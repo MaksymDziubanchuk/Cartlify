@@ -1,16 +1,22 @@
 {
   "compilerOptions": {
-    "target": "ES2020",                      
-    "module": "CommonJS",                                          
-    "outDir": "dist",                        
-    "strict": true,                          
-    "esModuleInterop": true,                 
-    "moduleResolution": "node",              
-    "resolveJsonModule": true,               
-    "skipLibCheck": true,                    
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ES2022",
+    "moduleResolution": "Bundler",
+    "rootDir": ".",
+    "outDir": "dist",
+    "noEmit": false,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node", "jest"]                
+    "baseUrl": ".",
+    "paths": { "@/*": ["src/*"] }
   },
-  "include": ["src", "tests"],
+  "include": ["src", "tests", "prisma"],
   "exclude": ["node_modules", "dist"]
 }
