@@ -1,7 +1,4 @@
-const { sign } = require('crypto');
-const { query } = require('express');
 const fastify = require('fastify');
-const path = require('path');
 
 const app = fastify({
   logger: {
