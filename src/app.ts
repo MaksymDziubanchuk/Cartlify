@@ -2,6 +2,7 @@ import { AppError } from '@utils/errors.js';
 import fastify from 'fastify';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
 import getHealthRoute from '@routes/health.js';
+import getReadyStatus from '@routes/ready.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
@@ -37,6 +38,7 @@ app.register(cookie, { secret: env.COOKIE_SECRET });
 app.register(staticPlagin, { root: path.join(__dirname, 'static') });
 
 app.register(getHealthRoute);
+app.register(getReadyStatus);
 
 app.setErrorHandler((error, request, reply) => {
   request.log.error(error);
@@ -52,6 +54,7 @@ app.setNotFoundHandler((request, reply) => {
   return reply.status(404).send({
     code: 404,
     message: 'Route not found',
+    method: request.method,
     url: request.url,
   });
 });
