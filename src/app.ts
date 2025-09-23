@@ -1,22 +1,40 @@
 import { AppError } from '@utils/errors.js';
 import fastify from 'fastify';
-import pino from 'pino';
-import getHealthRoute from 'routes/health.js';
+import { LoggerOptions, TransportSingleOptions } from 'pino';
+import getHealthRoute from '@routes/health.js';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import cookie from '@fastify/cookie';
+import staticPlagin from '@fastify/static';
+import env from '@config/env.js';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const logger: fastify.FastifyBaseLogger = pino(
-  {
-    level: 'info',
-    redact: ['req.headers.authorization', 'request.headers.cookie', "res.headers['set-cookie']"],
-  },
-  process.env.NODE_ENV === 'development'
-    ? pino.transport({
-        target: 'pino-pretty',
-        options: { translateTime: true },
-      })
-    : undefined,
-);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-export const app = fastify({ logger });
+type LoggerOptionsWithTransport = LoggerOptions & {
+  transport?: TransportSingleOptions;
+};
+
+const loggerOptions: LoggerOptionsWithTransport = {
+  level: 'info',
+  redact: ['req.headers.authorization', 'request.headers.cookie', "res.headers['set-cookie']"],
+};
+
+if (env.NODE_ENV === 'development') {
+  loggerOptions.transport = {
+    target: 'pino-pretty',
+    options: { translateTime: true },
+  };
+}
+
+export const app = fastify({ logger: loggerOptions });
+
+app.register(cors, { origin: true, credentials: true });
+app.register(helmet);
+app.register(cookie, { secret: env.COOKIE_SECRET });
+app.register(staticPlagin, { root: path.join(__dirname, 'static') });
 
 app.register(getHealthRoute);
 
