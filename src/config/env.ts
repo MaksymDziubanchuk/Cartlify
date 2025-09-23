@@ -1,10 +1,29 @@
 import * as dotenv from 'dotenv';
 
+declare global {
+  namespace NodeJS {
+    interface ProcessEnv {
+      NODE_ENV: 'development' | 'production' | 'test';
+      PORT?: string;
+      DATABASE_URL: string;
+      SUPABASE_URL: string;
+      SUPABASE_ANON_KEY: string;
+      SUPABASE_SERVICE_ROLE_KEY: string;
+      JWT_SECRET: string;
+      CLOUDINARY_CLOUD_NAME: string;
+      CLOUDINARY_API_KEY: string;
+      CLOUDINARY_API_SECRET: string;
+      OPENAI_API_KEY: string;
+    }
+  }
+}
+
 dotenv.config();
 
 export const env = {
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: process.env.PORT ? Number(process.env.PORT) : 3000,
+  HOST: process.env.HOST ? process.env.HOST : '0.0.0.0',
 
   DATABASE_URL: process.env.DATABASE_URL || '',
 
@@ -22,5 +41,5 @@ export const env = {
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
 
   // OpenAI
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY || ''
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
 };
