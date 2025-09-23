@@ -14,13 +14,14 @@ declare global {
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
       OPENAI_API_KEY: string;
+      COOKIE_SECRET: string;
     }
   }
 }
 
 dotenv.config();
 
-export const env = {
+export default {
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: process.env.PORT ? Number(process.env.PORT) : 3000,
   HOST: process.env.HOST ? process.env.HOST : '0.0.0.0',
@@ -42,4 +43,7 @@ export const env = {
 
   // OpenAI
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+
+  // Cookie
+  COOKIE_SECRET: process.env.COOKIE_SECRET || 'changeme',
 };

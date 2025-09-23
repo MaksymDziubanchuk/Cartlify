@@ -17,7 +17,8 @@
       "@middlewares/*": ["middlewares/*"],
       "@config/*": ["config/*"],
       "@graphql/*": ["graphql/*"],
-      "@utils/*": ["utils/*"]
+      "@utils/*": ["utils/*"],
+      "@routes/*": ["routes/*"]
     }
   },
   "include": ["src"],
