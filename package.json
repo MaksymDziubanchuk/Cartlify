@@ -24,7 +24,7 @@
     "ecommerce",
     "cartlify"
   ],
-  "author": "Your Name",
+  "author": "Maksym Dziubanchuk",
   "license": "MIT",
   "dependencies": {
     "@apollo/server": "^4.11.0",

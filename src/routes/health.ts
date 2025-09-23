@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import env from '@config/env.js';
 
 export default async function getHealthRoute(app: FastifyInstance, opt: any) {
   app.get(
@@ -12,14 +13,33 @@ export default async function getHealthRoute(app: FastifyInstance, opt: any) {
               status: {
                 type: 'string',
               },
+              uptime: {
+                type: 'number',
+              },
+              timestamp: {
+                type: 'string',
+              },
+              env: {
+                type: 'string',
+                enum: ['development', 'production', 'test'],
+              },
+              pid: {
+                type: 'number',
+              },
             },
+            required: ['status', 'uptime', 'timestamp', 'env', 'pid'],
           },
         },
       },
     },
     async () => {
+      const uptime = process.uptime();
       return {
-        status: 'ok',
+        status: uptime > 0 ? 'ok' : 'error',
+        uptime,
+        timestamp: new Date().toISOString(),
+        env: env.NODE_ENV,
+        pid: process.pid,
       };
     },
   );
