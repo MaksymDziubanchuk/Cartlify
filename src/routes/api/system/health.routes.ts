@@ -1,9 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import env from '@config/env.js';
 
-export default async function getHealthRoute(app: FastifyInstance, opt: any) {
+export default async function getHealthRouter(app: FastifyInstance, opt: unknown) {
   app.get(
-    '/health',
+    '/',
     {
       schema: {
         response: {

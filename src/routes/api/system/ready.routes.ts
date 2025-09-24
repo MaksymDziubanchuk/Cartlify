@@ -1,8 +1,8 @@
 import { FastifyInstance } from 'fastify';
 
-export default async function getReadyStatus(app: FastifyInstance, opt: any) {
+export default async function getReadyStatusRouter(app: FastifyInstance, opt: unknown) {
   app.get(
-    '/ready',
+    '/',
     {
       schema: {
         response: {

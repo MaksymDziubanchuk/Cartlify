@@ -1,12 +1,21 @@
 import { AppError } from '@utils/errors.js';
 import fastify from 'fastify';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
-import getHealthRoute from '@routes/health.js';
-import getReadyStatus from '@routes/ready.js';
+import {
+  getHealthRouter,
+  getProjectInfoRouter,
+  getReadyStatusRouter,
+} from '@routes/api/system/index.js';
+
+import { authRouter } from '@routes/api/auth/index.js';
+import { usersRouter } from '@routes/api/users/index.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
+import rateLimit from '@fastify/rate-limit';
 import staticPlagin from '@fastify/static';
+import multipart from '@fastify/multipart';
+import formbody from '@fastify/formbody';
 import env from '@config/env.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -35,10 +44,25 @@ export const app = fastify({ logger: loggerOptions });
 app.register(cors, { origin: true, credentials: true });
 app.register(helmet);
 app.register(cookie, { secret: env.COOKIE_SECRET });
-app.register(staticPlagin, { root: path.join(__dirname, 'static') });
+app.register(multipart, {
+  limits: {
+    fileSize: 10_000_000,
+  },
+  attachFieldsToBody: true,
+});
+app.register(formbody, { bodyLimit: 1048576 });
+app.register(staticPlagin, { root: path.join(__dirname, 'static'), prefix: '/static/' });
 
-app.register(getHealthRoute);
-app.register(getReadyStatus);
+app.register(getHealthRouter, { prefix: '/health' });
+app.register(getReadyStatusRouter, { prefix: '/ready' });
+app.register(getProjectInfoRouter, { prefix: '/info' });
+app.register(authRouter, { prefix: '/auth' });
+app.register(usersRouter, { prefix: '/users' });
+
+app.register(rateLimit, {
+  max: 100,
+  timeWindow: '1 minute',
+});
 
 app.setErrorHandler((error, request, reply) => {
   request.log.error(error);
