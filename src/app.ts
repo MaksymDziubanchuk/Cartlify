@@ -1,14 +1,6 @@
 import { AppError } from '@utils/errors.js';
 import fastify from 'fastify';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
-import {
-  getHealthRouter,
-  getProjectInfoRouter,
-  getReadyStatusRouter,
-} from '@routes/api/system/index.js';
-
-import { authRouter } from '@routes/api/auth/index.js';
-import { usersRouter } from '@routes/api/users/index.js';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
@@ -16,9 +8,19 @@ import rateLimit from '@fastify/rate-limit';
 import staticPlagin from '@fastify/static';
 import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
-import env from '@config/env.js';
-import path from 'path';
 import { fileURLToPath } from 'url';
+import path from 'path';
+
+import {
+  getHealthRouter,
+  getProjectInfoRouter,
+  getReadyStatusRouter,
+} from '@routes/api/system/index.js';
+import { authRouter } from '@routes/api/auth/index.js';
+import { usersRouter } from '@routes/api/users/index.js';
+import { productRouter } from '@routes/api/products/index.js';
+import { categoriesRouter } from '@routes/api/categories/index.js';
+import env from '@config/env.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +60,8 @@ app.register(getReadyStatusRouter, { prefix: '/ready' });
 app.register(getProjectInfoRouter, { prefix: '/info' });
 app.register(authRouter, { prefix: '/auth' });
 app.register(usersRouter, { prefix: '/users' });
+app.register(productRouter, { prefix: '/products' });
+app.register(categoriesRouter, { prefix: '/categories' });
 
 app.register(rateLimit, {
   max: 100,
