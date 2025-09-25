@@ -5,6 +5,7 @@ declare global {
     interface ProcessEnv {
       NODE_ENV: 'development' | 'production' | 'test';
       PORT?: string;
+      HOST?: string;
       DATABASE_URL: string;
       SUPABASE_URL: string;
       SUPABASE_ANON_KEY: string;
