@@ -10,17 +10,8 @@ import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
 import { fileURLToPath } from 'url';
 import path from 'path';
-
-import {
-  getHealthRouter,
-  getProjectInfoRouter,
-  getReadyStatusRouter,
-} from '@routes/api/system/index.js';
-import { authRouter } from '@routes/api/auth/index.js';
-import { usersRouter } from '@routes/api/users/index.js';
-import { productRouter } from '@routes/api/products/index.js';
-import { categoriesRouter } from '@routes/api/categories/index.js';
 import env from '@config/env.js';
+import { registerRoutes } from '@routes/api/index.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -54,19 +45,12 @@ app.register(multipart, {
 });
 app.register(formbody, { bodyLimit: 1048576 });
 app.register(staticPlagin, { root: path.join(__dirname, 'static'), prefix: '/static/' });
-
-app.register(getHealthRouter, { prefix: '/health' });
-app.register(getReadyStatusRouter, { prefix: '/ready' });
-app.register(getProjectInfoRouter, { prefix: '/info' });
-app.register(authRouter, { prefix: '/auth' });
-app.register(usersRouter, { prefix: '/users' });
-app.register(productRouter, { prefix: '/products' });
-app.register(categoriesRouter, { prefix: '/categories' });
-
 app.register(rateLimit, {
   max: 100,
   timeWindow: '1 minute',
 });
+
+await registerRoutes(app);
 
 app.setErrorHandler((error, request, reply) => {
   request.log.error(error);

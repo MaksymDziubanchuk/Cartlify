@@ -1,9 +1,12 @@
 import { FastifyInstance } from 'fastify';
+import authGuard from '@middlewares/auth.js';
+import requireRole from '@middlewares/requireRole.js';
 
 export default async function usersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/me',
     {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
       schema: {
         response: {
           200: {
@@ -25,6 +28,7 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/:id',
     {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
       schema: {
         response: {
           200: {
