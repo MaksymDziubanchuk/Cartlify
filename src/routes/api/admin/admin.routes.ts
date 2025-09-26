@@ -2,11 +2,11 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 
-export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
+export default async function adminRouter(app: FastifyInstance, opt: unknown) {
   app.get(
-    '/',
+    '/stats',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
       schema: {
         response: {
           200: {
@@ -21,58 +21,14 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     async () => {
       return {
-        message: 'orders not implemented',
-      };
-    },
-  );
-  app.get(
-    '/:orderId',
-    {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
-    },
-    async () => {
-      return {
-        message: 'order by id not implemented',
+        message: 'admin stats not implemented',
       };
     },
   );
   app.post(
-    '/',
+    '/products/:productId/popularity',
     {
-      preHandler: [authGuard, requireRole(['USER'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
-    },
-    async () => {
-      return {
-        message: 'create order not implemented',
-      };
-    },
-  );
-  app.put(
-    '/:orderId/status',
-    {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
       schema: {
         response: {
           200: {
@@ -87,7 +43,29 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     async () => {
       return {
-        message: 'update order status not implemented',
+        message: 'set product popularity not implemented',
+      };
+    },
+  );
+  app.get(
+    '/chats',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'admin chats not implemented',
       };
     },
   );

@@ -1,10 +1,12 @@
 import { FastifyInstance } from 'fastify';
-import isAdmin from '@middlewares/isAdmin.js';
+import authGuard from '@middlewares/auth.js';
+import requireRole from '@middlewares/requireRole.js';
 
 export default async function productsRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/',
     {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
       schema: {
         response: {
           200: {
@@ -24,8 +26,9 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     },
   );
   app.get(
-    '/:id',
+    '/:productId',
     {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
       schema: {
         response: {
           200: {
@@ -44,10 +47,32 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
       };
     },
   );
+  app.get(
+    '/:productId/reviews',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'product reviews not implemented',
+      };
+    },
+  );
   app.post(
     '/',
     {
-      preHandler: [isAdmin],
+      preHandler: [authGuard, requireRole(['ADMIN'])],
       schema: {
         response: {
           201: {
@@ -66,10 +91,32 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
       };
     },
   );
-  app.patch(
-    '/:id',
+  app.post(
+    '/:productId/reviews',
     {
-      preHandler: [isAdmin],
+      preHandler: [authGuard, requireRole(['USER'])],
+      schema: {
+        response: {
+          201: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'create review not implemented',
+      };
+    },
+  );
+  app.patch(
+    '/:productId',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN'])],
       schema: {
         response: {
           200: {
@@ -89,9 +136,9 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     },
   );
   app.delete(
-    '/:id',
+    '/:productId',
     {
-      preHandler: [isAdmin],
+      preHandler: [authGuard, requireRole(['ADMIN'])],
       schema: {
         response: {
           200: {
@@ -107,6 +154,28 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     async () => {
       return {
         message: 'delete product not implemented',
+      };
+    },
+  );
+  app.delete(
+    '/:productId/reviews/:reviewId',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'delete product review not implemented',
       };
     },
   );

@@ -6,6 +6,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
   app.get(
     '/',
     {
+      preHandler: [authGuard, requireRole(['GUEST', 'ADMIN', 'ROOT', 'USER'])],
       schema: {
         response: {
           200: {
@@ -47,7 +48,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
     },
   );
   app.patch(
-    '/:id',
+    '/:categoryId',
     {
       preHandler: [authGuard, requireRole(['ADMIN'])],
       schema: {
@@ -69,7 +70,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
     },
   );
   app.delete(
-    '/:id',
+    '/:categoryId',
     {
       preHandler: [authGuard, requireRole(['ADMIN'])],
       schema: {

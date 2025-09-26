@@ -1,9 +1,12 @@
 import { FastifyInstance } from 'fastify';
+import authGuard from '@middlewares/auth.js';
+import requireRole from '@middlewares/requireRole.js';
 
 export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/login',
     {
+      preHandler: [authGuard, requireRole(['GUEST'])],
       schema: {
         response: {
           200: {
@@ -25,6 +28,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/register',
     {
+      preHandler: [authGuard, requireRole(['GUEST'])],
       schema: {
         response: {
           201: {
@@ -46,6 +50,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/logout',
     {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
       schema: {
         response: {
           204: {
@@ -61,6 +66,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/refresh',
     {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
       schema: {
         response: {
           200: {
