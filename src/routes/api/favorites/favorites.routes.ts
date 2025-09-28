@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import validateId from '@middlewares/validateId.js';
 
 export default async function favoritesRouter(app: FastifyInstance, opt: unknown) {
   app.get(
@@ -28,7 +29,7 @@ export default async function favoritesRouter(app: FastifyInstance, opt: unknown
   app.post(
     '/:productId/toggle',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER'])],
+      preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
       schema: {
         response: {
           200: {
@@ -50,7 +51,7 @@ export default async function favoritesRouter(app: FastifyInstance, opt: unknown
   app.delete(
     '/:productId',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER'])],
+      preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
       schema: {
         response: {
           200: {

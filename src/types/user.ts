@@ -1,7 +1,8 @@
+import { UserId } from './ids.js';
 export type Role = 'GUEST' | 'USER' | 'ADMIN' | 'ROOT';
 
 export interface User {
-  id: string;
-  email: string;
+  id: UserId;
+  email?: string;
   role: Role;
 }

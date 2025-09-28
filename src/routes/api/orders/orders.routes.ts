@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import validateId from '@middlewares/validateId.js';
 
 export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
@@ -28,7 +29,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/:orderId',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT']), validateId('orderId')],
       schema: {
         response: {
           200: {
@@ -72,7 +73,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
   app.put(
     '/:orderId/status',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
+      preHandler: [authGuard, requireRole(['ADMIN']), validateId('orderId')],
       schema: {
         response: {
           200: {

@@ -1,4 +1,3 @@
-import { AppError } from '@utils/errors.js';
 import fastify from 'fastify';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
 import cors from '@fastify/cors';
@@ -12,6 +11,9 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import env from '@config/env.js';
 import { registerRoutes } from '@routes/api/index.js';
+import requestResponseLogger from '@middlewares/requestResponseLogger.js';
+import errorNormalizer from '@middlewares/errorNormalizer.js';
+import notFoundHandler from '@middlewares/notFoundHandler.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +36,7 @@ if (env.NODE_ENV === 'development') {
 
 export const app = fastify({ logger: loggerOptions });
 
+app.register(requestResponseLogger);
 app.register(cors, { origin: true, credentials: true });
 app.register(helmet);
 app.register(cookie, { secret: env.COOKIE_SECRET });
@@ -52,21 +55,5 @@ app.register(rateLimit, {
 
 await registerRoutes(app);
 
-app.setErrorHandler((error, request, reply) => {
-  request.log.error(error);
-  const statusCode = error instanceof AppError ? error.statusCode : 500;
-  return reply.status(statusCode).send({
-    code: statusCode,
-    message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message,
-    stack: process.env.NODE_ENV === 'production' ? undefined : error.stack,
-  });
-});
-
-app.setNotFoundHandler((request, reply) => {
-  return reply.status(404).send({
-    code: 404,
-    message: 'Route not found',
-    method: request.method,
-    url: request.url,
-  });
-});
+app.register(notFoundHandler);
+app.register(errorNormalizer);
