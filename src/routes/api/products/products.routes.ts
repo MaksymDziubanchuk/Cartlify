@@ -1,182 +1,93 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import validateId from '@middlewares/validateId.js';
+import { productController } from './product.controllers.js';
+import { productSchemas } from './product.schemas.js';
 
 export default async function productsRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: productSchemas.getAllProductsSchema,
     },
-    async () => {
-      return {
-        message: 'products not implemented',
-      };
-    },
+    productController.getAllProducts,
   );
+
   app.get(
     '/:productId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
+        validateId('productId'),
+      ],
+      schema: productSchemas.getProductByIdSchema,
     },
-    async () => {
-      return {
-        message: 'product by id not implemented',
-      };
-    },
+    productController.getProductById,
   );
+
   app.get(
     '/:productId/reviews',
     {
-      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
+        validateId('productId'),
+      ],
+      schema: productSchemas.getProductReviewsSchema,
     },
-    async () => {
-      return {
-        message: 'product reviews not implemented',
-      };
-    },
+    productController.getProductReviews,
   );
+
   app.post(
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: productSchemas.postProductSchema,
     },
-    async () => {
-      return {
-        message: 'create product not implemented',
-      };
-    },
+    productController.postProduct,
   );
+
   app.post(
     '/:productId/reviews',
     {
-      preHandler: [authGuard, requireRole(['USER'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [authGuard, requireRole(['USER']), validateId('productId')],
+      schema: productSchemas.postProductReviewSchema,
     },
-    async () => {
-      return {
-        message: 'create review not implemented',
-      };
-    },
+    productController.postProductReview,
   );
+
   app.patch(
     '/:productId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [authGuard, requireRole(['ADMIN']), validateId('productId')],
+      schema: productSchemas.updateProductByIdSchema,
     },
-    async () => {
-      return {
-        message: 'update product not implemented',
-      };
-    },
+    productController.updateProductById,
   );
+
   app.delete(
     '/:productId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [authGuard, requireRole(['ADMIN']), validateId('productId')],
+      schema: productSchemas.deleteProductByIdSchema,
     },
-    async () => {
-      return {
-        message: 'delete product not implemented',
-      };
-    },
+    productController.deleteProductById,
   );
+
   app.delete(
     '/:productId/reviews/:reviewId',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [
+        authGuard,
+        requireRole(['USER', 'ADMIN', 'ROOT']),
+        validateId('productId'),
+        validateId('reviewId'),
+      ],
+      schema: productSchemas.deleteProductReviewSchema,
     },
-    async () => {
-      return {
-        message: 'delete product review not implemented',
-      };
-    },
+    productController.deleteProductReview,
   );
 }

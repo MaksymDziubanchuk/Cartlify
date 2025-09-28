@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import validateId from '@middlewares/validateId.js';
 
 export default async function categoriesRouter(app: FastifyInstance, opt: unknown) {
   app.get(
@@ -50,7 +51,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
   app.patch(
     '/:categoryId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
+      preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
       schema: {
         response: {
           200: {
@@ -72,7 +73,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
   app.delete(
     '/:categoryId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
+      preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
       schema: {
         response: {
           200: {

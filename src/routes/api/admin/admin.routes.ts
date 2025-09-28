@@ -1,72 +1,33 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import validateId from '@middlewares/validateId.js';
+import { adminSchema } from './admin.schemas.js';
+import { adminController } from './admin.controllers.js';
 
 export default async function adminRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/stats',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: adminSchema.getStatsSchema,
     },
-    async () => {
-      return {
-        message: 'admin stats not implemented',
-      };
-    },
+    adminController.getAllStats,
   );
   app.post(
     '/products/:productId/popularity',
     {
-      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: adminSchema.setProductPopularity,
     },
-    async () => {
-      return {
-        message: 'set product popularity not implemented',
-      };
-    },
+    adminController.postProductPopularity,
   );
   app.get(
     '/chats',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: adminSchema.getChatsSchema,
     },
-    async () => {
-      return {
-        message: 'admin chats not implemented',
-      };
-    },
+    adminController.getAdminsChats,
   );
 }

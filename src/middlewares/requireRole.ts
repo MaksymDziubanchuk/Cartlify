@@ -1,4 +1,4 @@
-import { FastifyRequest, FastifyReply } from 'fastify';
+import { FastifyRequest } from 'fastify';
 import { ForbiddenError } from '@utils/errors.js';
 import { Role } from 'types/user.js';
 
