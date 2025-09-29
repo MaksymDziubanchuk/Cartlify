@@ -18,7 +18,8 @@
       "@config/*": ["config/*"],
       "@graphql/*": ["graphql/*"],
       "@utils/*": ["utils/*"],
-      "@routes/*": ["routes/*"]
+      "@routes/*": ["routes/*"],
+      "@schemas/*": ["schemas/*"]
     }
   },
   "include": ["src"],

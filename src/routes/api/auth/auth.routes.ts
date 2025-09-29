@@ -48,6 +48,72 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
     },
   );
   app.post(
+    '/verify/resend',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'verify resend not implemented',
+      };
+    },
+  );
+  app.post(
+    '/password/forgot',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'password forgot not implemented',
+      };
+    },
+  );
+  app.post(
+    '/password/reset',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'password reset not implemented',
+      };
+    },
+  );
+  app.post(
     '/logout',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
