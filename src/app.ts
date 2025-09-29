@@ -11,6 +11,7 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import env from '@config/env.js';
 import { registerRoutes } from '@routes/api/index.js';
+import { commonSchemas } from '@schemas/index.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
@@ -51,6 +52,10 @@ app.register(staticPlagin, { root: path.join(__dirname, 'static'), prefix: '/sta
 app.register(rateLimit, {
   max: 100,
   timeWindow: '1 minute',
+});
+
+Object.values(commonSchemas).forEach((schema) => {
+  app.addSchema(schema);
 });
 
 await registerRoutes(app);

@@ -1,4 +1,5 @@
 import { FastifyInstance } from 'fastify';
+import { app } from '../../app.js';
 import {
   getHealthRouter,
   getProjectInfoRouter,
@@ -15,6 +16,9 @@ import { adminRouter } from '@routes/api/admin/index.js';
 import { rootRouter } from '@routes/api/root/index.js';
 import { chatRouter } from '@routes/api/chat/index.js';
 
+import { authSchemas } from '@schemas/dto/auth.schemas.js';
+import { paramsSchemas, replySchemas } from '@schemas/index.js';
+
 export async function registerRoutes(app: FastifyInstance) {
   app.register(getHealthRouter, { prefix: '/health' });
   app.register(getReadyStatusRouter, { prefix: '/ready' });
@@ -30,3 +34,15 @@ export async function registerRoutes(app: FastifyInstance) {
   app.register(rootRouter, { prefix: '/root' });
   app.register(chatRouter, { prefix: '/chat' });
 }
+
+Object.values(authSchemas).forEach((schema) => {
+  app.addSchema(schema);
+});
+
+Object.values(paramsSchemas).forEach((schema) => {
+  app.addSchema(schema);
+});
+
+Object.values(replySchemas).forEach((schema) => {
+  app.addSchema(schema);
+});
