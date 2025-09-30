@@ -1,6 +1,12 @@
 import { ProductId, ReviewId } from 'types/ids.js';
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  CreateReviewDto,
+  FindAllProductsParams,
+} from 'types/dto/products.dto.js';
 
-async function findAll() {
+async function findAll({ page, limit, sort, categoryId }: FindAllProductsParams) {
   return {
     message: 'findAll not implemented',
   };
@@ -18,19 +24,19 @@ async function findReviews(productId: ProductId) {
   };
 }
 
-async function createProduct(data: unknown) {
+async function createProduct(data: CreateProductDto) {
   return {
     message: 'create not implemented',
   };
 }
 
-async function createReview(productId: ProductId, data: unknown) {
+async function createReview(productId: ProductId, data: CreateReviewDto) {
   return {
     message: 'createReview not implemented',
   };
 }
 
-async function updateProduct(productId: ProductId, data: unknown) {
+async function updateProduct(productId: ProductId, data: UpdateProductDto) {
   return {
     message: 'updateProduct not implemented',
   };
