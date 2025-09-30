@@ -1,5 +1,19 @@
 import { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
 
+export interface GetAllProductsQuery {
+  page?: number;
+  limit?: number;
+  sort?: 'price_asc' | 'price_desc' | 'popular';
+  categoryId?: CategoryId;
+}
+
+export interface FindAllProductsParams {
+  page: number;
+  limit: number;
+  sort?: 'price_asc' | 'price_desc' | 'popular';
+  categoryId?: CategoryId;
+}
+
 export interface CreateProductDto {
   name: string;
   description?: string;

@@ -1,62 +1,101 @@
-import { FastifyRequest, FastifyReply } from 'fastify';
+import { ControllerRouter } from 'types/controller.js';
 import { productServices } from './product.services.js';
-import { ProductId, ReviewId } from 'types/ids.js';
+import {
+  CreateProductDto,
+  UpdateProductDto,
+  CreateReviewDto,
+  FindAllProductsParams,
+  GetAllProductsQuery,
+} from 'types/dto/products.dto.js';
 
-async function getAllProducts(req: FastifyRequest, reply: FastifyReply) {
-  const result = await productServices.findAll();
+const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQuery, unknown> = async (
+  req,
+  reply,
+) => {
+  const { page: qp, limit: ql, sort: qs, categoryId: qc } = req.query;
+  const page = qp ? Number(qp) : 1;
+  const limit = ql ? Number(ql) : 10;
+  const categoryId = qc ? Number(qc) : undefined;
+
+  const allowedSort: Array<'price_asc' | 'price_desc' | 'popular'> = [
+    'price_asc',
+    'price_desc',
+    'popular',
+  ];
+  const sort = allowedSort.includes(qs as any) ? (qs as (typeof allowedSort)[number]) : undefined;
+
+  const args: FindAllProductsParams = {
+    page,
+    limit,
+    ...(sort !== undefined ? { sort } : {}),
+    ...(categoryId !== undefined ? { categoryId } : {}),
+  };
+  const result = await productServices.findAll(args);
   return result;
-}
+};
 
-async function getProductById(req: FastifyRequest, reply: FastifyReply) {
-  const { productId } = req.params as { productId: ProductId };
-  const id = Number(productId);
+const getProductById: ControllerRouter<{ productId: string }> = async (req, reply) => {
+  const id = Number(req.params.productId);
   const result = await productServices.findById(id);
   return result;
-}
+};
 
-async function getProductReviews(req: FastifyRequest, reply: FastifyReply) {
-  const { productId } = req.params as { productId: ProductId };
-  const id = Number(productId);
+const getProductReviews: ControllerRouter<{ productId: string }, {}, {}, unknown> = async (
+  req,
+  reply,
+) => {
+  const id = Number(req.params.productId);
   const result = await productServices.findReviews(id);
   return result;
-}
+};
 
-async function postProduct(req: FastifyRequest, reply: FastifyReply) {
-  const data = req.body;
-  const result = await productServices.createProduct(data);
+const postProduct: ControllerRouter<{}, CreateProductDto, {}, unknown> = async (req, reply) => {
+  const result = await productServices.createProduct(req.body);
   return result;
-}
+};
 
-async function postProductReview(req: FastifyRequest, reply: FastifyReply) {
-  const { productId } = req.params as { productId: ProductId };
-  const id = Number(productId);
-  const data = req.body;
-  const result = await productServices.createReview(id, data);
+const postProductReview: ControllerRouter<
+  { productId: string },
+  CreateReviewDto,
+  {},
+  unknown
+> = async (req, reply) => {
+  const id = Number(req.params.productId);
+  const result = await productServices.createReview(id, req.body);
   return result;
-}
+};
 
-async function updateProductById(req: FastifyRequest, reply: FastifyReply) {
-  const { productId } = req.params as { productId: ProductId };
-  const id = Number(productId);
-  const data = req.body;
-  const result = await productServices.updateProduct(id, data);
+const updateProductById: ControllerRouter<
+  { productId: string },
+  UpdateProductDto,
+  {},
+  unknown
+> = async (req, reply) => {
+  const id = Number(req.params.productId);
+  const result = await productServices.updateProduct(id, req.body);
   return result;
-}
+};
 
-async function deleteProductById(req: FastifyRequest, reply: FastifyReply) {
-  const { productId } = req.params as { productId: ProductId };
-  const id = Number(productId);
+const deleteProductById: ControllerRouter<{ productId: string }, {}, {}, unknown> = async (
+  req,
+  reply,
+) => {
+  const id = Number(req.params.productId);
   const result = await productServices.deleteProductById(id);
   return result;
-}
+};
 
-async function deleteProductReview(req: FastifyRequest, reply: FastifyReply) {
-  const { productId, reviewId } = req.params as { productId: ProductId; reviewId: ReviewId };
-  const prodId = Number(productId);
-  const revId = Number(reviewId);
+const deleteProductReview: ControllerRouter<
+  { productId: string; reviewId: string },
+  {},
+  {},
+  unknown
+> = async (req, reply) => {
+  const prodId = Number(req.params.productId);
+  const revId = Number(req.params.reviewId);
   const result = await productServices.deleteProductReview(prodId, revId);
   return result;
-}
+};
 
 export const productController = {
   getAllProducts,

@@ -1,5 +1,17 @@
+export const getAllProductsSchema = {
+  $id: 'getAllProductsSchema',
+  type: 'object',
+  properties: {
+    page: { type: 'integer', minimum: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    sort: { type: 'string', enum: ['price_asc', 'price_desc', 'popular'] },
+    categoryId: { type: 'integer', minimum: 1 },
+  },
+  additionalProperties: false,
+} as const;
+
 export const createProductSchema = {
-  $id: 'products.createBody',
+  $id: 'createProductSchema',
   type: 'object',
   properties: {
     name: { type: 'string', minLength: 1 },
@@ -13,7 +25,7 @@ export const createProductSchema = {
 } as const;
 
 export const updateProductSchema = {
-  $id: 'products.updateBody',
+  $id: 'updateProductSchema',
   type: 'object',
   properties: {
     name: { type: 'string', minLength: 1 },
@@ -26,7 +38,7 @@ export const updateProductSchema = {
 } as const;
 
 export const createReviewSchema = {
-  $id: 'reviews.createBody',
+  $id: 'createReviewSchema',
   type: 'object',
   properties: {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
@@ -37,7 +49,7 @@ export const createReviewSchema = {
 } as const;
 
 export const updateReviewSchema = {
-  $id: 'reviews.updateBody',
+  $id: 'updateReviewSchema',
   type: 'object',
   properties: {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
@@ -47,7 +59,7 @@ export const updateReviewSchema = {
 } as const;
 
 export const productsListQuerySchema = {
-  $id: 'products.listQuery',
+  $id: 'productsListQuerySchema',
   type: 'object',
   properties: {
     page: { type: 'integer', minimum: 1 },
@@ -63,7 +75,7 @@ export const productsListQuerySchema = {
 } as const;
 
 const productResponseSchema = {
-  $id: 'products.item',
+  $id: 'productResponseSchema',
   type: 'object',
   properties: {
     id: { type: 'integer' },
@@ -78,7 +90,7 @@ const productResponseSchema = {
 } as const;
 
 const reviewResponseSchema = {
-  $id: 'reviews.item',
+  $id: 'reviewResponseSchema',
   type: 'object',
   properties: {
     id: { type: 'integer' },
@@ -92,12 +104,12 @@ const reviewResponseSchema = {
 } as const;
 
 const productsListResponseSchema = {
-  $id: 'products.listResponse',
+  $id: 'productsListResponseSchema',
   type: 'object',
   properties: {
     items: {
       type: 'array',
-      items: { $ref: 'products.item#' },
+      items: { $ref: 'productResponseSchema#' },
     },
     total: { type: 'integer', minimum: 0 },
     page: { type: 'integer', minimum: 1 },

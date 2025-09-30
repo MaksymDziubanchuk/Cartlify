@@ -1,8 +1,9 @@
 const getAllProductsSchema = {
+  querystring: { $ref: 'getAllProductsSchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'paginatedList#' },
   },
-};
+} as const;
 
 const getProductByIdSchema = {
   params: { $ref: 'productIdParamSchema#' },
@@ -27,7 +28,7 @@ const postProductSchema = {
 
 const postProductReviewSchema = {
   params: { $ref: 'productIdParamSchema#' },
-  body: { $ref: 'createProductSchema#' },
+  body: { $ref: 'createReviewSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
