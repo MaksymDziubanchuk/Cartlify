@@ -4,11 +4,11 @@ import {
   CreateProductDto,
   UpdateProductDto,
   CreateReviewDto,
-  FindAllProductsParams,
-  GetAllProductsQuery,
+  FindAllProductsParamsDto,
+  GetAllProductsQueryDto,
 } from 'types/dto/products.dto.js';
 
-const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQuery, unknown> = async (
+const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, unknown> = async (
   req,
   reply,
 ) => {
@@ -24,7 +24,7 @@ const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQuery, unknown> = a
   ];
   const sort = allowedSort.includes(qs as any) ? (qs as (typeof allowedSort)[number]) : undefined;
 
-  const args: FindAllProductsParams = {
+  const args: FindAllProductsParamsDto = {
     page,
     limit,
     ...(sort !== undefined ? { sort } : {}),
