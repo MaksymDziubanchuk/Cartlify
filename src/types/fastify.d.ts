@@ -1,5 +1,5 @@
 import 'fastify';
-import { User } from './user.ts';
+import type { User } from './user.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {

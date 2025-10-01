@@ -1,4 +1,4 @@
-const userIdParamSchema = {
+export const userIdParamSchema = {
   $id: 'userIdParam',
   type: 'object',
   properties: {
@@ -7,7 +7,7 @@ const userIdParamSchema = {
   required: ['userId'],
 } as const;
 
-const productIdParamSchema = {
+export const productIdParamSchema = {
   $id: 'productIdParam',
   type: 'object',
   properties: {
@@ -16,7 +16,7 @@ const productIdParamSchema = {
   required: ['productId'],
 } as const;
 
-const reviewIdParamSchema = {
+export const reviewIdParamSchema = {
   $id: 'reviewIdParam',
   type: 'object',
   properties: {
@@ -25,7 +25,7 @@ const reviewIdParamSchema = {
   required: ['reviewId'],
 } as const;
 
-const productReviewIdsParamSchema = {
+export const productReviewIdsParamSchema = {
   $id: 'productReviewIdsParam',
   type: 'object',
   properties: {
@@ -35,7 +35,7 @@ const productReviewIdsParamSchema = {
   required: ['productId', 'reviewId'],
 } as const;
 
-const categoryIdParamSchema = {
+export const categoryIdParamSchema = {
   $id: 'categoryIdParam',
   type: 'object',
   properties: {
@@ -44,7 +44,7 @@ const categoryIdParamSchema = {
   required: ['categoryId'],
 } as const;
 
-const orderIdParamSchema = {
+export const orderIdParamSchema = {
   $id: 'orderIdParam',
   type: 'object',
   properties: {
@@ -53,7 +53,7 @@ const orderIdParamSchema = {
   required: ['orderId'],
 } as const;
 
-const adminIdParamSchema = {
+export const adminIdParamSchema = {
   $id: 'adminIdParam',
   type: 'object',
   properties: {
@@ -62,7 +62,7 @@ const adminIdParamSchema = {
   required: ['adminId'],
 } as const;
 
-export const paramsSchemas = {
+export const paramsSchemas = [
   userIdParamSchema,
   productIdParamSchema,
   reviewIdParamSchema,
@@ -70,4 +70,4 @@ export const paramsSchemas = {
   categoryIdParamSchema,
   orderIdParamSchema,
   adminIdParamSchema,
-};
+];

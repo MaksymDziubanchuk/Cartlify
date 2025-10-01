@@ -1,4 +1,4 @@
-const messageResponseSchema = {
+export const messageResponseSchema = {
   $id: 'messageResponse',
   type: 'object',
   properties: {
@@ -7,7 +7,7 @@ const messageResponseSchema = {
   required: ['message'],
 } as const;
 
-const errorResposeSchema = {
+export const errorResposeSchema = {
   $id: 'errorResponse',
   type: 'object',
   properties: {
@@ -18,7 +18,4 @@ const errorResposeSchema = {
   required: ['code', 'message'],
 } as const;
 
-export const commonSchemas = {
-  messageResponseSchema,
-  errorResposeSchema,
-};
+export const commonSchemas = [messageResponseSchema, errorResposeSchema];

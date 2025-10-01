@@ -1,4 +1,4 @@
-import { UserId, ProductId, CategoryId } from 'types/ids.js';
+import type { UserId, ProductId, CategoryId } from 'types/ids.js';
 
 export interface AdminStatsQueryDto {
   from?: string;

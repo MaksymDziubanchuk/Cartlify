@@ -1,40 +1,40 @@
-const getAllProductsSchema = {
+const getAllProductsRouterSchema = {
   querystring: { $ref: 'getAllProductsSchema#' },
   response: {
-    200: { $ref: 'paginatedList#' },
+    200: { $ref: 'messageResponseSchema#' },
   },
 } as const;
 
-const getProductByIdSchema = {
+const getProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
 };
 
-const getProductReviewsSchema = {
+const getProductReviewsRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
 };
 
-const postProductSchema = {
+const postProductRouterSchema = {
   body: { $ref: 'createProductSchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    201: { $ref: 'messageResponseSchema#' },
   },
 };
 
-const postProductReviewSchema = {
+const postProductReviewRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   body: { $ref: 'createReviewSchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    201: { $ref: 'messageResponseSchema#' },
   },
 };
 
-const updateProductByIdSchema = {
+const updateProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   body: { $ref: 'updateProductSchema#' },
   response: {
@@ -42,14 +42,14 @@ const updateProductByIdSchema = {
   },
 };
 
-const deleteProductByIdSchema = {
+const deleteProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
 };
 
-const deleteProductReviewSchema = {
+const deleteProductReviewRouterSchema = {
   params: { $ref: 'productReviewIdsParamSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -57,12 +57,12 @@ const deleteProductReviewSchema = {
 };
 
 export const productSchemas = {
-  getAllProductsSchema,
-  getProductByIdSchema,
-  getProductReviewsSchema,
-  postProductSchema,
-  postProductReviewSchema,
-  updateProductByIdSchema,
-  deleteProductByIdSchema,
-  deleteProductReviewSchema,
+  getAllProductsRouterSchema,
+  getProductByIdRouterSchema,
+  getProductReviewsRouterSchema,
+  postProductRouterSchema,
+  postProductReviewRouterSchema,
+  updateProductByIdRouterSchema,
+  deleteProductByIdRouterSchema,
+  deleteProductReviewRouterSchema,
 };
