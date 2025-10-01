@@ -1,4 +1,4 @@
-const loginSchema = {
+export const loginSchema = {
   $id: 'loginSchema',
   type: 'object',
   properties: {
@@ -9,7 +9,7 @@ const loginSchema = {
   additionalProperties: false,
 } as const;
 
-const registerSchema = {
+export const registerSchema = {
   $id: 'registerSchema',
   type: 'object',
   properties: {
@@ -21,7 +21,7 @@ const registerSchema = {
   additionalProperties: false,
 } as const;
 
-const forgotPasswordSchema = {
+export const forgotPasswordSchema = {
   $id: 'forgotPasswordSchema',
   type: 'object',
   properties: {
@@ -31,7 +31,7 @@ const forgotPasswordSchema = {
   additionalProperties: false,
 } as const;
 
-const resetPasswordSchema = {
+export const resetPasswordSchema = {
   $id: 'resetPasswordSchema',
   type: 'object',
   properties: {
@@ -42,9 +42,9 @@ const resetPasswordSchema = {
   additionalProperties: false,
 } as const;
 
-export const authSchemas = {
+export const authDtoSchemas = [
   loginSchema,
   registerSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-};
+];

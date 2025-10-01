@@ -10,7 +10,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
-      schema: productSchemas.getAllProductsSchema,
+      schema: productSchemas.getAllProductsRouterSchema,
     },
     productController.getAllProducts,
   );
@@ -23,7 +23,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
         requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
         validateId('productId'),
       ],
-      schema: productSchemas.getProductByIdSchema,
+      schema: productSchemas.getProductByIdRouterSchema,
     },
     productController.getProductById,
   );
@@ -36,7 +36,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
         requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
         validateId('productId'),
       ],
-      schema: productSchemas.getProductReviewsSchema,
+      schema: productSchemas.getProductReviewsRouterSchema,
     },
     productController.getProductReviews,
   );
@@ -45,7 +45,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN'])],
-      schema: productSchemas.postProductSchema,
+      schema: productSchemas.postProductRouterSchema,
     },
     productController.postProduct,
   );
@@ -54,7 +54,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/:productId/reviews',
     {
       preHandler: [authGuard, requireRole(['USER']), validateId('productId')],
-      schema: productSchemas.postProductReviewSchema,
+      schema: productSchemas.postProductReviewRouterSchema,
     },
     productController.postProductReview,
   );
@@ -63,7 +63,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/:productId',
     {
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('productId')],
-      schema: productSchemas.updateProductByIdSchema,
+      schema: productSchemas.updateProductByIdRouterSchema,
     },
     productController.updateProductById,
   );
@@ -72,7 +72,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/:productId',
     {
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('productId')],
-      schema: productSchemas.deleteProductByIdSchema,
+      schema: productSchemas.deleteProductByIdRouterSchema,
     },
     productController.deleteProductById,
   );
@@ -86,7 +86,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
         validateId('productId'),
         validateId('reviewId'),
       ],
-      schema: productSchemas.deleteProductReviewSchema,
+      schema: productSchemas.deleteProductReviewRouterSchema,
     },
     productController.deleteProductReview,
   );

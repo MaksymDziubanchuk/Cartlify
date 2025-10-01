@@ -11,7 +11,9 @@ import { fileURLToPath } from 'url';
 import path from 'path';
 import env from '@config/env.js';
 import { registerRoutes } from '@routes/api/index.js';
-import { commonSchemas } from '@schemas/index.js';
+import { commonSchemas, paramsSchemas } from '@schemas/index.js';
+import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
+import { productDtoSchemas } from '@schemas/dto/products.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
@@ -35,7 +37,10 @@ if (env.NODE_ENV === 'development') {
   };
 }
 
-export const app = fastify({ logger: loggerOptions });
+export const app = fastify({
+  logger: loggerOptions,
+  ajv: { customOptions: { coerceTypes: true } },
+});
 
 app.register(requestResponseLogger);
 app.register(cors, { origin: true, credentials: true });
@@ -52,11 +57,20 @@ app.register(staticPlagin, { root: path.join(__dirname, 'static'), prefix: '/sta
 app.register(rateLimit, {
   max: 100,
   timeWindow: '1 minute',
+  allowList: (req) =>
+    req.url?.startsWith('/health') ||
+    req.url?.startsWith('/ready') ||
+    req.url?.startsWith('/static'),
 });
 
-Object.values(commonSchemas).forEach((schema) => {
+for (const schema of [
+  ...commonSchemas,
+  ...paramsSchemas,
+  ...authDtoSchemas,
+  ...productDtoSchemas,
+]) {
   app.addSchema(schema);
-});
+}
 
 await registerRoutes(app);
 

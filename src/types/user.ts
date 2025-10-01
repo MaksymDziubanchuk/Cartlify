@@ -1,4 +1,5 @@
-import { UserId } from './ids.js';
+import type { UserId } from './ids.js';
+
 export type Role = 'GUEST' | 'USER' | 'ADMIN' | 'ROOT';
 
 export interface User {

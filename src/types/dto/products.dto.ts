@@ -1,4 +1,4 @@
-import { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
+import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
 
 export interface GetAllProductsQueryDto {
   page?: number;

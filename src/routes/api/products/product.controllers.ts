@@ -1,12 +1,14 @@
-import { ControllerRouter } from 'types/controller.js';
-import { productServices } from './product.services.js';
-import {
+import type { ControllerRouter } from 'types/controller.js';
+import type { ProductId, ReviewId } from 'types/ids.js';
+import type {
   CreateProductDto,
   UpdateProductDto,
   CreateReviewDto,
   FindAllProductsParamsDto,
   GetAllProductsQueryDto,
 } from 'types/dto/products.dto.js';
+import { productServices } from './product.services.js';
+import pickDefined from '@helpers/parameterNormalize.js';
 
 const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, unknown> = async (
   req,
@@ -24,23 +26,18 @@ const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, unknown> 
   ];
   const sort = allowedSort.includes(qs as any) ? (qs as (typeof allowedSort)[number]) : undefined;
 
-  const args: FindAllProductsParamsDto = {
-    page,
-    limit,
-    ...(sort !== undefined ? { sort } : {}),
-    ...(categoryId !== undefined ? { categoryId } : {}),
-  };
+  const args = pickDefined<FindAllProductsParamsDto>({ page, limit }, { sort, categoryId });
   const result = await productServices.findAll(args);
   return result;
 };
 
-const getProductById: ControllerRouter<{ productId: string }> = async (req, reply) => {
+const getProductById: ControllerRouter<{ productId: ProductId }> = async (req, reply) => {
   const id = Number(req.params.productId);
   const result = await productServices.findById(id);
   return result;
 };
 
-const getProductReviews: ControllerRouter<{ productId: string }, {}, {}, unknown> = async (
+const getProductReviews: ControllerRouter<{ productId: ProductId }, {}, {}, unknown> = async (
   req,
   reply,
 ) => {
@@ -51,22 +48,22 @@ const getProductReviews: ControllerRouter<{ productId: string }, {}, {}, unknown
 
 const postProduct: ControllerRouter<{}, CreateProductDto, {}, unknown> = async (req, reply) => {
   const result = await productServices.createProduct(req.body);
-  return result;
+  return reply.code(201).send(result);
 };
 
 const postProductReview: ControllerRouter<
-  { productId: string },
+  { productId: ProductId },
   CreateReviewDto,
   {},
   unknown
 > = async (req, reply) => {
   const id = Number(req.params.productId);
   const result = await productServices.createReview(id, req.body);
-  return result;
+  return reply.code(201).send(result);
 };
 
 const updateProductById: ControllerRouter<
-  { productId: string },
+  { productId: ProductId },
   UpdateProductDto,
   {},
   unknown
@@ -76,7 +73,7 @@ const updateProductById: ControllerRouter<
   return result;
 };
 
-const deleteProductById: ControllerRouter<{ productId: string }, {}, {}, unknown> = async (
+const deleteProductById: ControllerRouter<{ productId: ProductId }, {}, {}, unknown> = async (
   req,
   reply,
 ) => {
@@ -86,7 +83,7 @@ const deleteProductById: ControllerRouter<{ productId: string }, {}, {}, unknown
 };
 
 const deleteProductReview: ControllerRouter<
-  { productId: string; reviewId: string },
+  { productId: ProductId; reviewId: ReviewId },
   {},
   {},
   unknown

@@ -74,7 +74,7 @@ export const productsListQuerySchema = {
   additionalProperties: false,
 } as const;
 
-const productResponseSchema = {
+export const productResponseSchema = {
   $id: 'productResponseSchema',
   type: 'object',
   properties: {
@@ -89,7 +89,7 @@ const productResponseSchema = {
   additionalProperties: false,
 } as const;
 
-const reviewResponseSchema = {
+export const reviewResponseSchema = {
   $id: 'reviewResponseSchema',
   type: 'object',
   properties: {
@@ -97,13 +97,13 @@ const reviewResponseSchema = {
     productId: { type: 'integer' },
     rating: { type: 'integer', minimum: 1, maximum: 5 },
     comment: { type: 'string' },
-    userId: { type: 'string' },
+    userId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
   },
   required: ['id', 'productId', 'rating', 'userId'],
   additionalProperties: false,
 } as const;
 
-const productsListResponseSchema = {
+export const productsListResponseSchema = {
   $id: 'productsListResponseSchema',
   type: 'object',
   properties: {
@@ -119,7 +119,7 @@ const productsListResponseSchema = {
   additionalProperties: false,
 } as const;
 
-export const productDtoSchemas = {
+export const productDtoSchemas = [
   createProductSchema,
   updateProductSchema,
   createReviewSchema,
@@ -128,4 +128,4 @@ export const productDtoSchemas = {
   productResponseSchema,
   reviewResponseSchema,
   productsListResponseSchema,
-};
+];

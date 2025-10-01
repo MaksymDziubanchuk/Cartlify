@@ -1,12 +1,12 @@
-import { ProductId, ReviewId } from 'types/ids.js';
-import {
+import type { ProductId, ReviewId } from 'types/ids.js';
+import type {
   CreateProductDto,
   UpdateProductDto,
   CreateReviewDto,
-  FindAllProductsParams,
+  FindAllProductsParamsDto,
 } from 'types/dto/products.dto.js';
 
-async function findAll({ page, limit, sort, categoryId }: FindAllProductsParams) {
+async function findAll({ page, limit, sort, categoryId }: FindAllProductsParamsDto) {
   return {
     message: 'findAll not implemented',
   };

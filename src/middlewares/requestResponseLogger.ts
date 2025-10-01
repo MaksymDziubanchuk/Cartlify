@@ -25,6 +25,7 @@ async function requestResponseLogger(app: FastifyInstance, opt: unknown) {
         );
       } else {
         req.log.info({
+          reqId: req.id,
           timestamp,
           method: req.method,
           url: req.url,

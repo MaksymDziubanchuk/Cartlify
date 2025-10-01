@@ -19,7 +19,8 @@
       "@graphql/*": ["graphql/*"],
       "@utils/*": ["utils/*"],
       "@routes/*": ["routes/*"],
-      "@schemas/*": ["schemas/*"]
+      "@schemas/*": ["schemas/*"],
+      "@helpers/*": ["helpers/*"]
     }
   },
   "include": ["src"],

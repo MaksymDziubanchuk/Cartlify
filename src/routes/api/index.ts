@@ -16,10 +16,6 @@ import { adminRouter } from '@routes/api/admin/index.js';
 import { rootRouter } from '@routes/api/root/index.js';
 import { chatRouter } from '@routes/api/chat/index.js';
 
-import { paramsSchemas } from '@schemas/index.js';
-import { authSchemas } from '@schemas/dto/auth.dtoSchemas.js';
-import { productDtoSchemas } from '@schemas/dto/products.dtoSchemas.js';
-
 export async function registerRoutes(app: FastifyInstance) {
   app.register(getHealthRouter, { prefix: '/health' });
   app.register(getReadyStatusRouter, { prefix: '/ready' });
@@ -35,15 +31,3 @@ export async function registerRoutes(app: FastifyInstance) {
   app.register(rootRouter, { prefix: '/root' });
   app.register(chatRouter, { prefix: '/chat' });
 }
-
-Object.values(paramsSchemas).forEach((schema) => {
-  app.addSchema(schema);
-});
-
-Object.values(authSchemas).forEach((schema) => {
-  app.addSchema(schema);
-});
-
-Object.values(productDtoSchemas).forEach((schema) => {
-  app.addSchema(schema);
-});
