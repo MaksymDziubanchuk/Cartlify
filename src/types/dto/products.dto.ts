@@ -41,15 +41,18 @@ export interface ProductResponseDto {
   description?: string;
   price: number;
   categoryId: CategoryId;
+  createdAt: Date;
+  UpdatedAt: Date;
   imageUrl?: string;
 }
 
 export interface ReviewResponseDto {
-  id: ReviewId;
+  reviewId: ReviewId;
   productId: ProductId;
   rating: number;
   comment?: string;
   userId: UserId;
+  createdAt: Date;
 }
 
 export interface ProductsListQueryDto {
