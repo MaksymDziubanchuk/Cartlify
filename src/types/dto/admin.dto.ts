@@ -23,9 +23,9 @@ export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancel
 export interface AdminStatsOrdersByStatus {
   pending: number;
   paid: number;
-  shiped: number;
+  shipped: number;
   delivered: number;
-  canceled: number;
+  cancelled: number;
 }
 
 export interface AdminStatsOrdersRevenue {
@@ -48,8 +48,8 @@ export interface AdminTopProductRevenue {
 }
 
 export interface AdminTopCategoryRevenue {
-  categoryId: CategoryId;
-  categoryName: string;
+  id: CategoryId;
+  name: string;
   revenue: number;
 }
 
@@ -70,7 +70,7 @@ export interface GetAdminStatsResponseDto {
   orders: AdminStatsOrdersDto;
   products: AdminStatsProductsDto;
   reviews: AdminStatsReviewsDto;
-  generatedAt: string;
+  createdAt: Date;
 }
 
 export interface SetProductPopularityInputDto {
@@ -88,7 +88,7 @@ export interface SetProductPopularityBodyDto {
 }
 
 export interface SetProductPopularityResponseDto {
-  productId: ProductId;
+  id: ProductId;
   popularity: number;
 }
 
@@ -98,6 +98,7 @@ export type ChatType = 'bot' | 'admin';
 export interface GetAdminChatsQueryDto {
   status?: ChatStatus;
   page?: number;
+  type?: ChatType;
   limit?: number;
 }
 
@@ -114,7 +115,7 @@ export interface AdminChatItemDto {
   userId: UserId;
   type: ChatType;
   status: ChatStatus;
-  lastMessageAt: string;
+  lastMessageAt: Date;
 }
 
 export interface GetAdminChatsResponseDto {

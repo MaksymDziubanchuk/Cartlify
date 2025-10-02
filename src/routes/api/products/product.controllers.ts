@@ -7,10 +7,11 @@ import type {
   FindAllProductsParamsDto,
   GetAllProductsQueryDto,
 } from 'types/dto/products.dto.js';
+import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 
-const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, unknown> = async (
+const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, MessageResponseDto> = async (
   req,
   reply,
 ) => {
@@ -31,22 +32,32 @@ const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, unknown> 
   return result;
 };
 
-const getProductById: ControllerRouter<{ productId: ProductId }> = async (req, reply) => {
+const getProductById: ControllerRouter<
+  { productId: ProductId },
+  {},
+  {},
+  MessageResponseDto
+> = async (req, reply) => {
   const id = Number(req.params.productId);
   const result = await productServices.findById(id);
   return result;
 };
 
-const getProductReviews: ControllerRouter<{ productId: ProductId }, {}, {}, unknown> = async (
-  req,
-  reply,
-) => {
+const getProductReviews: ControllerRouter<
+  { productId: ProductId },
+  {},
+  {},
+  MessageResponseDto
+> = async (req, reply) => {
   const id = Number(req.params.productId);
   const result = await productServices.findReviews(id);
   return result;
 };
 
-const postProduct: ControllerRouter<{}, CreateProductDto, {}, unknown> = async (req, reply) => {
+const postProduct: ControllerRouter<{}, CreateProductDto, {}, MessageResponseDto> = async (
+  req,
+  reply,
+) => {
   const result = await productServices.createProduct(req.body);
   return reply.code(201).send(result);
 };
@@ -66,17 +77,19 @@ const updateProductById: ControllerRouter<
   { productId: ProductId },
   UpdateProductDto,
   {},
-  unknown
+  MessageResponseDto
 > = async (req, reply) => {
   const id = Number(req.params.productId);
   const result = await productServices.updateProduct(id, req.body);
   return result;
 };
 
-const deleteProductById: ControllerRouter<{ productId: ProductId }, {}, {}, unknown> = async (
-  req,
-  reply,
-) => {
+const deleteProductById: ControllerRouter<
+  { productId: ProductId },
+  {},
+  {},
+  MessageResponseDto
+> = async (req, reply) => {
   const id = Number(req.params.productId);
   const result = await productServices.deleteProductById(id);
   return result;
@@ -86,7 +99,7 @@ const deleteProductReview: ControllerRouter<
   { productId: ProductId; reviewId: ReviewId },
   {},
   {},
-  unknown
+  MessageResponseDto
 > = async (req, reply) => {
   const prodId = Number(req.params.productId);
   const revId = Number(req.params.reviewId);

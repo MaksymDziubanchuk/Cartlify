@@ -26,6 +26,28 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
       };
     },
   );
+  app.patch(
+    '/me',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER'])],
+      schema: {
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              message: { type: 'string' },
+            },
+            required: ['message'],
+          },
+        },
+      },
+    },
+    async () => {
+      return {
+        message: 'update me not implemented',
+      };
+    },
+  );
   app.get(
     '/:userId',
     {
