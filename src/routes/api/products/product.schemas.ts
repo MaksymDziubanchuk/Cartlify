@@ -3,7 +3,7 @@ const getAllProductsRouterSchema = {
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
-} as const;
+};
 
 const getProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },

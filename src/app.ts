@@ -13,6 +13,7 @@ import env from '@config/env.js';
 import { registerRoutes } from '@routes/api/index.js';
 import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
+import { adminDtoSchemas } from '@schemas/dto/admin.dtoSchemas.js';
 import { productDtoSchemas } from '@schemas/dto/products.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
@@ -68,6 +69,7 @@ for (const schema of [
   ...paramsSchemas,
   ...authDtoSchemas,
   ...productDtoSchemas,
+  ...adminDtoSchemas,
 ]) {
   app.addSchema(schema);
 }
