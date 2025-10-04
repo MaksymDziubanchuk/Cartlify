@@ -10,7 +10,10 @@ export interface AdminStatsQueryDto {
 export interface AdminStatsQueryNormalizedDto {
   from: Date;
   to: Date;
+  userId: UserId;
 }
+
+export type AdminStatsDto = AdminStatsQueryNormalizedDto;
 
 export interface AdminStatsUsersDto {
   total: number;
@@ -72,18 +75,17 @@ export interface GetAdminStatsResponseDto {
   createdAt: Date;
 }
 
-export interface SetProductPopularityInputDto {
-  productId: ProductId;
-  popularity: number;
-  actorId: UserId;
-}
-
 export interface SetProductPopularityParamsDto {
   productId: ProductId;
 }
 
 export interface SetProductPopularityBodyDto {
   popularity: number;
+}
+export interface SetProductPopularityDto {
+  productId: ProductId;
+  popularity: number;
+  actorId: UserId;
 }
 
 export interface SetProductPopularityResponseDto {
@@ -99,11 +101,12 @@ export interface GetAdminChatsQueryDto {
 }
 
 export interface AdminChatsDto {
-  status?: ChatStatus;
-  type?: ChatType;
   page: number;
   limit: number;
   offset: number;
+  userId: UserId;
+  status?: ChatStatus;
+  type?: ChatType;
 }
 
 export interface AdminChatItemDto {
