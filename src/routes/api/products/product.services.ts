@@ -3,52 +3,73 @@ import type {
   CreateProductDto,
   UpdateProductDto,
   CreateReviewDto,
-  FindAllProductsParamsDto,
+  FindAllProductsDto,
+  FindProductByIdDto,
+  FindProductReviewsDto,
+  DeleteProductByIdDto,
+  DeleteProductReviewDto,
 } from 'types/dto/products.dto.js';
 
-async function findAll({ page, limit, sort, categoryId }: FindAllProductsParamsDto) {
+async function findAll({
+  page,
+  limit,
+  search,
+  categoryIds,
+  minPrice,
+  maxPrice,
+  sortBy,
+  order,
+}: FindAllProductsDto) {
   return {
     message: 'findAll not implemented',
   };
 }
 
-async function findById(productId: ProductId) {
+async function findById({ productId }: FindProductByIdDto) {
   return {
     message: 'findById not implemented',
   };
 }
 
-async function findReviews(productId: ProductId) {
+async function findReviews({ productId }: FindProductReviewsDto) {
   return {
     message: 'findReviews not implemented',
   };
 }
 
-async function createProduct(data: CreateProductDto) {
+async function createProduct({ name, description, price, categoryId, imageUrl }: CreateProductDto) {
   return {
     message: 'create not implemented',
   };
 }
 
-async function createReview(productId: ProductId, data: CreateReviewDto) {
+async function createReview({ rating, comment, productId, userId }: CreateReviewDto) {
   return {
     message: 'createReview not implemented',
   };
 }
 
-async function updateProduct(productId: ProductId, data: UpdateProductDto) {
+async function updateProduct({
+  productId,
+  name,
+  description,
+  price,
+  categoryId,
+  imageUrl,
+  popularity,
+}: UpdateProductDto) {
   return {
     message: 'updateProduct not implemented',
   };
 }
 
-async function deleteProductById(productId: ProductId) {
+async function deleteProductById({ productId }: DeleteProductByIdDto) {
   return {
     message: 'daleteProduct not implemented',
   };
 }
 
-async function deleteProductReview(productId: ProductId, reviewId: ReviewId) {
+async function deleteProductReview({ productId, reviewId, actorId }: DeleteProductReviewDto) {
   return {
     message: 'daleteProductReview not implemented',
   };
