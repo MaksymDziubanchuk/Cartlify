@@ -1,4 +1,5 @@
 import type { UserId, ProductId, CategoryId } from 'types/ids.js';
+import type { ChatStatus, ChatType } from './chats.dto.js';
 
 export interface AdminStatsQueryDto {
   from?: string;
@@ -17,8 +18,6 @@ export interface AdminStatsUsersDto {
   new30d: number;
   verifiedRate: number;
 }
-
-export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
 
 export interface AdminStatsOrdersByStatus {
   pending: number;
@@ -91,9 +90,6 @@ export interface SetProductPopularityResponseDto {
   id: ProductId;
   popularity: number;
 }
-
-export type ChatStatus = 'open' | 'closed';
-export type ChatType = 'bot' | 'admin';
 
 export interface GetAdminChatsQueryDto {
   status?: ChatStatus;
