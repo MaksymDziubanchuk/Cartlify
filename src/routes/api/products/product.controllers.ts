@@ -1,11 +1,21 @@
 import type { ControllerRouter } from 'types/controller.js';
-import type { ProductId, ReviewId } from 'types/ids.js';
+import type { ProductId, ReviewId, CategoryId, UserId } from 'types/ids.js';
+import type { User } from 'types/user.js';
 import type {
-  CreateProductDto,
-  UpdateProductDto,
-  CreateReviewDto,
-  FindAllProductsParamsDto,
   GetAllProductsQueryDto,
+  FindAllProductsDto,
+  GetProductByIdParamsDto,
+  GetProductReviewsParamsDto,
+  GetProductReviewsQueryDto,
+  CreateProductBodyDto,
+  PostReviewParamsDto,
+  CreateReviewBodyDto,
+  CreateReviewDto,
+  UpdateProductParamsDto,
+  UpdateProductBodyDto,
+  UpdateProductDto,
+  DeleteProductByIdParamsDto,
+  DeleteProductReviewParamsDto,
 } from 'types/dto/products.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
@@ -15,46 +25,81 @@ const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, MessageRe
   req,
   reply,
 ) => {
-  const { page: qp, limit: ql, sort: qs, categoryId: qc } = req.query;
+  const {
+    page: qp,
+    limit: ql,
+    search: qs,
+    categoryIds: qcats,
+    minPrice: qmin,
+    maxPrice: qmax,
+    sortBy: qsort,
+    order: qorder,
+  } = req.query;
+
   const page = qp ? Number(qp) : 1;
   const limit = ql ? Number(ql) : 10;
-  const categoryId = qc ? Number(qc) : undefined;
 
-  const allowedSort: Array<'price_asc' | 'price_desc' | 'popular'> = [
-    'price_asc',
-    'price_desc',
+  const categoryIds = Array.isArray(qcats)
+    ? (qcats as typeof qcats)
+    : typeof qcats === 'string'
+      ? ((qcats as any as string).split(',').map((s) => Number(s.trim())) as CategoryId[])
+      : undefined;
+
+  const minPrice = qmin != null ? Number(qmin) : undefined;
+  const maxPrice = qmax != null ? Number(qmax) : undefined;
+
+  const allowedSortBy: Array<'price' | 'createdAt' | 'popular' | 'name'> = [
+    'price',
+    'createdAt',
     'popular',
+    'name',
   ];
-  const sort = allowedSort.includes(qs as any) ? (qs as (typeof allowedSort)[number]) : undefined;
+  const sortBy = allowedSortBy.includes(qsort as any)
+    ? (qsort as (typeof allowedSortBy)[number])
+    : 'createdAt';
 
-  const args = pickDefined<FindAllProductsParamsDto>({ page, limit }, { sort, categoryId });
+  const allowedOrder: Array<'asc' | 'desc'> = ['asc', 'desc'];
+  const order = allowedOrder.includes(qorder as any)
+    ? (qorder as (typeof allowedOrder)[number])
+    : 'desc';
+
+  const search = typeof qs === 'string' && qs.trim() ? qs.trim() : undefined;
+
+  const args = pickDefined<FindAllProductsDto>(
+    { page, limit, sortBy, order },
+    { search, categoryIds, minPrice, maxPrice },
+  );
+
   const result = await productServices.findAll(args);
   return result;
 };
 
 const getProductById: ControllerRouter<
-  { productId: ProductId },
+  GetProductByIdParamsDto,
   {},
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const id = Number(req.params.productId);
-  const result = await productServices.findById(id);
+  const productId = Number(req.params.productId);
+  const result = await productServices.findById({ productId });
   return result;
 };
 
 const getProductReviews: ControllerRouter<
-  { productId: ProductId },
+  GetProductReviewsParamsDto,
   {},
-  {},
+  GetProductReviewsQueryDto,
   MessageResponseDto
 > = async (req, reply) => {
-  const id = Number(req.params.productId);
-  const result = await productServices.findReviews(id);
+  const { page: qp, limit: ql } = req.query;
+  const page = qp ? Number(qp) : 1;
+  const limit = ql ? Number(ql) : 10;
+  const productId = Number(req.params.productId);
+  const result = await productServices.findReviews({ productId, page, limit });
   return result;
 };
 
-const postProduct: ControllerRouter<{}, CreateProductDto, {}, MessageResponseDto> = async (
+const postProduct: ControllerRouter<{}, CreateProductBodyDto, {}, MessageResponseDto> = async (
   req,
   reply,
 ) => {
@@ -63,47 +108,62 @@ const postProduct: ControllerRouter<{}, CreateProductDto, {}, MessageResponseDto
 };
 
 const postProductReview: ControllerRouter<
-  { productId: ProductId },
-  CreateReviewDto,
+  PostReviewParamsDto,
+  CreateReviewBodyDto,
   {},
   unknown
 > = async (req, reply) => {
-  const id = Number(req.params.productId);
-  const result = await productServices.createReview(id, req.body);
+  const productId = Number(req.params.productId);
+  const userId = (req.user as User).id;
+  const args: CreateReviewDto = {
+    productId,
+    userId,
+    ...req.body,
+  };
+  const result = await productServices.createReview(args);
   return reply.code(201).send(result);
 };
 
 const updateProductById: ControllerRouter<
-  { productId: ProductId },
-  UpdateProductDto,
+  UpdateProductParamsDto,
+  UpdateProductBodyDto,
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const id = Number(req.params.productId);
-  const result = await productServices.updateProduct(id, req.body);
+  const { name, description, price, categoryId, imageUrl, popularity } = req.body;
+
+  const productId = Number(req.params.productId);
+  const args = pickDefined<UpdateProductDto>(
+    {
+      productId,
+    },
+    { name, description, price, categoryId, imageUrl, popularity },
+  );
+  const result = await productServices.updateProduct(args);
   return result;
 };
 
 const deleteProductById: ControllerRouter<
-  { productId: ProductId },
+  DeleteProductByIdParamsDto,
   {},
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const id = Number(req.params.productId);
-  const result = await productServices.deleteProductById(id);
+  const productId = Number(req.params.productId);
+  const result = await productServices.deleteProductById({ productId });
   return result;
 };
 
 const deleteProductReview: ControllerRouter<
-  { productId: ProductId; reviewId: ReviewId },
+  DeleteProductReviewParamsDto,
   {},
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const prodId = Number(req.params.productId);
-  const revId = Number(req.params.reviewId);
-  const result = await productServices.deleteProductReview(prodId, revId);
+  const productId = Number(req.params.productId);
+  const reviewId = Number(req.params.reviewId);
+  const actorId = (req.user as User).id;
+  const result = await productServices.deleteProductReview({ productId, reviewId, actorId });
   return result;
 };
 
