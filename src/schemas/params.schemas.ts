@@ -5,6 +5,7 @@ export const userIdParamSchema = {
     userId: { type: 'integer', minimum: 1 },
   },
   required: ['userId'],
+  additionalProperties: false,
 } as const;
 
 export const productIdParamSchema = {
@@ -14,6 +15,7 @@ export const productIdParamSchema = {
     productId: { type: 'integer', minimum: 1 },
   },
   required: ['productId'],
+  additionalProperties: false,
 } as const;
 
 export const reviewIdParamSchema = {
@@ -23,6 +25,7 @@ export const reviewIdParamSchema = {
     reviewId: { type: 'integer', minimum: 1 },
   },
   required: ['reviewId'],
+  additionalProperties: false,
 } as const;
 
 export const productReviewIdsParamSchema = {
@@ -33,6 +36,7 @@ export const productReviewIdsParamSchema = {
     reviewId: { type: 'integer', minimum: 1 },
   },
   required: ['productId', 'reviewId'],
+  additionalProperties: false,
 } as const;
 
 export const categoryIdParamSchema = {
@@ -42,6 +46,7 @@ export const categoryIdParamSchema = {
     categoryId: { type: 'integer', minimum: 1 },
   },
   required: ['categoryId'],
+  additionalProperties: false,
 } as const;
 
 export const orderIdParamSchema = {
@@ -51,6 +56,7 @@ export const orderIdParamSchema = {
     orderId: { type: 'integer', minimum: 1 },
   },
   required: ['orderId'],
+  additionalProperties: false,
 } as const;
 
 export const adminIdParamSchema = {
@@ -60,6 +66,7 @@ export const adminIdParamSchema = {
     adminId: { type: 'integer', minimum: 1 },
   },
   required: ['adminId'],
+  additionalProperties: false,
 } as const;
 
 export const paramsSchemas = [

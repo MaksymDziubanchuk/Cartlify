@@ -5,6 +5,7 @@ export const messageResponseSchema = {
     message: { type: 'string' },
   },
   required: ['message'],
+  additionalProperties: false,
 } as const;
 
 export const errorResposeSchema = {
@@ -16,6 +17,7 @@ export const errorResposeSchema = {
     stack: { type: 'string' },
   },
   required: ['code', 'message'],
+  additionalProperties: false,
 } as const;
 
 export const commonSchemas = [messageResponseSchema, errorResposeSchema];
