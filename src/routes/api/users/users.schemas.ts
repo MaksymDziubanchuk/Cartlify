@@ -1,19 +1,16 @@
 import type { FastifySchema } from 'fastify';
 
-export const getFavoritesSchema = {
-  querystring: { $ref: 'favoritesGetQuerySchema#' },
+export const getMeSchema = {
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
-    400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
-    403: { $ref: 'errorResponseSchema#' },
     500: { $ref: 'errorResponseSchema#' },
   },
 } satisfies FastifySchema;
 
-export const postToggleFavoriteSchema = {
-  params: { $ref: 'favoritesToggleParamsSchema#' },
+export const patchMeSchema = {
+  body: { $ref: 'usersUpdateMeBodySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
@@ -26,8 +23,8 @@ export const postToggleFavoriteSchema = {
   },
 } satisfies FastifySchema;
 
-export const deleteFavoriteSchema = {
-  params: { $ref: 'favoritesDeleteParamsSchema#' },
+export const getUserByIdSchema = {
+  params: { $ref: 'usersGetByIdParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
@@ -39,8 +36,8 @@ export const deleteFavoriteSchema = {
   },
 } satisfies FastifySchema;
 
-export const favoritesSchema = {
-  getFavoritesSchema,
-  postToggleFavoriteSchema,
-  deleteFavoriteSchema,
+export const usersSchema = {
+  getMeSchema,
+  patchMeSchema,
+  getUserByIdSchema,
 };

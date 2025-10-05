@@ -129,6 +129,26 @@ export const ordersListResponseSchema = {
   required: ['items'],
 } as const;
 
+export const ordersDeleteParamsSchema = {
+  $id: 'ordersDeleteParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'number', minimum: 1 },
+  },
+  required: ['orderId'],
+} as const;
+
+export const ordersDeleteResponseSchema = {
+  $id: 'ordersDeleteResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message: { type: 'string' },
+  },
+  required: ['message'],
+} as const;
+
 export const ordersDtoSchemas = [
   ordersGetQuerySchema,
   ordersGetByIdParamsSchema,
@@ -141,4 +161,6 @@ export const ordersDtoSchemas = [
   ordersUpdateStatusBodySchema,
   ordersUpdateStatusResponseSchema,
   ordersListResponseSchema,
+  ordersDeleteParamsSchema,
+  ordersDeleteResponseSchema,
 ];
