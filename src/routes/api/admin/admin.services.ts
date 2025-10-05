@@ -4,8 +4,7 @@ import type {
   SetProductPopularityDto,
   AdminChatsDto,
 } from 'types/dto/admin.dto.js';
-import { ProductId, UserId } from 'types/ids.js';
-import { Role } from 'types/user.js';
+import type { MessageResponseDto } from 'types/common.js';
 
 async function showAllStats({
   from,
@@ -30,13 +29,24 @@ async function showAllStats({
   };
 }
 
-async function setProductPopularity({ productId, popularity, actorId }: SetProductPopularityDto) {
+async function setProductPopularity({
+  productId,
+  popularity,
+  actorId,
+}: SetProductPopularityDto): Promise<MessageResponseDto> {
   return {
     message: 'set product popularity not implemented',
   };
 }
 
-async function showAdminChats({ userId, page, limit, offset, status, type }: AdminChatsDto) {
+async function showAdminChats({
+  userId,
+  page,
+  limit,
+  offset,
+  status,
+  type,
+}: AdminChatsDto): Promise<MessageResponseDto> {
   return {
     message: 'admin chats not implemented',
   };

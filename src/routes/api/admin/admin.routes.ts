@@ -18,7 +18,7 @@ export default async function adminRouter(app: FastifyInstance, opt: unknown) {
     '/products/:productId/popularity',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
-      schema: adminSchema.setProductPopularity,
+      schema: adminSchema.setProductPopularitySchema,
     },
     adminController.postProductPopularity,
   );

@@ -48,7 +48,7 @@ const getAllStats: ControllerRouter<{}, {}, AdminStatsQueryDto, GetAdminStatsRes
   };
   const dto = toRange(from, to, range);
   const result = await adminServices.showAllStats(dto);
-  return result;
+  return reply.code(200).send(result);
 };
 
 const postProductPopularity: ControllerRouter<
@@ -66,7 +66,7 @@ const postProductPopularity: ControllerRouter<
     popularity,
     actorId: id,
   });
-  return result;
+  return reply.code(200).send(result);
 };
 
 const getAdminsChats: ControllerRouter<{}, {}, GetAdminChatsQueryDto, MessageResponseDto> = async (
@@ -82,7 +82,7 @@ const getAdminsChats: ControllerRouter<{}, {}, GetAdminChatsQueryDto, MessageRes
 
   const args = pickDefined<AdminChatsDto>({ userId: id, page, limit, offset }, { status, type });
   const result = await adminServices.showAdminChats(args);
-  return result;
+  return reply.code(200).send(result);
 };
 
 export const adminController = {

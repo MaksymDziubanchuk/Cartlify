@@ -1,5 +1,5 @@
 export const adminStatsQuerySchema = {
-  $id: 'adminStatsQuery',
+  $id: 'adminStatsQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -10,7 +10,7 @@ export const adminStatsQuerySchema = {
 };
 
 export const adminStatsUsersSchema = {
-  $id: 'adminStatsUsers',
+  $id: 'adminStatsUsersSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -23,7 +23,7 @@ export const adminStatsUsersSchema = {
 };
 
 export const adminStatsOrdersByStatusSchema = {
-  $id: 'adminStatsOrdersByStatus',
+  $id: 'adminStatsOrdersByStatusSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -37,7 +37,7 @@ export const adminStatsOrdersByStatusSchema = {
 };
 
 export const adminStatsOrdersRevenueSchema = {
-  $id: 'adminStatsOrdersRevenue',
+  $id: 'adminStatsOrdersRevenueSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -49,20 +49,20 @@ export const adminStatsOrdersRevenueSchema = {
 };
 
 export const adminStatsOrdersSchema = {
-  $id: 'adminStatsOrders',
+  $id: 'adminStatsOrdersSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     total: { type: 'number' },
-    byStatus: { $ref: 'adminStatsOrdersByStatus#' },
-    revenue: { $ref: 'adminStatsOrdersRevenue#' },
+    byStatus: { $ref: 'adminStatsOrdersByStatusSchema#' },
+    revenue: { $ref: 'adminStatsOrdersRevenueSchema#' },
     averageOrderValue: { type: 'number' },
   },
   required: ['total', 'byStatus', 'revenue', 'averageOrderValue'],
 };
 
 export const adminTopProductRevenueSchema = {
-  $id: 'adminTopProductRevenue',
+  $id: 'adminTopProductRevenueSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -74,7 +74,7 @@ export const adminTopProductRevenueSchema = {
 };
 
 export const adminTopCategoryRevenueSchema = {
-  $id: 'adminTopCategoryRevenue',
+  $id: 'adminTopCategoryRevenueSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -86,19 +86,19 @@ export const adminTopCategoryRevenueSchema = {
 };
 
 export const adminStatsProductsSchema = {
-  $id: 'adminStatsProducts',
+  $id: 'adminStatsProductsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     total: { type: 'number' },
-    topProductsByRevenue: { type: 'array', items: { $ref: 'adminTopProductRevenue#' } },
-    topCategoriesByRevenue: { type: 'array', items: { $ref: 'adminTopCategoryRevenue#' } },
+    topProductsByRevenue: { type: 'array', items: { $ref: 'adminTopProductRevenueSchema#' } },
+    topCategoriesByRevenue: { type: 'array', items: { $ref: 'adminTopCategoryRevenueSchema#' } },
   },
   required: ['total', 'topProductsByRevenue', 'topCategoriesByRevenue'],
 };
 
 export const adminStatsReviewsSchema = {
-  $id: 'adminStatsReviews',
+  $id: 'adminStatsReviewsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -110,21 +110,21 @@ export const adminStatsReviewsSchema = {
 };
 
 export const adminStatsResponseSchema = {
-  $id: 'adminStatsResponse',
+  $id: 'adminStatsResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    users: { $ref: 'adminStatsUsers#' },
-    orders: { $ref: 'adminStatsOrders#' },
-    products: { $ref: 'adminStatsProducts#' },
-    reviews: { $ref: 'adminStatsReviews#' },
+    users: { $ref: 'adminStatsUsersSchema#' },
+    orders: { $ref: 'adminStatsOrdersSchema#' },
+    products: { $ref: 'adminStatsProductsSchema#' },
+    reviews: { $ref: 'adminStatsReviewsSchema#' },
     createdAt: { type: 'string', format: 'date-time' },
   },
   required: ['users', 'orders', 'products', 'reviews', 'createdAt'],
 };
 
 export const adminSetPopularityParamsSchema = {
-  $id: 'adminSetPopularityParams',
+  $id: 'adminSetPopularityParamsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -134,7 +134,7 @@ export const adminSetPopularityParamsSchema = {
 };
 
 export const adminSetPopularityBodySchema = {
-  $id: 'adminSetPopularityBody',
+  $id: 'adminSetPopularityBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -144,7 +144,7 @@ export const adminSetPopularityBodySchema = {
 };
 
 export const adminSetPopularityResponseSchema = {
-  $id: 'adminSetPopularityResponse',
+  $id: 'adminSetPopularityResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -155,7 +155,7 @@ export const adminSetPopularityResponseSchema = {
 };
 
 export const adminChatsQuerySchema = {
-  $id: 'adminChatsQuery',
+  $id: 'adminChatsQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -167,7 +167,7 @@ export const adminChatsQuerySchema = {
 };
 
 export const adminChatItemSchema = {
-  $id: 'adminChatItem',
+  $id: 'adminChatItemSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -183,11 +183,11 @@ export const adminChatItemSchema = {
 };
 
 export const adminChatsResponseSchema = {
-  $id: 'adminChatsResponse',
+  $id: 'adminChatsResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    items: { type: 'array', items: { $ref: 'adminChatItem#' } },
+    items: { type: 'array', items: { $ref: 'adminChatItemSchema#' } },
     page: { type: 'number' },
     limit: { type: 'number' },
     total: { type: 'number' },

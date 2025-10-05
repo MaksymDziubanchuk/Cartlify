@@ -41,6 +41,10 @@ export interface PasswordResetBodyDto {
   newPassword: string;
 }
 
+export interface PasswordResetQueryDto {
+  token: string;
+}
+
 export interface PasswordResetDto {
   token: string;
   newPassword: string;
