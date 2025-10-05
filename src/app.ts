@@ -15,6 +15,13 @@ import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
 import { adminDtoSchemas } from '@schemas/dto/admin.dtoSchemas.js';
 import { productDtoSchemas } from '@schemas/dto/products.dtoSchemas.js';
+import { ordersDtoSchemas } from '@schemas/dto/orders.dtoSchemas.js';
+import { favoritesDtoSchemas } from '@schemas/dto/favorites.dtoSchemas.js';
+import { categoriesDtoSchemas } from '@schemas/dto/categories.dtoSchemas.js';
+import { reviewsDtoSchemas } from '@schemas/dto/reviews.dtoSchemas.js';
+import { usersDtoSchemas } from '@schemas/dto/users.dtoSchemas.js';
+import { rootAdminsDtoSchemas } from '@schemas/dto/root.dtoSchemas.js';
+import { chatsDtoSchemas } from '@schemas/dto/chat.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
@@ -70,6 +77,13 @@ for (const schema of [
   ...authDtoSchemas,
   ...productDtoSchemas,
   ...adminDtoSchemas,
+  ...ordersDtoSchemas,
+  ...favoritesDtoSchemas,
+  ...categoriesDtoSchemas,
+  ...reviewsDtoSchemas,
+  ...usersDtoSchemas,
+  ...rootAdminsDtoSchemas,
+  ...chatsDtoSchemas,
 ]) {
   app.addSchema(schema);
 }

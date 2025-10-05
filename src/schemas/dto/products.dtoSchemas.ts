@@ -119,6 +119,56 @@ export const productsListResponseSchema = {
   additionalProperties: false,
 } as const;
 
+export const productsUpdateCategoryParamsSchema = {
+  $id: 'productsUpdateCategoryParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    productId: { type: 'number' },
+  },
+  required: ['productId'],
+} as const;
+
+export const productsUpdateCategoryBodySchema = {
+  $id: 'productsUpdateCategoryBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    categoryId: { type: 'number' },
+  },
+  required: ['categoryId'],
+} as const;
+
+export const productsRemoveCategoryParamsSchema = {
+  $id: 'productsRemoveCategoryParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    productId: { type: 'number' },
+  },
+  required: ['productId'],
+} as const;
+
+export const productsUpdateCategoryResponseSchema = {
+  $id: 'productsUpdateCategoryResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message: { type: 'string' },
+  },
+  required: ['message'],
+} as const;
+
+export const productsRemoveCategoryResponseSchema = {
+  $id: 'productsRemoveCategoryResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message: { type: 'string' },
+  },
+  required: ['message'],
+} as const;
+
 export const productDtoSchemas = [
   createProductSchema,
   updateProductSchema,
@@ -128,4 +178,9 @@ export const productDtoSchemas = [
   productResponseSchema,
   reviewResponseSchema,
   productsListResponseSchema,
+  productsUpdateCategoryParamsSchema,
+  productsUpdateCategoryBodySchema,
+  productsRemoveCategoryParamsSchema,
+  productsUpdateCategoryResponseSchema,
+  productsRemoveCategoryResponseSchema,
 ];

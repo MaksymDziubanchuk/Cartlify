@@ -56,6 +56,21 @@ const deleteProductReviewRouterSchema = {
   },
 };
 
+export const patchProductCategorySchema = {
+  params: { $ref: 'productsUpdateCategoryParamsSchema#' },
+  body: { $ref: 'productsUpdateCategoryBodySchema#' },
+  response: {
+    200: { $ref: 'messageResponseSchema#' },
+  },
+};
+
+export const deleteProductCategorySchema = {
+  params: { $ref: 'productsRemoveCategoryParamsSchema#' },
+  response: {
+    200: { $ref: 'messageResponseSchema#' },
+  },
+};
+
 export const productSchemas = {
   getAllProductsRouterSchema,
   getProductByIdRouterSchema,
@@ -65,4 +80,6 @@ export const productSchemas = {
   updateProductByIdRouterSchema,
   deleteProductByIdRouterSchema,
   deleteProductReviewRouterSchema,
+  patchProductCategorySchema,
+  deleteProductCategorySchema,
 };

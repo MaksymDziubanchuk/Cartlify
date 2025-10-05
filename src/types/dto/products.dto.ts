@@ -154,3 +154,31 @@ export interface DeleteProductReviewDto {
 export interface DeleteProductReviewResponseDto {
   message: string;
 }
+
+export interface UpdateProductCategoryParamsDto {
+  productId: ProductId;
+}
+
+export interface UpdateProductCategoryBodyDto {
+  categoryId: CategoryId;
+}
+
+export interface UpdateProductCategoryDto {
+  productId: ProductId;
+  categoryId: CategoryId;
+}
+
+export interface UpdateProductCategoryResponseDto {
+  message: string;
+}
+
+export interface RemoveProductCategoryParamsDto {
+  productId: ProductId;
+}
+
+export interface RemoveProductCategoryDto {
+  productId: ProductId;
+}
+export interface RemoveProductCategoryResponseDto {
+  message: string;
+}

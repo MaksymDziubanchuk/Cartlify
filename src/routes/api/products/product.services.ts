@@ -8,6 +8,8 @@ import type {
   FindProductReviewsDto,
   DeleteProductByIdDto,
   DeleteProductReviewDto,
+  UpdateProductCategoryDto,
+  RemoveProductCategoryDto,
 } from 'types/dto/products.dto.js';
 
 async function findAll({
@@ -90,6 +92,19 @@ async function deleteProductReview({
   };
 }
 
+async function updateProductCategory({
+  productId,
+  categoryId,
+}: UpdateProductCategoryDto): Promise<MessageResponseDto> {
+  return { message: 'product category set not implemented' };
+}
+
+async function removeProductCategory({
+  productId,
+}: RemoveProductCategoryDto): Promise<MessageResponseDto> {
+  return { message: 'product category cleared not implemented' };
+}
+
 export const productServices = {
   findAll,
   findById,
@@ -99,4 +114,6 @@ export const productServices = {
   updateProduct,
   deleteProductById,
   deleteProductReview,
+  updateProductCategory,
+  removeProductCategory,
 };

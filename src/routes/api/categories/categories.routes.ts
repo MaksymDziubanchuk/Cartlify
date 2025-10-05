@@ -2,23 +2,14 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { categoriesSchema } from './categories.schemas.js';
 
 export default async function categoriesRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'ADMIN', 'ROOT', 'USER'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: categoriesSchema.getCategoriesSchema,
     },
     async () => {
       return {
@@ -30,17 +21,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: categoriesSchema.postCategorySchema,
     },
     async () => {
       return {
@@ -52,17 +33,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
     '/:categoryId',
     {
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: categoriesSchema.patchCategorySchema,
     },
     async () => {
       return {
@@ -74,17 +45,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
     '/:categoryId',
     {
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: categoriesSchema.getCategoriesSchema,
     },
     async () => {
       return {

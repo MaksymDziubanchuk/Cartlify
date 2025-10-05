@@ -90,4 +90,21 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     },
     productController.deleteProductReview,
   );
+  app.patch(
+    '/:productId/category',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.patchProductCategorySchema,
+    },
+    productController.patchProductCategory,
+  );
+
+  app.delete(
+    '/:productId/category',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.deleteProductCategorySchema,
+    },
+    productController.deleteProductCategory,
+  );
 }

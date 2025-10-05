@@ -16,6 +16,11 @@ import type {
   UpdateProductDto,
   DeleteProductByIdParamsDto,
   DeleteProductReviewParamsDto,
+  UpdateProductCategoryParamsDto,
+  UpdateProductCategoryBodyDto,
+  UpdateProductCategoryDto,
+  RemoveProductCategoryParamsDto,
+  RemoveProductCategoryDto,
 } from 'types/dto/products.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
@@ -167,6 +172,33 @@ const deleteProductReview: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+export const patchProductCategory: ControllerRouter<
+  UpdateProductCategoryParamsDto,
+  UpdateProductCategoryBodyDto,
+  {},
+  MessageResponseDto
+> = async (req, reply) => {
+  const { productId } = req.params;
+  const { categoryId } = req.body;
+
+  const args = pickDefined<UpdateProductCategoryDto>({ productId, categoryId }, {});
+  const result = await productServices.updateProductCategory(args);
+  return reply.code(200).send(result);
+};
+
+export const deleteProductCategory: ControllerRouter<
+  RemoveProductCategoryParamsDto,
+  {},
+  {},
+  MessageResponseDto
+> = async (req, reply) => {
+  const { productId } = req.params;
+
+  const args = pickDefined<RemoveProductCategoryDto>({ productId }, {});
+  const result = await productServices.removeProductCategory(args);
+  return reply.code(200).send(result);
+};
+
 export const productController = {
   getAllProducts,
   getProductById,
@@ -176,4 +208,6 @@ export const productController = {
   updateProductById,
   deleteProductById,
   deleteProductReview,
+  patchProductCategory,
+  deleteProductCategory,
 };
