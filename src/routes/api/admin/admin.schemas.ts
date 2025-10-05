@@ -1,20 +1,20 @@
 export const getStatsSchema = {
-  querystring: { $ref: 'adminStatsQuery#' },
+  querystring: { $ref: 'adminStatsQuerySchema#' },
   response: {
-    200: { $ref: 'adminStatsResponse#' },
+    200: { $ref: 'adminStatsResponseSchema#' },
   },
 };
 
-export const setProductPopularity = {
-  params: { $ref: 'adminSetPopularityParams#' },
-  body: { $ref: 'adminSetPopularityBody#' },
+export const setProductPopularitySchema = {
+  params: { $ref: 'adminSetPopularityParamsSchema#' },
+  body: { $ref: 'adminSetPopularityBodySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
 };
 
 export const getChatsSchema = {
-  querystring: { $ref: 'adminChatsQuery#' },
+  querystring: { $ref: 'adminChatsQuerySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
   },
@@ -22,6 +22,6 @@ export const getChatsSchema = {
 
 export const adminSchema = {
   getStatsSchema,
-  setProductPopularity,
+  setProductPopularitySchema,
   getChatsSchema,
 };

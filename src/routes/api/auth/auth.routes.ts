@@ -1,154 +1,64 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import { authSchema } from './auth.schemas.js';
+import { authController } from './auth.controllers.js';
 
 export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/login',
     {
       preHandler: [authGuard, requireRole(['GUEST'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: authSchema.setLoginSchema,
     },
-    async () => {
-      return {
-        message: 'login not implemented',
-      };
-    },
+    authController.postLogin,
   );
   app.post(
     '/register',
     {
       preHandler: [authGuard, requireRole(['GUEST'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: authSchema.setRegisterSchema,
     },
-    async () => {
-      return {
-        message: 'register not implemented',
-      };
-    },
+    authController.postRegister,
   );
   app.post(
     '/verify/resend',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: authSchema.setVerifyResendSchema,
     },
-    async () => {
-      return {
-        message: 'verify resend not implemented',
-      };
-    },
+    authController.postVerifyResend,
   );
   app.post(
     '/password/forgot',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: authSchema.setPasswordForgotSchema,
     },
-    async () => {
-      return {
-        message: 'password forgot not implemented',
-      };
-    },
+    authController.postPasswordForgot,
   );
   app.post(
     '/password/reset',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: authSchema.setPasswordResetSchema,
     },
-    async () => {
-      return {
-        message: 'password reset not implemented',
-      };
-    },
+    authController.postPasswordReset,
   );
   app.post(
     '/logout',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          204: {
-            type: 'null',
-          },
-        },
-      },
+      schema: authSchema.setLogoutSchema,
     },
-    async (request, reply) => {
-      return reply.code(204).send();
-    },
+    authController.postLogout,
   );
   app.post(
     '/refresh',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: authSchema.setRefreshSchema,
     },
-    async () => {
-      return {
-        message: 'refresh not implemented',
-      };
-    },
+    authController.postRefresh,
   );
 }

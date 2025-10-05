@@ -71,7 +71,7 @@ const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, MessageRe
   );
 
   const result = await productServices.findAll(args);
-  return result;
+  return reply.code(200).send(result);
 };
 
 const getProductById: ControllerRouter<
@@ -82,7 +82,7 @@ const getProductById: ControllerRouter<
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
   const result = await productServices.findById({ productId });
-  return result;
+  return reply.code(200).send(result);
 };
 
 const getProductReviews: ControllerRouter<
@@ -96,7 +96,7 @@ const getProductReviews: ControllerRouter<
   const limit = ql ? Number(ql) : 10;
   const productId = Number(req.params.productId);
   const result = await productServices.findReviews({ productId, page, limit });
-  return result;
+  return reply.code(200).send(result);
 };
 
 const postProduct: ControllerRouter<{}, CreateProductBodyDto, {}, MessageResponseDto> = async (
@@ -140,7 +140,7 @@ const updateProductById: ControllerRouter<
     { name, description, price, categoryId, imageUrl, popularity },
   );
   const result = await productServices.updateProduct(args);
-  return result;
+  return reply.code(200).send(result);
 };
 
 const deleteProductById: ControllerRouter<
@@ -151,7 +151,7 @@ const deleteProductById: ControllerRouter<
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
   const result = await productServices.deleteProductById({ productId });
-  return result;
+  return reply.code(200).send(result);
 };
 
 const deleteProductReview: ControllerRouter<
@@ -164,7 +164,7 @@ const deleteProductReview: ControllerRouter<
   const reviewId = Number(req.params.reviewId);
   const actorId = (req.user as User).id;
   const result = await productServices.deleteProductReview({ productId, reviewId, actorId });
-  return result;
+  return reply.code(200).send(result);
 };
 
 export const productController = {

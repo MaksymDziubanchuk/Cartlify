@@ -1,4 +1,4 @@
-import type { ProductId, ReviewId } from 'types/ids.js';
+import type { MessageResponseDto } from 'types/common.js';
 import type {
   CreateProductDto,
   UpdateProductDto,
@@ -19,31 +19,42 @@ async function findAll({
   maxPrice,
   sortBy,
   order,
-}: FindAllProductsDto) {
+}: FindAllProductsDto): Promise<MessageResponseDto> {
   return {
     message: 'findAll not implemented',
   };
 }
 
-async function findById({ productId }: FindProductByIdDto) {
+async function findById({ productId }: FindProductByIdDto): Promise<MessageResponseDto> {
   return {
     message: 'findById not implemented',
   };
 }
 
-async function findReviews({ productId }: FindProductReviewsDto) {
+async function findReviews({ productId }: FindProductReviewsDto): Promise<MessageResponseDto> {
   return {
     message: 'findReviews not implemented',
   };
 }
 
-async function createProduct({ name, description, price, categoryId, imageUrl }: CreateProductDto) {
+async function createProduct({
+  name,
+  description,
+  price,
+  categoryId,
+  imageUrl,
+}: CreateProductDto): Promise<MessageResponseDto> {
   return {
     message: 'create not implemented',
   };
 }
 
-async function createReview({ rating, comment, productId, userId }: CreateReviewDto) {
+async function createReview({
+  rating,
+  comment,
+  productId,
+  userId,
+}: CreateReviewDto): Promise<MessageResponseDto> {
   return {
     message: 'createReview not implemented',
   };
@@ -57,19 +68,23 @@ async function updateProduct({
   categoryId,
   imageUrl,
   popularity,
-}: UpdateProductDto) {
+}: UpdateProductDto): Promise<MessageResponseDto> {
   return {
     message: 'updateProduct not implemented',
   };
 }
 
-async function deleteProductById({ productId }: DeleteProductByIdDto) {
+async function deleteProductById({ productId }: DeleteProductByIdDto): Promise<MessageResponseDto> {
   return {
     message: 'daleteProduct not implemented',
   };
 }
 
-async function deleteProductReview({ productId, reviewId, actorId }: DeleteProductReviewDto) {
+async function deleteProductReview({
+  productId,
+  reviewId,
+  actorId,
+}: DeleteProductReviewDto): Promise<MessageResponseDto> {
   return {
     message: 'daleteProductReview not implemented',
   };
