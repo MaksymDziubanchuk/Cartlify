@@ -1,72 +1,32 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import { rootAdminsSchemas } from './root.schemas.js';
+import { rootAdminsController } from './root.controllers.js';
 
 export default async function rootRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/admins',
     {
       preHandler: [authGuard, requireRole(['ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: rootAdminsSchemas.getRootAdminsSchema,
     },
-    async () => {
-      return {
-        message: 'get admins not implemented',
-      };
-    },
+    rootAdminsController.getAdmins,
   );
   app.post(
     '/admins',
     {
       preHandler: [authGuard, requireRole(['ROOT'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: rootAdminsSchemas.postRootAdminSchema,
     },
-    async () => {
-      return {
-        message: 'add admin not implemented',
-      };
-    },
+    rootAdminsController.postAdmin,
   );
   app.delete(
     '/admins/:adminId',
     {
       preHandler: [authGuard, requireRole(['ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: rootAdminsSchemas.deleteRootAdminSchema,
     },
-    async () => {
-      return {
-        message: 'delete admin not implemented',
-      };
-    },
+    rootAdminsController.deleteAdmin,
   );
 }

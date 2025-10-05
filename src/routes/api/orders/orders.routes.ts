@@ -2,23 +2,14 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { ordersSchema } from './orders.schemas.js';
 
 export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: ordersSchema.getOrdersSchema,
     },
     async () => {
       return {
@@ -30,17 +21,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     '/:orderId',
     {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT']), validateId('orderId')],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: ordersSchema.getOrderByIdSchema,
     },
     async () => {
       return {
@@ -52,17 +33,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     '/',
     {
       preHandler: [authGuard, requireRole(['USER'])],
-      schema: {
-        response: {
-          201: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: ordersSchema.postOrderSchema,
     },
     async () => {
       return {
@@ -74,17 +45,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     '/:orderId/status',
     {
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('orderId')],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: ordersSchema.putOrderStatusSchema,
     },
     async () => {
       return {

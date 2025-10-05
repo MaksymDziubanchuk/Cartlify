@@ -2,51 +2,25 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { usersSchema } from './users.schema.js';
+import { usersController } from './users.controllers.js';
 
 export default async function usersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/me',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: usersSchema.getMeSchema,
     },
-    async () => {
-      return {
-        message: 'me not implemented',
-      };
-    },
+    usersController.getMe,
   );
   app.patch(
     '/me',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: usersSchema.patchMeSchema,
     },
-    async () => {
-      return {
-        message: 'update me not implemented',
-      };
-    },
+    usersController.patchMe,
   );
   app.get(
     '/:userId',
@@ -56,22 +30,8 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
         requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
         validateId('userId'),
       ],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: usersSchema.getUserByIdSchema,
     },
-    async () => {
-      return {
-        message: 'user by id not implemented',
-      };
-    },
+    usersController.getUserById,
   );
 }

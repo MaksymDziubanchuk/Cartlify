@@ -2,72 +2,32 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { favoritesSchema } from './favorites.schemas.js';
+import { favoritesController } from './favorites.controllers.js';
 
 export default async function favoritesRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: favoritesSchema.getFavoritesSchema,
     },
-    async () => {
-      return {
-        message: 'favorites not implemented',
-      };
-    },
+    favoritesController.getFavorites,
   );
   app.post(
     '/:productId/toggle',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: favoritesSchema.postToggleFavoriteSchema,
     },
-    async () => {
-      return {
-        message: 'toggle favorites not implemented',
-      };
-    },
+    favoritesController.postToggleFavorite,
   );
   app.delete(
     '/:productId',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              message: { type: 'string' },
-            },
-            required: ['message'],
-          },
-        },
-      },
+      schema: favoritesSchema.deleteFavoriteSchema,
     },
-    async () => {
-      return {
-        message: 'delete favorite not implemented',
-      };
-    },
+    favoritesController.deleteFavorite,
   );
 }
