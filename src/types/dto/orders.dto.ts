@@ -87,3 +87,12 @@ export interface UpdateOrderStatusDto {
 }
 
 export type UpdateOrderStatusResponseDto = OrderResponseDto;
+
+export interface DeleteOrderParamsDto {
+  orderId: OrderId;
+}
+
+export interface DeleteOrderDto {
+  actorId: UserId;
+  orderId: OrderId;
+}

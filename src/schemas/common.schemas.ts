@@ -1,5 +1,5 @@
 export const messageResponseSchema = {
-  $id: 'messageResponse',
+  $id: 'messageResponseSchema',
   type: 'object',
   properties: {
     message: { type: 'string' },
@@ -8,7 +8,7 @@ export const messageResponseSchema = {
 } as const;
 
 export const errorResposeSchema = {
-  $id: 'errorResponse',
+  $id: 'errorResponseSchema',
   type: 'object',
   properties: {
     code: { type: 'integer' },

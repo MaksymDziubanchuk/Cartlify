@@ -3,6 +3,7 @@ import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
 import { ordersSchema } from './orders.schemas.js';
+import { ordersController } from './orders.controllers.js';
 
 export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
@@ -11,11 +12,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
       schema: ordersSchema.getOrdersSchema,
     },
-    async () => {
-      return {
-        message: 'orders not implemented',
-      };
-    },
+    ordersController.getOrders,
   );
   app.get(
     '/:orderId',
@@ -23,11 +20,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT']), validateId('orderId')],
       schema: ordersSchema.getOrderByIdSchema,
     },
-    async () => {
-      return {
-        message: 'order by id not implemented',
-      };
-    },
+    ordersController.getOrderById,
   );
   app.post(
     '/',
@@ -35,22 +28,22 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['USER'])],
       schema: ordersSchema.postOrderSchema,
     },
-    async () => {
-      return {
-        message: 'create order not implemented',
-      };
-    },
+    ordersController.postOrder,
   );
-  app.put(
+  app.patch(
     '/:orderId/status',
     {
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('orderId')],
-      schema: ordersSchema.putOrderStatusSchema,
+      schema: ordersSchema.patchOrderStatusSchema,
     },
-    async () => {
-      return {
-        message: 'update order status not implemented',
-      };
+    ordersController.putOrderStatus,
+  );
+  app.delete(
+    '/:orderId',
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
+      schema: ordersSchema.deleteOrderSchema,
     },
+    ordersController.deleteOrder,
   );
 }

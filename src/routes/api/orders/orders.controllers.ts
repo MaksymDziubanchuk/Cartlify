@@ -11,6 +11,7 @@ import type {
   UpdateOrderStatusParamsDto,
   UpdateOrderStatusBodyDto,
   UpdateOrderStatusDto,
+  DeleteOrderParamsDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
@@ -72,9 +73,21 @@ const putOrderStatus: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+const deleteOrder: ControllerRouter<DeleteOrderParamsDto, {}, {}, MessageResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id } = req.user as UserEntity;
+  const { orderId } = req.params;
+
+  const result = await ordersServices.deleteOrder({ actorId: id, orderId });
+  return reply.code(204).send(result);
+};
+
 export const ordersController = {
   getOrders,
   getOrderById,
   postOrder,
   putOrderStatus,
+  deleteOrder,
 };
