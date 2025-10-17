@@ -6,7 +6,7 @@ export const categoriesGetQuerySchema = {
     page: { type: 'number', minimum: 1 },
     limit: { type: 'number', minimum: 1 },
     search: { type: 'string' },
-    parentId: { type: 'number' },
+    parentId: { type: 'number', minimum: 1 },
   },
 } as const;
 
