@@ -23,6 +23,7 @@ export const categoriesCategoryResponseSchema = {
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
+
   required: ['id', 'name', 'createdAt', 'updatedAt'],
 } as const;
 
