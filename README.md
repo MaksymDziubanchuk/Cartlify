@@ -5,4 +5,4 @@ live site
 
 list
 
-instructions
+instructions of usage
