@@ -1,5 +1,5 @@
 # Cartlify link
-live site
+<!-- live site
 link
 
 
@@ -7,5 +7,5 @@ list
 
 instructions of usage
 
-Stack
+Stack -->
 
