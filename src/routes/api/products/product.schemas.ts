@@ -13,7 +13,7 @@ const getAllProductsRouterSchema = {
 } satisfies FastifySchema;
 
 const getProductByIdRouterSchema = {
-  params: { $ref: 'productIdParamSchema#' },
+  params: { $ref: 'productIdParam#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
@@ -26,7 +26,7 @@ const getProductByIdRouterSchema = {
 } satisfies FastifySchema;
 
 const getProductReviewsRouterSchema = {
-  params: { $ref: 'productIdParamSchema#' },
+  params: { $ref: 'productIdParam#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
@@ -53,7 +53,7 @@ const postProductRouterSchema = {
 } satisfies FastifySchema;
 
 const postProductReviewRouterSchema = {
-  params: { $ref: 'productIdParamSchema#' },
+  params: { $ref: 'productIdParam#' },
   body: { $ref: 'createReviewSchema#' },
   response: {
     201: { $ref: 'messageResponseSchema#' },
@@ -69,7 +69,7 @@ const postProductReviewRouterSchema = {
 } satisfies FastifySchema;
 
 const updateProductByIdRouterSchema = {
-  params: { $ref: 'productIdParamSchema#' },
+  params: { $ref: 'productIdParam#' },
   body: { $ref: 'updateProductSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -85,7 +85,7 @@ const updateProductByIdRouterSchema = {
 } satisfies FastifySchema;
 
 const deleteProductByIdRouterSchema = {
-  params: { $ref: 'productIdParamSchema#' },
+  params: { $ref: 'productIdParam#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
