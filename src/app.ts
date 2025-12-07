@@ -61,7 +61,7 @@ app.register(multipart, {
   attachFieldsToBody: true,
 });
 app.register(formbody, { bodyLimit: 1048576 });
-app.register(staticPlagin, { root: path.join(__dirname, 'static'), prefix: '/static/' });
+app.register(staticPlagin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
 app.register(rateLimit, {
   max: 100,
   timeWindow: '1 minute',

@@ -170,6 +170,7 @@ export const productsRemoveCategoryResponseSchema = {
 } as const;
 
 export const productDtoSchemas = [
+  getAllProductsSchema,
   createProductSchema,
   updateProductSchema,
   createReviewSchema,
