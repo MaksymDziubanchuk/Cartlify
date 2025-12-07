@@ -1,5 +1,5 @@
 export const userIdParamSchema = {
-  $id: 'userIdParam',
+  $id: 'userIdParamSchema',
   type: 'object',
   properties: {
     userId: { type: 'integer', minimum: 1 },
@@ -9,7 +9,7 @@ export const userIdParamSchema = {
 } as const;
 
 export const productIdParamSchema = {
-  $id: 'productIdParam',
+  $id: 'productIdParamSchema',
   type: 'object',
   properties: {
     productId: { type: 'integer', minimum: 1 },
@@ -19,7 +19,7 @@ export const productIdParamSchema = {
 } as const;
 
 export const reviewIdParamSchema = {
-  $id: 'reviewIdParam',
+  $id: 'reviewIdParamSchema',
   type: 'object',
   properties: {
     reviewId: { type: 'integer', minimum: 1 },
@@ -29,7 +29,7 @@ export const reviewIdParamSchema = {
 } as const;
 
 export const productReviewIdsParamSchema = {
-  $id: 'productReviewIdsParam',
+  $id: 'productReviewIdsParamSchema',
   type: 'object',
   properties: {
     productId: { type: 'integer', minimum: 1 },
@@ -40,7 +40,7 @@ export const productReviewIdsParamSchema = {
 } as const;
 
 export const categoryIdParamSchema = {
-  $id: 'categoryIdParam',
+  $id: 'categoryIdParamSchema',
   type: 'object',
   properties: {
     categoryId: { type: 'integer', minimum: 1 },
@@ -50,7 +50,7 @@ export const categoryIdParamSchema = {
 } as const;
 
 export const orderIdParamSchema = {
-  $id: 'orderIdParam',
+  $id: 'orderIdParamSchema',
   type: 'object',
   properties: {
     orderId: { type: 'integer', minimum: 1 },
@@ -60,7 +60,7 @@ export const orderIdParamSchema = {
 } as const;
 
 export const adminIdParamSchema = {
-  $id: 'adminIdParam',
+  $id: 'adminIdParamSchema',
   type: 'object',
   properties: {
     adminId: { type: 'integer', minimum: 1 },
