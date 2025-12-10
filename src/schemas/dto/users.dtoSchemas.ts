@@ -15,7 +15,7 @@ export const usersUserResponseSchema = {
   properties: {
     id: { type: 'number' },
     email: { type: 'string', format: 'email' },
-    role: { type: 'string', enum: ['GUEST', 'USER', 'ADMIN', 'ROOT'] },
+    role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'] },
     isVerified: { type: 'boolean' },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },

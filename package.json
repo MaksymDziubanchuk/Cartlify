@@ -2,7 +2,7 @@
   "name": "cartlify",
   "type": "module",
   "version": "1.0.0",
-  "description": "Cartlify - E-commerce pet-project with Fastify, GraphQL, Prisma, Supabase, Cloudinary, and SSR Handlebars.",
+  "description": "Cartlify - E-commerce pet-project with Fastify, GraphQL, Prisma, Supabase, Cloudinary and SSR Handlebars.",
   "main": "src/index.ts",
   "scripts": {
     "dev": "tsx watch -r tsconfig-paths/register src/index.ts",
@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
     "test": "jest --runInBand --detectOpenHandles",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write .",
