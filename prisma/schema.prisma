@@ -13,21 +13,159 @@ enum Role {
   ROOT
 }
 
+enum UserTokenType {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
 model User {
-  id         Int      @id @default(autoincrement())
-  email      String   @unique
-  role       Role     @default(USER)
+  id            Int      @id @default(autoincrement())
+  email         String   @unique
+  passwordHash  String   
+  role          Role     @default(USER)
 
-  isVerified Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  isVerified    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  name       String?
-  avatarUrl  String?
-  locale     String?
-  phone      String?
+  name          String?
+  avatarUrl     String?
+  locale        String?
+  phone         String?
+
+  userTokens    UserToken[]
+  loginLogs     LoginLog[]
+  reviews          Review[]
 
   @@map("users")
   @@index([createdAt])
   @@index([isVerified, createdAt])
+}
+
+model UserToken {
+  id        Int           @id @default(autoincrement())
+  userId    Int
+  type      UserTokenType
+  token     String        @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  user      User          @relation(fields: [userId], references: [id])
+
+  @@map("user_tokens")
+  @@index([userId, type, createdAt])
+}
+
+model LoginLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  email     String
+  role      Role
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@map("login_logs")
+  @@index([userId, createdAt])
+  @@index([email, createdAt])
+}
+
+model Category {
+  id          Int        @id @default(autoincrement())
+  name        String
+  slug        String     @unique
+  description String?
+
+  parentId    Int?
+  parent      Category?  @relation("CategoryToSubcategories", fields: [parentId], references: [id], onDelete: SetNull)
+  children    Category[] @relation("CategoryToSubcategories")
+
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  products    Product[]
+
+  @@map("categories")
+  @@index([parentId])
+  @@index([slug])
+}
+
+model Product {
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+
+  price       Decimal  @db.Decimal(10, 2)
+
+  categoryId  Int
+  category    Category @relation(fields: [categoryId], references: [id])
+
+  popularity  Int      @default(0)
+  views       Int      @default(0)
+
+  avgRating   Decimal        @db.Decimal(3, 2) @default(0)
+  reviewsCount Int           @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // зв’язки, які додамо/розкоментуємо, коли створимо відповідні моделі:
+  reviews          Review[]
+  // favorites        Favorite[]
+  // orderItems       OrderItem[]
+  // priceChangeLogs  ProductPriceChangeLog[]
+  images      ProductImage[]
+
+  @@map("products")
+  @@index([categoryId])
+  @@index([price])
+  @@index([createdAt])
+  @@index([name])
+  @@index([popularity])
+  @@index([views])
+}
+
+model ProductImage {
+  id        Int      @id @default(autoincrement())
+
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  url       String
+  publicId  String?
+  alt       String?
+
+  position  Int      @default(0)
+  isPrimary Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("product_images")
+  @@index([productId, position])
+}
+
+model Review {
+  id        Int      @id @default(autoincrement())
+
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  rating    Int
+  avgRating Decimal @db.Decimal(3, 2) @default(0)
+
+  comment   String?
+
+  createdAt DateTime @default(now())
+
+  @@map("reviews")
+  @@index([productId])
+  @@index([userId])
+  @@unique([userId, productId])
 }

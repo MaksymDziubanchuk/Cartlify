@@ -28,7 +28,7 @@ export interface ProductResponseDto {
   categoryId: CategoryId;
   createdAt: Date;
   updatedAt: Date;
-  imageUrl?: string;
+  images?: string[];
   popularity?: number;
   views?: number;
   avgRating?: number;
@@ -72,6 +72,7 @@ export interface ReviewResponseDto {
   rating: number;
   userId: UserId;
   createdAt: Date;
+  avgRating?: number;
   comment?: string;
 }
 
@@ -87,7 +88,7 @@ export interface CreateProductBodyDto {
   description?: string;
   price: number;
   categoryId: CategoryId;
-  imageUrl?: string;
+  images?: string[];
 }
 
 export type CreateProductDto = CreateProductBodyDto;
@@ -103,7 +104,7 @@ export interface UpdateProductBodyDto {
   description?: string;
   price?: number;
   categoryId?: CategoryId;
-  imageUrl?: string;
+  images?: string[];
   popularity?: number;
 }
 
