@@ -135,14 +135,14 @@ const updateProductById: ControllerRouter<
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const { name, description, price, categoryId, imageUrl, popularity } = req.body;
+  const { name, description, price, categoryId, images, popularity } = req.body;
 
   const productId = Number(req.params.productId);
   const args = pickDefined<UpdateProductDto>(
     {
       productId,
     },
-    { name, description, price, categoryId, imageUrl, popularity },
+    { name, description, price, categoryId, images, popularity },
   );
   const result = await productServices.updateProduct(args);
   return reply.code(200).send(result);
