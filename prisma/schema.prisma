@@ -18,6 +18,65 @@ enum UserTokenType {
   RESET_PASSWORD
 }
 
+enum ReviewVoteAction {
+  UP
+  DOWN
+}
+
+enum OrderStatus {
+  pending
+  paid
+  shipped
+  delivered
+  cancelled
+}
+
+enum PriceChangeMode {
+  percent
+  fixed
+}
+
+enum AdminAuditEntityType {
+  user
+  product
+  category
+  order
+  review
+  other
+}
+
+enum AdminAuditAction {
+  USER_ROLE_CHANGE
+  PRODUCT_UPDATE
+  PRODUCT_PRICE_BULK_UPDATE
+  ORDER_STATUS_CHANGE
+  CATEGORY_UPDATE
+  OTHER
+}
+
+enum AuditOperation {
+  INSERT
+  UPDATE
+  DELETE
+}
+
+enum ChatStatus {
+  open
+  closed
+}
+
+enum ChatType {
+  bot
+  admin
+}
+
+enum ChatMessageSenderType {
+  user
+  admin
+  bot
+  system
+}
+
 model User {
   id            Int      @id @default(autoincrement())
   email         String   @unique
@@ -36,6 +95,14 @@ model User {
   userTokens    UserToken[]
   loginLogs     LoginLog[]
   reviews          Review[]
+  votes     ReviewVote[]
+  favorites Favorite[]
+  orders    Order[]
+  productPriceChangeLogs ProductPriceChangeLog[]
+  adminAuditLogs AdminAuditLog[]
+  auditLogs AuditLog[]
+  chatThreads ChatThread[]
+  chatMessages ChatMessage[]
 
   @@map("users")
   @@index([createdAt])
@@ -112,11 +179,10 @@ model Product {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // зв’язки, які додамо/розкоментуємо, коли створимо відповідні моделі:
   reviews          Review[]
-  // favorites        Favorite[]
-  // orderItems       OrderItem[]
-  // priceChangeLogs  ProductPriceChangeLog[]
+  favorites        Favorite[]
+  orderItems       OrderItem[]
+  priceChangeLogs  ProductPriceChangeLog[]
   images      ProductImage[]
 
   @@map("products")
@@ -158,14 +224,210 @@ model Review {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   rating    Int
-  avgRating Decimal @db.Decimal(3, 2) @default(0)
+
+  upVotes   Int      @default(0)
+  downVotes Int      @default(0)
 
   comment   String?
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  votes     ReviewVote[]
 
   @@map("reviews")
   @@index([productId])
   @@index([userId])
   @@unique([userId, productId])
+}
+
+model ReviewVote {
+  id        Int              @id @default(autoincrement())
+
+  reviewId  Int
+  review    Review           @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  userId    Int
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  action    ReviewVoteAction
+
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@map("review_votes")
+  @@unique([userId, reviewId])
+  @@index([reviewId])
+}
+
+model Favorite {
+  id        Int      @id @default(autoincrement())
+
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@map("favorites")
+  @@unique([userId, productId])
+  @@index([productId])
+}
+
+model Order {
+  id      Int         @id @default(autoincrement())
+
+  userId  Int
+  user    User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  status  OrderStatus @default(pending)
+
+  subtotal Decimal    @db.Decimal(10, 2)
+  shipping Decimal    @db.Decimal(10, 2) @default(0)
+  discount Decimal    @db.Decimal(10, 2) @default(0)
+  total    Decimal    @db.Decimal(10, 2)
+
+  shippingAddress String
+  note            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items     OrderItem[]
+
+  @@map("orders")
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model OrderItem {
+  id        Int      @id @default(autoincrement())
+
+  orderId   Int
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId Int
+  product   Product  @relation(fields: [productId], references: [id])
+
+  quantity  Int
+  unitPrice Decimal  @db.Decimal(10, 2)
+  totalPrice Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  @@map("order_items")
+  @@index([orderId])
+  @@index([productId])
+}
+
+model ProductPriceChangeLog {
+  id Int @id @default(autoincrement())
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  actorId Int
+  actor   User  @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  oldPrice Decimal @db.Decimal(10, 2)
+  newPrice Decimal @db.Decimal(10, 2)
+
+  mode  PriceChangeMode
+  value Decimal       @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  @@map("product_price_change_logs")
+  @@index([productId, createdAt])
+  @@index([actorId, createdAt])
+}
+
+model AdminAuditLog {
+  id Int @id @default(autoincrement())
+
+  actorId   Int
+  actor     User   @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  actorRole Role
+
+  entityType AdminAuditEntityType
+  entityId   Int?
+
+  action   AdminAuditAction
+  meta     Json?
+
+  ip        String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@map("admin_audit_log")
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+}
+
+model AuditLog {
+  id Int @id @default(autoincrement())
+
+  tableName String
+  rowId     Int?
+
+  operation AuditOperation
+
+  oldData Json?
+  newData Json?
+
+  actorId   Int?          
+  actor     User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actorRole Role?
+
+  createdAt DateTime @default(now())
+
+  @@map("audit_log")
+  @@index([tableName, rowId, createdAt])
+  @@index([createdAt])
+}
+
+model ChatThread {
+  id        String     @id @default(uuid()) @db.Uuid
+
+  userId    Int
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      ChatType
+  status    ChatStatus @default(open)
+
+  lastMessageAt      DateTime @default(now())
+  unreadCount        Int      @default(0)
+  lastMessagePreview String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages  ChatMessage[]
+
+  @@map("chat_threads")
+  @@index([userId, status, type, lastMessageAt])
+}
+
+model ChatMessage {
+  id       Int         @id @default(autoincrement())
+
+  threadId String @db.Uuid
+  thread   ChatThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  senderId Int?
+  sender   User?       @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  senderType ChatMessageSenderType
+
+  content    String
+
+  isRead     Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+
+  @@map("chat_messages")
+  @@index([threadId, createdAt])
 }

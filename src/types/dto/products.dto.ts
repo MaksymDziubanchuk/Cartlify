@@ -72,7 +72,6 @@ export interface ReviewResponseDto {
   rating: number;
   userId: UserId;
   createdAt: Date;
-  avgRating?: number;
   comment?: string;
 }
 
