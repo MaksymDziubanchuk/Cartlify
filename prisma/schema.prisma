@@ -283,10 +283,8 @@ model Order {
   user    User        @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   status  OrderStatus @default(pending)
+  confirmed Boolean     @default(false)
 
-  subtotal Decimal    @db.Decimal(10, 2)
-  shipping Decimal    @db.Decimal(10, 2) @default(0)
-  discount Decimal    @db.Decimal(10, 2) @default(0)
   total    Decimal    @db.Decimal(10, 2)
 
   shippingAddress String
@@ -320,6 +318,48 @@ model OrderItem {
   @@map("order_items")
   @@index([orderId])
   @@index([productId])
+}
+
+model ChatThread {
+  id        String     @id @default(uuid()) @db.Uuid
+
+  userId    Int
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      ChatType
+  status    ChatStatus @default(open)
+
+  lastMessageAt      DateTime @default(now())
+  unreadCount        Int      @default(0)
+  lastMessagePreview String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages  ChatMessage[]
+
+  @@map("chat_threads")
+  @@index([userId, status, type, lastMessageAt])
+}
+
+model ChatMessage {
+  id       Int         @id @default(autoincrement())
+
+  threadId String @db.Uuid
+  thread   ChatThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  senderId Int?
+  sender   User?       @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  senderType ChatMessageSenderType
+
+  content    String
+
+  isRead     Boolean    @default(false)
+  createdAt  DateTime   @default(now())
+
+  @@map("chat_messages")
+  @@index([threadId, createdAt])
 }
 
 model ProductPriceChangeLog {
@@ -388,46 +428,4 @@ model AuditLog {
   @@map("audit_log")
   @@index([tableName, rowId, createdAt])
   @@index([createdAt])
-}
-
-model ChatThread {
-  id        String     @id @default(uuid()) @db.Uuid
-
-  userId    Int
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  type      ChatType
-  status    ChatStatus @default(open)
-
-  lastMessageAt      DateTime @default(now())
-  unreadCount        Int      @default(0)
-  lastMessagePreview String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  messages  ChatMessage[]
-
-  @@map("chat_threads")
-  @@index([userId, status, type, lastMessageAt])
-}
-
-model ChatMessage {
-  id       Int         @id @default(autoincrement())
-
-  threadId String @db.Uuid
-  thread   ChatThread  @relation(fields: [threadId], references: [id], onDelete: Cascade)
-
-  senderId Int?
-  sender   User?       @relation(fields: [senderId], references: [id], onDelete: SetNull)
-
-  senderType ChatMessageSenderType
-
-  content    String
-
-  isRead     Boolean    @default(false)
-  createdAt  DateTime   @default(now())
-
-  @@map("chat_messages")
-  @@index([threadId, createdAt])
 }
