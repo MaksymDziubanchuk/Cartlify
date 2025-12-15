@@ -27,9 +27,6 @@ export interface OrderResponseDto {
   userId: UserId;
   status: OrderStatus;
   items: OrderItemDto[];
-  subtotal: number;
-  shipping?: number;
-  discount?: number;
   total: number;
   shippingAddress: string;
 
