@@ -170,8 +170,11 @@ model Product {
   categoryId  Int
   category    Category @relation(fields: [categoryId], references: [id])
 
-  popularity  Int      @default(0)
   views       Int      @default(0)
+
+  popularity  Int      @default(0)
+  popularityOverride      Int?
+  popularityOverrideUntil DateTime?
 
   avgRating   Decimal        @db.Decimal(3, 2) @default(0)
   reviewsCount Int           @default(0)
@@ -287,7 +290,7 @@ model Order {
 
   total    Decimal    @db.Decimal(10, 2)
 
-  shippingAddress String
+  shippingAddress String?
   note            String?
 
   createdAt DateTime @default(now())
