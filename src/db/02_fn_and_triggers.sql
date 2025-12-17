@@ -495,4 +495,73 @@ AFTER UPDATE ON cartlify.orders
 FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_after_update_popularity();
 
---
+--'chat_threads' UPDATE last message info
+CREATE OR REPLACE FUNCTION cartlify.chat_messages_after_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_preview text;
+BEGIN
+  v_preview := left(replace(NEW.content, E'\n', ' '), 200);
+
+  UPDATE cartlify.chat_threads AS t
+  SET
+    "lastMessageAt"      = NEW."createdAt",
+    "lastMessagePreview" = v_preview,
+    "unreadCount"        = CASE
+    WHEN NEW."senderType" <> 'user'
+        THEN t."unreadCount" + 1
+    ELSE t."unreadCount"
+        END
+  WHERE t.id = NEW."threadId";
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_chat_messages_after_insert ON cartlify.chat_messages;
+
+CREATE TRIGGER trg_chat_messages_after_insert
+AFTER INSERT ON cartlify.chat_messages
+FOR EACH ROW
+EXECUTE FUNCTION cartlify.chat_messages_after_insert();
+
+--'product_price_change_logs' ADD column
+CREATE OR REPLACE FUNCTION cartlify.log_product_price_change(
+  p_product_id integer,
+  p_actor_id   integer,
+  p_old_price  numeric,
+  p_new_price  numeric,
+  p_mode       "PriceChangeMode",
+  p_value      numeric
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+
+  IF p_old_price IS NOT DISTINCT FROM p_new_price THEN
+    RETURN;
+  END IF;
+
+  INSERT INTO cartlify."product_price_change_logs" (
+    "productId",
+    "actorId",
+    "oldPrice",
+    "newPrice",
+    "mode",
+    "value",
+    "createdAt"
+  )
+  VALUES (
+    p_product_id,
+    p_actor_id,
+    p_old_price,
+    p_new_price,
+    p_mode,
+    p_value,
+    now()
+  );
+END;
+$$;
