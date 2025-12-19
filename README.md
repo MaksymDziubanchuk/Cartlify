@@ -7,5 +7,8 @@ list
 
 instructions of usage
 
-Stack -->
+Stack 
+
+Examples -->
+
 
