@@ -1,4 +1,5 @@
-import type { CategoryId } from 'types/ids.js';
+import type { CategoryId, UserId } from 'types/ids.js';
+import type { User, Role } from 'types/user.js';
 
 export interface GetAllCategoriesQueryDto {
   page?: number;
@@ -55,6 +56,8 @@ export interface UpdateCategoryBodyDto {
 
 export interface UpdateCategoryDto extends UpdateCategoryBodyDto {
   categoryId: CategoryId;
+  actorId: UserId;
+  actorRole: Role;
 }
 
 export type UpdateCategoryResponseDto = CategoryResponseDto;

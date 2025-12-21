@@ -565,3 +565,49 @@ BEGIN
   );
 END;
 $$;
+
+-- 'AdminAuditLog' ADD column
+CREATE OR REPLACE FUNCTION cartlify.log_admin_action(
+  p_actor_id    integer,
+  p_actor_role  "Role",
+  p_entity_type "AdminAuditEntityType",
+  p_entity_id   integer,
+  p_action      "AdminAuditAction",
+  p_changes     jsonb,      
+  --p_ip          text,
+  --p_user_agent  text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+
+  IF p_changes IS NOT NULL AND jsonb_typeof(p_changes) <> 'array' THEN
+    RAISE EXCEPTION 'log_admin_action: p_changes must be JSON array'
+      USING HINT = 'Очікується масив обʼєктів {field, old, new}';
+  END IF;
+
+  INSERT INTO cartlify.admin_audit_log (
+    "actorId",
+    "actorRole",
+    "entityType",
+    "entityId",
+    action,
+    meta,
+    --ip,
+    --"userAgent",
+    "createdAt"
+  )
+  VALUES (
+    p_actor_id,
+    p_actor_role,
+    p_entity_type,
+    p_entity_id,
+    p_action,
+    p_changes,    
+    --p_ip,
+    --p_user_agent,
+    now()
+  );
+END;
+$$;

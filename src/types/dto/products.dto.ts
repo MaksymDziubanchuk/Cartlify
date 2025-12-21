@@ -1,4 +1,5 @@
 import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
+import type { Role } from 'types/user.js';
 
 export interface GetAllProductsQueryDto {
   page?: number;
@@ -90,7 +91,10 @@ export interface CreateProductBodyDto {
   images?: string[];
 }
 
-export type CreateProductDto = CreateProductBodyDto;
+export interface CreateProductDto extends CreateProductBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
 
 export type CreateProductResponseDto = ProductResponseDto;
 
@@ -110,6 +114,7 @@ export interface UpdateProductBodyDto {
 export interface UpdateProductDto extends UpdateProductBodyDto {
   productId: ProductId;
   actorId: UserId;
+  actorRole: Role;
 }
 
 export type UpdateProductResponseDto = ProductResponseDto;
@@ -120,6 +125,8 @@ export interface DeleteProductByIdParamsDto {
 
 export interface DeleteProductByIdDto {
   productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
 }
 
 export interface DeleteProductByIdResponseDto {
@@ -150,6 +157,7 @@ export interface DeleteProductReviewDto {
   productId: ProductId;
   reviewId: ReviewId;
   actorId: UserId;
+  actorRole: Role;
 }
 
 export interface DeleteProductReviewResponseDto {

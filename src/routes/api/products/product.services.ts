@@ -65,6 +65,7 @@ async function createReview({
 async function updateProduct({
   productId,
   actorId,
+  actorRole,
   name,
   description,
   price,

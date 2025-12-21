@@ -4,6 +4,7 @@ import type {
   CreateOrderDto,
   UpdateOrderStatusDto,
   DeleteOrderDto,
+  ConfirmOrderDto,
 } from 'types/dto/orders.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
@@ -37,6 +38,10 @@ async function updateOrderStatus({
   return { message: 'update order status not implemented' };
 }
 
+async function updateOrderConfirmStatus({ orderId }: ConfirmOrderDto): Promise<MessageResponseDto> {
+  return { message: 'update order confirm status not implemented' };
+}
+
 async function deleteOrder({ actorId, orderId }: DeleteOrderDto): Promise<MessageResponseDto> {
   return { message: 'delete order not implemented' };
 }
@@ -46,5 +51,6 @@ export const ordersServices = {
   findOrderById,
   createOrder,
   updateOrderStatus,
+  updateOrderConfirmStatus,
   deleteOrder,
 };
