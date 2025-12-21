@@ -109,6 +109,7 @@ export interface UpdateProductBodyDto {
 
 export interface UpdateProductDto extends UpdateProductBodyDto {
   productId: ProductId;
+  actorId: UserId;
 }
 
 export type UpdateProductResponseDto = ProductResponseDto;
