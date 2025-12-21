@@ -98,16 +98,6 @@ export const ordersUpdateStatusParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersUpdateConfirmStatusParamsSchema = {
-  $id: 'ordersUpdateConfirmStatusParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    orderId: { type: 'number' },
-  },
-  required: ['orderId'],
-} as const;
-
 export const ordersUpdateStatusBodySchema = {
   $id: 'ordersUpdateStatusBodySchema',
   type: 'object',
@@ -120,6 +110,21 @@ export const ordersUpdateStatusBodySchema = {
 
 export const ordersUpdateStatusResponseSchema = {
   $id: 'ordersUpdateStatusResponseSchema',
+  allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
+} as const;
+
+export const ordersUpdateConfirmStatusParamsSchema = {
+  $id: 'ordersUpdateConfirmStatusParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'number' },
+  },
+  required: ['orderId'],
+} as const;
+
+export const ordersUpdateConfirmStatusResponseSchema = {
+  $id: 'ordersUpdateConfirmStatusResponseSchema',
   allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
 } as const;
 
@@ -167,6 +172,8 @@ export const ordersDtoSchemas = [
   ordersUpdateStatusParamsSchema,
   ordersUpdateStatusBodySchema,
   ordersUpdateStatusResponseSchema,
+  ordersUpdateConfirmStatusParamsSchema,
+  ordersUpdateConfirmStatusResponseSchema,
   ordersListResponseSchema,
   ordersDeleteParamsSchema,
   ordersDeleteResponseSchema,
