@@ -54,11 +54,6 @@ enum AdminAuditAction {
   OTHER
 }
 
-enum AuditOperation {
-  INSERT
-  UPDATE
-  DELETE
-}
 
 enum ChatStatus {
   open
@@ -100,7 +95,6 @@ model User {
   orders    Order[]
   productPriceChangeLogs ProductPriceChangeLog[]
   adminAuditLogs AdminAuditLog[]
-  auditLogs AuditLog[]
   chatThreads ChatThread[]
   chatMessages ChatMessage[]
 
@@ -409,26 +403,4 @@ model AdminAuditLog {
   @@map("admin_audit_log")
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
-}
-
-model AuditLog {
-  id Int @id @default(autoincrement())
-
-  tableName String
-  rowId     Int?
-
-  operation AuditOperation
-
-  oldData Json?
-  newData Json?
-
-  actorId   Int?          
-  actor     User?   @relation(fields: [actorId], references: [id], onDelete: SetNull)
-  actorRole Role?
-
-  createdAt DateTime @default(now())
-
-  @@map("audit_log")
-  @@index([tableName, rowId, createdAt])
-  @@index([createdAt])
 }

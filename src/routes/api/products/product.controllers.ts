@@ -136,11 +136,12 @@ const updateProductById: ControllerRouter<
   MessageResponseDto
 > = async (req, reply) => {
   const { name, description, price, categoryId, images, popularity } = req.body;
-
+  const userId = (req.user as User).id;
   const productId = Number(req.params.productId);
   const args = pickDefined<UpdateProductDto>(
     {
       productId,
+      actorId: userId,
     },
     { name, description, price, categoryId, images, popularity },
   );
