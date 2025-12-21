@@ -6,6 +6,7 @@ export const ordersGetQuerySchema = {
     page: { type: 'number', minimum: 1 },
     limit: { type: 'number', minimum: 1 },
     status: { type: 'string', enum: ['pending', 'paid', 'shipped', 'delivered', 'cancelled'] },
+    confirmed: { type: 'boolean', enum: ['true', 'false'] },
   },
 } as const;
 
@@ -89,6 +90,16 @@ export const ordersCreateResponseSchema = {
 
 export const ordersUpdateStatusParamsSchema = {
   $id: 'ordersUpdateStatusParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'number' },
+  },
+  required: ['orderId'],
+} as const;
+
+export const ordersUpdateConfirmStatusParamsSchema = {
+  $id: 'ordersUpdateConfirmStatusParamsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
