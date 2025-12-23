@@ -598,7 +598,6 @@ BEGIN
     --"userAgent",
     "createdAt"
   )
-  
   VALUES (
     p_actor_id,
     p_actor_role,
