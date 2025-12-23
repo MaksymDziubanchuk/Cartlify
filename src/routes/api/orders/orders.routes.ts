@@ -38,6 +38,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.putOrderStatus,
   );
+
   app.delete(
     '/:orderId',
     {
