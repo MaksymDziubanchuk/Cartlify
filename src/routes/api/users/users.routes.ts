@@ -9,7 +9,7 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/me',
     {
-      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER'])],
       schema: usersSchema.getMeSchema,
     },
     usersController.getMe,
@@ -25,11 +25,7 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/:userId',
     {
-      preHandler: [
-        authGuard,
-        requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
-        validateId('userId'),
-      ],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER']), validateId('userId')],
       schema: usersSchema.getUserByIdSchema,
     },
     usersController.getUserById,

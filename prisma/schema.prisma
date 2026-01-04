@@ -8,6 +8,7 @@ generator client {
 }
 
 enum Role {
+  GUEST
   USER
   ADMIN
   ROOT
@@ -263,8 +264,9 @@ model ReviewVote {
 model Favorite {
   id        Int      @id @default(autoincrement())
 
-  userId    Int
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId   Int?
+  guestId  String?  @db.Uuid
+  user     User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   productId Int
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -273,6 +275,7 @@ model Favorite {
 
   @@map("favorites")
   @@unique([userId, productId])
+  @@unique([guestId, productId])
   @@index([productId])
 }
 
@@ -323,9 +326,12 @@ model OrderItem {
 model ChatThread {
   id        String     @id @default(uuid()) @db.Uuid
 
-  userId    Int
-  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  userId  Int?
+  guestId String? @db.Uuid
 
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
   type      ChatType
   status    ChatStatus @default(open)
 
@@ -340,6 +346,7 @@ model ChatThread {
 
   @@map("chat_threads")
   @@index([userId, status, type, lastMessageAt])
+  @@index([guestId, status, type, lastMessageAt])
 }
 
 model ChatMessage {
