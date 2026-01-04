@@ -1,3 +1,5 @@
+BEGIN;
+
 -- "orders" CALC total
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total(p_order_id integer)
 RETURNS void
@@ -611,3 +613,45 @@ BEGIN
   );
 END;
 $$;
+
+----------------------------------------
+-- GUEST DATA -> USER
+----------------------------------------
+
+CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user(
+  p_guest_id uuid,
+  p_user_id  integer
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF p_guest_id IS NULL OR p_user_id IS NULL THEN
+    RETURN;
+  END IF;
+
+  -- FAVORITES: remove conflicts (user already has same product)
+  DELETE FROM cartlify.favorites f
+  WHERE f."guestId" = p_guest_id
+    AND EXISTS (
+      SELECT 1
+      FROM cartlify.favorites u
+      WHERE u."userId" = p_user_id
+        AND u."productId" = f."productId"
+    );
+
+  -- FAVORITES: migrate guest -> user
+  UPDATE cartlify.favorites
+  SET "userId"  = p_user_id,
+      "guestId" = NULL
+  WHERE "guestId" = p_guest_id;
+
+  -- CHAT THREADS: migrate guest -> user
+  UPDATE cartlify.chat_threads
+  SET "userId"  = p_user_id,
+      "guestId" = NULL
+  WHERE "guestId" = p_guest_id;
+END;
+$$;
+
+COMMIT;
