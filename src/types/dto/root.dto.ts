@@ -1,5 +1,6 @@
 import type { UserId } from 'types/ids.js';
 import type { UserResponseDto } from 'types/dto/users.dto.js';
+import type { Role } from 'types/user.js';
 
 export interface GetAdminsQueryDto {
   page?: number;
@@ -28,6 +29,7 @@ export interface AddAdminBodyDto {
 
 export interface AddAdminDto {
   actorId: UserId;
+  actorRole: Role;
   userId: UserId;
 }
 
@@ -39,6 +41,7 @@ export interface DeleteAdminParamsDto {
 
 export interface DeleteAdminDto {
   actorId: UserId;
+  actorRole: Role;
   adminId: UserId;
 }
 

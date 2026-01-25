@@ -1,11 +1,14 @@
 import type { UserId, ProductId, OrderId } from 'types/ids.js';
+import type { Role } from 'types/user.js';
 
 export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
+export type ConfirmedStatus = true | false;
 
 export interface GetOrdersQueryDto {
   page?: number;
   limit?: number;
   status?: OrderStatus;
+  confirmed?: ConfirmedStatus;
 }
 
 export interface FindOrdersDto {
@@ -13,6 +16,7 @@ export interface FindOrdersDto {
   page: number;
   limit: number;
   status?: OrderStatus;
+  confirmed?: ConfirmedStatus;
 }
 
 export interface OrderItemDto {
@@ -26,10 +30,8 @@ export interface OrderResponseDto {
   id: OrderId;
   userId: UserId;
   status: OrderStatus;
+  confirmed: ConfirmedStatus;
   items: OrderItemDto[];
-  subtotal: number;
-  shipping?: number;
-  discount?: number;
   total: number;
   shippingAddress: string;
 
@@ -82,8 +84,15 @@ export interface UpdateOrderStatusBodyDto {
 
 export interface UpdateOrderStatusDto {
   actorId: UserId;
+  actorRole: Role;
   orderId: OrderId;
   status: OrderStatus;
+}
+
+export type ConfirmOrderParamsDto = UpdateOrderStatusParamsDto;
+
+export interface ConfirmOrderDto {
+  orderId: OrderId;
 }
 
 export type UpdateOrderStatusResponseDto = OrderResponseDto;

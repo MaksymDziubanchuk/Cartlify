@@ -8,6 +8,7 @@ import type {
   GetProductReviewsParamsDto,
   GetProductReviewsQueryDto,
   CreateProductBodyDto,
+  CreateProductDto,
   PostReviewParamsDto,
   CreateReviewBodyDto,
   CreateReviewDto,
@@ -108,7 +109,19 @@ const postProduct: ControllerRouter<{}, CreateProductBodyDto, {}, MessageRespons
   req,
   reply,
 ) => {
-  const result = await productServices.createProduct(req.body);
+  const { name, description, price, categoryId, images } = req.body;
+  const { id: actorId, role: actorRole } = req.user as User;
+  const args = pickDefined<CreateProductDto>(
+    {
+      name,
+      price,
+      categoryId,
+      actorId,
+      actorRole,
+    },
+    { description, images },
+  );
+  const result = await productServices.createProduct(args);
   return reply.code(201).send(result);
 };
 
@@ -135,14 +148,16 @@ const updateProductById: ControllerRouter<
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const { name, description, price, categoryId, imageUrl, popularity } = req.body;
-
+  const { name, description, price, categoryId, images, popularity } = req.body;
+  const { id: actorId, role: actorRole } = req.user as User;
   const productId = Number(req.params.productId);
   const args = pickDefined<UpdateProductDto>(
     {
       productId,
+      actorId,
+      actorRole,
     },
-    { name, description, price, categoryId, imageUrl, popularity },
+    { name, description, price, categoryId, images, popularity },
   );
   const result = await productServices.updateProduct(args);
   return reply.code(200).send(result);
@@ -155,7 +170,8 @@ const deleteProductById: ControllerRouter<
   MessageResponseDto
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
-  const result = await productServices.deleteProductById({ productId });
+  const { id: actorId, role: actorRole } = req.user as User;
+  const result = await productServices.deleteProductById({ productId, actorId, actorRole });
   return reply.code(200).send(result);
 };
 
@@ -167,8 +183,13 @@ const deleteProductReview: ControllerRouter<
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
   const reviewId = Number(req.params.reviewId);
-  const actorId = (req.user as User).id;
-  const result = await productServices.deleteProductReview({ productId, reviewId, actorId });
+  const { id: actorId, role: actorRole } = req.user as User;
+  const result = await productServices.deleteProductReview({
+    productId,
+    reviewId,
+    actorId,
+    actorRole,
+  });
   return reply.code(200).send(result);
 };
 

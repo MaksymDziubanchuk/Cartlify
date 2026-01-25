@@ -1,6 +1,6 @@
 datasource db {
   provider = "postgresql"
-  url = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
 
 generator client {
@@ -8,26 +8,407 @@ generator client {
 }
 
 enum Role {
+  GUEST
   USER
   ADMIN
   ROOT
 }
 
+enum UserTokenType {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
+enum ReviewVoteAction {
+  UP
+  DOWN
+}
+
+enum OrderStatus {
+  pending
+  paid
+  shipped
+  delivered
+  cancelled
+}
+
+enum PriceChangeMode {
+  percent
+  fixed
+}
+
+enum AdminAuditEntityType {
+  user
+  product
+  category
+  order
+  review
+  other
+}
+
+enum AdminAuditAction {
+  USER_ROLE_CHANGE
+  PRODUCT_CREATE
+  PRODUCT_UPDATE
+  PRODUCT_DELETE
+  PRODUCT_PRICE_BULK_UPDATE
+  ORDER_STATUS_CHANGE
+  CATEGORY_UPDATE
+  REVIEW_DELETE
+  OTHER
+}
+
+enum ChatStatus {
+  open
+  closed
+}
+
+enum ChatType {
+  bot
+  admin
+}
+
+enum ChatMessageSenderType {
+  user
+  admin
+  bot
+  system
+}
+
 model User {
-  id         Int      @id @default(autoincrement())
-  email      String   @unique
-  role       Role     @default(USER)
+  id           Int    @id @default(autoincrement())
+  email        String @unique
+  passwordHash String
+  role         Role   @default(USER)
 
   isVerified Boolean  @default(false)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
-  name       String?
-  avatarUrl  String?
-  locale     String?
-  phone      String?
+  name      String?
+  avatarUrl String?
+  locale    String?
+  phone     String?
 
-  @@map("users")
+  userTokens             UserToken[]
+  loginLogs              LoginLog[]
+  reviews                Review[]
+  votes                  ReviewVote[]
+  favorites              Favorite[]
+  orders                 Order[]
+  productPriceChangeLogs ProductPriceChangeLog[]
+  adminAuditLogs         AdminAuditLog[]
+  chatThreads            ChatThread[]
+  chatMessages           ChatMessage[]
+
   @@index([createdAt])
   @@index([isVerified, createdAt])
+  @@map("users")
+}
+
+model UserToken {
+  id        Int           @id @default(autoincrement())
+  userId    Int
+  type      UserTokenType
+  token     String        @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime      @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, type, createdAt])
+  @@map("user_tokens")
+}
+
+model LoginLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  email     String
+  role      Role
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([email, createdAt])
+  @@map("login_logs")
+}
+
+model Category {
+  id          Int     @id @default(autoincrement())
+  name        String
+  slug        String  @unique
+  description String?
+
+  parentId Int?
+  parent   Category?  @relation("CategoryToSubcategories", fields: [parentId], references: [id], onDelete: SetNull)
+  children Category[] @relation("CategoryToSubcategories")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@index([parentId])
+  @@index([slug])
+  @@map("categories")
+}
+
+model Product {
+  id          Int     @id @default(autoincrement())
+  name        String
+  description String?
+
+  price Decimal @db.Decimal(10, 2)
+
+  categoryId Int
+  category   Category @relation(fields: [categoryId], references: [id])
+
+  views Int @default(0)
+
+  popularity              Int       @default(0)
+  popularityOverride      Int?
+  popularityOverrideUntil DateTime?
+
+  avgRating    Decimal @default(0) @db.Decimal(3, 2)
+  reviewsCount Int     @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reviews         Review[]
+  favorites       Favorite[]
+  orderItems      OrderItem[]
+  priceChangeLogs ProductPriceChangeLog[]
+  images          ProductImage[]
+
+  @@index([categoryId])
+  @@index([price])
+  @@index([createdAt])
+  @@index([name])
+  @@index([popularity])
+  @@index([views])
+  @@map("products")
+}
+
+model ProductImage {
+  id Int @id @default(autoincrement())
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  url      String
+  publicId String?
+  alt      String?
+
+  position  Int     @default(0)
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId, position])
+  @@map("product_images")
+}
+
+model Review {
+  id Int @id @default(autoincrement())
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  rating Int
+
+  upVotes   Int @default(0)
+  downVotes Int @default(0)
+
+  comment String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  votes ReviewVote[]
+
+  @@unique([userId, productId])
+  @@index([productId])
+  @@index([userId])
+  @@map("reviews")
+}
+
+model ReviewVote {
+  id Int @id @default(autoincrement())
+
+  reviewId Int
+  review   Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  action ReviewVoteAction
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, reviewId])
+  @@index([reviewId])
+  @@map("review_votes")
+}
+
+model Favorite {
+  id Int @id @default(autoincrement())
+
+  userId  Int?
+  guestId String? @db.Uuid
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, productId])
+  @@unique([guestId, productId])
+  @@index([productId])
+  @@map("favorites")
+}
+
+model Order {
+  id Int @id @default(autoincrement())
+
+  userId Int
+  user   User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  status    OrderStatus @default(pending)
+  confirmed Boolean     @default(false)
+
+  total Decimal @db.Decimal(10, 2)
+
+  shippingAddress String?
+  note            String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items OrderItem[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id Int @id @default(autoincrement())
+
+  orderId Int
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id])
+
+  quantity   Int
+  unitPrice  Decimal @db.Decimal(10, 2)
+  totalPrice Decimal @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([orderId])
+  @@index([productId])
+  @@map("order_items")
+}
+
+model ChatThread {
+  id String @id @db.Uuid
+
+  userId  Int?
+  guestId String? @db.Uuid
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type   ChatType
+  status ChatStatus @default(open)
+
+  lastMessageAt      DateTime @default(now())
+  unreadCount        Int      @default(0)
+  lastMessagePreview String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages ChatMessage[]
+
+  @@index([userId, status, type, lastMessageAt])
+  @@index([guestId, status, type, lastMessageAt])
+  @@map("chat_threads")
+}
+
+model ChatMessage {
+  id Int @id @default(autoincrement())
+
+  threadId String     @db.Uuid
+  thread   ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  senderId Int?
+  sender   User? @relation(fields: [senderId], references: [id], onDelete: SetNull)
+
+  senderType ChatMessageSenderType
+
+  content String
+
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([threadId, createdAt])
+  @@map("chat_messages")
+}
+
+model ProductPriceChangeLog {
+  id Int @id @default(autoincrement())
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  actorId Int
+  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  oldPrice Decimal @db.Decimal(10, 2)
+  newPrice Decimal @db.Decimal(10, 2)
+
+  mode  PriceChangeMode
+  value Decimal         @db.Decimal(10, 2)
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@index([actorId, createdAt])
+  @@map("product_price_change_logs")
+}
+
+model AdminAuditLog {
+  id Int @id @default(autoincrement())
+
+  actorId Int
+  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  actorRole Role
+
+  entityType AdminAuditEntityType
+  entityId   Int?
+
+  action AdminAuditAction
+  meta   Json?
+
+  ip        String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@map("admin_audit_log")
 }
