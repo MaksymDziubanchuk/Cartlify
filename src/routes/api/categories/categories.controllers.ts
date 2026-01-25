@@ -1,4 +1,5 @@
 import type { ControllerRouter } from 'types/controller.js';
+import type { User } from 'types/user.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type {
   GetAllCategoriesQueryDto,
@@ -48,9 +49,9 @@ const patchCategory: ControllerRouter<
 > = async (req, reply) => {
   const { categoryId } = req.params;
   const { name, slug, description, parentId } = req.body;
-
+  const { id: actorId, role: actorRole } = req.user as User;
   const args = pickDefined<UpdateCategoryDto>(
-    { categoryId },
+    { categoryId, actorId, actorRole },
     { name, slug, description, parentId },
   );
   const result = await categoriesServices.update(args);

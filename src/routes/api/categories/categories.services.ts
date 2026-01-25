@@ -26,6 +26,8 @@ async function create({
 
 async function update({
   categoryId,
+  actorId,
+  actorRole,
   name,
   slug,
   description,

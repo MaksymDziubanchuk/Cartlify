@@ -44,7 +44,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
   app.post(
     '/',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
       schema: productSchemas.postProductRouterSchema,
     },
     productController.postProduct,
@@ -62,7 +62,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
   app.patch(
     '/:productId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN']), validateId('productId')],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
       schema: productSchemas.updateProductByIdRouterSchema,
     },
     productController.updateProductById,
@@ -71,7 +71,7 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
   app.delete(
     '/:productId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN']), validateId('productId')],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
       schema: productSchemas.deleteProductByIdRouterSchema,
     },
     productController.deleteProductById,

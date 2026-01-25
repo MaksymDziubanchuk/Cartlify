@@ -3,6 +3,7 @@ import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
 import { categoriesSchema } from './categories.schemas.js';
+import { categoriesController } from './categories.controllers.js';
 
 export default async function categoriesRouter(app: FastifyInstance, opt: unknown) {
   app.get(
@@ -11,11 +12,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
       preHandler: [authGuard, requireRole(['GUEST', 'ADMIN', 'ROOT', 'USER'])],
       schema: categoriesSchema.getCategoriesSchema,
     },
-    async () => {
-      return {
-        message: 'categories not implemented',
-      };
-    },
+    categoriesController.getCategories,
   );
   app.post(
     '/',
@@ -23,11 +20,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
       preHandler: [authGuard, requireRole(['ADMIN'])],
       schema: categoriesSchema.postCategorySchema,
     },
-    async () => {
-      return {
-        message: 'create category not implemented',
-      };
-    },
+    categoriesController.postCategory,
   );
   app.patch(
     '/:categoryId',
@@ -35,11 +28,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
       schema: categoriesSchema.patchCategorySchema,
     },
-    async () => {
-      return {
-        message: 'update category not implemented',
-      };
-    },
+    categoriesController.patchCategory,
   );
   app.delete(
     '/:categoryId',
@@ -47,10 +36,6 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
       preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
       schema: categoriesSchema.getCategoriesSchema,
     },
-    async () => {
-      return {
-        message: 'delete category not implemented',
-      };
-    },
+    categoriesController.deleteCategory,
   );
 }

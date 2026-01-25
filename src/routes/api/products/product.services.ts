@@ -44,7 +44,7 @@ async function createProduct({
   description,
   price,
   categoryId,
-  imageUrl,
+  images,
 }: CreateProductDto): Promise<MessageResponseDto> {
   return {
     message: 'create not implemented',
@@ -64,11 +64,13 @@ async function createReview({
 
 async function updateProduct({
   productId,
+  actorId,
+  actorRole,
   name,
   description,
   price,
   categoryId,
-  imageUrl,
+  images,
   popularity,
 }: UpdateProductDto): Promise<MessageResponseDto> {
   return {

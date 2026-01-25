@@ -38,7 +38,18 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.putOrderStatus,
   );
+<<<<<<< HEAD
 
+=======
+  app.patch(
+    '/:orderId/confirm',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN']), validateId('orderId')],
+      schema: ordersSchema.patchOrderConfirmSchema,
+    },
+    ordersController.putOrderConfirmStatus,
+  );
+>>>>>>> develop
   app.delete(
     '/:orderId',
     {

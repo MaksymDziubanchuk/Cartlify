@@ -1,6 +1,7 @@
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 import type { Email } from 'types/common.js';
+import type { ReviewResponseDto } from './products.dto.js';
 
 export interface GetUserByIdParamsDto {
   userId: UserId;
@@ -26,6 +27,7 @@ export interface UserResponseDto {
   avatarUrl?: string;
   locale?: string;
   phone?: string;
+  reviews?: ReviewResponseDto;
 }
 
 export interface UpdateMeBodyDto {

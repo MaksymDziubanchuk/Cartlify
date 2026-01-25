@@ -28,9 +28,9 @@ const postAdmin: ControllerRouter<{}, AddAdminBodyDto, {}, MessageResponseDto> =
   req,
   reply,
 ) => {
-  const { id: actorId } = req.user as UserEntity;
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
   const { userId } = req.body;
-  const args = pickDefined<AddAdminDto>({ actorId, userId }, {});
+  const args = pickDefined<AddAdminDto>({ actorId, userId, actorRole }, {});
   const result = await rootServices.addAdmin(args);
   return reply.code(201).send(result);
 };
@@ -39,9 +39,9 @@ const deleteAdmin: ControllerRouter<DeleteAdminParamsDto, {}, {}, MessageRespons
   req,
   reply,
 ) => {
-  const { id: actorId } = req.user as UserEntity;
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
   const { adminId } = req.params;
-  const args = pickDefined<DeleteAdminDto>({ actorId, adminId }, {});
+  const args = pickDefined<DeleteAdminDto>({ actorId, adminId, actorRole }, {});
   const result = await rootServices.removeAdmin(args);
   return reply.code(200).send(result);
 };
