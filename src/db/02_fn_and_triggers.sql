@@ -1,10 +1,7 @@
 BEGIN;
 
 -- "orders" CALC total
-CREATE OR REPLACE FUNCTION cartlify.recalc_order_total(p_order_id integer)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_total cartlify.orders.total%TYPE;
 BEGIN
@@ -20,10 +17,7 @@ END;
 $$;
 
 -- "order_items" CALC totalPrice
-CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
 BEGIN
@@ -41,21 +35,19 @@ BEGIN
   NEW."totalPrice" := NEW."unitPrice" * NEW."quantity";
 
   RETURN NEW;
+  
 END;
 $$;
 
 DROP TRIGGER IF EXISTS trg_order_items_before_ins_upd ON cartlify.order_items;
 
-CREATE TRIGGER trg_order_items_before_ins_upd
-BEFORE INSERT OR UPDATE ON cartlify.order_items
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.order_items_before_ins_upd();
+CREATE TRIGGER trg_order_items_before_ins_upd BEFORE INSERT
+OR
+UPDATE ON cartlify.order_items FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_items_before_ins_upd ();
 
 -- 'orders' RECALC total
-CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_order_id integer;
 BEGIN
@@ -79,15 +71,14 @@ $$;
 DROP TRIGGER IF EXISTS trg_order_items_after_mod ON cartlify.order_items;
 
 CREATE TRIGGER trg_order_items_after_mod
-AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.order_items_after_mod();
+AFTER INSERT
+OR
+UPDATE
+OR DELETE ON cartlify.order_items FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
 -- 'orders' CONFIRMING
-CREATE OR REPLACE FUNCTION cartlify.orders_before_update()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 
   IF OLD."confirmed" THEN
@@ -121,16 +112,12 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_orders_before_update ON cartlify.orders;
 
-CREATE TRIGGER trg_orders_before_update
-BEFORE UPDATE ON cartlify.orders
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.orders_before_update();
+CREATE TRIGGER trg_orders_before_update BEFORE
+UPDATE ON cartlify.orders FOR EACH ROW
+EXECUTE FUNCTION cartlify.orders_before_update ();
 
 -- 'product' CALC avgRating
-CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating(p_product_id integer)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_avg   numeric(3, 2);
   v_count integer;
@@ -150,10 +137,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -176,15 +160,14 @@ $$;
 DROP TRIGGER IF EXISTS trg_reviews_after_mod ON cartlify.reviews;
 
 CREATE TRIGGER trg_reviews_after_mod
-AFTER INSERT OR UPDATE OR DELETE ON cartlify.reviews
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.reviews_after_mod();
+AFTER INSERT
+OR
+UPDATE
+OR DELETE ON cartlify.reviews FOR EACH ROW
+EXECUTE FUNCTION cartlify.reviews_after_mod ();
 
 -- 'reviews' CALC upVotes & downVotes
-CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes(p_review_id integer)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_up   integer;
   v_down integer;
@@ -204,10 +187,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION cartlify.review_votes_after_mod()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.review_votes_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_review_id integer;
 BEGIN
@@ -230,15 +210,14 @@ $$;
 DROP TRIGGER IF EXISTS trg_review_votes_after_mod ON cartlify.review_votes;
 
 CREATE TRIGGER trg_review_votes_after_mod
-AFTER INSERT OR UPDATE OR DELETE ON cartlify.review_votes
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.review_votes_after_mod();
+AFTER INSERT
+OR
+UPDATE
+OR DELETE ON cartlify.review_votes FOR EACH ROW
+EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 
 -- 'products' CALC popularity
-CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity(p_product_id integer)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_views           integer;
   v_favs_30d        integer;
@@ -335,10 +314,7 @@ $$;
 --psql "$MIGRATION_DATABASE_URL" \
 -- -c 'SELECT cartlify.recalc_all_products_popularity();'
 -- 'products' RECALC ALL popularity
-CREATE OR REPLACE FUNCTION cartlify.recalc_all_products_popularity()
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_all_products_popularity () RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -352,10 +328,7 @@ END;
 $$;
 
 --
-CREATE OR REPLACE FUNCTION cartlify.products_after_views_change()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.products_after_views_change () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."views" IS DISTINCT FROM OLD."views" THEN
     PERFORM cartlify.recalc_product_popularity(NEW.id);
@@ -368,15 +341,12 @@ $$;
 DROP TRIGGER IF EXISTS trg_products_after_views_change ON cartlify.products;
 
 CREATE TRIGGER trg_products_after_views_change
-AFTER UPDATE ON cartlify.products
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.products_after_views_change();
+AFTER
+UPDATE ON cartlify.products FOR EACH ROW
+EXECUTE FUNCTION cartlify.products_after_views_change ();
 
 --
-CREATE OR REPLACE FUNCTION cartlify.favorites_after_mod_popularity()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.favorites_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -399,15 +369,12 @@ $$;
 DROP TRIGGER IF EXISTS trg_favorites_after_mod_popularity ON cartlify.favorites;
 
 CREATE TRIGGER trg_favorites_after_mod_popularity
-AFTER INSERT OR DELETE ON cartlify.favorites
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.favorites_after_mod_popularity();
+AFTER INSERT
+OR DELETE ON cartlify.favorites FOR EACH ROW
+EXECUTE FUNCTION cartlify.favorites_after_mod_popularity ();
 
 --
-CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod_popularity()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -430,15 +397,14 @@ $$;
 DROP TRIGGER IF EXISTS trg_order_items_after_mod_popularity ON cartlify.order_items;
 
 CREATE TRIGGER trg_order_items_after_mod_popularity
-AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.order_items_after_mod_popularity();
+AFTER INSERT
+OR
+UPDATE
+OR DELETE ON cartlify.order_items FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_items_after_mod_popularity ();
 
 --
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -461,15 +427,14 @@ $$;
 DROP TRIGGER IF EXISTS trg_reviews_after_mod ON cartlify.reviews;
 
 CREATE TRIGGER trg_reviews_after_mod
-AFTER INSERT OR UPDATE OR DELETE ON cartlify.reviews
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.reviews_after_mod();
+AFTER INSERT
+OR
+UPDATE
+OR DELETE ON cartlify.reviews FOR EACH ROW
+EXECUTE FUNCTION cartlify.reviews_after_mod ();
 
 --
-CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -493,15 +458,12 @@ $$;
 DROP TRIGGER IF EXISTS trg_orders_after_update_popularity ON cartlify.orders;
 
 CREATE TRIGGER trg_orders_after_update_popularity
-AFTER UPDATE ON cartlify.orders
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.orders_after_update_popularity();
+AFTER
+UPDATE ON cartlify.orders FOR EACH ROW
+EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 
 --'chat_threads' UPDATE last message info
-CREATE OR REPLACE FUNCTION cartlify.chat_messages_after_insert()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.chat_messages_after_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_preview text;
 BEGIN
@@ -525,22 +487,18 @@ $$;
 DROP TRIGGER IF EXISTS trg_chat_messages_after_insert ON cartlify.chat_messages;
 
 CREATE TRIGGER trg_chat_messages_after_insert
-AFTER INSERT ON cartlify.chat_messages
-FOR EACH ROW
-EXECUTE FUNCTION cartlify.chat_messages_after_insert();
+AFTER INSERT ON cartlify.chat_messages FOR EACH ROW
+EXECUTE FUNCTION cartlify.chat_messages_after_insert ();
 
 --'product_price_change_logs' ADD column
-CREATE OR REPLACE FUNCTION cartlify.log_product_price_change(
+CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_product_id integer,
-  p_actor_id   integer,
-  p_old_price  numeric,
-  p_new_price  numeric,
-  p_mode       "PriceChangeMode",
-  p_value      numeric
-)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+  p_actor_id integer,
+  p_old_price numeric,
+  p_new_price numeric,
+  p_mode "PriceChangeMode",
+  p_value numeric
+) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
 
   IF p_old_price IS NOT DISTINCT FROM p_new_price THEN
@@ -569,19 +527,16 @@ END;
 $$;
 
 -- 'AdminAuditLog' ADD column
-CREATE OR REPLACE FUNCTION cartlify.log_admin_action(
-  p_actor_id    integer,
-  p_actor_role  "Role",
+CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
+  p_actor_id integer,
+  p_actor_role "Role",
   p_entity_type "AdminAuditEntityType",
-  p_entity_id   integer,
-  p_action      "AdminAuditAction",
-  p_changes     jsonb,      
+  p_entity_id integer,
+  p_action "AdminAuditAction",
+  p_changes jsonb,
   --p_ip          text,
   --p_user_agent  text
-)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
 
   IF p_changes IS NOT NULL AND jsonb_typeof(p_changes) <> 'array' THEN
@@ -617,14 +572,7 @@ $$;
 ----------------------------------------
 -- GUEST DATA -> USER
 ----------------------------------------
-
-CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user(
-  p_guest_id uuid,
-  p_user_id  integer
-)
-RETURNS void
-LANGUAGE plpgsql
-AS $$
+CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user (p_guest_id uuid, p_user_id integer) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   IF p_guest_id IS NULL OR p_user_id IS NULL THEN
     RETURN;
