@@ -137,7 +137,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -157,14 +157,14 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_reviews_after_mod ON cartlify.reviews;
+DROP TRIGGER IF EXISTS trg_reviews_after_mod_rating ON cartlify.reviews;
 
-CREATE TRIGGER trg_reviews_after_mod
+CREATE TRIGGER trg_reviews_after_mod_rating
 AFTER INSERT
 OR
 UPDATE
 OR DELETE ON cartlify.reviews FOR EACH ROW
-EXECUTE FUNCTION cartlify.reviews_after_mod ();
+EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 
 -- 'reviews' CALC upVotes & downVotes
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$
@@ -404,7 +404,7 @@ OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod_popularity ();
 
 --
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -424,14 +424,14 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_reviews_after_mod ON cartlify.reviews;
+DROP TRIGGER IF EXISTS trg_reviews_after_mod_popularity ON cartlify.reviews;
 
-CREATE TRIGGER trg_reviews_after_mod
+CREATE TRIGGER trg_reviews_after_mod_popularity
 AFTER INSERT
 OR
 UPDATE
 OR DELETE ON cartlify.reviews FOR EACH ROW
-EXECUTE FUNCTION cartlify.reviews_after_mod ();
+EXECUTE FUNCTION cartlify.reviews_after_mod_popularity ();
 
 --
 CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
@@ -496,7 +496,7 @@ CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_actor_id integer,
   p_old_price numeric,
   p_new_price numeric,
-  p_mode "PriceChangeMode",
+  p_mode cartlify."PriceChangeMode",
   p_value numeric
 ) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
@@ -529,11 +529,11 @@ $$;
 -- 'AdminAuditLog' ADD column
 CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
   p_actor_id integer,
-  p_actor_role "Role",
-  p_entity_type "AdminAuditEntityType",
+  p_actor_role cartlify."Role",
+  p_entity_type cartlify."AdminAuditEntityType",
   p_entity_id integer,
-  p_action "AdminAuditAction",
-  p_changes jsonb,
+  p_action cartlify."AdminAuditAction",
+  p_changes jsonb
   --p_ip          text,
   --p_user_agent  text
 ) RETURNS void LANGUAGE plpgsql AS $$
