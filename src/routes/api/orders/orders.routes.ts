@@ -38,9 +38,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.putOrderStatus,
   );
-<<<<<<< HEAD
 
-=======
   app.patch(
     '/:orderId/confirm',
     {
@@ -49,7 +47,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.putOrderConfirmStatus,
   );
->>>>>>> develop
+
   app.delete(
     '/:orderId',
     {
