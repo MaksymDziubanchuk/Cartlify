@@ -17,6 +17,22 @@ import type {
 import { authServices } from './auth.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 
+const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, MessageResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { email, password, name } = req.body;
+  const args = pickDefined<RegisterDto>(
+    {
+      email,
+      password,
+    },
+    { name },
+  );
+  const result = await authServices.register(args);
+  return reply.code(201).send(result);
+};
+
 const postLogin: ControllerRouter<{}, LoginBodyDto, {}, MessageResponseDto> = async (
   req,
   reply,
@@ -38,22 +54,6 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, MessageResponseDto> = as
 
   const result = await authServices.login(args);
   return result;
-};
-
-const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
-  const { email, password, name } = req.body;
-  const args = pickDefined<RegisterDto>(
-    {
-      email,
-      password,
-    },
-    { name },
-  );
-  const result = await authServices.register(args);
-  return reply.code(201).send(result);
 };
 
 const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageResponseDto> = async (

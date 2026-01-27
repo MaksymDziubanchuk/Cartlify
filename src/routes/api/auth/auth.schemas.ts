@@ -1,17 +1,5 @@
 import type { FastifySchema } from 'fastify';
 
-export const setLoginSchema = {
-  body: { $ref: 'authLoginBodySchema#' },
-  response: {
-    200: { $ref: 'messageResponseSchema#' },
-
-    400: { $ref: 'errorResponseSchema#' },
-    401: { $ref: 'errorResponseSchema#' },
-    422: { $ref: 'errorResponseSchema#' },
-    500: { $ref: 'errorResponseSchema#' },
-  },
-} satisfies FastifySchema;
-
 export const setRegisterSchema = {
   body: { $ref: 'authRegisterBodySchema#' },
   response: {
@@ -19,6 +7,18 @@ export const setRegisterSchema = {
 
     400: { $ref: 'errorResponseSchema#' },
     409: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+export const setLoginSchema = {
+  body: { $ref: 'authLoginBodySchema#' },
+  response: {
+    200: { $ref: 'messageResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
     422: { $ref: 'errorResponseSchema#' },
     500: { $ref: 'errorResponseSchema#' },
   },
