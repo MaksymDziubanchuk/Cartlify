@@ -20,7 +20,8 @@
       "@utils/*": ["utils/*"],
       "@routes/*": ["routes/*"],
       "@schemas/*": ["schemas/*"],
-      "@helpers/*": ["helpers/*"]
+      "@helpers/*": ["helpers/*"],
+      "@db/*": ["db/*"]
     }
   },
   "include": ["src"],

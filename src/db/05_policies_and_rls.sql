@@ -211,7 +211,16 @@ SELECT
 -- INSERT (cannot create for other user)
 CREATE POLICY user_tokens_insert ON cartlify.user_tokens FOR INSERT
 WITH
-  CHECK (cartlify.is_owner_or_admin ("userId"));
+  CHECK (
+    cartlify.is_owner_or_admin ("userId")
+    OR (
+      cartlify.current_actor_role () = 'GUEST'
+      AND type = 'VERIFY_EMAIL'
+      AND "usedAt" IS NULL
+      AND "expiresAt" > now()
+      AND "expiresAt" <= now() + interval '48 hours'
+    )
+  );
 
 -- UPDATE (cannot move token to other user)
 CREATE POLICY user_tokens_update ON cartlify.user_tokens

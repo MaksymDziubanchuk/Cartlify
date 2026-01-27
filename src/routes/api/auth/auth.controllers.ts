@@ -1,6 +1,6 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { UserEntity } from 'types/user.js';
+import type { User, UserEntity } from 'types/user.js';
 import type {
   LoginBodyDto,
   LoginDto,
@@ -22,10 +22,13 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, MessageResponseDto
   reply,
 ) => {
   const { email, password, name } = req.body;
+  const { id, role } = req.user as User;
   const args = pickDefined<RegisterDto>(
     {
       email,
       password,
+      userId: id,
+      role,
     },
     { name },
   );
