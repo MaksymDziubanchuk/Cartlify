@@ -6,20 +6,20 @@ import { authController } from './auth.controllers.js';
 
 export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
-    '/login',
-    {
-      preHandler: [authGuard, requireRole(['GUEST'])],
-      schema: authSchema.setLoginSchema,
-    },
-    authController.postLogin,
-  );
-  app.post(
     '/register',
     {
       preHandler: [authGuard, requireRole(['GUEST'])],
       schema: authSchema.setRegisterSchema,
     },
     authController.postRegister,
+  );
+  app.post(
+    '/login',
+    {
+      preHandler: [authGuard, requireRole(['GUEST'])],
+      schema: authSchema.setLoginSchema,
+    },
+    authController.postLogin,
   );
   app.post(
     '/verify/resend',
