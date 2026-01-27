@@ -1,6 +1,7 @@
 import type { Email } from 'types/common.js';
 import type { UserId } from 'types/ids.js';
 import type { UserResponseDto } from './users.dto.js';
+import type { Role } from 'types/user.js';
 
 export interface LoginBodyDto {
   email: Email;
@@ -21,6 +22,8 @@ export type LoginResponseDto = UserResponseDto;
 export interface RegisterBodyDto {
   email: Email;
   password: string;
+  userId: UserId;
+  role: Role;
   name?: string;
 }
 export type RegisterDto = RegisterBodyDto;
