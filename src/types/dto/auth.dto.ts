@@ -12,12 +12,17 @@ export interface LoginBodyDto {
 export interface LoginDto {
   email: Email;
   password: string;
+  userId: UserId;
+  role: Role;
   rememberMe?: boolean;
   ip?: string;
   userAgent?: string;
 }
 
-export type LoginResponseDto = UserResponseDto;
+export interface LoginResponseDto {
+  accessToken: string;
+  user: UserResponseDto;
+}
 
 export interface RegisterBodyDto {
   email: Email;
@@ -31,7 +36,11 @@ export type RegisterDto = RegisterBodyDto;
 export type RegisterResponseDto = UserResponseDto;
 
 export interface ResendVerifyDto {
-  userId: UserId;
+  email: Email;
+}
+
+export interface VerifyEmailDto {
+  token: string;
 }
 
 export interface PasswordForgotBodyDto {
