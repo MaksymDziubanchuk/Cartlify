@@ -4,9 +4,12 @@ import type { User, UserEntity } from 'types/user.js';
 import type {
   LoginBodyDto,
   LoginDto,
+  LoginResponseDto,
   RegisterBodyDto,
+  RegisterResponseDto,
   RegisterDto,
   ResendVerifyDto,
+  VerifyEmailDto,
   PasswordForgotBodyDto,
   PasswordResetBodyDto,
   PasswordResetQueryDto,
@@ -17,7 +20,7 @@ import type {
 import { authServices } from './auth.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 
-const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, MessageResponseDto> = async (
+const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
   reply,
 ) => {
@@ -36,17 +39,17 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, MessageResponseDto
   return reply.code(201).send(result);
 };
 
-const postLogin: ControllerRouter<{}, LoginBodyDto, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
+const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = async (req, reply) => {
   const { email, password, rememberMe } = req.body;
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
+  const { id, role } = req.user as User;
   const args = pickDefined<LoginDto>(
     {
       email,
       password,
+      userId: id,
+      role,
     },
     {
       rememberMe,
@@ -64,6 +67,14 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
   reply,
 ) => {
   const result = await authServices.resendVerify(req.body);
+  return reply.code(200).send(result);
+};
+
+export const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
+  req,
+  reply,
+) => {
+  const result = await authServices.verifyEmail(req.query);
   return reply.code(200).send(result);
 };
 
@@ -107,6 +118,7 @@ export const authController = {
   postLogin,
   postRegister,
   postVerifyResend,
+  getVerifyEmail,
   postPasswordForgot,
   postPasswordReset,
   postLogout,

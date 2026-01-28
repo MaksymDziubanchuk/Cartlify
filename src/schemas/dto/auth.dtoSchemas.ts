@@ -15,17 +15,27 @@ export const authLoginResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'number' },
-    email: { type: 'string', format: 'email' },
-    role: { type: 'string' },
-    isVerified: { type: 'boolean' },
-    createdAt: { type: 'string', format: 'date-time' },
-    updatedAt: { type: 'string', format: 'date-time' },
-    name: { type: 'string' },
-    avatarUrl: { type: 'string' },
-    locale: { type: 'string' },
+    accessToken: { type: 'string' },
+    user: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        email: { type: 'string', format: 'email' },
+        role: { type: 'string' },
+        isVerified: { type: 'boolean' },
+        createdAt: { type: 'string', format: 'date-time' },
+        updatedAt: { type: 'string', format: 'date-time' },
+
+        name: { type: 'string' },
+        avatarUrl: { type: 'string' },
+        locale: { type: 'string' },
+        phone: { type: 'string' },
+      },
+      required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
+    },
   },
-  required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
+  required: ['accessToken', 'user'],
 } as const;
 
 export const authRegisterBodySchema = {
@@ -63,9 +73,19 @@ export const authResendVerifyBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    userId: { type: 'number' },
+    email: { type: 'string', format: 'email' },
   },
-  required: ['userId'],
+  required: ['email'],
+} as const;
+
+export const authVerifyEmailQuerySchema = {
+  $id: 'authVerifyEmailQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    token: { type: 'string', minLength: 10 },
+  },
+  required: ['token'],
 } as const;
 
 export const authPasswordForgotBodySchema = {
@@ -127,6 +147,7 @@ export const authDtoSchemas = [
   authRegisterBodySchema,
   authRegisterResponseSchema,
   authResendVerifyBodySchema,
+  authVerifyEmailQuerySchema,
   authPasswordForgotBodySchema,
   authPasswordResetQuerySchema,
   authPasswordResetBodySchema,

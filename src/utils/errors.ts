@@ -31,3 +31,9 @@ export class NotFoundError extends AppError {
     super(message, 404);
   }
 }
+
+export class TooManyRequestsError extends AppError {
+  constructor(message = 'Too Many Requests') {
+    super(message, 429);
+  }
+}
