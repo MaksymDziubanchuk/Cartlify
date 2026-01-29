@@ -24,7 +24,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   );
 
   app.get(
-    '/oauth/google/callback',
+    '/google/callback',
     {
       preHandler: [authGuard],
       schema: authSchema.setGoogleCallbackSchema,
