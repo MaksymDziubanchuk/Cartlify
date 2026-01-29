@@ -39,7 +39,7 @@ export const setGoogleStartSchema = {
 export const setGoogleCallbackSchema = {
   querystring: { $ref: 'authGoogleCallbackQuerySchema#' },
   response: {
-    200: { $ref: 'authLoginResponseSchema#' },
+    200: { $ref: 'messageResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
