@@ -1,16 +1,25 @@
 import { Prisma, Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { AppError, BadRequestError } from '@utils/errors.js';
+import { buildGoogleAuthUrl } from '@utils/googleOAuth.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass, verifyPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { signAccessToken } from '@utils/jwt.js';
+import {
+  verifyGoogleOAuthState,
+  exchangeGoogleCodeForTokens,
+  decodeJwtPayload,
+} from '@utils/googleOAuth.js';
 
 import type {
   LoginDto,
   LoginResponseDto,
   RegisterDto,
   RegisterResponseDto,
+  GoogleStartDto,
+  GoogleStartResponseDto,
+  GoogleCallbackDto,
   ResendVerifyDto,
   VerifyEmailDto,
   PasswordForgotDto,
@@ -18,6 +27,7 @@ import type {
   LogoutDto,
   RefreshDto,
 } from 'types/dto/auth.dto.js';
+import type { GoogleIdTokenPayload } from '@utils/googleOAuth.js';
 import type { MessageResponseDto } from 'types/common.js';
 
 async function register({
@@ -218,6 +228,102 @@ async function login({
     });
 }
 
+export async function googleStart({
+  guestId,
+  role,
+}: GoogleStartDto): Promise<GoogleStartResponseDto> {
+  if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
+  if (!guestId) throw new AppError('Guest id is required', 400);
+
+  const url = buildGoogleAuthUrl(String(guestId));
+  return { url };
+}
+
+export async function googleCallback({
+  code,
+  state,
+  ip,
+  userAgent,
+}: GoogleCallbackDto): Promise<MessageResponseDto> {
+  if (!code) throw new BadRequestError('MISSING_CODE');
+  if (!state) throw new BadRequestError('MISSING_STATE');
+
+  // 1) Витягаємо guestId зі state (і перевіряємо підпис/час в твоїй verifyGoogleOAuthState)
+  const st = verifyGoogleOAuthState(state); // очікую щось типу { guestId, nonce, iat }
+  if (!st) throw new AppError('INVALID_STATE', 500);
+  const guestId = st.guestId;
+
+  // 2) Міняємо code -> tokens (access_token + id_token)
+  const tokens = await exchangeGoogleCodeForTokens(code);
+
+  // 3) Дістаємо профіль з id_token (це JWT). Поки без крипто-верифікації підпису — лише для логів.
+  const idp = decodeJwtPayload<GoogleIdTokenPayload>(tokens.id_token);
+
+  const googleUser = {
+    sub: idp.sub, // унікальний id юзера в Google
+    email: idp.email ?? null,
+    emailVerified: idp.email_verified ?? null,
+    name: idp.name ?? null,
+    avatarUrl: idp.picture ?? null,
+    locale: idp.locale ?? null,
+  };
+
+  // 4) Оце “план” що ми б робили з БД (поки тільки LOG)
+  const dbPlan = {
+    lookup: {
+      byEmail: googleUser.email, // якщо null → доведеться відмовити
+    },
+    createUserIfNotExists: {
+      email: googleUser.email,
+      role: 'USER',
+      isVerified: googleUser.emailVerified === true,
+      name: googleUser.name,
+      avatarUrl: googleUser.avatarUrl,
+      locale: googleUser.locale,
+      // у тебе passwordHash NOT NULL → або міняти схему, або ставити випадковий пароль (поки планом)
+      passwordHash: '<hash(randomBytes(32))>',
+    },
+    createProviderRowIfYouAddTable: {
+      provider: 'google',
+      providerSubject: googleUser.sub,
+      email: googleUser.email,
+      userId: '<resolved_user_id>',
+    },
+    loginLog: {
+      ip: ip ?? null,
+      userAgent: userAgent ?? null,
+      guestId,
+      userId: '<resolved_user_id>',
+      role: 'USER',
+    },
+    guestMigration: {
+      guestId,
+      userId: '<resolved_user_id>',
+      fn: 'cartlify.migrate_guest_data_to_user',
+    },
+    jwtIssue: {
+      accessToken: '<signAccessToken({ userId, role })>',
+      ttl: '<short/long by rememberMe>',
+    },
+  };
+
+  console.log('[GOOGLE_OAUTH_CALLBACK]', {
+    guestId,
+    tokens: {
+      token_type: tokens.token_type,
+      expires_in: tokens.expires_in,
+      scope: tokens.scope,
+      has_refresh_token: Boolean(tokens.refresh_token),
+      has_access_token: Boolean(tokens.access_token),
+      has_id_token: Boolean(tokens.id_token),
+    },
+    googleUser,
+    dbPlan,
+  });
+
+  return { message: 'Google callback received (stub). See server logs.' };
+}
+
 async function resendVerify({ email }: ResendVerifyDto): Promise<MessageResponseDto> {
   assertEmail(email);
 
@@ -242,7 +348,7 @@ async function resendVerify({ email }: ResendVerifyDto): Promise<MessageResponse
   return { message: 'If the email exists, a verification link was sent.' };
 }
 
-export async function verifyEmail({ token }: VerifyEmailDto): Promise<{ message: string }> {
+async function verifyEmail({ token }: VerifyEmailDto): Promise<{ message: string }> {
   const cleanToken = token?.trim();
   if (!cleanToken) throw new BadRequestError('Token is required');
 
@@ -282,6 +388,8 @@ async function refresh({ userId }: RefreshDto): Promise<MessageResponseDto> {
 export const authServices = {
   login,
   register,
+  googleStart,
+  googleCallback,
   resendVerify,
   verifyEmail,
   passwordForgot,

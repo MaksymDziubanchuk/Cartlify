@@ -24,6 +24,32 @@ export const setLoginSchema = {
   },
 } satisfies FastifySchema;
 
+export const setGoogleStartSchema = {
+  response: {
+    302: { type: 'null' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    429: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+export const setGoogleCallbackSchema = {
+  querystring: { $ref: 'authGoogleCallbackQuerySchema#' },
+  response: {
+    200: { $ref: 'authLoginResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    429: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 export const setVerifyResendSchema = {
   body: { $ref: 'authResendVerifyBodySchema#' },
   response: {
@@ -94,6 +120,8 @@ export const setRefreshSchema = {
 
 export const authSchema = {
   setLoginSchema,
+  setGoogleStartSchema,
+  setGoogleCallbackSchema,
   setRegisterSchema,
   setVerifyResendSchema,
   authVerifyEmailSchema,

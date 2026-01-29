@@ -13,6 +13,25 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
     },
     authController.postRegister,
   );
+
+  app.get(
+    '/oauth/google',
+    {
+      preHandler: [authGuard, requireRole(['GUEST'])],
+      schema: authSchema.setGoogleStartSchema,
+    },
+    authController.getGoogleStart,
+  );
+
+  app.get(
+    '/oauth/google/callback',
+    {
+      preHandler: [authGuard],
+      schema: authSchema.setGoogleCallbackSchema,
+    },
+    authController.getGoogleCallback,
+  );
+
   app.post(
     '/login',
     {

@@ -24,6 +24,37 @@ export interface LoginResponseDto {
   user: UserResponseDto;
 }
 
+export interface GoogleStartDto {
+  guestId: UserId;
+  role: Role;
+  ip?: string;
+  userAgent?: string;
+}
+
+export interface GoogleStartResponseDto {
+  url: string;
+}
+
+export interface GoogleCallbackSuccessQueryDto {
+  code: string;
+  state: string;
+}
+
+export interface GoogleCallbackErrorQueryDto {
+  error: string;
+  error_description?: string;
+  state?: string;
+}
+
+export type GoogleCallbackQueryDto = GoogleCallbackSuccessQueryDto | GoogleCallbackErrorQueryDto;
+
+export interface GoogleCallbackDto {
+  code: string;
+  state: string;
+  ip?: string;
+  userAgent?: string;
+}
+
 export interface RegisterBodyDto {
   email: Email;
   password: string;
