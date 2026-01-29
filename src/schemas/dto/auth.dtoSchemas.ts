@@ -38,6 +38,20 @@ export const authLoginResponseSchema = {
   required: ['accessToken', 'user'],
 } as const;
 
+export const authGoogleCallbackQuerySchema = {
+  $id: 'authGoogleCallbackQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    code: { type: 'string' },
+    state: { type: 'string' },
+
+    error: { type: 'string' },
+    error_description: { type: 'string' },
+  },
+  required: ['code', 'state'],
+} as const;
+
 export const authRegisterBodySchema = {
   $id: 'authRegisterBodySchema',
   type: 'object',
@@ -144,6 +158,7 @@ export const authRefreshResponseSchema = {
 export const authDtoSchemas = [
   authLoginBodySchema,
   authLoginResponseSchema,
+  authGoogleCallbackQuerySchema,
   authRegisterBodySchema,
   authRegisterResponseSchema,
   authResendVerifyBodySchema,
