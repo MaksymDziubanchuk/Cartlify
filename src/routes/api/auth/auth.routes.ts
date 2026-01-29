@@ -13,6 +13,25 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
     },
     authController.postRegister,
   );
+
+  app.get(
+    '/oauth/google',
+    {
+      preHandler: [authGuard, requireRole(['GUEST'])],
+      schema: authSchema.setGoogleStartSchema,
+    },
+    authController.getGoogleStart,
+  );
+
+  app.get(
+    '/google/callback',
+    {
+      preHandler: [authGuard],
+      schema: authSchema.setGoogleCallbackSchema,
+    },
+    authController.getGoogleCallback,
+  );
+
   app.post(
     '/login',
     {
@@ -24,11 +43,12 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/verify/resend',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      preHandler: [authGuard, requireRole(['GUEST'])],
       schema: authSchema.setVerifyResendSchema,
     },
     authController.postVerifyResend,
   );
+  app.get('/verify', { schema: authSchema.authVerifyEmailSchema }, authController.getVerifyEmail);
   app.post(
     '/password/forgot',
     {

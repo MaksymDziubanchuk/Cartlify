@@ -147,7 +147,7 @@ DROP POLICY IF EXISTS users_insert ON cartlify.users;
 
 DROP POLICY IF EXISTS users_delete ON cartlify.users;
 
--- SELECT: owner OR admin/root
+-- SELECT: owner OR admin/owner
 CREATE POLICY users_select ON cartlify.users FOR
 SELECT
   USING (cartlify.is_owner_or_admin (id));

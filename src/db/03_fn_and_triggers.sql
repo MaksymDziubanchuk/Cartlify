@@ -1,5 +1,247 @@
 BEGIN;
 
+-- "users" GET user for login
+CREATE OR REPLACE FUNCTION cartlify.auth_get_user_for_login (p_email text) RETURNS TABLE (
+  id int,
+  password_hash text,
+  role cartlify."Role",
+  is_verified boolean
+) LANGUAGE plpgsql SECURITY DEFINER AS $$
+DECLARE
+  prev_role text;
+  prev_uid  text;
+  prev_gid  text;
+BEGIN
+  prev_role := current_setting('cartlify.role', true);
+  prev_uid  := current_setting('cartlify.user_id', true);
+  prev_gid  := current_setting('cartlify.guest_id', true);
+
+  -- adding ADMIN context
+  PERFORM cartlify.set_current_context('ADMIN'::cartlify."Role", NULL, NULL);
+
+  RETURN QUERY
+  SELECT u.id, u."passwordHash", u.role, u."isVerified"
+  FROM cartlify.users u
+  WHERE u.email = lower(btrim(p_email))
+  LIMIT 1;
+
+  -- restore previous context
+  PERFORM set_config('cartlify.role',     COALESCE(prev_role, ''), true);
+  PERFORM set_config('cartlify.user_id',  COALESCE(prev_uid,  ''), true);
+  PERFORM set_config('cartlify.guest_id', COALESCE(prev_gid,  ''), true);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION cartlify.auth_get_user_for_login (text)
+FROM
+  PUBLIC;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.auth_get_user_for_login (text) TO cartlify_app,
+cartlify_owner;
+
+-- "users token" GET new for verify
+DROP FUNCTION IF EXISTS cartlify.auth_resend_verify (text, text, timestamptz);
+
+CREATE OR REPLACE FUNCTION cartlify.auth_resend_verify (
+  p_email text,
+  p_token text,
+  p_expires_at timestamptz
+) RETURNS TABLE (user_id int, token text, expires_at timestamptz) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_prev_role text;
+  v_prev_user_id text;
+  v_prev_guest_id text;
+
+  v_user_id int;
+  v_is_verified boolean;
+
+  v_token text;
+  v_expires_at timestamptz;
+BEGIN
+  -- normalize + validate inputs
+  p_email := lower(btrim(p_email));
+  p_token := btrim(p_token);
+
+  IF p_email IS NULL OR p_email = '' THEN RETURN; END IF;
+  IF p_token IS NULL OR p_token = '' THEN RETURN; END IF;
+  IF p_expires_at IS NULL OR p_expires_at <= now() THEN RETURN; END IF;
+
+  -- save current context
+  v_prev_role := current_setting('cartlify.role', true);
+  v_prev_user_id := current_setting('cartlify.user_id', true);
+  v_prev_guest_id := current_setting('cartlify.guest_id', true);
+
+  BEGIN
+    -- TEMP: become admin-context to pass users_select under FORCE RLS
+    PERFORM cartlify.set_current_context('ADMIN'::cartlify."Role", NULL, NULL);
+
+    -- find user
+    SELECT u.id, u."isVerified"
+      INTO v_user_id, v_is_verified
+    FROM cartlify.users u
+    WHERE u.email = p_email
+    LIMIT 1;
+
+    IF v_user_id IS NULL OR v_is_verified IS TRUE THEN
+      -- restore context and return 0 rows
+      PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+      PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+      PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+      RETURN;
+    END IF;
+
+    -- reuse existing active verify token if present
+    SELECT ut.token, ut."expiresAt"
+      INTO v_token, v_expires_at
+    FROM cartlify.user_tokens ut
+    WHERE ut."userId" = v_user_id
+      AND ut.type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
+      AND ut."usedAt" IS NULL
+      AND ut."expiresAt" > now()
+    ORDER BY ut."expiresAt" DESC
+    LIMIT 1;
+
+    IF v_token IS NULL THEN
+      INSERT INTO cartlify.user_tokens ("userId", type, token, "expiresAt", "usedAt")
+      VALUES (v_user_id, 'VERIFY_EMAIL'::cartlify."UserTokenType", p_token, p_expires_at, NULL);
+
+      v_token := p_token;
+      v_expires_at := p_expires_at;
+    END IF;
+
+    -- restore original context before returning
+    PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+    PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+    PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+
+    user_id := v_user_id;
+    token := v_token;
+    expires_at := v_expires_at;
+    RETURN NEXT;
+    RETURN;
+
+  EXCEPTION WHEN unique_violation THEN
+    -- race: if insert collided, try fetch active token and return it
+    SELECT ut.token, ut."expiresAt"
+      INTO v_token, v_expires_at
+    FROM cartlify.user_tokens ut
+    WHERE ut."userId" = v_user_id
+      AND ut.type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
+      AND ut."usedAt" IS NULL
+      AND ut."expiresAt" > now()
+    ORDER BY ut."expiresAt" DESC
+    LIMIT 1;
+
+    PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+    PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+    PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+
+    IF v_token IS NOT NULL THEN
+      user_id := v_user_id;
+      token := v_token;
+      expires_at := v_expires_at;
+      RETURN NEXT;
+    END IF;
+    RETURN;
+
+  WHEN OTHERS THEN
+    -- always restore context
+    PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+    PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+    PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+    RAISE;
+  END;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION cartlify.auth_resend_verify (text, text, timestamptz)
+FROM
+  PUBLIC;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.auth_resend_verify (text, text, timestamptz) TO cartlify_owner,
+cartlify_app;
+
+-- "user_tokens" MAKE GUEST verify
+DROP FUNCTION IF EXISTS cartlify.auth_verify_email (text);
+
+CREATE OR REPLACE FUNCTION cartlify.auth_verify_email (p_token text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_catalog AS $$
+DECLARE
+  v_prev_role text;
+  v_prev_user_id text;
+  v_prev_guest_id text;
+
+  v_user_id int;
+BEGIN
+  p_token := btrim(p_token);
+  IF p_token IS NULL OR p_token = '' THEN
+    RETURN false;
+  END IF;
+
+  v_prev_role := current_setting('cartlify.role', true);
+  v_prev_user_id := current_setting('cartlify.user_id', true);
+  v_prev_guest_id := current_setting('cartlify.guest_id', true);
+
+  BEGIN
+    PERFORM cartlify.set_current_context('ADMIN'::cartlify."Role", NULL, NULL);
+
+    SELECT ut."userId"
+      INTO v_user_id
+    FROM cartlify.user_tokens ut
+    WHERE ut.token = p_token
+      AND ut.type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
+      AND ut."usedAt" IS NULL
+      AND ut."expiresAt" > now()
+    LIMIT 1;
+
+    IF v_user_id IS NULL THEN
+      PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+      PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+      PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+      RETURN false;
+    END IF;
+
+    UPDATE cartlify.user_tokens
+    SET "usedAt" = now()
+    WHERE token = p_token
+      AND type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
+      AND "usedAt" IS NULL;
+
+    UPDATE cartlify.users
+    SET "isVerified" = true,
+        "updatedAt" = now()
+    WHERE id = v_user_id
+      AND "isVerified" = false;
+
+    PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+    PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+    PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+
+    RETURN true;
+
+  EXCEPTION WHEN OTHERS THEN
+    PERFORM set_config('cartlify.role',     COALESCE(v_prev_role, ''), true);
+    PERFORM set_config('cartlify.user_id',  COALESCE(v_prev_user_id, ''), true);
+    PERFORM set_config('cartlify.guest_id', COALESCE(v_prev_guest_id, ''), true);
+    RAISE;
+  END;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION cartlify.auth_verify_email (text)
+FROM
+  PUBLIC;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.auth_verify_email (text) TO cartlify_owner,
+cartlify_app;
+
 -- "orders" CALC total
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
