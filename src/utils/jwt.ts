@@ -1,5 +1,4 @@
 import jwt from 'jsonwebtoken';
-import { TokenExpiredError } from 'jsonwebtoken';
 import type { Secret, SignOptions } from 'jsonwebtoken';
 import type { Role } from '@prisma/client';
 import env from '@config/env.js';
@@ -87,7 +86,11 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
 
     return { userId, role: role as Role, type, exp };
   } catch (err) {
-    if (err instanceof TokenExpiredError) {
+    if (
+      typeof err === 'object' &&
+      err !== null &&
+      (err as { name?: unknown }).name === 'TokenExpiredError'
+    ) {
       throw new AccessTokenExpiredError();
     }
 
