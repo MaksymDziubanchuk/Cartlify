@@ -37,3 +37,9 @@ export class TooManyRequestsError extends AppError {
     super(message, 429);
   }
 }
+
+export class AccessTokenExpiredError extends AppError {
+  constructor(message = 'ACCESS_TOKEN_EXPIRED') {
+    super(message, 401);
+  }
+}

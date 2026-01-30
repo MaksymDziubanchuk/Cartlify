@@ -1,53 +1,127 @@
 import jwt from 'jsonwebtoken';
+import { TokenExpiredError } from 'jsonwebtoken';
 import type { Secret, SignOptions } from 'jsonwebtoken';
 import type { Role } from '@prisma/client';
+import env from '@config/env.js';
+import { AppError, BadRequestError, AccessTokenExpiredError } from '@utils/errors.js';
 
-type AccessTokenPayload = {
+export type AccessTokenPayload = {
   userId: number;
   role: Role;
+  type: string;
 };
 
-type ExpiresIn = Exclude<SignOptions['expiresIn'], undefined>;
+export type VerifiedAccessToken = AccessTokenPayload & { exp: number };
 
-function requireEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is required`);
-  return v;
-}
+export type RefreshTokenPayload = {
+  userId: number;
+  role: Role;
+  type: string;
+  jwtId: number;
+};
 
-function getAccessTtl(rememberMe: boolean): ExpiresIn {
-  const raw = rememberMe ? requireEnv('JWT_ACCESS_TTL_LONG') : requireEnv('JWT_ACCESS_TTL_SHORT');
+export type VerifiedRefreshToken = RefreshTokenPayload & { exp: number };
 
-  const s = raw.trim();
+export type ExpiresIn = Exclude<SignOptions['expiresIn'], undefined>;
 
-  if (/^\d+$/.test(s)) return Number(s);
+export function getTtl(rememberMe: boolean, type: string): ExpiresIn {
+  let raw = '';
 
-  return s as ExpiresIn;
+  if (type === 'access') {
+    raw = rememberMe ? env.JWT_ACCESS_TTL_LONG : env.JWT_ACCESS_TTL_SHORT;
+  } else if (type === 'refresh') {
+    raw = rememberMe ? env.JWT_ACCESS_TTL_LONG : env.JWT_ACCESS_TTL_SHORT;
+  } else
+    throw new BadRequestError(
+      `Invalid JWT access TTL: "${raw}" (expected e.g. "3600", "1h", "30d")`,
+    );
+
+  const compact = raw.trim().toLowerCase().replace(/\s+/g, '');
+
+  if (/^\d+$/.test(compact)) return Number(compact);
+
+  const m = compact.match(/^(\d+)([smhd])$/);
+  if (m) return `${m[1]}${m[2]}` as ExpiresIn;
+
+  throw new BadRequestError(`Invalid JWT access TTL: "${raw}" (expected e.g. "3600", "1h", "30d")`);
 }
 
 export function signAccessToken(payload: AccessTokenPayload, rememberMe: boolean): string {
-  const secret = requireEnv('JWT_ACCESS_SECRET') as Secret;
+  const secret = env.JWT_ACCESS_SECRET as Secret;
 
   const options: SignOptions = {
-    expiresIn: getAccessTtl(rememberMe),
+    expiresIn: getTtl(rememberMe, 'access'),
   };
 
   return jwt.sign(payload, secret, options);
 }
 
-export function verifyAccessToken(token: string): AccessTokenPayload {
-  const secret = requireEnv('JWT_ACCESS_SECRET') as Secret;
-  const decoded = jwt.verify(token, secret);
+export function signRefreshToken(payload: RefreshTokenPayload, rememberMe: boolean): string {
+  const secret = env.JWT_REFRESH_SECRET as Secret;
+
+  const options: SignOptions = {
+    expiresIn: getTtl(rememberMe, 'refresh'),
+  };
+
+  return jwt.sign(payload, secret, options);
+}
+
+export function verifyAccessToken(token: string): VerifiedAccessToken {
+  const secret = env.JWT_ACCESS_SECRET as Secret;
+
+  let decoded: unknown;
+  try {
+    decoded = jwt.verify(token, secret);
+
+    if (typeof decoded !== 'object' || decoded === null) {
+      throw new AppError('Invalid access token payload', 401);
+    }
+
+    const { userId, role, type, exp } = decoded as Partial<
+      AccessTokenPayload & { exp: number; iat: number }
+    >;
+
+    if (typeof userId !== 'number' || !role || type !== 'refresh' || typeof exp !== 'number') {
+      throw new AppError('Invalid refresh token payload', 401);
+    }
+
+    return { userId, role: role as Role, type, exp };
+  } catch (err) {
+    if (err instanceof TokenExpiredError) {
+      throw new AccessTokenExpiredError();
+    }
+
+    throw new AppError('Invalid access token', 401);
+  }
+}
+
+export function verifyRefreshToken(token: string): VerifiedRefreshToken {
+  const secret = env.JWT_REFRESH_SECRET as Secret;
+
+  let decoded: unknown;
+  try {
+    decoded = jwt.verify(token, secret);
+  } catch (e) {
+    throw new AppError('Invalid refresh token', 401);
+  }
 
   if (typeof decoded !== 'object' || decoded === null) {
-    throw new Error('Invalid token payload');
+    throw new AppError('Invalid refresh token payload', 401);
   }
 
-  const { userId, role } = decoded as Partial<AccessTokenPayload>;
+  const { userId, role, type, jwtId, exp } = decoded as Partial<
+    RefreshTokenPayload & { exp: number }
+  >;
 
-  if (typeof userId !== 'number' || !role) {
-    throw new Error('Invalid token payload');
+  if (
+    typeof userId !== 'number' ||
+    !role ||
+    type !== 'refresh' ||
+    typeof jwtId !== 'number' ||
+    typeof exp !== 'number'
+  ) {
+    throw new AppError('Invalid refresh token payload', 401);
   }
 
-  return { userId, role: role as Role };
+  return { userId, role: role as Role, type, jwtId, exp };
 }

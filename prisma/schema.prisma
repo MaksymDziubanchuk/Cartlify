@@ -17,6 +17,7 @@ enum Role {
 enum UserTokenType {
   VERIFY_EMAIL
   RESET_PASSWORD
+  REFRESH_TOKEN
 }
 
 enum ReviewVoteAction {

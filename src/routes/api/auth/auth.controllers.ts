@@ -64,7 +64,10 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
     },
   );
 
-  const result = await authServices.login(args);
+  const { result, refreshToken } = await authServices.login(args);
+
+  // TODO: тут пізніше буде reply.setCookie('refreshToken', refreshToken, options)
+
   return result;
 };
 
