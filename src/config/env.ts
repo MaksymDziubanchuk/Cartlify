@@ -13,9 +13,13 @@ declare global {
       SUPABASE_ANON_KEY: string;
       SUPABASE_SERVICE_ROLE_KEY: string;
 
-      JWT_SECRET: string;
-      JWT_ACCESS_TTL_SHORT?: string;
-      JWT_ACCESS_TTL_LONG?: string;
+      JWT_ACCESS_SECRET: string;
+      JWT_ACCESS_TTL_SHORT: string;
+      JWT_ACCESS_TTL_LONG: string;
+
+      JWT_REFRESH_SECRET: string;
+      JWT_REFRESH_TTL_SHORT: string;
+      JWT_REFRESH_TTL_LONG: string;
 
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
@@ -48,9 +52,13 @@ export default {
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
 
   // JWT
-  JWT_SECRET: process.env.JWT_SECRET || 'changeme',
-  JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '24h',
-  JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '30d',
+  JWT_ACCESS_SECRET: process.env.JWT_SECRET || 'changeme',
+  JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1h',
+  JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '24h',
+
+  JWT_REFRESH_SECRET: process.env.JWT_SECRET || 'changeme',
+  JWT_REFRESH_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1d',
+  JWT_REFRESH_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '30d',
 
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',

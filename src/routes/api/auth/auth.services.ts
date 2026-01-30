@@ -5,7 +5,9 @@ import { buildGoogleAuthUrl } from '@utils/googleOAuth.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass, verifyPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
-import { signAccessToken } from '@utils/jwt.js';
+import { signAccessToken, signRefreshToken, verifyRefreshToken } from '@utils/jwt.js';
+import { createPlaceholder } from '@utils/placeholder.js';
+import { hashToken } from '@utils/tokenHash.js';
 import {
   verifyGoogleOAuthState,
   exchangeGoogleCodeForTokens,
@@ -141,7 +143,7 @@ async function login({
   ip,
   userAgent,
   userId: guestId,
-}: LoginDto): Promise<LoginResponseDto> {
+}: LoginDto): Promise<{ result: LoginResponseDto; refreshToken: string }> {
   const cleanEmail = email.trim().toLowerCase();
 
   if (!cleanEmail) throw new BadRequestError('Email is required');
@@ -177,6 +179,11 @@ async function login({
       NULL
     )`;
 
+      await tx.$executeRaw`select cartlify.migrate_guest_data_to_user(
+        ${guestId}::uuid,
+        ${u.id}::int
+      )`;
+
       await tx.$executeRaw`
       insert into cartlify.login_logs ("userId", "email", "role", "ipAddress", "userAgent")
       values (${u.id}, ${cleanEmail}, ${u.role}::cartlify."Role", ${ip}, ${userAgent})
@@ -201,9 +208,46 @@ async function login({
       if (!user) throw new AppError('User not found after login', 500);
 
       assertEmail(user.email);
-      const accessToken = signAccessToken({ userId: u.id, role: u.role }, rememberMe);
 
-      const dto: LoginResponseDto = {
+      const accessToken = signAccessToken(
+        { userId: u.id, role: u.role, type: 'access' },
+        rememberMe,
+      );
+
+      const placeholder = createPlaceholder(32, 'hex');
+
+      const created = await tx.$queryRaw<{ id: number }[]>`
+        insert into cartlify.user_tokens ("userId", type, token, "expiresAt")
+        values (
+          ${u.id},
+          'REFRESH_TOKEN'::cartlify."UserTokenType",
+          ${placeholder},
+          now()
+        )
+        returning id
+      `;
+
+      const jwtId = created[0]?.id;
+      if (!jwtId) throw new AppError('Failed to create refresh token row', 500);
+
+      const refreshToken = signRefreshToken(
+        { userId: u.id, role: u.role, type: 'refresh', jwtId },
+        rememberMe,
+      );
+
+      const { exp } = verifyRefreshToken(refreshToken);
+      if (!exp) throw new AppError('Failed to decode refresh token exp', 500);
+
+      const refreshExpiresAt = new Date(exp * 1000);
+      const refreshHash = hashToken(refreshToken);
+
+      await tx.$executeRaw`
+        update cartlify.user_tokens
+        set token = ${refreshHash}, "expiresAt" = ${refreshExpiresAt}
+        where id = ${jwtId}::int
+      `;
+
+      const result: LoginResponseDto = {
         accessToken,
         user: {
           id: user.id,
@@ -219,7 +263,7 @@ async function login({
         },
       };
 
-      return dto;
+      return { result, refreshToken };
     })
     .catch((err) => {
       if (err instanceof AppError) throw err;
@@ -248,19 +292,16 @@ export async function googleCallback({
   if (!code) throw new BadRequestError('MISSING_CODE');
   if (!state) throw new BadRequestError('MISSING_STATE');
 
-  // 1) Витягаємо guestId зі state (і перевіряємо підпис/час в твоїй verifyGoogleOAuthState)
-  const st = verifyGoogleOAuthState(state); // очікую щось типу { guestId, nonce, iat }
+  const st = verifyGoogleOAuthState(state);
   if (!st) throw new AppError('INVALID_STATE', 500);
   const guestId = st.guestId;
 
-  // 2) Міняємо code -> tokens (access_token + id_token)
   const tokens = await exchangeGoogleCodeForTokens(code);
 
-  // 3) Дістаємо профіль з id_token (це JWT). Поки без крипто-верифікації підпису — лише для логів.
   const idp = decodeJwtPayload<GoogleIdTokenPayload>(tokens.id_token);
 
   const googleUser = {
-    sub: idp.sub, // унікальний id юзера в Google
+    sub: idp.sub,
     email: idp.email ?? null,
     emailVerified: idp.email_verified ?? null,
     name: idp.name ?? null,
@@ -268,10 +309,9 @@ export async function googleCallback({
     locale: idp.locale ?? null,
   };
 
-  // 4) Оце “план” що ми б робили з БД (поки тільки LOG)
   const dbPlan = {
     lookup: {
-      byEmail: googleUser.email, // якщо null → доведеться відмовити
+      byEmail: googleUser.email,
     },
     createUserIfNotExists: {
       email: googleUser.email,
@@ -280,7 +320,7 @@ export async function googleCallback({
       name: googleUser.name,
       avatarUrl: googleUser.avatarUrl,
       locale: googleUser.locale,
-      // у тебе passwordHash NOT NULL → або міняти схему, або ставити випадковий пароль (поки планом)
+
       passwordHash: '<hash(randomBytes(32))>',
     },
     createProviderRowIfYouAddTable: {
