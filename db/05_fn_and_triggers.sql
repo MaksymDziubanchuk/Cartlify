@@ -1,12 +1,150 @@
 BEGIN;
 
+------------------------------------------------------------
+-- Roles and context functions
+------------------------------------------------------------
+-- Set context
+CREATE OR REPLACE FUNCTION cartlify.set_current_context (
+  p_role cartlify."Role",
+  p_user_id integer DEFAULT NULL,
+  p_guest_id uuid DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config('cartlify.role', COALESCE(p_role::text, ''), true);
+
+  PERFORM set_config('cartlify.user_id',  '', true);
+  PERFORM set_config('cartlify.guest_id', '', true);
+
+  IF p_role = 'GUEST' THEN
+    PERFORM set_config('cartlify.guest_id', COALESCE(p_guest_id::text, ''), true);
+  ELSE
+    PERFORM set_config('cartlify.user_id', COALESCE(p_user_id::text, ''), true);
+  END IF;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION cartlify.set_current_context (cartlify."Role", integer, uuid)
+FROM
+  PUBLIC;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.set_current_context (cartlify."Role", integer, uuid) TO cartlify_owner,
+cartlify_app;
+
+-- Get actor user id
+CREATE OR REPLACE FUNCTION cartlify.current_actor_id () RETURNS integer LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  uid_text text;
+BEGIN
+  uid_text := btrim(current_setting('cartlify.user_id', true));
+
+  IF uid_text IS NULL OR uid_text = '' THEN
+    RETURN NULL;
+  END IF;
+
+  IF uid_text ~ '^[0-9]+$' THEN
+    RETURN uid_text::integer;
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+-- Get guest id
+CREATE OR REPLACE FUNCTION cartlify.current_guest_id () RETURNS uuid LANGUAGE plpgsql STABLE AS $$
+DECLARE gid_text text;
+BEGIN
+  gid_text := btrim(current_setting('cartlify.guest_id', true));
+  IF gid_text IS NULL OR gid_text = '' THEN RETURN NULL; END IF;
+  RETURN gid_text::uuid;
+EXCEPTION WHEN invalid_text_representation THEN
+  RETURN NULL;
+END;
+$$;
+
+-- Get actor role
+CREATE OR REPLACE FUNCTION cartlify.current_actor_role () RETURNS cartlify."Role" LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  role_text text;
+BEGIN
+  role_text := btrim(current_setting('cartlify.role', true));
+
+  IF role_text IS NULL OR role_text = '' THEN
+    RETURN NULL;
+  END IF;
+
+  IF role_text IN ('GUEST', 'USER', 'ADMIN', 'ROOT') THEN
+    RETURN role_text::cartlify."Role";
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+-- Is actor admin
+CREATE OR REPLACE FUNCTION cartlify.is_admin () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  a_role cartlify."Role";
+BEGIN
+  a_role := cartlify.current_actor_role();
+
+  IF a_role IS NULL THEN
+    RETURN false;
+  END IF;
+
+  RETURN a_role IN ('ADMIN', 'ROOT');
+END;
+$$;
+
+-- Is actor root
+CREATE OR REPLACE FUNCTION cartlify.is_root () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  a_role cartlify."Role";
+BEGIN
+  a_role := cartlify.current_actor_role();
+
+  IF a_role IS NULL THEN
+    RETURN false;
+  END IF;
+
+  RETURN a_role = 'ROOT';
+END;
+$$;
+
+-- Is actor owner
+CREATE OR REPLACE FUNCTION cartlify.is_owner (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  a_id integer;
+BEGIN
+  a_id := cartlify.current_actor_id();
+
+  IF a_id IS NULL OR p_user_id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  RETURN a_id = p_user_id;
+END;
+$$;
+
+-- Is owner or admin
+CREATE OR REPLACE FUNCTION cartlify.is_owner_or_admin (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+  RETURN cartlify.is_admin() OR cartlify.is_owner(p_user_id);
+END;
+$$;
+
+------------------------------------------------------------
+-- USERS
+------------------------------------------------------------
 -- "users" GET user for login
 CREATE OR REPLACE FUNCTION cartlify.auth_get_user_for_login (p_email text) RETURNS TABLE (
   id int,
   password_hash text,
   role cartlify."Role",
   is_verified boolean
-) LANGUAGE plpgsql SECURITY DEFINER AS $$
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
 DECLARE
   prev_role text;
   prev_uid  text;
@@ -40,6 +178,9 @@ GRANT
 EXECUTE ON FUNCTION cartlify.auth_get_user_for_login (text) TO cartlify_app,
 cartlify_owner;
 
+------------------------------------------------------------
+-- USERS TOKENS
+------------------------------------------------------------
 -- "users token" GET new for verify
 DROP FUNCTION IF EXISTS cartlify.auth_resend_verify (text, text, timestamptz);
 
@@ -242,6 +383,9 @@ GRANT
 EXECUTE ON FUNCTION cartlify.auth_verify_email (text) TO cartlify_owner,
 cartlify_app;
 
+------------------------------------------------------------
+-- ORDERS
+------------------------------------------------------------
 -- "orders" CALC total
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -258,6 +402,9 @@ BEGIN
 END;
 $$;
 
+------------------------------------------------------------
+-- ORDERS AND ORDER ITEMS
+------------------------------------------------------------
 -- "order_items" CALC totalPrice
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -358,6 +505,9 @@ CREATE TRIGGER trg_orders_before_update BEFORE
 UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_before_update ();
 
+------------------------------------------------------------
+-- PRODUCTS
+------------------------------------------------------------
 -- 'product' CALC avgRating
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -408,6 +558,9 @@ UPDATE
 OR DELETE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 
+------------------------------------------------------------
+-- REVIEWS AND REVIEWS
+------------------------------------------------------------
 -- 'reviews' CALC upVotes & downVotes
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
@@ -704,6 +857,9 @@ AFTER
 UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 
+------------------------------------------------------------
+-- CHAT THREADS
+------------------------------------------------------------
 --'chat_threads' UPDATE last message info
 CREATE OR REPLACE FUNCTION cartlify.chat_messages_after_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -732,6 +888,9 @@ CREATE TRIGGER trg_chat_messages_after_insert
 AFTER INSERT ON cartlify.chat_messages FOR EACH ROW
 EXECUTE FUNCTION cartlify.chat_messages_after_insert ();
 
+------------------------------------------------------------
+-- PRODUCT PRICE CHANGE LOGS
+------------------------------------------------------------
 --'product_price_change_logs' ADD column
 CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_product_id integer,
@@ -768,6 +927,9 @@ BEGIN
 END;
 $$;
 
+------------------------------------------------------------
+-- ADMIN AUDIT LOG
+------------------------------------------------------------
 -- 'AdminAuditLog' ADD column
 CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
   p_actor_id integer,

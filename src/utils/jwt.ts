@@ -29,7 +29,7 @@ export function getTtl(rememberMe: boolean, type: string): ExpiresIn {
   if (type === 'access') {
     raw = rememberMe ? env.JWT_ACCESS_TTL_LONG : env.JWT_ACCESS_TTL_SHORT;
   } else if (type === 'refresh') {
-    raw = rememberMe ? env.JWT_ACCESS_TTL_LONG : env.JWT_ACCESS_TTL_SHORT;
+    raw = rememberMe ? env.JWT_REFRESH_TTL_LONG : env.JWT_REFRESH_TTL_SHORT;
   } else
     throw new BadRequestError(
       `Invalid JWT access TTL: "${raw}" (expected e.g. "3600", "1h", "30d")`,
@@ -80,8 +80,8 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
       AccessTokenPayload & { exp: number; iat: number }
     >;
 
-    if (typeof userId !== 'number' || !role || type !== 'refresh' || typeof exp !== 'number') {
-      throw new AppError('Invalid refresh token payload', 401);
+    if (typeof userId !== 'number' || !role || type !== 'access' || typeof exp !== 'number') {
+      throw new AppError('Invalid access token payload', 401);
     }
 
     return { userId, role: role as Role, type, exp };
