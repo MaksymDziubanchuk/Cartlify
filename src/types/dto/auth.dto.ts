@@ -19,10 +19,7 @@ export interface LoginDto {
   userAgent?: string;
 }
 
-export interface LoginResponseDto {
-  accessToken: string;
-  user: UserResponseDto;
-}
+export type LoginResponseDto = UserResponseDto;
 
 export interface GoogleStartDto {
   guestId: UserId;
@@ -93,12 +90,19 @@ export interface PasswordResetDto {
   newPassword: string;
 }
 
+export interface LogoutBodyDto {
+  allDevices?: boolean;
+}
+
 export interface LogoutDto {
-  userId: UserId;
+  refreshToken?: string;
+  allDevices?: boolean;
 }
 
 export interface RefreshDto {
-  userId?: UserId;
+  refreshToken: string;
 }
 
-export type RefreshResponseDto = UserResponseDto;
+export interface RefreshResponseDto {
+  accessToken: string;
+}

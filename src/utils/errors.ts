@@ -43,3 +43,16 @@ export class AccessTokenExpiredError extends AppError {
     super(message, 401);
   }
 }
+
+export function isErrorNamed(err: unknown, name: string): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === name;
+}
+
+export function isAppError(err: unknown): err is AppError {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'statusCode' in err &&
+    typeof (err as { statusCode?: unknown }).statusCode === 'number'
+  );
+}

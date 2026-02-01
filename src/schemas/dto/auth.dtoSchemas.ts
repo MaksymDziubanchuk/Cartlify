@@ -15,27 +15,19 @@ export const authLoginResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    accessToken: { type: 'string' },
-    user: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'number' },
-        email: { type: 'string', format: 'email' },
-        role: { type: 'string' },
-        isVerified: { type: 'boolean' },
-        createdAt: { type: 'string', format: 'date-time' },
-        updatedAt: { type: 'string', format: 'date-time' },
+    id: { type: 'number' },
+    email: { type: 'string', format: 'email' },
+    role: { type: 'string' },
+    isVerified: { type: 'boolean' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
 
-        name: { type: 'string' },
-        avatarUrl: { type: 'string' },
-        locale: { type: 'string' },
-        phone: { type: 'string' },
-      },
-      required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
-    },
+    name: { type: 'string' },
+    avatarUrl: { type: 'string' },
+    locale: { type: 'string' },
+    phone: { type: 'string' },
   },
-  required: ['accessToken', 'user'],
+  required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
 } as const;
 
 export const authGoogleCallbackQuerySchema = {
@@ -132,6 +124,16 @@ export const authPasswordResetBodySchema = {
   required: ['newPassword'],
 } as const;
 
+export const authLogoutBodySchema = {
+  $id: 'authLogoutBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    allDevices: { type: 'boolean' },
+  },
+  required: ['newPassword'],
+} as const;
+
 export const authLogoutResponseSchema = {
   $id: 'authLogoutResponseSchema',
   type: 'null',
@@ -142,17 +144,9 @@ export const authRefreshResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'number' },
-    email: { type: 'string', format: 'email' },
-    role: { type: 'string' },
-    isVerified: { type: 'boolean' },
-    createdAt: { type: 'string', format: 'date-time' },
-    updatedAt: { type: 'string', format: 'date-time' },
-    name: { type: 'string' },
-    avatarUrl: { type: 'string' },
-    locale: { type: 'string' },
+    accessToken: { type: 'string' },
   },
-  required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
+  required: ['accessToken'],
 } as const;
 
 export const authDtoSchemas = [
@@ -167,5 +161,6 @@ export const authDtoSchemas = [
   authPasswordResetQuerySchema,
   authPasswordResetBodySchema,
   authLogoutResponseSchema,
+  authLogoutBodySchema,
   authRefreshResponseSchema,
 ];
