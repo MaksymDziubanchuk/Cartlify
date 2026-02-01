@@ -24,7 +24,9 @@ import type {
 
 import { authServices } from './auth.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
-import { AppError } from '@utils/errors.js';
+import { AppError, BadRequestError } from '@utils/errors.js';
+import env from '@config/env.js';
+import { getTtl } from '@utils/jwt.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
@@ -64,9 +66,48 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
     },
   );
 
-  const { result, refreshToken } = await authServices.login(args);
+  const { result, refreshToken, accessToken } = await authServices.login(args);
 
-  // TODO: тут пізніше буде reply.setCookie('refreshToken', refreshToken, options)
+  const isProd = env.NODE_ENV === 'production';
+
+  const refreshTtl = rememberMe ? getTtl(rememberMe, 'refresh') : getTtl(false, 'refresh');
+  const accessTtl = rememberMe ? getTtl(rememberMe, 'access') : getTtl(false, 'access');
+
+  if (!refreshTtl || !accessTtl)
+    throw new BadRequestError('Invalid JWT TTL: (expected e.g. "3600")');
+
+  const baseCookie = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: 'lax' as const,
+  } as const;
+
+  reply.clearCookie('guestId', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.clearCookie('accessToken', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.clearCookie('refreshToken', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.setCookie('accessToken', accessToken, {
+    ...baseCookie,
+    path: '/',
+    maxAge: accessTtl as number,
+  });
+
+  reply.setCookie('refreshToken', refreshToken, {
+    ...baseCookie,
+    path: '/',
+    maxAge: refreshTtl as number,
+  });
 
   return result;
 };
@@ -103,8 +144,8 @@ export const getGoogleCallback: ControllerRouter<
   {},
   {},
   GoogleCallbackQueryDto,
-  MessageResponseDto
-> = async (req) => {
+  LoginResponseDto
+> = async (req, reply) => {
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
 
@@ -125,7 +166,49 @@ export const getGoogleCallback: ControllerRouter<
 
   const args = pickDefined<GoogleCallbackDto>({ code, state }, { ip, userAgent });
 
-  const result = await authServices.googleCallback(args);
+  const { result, accessToken, refreshToken } = await authServices.googleCallback(args);
+
+  const isProd = env.NODE_ENV === 'production';
+
+  const refreshTtl = getTtl(true, 'refresh');
+  const accessTtl = getTtl(true, 'access');
+
+  if (!refreshTtl || !accessTtl)
+    throw new BadRequestError('Invalid JWT TTL: (expected e.g. "3600")');
+
+  const baseCookie = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: 'lax' as const,
+  } as const;
+
+  reply.clearCookie('guestId', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.clearCookie('accessToken', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.clearCookie('refreshToken', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.setCookie('accessToken', accessToken, {
+    ...baseCookie,
+    path: '/',
+    maxAge: accessTtl as number,
+  });
+
+  reply.setCookie('refreshToken', refreshToken, {
+    ...baseCookie,
+    path: '/',
+    maxAge: refreshTtl as number,
+  });
+
   return result;
 };
 
