@@ -21,6 +21,10 @@ declare global {
       JWT_REFRESH_TTL_SHORT: string;
       JWT_REFRESH_TTL_LONG: string;
 
+      GUEST_ID_TTL: string;
+
+      RESET_TTL_MS: string;
+
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -53,13 +57,16 @@ export default {
 
   // JWT
   JWT_ACCESS_SECRET: process.env.JWT_SECRET || 'changeme',
-  JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1h',
-  JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '24h',
+  JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1200',
+  JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '3600',
 
   JWT_REFRESH_SECRET: process.env.JWT_SECRET || 'changeme',
-  JWT_REFRESH_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1d',
-  JWT_REFRESH_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '30d',
+  JWT_REFRESH_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '86400',
+  JWT_REFRESH_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '2592000',
 
+  GUEST_ID_TTL: process.env.GUEST_ID_TTL || '157680000',
+
+  RESET_TTL_MS: process.env.RESET_TTL_MS || '3600',
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',

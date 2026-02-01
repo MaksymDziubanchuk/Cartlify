@@ -39,7 +39,7 @@ export const setGoogleStartSchema = {
 export const setGoogleCallbackSchema = {
   querystring: { $ref: 'authGoogleCallbackQuerySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'authLoginResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -99,6 +99,7 @@ export const setPasswordResetSchema = {
 } satisfies FastifySchema;
 
 export const setLogoutSchema = {
+  body: { $ref: 'authLogoutBodySchema#' },
   response: {
     204: { $ref: 'messageResponseSchema#' },
 
@@ -110,7 +111,7 @@ export const setLogoutSchema = {
 
 export const setRefreshSchema = {
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'authRefreshResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
