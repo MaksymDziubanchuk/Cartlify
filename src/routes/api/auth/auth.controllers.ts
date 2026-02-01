@@ -16,6 +16,7 @@ import type {
   ResendVerifyDto,
   VerifyEmailDto,
   PasswordForgotBodyDto,
+  PasswordForgotDto,
   PasswordResetBodyDto,
   PasswordResetQueryDto,
   PasswordResetDto,
@@ -247,7 +248,9 @@ const postPasswordForgot: ControllerRouter<
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const result = await authServices.passwordForgot(req.body);
+  const email = req.body?.email;
+  const args = pickDefined<PasswordForgotDto>({ email }, {});
+  const result = await authServices.passwordForgot(args);
   return reply.code(200).send(result);
 };
 
@@ -257,7 +260,10 @@ const postPasswordReset: ControllerRouter<
   PasswordResetQueryDto,
   MessageResponseDto
 > = async (req, reply) => {
-  const args: PasswordResetDto = { token: req.query.token, newPassword: req.body.newPassword };
+  const token = req.query?.token;
+  const newPassword = req.body?.newPassword;
+  const args = pickDefined<PasswordResetDto>({ token, newPassword }, {});
+
   const result = await authServices.passwordReset(args);
   return reply.code(200).send(result);
 };
