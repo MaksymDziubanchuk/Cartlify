@@ -23,6 +23,8 @@ declare global {
 
       GUEST_ID_TTL: string;
 
+      RESET_TTL_MS: string;
+
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -64,6 +66,7 @@ export default {
 
   GUEST_ID_TTL: process.env.GUEST_ID_TTL || '157680000',
 
+  RESET_TTL_MS: process.env.RESET_TTL_MS || '3600',
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
