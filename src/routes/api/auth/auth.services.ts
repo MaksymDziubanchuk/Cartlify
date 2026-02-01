@@ -1,6 +1,12 @@
 import { Prisma, Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
-import { AppError, BadRequestError, UnauthorizedError, ForbiddenError } from '@utils/errors.js';
+import {
+  AppError,
+  BadRequestError,
+  UnauthorizedError,
+  ForbiddenError,
+  isAppError,
+} from '@utils/errors.js';
 import { buildGoogleAuthUrl } from '@utils/googleOAuth.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass, verifyPass } from '@helpers/safePass.js';
@@ -15,6 +21,7 @@ import {
 } from '@utils/googleOAuth.js';
 import env from '@config/env.js';
 import { refreshAccessTokenByRefreshToken } from '@utils/resignAccessToken.js';
+import { verifyTokenHash } from '@utils/tokenHash.js';
 
 import type {
   LoginDto,
@@ -562,8 +569,80 @@ async function passwordReset({
   return { message: 'password reset not implemented' };
 }
 
-async function logout({ userId }: LogoutDto): Promise<void> {
-  return;
+async function logout({
+  refreshToken,
+  allDevices = false,
+}: LogoutDto): Promise<MessageResponseDto> {
+  const rt = refreshToken?.trim();
+
+  if (!rt) return { message: 'ok' };
+
+  let payload: { userId: number; jwtId: number; role: Role };
+  try {
+    const { userId, jwtId, role } = verifyRefreshToken(rt);
+    payload = { userId, jwtId, role };
+  } catch (err) {
+    if (isAppError(err)) return { message: 'ok' };
+    throw new AppError('logout: unexpected verify error', 500);
+  }
+
+  const now = new Date();
+
+  return prisma
+    .$transaction(async (tx) => {
+      await tx.$executeRaw`select cartlify.set_current_context(
+        ${payload.role}::cartlify."Role",
+        ${payload.userId}::int,
+        NULL
+      )`;
+
+      const tokenRow = await tx.userToken.findUnique({
+        where: { id: payload.jwtId },
+        select: {
+          id: true,
+          userId: true,
+          type: true,
+          token: true,
+          usedAt: true,
+        },
+      });
+
+      if (!tokenRow) return { message: 'ok' };
+
+      if (tokenRow.userId !== payload.userId) return { message: 'ok' };
+      if (tokenRow.type !== 'REFRESH_TOKEN') return { message: 'ok' };
+
+      if (tokenRow.usedAt) return { message: 'ok' };
+
+      const ok = verifyTokenHash(rt, tokenRow.token);
+      if (!ok) return { message: 'ok' };
+
+      if (allDevices) {
+        await tx.userToken.updateMany({
+          where: {
+            userId: payload.userId,
+            type: 'REFRESH_TOKEN',
+            usedAt: null,
+          },
+          data: { usedAt: now },
+        });
+      } else {
+        await tx.userToken.updateMany({
+          where: { id: tokenRow.id, usedAt: null },
+          data: { usedAt: now },
+        });
+      }
+
+      return { message: 'ok' };
+    })
+    .catch((err) => {
+      if (isAppError(err)) throw err;
+      const msg =
+        typeof err === 'object' && err !== null && 'message' in err
+          ? String((err as { message: unknown }).message)
+          : 'unknown';
+      throw new AppError(`logout: unexpected (${msg})`, 500);
+    });
 }
 
 async function refresh({ refreshToken }: RefreshDto): Promise<RefreshResponseDto> {
@@ -574,7 +653,7 @@ async function refresh({ refreshToken }: RefreshDto): Promise<RefreshResponseDto
     const { accessToken } = await refreshAccessTokenByRefreshToken({ refreshToken: rt });
     return { accessToken };
   } catch (err) {
-    if (err instanceof AppError) throw err;
+    if (isAppError(err)) throw err;
 
     const msg =
       typeof err === 'object' && err !== null && 'message' in err

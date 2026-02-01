@@ -124,6 +124,16 @@ export const authPasswordResetBodySchema = {
   required: ['newPassword'],
 } as const;
 
+export const authLogoutBodySchema = {
+  $id: 'authLogoutBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    allDevices: { type: 'boolean' },
+  },
+  required: ['newPassword'],
+} as const;
+
 export const authLogoutResponseSchema = {
   $id: 'authLogoutResponseSchema',
   type: 'null',
@@ -151,5 +161,6 @@ export const authDtoSchemas = [
   authPasswordResetQuerySchema,
   authPasswordResetBodySchema,
   authLogoutResponseSchema,
+  authLogoutBodySchema,
   authRefreshResponseSchema,
 ];

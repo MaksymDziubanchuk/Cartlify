@@ -19,6 +19,8 @@ import type {
   PasswordResetBodyDto,
   PasswordResetQueryDto,
   PasswordResetDto,
+  LogoutBodyDto,
+  LogoutDto,
   RefreshDto,
   RefreshResponseDto,
 } from 'types/dto/auth.dto.js';
@@ -260,9 +262,23 @@ const postPasswordReset: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-const postLogout: ControllerRouter<{}, {}, {}, unknown> = async (req, reply) => {
-  const { id } = req.user as UserEntity;
-  await authServices.logout({ userId: id });
+const postLogout: ControllerRouter<{}, LogoutBodyDto, {}, void> = async (req, reply) => {
+  const refreshToken = req.cookies?.refreshToken;
+  const allDevices = req.body?.allDevices;
+  const args = pickDefined<LogoutDto>({}, { refreshToken, allDevices });
+
+  await authServices.logout(args);
+
+  const isProd = env.NODE_ENV === 'production';
+
+  const baseCookie = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: 'lax' as const,
+  } as const;
+
+  reply.clearCookie('accessToken', { ...baseCookie, path: '/' });
+  reply.clearCookie('refreshToken', { ...baseCookie, path: '/' });
   return reply.code(204).send();
 };
 

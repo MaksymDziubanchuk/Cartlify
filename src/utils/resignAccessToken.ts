@@ -34,7 +34,7 @@ export async function refreshAccessTokenByRefreshToken({
   return prisma
     .$transaction(async (tx) => {
       await tx.$executeRaw`select cartlify.set_current_context(
-        'USER'::cartlify."Role",
+        ${tokenRole}::cartlify."Role",
         ${userId}::int,
         NULL
       )`;

@@ -20,14 +20,14 @@ export async function registerRoutes(app: FastifyInstance) {
   app.register(getHealthRouter, { prefix: '/health' });
   app.register(getReadyStatusRouter, { prefix: '/ready' });
   app.register(getProjectInfoRouter, { prefix: '/info' });
-  app.register(authRouter, { prefix: '/auth' });
-  app.register(usersRouter, { prefix: '/users' });
-  app.register(productRouter, { prefix: '/products' });
-  app.register(categoriesRouter, { prefix: '/categories' });
-  app.register(ordersRouter, { prefix: '/orders' });
-  app.register(favoritesRouter, { prefix: '/favorites' });
-  app.register(reviewsRouter, { prefix: '/reviews' });
-  app.register(adminRouter, { prefix: '/admin' });
-  app.register(rootRouter, { prefix: '/root' });
-  app.register(chatRouter, { prefix: '/chat' });
+  app.register(authRouter, { prefix: 'api/auth' });
+  app.register(usersRouter, { prefix: 'api/users' });
+  app.register(productRouter, { prefix: 'api/products' });
+  app.register(categoriesRouter, { prefix: 'api/categories' });
+  app.register(ordersRouter, { prefix: 'api/orders' });
+  app.register(favoritesRouter, { prefix: 'api/favorites' });
+  app.register(reviewsRouter, { prefix: 'api/reviews' });
+  app.register(adminRouter, { prefix: 'api/admin' });
+  app.register(rootRouter, { prefix: 'api/root' });
+  app.register(chatRouter, { prefix: 'api/chat' });
 }
