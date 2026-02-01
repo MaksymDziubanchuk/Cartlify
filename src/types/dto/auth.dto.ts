@@ -95,7 +95,9 @@ export interface LogoutDto {
 }
 
 export interface RefreshDto {
-  userId?: UserId;
+  refreshToken: string;
 }
 
-export type RefreshResponseDto = UserResponseDto;
+export interface RefreshResponseDto {
+  accessToken: string;
+}

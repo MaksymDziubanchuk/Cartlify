@@ -20,6 +20,7 @@ import type {
   PasswordResetQueryDto,
   PasswordResetDto,
   RefreshDto,
+  RefreshResponseDto,
 } from 'types/dto/auth.dto.js';
 
 import { authServices } from './auth.services.js';
@@ -27,6 +28,7 @@ import pickDefined from '@helpers/parameterNormalize.js';
 import { AppError, BadRequestError } from '@utils/errors.js';
 import env from '@config/env.js';
 import { getTtl } from '@utils/jwt.js';
+import { assertEmail } from '@helpers/validateEmail.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
@@ -116,7 +118,17 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
   req,
   reply,
 ) => {
-  const result = await authServices.resendVerify(req.body);
+  const { email } = req.body;
+
+  assertEmail(email);
+
+  const args = pickDefined<ResendVerifyDto>(
+    {
+      email,
+    },
+    {},
+  );
+  const result = await authServices.resendVerify(args);
   return reply.code(200).send(result);
 };
 
@@ -216,7 +228,14 @@ export const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageRes
   req,
   reply,
 ) => {
-  const result = await authServices.verifyEmail(req.query);
+  const { token } = req.query;
+  const args = pickDefined<VerifyEmailDto>(
+    {
+      token,
+    },
+    {},
+  );
+  const result = await authServices.verifyEmail(args);
   return reply.code(200).send(result);
 };
 
@@ -247,13 +266,18 @@ const postLogout: ControllerRouter<{}, {}, {}, unknown> = async (req, reply) => 
   return reply.code(204).send();
 };
 
-const postRefresh: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
-  const userId = (req.user as UserEntity | undefined)?.id;
+const postRefresh: ControllerRouter<{}, {}, {}, RefreshResponseDto> = async (req, reply) => {
+  const refreshToken = req.cookies?.refreshToken;
+  if (!refreshToken) throw new BadRequestError('REFRESH_TOKEN_REQUIRED');
+  const args = pickDefined<RefreshDto>(
+    {
+      refreshToken,
+    },
+    {},
+  );
+  const { accessToken } = await authServices.refresh(args);
 
-  const args = pickDefined<RefreshDto>({}, { userId });
-
-  const result = await authServices.refresh(args);
-  return result;
+  return { accessToken };
 };
 
 export const authController = {

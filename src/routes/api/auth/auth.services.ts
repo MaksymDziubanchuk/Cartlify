@@ -14,6 +14,7 @@ import {
   decodeJwtPayload,
 } from '@utils/googleOAuth.js';
 import env from '@config/env.js';
+import { refreshAccessTokenByRefreshToken } from '@utils/resignAccessToken.js';
 
 import type {
   LoginDto,
@@ -29,6 +30,7 @@ import type {
   PasswordResetDto,
   LogoutDto,
   RefreshDto,
+  RefreshResponseDto,
 } from 'types/dto/auth.dto.js';
 import type { GoogleIdTokenPayload } from '@utils/googleOAuth.js';
 import type { MessageResponseDto } from 'types/common.js';
@@ -146,6 +148,8 @@ async function login({
   userId: guestId,
 }: LoginDto): Promise<{ result: LoginResponseDto; refreshToken: string; accessToken: string }> {
   const cleanEmail = email.trim().toLowerCase();
+
+  assertEmail(cleanEmail);
 
   if (!cleanEmail) throw new BadRequestError('Email is required');
   if (!password) throw new BadRequestError('Password is required');
@@ -562,8 +566,23 @@ async function logout({ userId }: LogoutDto): Promise<void> {
   return;
 }
 
-async function refresh({ userId }: RefreshDto): Promise<MessageResponseDto> {
-  return { message: 'refresh not implemented' };
+async function refresh({ refreshToken }: RefreshDto): Promise<RefreshResponseDto> {
+  const rt = refreshToken?.trim();
+  if (!rt) throw new BadRequestError('REFRESH_TOKEN_REQUIRED');
+
+  try {
+    const { accessToken } = await refreshAccessTokenByRefreshToken({ refreshToken: rt });
+    return { accessToken };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`refresh(service): unexpected (${msg})`, 500);
+  }
 }
 
 export const authServices = {

@@ -110,7 +110,7 @@ export const setLogoutSchema = {
 
 export const setRefreshSchema = {
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'authRefreshResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
