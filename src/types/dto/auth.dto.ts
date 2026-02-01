@@ -90,8 +90,13 @@ export interface PasswordResetDto {
   newPassword: string;
 }
 
+export interface LogoutBodyDto {
+  allDevices?: boolean;
+}
+
 export interface LogoutDto {
-  userId: UserId;
+  refreshToken?: string;
+  allDevices?: boolean;
 }
 
 export interface RefreshDto {

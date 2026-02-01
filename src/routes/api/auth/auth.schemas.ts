@@ -99,6 +99,7 @@ export const setPasswordResetSchema = {
 } satisfies FastifySchema;
 
 export const setLogoutSchema = {
+  body: { $ref: 'authLogoutBodySchema#' },
   response: {
     204: { $ref: 'messageResponseSchema#' },
 
