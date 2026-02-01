@@ -19,10 +19,7 @@ export interface LoginDto {
   userAgent?: string;
 }
 
-export interface LoginResponseDto {
-  accessToken: string;
-  user: UserResponseDto;
-}
+export type LoginResponseDto = UserResponseDto;
 
 export interface GoogleStartDto {
   guestId: UserId;

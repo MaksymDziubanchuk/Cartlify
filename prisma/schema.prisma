@@ -21,6 +21,13 @@ enum UserTokenType {
   REFRESH_TOKEN
 }
 
+enum AuthProvider {
+  LOCAL
+  GOOGLE
+  GITHUB
+  LINKEDIN
+}
+
 enum ReviewVoteAction {
   UP
   DOWN
@@ -78,10 +85,13 @@ enum ChatMessageSenderType {
 }
 
 model User {
-  id           Int    @id @default(autoincrement())
-  email        String @unique
-  passwordHash String
-  role         Role   @default(USER)
+  id           Int     @id @default(autoincrement())
+  email        String  @unique
+  passwordHash String?
+  role         Role    @default(USER)
+
+  authProvider AuthProvider @default(LOCAL)
+  providerSub  String?
 
   isVerified Boolean  @default(false)
   createdAt  DateTime @default(now())
@@ -103,6 +113,8 @@ model User {
   chatThreads            ChatThread[]
   chatMessages           ChatMessage[]
 
+  @@unique([authProvider, providerSub])
+  @@index([authProvider])
   @@index([createdAt])
   @@index([isVerified, createdAt])
   @@map("users")
