@@ -1,6 +1,6 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { User, UserEntity } from 'types/user.js';
+import type { User } from 'types/user.js';
 import type {
   LoginBodyDto,
   LoginDto,
@@ -32,6 +32,7 @@ import { AppError, BadRequestError } from '@utils/errors.js';
 import env from '@config/env.js';
 import { getTtl } from '@utils/jwt.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { verifyRefreshToken } from '@utils/jwt.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
@@ -185,11 +186,9 @@ export const getGoogleCallback: ControllerRouter<
 
   const isProd = env.NODE_ENV === 'production';
 
-  const refreshTtl = getTtl(true, 'refresh');
-  const accessTtl = getTtl(true, 'access');
-
-  if (!refreshTtl || !accessTtl)
-    throw new BadRequestError('Invalid JWT TTL: (expected e.g. "3600")');
+  const { rememberMe } = verifyRefreshToken(refreshToken);
+  const refreshTtl = getTtl(rememberMe, 'refresh');
+  const accessTtl = getTtl(rememberMe, 'access');
 
   const baseCookie = {
     httpOnly: true,

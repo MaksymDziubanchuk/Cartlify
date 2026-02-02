@@ -257,7 +257,7 @@ async function login({
       if (!jwtId) throw new AppError('Failed to create refresh token row', 500);
 
       const refreshToken = signRefreshToken(
-        { userId: u.id, role: u.role, type: 'refresh', jwtId },
+        { userId: u.id, role: u.role, type: 'refresh', jwtId, rememberMe },
         rememberMe,
       );
 
@@ -477,7 +477,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
       if (!jwtId) throw new AppError('Failed to create refresh token row', 500);
 
       const refreshToken = signRefreshToken(
-        { userId: u.id, role: u.role, type: 'refresh', jwtId },
+        { userId: u.id, role: u.role, type: 'refresh', jwtId, rememberMe },
         rememberMe,
       );
 
