@@ -24,9 +24,11 @@ async function trySilentRefresh(
   refreshToken: string,
 ): Promise<boolean> {
   try {
-    const { accessToken, user } = await refreshAccessTokenByRefreshToken({ refreshToken });
+    const { accessToken, user, rememberMe } = await refreshAccessTokenByRefreshToken({
+      refreshToken,
+    });
 
-    const accessTtl = getTtl(true, 'access');
+    const accessTtl = getTtl(rememberMe, 'access');
 
     reply.setCookie('accessToken', accessToken, {
       ...baseCookie,

@@ -17,6 +17,7 @@ export type RefreshTokenPayload = {
   role: Role;
   type: string;
   jwtId: number;
+  rememberMe: boolean;
 };
 
 export type VerifiedRefreshToken = RefreshTokenPayload & { exp: number };
@@ -105,7 +106,7 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
 
     return { userId, role: role as Role, type, exp };
   } catch (err) {
-    if (isErrorNamed(err, 'AccessTokenExpiredError')) {
+    if (isErrorNamed(err, 'TokenExpiredError')) {
       throw new AccessTokenExpiredError();
     }
 
@@ -127,7 +128,7 @@ export function verifyRefreshToken(token: string): VerifiedRefreshToken {
     throw new AppError('Invalid refresh token payload', 401);
   }
 
-  const { userId, role, type, jwtId, exp } = decoded as Partial<
+  const { userId, role, type, jwtId, exp, rememberMe } = decoded as Partial<
     RefreshTokenPayload & { exp: number }
   >;
 
@@ -136,10 +137,11 @@ export function verifyRefreshToken(token: string): VerifiedRefreshToken {
     !role ||
     type !== 'refresh' ||
     typeof jwtId !== 'number' ||
-    typeof exp !== 'number'
+    typeof exp !== 'number' ||
+    typeof rememberMe !== 'boolean'
   ) {
     throw new AppError('Invalid refresh token payload', 401);
   }
 
-  return { userId, role: role as Role, type, jwtId, exp };
+  return { userId, role: role as Role, type, jwtId, exp, rememberMe };
 }
