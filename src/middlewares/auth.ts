@@ -30,6 +30,11 @@ async function trySilentRefresh(
 
     const accessTtl = getTtl(rememberMe, 'access');
 
+    reply.clearCookie('accessToken', {
+      ...baseCookie,
+      path: '/',
+    });
+
     reply.setCookie('accessToken', accessToken, {
       ...baseCookie,
       path: '/',
@@ -50,6 +55,11 @@ async function ensureGuest(req: FastifyRequest, reply: FastifyReply) {
 
   if (!guestId) {
     guestId = randomUUID();
+
+    reply.clearCookie('guestId', {
+      ...baseCookie,
+      path: '/',
+    });
 
     reply.setCookie('guestId', guestId, {
       ...baseCookie,

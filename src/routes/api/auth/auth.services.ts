@@ -19,6 +19,14 @@ import {
   exchangeGoogleCodeForTokens,
   decodeJwtPayload,
 } from '@utils/googleOAuth.js';
+import {
+  buildGithubAuthUrl,
+  verifyGithubOAuthState,
+  exchangeGithubCodeForTokens,
+  fetchGithubUser,
+  fetchGithubEmails,
+  pickBestGithubEmail,
+} from '@utils/githubOAuth.js';
 import env from '@config/env.js';
 import { refreshAccessTokenByRefreshToken } from '@utils/resignAccessToken.js';
 import { verifyTokenHash } from '@utils/tokenHash.js';
@@ -31,6 +39,9 @@ import type {
   GoogleStartDto,
   GoogleStartResponseDto,
   GoogleCallbackDto,
+  GithubStartDto,
+  GithubStartResponseDto,
+  GithubCallbackDto,
   ResendVerifyDto,
   VerifyEmailDto,
   PasswordForgotDto,
@@ -295,10 +306,7 @@ async function login({
     });
 }
 
-export async function googleStart({
-  guestId,
-  role,
-}: GoogleStartDto): Promise<GoogleStartResponseDto> {
+async function googleStart({ guestId, role }: GoogleStartDto): Promise<GoogleStartResponseDto> {
   if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
   if (!guestId) throw new AppError('Guest id is required', 400);
 
@@ -306,7 +314,7 @@ export async function googleStart({
   return { url };
 }
 
-export async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto): Promise<{
+async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto): Promise<{
   result: LoginResponseDto;
   refreshToken: string;
   accessToken: string;
@@ -386,7 +394,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
           name,
           "avatarUrl",
           locale,
-          provider,
+          "authProvider",
           "providerSub",
           "passwordHash"
         )
@@ -409,7 +417,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
           locale       = coalesce(cartlify.users.locale, excluded.locale),
           "providerSub"= coalesce(cartlify.users."providerSub", excluded."providerSub")
         where
-          cartlify.users.provider = 'GOOGLE'
+          cartlify.users."authProvider" = 'GOOGLE'
           and (cartlify.users."providerSub" is null or cartlify.users."providerSub" = excluded."providerSub")
         returning
           id,
@@ -422,15 +430,15 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
           "avatarUrl"  as "avatarUrl",
           locale,
           phone,
-          provider,
+          "authProvider" as "authProvider",
           "providerSub" as "providerSub"
       `;
 
       if (!upserted.length) {
-        const existing = await tx.$queryRaw<{ provider: string }[]>`
-          select provider from cartlify.users where email = ${email} limit 1
+        const existing = await tx.$queryRaw<{ authProvider: string }[]>`
+          select "authProvider" as "authProvider" from cartlify.users where email = ${email} limit 1
         `;
-        const p = existing[0]?.provider;
+        const p = existing[0]?.authProvider;
         if (p && p !== 'GOOGLE') throw new AppError(`Use ${p} login for this account`, 403);
         throw new AppError('GOOGLE_UPSERT_FAILED', 500);
       }
@@ -468,7 +476,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now()
+          now() + interval '1 second'
         )
         returning id
       `;
@@ -513,6 +521,241 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
     .catch((err) => {
       if (err instanceof AppError) throw err;
       throw new AppError('Something went wrong', 500);
+    });
+}
+
+async function githubStart({ guestId, role }: GithubStartDto): Promise<GithubStartResponseDto> {
+  if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
+  if (!guestId) throw new AppError('Guest id is required', 400);
+
+  const url = buildGithubAuthUrl(String(guestId));
+  return { url };
+}
+
+async function githubCallback({ code, state, ip, userAgent }: GithubCallbackDto): Promise<{
+  result: LoginResponseDto;
+  refreshToken: string;
+  accessToken: string;
+}> {
+  if (!code) throw new BadRequestError('MISSING_CODE');
+  if (!state) throw new BadRequestError('MISSING_STATE');
+
+  const st = verifyGithubOAuthState(state);
+  if (!st) throw new BadRequestError('INVALID_STATE');
+  const guestId = st.guestId;
+
+  const tokens = await exchangeGithubCodeForTokens(code, state);
+  if (!tokens.access_token) throw new BadRequestError('GITHUB_NO_ACCESS_TOKEN');
+
+  const ghUser = await fetchGithubUser(tokens.access_token);
+  const ghEmails = await fetchGithubEmails(tokens.access_token);
+
+  const sub = String(ghUser.id ?? '').trim();
+  if (!sub) throw new BadRequestError('GITHUB_SUB_MISSING');
+
+  const picked = pickBestGithubEmail(ghUser, ghEmails);
+  const email = (picked ?? '').trim().toLowerCase();
+  if (!email) throw new BadRequestError('GITHUB_EMAIL_MISSING');
+  assertEmail(email);
+
+  const isVerified = ghEmails.some(
+    (e) => e.verified === true && e.email.trim().toLowerCase() === email,
+  );
+  if (!isVerified) {
+    throw new ForbiddenError('GITHUB_EMAIL_NOT_VERIFIED');
+  }
+
+  const name = typeof ghUser.name === 'string' && ghUser.name.trim() ? ghUser.name.trim() : null;
+
+  const avatarUrl =
+    typeof ghUser.avatar_url === 'string' && ghUser.avatar_url.trim()
+      ? ghUser.avatar_url.trim()
+      : null;
+
+  const locale = null;
+
+  return prisma
+    .$transaction(async (tx) => {
+      await tx.$executeRaw`select cartlify.set_current_context(
+        'ADMIN'::cartlify."Role",
+        NULL,
+        NULL
+      )`;
+
+      const inserted = await tx.$queryRaw<
+        {
+          id: number;
+          email: string;
+          role: Role;
+          isVerified: boolean;
+          createdAt: Date;
+          updatedAt: Date;
+          name: string | null;
+          avatarUrl: string | null;
+          locale: string | null;
+          phone: string | null;
+          authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          providerSub: string | null;
+        }[]
+      >`
+        insert into cartlify.users (
+          email,
+          role,
+          "isVerified",
+          name,
+          "avatarUrl",
+          locale,
+          "authProvider",
+          "providerSub",
+          "passwordHash"
+        )
+        values (
+          ${email},
+          'USER'::cartlify."Role",
+          true,
+          ${name},
+          ${avatarUrl},
+          ${locale},
+          'GITHUB',
+          ${sub},
+          null
+        )
+        on conflict (email) do nothing
+        returning
+          id,
+          email,
+          role,
+          "isVerified",
+          "createdAt",
+          "updatedAt",
+          name,
+          "avatarUrl",
+          locale,
+          phone,
+          "authProvider",
+          "providerSub"
+      `;
+      let u = inserted[0];
+
+      if (!u) {
+        // 2) якщо вже існує — просто дістаємо
+        const rows = await tx.$queryRaw<typeof inserted>`
+          select
+            id,
+            email,
+            role,
+            "isVerified",
+            "createdAt",
+            "updatedAt",
+            name,
+            "avatarUrl",
+            locale,
+            phone,
+            "authProvider",
+            "providerSub"
+          from cartlify.users
+          where email = ${email}
+          limit 1
+        `;
+        u = rows[0];
+        if (!u) throw new AppError('USER_NOT_FOUND_AFTER_CONFLICT', 500);
+
+        if (u.authProvider !== 'GITHUB') {
+          throw new AppError(`Use ${u.authProvider} login for this account`, 403);
+        }
+
+        if (u.providerSub && u.providerSub !== sub) {
+          throw new AppError('GITHUB_SUB_MISMATCH', 403);
+        }
+      }
+
+      await tx.$executeRaw`select cartlify.set_current_context(
+        ${u.role}::cartlify."Role",
+        ${u.id}::int,
+        NULL
+      )`;
+
+      await tx.$executeRaw`
+        update cartlify.users
+        set
+          "providerSub" = coalesce("providerSub", ${sub}),
+          name          = coalesce(name, ${name}),
+          "avatarUrl"   = coalesce("avatarUrl", ${avatarUrl}),
+          locale        = coalesce(locale, ${locale})
+        where id = ${u.id}::int
+      `;
+
+      await tx.$executeRaw`select cartlify.migrate_guest_data_to_user(
+        ${guestId}::uuid,
+        ${u.id}::int
+      )`;
+
+      await tx.$executeRaw`
+        insert into cartlify.login_logs ("userId", "email", "role", "ipAddress", "userAgent")
+        values (${u.id}, ${email}, ${u.role}::cartlify."Role", ${ip ?? null}, ${userAgent ?? null})
+      `;
+
+      const rememberMe = true;
+
+      const accessToken = signAccessToken(
+        { userId: u.id, role: u.role, type: 'access' },
+        rememberMe,
+      );
+
+      const placeholder = createPlaceholder(32, 'hex');
+
+      const created = await tx.$queryRaw<{ id: number }[]>`
+        insert into cartlify.user_tokens ("userId", type, token, "expiresAt")
+        values (
+          ${u.id},
+          'REFRESH_TOKEN'::cartlify."UserTokenType",
+          ${placeholder},
+          now() + interval '1 second'
+        )
+        returning id
+      `;
+
+      const jwtId = created[0]?.id;
+      if (!jwtId) throw new AppError('Failed to create refresh token row', 500);
+
+      const refreshToken = signRefreshToken(
+        { userId: u.id, role: u.role, type: 'refresh', jwtId, rememberMe },
+        rememberMe,
+      );
+
+      const { exp } = verifyRefreshToken(refreshToken);
+      if (!exp) throw new AppError('Failed to decode refresh token exp', 500);
+
+      const refreshExpiresAt = new Date(exp * 1000);
+      const refreshHash = hashToken(refreshToken);
+
+      await tx.$executeRaw`
+        update cartlify.user_tokens
+        set token = ${refreshHash}, "expiresAt" = ${refreshExpiresAt}
+        where id = ${jwtId}::int
+      `;
+
+      assertEmail(u.email);
+
+      const result: LoginResponseDto = {
+        id: u.id,
+        email: u.email,
+        role: u.role,
+        isVerified: u.isVerified,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+        ...(u.name ? { name: u.name } : {}),
+        ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
+        ...(u.locale ? { locale: u.locale } : {}),
+        ...(u.phone ? { phone: u.phone } : {}),
+      };
+
+      return { result, accessToken, refreshToken };
+    })
+    .catch((err) => {
+      if (err instanceof AppError) throw err;
+
+      throw err;
     });
 }
 
@@ -793,6 +1036,8 @@ export const authServices = {
   register,
   googleStart,
   googleCallback,
+  githubStart,
+  githubCallback,
   resendVerify,
   verifyEmail,
   passwordForgot,

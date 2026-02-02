@@ -16,7 +16,7 @@ async function requestResponseLogger(app: FastifyInstance, opt: unknown) {
     (req: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction) => {
       const responseTime = Date.now() - (req.startTime as number);
       const timestamp = new Date().toISOString();
-      const role = req.user?.role ?? 'GUEST';
+      const role = req.user?.role ?? 'ANON';
       const userId = req.user?.id ?? 'unknown';
 
       if (env.NODE_ENV === 'development') {

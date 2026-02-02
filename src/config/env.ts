@@ -37,6 +37,11 @@ declare global {
       GOOGLE_CLIENT_SECRET: string;
       GOOGLE_REDIRECT_URI: string;
       GOOGLE_STATE_SECRET: string;
+
+      GITHUB_CLIENT_ID: string;
+      GITHUB_CLIENT_SECRET: string;
+      GITHUB_REDIRECT_URI: string;
+      GITHUB_STATE_SECRET: string;
     }
   }
 }
@@ -83,4 +88,9 @@ export default {
   GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET || '',
   GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI || '',
   GOOGLE_STATE_SECRET: process.env.GOOGLE_STATE_SECRET || '',
+
+  GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID || '',
+  GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET || '',
+  GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI || '',
+  GITHUB_STATE_SECRET: process.env.GITHUB_STATE_SECRET || '',
 };

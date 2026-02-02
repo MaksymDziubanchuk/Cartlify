@@ -10,6 +10,11 @@ import type {
   GoogleCallbackQueryDto,
   GoogleCallbackDto,
   GoogleCallbackSuccessQueryDto,
+  GithubStartDto,
+  GithubStartResponseDto,
+  GithubCallbackQueryDto,
+  GithubCallbackDto,
+  GithubCallbackSuccessQueryDto,
   RegisterBodyDto,
   RegisterResponseDto,
   RegisterDto,
@@ -136,10 +141,7 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
   return reply.code(200).send(result);
 };
 
-export const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = async (
-  req,
-  reply,
-) => {
+const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = async (req, reply) => {
   const { id, role } = req.user as User;
 
   if (role !== 'GUEST') {
@@ -156,7 +158,7 @@ export const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto
   return;
 };
 
-export const getGoogleCallback: ControllerRouter<
+const getGoogleCallback: ControllerRouter<
   {},
   {},
   GoogleCallbackQueryDto,
@@ -226,7 +228,94 @@ export const getGoogleCallback: ControllerRouter<
   return result;
 };
 
-export const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
+const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = async (req, reply) => {
+  const { id, role } = req.user as User;
+
+  if (role !== 'GUEST') {
+    throw new AppError('Already authenticated', 409);
+  }
+
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'];
+
+  const args = pickDefined<GithubStartDto>({ guestId: id, role }, { ip, userAgent });
+
+  const { url } = await authServices.githubStart(args);
+  reply.code(302).redirect(url);
+  return;
+};
+
+const getGithubCallback: ControllerRouter<
+  {},
+  {},
+  GithubCallbackQueryDto,
+  LoginResponseDto
+> = async (req, reply) => {
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'];
+
+  const q = req.query;
+
+  if ('error' in q && typeof q.error === 'string') {
+    const code = q.error;
+    const desc = q.error_description;
+
+    if (code === 'access_denied') {
+      throw new AppError(desc ?? 'OAuth access denied', 401);
+    }
+
+    throw new AppError(desc ?? code, 400);
+  }
+
+  const { code, state } = q as GithubCallbackSuccessQueryDto;
+
+  const args = pickDefined<GithubCallbackDto>({ code, state }, { ip, userAgent });
+
+  const { result, accessToken, refreshToken } = await authServices.githubCallback(args);
+
+  const isProd = env.NODE_ENV === 'production';
+
+  const { rememberMe } = verifyRefreshToken(refreshToken);
+  const refreshTtl = getTtl(rememberMe, 'refresh');
+  const accessTtl = getTtl(rememberMe, 'access');
+
+  const baseCookie = {
+    httpOnly: true,
+    secure: isProd,
+    sameSite: 'lax' as const,
+  } as const;
+
+  reply.clearCookie('guestId', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.clearCookie('accessToken', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.clearCookie('refreshToken', {
+    ...baseCookie,
+    path: '/',
+  });
+
+  reply.setCookie('accessToken', accessToken, {
+    ...baseCookie,
+    path: '/',
+    maxAge: accessTtl as number,
+  });
+
+  reply.setCookie('refreshToken', refreshToken, {
+    ...baseCookie,
+    path: '/',
+    maxAge: refreshTtl as number,
+  });
+
+  return result;
+};
+
+const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
   req,
   reply,
 ) => {
@@ -306,6 +395,8 @@ export const authController = {
   postRegister,
   getGoogleStart,
   getGoogleCallback,
+  getGithubStart,
+  getGithubCallback,
   postVerifyResend,
   getVerifyEmail,
   postPasswordForgot,
