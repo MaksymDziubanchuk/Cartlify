@@ -56,17 +56,17 @@ export default {
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
 
   // JWT
-  JWT_ACCESS_SECRET: process.env.JWT_SECRET || 'changeme',
+  JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET || 'changeme',
   JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1200',
   JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '3600',
 
-  JWT_REFRESH_SECRET: process.env.JWT_SECRET || 'changeme',
-  JWT_REFRESH_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '86400',
-  JWT_REFRESH_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '2592000',
+  JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || 'changeme',
+  JWT_REFRESH_TTL_SHORT: process.env.JWT_REFRESH_TTL_SHORT || '86400',
+  JWT_REFRESH_TTL_LONG: process.env.JWT_REFRESH_TTL_LONG || '2592000',
 
   GUEST_ID_TTL: process.env.GUEST_ID_TTL || '157680000',
 
-  RESET_TTL_MS: process.env.RESET_TTL_MS || '3600',
+  RESET_TTL_MS: process.env.RESET_TTL_MS ? Number(process.env.RESET_TTL_MS) : 3600000,
   // Cloudinary
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
