@@ -52,6 +52,38 @@ export interface GoogleCallbackDto {
   userAgent?: string;
 }
 
+export interface GithubStartDto {
+  guestId: UserId;
+  role: Role;
+  ip?: string;
+  userAgent?: string;
+}
+
+export interface GithubStartResponseDto {
+  url: string;
+}
+
+export interface GithubCallbackSuccessQueryDto {
+  code: string;
+  state: string;
+}
+
+export interface GithubCallbackErrorQueryDto {
+  error: string;
+  error_description?: string;
+  error_uri?: string;
+  state?: string;
+}
+
+export type GithubCallbackQueryDto = GithubCallbackSuccessQueryDto | GithubCallbackErrorQueryDto;
+
+export interface GithubCallbackDto {
+  code: string;
+  state: string;
+  ip?: string;
+  userAgent?: string;
+}
+
 export interface RegisterBodyDto {
   email: Email;
   password: string;

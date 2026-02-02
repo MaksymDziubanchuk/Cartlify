@@ -55,6 +55,8 @@ export function decodeJwtPayload<T>(jwt: string): T {
 
 const { GOOGLE_STATE_SECRET, GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI, GOOGLE_CLIENT_SECRET } = env;
 
+const GOOGLE_SCOPE = 'openid email profile';
+
 export function createGoogleOAuthState(guestId: string) {
   const secret = GOOGLE_STATE_SECRET;
   if (!secret) throw new AppError('GOOGLE_STATE_SECRET is missing', 500);
@@ -87,7 +89,7 @@ export function buildGoogleAuthUrl(guestId: string) {
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', redirectUri);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', 'openid email profile');
+  url.searchParams.set('scope', GOOGLE_SCOPE);
   url.searchParams.set('state', state);
 
   return url.toString();

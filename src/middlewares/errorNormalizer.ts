@@ -9,7 +9,10 @@ export default function errorNormalizer(app: FastifyInstance) {
 
     const payload: { code: number; message: string; stack?: string } = {
       code: statusCode,
-      message: process.env.NODE_ENV === 'production' ? 'Something went wrong' : error.message,
+      message:
+        process.env.NODE_ENV === 'production' && statusCode >= 500
+          ? 'Something went wrong'
+          : error.message,
     };
 
     if (process.env.NODE_ENV !== 'production' && statusCode >= 500 && error.stack) {
