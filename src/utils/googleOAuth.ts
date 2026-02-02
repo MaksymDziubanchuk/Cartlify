@@ -1,6 +1,7 @@
-import { createHmac, randomBytes } from 'node:crypto';
-import env from '../config/env.js';
-import { AppError } from './errors.js';
+import { createHmac } from 'node:crypto';
+import env from '@config/env.js';
+import { AppError } from '@utils/errors.js';
+import { createPlaceholder, decodePlaceholderInternal } from '@utils/placeholder.js';
 
 type StatePayload = {
   guestId: string;
@@ -42,12 +43,6 @@ function b64urlJson(obj: unknown) {
   return b64url(JSON.stringify(obj));
 }
 
-function b64urlDecodeToString(input: string) {
-  const pad = '='.repeat((4 - (input.length % 4)) % 4);
-  const b64 = (input + pad).replace(/-/g, '+').replace(/_/g, '/');
-  return Buffer.from(b64, 'base64').toString('utf8');
-}
-
 function signState(payloadB64: string, secret: string) {
   return b64url(createHmac('sha256', secret).update(payloadB64).digest());
 }
@@ -55,7 +50,7 @@ function signState(payloadB64: string, secret: string) {
 export function decodeJwtPayload<T>(jwt: string): T {
   const parts = jwt.split('.');
   if (parts.length < 2) throw new AppError('INVALID_GOOGLE_ID_TOKEN', 500);
-  return JSON.parse(b64urlDecodeToString(parts[1])) as T;
+  return JSON.parse(decodePlaceholderInternal(parts[1], 'base64url').toString('utf8')) as T;
 }
 
 const { GOOGLE_STATE_SECRET, GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI, GOOGLE_CLIENT_SECRET } = env;
@@ -68,7 +63,7 @@ export function createGoogleOAuthState(guestId: string) {
 
   const payload: StatePayload = {
     guestId,
-    nonce: b64url(randomBytes(16)),
+    nonce: createPlaceholder(16, 'base64url'),
     iat: now,
     exp: now + 10 * 60,
   };
@@ -109,12 +104,30 @@ export function verifyGoogleOAuthState(state: string): StatePayload | null {
   if (sig !== expected) throw new AppError('INVALID_PAYLOAD', 500);
 
   try {
-    const json = Buffer.from(
-      payloadB64.replaceAll('-', '+').replaceAll('_', '/'),
-      'base64',
-    ).toString('utf8');
-    return JSON.parse(json) as StatePayload;
-  } catch {
+    const json = decodePlaceholderInternal(payloadB64, 'base64url').toString('utf8');
+    const payload = JSON.parse(json) as StatePayload;
+
+    const now = Math.floor(Date.now() / 1000);
+
+    if (typeof payload.exp !== 'number' || payload.exp < now) {
+      throw new AppError('GOOGLE_OAUTH_STATE_EXPIRED', 401);
+    }
+
+    if (typeof payload.iat !== 'number') {
+      throw new AppError('GOOGLE_OAUTH_STATE_IAT_INVALID', 401);
+    }
+
+    if (payload.iat > now + 30) {
+      throw new AppError('GOOGLE_OAUTH_STATE_IAT_IN_FUTURE', 401);
+    }
+
+    if (payload.exp <= payload.iat) {
+      throw new AppError('GOOGLE_OAUTH_STATE_TIME_RANGE_INVALID', 401);
+    }
+
+    return payload as StatePayload;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
     throw new AppError('Parsing payload failed!', 500);
   }
 }
@@ -144,7 +157,6 @@ export async function exchangeGoogleCodeForTokens(code: string): Promise<GoogleT
 
   const text = await res.text();
   if (!res.ok) {
-    console.log('[GOOGLE_TOKEN_EXCHANGE_FAIL]', { status: res.status, body: text });
     throw new AppError('GOOGLE_OAUTH_TOKEN_EXCHANGE_FAILED', 401);
   }
 

@@ -11,6 +11,7 @@ export type RefreshAccessDto = {
 export type RefreshAccessResult = {
   accessToken: string;
   user: { id: number; role: Role };
+  rememberMe: boolean;
 };
 
 export async function refreshAccessTokenByRefreshToken({
@@ -19,7 +20,7 @@ export async function refreshAccessTokenByRefreshToken({
   const rt = refreshToken?.trim();
   if (!rt) throw new BadRequestError('refresh: refreshToken required');
 
-  const { userId, role: tokenRole, jwtId } = verifyRefreshToken(rt);
+  const { userId, role: tokenRole, jwtId, rememberMe } = verifyRefreshToken(rt);
 
   if (!Number.isInteger(userId) || userId <= 0) {
     throw new UnauthorizedError('refresh: bad payload userId');
@@ -82,13 +83,12 @@ export async function refreshAccessTokenByRefreshToken({
       if (!dbUser) throw new UnauthorizedError('refresh: user not found');
       if (dbUser.role === 'GUEST') throw new UnauthorizedError('refresh: guest forbidden');
 
-      const rememberMe = true;
       const accessToken = signAccessToken(
         { userId: dbUser.id, role: dbUser.role, type: 'access' },
         rememberMe,
       );
 
-      return { accessToken, user: { id: dbUser.id, role: dbUser.role } };
+      return { accessToken, user: { id: dbUser.id, role: dbUser.role }, rememberMe };
     })
     .catch((err) => {
       if (err instanceof AppError) throw err;
