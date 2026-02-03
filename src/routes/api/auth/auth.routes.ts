@@ -17,7 +17,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/oauth/google',
     {
-      preHandler: [authGuard, requireRole(['GUEST'])],
+      preHandler: [authGuard],
       schema: authSchema.setGoogleStartSchema,
     },
     authController.getGoogleStart,
@@ -35,7 +35,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.get(
     '/oauth/github',
     {
-      preHandler: [authGuard, requireRole(['GUEST'])],
+      preHandler: [authGuard],
       schema: authSchema.setGithubStartSchema,
     },
     authController.getGithubStart,

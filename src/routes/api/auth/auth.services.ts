@@ -259,7 +259,7 @@ async function login({
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now()
+          now() + interval '60 second'
         )
         returning id
       `;
@@ -371,7 +371,7 @@ async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto)
         NULL
       )`;
 
-      const upserted = await tx.$queryRaw<
+      const inserted = await tx.$queryRaw<
         {
           id: number;
           email: string;
@@ -383,7 +383,7 @@ async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto)
           avatarUrl: string | null;
           locale: string | null;
           phone: string | null;
-          provider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
           providerSub: string | null;
         }[]
       >`
@@ -409,47 +409,70 @@ async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto)
           ${sub},
           null
         )
-        on conflict (email)
-        do update set
-          "isVerified" = (cartlify.users."isVerified" OR excluded."isVerified"),
-          name         = coalesce(cartlify.users.name, excluded.name),
-          "avatarUrl"  = coalesce(cartlify.users."avatarUrl", excluded."avatarUrl"),
-          locale       = coalesce(cartlify.users.locale, excluded.locale),
-          "providerSub"= coalesce(cartlify.users."providerSub", excluded."providerSub")
-        where
-          cartlify.users."authProvider" = 'GOOGLE'
-          and (cartlify.users."providerSub" is null or cartlify.users."providerSub" = excluded."providerSub")
+        on conflict (email) do nothing
         returning
           id,
           email,
           role,
-          "isVerified" as "isVerified",
-          "createdAt"  as "createdAt",
-          "updatedAt"  as "updatedAt",
+          "isVerified",
+          "createdAt",
+          "updatedAt",
           name,
-          "avatarUrl"  as "avatarUrl",
+          "avatarUrl",
           locale,
           phone,
-          "authProvider" as "authProvider",
-          "providerSub" as "providerSub"
+          "authProvider",
+          "providerSub"
       `;
 
-      if (!upserted.length) {
-        const existing = await tx.$queryRaw<{ authProvider: string }[]>`
-          select "authProvider" as "authProvider" from cartlify.users where email = ${email} limit 1
-        `;
-        const p = existing[0]?.authProvider;
-        if (p && p !== 'GOOGLE') throw new AppError(`Use ${p} login for this account`, 403);
-        throw new AppError('GOOGLE_UPSERT_FAILED', 500);
-      }
+      let u = inserted[0];
 
-      const u = upserted[0];
+      if (!u) {
+        const rows = await tx.$queryRaw<typeof inserted>`
+          select
+            id,
+            email,
+            role,
+            "isVerified",
+            "createdAt",
+            "updatedAt",
+            name,
+            "avatarUrl",
+            locale,
+            phone,
+            "authProvider",
+            "providerSub"
+          from cartlify.users
+          where email = ${email}
+          limit 1
+        `;
+        u = rows[0];
+        if (!u) throw new AppError('USER_NOT_FOUND_AFTER_CONFLICT', 500);
+
+        if (u.authProvider !== 'GOOGLE') {
+          throw new AppError(`Use ${u.authProvider} login for this account`, 403);
+        }
+
+        if (u.providerSub && u.providerSub !== sub) {
+          throw new AppError('GOOGLE_SUB_MISMATCH', 403);
+        }
+      }
 
       await tx.$executeRaw`select cartlify.set_current_context(
         ${u.role}::cartlify."Role",
         ${u.id}::int,
         NULL
       )`;
+
+      await tx.$executeRaw`
+        update cartlify.users
+        set
+          "providerSub" = coalesce("providerSub", ${sub}),
+          name          = coalesce(name, ${name}),
+          "avatarUrl"   = coalesce("avatarUrl", ${avatarUrl}),
+          locale        = coalesce(locale, ${locale})
+        where id = ${u.id}::int
+      `;
 
       await tx.$executeRaw`select cartlify.migrate_guest_data_to_user(
         ${guestId}::uuid,
@@ -476,7 +499,7 @@ async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto)
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now() + interval '1 second'
+          now() + interval '60 second'
         )
         returning id
       `;
@@ -635,10 +658,10 @@ async function githubCallback({ code, state, ip, userAgent }: GithubCallbackDto)
           "authProvider",
           "providerSub"
       `;
+
       let u = inserted[0];
 
       if (!u) {
-        // 2) якщо вже існує — просто дістаємо
         const rows = await tx.$queryRaw<typeof inserted>`
           select
             id,
@@ -710,7 +733,7 @@ async function githubCallback({ code, state, ip, userAgent }: GithubCallbackDto)
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now() + interval '1 second'
+          now() + interval '60 second'
         )
         returning id
       `;

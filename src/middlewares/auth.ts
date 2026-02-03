@@ -44,7 +44,7 @@ async function trySilentRefresh(
     req.user = { id: user.id, role: user.role };
     return true;
   } catch (err) {
-    console.log('silent refresh failed');
+    req.log.info('silent refresh failed');
     return false;
   }
 }
@@ -72,6 +72,7 @@ async function ensureGuest(req: FastifyRequest, reply: FastifyReply) {
 }
 
 export default async function authGuard(req: FastifyRequest, reply: FastifyReply) {
+  if (!req.url.startsWith('/api/')) return;
   const cookies = (req.cookies as Record<string, string | undefined>) ?? {};
 
   const accessToken = cookies?.accessToken;
@@ -90,10 +91,10 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
         if (ok) return;
       }
 
-      if (isErrorNamed(err, 'AccessTokenExpiredError')) {
-        console.log('need login (access expired, refresh missing/failed)');
+      if (isErrorNamed(err, 'TokenExpiredError')) {
+        req.log.info('need login (access expired, refresh missing/failed)');
       } else {
-        console.log('need login (access invalid, refresh missing/failed)');
+        req.log.info('need login (access invalid, refresh missing/failed)');
       }
 
       throw new BadRequestError('LOGIN_REQUIRED');
@@ -105,7 +106,7 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
 
     if (ok) return;
 
-    console.log('need login (no access, refresh invalid/expired)');
+    req.log.info('need login (no access, refresh invalid/expired)');
     throw new BadRequestError('LOGIN_REQUIRED');
   }
 

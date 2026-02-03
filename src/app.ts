@@ -41,7 +41,7 @@ const loggerOptions: LoggerOptionsWithTransport = {
 if (env.NODE_ENV === 'development') {
   loggerOptions.transport = {
     target: 'pino-pretty',
-    options: { translateTime: true },
+    options: { singleLine: true },
   };
 }
 

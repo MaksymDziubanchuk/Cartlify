@@ -146,7 +146,6 @@ export const authLogoutBodySchema = {
   properties: {
     allDevices: { type: 'boolean' },
   },
-  required: ['newPassword'],
 } as const;
 
 export const authLogoutResponseSchema = {
