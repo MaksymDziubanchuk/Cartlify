@@ -20,7 +20,7 @@ async function requestResponseLogger(app: FastifyInstance, opt: unknown) {
       const userId = req.user?.id ?? 'unknown';
 
       if (env.NODE_ENV === 'development') {
-        console.log(
+        req.log.info(
           `[${timestamp}] ${req.method} ${req.url} ${reply.statusCode} ${role}(id=${userId}) - ${responseTime}ms`,
         );
       } else {
