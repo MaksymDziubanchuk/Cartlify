@@ -259,7 +259,7 @@ async function login({
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now() + interval '60 second'
+          now() + interval '1 second'
         )
         returning id
       `;
@@ -499,7 +499,7 @@ async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto)
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now() + interval '60 second'
+          now() + interval '1 second'
         )
         returning id
       `;
@@ -733,7 +733,7 @@ async function githubCallback({ code, state, ip, userAgent }: GithubCallbackDto)
           ${u.id},
           'REFRESH_TOKEN'::cartlify."UserTokenType",
           ${placeholder},
-          now() + interval '60 second'
+          now() + interval '1 second'
         )
         returning id
       `;

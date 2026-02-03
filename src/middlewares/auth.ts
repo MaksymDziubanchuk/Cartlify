@@ -24,21 +24,28 @@ async function trySilentRefresh(
   refreshToken: string,
 ): Promise<boolean> {
   try {
-    const { accessToken, user, rememberMe } = await refreshAccessTokenByRefreshToken({
-      refreshToken,
-    });
+    const {
+      accessToken,
+      refreshToken: newRefreshToken,
+      user,
+      rememberMe,
+      refreshMaxAgeSec,
+    } = await refreshAccessTokenByRefreshToken({ refreshToken });
 
     const accessTtl = getTtl(rememberMe, 'access');
 
-    reply.clearCookie('accessToken', {
-      ...baseCookie,
-      path: '/',
-    });
-
+    reply.clearCookie('accessToken', { ...baseCookie, path: '/' });
     reply.setCookie('accessToken', accessToken, {
       ...baseCookie,
       path: '/',
       maxAge: accessTtl as number,
+    });
+
+    reply.clearCookie('refreshToken', { ...baseCookie, path: '/' });
+    reply.setCookie('refreshToken', newRefreshToken, {
+      ...baseCookie,
+      path: '/',
+      maxAge: refreshMaxAgeSec,
     });
 
     req.user = { id: user.id, role: user.role };
