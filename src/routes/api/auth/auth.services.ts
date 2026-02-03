@@ -188,15 +188,15 @@ async function login({
           password_hash: string | null;
           role: Role;
           is_verified: boolean;
-          provider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
         }[]
       >`select * from cartlify.auth_get_user_for_login(${cleanEmail})`;
 
       const u = rows[0];
       if (!u) throw invalidCreds();
 
-      if (u.provider !== 'LOCAL') {
-        throw new AppError(`Use ${u.provider} login for this account`, 403);
+      if (u.authProvider !== 'LOCAL') {
+        throw new AppError(`Use ${u.authProvider} login for this account`, 403);
       }
 
       if (!u.password_hash) {
