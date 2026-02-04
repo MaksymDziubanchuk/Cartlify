@@ -38,6 +38,12 @@ import env from '@config/env.js';
 import { getTtl } from '@utils/jwt.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { verifyRefreshToken } from '@utils/jwt.js';
+import {
+  clearGuestIdCookie,
+  setAccessTokenCookie,
+  setRefreshTokenCookie,
+  clearAuthCookies,
+} from '@routes/api/auth//services/helpers/authCookies.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
@@ -87,38 +93,9 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
   if (!refreshTtl || !accessTtl)
     throw new BadRequestError('Invalid JWT TTL: (expected e.g. "3600")');
 
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('guestId', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('accessToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('refreshToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.setCookie('accessToken', accessToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: accessTtl as number,
-  });
-
-  reply.setCookie('refreshToken', refreshToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: refreshTtl as number,
-  });
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
 
   return result;
 };
@@ -192,38 +169,9 @@ const getGoogleCallback: ControllerRouter<
   const refreshTtl = getTtl(rememberMe, 'refresh');
   const accessTtl = getTtl(rememberMe, 'access');
 
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('guestId', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('accessToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('refreshToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.setCookie('accessToken', accessToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: accessTtl as number,
-  });
-
-  reply.setCookie('refreshToken', refreshToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: refreshTtl as number,
-  });
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
 
   return result;
 };
@@ -279,38 +227,9 @@ const getGithubCallback: ControllerRouter<
   const refreshTtl = getTtl(rememberMe, 'refresh');
   const accessTtl = getTtl(rememberMe, 'access');
 
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('guestId', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('accessToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('refreshToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.setCookie('accessToken', accessToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: accessTtl as number,
-  });
-
-  reply.setCookie('refreshToken', refreshToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: refreshTtl as number,
-  });
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
 
   return result;
 };
@@ -363,29 +282,29 @@ const postLogout: ControllerRouter<{}, LogoutBodyDto, {}, void> = async (req, re
 
   await authServices.logout(args);
 
-  const isProd = env.NODE_ENV === 'production';
-
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('accessToken', { ...baseCookie, path: '/' });
-  reply.clearCookie('refreshToken', { ...baseCookie, path: '/' });
+  clearAuthCookies(reply);
   return reply.code(204).send();
 };
 
 const postRefresh: ControllerRouter<{}, {}, {}, RefreshResponseDto> = async (req, reply) => {
   const refreshToken = req.cookies?.refreshToken;
   if (!refreshToken) throw new BadRequestError('REFRESH_TOKEN_REQUIRED');
+
   const args = pickDefined<RefreshDto>(
     {
       refreshToken,
     },
     {},
   );
-  const { accessToken } = await authServices.refresh(args);
+
+  const {
+    result,
+    refreshToken: newRefreshToken,
+    refreshMaxAgeSec,
+  } = await authServices.refresh(args);
+  const { accessToken } = result;
+
+  setRefreshTokenCookie(reply, newRefreshToken, refreshMaxAgeSec);
 
   return { accessToken };
 };
