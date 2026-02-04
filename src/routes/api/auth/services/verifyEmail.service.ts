@@ -8,6 +8,8 @@ import type { MessageResponseDto } from 'types/common.js';
 
 import { setGuestNullContext } from '@db/dbContext.service.js';
 
+// resend verify email flow
+// create new verify token
 export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageResponseDto> {
   assertEmail(email);
 
@@ -17,15 +19,18 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
   await prisma.$transaction(async (tx) => {
     await setGuestNullContext(tx);
 
+    // call db resend function
     const rows = await tx.$queryRaw<{ user_id: number; token: string; expires_at: Date }[]>`
       select * from cartlify.auth_resend_verify(${cleanEmail}, ${token}, ${expiresAt})
     `;
 
+    // log only when user exists
     if (rows.length) {
       console.log('[VERIFY_EMAIL_RESEND]', { email: cleanEmail, rows });
     }
   });
 
+  // generic response
   return { message: 'If the email exists, a verification link was sent.' };
 }
 
@@ -36,6 +41,7 @@ export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageRes
   const ok = await prisma.$transaction(async (tx) => {
     await setGuestNullContext(tx);
 
+    // call db verify function
     const rows = await tx.$queryRaw<{ ok: boolean }[]>`
       select cartlify.auth_verify_email(${cleanToken}::text) as ok
     `;
@@ -43,6 +49,7 @@ export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageRes
     return Boolean(rows[0]?.ok);
   });
 
+  // reject invalid token
   if (!ok) throw new AppError('Invalid or expired token', 400);
 
   return { message: 'Email verified' };

@@ -30,7 +30,7 @@ export async function githubStart({
 }: GithubStartDto): Promise<GithubStartResponseDto> {
   if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
   if (!guestId) throw new AppError('Guest id is required', 400);
-
+  // build oauth redirect url
   const url = buildGithubAuthUrl(String(guestId));
   return { url };
 }
@@ -43,19 +43,24 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
   if (!code) throw new BadRequestError('MISSING_CODE');
   if (!state) throw new BadRequestError('MISSING_STATE');
 
+  // verify oauth state payload
   const st = verifyGithubOAuthState(state);
   if (!st) throw new BadRequestError('INVALID_STATE');
   const guestId = st.guestId;
 
+  // exchange code for oauth tokens
   const tokens = await exchangeGithubCodeForTokens(code, state);
   if (!tokens.access_token) throw new BadRequestError('GITHUB_NO_ACCESS_TOKEN');
 
+  // fetch github user and emails
   const ghUser = await fetchGithubUser(tokens.access_token);
   const ghEmails = await fetchGithubEmails(tokens.access_token);
 
+  // build provider subject id
   const sub = String(ghUser.id ?? '').trim();
   if (!sub) throw new BadRequestError('GITHUB_SUB_MISSING');
 
+  // pick best email address
   const picked = pickBestGithubEmail(ghUser, ghEmails);
   const email = (picked ?? '').trim().toLowerCase();
   if (!email) throw new BadRequestError('GITHUB_EMAIL_MISSING');
@@ -77,6 +82,7 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
 
   return prisma
     .$transaction(async (tx) => {
+      // try to create user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
         provider: 'GITHUB',
@@ -101,6 +107,7 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
 
       const rememberMe = true;
 
+      // issue tokens for session
       const { accessToken, refreshToken } = await issueTokensOnLogin(tx, {
         userId: u.id,
         role: u.role as any,

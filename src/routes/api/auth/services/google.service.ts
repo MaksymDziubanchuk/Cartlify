@@ -32,7 +32,7 @@ export async function googleStart({
 }: GoogleStartDto): Promise<GoogleStartResponseDto> {
   if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
   if (!guestId) throw new AppError('Guest id is required', 400);
-
+  // build oauth redirect url
   const url = buildGoogleAuthUrl(String(guestId));
   return { url };
 }
@@ -45,13 +45,16 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
   if (!code) throw new BadRequestError('MISSING_CODE');
   if (!state) throw new BadRequestError('MISSING_STATE');
 
+  // verify oauth state payload
   const st = verifyGoogleOAuthState(state);
   if (!st) throw new BadRequestError('INVALID_STATE');
   const guestId = st.guestId;
 
+  // exchange code for google tokens
   const tokens = await exchangeGoogleCodeForTokens(code);
   if (!tokens.id_token) throw new BadRequestError('GOOGLE_NO_ID_TOKEN');
 
+  // decode id_token claims
   const idp = decodeJwtPayload<GoogleIdTokenPayload>(tokens.id_token);
 
   const now = Math.floor(Date.now() / 1000);
@@ -59,6 +62,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
     throw new UnauthorizedError('GOOGLE_ID_TOKEN_EXPIRED');
   }
 
+  // validate issuer and audience
   if (idp.iss && idp.iss !== 'https://accounts.google.com' && idp.iss !== 'accounts.google.com') {
     throw new UnauthorizedError('GOOGLE_ID_TOKEN_BAD_ISS');
   }
@@ -69,6 +73,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
   const sub = (idp.sub ?? '').trim();
   if (!sub) throw new BadRequestError('GOOGLE_SUB_MISSING');
 
+  // normalize and validate email
   const email = (idp.email ?? '').trim().toLowerCase();
   if (!email) throw new BadRequestError('GOOGLE_EMAIL_MISSING');
   assertEmail(email);
@@ -76,6 +81,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
   const emailVerified = idp.email_verified === true;
   if (!emailVerified) throw new ForbiddenError('GOOGLE_EMAIL_NOT_VERIFIED');
 
+  // normalize locale for app
   const normalizeLocale = (raw?: string | null) => {
     if (!raw) return undefined;
     const base = raw.trim().toLowerCase().split('-')[0];
@@ -90,6 +96,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
 
   return prisma
     .$transaction(async (tx) => {
+      // create or link oauth user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
         provider: 'GOOGLE',
@@ -114,6 +121,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
 
       const rememberMe = true;
 
+      // issue tokens for session
       const { accessToken, refreshToken } = await issueTokensOnLogin(tx, {
         userId: u.id,
         role: u.role as Role,
