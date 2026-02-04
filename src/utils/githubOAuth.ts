@@ -1,7 +1,7 @@
-import { createHmac } from 'node:crypto';
 import env from '@config/env.js';
 import { AppError } from '@utils/errors.js';
-import { createPlaceholder, decodePlaceholderInternal } from '@utils/placeholder.js';
+import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
+import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
 type StatePayload = {
   guestId: string;
@@ -38,29 +38,18 @@ export type GithubEmailItem = {
   visibility?: string | null;
 };
 
-function b64url(input: Buffer | string) {
-  const buf = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
-  return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
-}
-
-function b64urlJson(obj: unknown) {
-  return b64url(JSON.stringify(obj));
-}
-
-function signState(payloadB64: string, secret: string) {
-  return b64url(createHmac('sha256', secret).update(payloadB64).digest());
-}
-
 const { GITHUB_STATE_SECRET, GITHUB_CLIENT_ID, GITHUB_REDIRECT_URI, GITHUB_CLIENT_SECRET } = env;
 
 const GITHUB_SCOPE = 'read:user user:email';
 
+// build signed oauth state
 export function createGithubOAuthState(guestId: string) {
   const secret = GITHUB_STATE_SECRET;
   if (!secret) throw new AppError('GITHUB_STATE_SECRET is missing', 500);
 
   const now = Math.floor(Date.now() / 1000);
 
+  // short-lived state window
   const payload: StatePayload = {
     guestId,
     nonce: createPlaceholder(16, 'base64url'),
@@ -68,12 +57,14 @@ export function createGithubOAuthState(guestId: string) {
     exp: now + 10 * 60,
   };
 
+  // sign state for tamper check
   const payloadB64 = b64urlJson(payload);
   const sig = signState(payloadB64, secret);
 
   return `${payloadB64}.${sig}`;
 }
 
+// build github authorize url
 export function buildGithubAuthUrl(guestId: string) {
   const clientId = GITHUB_CLIENT_ID;
   const redirectUri = GITHUB_REDIRECT_URI;
@@ -81,6 +72,7 @@ export function buildGithubAuthUrl(guestId: string) {
   if (!clientId) throw new AppError('GITHUB_CLIENT_ID is missing', 500);
   if (!redirectUri) throw new AppError('GITHUB_REDIRECT_URI is missing', 500);
 
+  // attach state to redirect
   const state = createGithubOAuthState(guestId);
 
   const url = new URL('https://github.com/login/oauth/authorize');
@@ -92,22 +84,27 @@ export function buildGithubAuthUrl(guestId: string) {
   return url.toString();
 }
 
+// verify oauth state signature
 export function verifyGithubOAuthState(state: string): StatePayload | null {
   const secret = GITHUB_STATE_SECRET;
   if (!secret) throw new AppError('GITHUB_STATE_SECRET is missing', 500);
 
+  // split payload and signature
   const [payloadB64, sig] = state.split('.');
   if (!payloadB64 || !sig) throw new AppError('INVALID_STATE', 500);
 
+  // compare expected signature
   const expected = signState(payloadB64, secret);
   if (sig !== expected) throw new AppError('INVALID_PAYLOAD', 500);
 
   try {
+    // decode signed state payload
     const json = decodePlaceholderInternal(payloadB64, 'base64url').toString('utf8');
     const payload = JSON.parse(json) as StatePayload;
 
     const now = Math.floor(Date.now() / 1000);
 
+    // enforce state expiration
     if (typeof payload.exp !== 'number' || payload.exp < now) {
       throw new AppError('GITHUB_OAUTH_STATE_EXPIRED', 401);
     }
@@ -131,6 +128,7 @@ export function verifyGithubOAuthState(state: string): StatePayload | null {
   }
 }
 
+// exchange code for access token
 export async function exchangeGithubCodeForTokens(
   code: string,
   state?: string,
@@ -151,6 +149,7 @@ export async function exchangeGithubCodeForTokens(
     ...(state ? { state } : {}),
   });
 
+  // call github token endpoint
   const res = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: {
@@ -165,8 +164,10 @@ export async function exchangeGithubCodeForTokens(
     throw new AppError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', 401);
   }
 
+  // parse token response union
   const data = JSON.parse(text) as GithubTokenResponse | GithubTokenError;
 
+  // surface oauth error response
   if ('error' in data) {
     throw new AppError(
       data.error_description ?? data.error ?? 'GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED',
@@ -179,6 +180,7 @@ export async function exchangeGithubCodeForTokens(
   return data;
 }
 
+// fetch github user profile
 export async function fetchGithubUser(accessToken: string): Promise<GithubUserResponse> {
   const res = await fetch('https://api.github.com/user', {
     method: 'GET',
@@ -198,6 +200,7 @@ export async function fetchGithubUser(accessToken: string): Promise<GithubUserRe
   return JSON.parse(text) as GithubUserResponse;
 }
 
+// fetch github email list
 export async function fetchGithubEmails(accessToken: string): Promise<GithubEmailItem[]> {
   const res = await fetch('https://api.github.com/user/emails', {
     method: 'GET',
@@ -218,6 +221,7 @@ export async function fetchGithubEmails(accessToken: string): Promise<GithubEmai
   return Array.isArray(data) ? data : [];
 }
 
+// choose best verified email
 export function pickBestGithubEmail(user: GithubUserResponse, emails: GithubEmailItem[]) {
   const primaryVerified = emails.find((e) => e.primary && e.verified)?.email;
   if (primaryVerified) return primaryVerified;

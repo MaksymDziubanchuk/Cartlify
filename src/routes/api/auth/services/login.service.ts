@@ -12,6 +12,9 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.service.js';
 import { insertLoginLog } from './helpers/loginLogs.service.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.service.js';
 
+// local login flow
+// guest -> user context switch
+// migrate + log + issue tokens
 export async function login({
   email,
   password,
@@ -31,8 +34,10 @@ export async function login({
 
   return await prisma
     .$transaction(async (tx) => {
+      // allow guest-scoped reads
       await setGuestContext(tx, guestId);
 
+      // load login data from db
       const rows = await tx.$queryRaw<
         {
           id: number;
@@ -46,10 +51,12 @@ export async function login({
       const u = rows[0];
       if (!u) throw invalidCreds();
 
+      // require local auth provider
       if (u.authProvider !== 'LOCAL') {
         throw new AppError(`Use ${u.authProvider} login for this account`, 403);
       }
 
+      // verify password hash
       if (!u.password_hash) {
         throw new AppError('Local account has no password hash', 500);
       }
@@ -57,10 +64,12 @@ export async function login({
       const ok = await verifyPass(password, u.password_hash);
       if (!ok) throw invalidCreds();
 
+      // require verified email
       if (!u.is_verified) {
         throw new AppError('Email is not verified', 403);
       }
 
+      // switch to user db context
       await setUserContext(tx, { userId: u.id, role: u.role });
 
       await migrateGuestDataToUser(tx, guestId, u.id);
@@ -73,6 +82,7 @@ export async function login({
         ...(userAgent !== undefined ? { userAgent } : {}),
       });
 
+      // load full user profile
       const user = await tx.user.findUnique({
         where: { id: u.id },
         select: {
@@ -93,6 +103,7 @@ export async function login({
 
       assertEmail(user.email);
 
+      // issue session tokens
       const { accessToken, refreshToken } = await issueTokensOnLogin(tx, {
         userId: u.id,
         role: u.role,

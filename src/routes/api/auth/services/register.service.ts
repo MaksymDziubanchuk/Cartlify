@@ -10,6 +10,8 @@ import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
 
+// local register flow
+// create user + verify token
 export async function register({
   email,
   password,
@@ -27,6 +29,7 @@ export async function register({
     throw new BadRequestError('Password must be at least 6 characters');
   }
 
+  // prepare password and verify token
   const passwordHash = await hashPass(password);
   const { token, expiresAt } = makeVerifyToken();
 
@@ -34,6 +37,7 @@ export async function register({
     return await prisma.$transaction(async (tx) => {
       await setGuestContext(tx, guestId);
 
+      // create user row
       await tx.$executeRaw`
         insert into cartlify.users (email, "passwordHash", role, "isVerified", name)
         values (
@@ -45,12 +49,15 @@ export async function register({
         )
       `;
 
+      // read new user id
       const [{ id }] = await tx.$queryRaw<{ id: number }[]>`
         select currval(pg_get_serial_sequence('cartlify.users', 'id'))::int as id
       `;
 
+      // switch to user db context
       await setUserContext(tx, { userId: id, role: 'USER' });
 
+      // store verify email token
       await tx.$executeRaw`
         insert into cartlify.user_tokens ("userId", type, token, "expiresAt")
         values (
@@ -61,6 +68,7 @@ export async function register({
         )
       `;
 
+      // load created user profile
       const u = await tx.user.findUnique({
         where: { id },
         select: {
@@ -93,9 +101,11 @@ export async function register({
       };
     });
   } catch (err) {
+    // map unique email conflict
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       throw new AppError('Email already in use', 409);
     }
+    // map raw sql unique conflict
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === 'P2010' &&

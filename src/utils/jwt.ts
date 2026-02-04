@@ -26,6 +26,7 @@ export type ExpiresIn = Exclude<SignOptions['expiresIn'], undefined>;
 
 type TokenType = 'access' | 'refresh';
 
+// pick ttl from env by type
 export function getTtl(rememberMe: boolean, type: TokenType): ExpiresIn | number {
   const envKey =
     type === 'access'
@@ -36,6 +37,7 @@ export function getTtl(rememberMe: boolean, type: TokenType): ExpiresIn | number
         ? 'JWT_REFRESH_TTL_LONG'
         : 'JWT_REFRESH_TTL_SHORT';
 
+  // read ttl string from env
   const raw = (env as Record<string, unknown>)[envKey];
 
   if (typeof raw !== 'string') {
@@ -48,6 +50,7 @@ export function getTtl(rememberMe: boolean, type: TokenType): ExpiresIn | number
     throw new AppError(`Server misconfigured: ${envKey} is empty`, 500);
   }
 
+  // validate ttl format and range
   if (!/^\d+$/.test(compact)) {
     throw new AppError(
       `Server misconfigured: ${envKey} (seconds integer expected, e.g. "3600")`,
@@ -68,6 +71,7 @@ export function getTtl(rememberMe: boolean, type: TokenType): ExpiresIn | number
 }
 
 export function signAccessToken(payload: AccessTokenPayload, rememberMe: boolean): string {
+  // validate ttl format and range
   const secret = env.JWT_ACCESS_SECRET as Secret;
 
   const options: SignOptions = {
@@ -78,6 +82,7 @@ export function signAccessToken(payload: AccessTokenPayload, rememberMe: boolean
 }
 
 export function signRefreshToken(payload: RefreshTokenPayload, rememberMe: boolean): string {
+  // sign refresh token with ttl
   const secret = env.JWT_REFRESH_SECRET as Secret;
 
   const options: SignOptions = {
@@ -88,6 +93,7 @@ export function signRefreshToken(payload: RefreshTokenPayload, rememberMe: boole
 }
 
 export function verifyAccessToken(token: string): VerifiedAccessToken {
+  // verify access token signature
   const secret = env.JWT_ACCESS_SECRET as Secret;
 
   let decoded: unknown;
@@ -98,6 +104,7 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
       throw new AppError('Invalid access token payload', 401);
     }
 
+    // verify access token signature
     const { userId, role, type, exp } = decoded as Partial<AccessTokenPayload & { exp: number }>;
 
     if (typeof userId !== 'number' || !role || type !== 'access' || typeof exp !== 'number') {
@@ -115,6 +122,7 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
 }
 
 export function verifyRefreshToken(token: string): VerifiedRefreshToken {
+  // verify refresh token signature
   const secret = env.JWT_REFRESH_SECRET as Secret;
 
   let decoded: unknown;
@@ -128,6 +136,7 @@ export function verifyRefreshToken(token: string): VerifiedRefreshToken {
     throw new AppError('Invalid refresh token payload', 401);
   }
 
+  // validate refresh token payload
   const { userId, role, type, jwtId, exp, rememberMe } = decoded as Partial<
     RefreshTokenPayload & { exp: number }
   >;

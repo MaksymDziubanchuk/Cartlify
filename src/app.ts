@@ -26,53 +26,78 @@ import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 
+// keep esm __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// allow pino transport type
 type LoggerOptionsWithTransport = LoggerOptions & {
   transport?: TransportSingleOptions;
 };
 
+// base logger config
 const loggerOptions: LoggerOptionsWithTransport = {
   level: 'info',
+  // hide sensitive headers
   redact: ['req.headers.authorization', 'request.headers.cookie', "res.headers['set-cookie']"],
 };
 
+// dev pretty logs
 if (env.NODE_ENV === 'development') {
   loggerOptions.transport = {
+    // pretty log options
     target: 'pino-pretty',
     options: { singleLine: true },
   };
 }
 
+// create fastify instance
+// enable ajv coercion
 export const app = fastify({
   logger: loggerOptions,
+  // coerce query/body types
   ajv: { customOptions: { coerceTypes: true } },
 });
 
+// add request/response logs
 app.register(requestResponseLogger);
+
+// add security headers
 app.register(cors, { origin: true, credentials: true });
 app.register(helmet);
+
+// cookie secret for signing
+// enable signed cookies later
 app.register(cookie, { secret: env.COOKIE_SECRET });
 app.register(multipart, {
+  // file upload limits
   limits: {
     fileSize: 10_000_000,
   },
+  // expose fields in body
   attachFieldsToBody: true,
 });
+
+// parse x-www-form-urlencoded
 app.register(formbody, { bodyLimit: 1048576 });
+
+// serve static assets
 app.register(staticPlagin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
 app.register(rateLimit, {
+  // protect from abuse
   max: 100,
   timeWindow: '1 minute',
   allowList: (req) =>
+    // allow health and static
     req.url?.startsWith('/health') ||
     req.url?.startsWith('/ready') ||
     req.url?.startsWith('/static'),
 });
 
+// register shared schemas
 for (const schema of [
   ...commonSchemas,
+  // register dto schemas
   ...paramsSchemas,
   ...authDtoSchemas,
   ...productDtoSchemas,
@@ -85,10 +110,15 @@ for (const schema of [
   ...rootAdminsDtoSchemas,
   ...chatsDtoSchemas,
 ]) {
+  // add schemas to ajv
   app.addSchema(schema);
 }
 
+// normalize errors to json
 errorNormalizer(app);
 
+// register api routes
 await registerRoutes(app);
+
+// final 404 handler
 app.register(notFoundHandler);

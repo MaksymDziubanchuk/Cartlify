@@ -1,8 +1,8 @@
 import type { Prisma, Role, UserTokenType } from '@prisma/client';
 
 import { AppError, ForbiddenError, UnauthorizedError } from '@utils/errors.js';
-import { createPlaceholder } from '@utils/placeholder.js';
-import { hashToken, verifyTokenHash } from '@utils/tokenHash.js';
+import { createPlaceholder } from '@helpers/placeholder.js';
+import { hashToken, verifyTokenHash } from '@helpers/tokenHash.js';
 import { signRefreshToken, signAccessToken, verifyRefreshToken } from '@utils/jwt.js';
 
 export type Tx = Prisma.TransactionClient;

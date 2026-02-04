@@ -6,14 +6,17 @@ import { assertEmail } from '@helpers/validateEmail.js';
 import { hashPass } from '@helpers/safePass.js';
 
 import env from '@config/env.js';
-import { createPlaceholder } from '@utils/placeholder.js';
-import { hashToken } from '@utils/tokenHash.js';
+import { createPlaceholder } from '@helpers/placeholder.js';
+import { hashToken } from '@helpers/tokenHash.js';
 
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
-import { setAdminNullContext } from '@db/dbContext.service.js';
+import { setAdminContext } from '@db/dbContext.service.js';
 
+// password reset request flow
+// create reset token row
+// return generic response
 export async function passwordForgot({ email }: PasswordForgotDto): Promise<MessageResponseDto> {
   const cleanEmail = email?.trim().toLowerCase();
   if (!cleanEmail) throw new BadRequestError('Email is required');
@@ -24,8 +27,9 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
 
   return prisma
     .$transaction(async (tx) => {
-      await setAdminNullContext(tx);
+      await setAdminContext(tx);
 
+      // load user by email
       const rows = await tx.$queryRaw<
         { id: number; email: string; authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN' }[]
       >`
@@ -35,18 +39,22 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
         limit 1
       `;
 
+      // keep response generic
       if (!rows.length) return genericOk;
 
       const u = rows[0];
 
+      // skip non-local accounts
       if (u.authProvider !== 'LOCAL') {
         return genericOk;
       }
 
+      // issue reset token row
       const rawToken = createPlaceholder();
       const tokenHash = hashToken(rawToken);
       const expiresAt = new Date(Date.now() + env.RESET_TTL_MS);
 
+      // store reset token in db
       await tx.userToken.create({
         data: {
           userId: u.id,
@@ -56,10 +64,13 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
         },
       });
 
+      // build reset link preview
       const resetUrl = '${env.APP_URL}/web/auth/reset?token=${rawToken}';
 
+      // TO DO -> SEND EMAIL
       console.log('[PASSWORD_FORGOT_EMAIL_PREVIEW]', { email: cleanEmail, resetUrl, expiresAt });
 
+      // return generic ok
       return genericOk;
     })
     .catch((err) => {
@@ -74,6 +85,9 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
     });
 }
 
+// password reset flow
+// consume reset token once
+// rotate password and revoke sessions
 export async function passwordReset({
   token,
   newPassword,
@@ -85,19 +99,15 @@ export async function passwordReset({
   if (!cleanNewPassword) throw new BadRequestError('NEW_PASSWORD_REQUIRED');
   if (cleanNewPassword.length < 6) throw new BadRequestError('PASSWORD_TOO_SHORT');
 
-  const roundsRaw = (env as Record<string, unknown>).BCRYPT_ROUNDS;
-  const rounds = typeof roundsRaw === 'string' ? Number(roundsRaw) : 12;
-  if (!Number.isInteger(rounds) || rounds < 10 || rounds > 15) {
-    throw new AppError('Server misconfigured: BCRYPT_ROUNDS', 500);
-  }
-
+  // hash incoming reset token
   const tokenHash = hashToken(cleanToken);
   const now = new Date();
 
   return prisma
     .$transaction(async (tx) => {
-      await setAdminNullContext(tx);
+      await setAdminContext(tx);
 
+      // consume valid reset token
       const consumed = await tx.$queryRaw<{ userId: number }[]>`
         update cartlify.user_tokens ut
         set "usedAt" = ${now}
@@ -108,9 +118,11 @@ export async function passwordReset({
         returning ut."userId" as "userId"
       `;
 
+      // require consumed token row
       const userId = consumed[0]?.userId;
       if (!userId) throw new AppError('Invalid or expired token', 400);
 
+      // hash new password
       const passwordHash = await hashPass(cleanNewPassword);
 
       await tx.user.update({
@@ -122,6 +134,7 @@ export async function passwordReset({
         select: { id: true },
       });
 
+      // revoke active refresh tokens
       await tx.userToken.updateMany({
         where: { userId, type: 'REFRESH_TOKEN', usedAt: null },
         data: { usedAt: now },
