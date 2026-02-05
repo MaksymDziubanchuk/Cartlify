@@ -99,7 +99,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
       // create or link oauth user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
-        provider: 'GOOGLE',
+        authProvider: 'GOOGLE',
         providerSub: sub,
         emailVerified,
         name,
