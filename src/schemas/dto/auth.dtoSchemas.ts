@@ -59,6 +59,21 @@ export const authGithubCallbackQuerySchema = {
   required: ['code', 'state'],
 } as const;
 
+export const authLinkedInCallbackQuerySchema = {
+  $id: 'authLinkedInCallbackQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    code: { type: 'string' },
+    state: { type: 'string' },
+
+    error: { type: 'string' },
+    error_description: { type: 'string' },
+    error_uri: { type: 'string' },
+  },
+  required: ['code', 'state'],
+} as const;
+
 export const authRegisterBodySchema = {
   $id: 'authRegisterBodySchema',
   type: 'object',
@@ -168,6 +183,7 @@ export const authDtoSchemas = [
   authLoginResponseSchema,
   authGoogleCallbackQuerySchema,
   authGithubCallbackQuerySchema,
+  authLinkedInCallbackQuerySchema,
   authRegisterBodySchema,
   authRegisterResponseSchema,
   authResendVerifyBodySchema,

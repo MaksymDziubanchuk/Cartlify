@@ -15,6 +15,11 @@ import type {
   GithubCallbackQueryDto,
   GithubCallbackDto,
   GithubCallbackSuccessQueryDto,
+  LinkedInStartDto,
+  LinkedInStartResponseDto,
+  LinkedInCallbackQueryDto,
+  LinkedInCallbackSuccessQueryDto,
+  LinkedInCallbackDto,
   RegisterBodyDto,
   RegisterResponseDto,
   RegisterDto,
@@ -248,6 +253,72 @@ const getGithubCallback: ControllerRouter<
   return result;
 };
 
+const getLinkedInStart: ControllerRouter<{}, {}, {}, LinkedInStartResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id, role } = req.user as User;
+
+  // allow oauth start for guest
+  if (role !== 'GUEST') {
+    throw new AppError('Already authenticated', 409);
+  }
+
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'];
+
+  // build linkedin start dto
+  const args = pickDefined<LinkedInStartDto>({ guestId: id, role }, { ip, userAgent });
+
+  const { url } = await authServices.linkedInStart(args);
+  // redirect to linkedin oauth
+  reply.code(302).redirect(url);
+  return;
+};
+
+const getLinkedInCallback: ControllerRouter<
+  {},
+  {},
+  LinkedInCallbackQueryDto,
+  LoginResponseDto
+> = async (req, reply) => {
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'];
+
+  const q = req.query;
+
+  // handle oauth error callback
+  if ('error' in q && typeof q.error === 'string') {
+    const code = q.error;
+    const desc = q.error_description;
+
+    if (code === 'access_denied') {
+      throw new AppError(desc ?? 'OAuth access denied', 401);
+    }
+
+    throw new AppError(desc ?? code, 400);
+  }
+
+  const { code, state } = q as LinkedInCallbackSuccessQueryDto;
+
+  // build linkedin callback dto
+  const args = pickDefined<LinkedInCallbackDto>({ code, state }, { ip, userAgent });
+
+  const { result, accessToken, refreshToken } = await authServices.linkedInCallback(args);
+
+  // derive ttl from refresh
+  const { rememberMe } = verifyRefreshToken(refreshToken);
+  const refreshTtl = getTtl(rememberMe, 'refresh');
+  const accessTtl = getTtl(rememberMe, 'access');
+
+  // set oauth auth cookies
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
+
+  return result;
+};
+
 const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
   req,
   reply,
@@ -335,6 +406,8 @@ export const authController = {
   getGoogleCallback,
   getGithubStart,
   getGithubCallback,
+  getLinkedInStart,
+  getLinkedInCallback,
   postVerifyResend,
   getVerifyEmail,
   postPasswordForgot,

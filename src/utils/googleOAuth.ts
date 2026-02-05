@@ -34,13 +34,6 @@ export type GoogleIdTokenPayload = {
   exp: number;
 };
 
-// decode jwt payload part
-export function decodeJwtPayload<T>(jwt: string): T {
-  const parts = jwt.split('.');
-  if (parts.length < 2) throw new AppError('INVALID_GOOGLE_ID_TOKEN', 500);
-  return JSON.parse(decodePlaceholderInternal(parts[1], 'base64url').toString('utf8')) as T;
-}
-
 // read google oauth env
 const { GOOGLE_STATE_SECRET, GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI, GOOGLE_CLIENT_SECRET } = env;
 
@@ -90,7 +83,7 @@ export function buildGoogleAuthUrl(guestId: string) {
 }
 
 // verify oauth state signature
-export function verifyGoogleOAuthState(state: string): StatePayload | null {
+export function verifyGoogleOAuthState(state: string): StatePayload {
   const secret = GOOGLE_STATE_SECRET;
   if (!secret) throw new AppError('GOOGLE_STATE_SECRET is missing', 500);
 
