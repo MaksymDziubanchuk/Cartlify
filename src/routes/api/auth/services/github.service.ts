@@ -85,7 +85,7 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
       // try to create user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
-        provider: 'GITHUB',
+        authProvider: 'GITHUB',
         providerSub: sub,
         emailVerified: true,
         name,
