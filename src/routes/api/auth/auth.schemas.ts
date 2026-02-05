@@ -50,6 +50,32 @@ export const setGoogleCallbackSchema = {
   },
 } satisfies FastifySchema;
 
+export const setGithubStartSchema = {
+  response: {
+    302: { type: 'null' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    429: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+export const setGithubCallbackSchema = {
+  querystring: { $ref: 'authGithubCallbackQuerySchema#' },
+  response: {
+    200: { $ref: 'authLoginResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    429: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 export const setVerifyResendSchema = {
   body: { $ref: 'authResendVerifyBodySchema#' },
   response: {
@@ -123,6 +149,8 @@ export const authSchema = {
   setLoginSchema,
   setGoogleStartSchema,
   setGoogleCallbackSchema,
+  setGithubStartSchema,
+  setGithubCallbackSchema,
   setRegisterSchema,
   setVerifyResendSchema,
   authVerifyEmailSchema,

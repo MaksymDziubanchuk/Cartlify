@@ -32,6 +32,12 @@ export class NotFoundError extends AppError {
   }
 }
 
+export class AlreadyAuthenticatedError extends AppError {
+  constructor(message = 'Already authenticated') {
+    super(message, 409);
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = 'Too Many Requests') {
     super(message, 429);

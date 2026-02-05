@@ -1,5 +1,4 @@
 import { FastifyInstance } from 'fastify';
-import { app } from '../../app.js';
 import {
   getHealthRouter,
   getProjectInfoRouter,

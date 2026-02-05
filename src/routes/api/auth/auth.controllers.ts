@@ -10,6 +10,11 @@ import type {
   GoogleCallbackQueryDto,
   GoogleCallbackDto,
   GoogleCallbackSuccessQueryDto,
+  GithubStartDto,
+  GithubStartResponseDto,
+  GithubCallbackQueryDto,
+  GithubCallbackDto,
+  GithubCallbackSuccessQueryDto,
   RegisterBodyDto,
   RegisterResponseDto,
   RegisterDto,
@@ -29,10 +34,15 @@ import type {
 import { authServices } from './auth.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { AppError, BadRequestError } from '@utils/errors.js';
-import env from '@config/env.js';
 import { getTtl } from '@utils/jwt.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { verifyRefreshToken } from '@utils/jwt.js';
+import {
+  clearGuestIdCookie,
+  setAccessTokenCookie,
+  setRefreshTokenCookie,
+  clearAuthCookies,
+} from '@routes/api/auth/services/helpers/authCookies.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
@@ -40,6 +50,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
 ) => {
   const { email, password, name } = req.body;
   const { id, role } = req.user as User;
+  // build register dto
   const args = pickDefined<RegisterDto>(
     {
       email,
@@ -49,6 +60,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
     },
     { name },
   );
+  // create user in service
   const result = await authServices.register(args);
   return reply.code(201).send(result);
 };
@@ -58,6 +70,7 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
   const { id, role } = req.user as User;
+  // build login dto
   const args = pickDefined<LoginDto>(
     {
       email,
@@ -72,9 +85,8 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
     },
   );
 
+  // authenticate and get tokens
   const { result, refreshToken, accessToken } = await authServices.login(args);
-
-  const isProd = env.NODE_ENV === 'production';
 
   const refreshTtl = rememberMe ? getTtl(rememberMe, 'refresh') : getTtl(false, 'refresh');
   const accessTtl = rememberMe ? getTtl(rememberMe, 'access') : getTtl(false, 'access');
@@ -82,38 +94,10 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
   if (!refreshTtl || !accessTtl)
     throw new BadRequestError('Invalid JWT TTL: (expected e.g. "3600")');
 
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('guestId', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('accessToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('refreshToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.setCookie('accessToken', accessToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: accessTtl as number,
-  });
-
-  reply.setCookie('refreshToken', refreshToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: refreshTtl as number,
-  });
+  // set auth cookies
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
 
   return result;
 };
@@ -124,6 +108,7 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
 ) => {
   const { email } = req.body;
 
+  // validate email for resend
   assertEmail(email);
 
   const args = pickDefined<ResendVerifyDto>(
@@ -132,16 +117,15 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
     },
     {},
   );
+  // resend verify email
   const result = await authServices.resendVerify(args);
   return reply.code(200).send(result);
 };
 
-export const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = async (
-  req,
-  reply,
-) => {
+const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = async (req, reply) => {
   const { id, role } = req.user as User;
 
+  // allow oauth start for guest
   if (role !== 'GUEST') {
     throw new AppError('Already authenticated', 409);
   }
@@ -149,14 +133,16 @@ export const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
 
+  // build google start dto
   const args = pickDefined<GoogleStartDto>({ guestId: id, role }, { ip, userAgent });
 
   const { url } = await authServices.googleStart(args);
+  // redirect to google oauth
   reply.code(302).redirect(url);
   return;
 };
 
-export const getGoogleCallback: ControllerRouter<
+const getGoogleCallback: ControllerRouter<
   {},
   {},
   GoogleCallbackQueryDto,
@@ -167,6 +153,7 @@ export const getGoogleCallback: ControllerRouter<
 
   const q = req.query;
 
+  // handle oauth error callback
   if ('error' in q && typeof q.error === 'string') {
     const code = q.error;
     const desc = q.error_description;
@@ -180,53 +167,88 @@ export const getGoogleCallback: ControllerRouter<
 
   const { code, state } = q as GoogleCallbackSuccessQueryDto;
 
+  // build google callback dto
   const args = pickDefined<GoogleCallbackDto>({ code, state }, { ip, userAgent });
 
   const { result, accessToken, refreshToken } = await authServices.googleCallback(args);
 
-  const isProd = env.NODE_ENV === 'production';
-
+  // derive ttl from refresh
   const { rememberMe } = verifyRefreshToken(refreshToken);
   const refreshTtl = getTtl(rememberMe, 'refresh');
   const accessTtl = getTtl(rememberMe, 'access');
 
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('guestId', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('accessToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.clearCookie('refreshToken', {
-    ...baseCookie,
-    path: '/',
-  });
-
-  reply.setCookie('accessToken', accessToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: accessTtl as number,
-  });
-
-  reply.setCookie('refreshToken', refreshToken, {
-    ...baseCookie,
-    path: '/',
-    maxAge: refreshTtl as number,
-  });
+  // set oauth auth cookies
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
 
   return result;
 };
 
-export const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
+const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = async (req, reply) => {
+  const { id, role } = req.user as User;
+
+  // allow oauth start for guest
+  if (role !== 'GUEST') {
+    throw new AppError('Already authenticated', 409);
+  }
+
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'];
+
+  // build github start dto
+  const args = pickDefined<GithubStartDto>({ guestId: id, role }, { ip, userAgent });
+
+  const { url } = await authServices.githubStart(args);
+  // redirect to github oauth
+  reply.code(302).redirect(url);
+  return;
+};
+
+const getGithubCallback: ControllerRouter<
+  {},
+  {},
+  GithubCallbackQueryDto,
+  LoginResponseDto
+> = async (req, reply) => {
+  const ip = req.ip;
+  const userAgent = req.headers['user-agent'];
+
+  const q = req.query;
+
+  // handle oauth error callback
+  if ('error' in q && typeof q.error === 'string') {
+    const code = q.error;
+    const desc = q.error_description;
+
+    if (code === 'access_denied') {
+      throw new AppError(desc ?? 'OAuth access denied', 401);
+    }
+
+    throw new AppError(desc ?? code, 400);
+  }
+
+  const { code, state } = q as GithubCallbackSuccessQueryDto;
+
+  // handle oauth error callback
+  const args = pickDefined<GithubCallbackDto>({ code, state }, { ip, userAgent });
+
+  const { result, accessToken, refreshToken } = await authServices.githubCallback(args);
+
+  // derive ttl from refresh
+  const { rememberMe } = verifyRefreshToken(refreshToken);
+  const refreshTtl = getTtl(rememberMe, 'refresh');
+  const accessTtl = getTtl(rememberMe, 'access');
+
+  // set oauth auth cookies
+  clearGuestIdCookie(reply);
+  setAccessTokenCookie(reply, accessToken, accessTtl as number);
+  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
+
+  return result;
+};
+
+const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
   req,
   reply,
 ) => {
@@ -237,6 +259,7 @@ export const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageRes
     },
     {},
   );
+  // verify email by token
   const result = await authServices.verifyEmail(args);
   return reply.code(200).send(result);
 };
@@ -249,6 +272,7 @@ const postPasswordForgot: ControllerRouter<
 > = async (req, reply) => {
   const email = req.body?.email;
   const args = pickDefined<PasswordForgotDto>({ email }, {});
+  // request password reset
   const result = await authServices.passwordForgot(args);
   return reply.code(200).send(result);
 };
@@ -262,7 +286,7 @@ const postPasswordReset: ControllerRouter<
   const token = req.query?.token;
   const newPassword = req.body?.newPassword;
   const args = pickDefined<PasswordResetDto>({ token, newPassword }, {});
-
+  // reset password by token
   const result = await authServices.passwordReset(args);
   return reply.code(200).send(result);
 };
@@ -272,31 +296,34 @@ const postLogout: ControllerRouter<{}, LogoutBodyDto, {}, void> = async (req, re
   const allDevices = req.body?.allDevices;
   const args = pickDefined<LogoutDto>({}, { refreshToken, allDevices });
 
+  // logout and clear cookies
   await authServices.logout(args);
 
-  const isProd = env.NODE_ENV === 'production';
-
-  const baseCookie = {
-    httpOnly: true,
-    secure: isProd,
-    sameSite: 'lax' as const,
-  } as const;
-
-  reply.clearCookie('accessToken', { ...baseCookie, path: '/' });
-  reply.clearCookie('refreshToken', { ...baseCookie, path: '/' });
+  clearAuthCookies(reply);
   return reply.code(204).send();
 };
 
 const postRefresh: ControllerRouter<{}, {}, {}, RefreshResponseDto> = async (req, reply) => {
   const refreshToken = req.cookies?.refreshToken;
   if (!refreshToken) throw new BadRequestError('REFRESH_TOKEN_REQUIRED');
+
   const args = pickDefined<RefreshDto>(
     {
       refreshToken,
     },
     {},
   );
-  const { accessToken } = await authServices.refresh(args);
+
+  // rotate tokens from refresh cookie
+  const {
+    result,
+    refreshToken: newRefreshToken,
+    refreshMaxAgeSec,
+  } = await authServices.refresh(args);
+  const { accessToken } = result;
+
+  // store new refresh cookie
+  setRefreshTokenCookie(reply, newRefreshToken, refreshMaxAgeSec);
 
   return { accessToken };
 };
@@ -306,6 +333,8 @@ export const authController = {
   postRegister,
   getGoogleStart,
   getGoogleCallback,
+  getGithubStart,
+  getGithubCallback,
   postVerifyResend,
   getVerifyEmail,
   postPasswordForgot,

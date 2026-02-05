@@ -5,6 +5,7 @@ export type PlaceholderEncoding = 'hex' | 'base64url';
 
 export const DEFAULT_PLACEHOLDER_BYTES = 32 as const;
 
+// generate random placeholder string
 export function createPlaceholder(
   bytes: number = DEFAULT_PLACEHOLDER_BYTES,
   encoding: PlaceholderEncoding = 'hex',
@@ -15,6 +16,7 @@ export function createPlaceholder(
   return crypto.randomBytes(bytes).toString(encoding);
 }
 
+// decode and validate internal token
 export function decodePlaceholderInternal(
   value: string,
   encoding: PlaceholderEncoding = 'hex',
@@ -23,6 +25,7 @@ export function decodePlaceholderInternal(
     throw new AppError('Internal placeholder is empty or not a string', 500);
   }
 
+  // validate placeholder format by encoding
   if (encoding === 'hex') {
     if (value.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(value)) {
       throw new AppError('Internal hex placeholder is invalid', 500);
@@ -33,6 +36,7 @@ export function decodePlaceholderInternal(
     }
   }
 
+  // decode placeholder to bytes
   try {
     return Buffer.from(value, encoding);
   } catch {
