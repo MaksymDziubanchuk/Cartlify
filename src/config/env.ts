@@ -53,6 +53,11 @@ declare global {
       GITHUB_CLIENT_SECRET: string;
       GITHUB_REDIRECT_URI: string;
       GITHUB_STATE_SECRET: string;
+
+      LINKEDIN_CLIENT_ID: string;
+      LINKEDIN_CLIENT_SECRET: string;
+      LINKEDIN_REDIRECT_URI: string;
+      LINKEDIN_STATE_SECRET: string;
     }
   }
 }
@@ -120,4 +125,10 @@ export default {
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET || '',
   GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI || '',
   GITHUB_STATE_SECRET: process.env.GITHUB_STATE_SECRET || '',
+
+  // linkedin oauth client config
+  LINKEDIN_CLIENT_ID: process.env.LINKEDIN_CLIENT_ID || '',
+  LINKEDIN_CLIENT_SECRET: process.env.LINKEDIN_CLIENT_SECRET || '',
+  LINKEDIN_REDIRECT_URI: process.env.LINKEDIN_REDIRECT_URI || '',
+  LINKEDIN_STATE_SECRET: process.env.LINKEDIN_STATE_SECRET || '',
 };

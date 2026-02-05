@@ -84,6 +84,40 @@ export interface GithubCallbackDto {
   userAgent?: string;
 }
 
+export interface LinkedInStartDto {
+  guestId: UserId;
+  role: Role;
+  ip?: string;
+  userAgent?: string;
+}
+
+export interface LinkedInStartResponseDto {
+  url: string;
+}
+
+export interface LinkedInCallbackSuccessQueryDto {
+  code: string;
+  state: string;
+}
+
+export interface LinkedInCallbackErrorQueryDto {
+  error: string;
+  error_description?: string;
+  error_uri?: string;
+  state?: string;
+}
+
+export type LinkedInCallbackQueryDto =
+  | LinkedInCallbackSuccessQueryDto
+  | LinkedInCallbackErrorQueryDto;
+
+export interface LinkedInCallbackDto {
+  code: string;
+  state: string;
+  ip?: string;
+  userAgent?: string;
+}
+
 export interface RegisterBodyDto {
   email: Email;
   password: string;

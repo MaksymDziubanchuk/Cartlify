@@ -7,11 +7,13 @@ import env from '@config/env.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
 import { buildGoogleAuthUrl } from '@utils/googleOAuth.js';
-import {
-  verifyGoogleOAuthState,
-  exchangeGoogleCodeForTokens,
-  decodeJwtPayload,
-} from '@utils/googleOAuth.js';
+import { verifyGoogleOAuthState, exchangeGoogleCodeForTokens } from '@utils/googleOAuth.js';
+import { verifyOidcIdToken } from '@utils/oidcIdTokenVerify.js';
+
+import { migrateGuestDataToUser } from './helpers/guestMigration.service.js';
+import { insertLoginLog } from './helpers/loginLogs.service.js';
+import { issueTokensOnLogin } from './helpers/tokenRotation.service.js';
+import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.service.js';
 
 import type {
   GoogleStartDto,
@@ -20,11 +22,6 @@ import type {
   LoginResponseDto,
 } from 'types/dto/auth.dto.js';
 import type { GoogleIdTokenPayload } from '@utils/googleOAuth.js';
-
-import { migrateGuestDataToUser } from './helpers/guestMigration.service.js';
-import { insertLoginLog } from './helpers/loginLogs.service.js';
-import { issueTokensOnLogin } from './helpers/tokenRotation.service.js';
-import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.service.js';
 
 export async function googleStart({
   guestId,
@@ -55,20 +52,12 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
   if (!tokens.id_token) throw new BadRequestError('GOOGLE_NO_ID_TOKEN');
 
   // decode id_token claims
-  const idp = decodeJwtPayload<GoogleIdTokenPayload>(tokens.id_token);
-
-  const now = Math.floor(Date.now() / 1000);
-  if (typeof idp.exp === 'number' && idp.exp <= now) {
-    throw new UnauthorizedError('GOOGLE_ID_TOKEN_EXPIRED');
-  }
-
-  // validate issuer and audience
-  if (idp.iss && idp.iss !== 'https://accounts.google.com' && idp.iss !== 'accounts.google.com') {
-    throw new UnauthorizedError('GOOGLE_ID_TOKEN_BAD_ISS');
-  }
-  if (idp.aud && idp.aud !== env.GOOGLE_CLIENT_ID) {
-    throw new UnauthorizedError('GOOGLE_ID_TOKEN_BAD_AUD');
-  }
+  const idp = await verifyOidcIdToken<GoogleIdTokenPayload>(tokens.id_token, {
+    jwksUri: 'https://www.googleapis.com/oauth2/v3/certs',
+    issuers: ['https://accounts.google.com', 'accounts.google.com'],
+    audience: env.GOOGLE_CLIENT_ID,
+    algorithms: ['RS256'],
+  });
 
   const sub = (idp.sub ?? '').trim();
   if (!sub) throw new BadRequestError('GOOGLE_SUB_MISSING');

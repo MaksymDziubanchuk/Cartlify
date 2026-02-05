@@ -76,6 +76,31 @@ export const setGithubCallbackSchema = {
   },
 } satisfies FastifySchema;
 
+export const setLinkedInStartSchema: FastifySchema = {
+  response: {
+    302: { type: 'null' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    429: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+export const setLinkedInCallbackSchema: FastifySchema = {
+  querystring: { $ref: 'authLinkedInCallbackQuerySchema#' },
+  response: {
+    200: { $ref: 'messageResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 export const setVerifyResendSchema = {
   body: { $ref: 'authResendVerifyBodySchema#' },
   response: {
@@ -151,6 +176,8 @@ export const authSchema = {
   setGoogleCallbackSchema,
   setGithubStartSchema,
   setGithubCallbackSchema,
+  setLinkedInStartSchema,
+  setLinkedInCallbackSchema,
   setRegisterSchema,
   setVerifyResendSchema,
   authVerifyEmailSchema,

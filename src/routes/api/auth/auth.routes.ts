@@ -49,6 +49,22 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
     },
     authController.getGithubCallback,
   );
+  app.get(
+    '/oauth/linkedin',
+    {
+      preHandler: [authGuard],
+      schema: authSchema.setLinkedInStartSchema,
+    },
+    authController.getLinkedInStart,
+  );
+  app.get(
+    '/linkedin/callback',
+    {
+      preHandler: [authGuard],
+      schema: authSchema.setLinkedInCallbackSchema,
+    },
+    authController.getLinkedInCallback,
+  );
   app.post(
     '/login',
     {
