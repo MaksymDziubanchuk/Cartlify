@@ -9,6 +9,8 @@ import env from '@config/env.js';
 import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
+import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.service.js';
+
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
@@ -24,6 +26,8 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
   assertEmail(cleanEmail);
 
   const genericOk = { message: 'If account exists, reset email will be sent' };
+
+  let sendJob: { to: string; resetToken: string; expiresAt: Date } | null = null;
 
   return prisma
     .$transaction(async (tx) => {
@@ -64,14 +68,23 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
         },
       });
 
-      // build reset link preview
-      const resetUrl = '${env.APP_URL}/web/auth/reset?token=${rawToken}';
-
-      // TO DO -> SEND EMAIL
-      console.log('[PASSWORD_FORGOT_EMAIL_PREVIEW]', { email: cleanEmail, resetUrl, expiresAt });
+      // schedule email send
+      sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt };
 
       // return generic ok
       return genericOk;
+    })
+    .then(async (res) => {
+      // avoid user enumeration
+      if (!sendJob) return res;
+
+      try {
+        await sendResetPasswordEmail(sendJob);
+      } catch {
+        console.log('[PASSWORD_FORGOT_EMAIL_SEND_FAILED]', { email: cleanEmail });
+      }
+
+      return res;
     })
     .catch((err) => {
       if (isAppError(err)) throw err;
