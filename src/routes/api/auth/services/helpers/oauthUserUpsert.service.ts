@@ -23,7 +23,7 @@ export interface OAuthUserRow {
 
 export interface UpsertOAuthUserArgs {
   email: string;
-  provider: OAuthProvider;
+  authProvider: OAuthProvider;
   providerSub: string;
   emailVerified: boolean;
   name: string | null;
@@ -40,7 +40,7 @@ export async function upsertOAuthUserByEmail(
 ): Promise<OAuthUserRow> {
   const {
     email,
-    provider,
+    authProvider,
     providerSub,
     emailVerified,
     name,
@@ -72,7 +72,7 @@ export async function upsertOAuthUserByEmail(
       ${name},
       ${avatarUrl},
       ${locale},
-      ${provider},
+      ${authProvider},
       ${providerSub},
       null
     )
@@ -92,6 +92,7 @@ export async function upsertOAuthUserByEmail(
       "providerSub"
   `;
 
+  // track current user row
   let u = inserted[0];
 
   if (!u) {
@@ -114,16 +115,65 @@ export async function upsertOAuthUserByEmail(
       limit 1
     `;
 
+    // fallback user snapshot
     u = rows[0];
 
     // fallback select on conflict
     if (!u) throw new AppError(userNotFoundAfterConflictMsg, 500);
 
-    if (u.authProvider !== provider) {
-      throw new AppError(`Use ${u.authProvider} login for this account`, 403);
+    // allow oauth takeover
+    const canAdoptUnverifiedLocal =
+      u.authProvider === 'LOCAL' && !u.isVerified && emailVerified === true;
+
+    // provider mismatch on existing account
+    if (u.authProvider !== authProvider) {
+      if (!canAdoptUnverifiedLocal) {
+        throw new AppError(`Use ${u.authProvider} login for this account`, 403);
+      }
+
+      // convert unverified local to oauth
+      const updated = await tx.$queryRaw<OAuthUserRow[]>`
+        update cartlify.users
+        set
+          "authProvider" = ${authProvider},
+          "providerSub"  = ${providerSub},
+          "isVerified"   = true,
+          "passwordHash" = null,
+          "updatedAt"    = now()
+        where id = ${u.id}::int
+        returning
+          id,
+          email,
+          role,
+          "isVerified",
+          "createdAt",
+          "updatedAt",
+          name,
+          "avatarUrl",
+          locale,
+          phone,
+          "authProvider",
+          "providerSub"
+      `;
+
+      const uu = updated[0];
+      if (!uu) throw new AppError(userNotFoundAfterConflictMsg, 500);
+
+      // invalidate pending verify tokens
+      await tx.$executeRaw`
+        update cartlify.user_tokens
+        set "usedAt" = now()
+        where "userId" = ${uu.id}::int
+          and type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
+          and "usedAt" is null
+      `;
+
+      // use converted row
+      u = uu;
     }
 
-    if (u.providerSub && u.providerSub !== providerSub) {
+    // prevent sub takeover
+    if (u.authProvider === authProvider && u.providerSub && u.providerSub !== providerSub) {
       throw new AppError(providerSubMismatchMsg, 403);
     }
   }
@@ -132,15 +182,32 @@ export async function upsertOAuthUserByEmail(
   await setUserContext(tx, { userId: u.id, role: u.role });
 
   // fill missing profile fields
-  await tx.$executeRaw`
+  const updated = await tx.$queryRaw<OAuthUserRow[]>`
     update cartlify.users
     set
       "providerSub" = coalesce("providerSub", ${providerSub}),
       name          = coalesce(name, ${name}),
       "avatarUrl"   = coalesce("avatarUrl", ${avatarUrl}),
-      locale        = coalesce(locale, ${locale})
+      locale        = coalesce(locale, ${locale}),
+      "updatedAt"   = now()
     where id = ${u.id}::int
+    returning
+      id,
+      email,
+      role,
+      "isVerified",
+      "createdAt",
+      "updatedAt",
+      name,
+      "avatarUrl",
+      locale,
+      phone,
+      "authProvider",
+      "providerSub"
   `;
+
+  // refresh returned fields
+  u = updated[0] ?? u;
 
   return u;
 }

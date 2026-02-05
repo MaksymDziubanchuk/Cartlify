@@ -8,6 +8,8 @@ declare global {
       PORT?: string;
       HOST?: string;
 
+      WEB_ORIGIN: string;
+
       DATABASE_URL: string;
 
       SUPABASE_URL: string;
@@ -34,6 +36,12 @@ declare global {
 
       OPENAI_API_KEY: string;
 
+      SENDGRID_API_KEY: string;
+
+      EMAIL_FROM: string;
+      EMAIL_FROM_NAME: string;
+      EMAIL_REPLY_TO: string;
+
       COOKIE_SECRET: string;
 
       GOOGLE_CLIENT_ID: string;
@@ -56,9 +64,11 @@ export default {
   // runtime mode and server bind
   NODE_ENV: process.env.NODE_ENV || 'development',
   PORT: process.env.PORT ? Number(process.env.PORT) : 3000,
+
   // host bind and db url
   HOST: process.env.HOST ? process.env.HOST : '0.0.0.0',
   DATABASE_URL: process.env.DATABASE_URL || '',
+  WEB_ORIGIN: process.env.WEB_ORIGIN || '',
 
   // supabase client keys
   SUPABASE_URL: process.env.SUPABASE_URL || '',
@@ -89,6 +99,12 @@ export default {
 
   // openai and cookie secret
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+
+  // SendGrid variables
+  SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
+  EMAIL_FROM: process.env.EMAIL_FROM || '',
+  EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME || '',
+  EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO || '',
 
   // cookie signing secret
   COOKIE_SECRET: process.env.COOKIE_SECRET || 'changeme',

@@ -6,6 +6,8 @@ import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
+import { sendVerifyEmail } from './helpers/sendVerifyEmail.service.js';
+
 import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
@@ -33,8 +35,10 @@ export async function register({
   const passwordHash = await hashPass(password);
   const { token, expiresAt } = makeVerifyToken();
 
+  let result: RegisterResponseDto;
+
   try {
-    return await prisma.$transaction(async (tx) => {
+    result = await prisma.$transaction(async (tx) => {
       await setGuestContext(tx, guestId);
 
       // create user row
@@ -115,4 +119,14 @@ export async function register({
     }
     throw err;
   }
+
+  // send verify email after commit
+  await sendVerifyEmail({
+    to: cleanEmail,
+    token,
+    expiresAt,
+    userName: cleanName || '',
+  });
+
+  return result;
 }

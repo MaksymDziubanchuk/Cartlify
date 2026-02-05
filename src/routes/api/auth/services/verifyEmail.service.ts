@@ -3,6 +3,8 @@ import { AppError, BadRequestError } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 
+import { sendVerifyEmail } from './helpers/sendVerifyEmail.service.js';
+
 import type { ResendVerifyDto, VerifyEmailDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
@@ -16,6 +18,8 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
   const cleanEmail = email.trim().toLowerCase();
   const { token, expiresAt } = makeVerifyToken();
 
+  let sendPayload: { to: string; token: string; expiresAt: Date } | null = null;
+
   await prisma.$transaction(async (tx) => {
     await setGuestNullContext(tx);
 
@@ -24,11 +28,24 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
       select * from cartlify.auth_resend_verify(${cleanEmail}, ${token}, ${expiresAt})
     `;
 
-    // log only when user exists
+    // schedule email only when user exists
     if (rows.length) {
-      console.log('[VERIFY_EMAIL_RESEND]', { email: cleanEmail, rows });
+      sendPayload = {
+        to: cleanEmail,
+        token: rows[0].token,
+        expiresAt: rows[0].expires_at,
+      };
     }
   });
+
+  // avoid user enumeration
+  if (sendPayload) {
+    try {
+      await sendVerifyEmail(sendPayload);
+    } catch (err) {
+      console.log('[VERIFY_EMAIL_RESEND_SEND_FAILED]', { email: cleanEmail });
+    }
+  }
 
   // generic response
   return { message: 'If the email exists, a verification link was sent.' };
