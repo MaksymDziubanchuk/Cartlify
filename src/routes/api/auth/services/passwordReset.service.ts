@@ -29,19 +29,19 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
 
   let sendJob: { to: string; resetToken: string; expiresAt: Date } | null = null;
 
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    const res = await prisma.$transaction(async (tx) => {
       await setAdminContext(tx);
 
       // load user by email
       const rows = await tx.$queryRaw<
         { id: number; email: string; authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN' }[]
       >`
-        select id, email, "authProvider" as "authProvider"
-        from cartlify.users
-        where email = ${cleanEmail}
-        limit 1
-      `;
+      select id, email, "authProvider" as "authProvider"
+      from cartlify.users
+      where email = ${cleanEmail}
+      limit 1
+    `;
 
       // keep response generic
       if (!rows.length) return genericOk;
@@ -68,34 +68,41 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
         },
       });
 
+      // revoke all active refresh tokens for this user
+      const now = new Date();
+
+      await tx.userToken.updateMany({
+        where: { userId: u.id, type: 'REFRESH_TOKEN', usedAt: null },
+        data: { usedAt: now },
+      });
+
       // schedule email send
       sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt };
 
       // return generic ok
       return genericOk;
-    })
-    .then(async (res) => {
-      // avoid user enumeration
-      if (!sendJob) return res;
-
-      try {
-        await sendResetPasswordEmail(sendJob);
-      } catch {
-        throw new AppError('PASSWORD_FORGOT_EMAIL_SEND_FAILED', 500);
-      }
-
-      return res;
-    })
-    .catch((err) => {
-      if (isAppError(err)) throw err;
-
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'unknown';
-
-      throw new AppError(`passwordForgot: unexpected (${msg})`, 500);
     });
+
+    // avoid user enumeration
+    if (!sendJob) return res;
+
+    try {
+      await sendResetPasswordEmail(sendJob);
+    } catch {
+      throw new AppError('PASSWORD_FORGOT_EMAIL_SEND_FAILED', 500);
+    }
+
+    return res;
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`passwordForgot: unexpected (${msg})`, 500);
+  }
 }
 
 // password reset flow
