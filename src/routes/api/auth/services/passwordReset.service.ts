@@ -81,7 +81,7 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
       try {
         await sendResetPasswordEmail(sendJob);
       } catch {
-        console.log('[PASSWORD_FORGOT_EMAIL_SEND_FAILED]', { email: cleanEmail });
+        throw new AppError('PASSWORD_FORGOT_EMAIL_SEND_FAILED', 500);
       }
 
       return res;
@@ -115,21 +115,20 @@ export async function passwordReset({
   // hash incoming reset token
   const tokenHash = hashToken(cleanToken);
   const now = new Date();
-
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       await setAdminContext(tx);
 
       // consume valid reset token
       const consumed = await tx.$queryRaw<{ userId: number }[]>`
-        update cartlify.user_tokens ut
-        set "usedAt" = ${now}
-        where ut.type = 'RESET_PASSWORD'::cartlify."UserTokenType"
-          and ut."usedAt" is null
-          and ut."expiresAt" > now()
-          and ut.token = ${tokenHash}
-        returning ut."userId" as "userId"
-      `;
+      update cartlify.user_tokens ut
+      set "usedAt" = ${now}
+      where ut.type = 'RESET_PASSWORD'::cartlify."UserTokenType"
+        and ut."usedAt" is null
+        and ut."expiresAt" > now()
+        and ut.token = ${tokenHash}
+      returning ut."userId" as "userId"
+    `;
 
       // require consumed token row
       const userId = consumed[0]?.userId;
@@ -154,15 +153,15 @@ export async function passwordReset({
       });
 
       return { message: 'Password reset successful' };
-    })
-    .catch((err) => {
-      if (isAppError(err)) throw err;
-
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'unknown';
-
-      throw new AppError(`passwordReset: unexpected (${msg})`, 500);
     });
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`passwordReset: unexpected (${msg})`, 500);
+  }
 }
