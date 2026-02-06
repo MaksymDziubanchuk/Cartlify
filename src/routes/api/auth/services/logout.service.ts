@@ -37,9 +37,8 @@ export async function logout({
   }
 
   const now = new Date();
-
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       // set db actor context
       await setUserContext(tx, { userId: payload.userId, role: payload.role });
 
@@ -64,15 +63,15 @@ export async function logout({
       }
 
       return { message: 'ok' };
-    })
-    .catch((err) => {
-      if (isAppError(err)) throw err;
-
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'unknown';
-
-      throw new AppError(`logout: unexpected (${msg})`, 500);
     });
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`logout: unexpected (${msg})`, 500);
+  }
 }

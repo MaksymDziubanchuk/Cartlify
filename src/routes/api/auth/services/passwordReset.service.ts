@@ -10,11 +10,11 @@ import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
 import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
-
-import { setAdminContext } from '@db/dbContext.service.js';
+import type { Role } from 'types/user.js';
 
 // password reset request flow
 // create reset token row
@@ -29,19 +29,19 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
 
   let sendJob: { to: string; resetToken: string; expiresAt: Date } | null = null;
 
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    const res = await prisma.$transaction(async (tx) => {
       await setAdminContext(tx);
 
       // load user by email
       const rows = await tx.$queryRaw<
         { id: number; email: string; authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN' }[]
       >`
-        select id, email, "authProvider" as "authProvider"
-        from cartlify.users
-        where email = ${cleanEmail}
-        limit 1
-      `;
+      select id, email, "authProvider" as "authProvider"
+      from cartlify.users
+      where email = ${cleanEmail}
+      limit 1
+    `;
 
       // keep response generic
       if (!rows.length) return genericOk;
@@ -68,34 +68,41 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
         },
       });
 
+      // revoke all active refresh tokens for this user
+      const now = new Date();
+
+      await tx.userToken.updateMany({
+        where: { userId: u.id, type: 'REFRESH_TOKEN', usedAt: null },
+        data: { usedAt: now },
+      });
+
       // schedule email send
       sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt };
 
       // return generic ok
       return genericOk;
-    })
-    .then(async (res) => {
-      // avoid user enumeration
-      if (!sendJob) return res;
-
-      try {
-        await sendResetPasswordEmail(sendJob);
-      } catch {
-        console.log('[PASSWORD_FORGOT_EMAIL_SEND_FAILED]', { email: cleanEmail });
-      }
-
-      return res;
-    })
-    .catch((err) => {
-      if (isAppError(err)) throw err;
-
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'unknown';
-
-      throw new AppError(`passwordForgot: unexpected (${msg})`, 500);
     });
+
+    // avoid user enumeration
+    if (!sendJob) return res;
+
+    try {
+      await sendResetPasswordEmail(sendJob);
+    } catch {
+      throw new AppError('PASSWORD_FORGOT_EMAIL_SEND_FAILED', 500);
+    }
+
+    return res;
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`passwordForgot: unexpected (${msg})`, 500);
+  }
 }
 
 // password reset flow
@@ -115,25 +122,37 @@ export async function passwordReset({
   // hash incoming reset token
   const tokenHash = hashToken(cleanToken);
   const now = new Date();
-
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       await setAdminContext(tx);
 
       // consume valid reset token
       const consumed = await tx.$queryRaw<{ userId: number }[]>`
-        update cartlify.user_tokens ut
-        set "usedAt" = ${now}
-        where ut.type = 'RESET_PASSWORD'::cartlify."UserTokenType"
-          and ut."usedAt" is null
-          and ut."expiresAt" > now()
-          and ut.token = ${tokenHash}
-        returning ut."userId" as "userId"
-      `;
+      update cartlify.user_tokens ut
+      set "usedAt" = ${now}
+      where ut.type = 'RESET_PASSWORD'::cartlify."UserTokenType"
+        and ut."usedAt" is null
+        and ut."expiresAt" > now()
+        and ut.token = ${tokenHash}
+      returning ut."userId" as "userId"
+    `;
 
       // require consumed token row
       const userId = consumed[0]?.userId;
       if (!userId) throw new AppError('Invalid or expired token', 400);
+
+      // load user role and switch into owner context
+      const userRows = await tx.$queryRaw<{ id: number; role: Role }[]>`
+        select id, role
+        from cartlify.users
+        where id = ${userId}::int
+        limit 1
+      `;
+
+      const u = userRows[0];
+      if (!u) throw new AppError('USER_NOT_FOUND_FOR_RESET', 500);
+
+      await setUserContext(tx, { userId: u.id, role: u.role });
 
       // hash new password
       const passwordHash = await hashPass(cleanNewPassword);
@@ -154,15 +173,15 @@ export async function passwordReset({
       });
 
       return { message: 'Password reset successful' };
-    })
-    .catch((err) => {
-      if (isAppError(err)) throw err;
-
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'unknown';
-
-      throw new AppError(`passwordReset: unexpected (${msg})`, 500);
     });
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`passwordReset: unexpected (${msg})`, 500);
+  }
 }

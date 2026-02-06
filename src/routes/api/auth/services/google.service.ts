@@ -83,8 +83,8 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
     typeof idp.picture === 'string' && idp.picture.trim() ? idp.picture.trim() : null;
   const locale = normalizeLocale(typeof idp.locale === 'string' ? idp.locale : null) ?? null;
 
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       // create or link oauth user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
@@ -133,9 +133,15 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
       };
 
       return { result, accessToken, refreshToken };
-    })
-    .catch((err) => {
-      if (err instanceof AppError) throw err;
-      throw new AppError('Something went wrong', 500);
     });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`Google(service): unexpected (${msg})`, 500);
+  }
 }

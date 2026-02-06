@@ -345,6 +345,9 @@ const postPasswordForgot: ControllerRouter<
   const args = pickDefined<PasswordForgotDto>({ email }, {});
   // request password reset
   const result = await authServices.passwordForgot(args);
+
+  // revoke auth cookies
+  clearAuthCookies(reply);
   return reply.code(200).send(result);
 };
 

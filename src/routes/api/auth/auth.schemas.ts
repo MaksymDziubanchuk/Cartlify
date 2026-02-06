@@ -91,7 +91,7 @@ export const setLinkedInStartSchema: FastifySchema = {
 export const setLinkedInCallbackSchema: FastifySchema = {
   querystring: { $ref: 'authLinkedInCallbackQuerySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'authLoginResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },

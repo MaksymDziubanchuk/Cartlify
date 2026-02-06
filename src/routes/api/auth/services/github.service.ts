@@ -80,8 +80,8 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
 
   const locale = null;
 
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       // try to create user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
@@ -130,9 +130,15 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
       };
 
       return { result, accessToken, refreshToken };
-    })
-    .catch((err) => {
-      if (err instanceof AppError) throw err;
-      throw err;
     });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`Github(service): unexpected (${msg})`, 500);
+  }
 }
