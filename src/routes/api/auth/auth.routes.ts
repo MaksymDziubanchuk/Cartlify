@@ -85,7 +85,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/password/forgot',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      preHandler: [authGuard],
       schema: authSchema.setPasswordForgotSchema,
     },
     authController.postPasswordForgot,
@@ -93,7 +93,7 @@ export default async function authRouter(app: FastifyInstance, opt: unknown) {
   app.post(
     '/password/reset',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      preHandler: [authGuard],
       schema: authSchema.setPasswordResetSchema,
     },
     authController.postPasswordReset,

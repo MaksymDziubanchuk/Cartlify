@@ -72,7 +72,7 @@ export async function upsertOAuthUserByEmail(
       ${name},
       ${avatarUrl},
       ${locale},
-      ${authProvider},
+      ${authProvider}::cartlify."AuthProvider",
       ${providerSub},
       null
     )
@@ -131,11 +131,14 @@ export async function upsertOAuthUserByEmail(
         throw new AppError(`Use ${u.authProvider} login for this account`, 403);
       }
 
+      // set user db context
+      await setUserContext(tx, { userId: u.id, role: u.role });
+
       // convert unverified local to oauth
       const updated = await tx.$queryRaw<OAuthUserRow[]>`
         update cartlify.users
         set
-          "authProvider" = ${authProvider},
+          "authProvider" = ${authProvider}::cartlify."AuthProvider",
           "providerSub"  = ${providerSub},
           "isVerified"   = true,
           "passwordHash" = null,
@@ -157,7 +160,7 @@ export async function upsertOAuthUserByEmail(
       `;
 
       const uu = updated[0];
-      if (!uu) throw new AppError(userNotFoundAfterConflictMsg, 500);
+      if (!uu) throw new AppError('USER_TAKEOVER_FAILED', 500);
 
       // invalidate pending verify tokens
       await tx.$executeRaw`

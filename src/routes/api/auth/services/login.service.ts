@@ -32,8 +32,8 @@ export async function login({
 
   const invalidCreds = () => new AppError('Invalid email or password', 401);
 
-  return await prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       // allow guest-scoped reads
       await setGuestContext(tx, guestId);
 
@@ -44,7 +44,7 @@ export async function login({
           password_hash: string | null;
           role: Role;
           is_verified: boolean;
-          authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          auth_provider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
         }[]
       >`select * from cartlify.auth_get_user_for_login(${cleanEmail})`;
 
@@ -52,8 +52,8 @@ export async function login({
       if (!u) throw invalidCreds();
 
       // require local auth provider
-      if (u.authProvider !== 'LOCAL') {
-        throw new AppError(`Use ${u.authProvider} login for this account`, 403);
+      if (u.auth_provider !== 'LOCAL') {
+        throw new AppError(`Use ${u.auth_provider} login for this account`, 403);
       }
 
       // verify password hash
@@ -124,9 +124,15 @@ export async function login({
       };
 
       return { result, refreshToken, accessToken };
-    })
-    .catch((err) => {
-      if (err instanceof AppError) throw err;
-      throw new AppError('Something went wrong', 500);
     });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`Login(service): unexpected (${msg})`, 500);
+  }
 }

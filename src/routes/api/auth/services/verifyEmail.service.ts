@@ -43,7 +43,7 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
     try {
       await sendVerifyEmail(sendPayload);
     } catch (err) {
-      console.log('[VERIFY_EMAIL_RESEND_SEND_FAILED]', { email: cleanEmail });
+      throw new AppError(`VERIFY_EMAIL_RESEND_SEND_FAILED. Email: ${cleanEmail}`, 500);
     }
   }
 
@@ -55,19 +55,30 @@ export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageRes
   const cleanToken = token?.trim();
   if (!cleanToken) throw new BadRequestError('Token is required');
 
-  const ok = await prisma.$transaction(async (tx) => {
-    await setGuestNullContext(tx);
+  try {
+    const ok = await prisma.$transaction(async (tx) => {
+      await setGuestNullContext(tx);
 
-    // call db verify function
-    const rows = await tx.$queryRaw<{ ok: boolean }[]>`
+      // call db verify function
+      const rows = await tx.$queryRaw<{ ok: boolean }[]>`
       select cartlify.auth_verify_email(${cleanToken}::text) as ok
     `;
 
-    return Boolean(rows[0]?.ok);
-  });
+      return Boolean(rows[0]?.ok);
+    });
 
-  // reject invalid token
-  if (!ok) throw new AppError('Invalid or expired token', 400);
+    // reject invalid token
+    if (!ok) throw new AppError('Invalid or expired token', 400);
 
-  return { message: 'Email verified' };
+    return { message: 'Email verified' };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`verifyEmail: unexpected (${msg})`, 500);
+  }
 }

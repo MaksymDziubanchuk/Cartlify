@@ -42,7 +42,7 @@ WITH
 
 -- INSERT:
 -- - registration can only create USER
--- - root can create USER/ADMIN (and ROOT if ти захочеш, зараз не даю)
+-- - root can create USER/ADMIN
 CREATE POLICY users_insert ON cartlify.users FOR INSERT
 WITH
   CHECK (

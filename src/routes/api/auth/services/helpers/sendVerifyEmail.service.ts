@@ -57,7 +57,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
 function buildWebLoginVerifyUrl(token: string): string {
   const base = (env.WEB_ORIGIN || '').trim() || 'http://localhost:3000';
   const url = new URL('/web/login', base);
-  url.searchParams.set('verifyToken', token);
+  url.searchParams.set('token', token);
   return url.toString();
 }
 

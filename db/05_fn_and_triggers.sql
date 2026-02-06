@@ -4,6 +4,8 @@ BEGIN;
 -- Roles and context functions
 ------------------------------------------------------------
 -- Set context
+DROP FUNCTION IF EXISTS cartlify.set_current_context (cartlify."Role", integer, uuid);
+
 CREATE OR REPLACE FUNCTION cartlify.set_current_context (
   p_role cartlify."Role",
   p_user_id integer DEFAULT NULL,
@@ -32,6 +34,8 @@ EXECUTE ON FUNCTION cartlify.set_current_context (cartlify."Role", integer, uuid
 cartlify_app;
 
 -- Get actor user id
+DROP FUNCTION IF EXISTS cartlify.current_actor_id ();
+
 CREATE OR REPLACE FUNCTION cartlify.current_actor_id () RETURNS integer LANGUAGE plpgsql STABLE AS $$
 DECLARE
   uid_text text;
@@ -51,6 +55,8 @@ END;
 $$;
 
 -- Get guest id
+DROP FUNCTION IF EXISTS cartlify.current_guest_id ();
+
 CREATE OR REPLACE FUNCTION cartlify.current_guest_id () RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 DECLARE gid_text text;
 BEGIN
@@ -63,6 +69,8 @@ END;
 $$;
 
 -- Get actor role
+DROP FUNCTION IF EXISTS cartlify.current_actor_role ();
+
 CREATE OR REPLACE FUNCTION cartlify.current_actor_role () RETURNS cartlify."Role" LANGUAGE plpgsql STABLE AS $$
 DECLARE
   role_text text;
@@ -82,6 +90,8 @@ END;
 $$;
 
 -- Is actor admin
+DROP FUNCTION IF EXISTS cartlify.is_admin ();
+
 CREATE OR REPLACE FUNCTION cartlify.is_admin () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
   a_role cartlify."Role";
@@ -97,6 +107,8 @@ END;
 $$;
 
 -- Is actor root
+DROP FUNCTION IF EXISTS cartlify.is_root ();
+
 CREATE OR REPLACE FUNCTION cartlify.is_root () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
   a_role cartlify."Role";
@@ -112,6 +124,8 @@ END;
 $$;
 
 -- Is actor owner
+DROP FUNCTION IF EXISTS cartlify.is_owner (integer);
+
 CREATE OR REPLACE FUNCTION cartlify.is_owner (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
   a_id integer;
@@ -127,6 +141,7 @@ END;
 $$;
 
 -- Is owner or admin
+DROP FUNCTION IF EXISTS cartlify.is_owner_or_admin (integer)
 CREATE OR REPLACE FUNCTION cartlify.is_owner_or_admin (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 BEGIN
   RETURN cartlify.is_admin() OR cartlify.is_owner(p_user_id);
@@ -137,11 +152,13 @@ $$;
 -- USERS
 ------------------------------------------------------------
 -- "users" GET user for login
+DROP FUNCTION IF EXISTS cartlify.auth_get_user_for_login (text)
 CREATE OR REPLACE FUNCTION cartlify.auth_get_user_for_login (p_email text) RETURNS TABLE (
   id int,
   password_hash text,
   role cartlify."Role",
-  is_verified boolean
+  is_verified boolean,
+  auth_provider cartlify."AuthProvider"
 ) LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify AS $$
@@ -158,7 +175,7 @@ BEGIN
   PERFORM cartlify.set_current_context('ADMIN'::cartlify."Role", NULL, NULL);
 
   RETURN QUERY
-  SELECT u.id, u."passwordHash", u.role, u."isVerified"
+  SELECT u.id, u."passwordHash", u.role, u."isVerified", u."authProvider"
   FROM cartlify.users u
   WHERE u.email = lower(btrim(p_email))
   LIMIT 1;
@@ -387,6 +404,7 @@ cartlify_app;
 -- ORDERS
 ------------------------------------------------------------
 -- "orders" CALC total
+DROP FUNCTION IF EXISTS cartlify.recalc_order_total (integer)
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_total cartlify.orders.total%TYPE;
@@ -406,6 +424,7 @@ $$;
 -- ORDERS AND ORDER ITEMS
 ------------------------------------------------------------
 -- "order_items" CALC totalPrice
+DROP FUNCTION IF EXISTS cartlify.order_items_before_ins_upd ()
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
@@ -436,6 +455,7 @@ UPDATE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_before_ins_upd ();
 
 -- 'orders' RECALC total
+DROP FUNCTION IF EXISTS cartlify.order_items_after_mod ()
 CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_order_id integer;
@@ -467,6 +487,7 @@ OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
 -- 'orders' CONFIRMING
+DROP FUNCTION IF EXISTS cartlify.orders_before_update ()
 CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
 
@@ -509,6 +530,7 @@ EXECUTE FUNCTION cartlify.orders_before_update ();
 -- PRODUCTS
 ------------------------------------------------------------
 -- 'product' CALC avgRating
+DROP FUNCTION IF EXISTS cartlify.recalc_product_rating (integer)
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_avg   numeric(3, 2);
@@ -529,6 +551,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS cartlify.reviews_after_mod_rating ()
 CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
@@ -562,6 +585,7 @@ EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 -- REVIEWS AND REVIEWS
 ------------------------------------------------------------
 -- 'reviews' CALC upVotes & downVotes
+DROP FUNCTION IF EXISTS cartlify.recalc_review_votes (integer)
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_up   integer;
@@ -582,6 +606,7 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS cartlify.review_votes_after_mod ()
 CREATE OR REPLACE FUNCTION cartlify.review_votes_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_review_id integer;
@@ -612,6 +637,7 @@ OR DELETE ON cartlify.review_votes FOR EACH ROW
 EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 
 -- 'products' CALC popularity
+DROP FUNCTION IF EXISTS cartlify.recalc_product_popularity (integer)
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_views           integer;
@@ -709,6 +735,7 @@ $$;
 --psql "$MIGRATION_DATABASE_URL" \
 -- -c 'SELECT cartlify.recalc_all_products_popularity();'
 -- 'products' RECALC ALL popularity
+DROP FUNCTION IF EXISTS cartlify.recalc_all_products_popularity ()
 CREATE OR REPLACE FUNCTION cartlify.recalc_all_products_popularity () RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
@@ -723,6 +750,7 @@ END;
 $$;
 
 --
+DROP FUNCTION IF EXISTS cartlify.products_after_views_change ()
 CREATE OR REPLACE FUNCTION cartlify.products_after_views_change () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."views" IS DISTINCT FROM OLD."views" THEN
@@ -741,6 +769,7 @@ UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_after_views_change ();
 
 --
+DROP FUNCTION IF EXISTS cartlify.favorites_after_mod_popularity ()
 CREATE OR REPLACE FUNCTION cartlify.favorites_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
@@ -769,6 +798,7 @@ OR DELETE ON cartlify.favorites FOR EACH ROW
 EXECUTE FUNCTION cartlify.favorites_after_mod_popularity ();
 
 --
+DROP FUNCTION IF EXISTS cartlify.order_items_after_mod_popularity ()
 CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
@@ -799,6 +829,7 @@ OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod_popularity ();
 
 --
+DROP FUNCTION IF EXISTS cartlify.reviews_after_mod_popularity ()
 CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
@@ -829,6 +860,7 @@ OR DELETE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_popularity ();
 
 --
+DROP FUNCTION IF EXISTS cartlify.orders_after_update_popularity ()
 CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
@@ -861,6 +893,7 @@ EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 -- CHAT THREADS
 ------------------------------------------------------------
 --'chat_threads' UPDATE last message info
+DROP FUNCTION IF EXISTS cartlify.chat_messages_after_insert ()
 CREATE OR REPLACE FUNCTION cartlify.chat_messages_after_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_preview text;
@@ -892,6 +925,14 @@ EXECUTE FUNCTION cartlify.chat_messages_after_insert ();
 -- PRODUCT PRICE CHANGE LOGS
 ------------------------------------------------------------
 --'product_price_change_logs' ADD column
+DROP FUNCTION IF EXISTS cartlify.log_product_price_change (
+  integer,
+  integer,
+  numeric,
+  numeric,
+  cartlify."PriceChangeMode",
+  numeric
+)
 CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_product_id integer,
   p_actor_id integer,
@@ -931,6 +972,16 @@ $$;
 -- ADMIN AUDIT LOG
 ------------------------------------------------------------
 -- 'AdminAuditLog' ADD column
+DROP FUNCTION IF EXISTS cartlify.log_admin_action (
+  integer,
+  cartlify."Role",
+  cartlify."AdminAuditEntityType",
+  integer,
+  cartlify."AdminAuditAction",
+  jsonb
+  --text,
+  --text
+)
 CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
   p_actor_id integer,
   p_actor_role cartlify."Role",
@@ -976,6 +1027,7 @@ $$;
 ----------------------------------------
 -- GUEST DATA -> USER
 ----------------------------------------
+DROP FUNCTION IF EXISTS cartlify.migrate_guest_data_to_user (uuid, integer)
 CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user (p_guest_id uuid, p_user_id integer) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   IF p_guest_id IS NULL OR p_user_id IS NULL THEN
