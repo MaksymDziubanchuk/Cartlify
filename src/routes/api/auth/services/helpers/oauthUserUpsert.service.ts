@@ -135,7 +135,7 @@ export async function upsertOAuthUserByEmail(
       const updated = await tx.$queryRaw<OAuthUserRow[]>`
         update cartlify.users
         set
-          "authProvider" = ${authProvider},
+          "authProvider" = ${authProvider}::cartlify."AuthProvider",
           "providerSub"  = ${providerSub},
           "isVerified"   = true,
           "passwordHash" = null,
