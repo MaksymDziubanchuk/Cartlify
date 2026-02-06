@@ -72,7 +72,7 @@ export async function upsertOAuthUserByEmail(
       ${name},
       ${avatarUrl},
       ${locale},
-      ${authProvider},
+      ${authProvider}::cartlify."AuthProvider",
       ${providerSub},
       null
     )
