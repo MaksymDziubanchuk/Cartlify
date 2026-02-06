@@ -10,11 +10,11 @@ import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
 import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
-
-import { setAdminContext } from '@db/dbContext.service.js';
+import type { Role } from 'types/user.js';
 
 // password reset request flow
 // create reset token row
@@ -140,6 +140,19 @@ export async function passwordReset({
       // require consumed token row
       const userId = consumed[0]?.userId;
       if (!userId) throw new AppError('Invalid or expired token', 400);
+
+      // load user role and switch into owner context
+      const userRows = await tx.$queryRaw<{ id: number; role: Role }[]>`
+        select id, role
+        from cartlify.users
+        where id = ${userId}::int
+        limit 1
+      `;
+
+      const u = userRows[0];
+      if (!u) throw new AppError('USER_NOT_FOUND_FOR_RESET', 500);
+
+      await setUserContext(tx, { userId: u.id, role: u.role });
 
       // hash new password
       const passwordHash = await hashPass(cleanNewPassword);
