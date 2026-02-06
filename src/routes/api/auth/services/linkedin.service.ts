@@ -86,10 +86,8 @@ export async function linkedInCallback({
     typeof idp.picture === 'string' && idp.picture.trim() ? idp.picture.trim() : null;
 
   const locale = null;
-  const emailVerified = idp.email_verified === true;
-
-  return prisma
-    .$transaction(async (tx) => {
+  try {
+    return await prisma.$transaction(async (tx) => {
       // create or link oauth user by verified email
       const u = await upsertOAuthUserByEmail(tx, {
         email,
@@ -140,9 +138,15 @@ export async function linkedInCallback({
       };
 
       return { result, accessToken, refreshToken };
-    })
-    .catch((err) => {
-      if (err instanceof AppError) throw err;
-      throw new AppError('Something went wrong', 500);
     });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`LinkedIn(service): unexpected (${msg})`, 500);
+  }
 }
