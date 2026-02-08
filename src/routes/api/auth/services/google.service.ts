@@ -1,7 +1,7 @@
 import type { Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
-import { AppError, BadRequestError, UnauthorizedError, ForbiddenError } from '@utils/errors.js';
+import { AppError, BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import env from '@config/env.js';
 import { assertEmail } from '@helpers/validateEmail.js';
@@ -14,6 +14,8 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.service.js';
 import { insertLoginLog } from './helpers/loginLogs.service.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.service.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.service.js';
+
+import { buildImageUrls } from '@utils/cloudinary.util.js';
 
 import type {
   GoogleStartDto,
@@ -127,7 +129,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
+        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };

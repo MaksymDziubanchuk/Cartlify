@@ -10,6 +10,8 @@ import { sendVerifyEmail } from './helpers/sendVerifyEmail.service.js';
 
 import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
 
+import { buildImageUrls } from '@utils/cloudinary.util.js';
+
 import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
 
 // local register flow
@@ -99,7 +101,7 @@ export async function register({
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
+        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
