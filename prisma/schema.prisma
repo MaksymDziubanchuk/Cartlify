@@ -99,6 +99,7 @@ model User {
 
   name      String?
   avatarUrl String?
+  publicId  String?
   locale    String?
   phone     String?
 
