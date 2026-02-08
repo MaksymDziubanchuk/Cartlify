@@ -1,6 +1,12 @@
 import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
 
+export type ProductImagesUrls = {
+  url200: string;
+  url400: string;
+  url800: string;
+};
+
 export interface GetAllProductsQueryDto {
   page?: number;
   limit?: number;
@@ -29,7 +35,7 @@ export interface ProductResponseDto {
   categoryId: CategoryId;
   createdAt: Date;
   updatedAt: Date;
-  images?: string[];
+  images?: ProductImagesUrls;
   popularity?: number;
   views?: number;
   avgRating?: number;

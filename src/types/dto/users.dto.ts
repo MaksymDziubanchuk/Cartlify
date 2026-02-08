@@ -3,6 +3,13 @@ import type { Role } from 'types/user.js';
 import type { Email } from 'types/common.js';
 import type { ReviewResponseDto } from './products.dto.js';
 
+export type AvatarUrls = {
+  url32: string;
+  url64: string;
+  url128: string;
+  url256: string;
+};
+
 export interface GetUserByIdParamsDto {
   userId: UserId;
 }
@@ -24,7 +31,7 @@ export interface UserResponseDto {
   updatedAt: Date;
 
   name?: string;
-  avatarUrl?: string;
+  avatarUrls?: AvatarUrls;
   locale?: string;
   phone?: string;
   reviews?: ReviewResponseDto;
