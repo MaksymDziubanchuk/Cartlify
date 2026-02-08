@@ -8,6 +8,40 @@ export const usersGetByIdParamsSchema = {
   required: ['userId'],
 } as const;
 
+export const usersUserReviewResponseSchema = {
+  $id: 'usersUserReviewResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'number' },
+    productId: { type: 'number' },
+    rating: { type: 'number' },
+    userId: { type: 'number' },
+    createdAt: { type: 'string', format: 'date-time' },
+
+    comment: { type: 'string' },
+
+    upVotes: { type: 'number' },
+    downVotes: { type: 'number' },
+    userVote: {
+      anyOf: [{ type: 'string', enum: ['up', 'down'] }, { type: 'null' }],
+    },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+  required: [
+    'id',
+    'productId',
+    'rating',
+    'userId',
+    'createdAt',
+    'comment',
+    'upVotes',
+    'downVotes',
+    'userVote',
+    'updatedAt',
+  ],
+} as const;
+
 export const usersUserResponseSchema = {
   $id: 'usersUserResponseSchema',
   type: 'object',
@@ -34,6 +68,11 @@ export const usersUserResponseSchema = {
     },
     locale: { type: 'string' },
     phone: { type: 'string' },
+
+    reviews: {
+      type: 'array',
+      items: { $ref: 'usersUserReviewResponseSchema#' },
+    },
   },
   required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
 } as const;
@@ -45,7 +84,29 @@ export const usersGetMeResponseSchema = {
 
 export const usersGetByIdResponseSchema = {
   $id: 'usersGetByIdResponseSchema',
-  allOf: [{ $ref: 'usersUserResponseSchema#' }],
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'number' },
+    email: { type: 'string', format: 'email' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+
+    name: { type: 'string' },
+    avatarUrls: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url32: { type: 'string' },
+        url64: { type: 'string' },
+        url128: { type: 'string' },
+        url256: { type: 'string' },
+      },
+      required: ['url32', 'url64', 'url128', 'url256'],
+    },
+    locale: { type: 'string' },
+  },
+  required: ['id', 'email', 'createdAt', 'updatedAt'],
 } as const;
 
 export const usersUpdateMeBodySchema = {
@@ -54,7 +115,7 @@ export const usersUpdateMeBodySchema = {
   additionalProperties: false,
   properties: {
     name: { type: 'string' },
-    avatarUrl: { type: 'string' },
+    avatar: { type: 'object' },
     locale: { type: 'string' },
     phone: { type: 'string' },
   },
@@ -68,6 +129,7 @@ export const usersUpdateMeResponseSchema = {
 export const usersDtoSchemas = [
   usersGetByIdParamsSchema,
   usersUserResponseSchema,
+  usersUserReviewResponseSchema,
   usersGetMeResponseSchema,
   usersGetByIdResponseSchema,
   usersUpdateMeBodySchema,
