@@ -1,17 +1,18 @@
 import type { ControllerRouter } from 'types/controller.js';
-import type { MessageResponseDto } from 'types/common.js';
 import type { UserEntity } from 'types/user.js';
 import type {
   GetUserByIdParamsDto,
+  UserResponseDto,
   FindUserByIdDto,
   FindMeByIdDto,
   UpdateMeBodyDto,
   UpdateMeDto,
+  UserByIdResponseDto,
 } from 'types/dto/users.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { usersServices } from './users.services.js';
 
-const getMe: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
+const getMe: ControllerRouter<{}, {}, {}, UserResponseDto> = async (req, reply) => {
   const { id } = req.user as UserEntity;
 
   const args = pickDefined<FindMeByIdDto>({ userId: id }, {});
@@ -19,19 +20,16 @@ const getMe: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, repl
   return reply.code(200).send(result);
 };
 
-const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
+const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = async (req, reply) => {
   const { id } = req.user as UserEntity;
-  const { name, avatarUrl, locale, phone } = req.body;
+  const { name, avatar, locale, phone } = req.body;
 
-  const args = pickDefined<UpdateMeDto>({ userId: id }, { name, avatarUrl, locale, phone });
+  const args = pickDefined<UpdateMeDto>({ userId: id }, { name, avatar, locale, phone });
   const result = await usersServices.updateMe(args);
   return reply.code(200).send(result);
 };
 
-const getUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, MessageResponseDto> = async (
+const getUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, UserByIdResponseDto> = async (
   req,
   reply,
 ) => {
