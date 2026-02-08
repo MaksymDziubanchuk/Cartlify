@@ -33,6 +33,7 @@ declare global {
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
+      CLOUDINARY_URL: string;
 
       OPENAI_API_KEY: string;
 
@@ -101,6 +102,7 @@ export default {
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
+  CLOUDINARY_URL: process.env.CLOUDINARY_URL || '',
 
   // openai and cookie secret
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',

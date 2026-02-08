@@ -23,7 +23,17 @@ export const authLoginResponseSchema = {
     updatedAt: { type: 'string', format: 'date-time' },
 
     name: { type: 'string' },
-    avatarUrl: { type: 'string' },
+    avatarUrls: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url32: { type: 'string' },
+        url64: { type: 'string' },
+        url128: { type: 'string' },
+        url256: { type: 'string' },
+      },
+      required: ['url32', 'url64', 'url128', 'url256'],
+    },
     locale: { type: 'string' },
     phone: { type: 'string' },
   },
@@ -98,7 +108,17 @@ export const authRegisterResponseSchema = {
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
     name: { type: 'string' },
-    avatarUrl: { type: 'string' },
+    avatarUrls: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url32: { type: 'string' },
+        url64: { type: 'string' },
+        url128: { type: 'string' },
+        url256: { type: 'string' },
+      },
+      required: ['url32', 'url64', 'url128', 'url256'],
+    },
     locale: { type: 'string' },
   },
   required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],

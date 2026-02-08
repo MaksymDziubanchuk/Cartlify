@@ -24,6 +24,8 @@ import { insertLoginLog } from './helpers/loginLogs.service.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.service.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.service.js';
 
+import { buildImageUrls } from '@utils/cloudinary.util.js';
+
 export async function githubStart({
   guestId,
   role,
@@ -124,7 +126,7 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
+        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };

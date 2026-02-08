@@ -13,6 +13,8 @@ import {
 } from '@utils/linkedinOAuth.js';
 import { verifyOidcIdToken } from '@utils/oidcIdTokenVerify.js';
 
+import { buildImageUrls } from '@utils/cloudinary.util.js';
+
 import type {
   LinkedInStartDto,
   LinkedInStartResponseDto,
@@ -132,7 +134,7 @@ export async function linkedInCallback({
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrl: u.avatarUrl } : {}),
+        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
