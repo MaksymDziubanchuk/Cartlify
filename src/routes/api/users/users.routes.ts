@@ -30,4 +30,12 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
     },
     usersController.getUserById,
   );
+  app.delete(
+    '/:userId',
+    {
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('userId')],
+      schema: usersSchema.deleteUserByIdSchema,
+    },
+    usersController.deleteUserById,
+  );
 }

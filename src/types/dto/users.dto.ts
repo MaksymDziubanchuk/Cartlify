@@ -59,3 +59,8 @@ export interface UpdateMeBodyDto {
 export interface UpdateMeDto extends UpdateMeBodyDto {
   userId: UserId;
 }
+
+export interface DeleteUserByIdDto {
+  actorId: UserId;
+  userId: UserId;
+}
