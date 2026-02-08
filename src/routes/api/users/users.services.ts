@@ -18,6 +18,7 @@ import type {
   UserResponseDto,
   UserReviewResponseDto,
   UserByIdResponseDto,
+  DeleteUserByIdDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
@@ -382,8 +383,77 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
   }
 }
 
+async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<MessageResponseDto> {
+  // normalize ids
+  const rootId = typeof actorId === 'string' ? Number(actorId) : actorId;
+  const targetId = typeof userId === 'string' ? Number(userId) : userId;
+
+  // guard invalid input
+  if (!Number.isInteger(targetId) || targetId <= 0) throw new BadRequestError('USER_ID_INVALID');
+
+  // avoid locking yourself out
+  if (targetId === rootId) throw new AppError('ROOT_CANNOT_DELETE_SELF', 409);
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // apply root db context for rls
+      await setUserContext(tx, { userId: rootId, role: 'ROOT' });
+
+      // ensure target exists
+      const target = await tx.user.findUnique({
+        where: { id: targetId },
+        select: { id: true, email: true },
+      });
+
+      if (!target) throw new NotFoundError('USER_NOT_FOUND');
+
+      // keep previous email "visible" but safe for email format and length
+      const prevTag = target.email
+        .toLowerCase()
+        .replace(/@/g, '_at_')
+        .replace(/[^a-z0-9_]+/g, '_')
+        .slice(0, 32);
+
+      const deletedEmail = `deleted+${targetId}+${prevTag}@deleted.com`;
+
+      // revoke all tokens for this user
+      await tx.userToken.deleteMany({ where: { userId: targetId } });
+
+      // anonymize pii and disable verification
+      await tx.user.update({
+        where: { id: targetId },
+        data: {
+          email: deletedEmail,
+          passwordHash: null,
+          authProvider: 'LOCAL',
+          providerSub: null,
+          isVerified: false,
+          name: null,
+          avatarUrl: null,
+          publicId: null,
+          locale: null,
+          phone: null,
+        },
+        select: { id: true },
+      });
+    });
+
+    return { message: 'user deleted' };
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const msg =
+      typeof err === 'object' && err !== null && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : 'unknown';
+
+    throw new AppError(`users.deleteUserById: unexpected (${msg})`, 500);
+  }
+}
+
 export const usersServices = {
   findMe,
   updateMe,
   findById,
+  deleteUserById,
 };

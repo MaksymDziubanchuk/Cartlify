@@ -8,7 +8,10 @@ import type {
   UpdateMeBodyDto,
   UpdateMeDto,
   UserByIdResponseDto,
+  DeleteUserByIdDto,
 } from 'types/dto/users.dto.js';
+import type { MessageResponseDto } from 'types/common.js';
+
 import pickDefined from '@helpers/parameterNormalize.js';
 import { usersServices } from './users.services.js';
 
@@ -40,8 +43,21 @@ const getUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, UserByIdRespon
   return reply.code(200).send(result);
 };
 
+const deleteUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, MessageResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId } = req.user as UserEntity;
+  const userId = Number(req.params.userId);
+
+  const args = pickDefined<DeleteUserByIdDto>({ actorId, userId }, {});
+  const result = await usersServices.deleteUserById(args);
+  return reply.code(200).send(result);
+};
+
 export const usersController = {
   getMe,
   patchMe,
   getUserById,
+  deleteUserById,
 };
