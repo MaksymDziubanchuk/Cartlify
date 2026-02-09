@@ -1,33 +1,30 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
-import env from '@config/env.js';
+import { sendEmail } from './sendEmail.helper.js';
+import { buildVerifyEmailTemplate } from '@services/email/templates/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
 
-import { sendEmail } from './sendEmail.service.js';
-import { buildResetPasswordTemplate } from '@services/email/templates/resetPassword.template.js';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import env from '@config/env.js';
 
-export type SendResetPasswordEmailArgs = {
+export type SendVerifyEmailArgs = {
   to: string;
-  resetToken: string;
+  token: string;
   expiresAt: Date;
   userName?: string;
 };
 
-// reset email main flow
-// build reset url
-// send branded email
-export async function sendResetPasswordEmail(
-  args: SendResetPasswordEmailArgs,
-): Promise<{ status: number }> {
-  const resetUrl = buildWebResetUrl(args.resetToken);
+// build verify url
+// add expiry hint
+// send email via provider
+export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ status: number }> {
+  const verifyUrl = buildWebLoginVerifyUrl(args.token);
   const expiresInText = formatExpiresIn(args.expiresAt);
 
   const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
   const logoBase64 = (await readFile(logoPath)).toString('base64');
 
-  const { subject, text, html } = buildResetPasswordTemplate({
-    resetUrl,
+  const { subject, text, html } = buildVerifyEmailTemplate({
+    verifyUrl,
     userName: args.userName || '',
     appName: 'Cartlify',
     logoCid: 'cartlify-logo',
@@ -50,15 +47,16 @@ export async function sendResetPasswordEmail(
         },
       ],
     });
-  } catch {
-    throw new AppError('RESET_EMAIL_SEND_FAILED', 502);
+  } catch (err) {
+    // avoid leaking provider details
+    throw new AppError('VERIFY_EMAIL_SEND_FAILED', 502);
   }
 }
 
-// frontend reset entrypoint
-function buildWebResetUrl(token: string): string {
+// frontend verify entrypoint
+function buildWebLoginVerifyUrl(token: string): string {
   const base = (env.WEB_ORIGIN || '').trim() || 'http://localhost:3000';
-  const url = new URL('/web/auth/reset', base);
+  const url = new URL('/web/login', base);
   url.searchParams.set('token', token);
   return url.toString();
 }

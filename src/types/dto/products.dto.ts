@@ -1,5 +1,6 @@
 import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
+import type { MultipartFile } from '@fastify/multipart';
 
 export type ProductImagesUrls = {
   url200: string;
@@ -94,7 +95,7 @@ export interface CreateProductBodyDto {
   description?: string;
   price: number;
   categoryId: CategoryId;
-  images?: string[];
+  images?: MultipartFile[];
 }
 
 export interface CreateProductDto extends CreateProductBodyDto {
@@ -113,7 +114,7 @@ export interface UpdateProductBodyDto {
   description?: string;
   price?: number;
   categoryId?: CategoryId;
-  images?: string[];
+  images?: MultipartFile[];
   popularity?: number;
 }
 

@@ -8,9 +8,9 @@ import { verifyPass } from '@helpers/safePass.js';
 import type { LoginDto, LoginResponseDto } from 'types/dto/auth.dto.js';
 
 import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
-import { migrateGuestDataToUser } from './helpers/guestMigration.service.js';
-import { insertLoginLog } from './helpers/loginLogs.service.js';
-import { issueTokensOnLogin } from './helpers/tokenRotation.service.js';
+import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
+import { insertLoginLog } from './helpers/loginLogs.helper.js';
+import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 

@@ -14,7 +14,7 @@ import {
   getRefreshTokenRow,
   markRefreshTokenUsed,
   revokeAllActiveRefreshTokens,
-} from './helpers/tokenRotation.service.js';
+} from './helpers/tokenRotation.helper.js';
 
 // logout by refresh token
 // mark used or revoke all

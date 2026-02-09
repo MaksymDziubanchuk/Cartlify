@@ -9,12 +9,14 @@ import type {
   GetProductReviewsQueryDto,
   CreateProductBodyDto,
   CreateProductDto,
+  CreateProductResponseDto,
   PostReviewParamsDto,
   CreateReviewBodyDto,
   CreateReviewDto,
   UpdateProductParamsDto,
   UpdateProductBodyDto,
   UpdateProductDto,
+  UpdateProductResponseDto,
   DeleteProductByIdParamsDto,
   DeleteProductReviewParamsDto,
   UpdateProductCategoryParamsDto,
@@ -105,22 +107,22 @@ const getProductReviews: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-const postProduct: ControllerRouter<{}, CreateProductBodyDto, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
+const postProduct: ControllerRouter<
+  {},
+  CreateProductBodyDto,
+  {},
+  CreateProductResponseDto
+> = async (req, reply) => {
+  // pass request payload as dto, keep parsing inside service for multipart shapes
   const { name, description, price, categoryId, images } = req.body;
+  // pass actor context for rls policies
   const { id: actorId, role: actorRole } = req.user as User;
+
   const args = pickDefined<CreateProductDto>(
-    {
-      name,
-      price,
-      categoryId,
-      actorId,
-      actorRole,
-    },
+    { name, price, categoryId, actorId, actorRole },
     { description, images },
   );
+
   const result = await productServices.createProduct(args);
   return reply.code(201).send(result);
 };
@@ -146,19 +148,20 @@ const updateProductById: ControllerRouter<
   UpdateProductParamsDto,
   UpdateProductBodyDto,
   {},
-  MessageResponseDto
+  UpdateProductResponseDto
 > = async (req, reply) => {
-  const { name, description, price, categoryId, images, popularity } = req.body;
-  const { id: actorId, role: actorRole } = req.user as User;
+  // normalize params and actor context for service and rls
   const productId = Number(req.params.productId);
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  // pass optional fields as-is, service validates multipart and values
+  const { name, description, price, categoryId, images, popularity } = req.body;
+
   const args = pickDefined<UpdateProductDto>(
-    {
-      productId,
-      actorId,
-      actorRole,
-    },
+    { productId, actorId, actorRole },
     { name, description, price, categoryId, images, popularity },
   );
+
   const result = await productServices.updateProduct(args);
   return reply.code(200).send(result);
 };

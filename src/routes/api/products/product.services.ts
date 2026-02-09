@@ -1,7 +1,29 @@
+import { Prisma } from '@prisma/client';
+import { prisma } from '@db/client.js';
+import { setUserContext } from '@db/dbContext.service.js';
+
+import {
+  AppError,
+  BadRequestError,
+  ForbiddenError,
+  NotFoundError,
+  isAppError,
+} from '@utils/errors.js';
+
+import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
+import {
+  normalizeMultipartFiles,
+  uploadProductImages,
+  persistProductImages,
+  mapProductRowToResponse,
+  buildProductUpdateAuditChanges,
+  writeAdminAuditLog,
+  writeProductPriceChangeLog,
+  computeFixedDelta,
+} from './services/helpers/index.js';
+
 import type { MessageResponseDto } from 'types/common.js';
 import type {
-  CreateProductDto,
-  UpdateProductDto,
   CreateReviewDto,
   FindAllProductsDto,
   FindProductByIdDto,
@@ -11,6 +33,9 @@ import type {
   UpdateProductCategoryDto,
   RemoveProductCategoryDto,
 } from 'types/dto/products.dto.js';
+
+import { createProduct } from './services/create.service.js';
+import { updateProduct } from './services/update.service.js';
 
 async function findAll({
   page,
@@ -39,18 +64,6 @@ async function findReviews({ productId }: FindProductReviewsDto): Promise<Messag
   };
 }
 
-async function createProduct({
-  name,
-  description,
-  price,
-  categoryId,
-  images,
-}: CreateProductDto): Promise<MessageResponseDto> {
-  return {
-    message: 'create not implemented',
-  };
-}
-
 async function createReview({
   rating,
   comment,
@@ -59,22 +72,6 @@ async function createReview({
 }: CreateReviewDto): Promise<MessageResponseDto> {
   return {
     message: 'createReview not implemented',
-  };
-}
-
-async function updateProduct({
-  productId,
-  actorId,
-  actorRole,
-  name,
-  description,
-  price,
-  categoryId,
-  images,
-  popularity,
-}: UpdateProductDto): Promise<MessageResponseDto> {
-  return {
-    message: 'updateProduct not implemented',
   };
 }
 
