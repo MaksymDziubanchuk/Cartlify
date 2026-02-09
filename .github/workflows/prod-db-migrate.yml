@@ -1,0 +1,49 @@
+name: PROD DB — Prisma migrate deploy (develop only)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: prod-db-migrations
+  cancel-in-progress: false
+
+jobs:
+  migrate_prod:
+    name: Apply Prisma migrations to PROD database
+    runs-on: ubuntu-latest
+
+    if: github.ref == 'refs/heads/develop'
+
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma migrate status (PROD)
+        run: npx prisma migrate status
+        env:
+          DATABASE_URL: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+
+      - name: Prisma migrate deploy (PROD)
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+
+  deny_non_develop:
+    name: Deny run on non-develop branches
+    runs-on: ubuntu-latest
+    if: github.ref != 'refs/heads/develop'
+    steps:
+      - run: |
+          echo "This workflow may only run from the develop branch."
+          exit 1
