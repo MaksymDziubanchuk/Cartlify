@@ -1,0 +1,124 @@
+name: DB — run SQL script (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_db:
+        description: 'target database'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+      sql_file:
+        description: 'sql file under db/'
+        required: true
+        type: choice
+        options:
+          # keep this list in sync with /db/*.sql
+          - db/01_roles_and_schemas.sql
+          - db/02_extensions.sql
+          - db/03_policies_and_rls.sql
+          - db/04_views.sql
+          - db/05_fn_and_triggers.sql
+          - db/06_indexes_and_constraints.sql
+          - db/reseed.sql
+
+concurrency:
+  # prevent parallel db mutations per target
+  group: db-sql-${{ inputs.target_db }}
+  cancel-in-progress: false
+
+jobs:
+  run_sql:
+    runs-on: ubuntu-latest
+
+    steps:
+      # get repo files so runner can access db scripts
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # install psql client for executing postgres scripts
+      - name: Install psql client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      # validate selected file to avoid path traversal and weird shell tricks
+      - name: Validate selected file
+        run: |
+          set -euo pipefail
+
+          SCRIPT="${{ inputs.sql_file }}"
+
+          # allow only .sql files
+          case "$SCRIPT" in
+            *.sql) ;;
+            *) echo "only .sql files are allowed"; exit 1 ;;
+          esac
+
+          # block path traversal
+          if echo "$SCRIPT" | grep -q '\.\.'; then
+            echo "path traversal is not allowed"
+            exit 1
+          fi
+
+          # allow only safe characters
+          if echo "$SCRIPT" | grep -Eq '[^a-zA-Z0-9._/\-]'; then
+            echo "invalid characters in script path"
+            exit 1
+          fi
+
+          # restrict scripts to db/ folder
+          case "$SCRIPT" in
+            db/*) ;;
+            *) echo "only scripts under db/ are allowed"; exit 1 ;;
+          esac
+
+          # require file to exist
+          if [ ! -f "$SCRIPT" ]; then
+            echo "file not found: $SCRIPT"
+            echo "available sql files under db/:"
+            find db -maxdepth 2 -type f -name "*.sql" -print
+            exit 1
+          fi
+
+          echo "script ok: $SCRIPT"
+
+      # show target info to reduce human mistakes
+      - name: Show db target info
+        env:
+          DEV_URL: ${{ secrets.DEV_DB_URL }}
+          PROD_URL: ${{ secrets.PROD_DB_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ inputs.target_db }}" = "dev" ]; then
+            URL="$DEV_URL"
+          else
+            URL="$PROD_URL"
+          fi
+
+          # show current database/user before executing mutations
+          psql -v ON_ERROR_STOP=1 -c "select current_database() as db, current_user as usr;" "$URL"
+
+      # run selected sql on dev db
+      - name: Run script on DEV
+        if: inputs.target_db == 'dev'
+        env:
+          DATABASE_URL: ${{ secrets.DEV_DB_URL }}
+        run: |
+          set -euo pipefail
+
+          # url goes last so psql does not ignore following args
+          psql -v ON_ERROR_STOP=1 -f "${{ inputs.sql_file }}" "$DATABASE_URL"
+
+      # run selected sql on prod db
+      - name: Run script on PROD
+        if: inputs.target_db == 'prod'
+        env:
+          DATABASE_URL: ${{ secrets.PROD_DB_URL }}
+        run: |
+          set -euo pipefail
+
+          # url goes last so psql does not ignore following args
+          psql -v ON_ERROR_STOP=1 -f "${{ inputs.sql_file }}" "$DATABASE_URL"
