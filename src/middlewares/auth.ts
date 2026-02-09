@@ -12,9 +12,9 @@ import {
   clearAccessTokenCookie,
   clearRefreshTokenCookie,
   shouldClearRefreshCookieOnRefreshError,
-} from '@routes/api/auth/services/helpers/authCookies.js';
+} from '@routes/api/auth/services/helpers/authCookies.helper.js';
 
-import { refreshAccessTokenByRefreshToken } from '@routes/api/auth/services/helpers/resignAccessToken.service.js';
+import { refreshAccessTokenByRefreshToken } from '@routes/api/auth/services/helpers/resignAccessToken.helper.js';
 
 const GUEST_ID_TTL = Number(env.GUEST_ID_TTL);
 

@@ -3,7 +3,7 @@ import { AppError, BadRequestError } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 
-import { sendVerifyEmail } from './helpers/sendVerifyEmail.service.js';
+import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
 import type { ResendVerifyDto, VerifyEmailDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';

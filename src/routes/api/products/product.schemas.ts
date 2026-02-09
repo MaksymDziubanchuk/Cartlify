@@ -1,9 +1,9 @@
 import type { FastifySchema } from 'fastify';
 
 const getAllProductsRouterSchema = {
-  querystring: { $ref: 'getAllProductsSchema#' },
+  querystring: { $ref: 'getAllProductsQuerySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'productsListResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -15,7 +15,7 @@ const getAllProductsRouterSchema = {
 const getProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'productResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -28,7 +28,7 @@ const getProductByIdRouterSchema = {
 const getProductReviewsRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'reviewResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -39,9 +39,9 @@ const getProductReviewsRouterSchema = {
 } satisfies FastifySchema;
 
 const postProductRouterSchema = {
-  body: { $ref: 'createProductSchema#' },
+  body: { $ref: 'createProductBodySchema#' },
   response: {
-    201: { $ref: 'messageResponseSchema#' },
+    201: { $ref: 'productResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -54,9 +54,9 @@ const postProductRouterSchema = {
 
 const postProductReviewRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
-  body: { $ref: 'createReviewSchema#' },
+  body: { $ref: 'createReviewBodySchema#' },
   response: {
-    201: { $ref: 'messageResponseSchema#' },
+    201: { $ref: 'reviewResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -70,9 +70,9 @@ const postProductReviewRouterSchema = {
 
 const updateProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
-  body: { $ref: 'updateProductSchema#' },
+  body: { $ref: 'updateProductBodySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'productResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -129,7 +129,7 @@ export const patchProductCategorySchema = {
 export const deleteProductCategorySchema = {
   params: { $ref: 'productsRemoveCategoryParamsSchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'productsRemoveCategoryResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },

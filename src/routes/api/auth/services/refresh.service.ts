@@ -2,7 +2,7 @@ import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
 
 import type { RefreshDto, RefreshResponseDto } from 'types/dto/auth.dto.js';
 
-import { refreshAccessTokenByRefreshToken } from './helpers/resignAccessToken.service.js';
+import { refreshAccessTokenByRefreshToken } from './helpers/resignAccessToken.helper.js';
 
 // refresh access by refresh token
 // return new refresh deadline

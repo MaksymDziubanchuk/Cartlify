@@ -6,7 +6,7 @@ import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
-import { sendVerifyEmail } from './helpers/sendVerifyEmail.service.js';
+import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
 import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
 

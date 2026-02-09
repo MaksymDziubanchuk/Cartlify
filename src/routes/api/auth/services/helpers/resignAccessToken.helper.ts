@@ -11,7 +11,7 @@ import {
   assertNotReusedAndHashOkOrThrow,
   assertNotExpiredInDbOrThrow,
   rotateFixedDeadlineTokens,
-} from './tokenRotation.service.js';
+} from './tokenRotation.helper.js';
 
 export type RefreshAccessDto = {
   refreshToken: string;

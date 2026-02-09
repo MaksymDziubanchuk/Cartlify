@@ -9,7 +9,7 @@ import env from '@config/env.js';
 import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
-import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.service.js';
+import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.helper.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';

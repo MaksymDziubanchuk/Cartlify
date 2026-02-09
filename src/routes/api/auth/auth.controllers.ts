@@ -47,7 +47,7 @@ import {
   setAccessTokenCookie,
   setRefreshTokenCookie,
   clearAuthCookies,
-} from '@routes/api/auth/services/helpers/authCookies.js';
+} from '@routes/api/auth/services/helpers/authCookies.helper.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
   req,
