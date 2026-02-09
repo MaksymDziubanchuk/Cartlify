@@ -1,91 +1,154 @@
--- One-time script: transfer ownership of all objects in schema cartlify to cartlify_owner
--- Run as postgres/superuser (or as the current owner of those objects).
-BEGIN;
+-- one-time script: transfer ownership of non-extension objects in schema cartlify to cartlify_owner
+-- run as postgres/superuser or as the current owner of the objects you want to change
+begin;
 
-SET
-    LOCAL lock_timeout = '10s';
+set
+  local lock_timeout = '10s';
 
-SET
-    LOCAL statement_timeout = '5min';
+set
+  local statement_timeout = '5min';
 
--- 1) Ensure schema exists and is owned by cartlify_owner
-DO $do$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.schemata WHERE schema_name = 'cartlify'
-  ) THEN
-    EXECUTE 'CREATE SCHEMA cartlify AUTHORIZATION cartlify_owner';
-  ELSE
-    EXECUTE 'ALTER SCHEMA cartlify OWNER TO cartlify_owner';
-  END IF;
-END
+-- ensure schema exists and is owned by cartlify_owner
+do $do$
+begin
+  if not exists (
+    select 1 from information_schema.schemata where schema_name = 'cartlify'
+  ) then
+    execute 'create schema cartlify authorization cartlify_owner';
+  else
+    execute 'alter schema cartlify owner to cartlify_owner';
+  end if;
+end
 $do$;
 
--- 2) Transfer ownership of objects inside schema cartlify
-DO $do$
-DECLARE
+-- transfer ownership of objects inside schema cartlify
+do $do$
+declare
+  v_schema text := 'cartlify';
+  v_owner  text := 'cartlify_owner';
   r record;
-BEGIN
-  -- Tables (incl. _prisma_migrations), partitioned tables, foreign tables
-  FOR r IN
-    SELECT n.nspname AS schema_name, c.relname AS obj_name, c.relkind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'cartlify'
-      AND c.relkind IN ('r','p','f')  -- r=table, p=partitioned table, f=foreign table
-  LOOP
-    EXECUTE format('ALTER TABLE %I.%I OWNER TO %I', r.schema_name, r.obj_name, 'cartlify_owner');
-  END LOOP;
+begin
+  -- tables, partitioned tables, foreign tables
+  for r in
+    select n.nspname as schema_name, c.relname as obj_name
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = v_schema
+      and c.relkind in ('r','p','f')
+      and not exists (
+        select 1
+        from pg_depend d
+        where d.classid = 'pg_class'::regclass
+          and d.objid = c.oid
+          and d.refclassid = 'pg_extension'::regclass
+      )
+  loop
+    begin
+      execute format('alter table %I.%I owner to %I', r.schema_name, r.obj_name, v_owner);
+    exception when others then
+      raise notice 'skip table %.%: %', r.schema_name, r.obj_name, sqlerrm;
+    end;
+  end loop;
 
-  -- Sequences
-  FOR r IN
-    SELECT sequence_schema AS schema_name, sequence_name AS obj_name
-    FROM information_schema.sequences
-    WHERE sequence_schema = 'cartlify'
-  LOOP
-    EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO %I', r.schema_name, r.obj_name, 'cartlify_owner');
-  END LOOP;
+  -- sequences
+  for r in
+    select n.nspname as schema_name, c.relname as obj_name
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = v_schema
+      and c.relkind = 'S'
+      and not exists (
+        select 1
+        from pg_depend d
+        where d.classid = 'pg_class'::regclass
+          and d.objid = c.oid
+          and d.refclassid = 'pg_extension'::regclass
+      )
+  loop
+    begin
+      execute format('alter sequence %I.%I owner to %I', r.schema_name, r.obj_name, v_owner);
+    exception when others then
+      raise notice 'skip sequence %.%: %', r.schema_name, r.obj_name, sqlerrm;
+    end;
+  end loop;
 
-  -- Views + materialized views
-  FOR r IN
-    SELECT n.nspname AS schema_name, c.relname AS obj_name, c.relkind
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'cartlify'
-      AND c.relkind IN ('v','m')  -- v=view, m=matview
-  LOOP
-    IF r.relkind = 'v' THEN
-      EXECUTE format('ALTER VIEW %I.%I OWNER TO %I', r.schema_name, r.obj_name, 'cartlify_owner');
-    ELSE
-      EXECUTE format('ALTER MATERIALIZED VIEW %I.%I OWNER TO %I', r.schema_name, r.obj_name, 'cartlify_owner');
-    END IF;
-  END LOOP;
+  -- views and materialized views
+  for r in
+    select n.nspname as schema_name, c.relname as obj_name, c.relkind
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = v_schema
+      and c.relkind in ('v','m')
+      and not exists (
+        select 1
+        from pg_depend d
+        where d.classid = 'pg_class'::regclass
+          and d.objid = c.oid
+          and d.refclassid = 'pg_extension'::regclass
+      )
+  loop
+    begin
+      if r.relkind = 'v' then
+        execute format('alter view %I.%I owner to %I', r.schema_name, r.obj_name, v_owner);
+      else
+        execute format('alter materialized view %I.%I owner to %I', r.schema_name, r.obj_name, v_owner);
+      end if;
+    exception when others then
+      raise notice 'skip view/matview %.%: %', r.schema_name, r.obj_name, sqlerrm;
+    end;
+  end loop;
 
-  -- Functions
-  FOR r IN
-    SELECT n.nspname AS schema_name,
-           p.proname AS obj_name,
-           pg_get_function_identity_arguments(p.oid) AS args
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'cartlify'
-  LOOP
-    EXECUTE format('ALTER FUNCTION %I.%I(%s) OWNER TO %I',
-      r.schema_name, r.obj_name, r.args, 'cartlify_owner'
-    );
-  END LOOP;
+  -- functions
+  for r in
+    select
+      n.nspname as schema_name,
+      p.proname as obj_name,
+      pg_get_function_identity_arguments(p.oid) as args,
+      p.oid as oid
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = v_schema
+      and not exists (
+        select 1
+        from pg_depend d
+        where d.classid = 'pg_proc'::regclass
+          and d.objid = p.oid
+          and d.refclassid = 'pg_extension'::regclass
+      )
+  loop
+    begin
+      execute format(
+        'alter function %I.%I(%s) owner to %I',
+        r.schema_name, r.obj_name, r.args, v_owner
+      );
+    exception when others then
+      raise notice 'skip function %.%(%) : %', r.schema_name, r.obj_name, r.args, sqlerrm;
+    end;
+  end loop;
 
-  -- Types (enums, composites)
-  FOR r IN
-    SELECT n.nspname AS schema_name, t.typname AS obj_name
-    FROM pg_type t
-    JOIN pg_namespace n ON n.oid = t.typnamespace
-    WHERE n.nspname = 'cartlify'
-      AND t.typtype = 'e'  -- e=enum only
-  LOOP
-    EXECUTE format('ALTER TYPE %I.%I OWNER TO %I', r.schema_name, r.obj_name, 'cartlify_owner');
-  END LOOP;
-END
+  -- types
+  -- enums, domains, composite types
+  for r in
+    select n.nspname as schema_name, t.typname as obj_name, t.oid as oid, t.typtype
+    from pg_type t
+    join pg_namespace n on n.oid = t.typnamespace
+    where n.nspname = v_schema
+      and t.typtype in ('e','d','c')
+      and not exists (
+        select 1
+        from pg_depend d
+        where d.classid = 'pg_type'::regclass
+          and d.objid = t.oid
+          and d.refclassid = 'pg_extension'::regclass
+      )
+  loop
+    begin
+      execute format('alter type %I.%I owner to %I', r.schema_name, r.obj_name, v_owner);
+    exception when others then
+      raise notice 'skip type %.%: %', r.schema_name, r.obj_name, sqlerrm;
+    end;
+  end loop;
+end
 $do$;
 
-COMMIT;
+commit;
