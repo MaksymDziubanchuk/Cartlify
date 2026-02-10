@@ -314,7 +314,13 @@ FOR UPDATE
     )
   )
 WITH
-  CHECK (cartlify.is_owner ("userId"));
+  CHECK (
+    cartlify.is_owner ("userId")
+    AND (
+      "comment" IS NOT NULL
+      AND btrim("comment") <> ''
+    )
+  );
 
 -- DELETE (owner or admin/root)
 CREATE POLICY reviews_delete ON cartlify.reviews FOR DELETE USING (cartlify.is_owner_or_admin ("userId"));
