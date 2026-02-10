@@ -1,7 +1,7 @@
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 
-import type { ProductResponseDto } from 'types/dto/products.dto.js';
+import type { CreateProductResponseDto } from 'types/dto/products.dto.js';
 
 export function mapProductRowToResponse(args: {
   product: {
@@ -17,10 +17,10 @@ export function mapProductRowToResponse(args: {
     createdAt: Date;
     updatedAt: Date;
   };
-  primaryImageUrl?: string | null;
-}): ProductResponseDto {
+  images?: Array<{ url: string; position: number }>;
+}): CreateProductResponseDto {
   // map db row to api dto shape
-  const { product } = args;
+  const { product, images } = args;
 
   return {
     id: product.id as any,
@@ -30,7 +30,7 @@ export function mapProductRowToResponse(args: {
     categoryId: product.categoryId as any,
     createdAt: product.createdAt,
     updatedAt: product.updatedAt,
-    ...(args.primaryImageUrl ? { images: buildImageUrls(args.primaryImageUrl, 'product') } : {}),
+    ...(images?.length ? { images: images.map((r) => buildImageUrls(r.url, 'product')) } : {}),
     popularity: product.popularity,
     views: product.views,
     avgRating: decimalToNumber(product.avgRating),

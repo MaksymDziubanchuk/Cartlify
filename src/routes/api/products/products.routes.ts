@@ -98,13 +98,4 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     },
     productController.patchProductCategory,
   );
-
-  app.delete(
-    '/:productId/category',
-    {
-      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
-      schema: productSchemas.deleteProductCategorySchema,
-    },
-    productController.deleteProductCategory,
-  );
 }
