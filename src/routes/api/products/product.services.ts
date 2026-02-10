@@ -31,11 +31,14 @@ import type {
   DeleteProductByIdDto,
   DeleteProductReviewDto,
   UpdateProductCategoryDto,
-  RemoveProductCategoryDto,
 } from 'types/dto/products.dto.js';
 
-import { createProduct } from './services/create.service.js';
-import { updateProduct } from './services/update.service.js';
+import { createProduct } from './services/createProduct.service.js';
+import { updateProduct } from './services/updateProduct.service.js';
+import { updateProductCategory } from './services/updateCategory.service.js';
+import { createReview } from './services/createReview.service.js';
+import { findReviews } from './services/findReviews.service.js';
+import { deleteProductReview } from './services/reviewDelete.service.js';
 
 async function findAll({
   page,
@@ -58,50 +61,10 @@ async function findById({ productId }: FindProductByIdDto): Promise<MessageRespo
   };
 }
 
-async function findReviews({ productId }: FindProductReviewsDto): Promise<MessageResponseDto> {
-  return {
-    message: 'findReviews not implemented',
-  };
-}
-
-async function createReview({
-  rating,
-  comment,
-  productId,
-  userId,
-}: CreateReviewDto): Promise<MessageResponseDto> {
-  return {
-    message: 'createReview not implemented',
-  };
-}
-
 async function deleteProductById({ productId }: DeleteProductByIdDto): Promise<MessageResponseDto> {
   return {
     message: 'daleteProduct not implemented',
   };
-}
-
-async function deleteProductReview({
-  productId,
-  reviewId,
-  actorId,
-}: DeleteProductReviewDto): Promise<MessageResponseDto> {
-  return {
-    message: 'daleteProductReview not implemented',
-  };
-}
-
-async function updateProductCategory({
-  productId,
-  categoryId,
-}: UpdateProductCategoryDto): Promise<MessageResponseDto> {
-  return { message: 'product category set not implemented' };
-}
-
-async function removeProductCategory({
-  productId,
-}: RemoveProductCategoryDto): Promise<MessageResponseDto> {
-  return { message: 'product category cleared not implemented' };
 }
 
 export const productServices = {
@@ -114,5 +77,4 @@ export const productServices = {
   deleteProductById,
   deleteProductReview,
   updateProductCategory,
-  removeProductCategory,
 };

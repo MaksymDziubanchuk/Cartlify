@@ -573,8 +573,33 @@ OR DELETE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 
 ------------------------------------------------------------
--- REVIEWS AND REVIEWS
+-- REVIEWS 
 ------------------------------------------------------------
+-- PREVENT RATING CHANGE
+CREATE OR REPLACE FUNCTION cartlify.reviews_lock_rating_and_keys () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."rating" IS DISTINCT FROM OLD."rating" THEN
+    RAISE EXCEPTION 'REVIEW_RATING_UPDATE_FORBIDDEN';
+  END IF;
+
+  IF NEW."userId" IS DISTINCT FROM OLD."userId" THEN
+    RAISE EXCEPTION 'REVIEW_USER_CHANGE_FORBIDDEN';
+  END IF;
+
+  IF NEW."productId" IS DISTINCT FROM OLD."productId" THEN
+    RAISE EXCEPTION 'REVIEW_PRODUCT_CHANGE_FORBIDDEN';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_reviews_lock_rating_and_keys ON cartlify.reviews;
+
+CREATE TRIGGER trg_reviews_lock_rating_and_keys BEFORE
+UPDATE ON cartlify.reviews FOR EACH ROW
+EXECUTE FUNCTION cartlify.reviews_lock_rating_and_keys ();
+
 -- 'reviews' CALC upVotes & downVotes
 -- DROP FUNCTION IF EXISTS cartlify.recalc_review_votes (integer)
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$

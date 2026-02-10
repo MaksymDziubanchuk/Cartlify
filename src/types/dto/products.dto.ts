@@ -8,6 +8,8 @@ export type ProductImagesUrls = {
   url800: string;
 };
 
+//GET ALL PRODUCTS
+
 export interface GetAllProductsQueryDto {
   page?: number;
   limit?: number;
@@ -50,6 +52,7 @@ export interface ProductsResponseDto {
   total?: number;
 }
 
+//GET PRODUCT BY ID
 export interface GetProductByIdParamsDto {
   productId: ProductId;
 }
@@ -58,20 +61,23 @@ export interface FindProductByIdDto {
   productId: ProductId;
 }
 
-export type GetProductByIdResponseDto = ProductResponseDto;
+export type FullProductResponseDto = Omit<ProductResponseDto, 'images'> & {
+  images?: ProductImagesUrls[];
+};
 
+// GET PRODUCTS REVIEWS
 export interface GetProductReviewsParamsDto {
   productId: ProductId;
 }
 export interface GetProductReviewsQueryDto {
-  page?: number;
+  cursorId?: ReviewId;
   limit?: number;
 }
 
 export interface FindProductReviewsDto {
   productId: ProductId;
-  page: number;
   limit: number;
+  cursorId?: ReviewId;
 }
 
 export interface ReviewResponseDto {
@@ -80,16 +86,18 @@ export interface ReviewResponseDto {
   rating: number;
   userId: UserId;
   createdAt: Date;
+  updatedAt: Date;
   comment?: string;
 }
 
 export interface ReviewsResponseDto {
   items: ReviewResponseDto[];
-  page?: number;
-  limit?: number;
-  total?: number;
+  limit: number;
+  total: number;
+  nextCursorId?: ReviewId;
 }
 
+// CREATE PRODUCT
 export interface CreateProductBodyDto {
   name: string;
   description?: string;
@@ -103,8 +111,9 @@ export interface CreateProductDto extends CreateProductBodyDto {
   actorRole: Role;
 }
 
-export type CreateProductResponseDto = ProductResponseDto;
+export type CreateProductResponseDto = FullProductResponseDto;
 
+// UPDATE PRODUCT
 export interface UpdateProductParamsDto {
   productId: ProductId;
 }
@@ -124,8 +133,9 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
   actorRole: Role;
 }
 
-export type UpdateProductResponseDto = ProductResponseDto;
+export type UpdateProductResponseDto = FullProductResponseDto;
 
+// DELETE PRODUCT BY ID
 export interface DeleteProductByIdParamsDto {
   productId: ProductId;
 }
@@ -140,21 +150,24 @@ export interface DeleteProductByIdResponseDto {
   message: string;
 }
 
+// CREATE REVIEW
 export interface PostReviewParamsDto {
   productId: ProductId;
 }
 export interface CreateReviewBodyDto {
-  rating: number;
+  rating?: number;
   comment?: string;
 }
 
 export interface CreateReviewDto extends CreateReviewBodyDto {
   productId: ProductId;
   userId: UserId;
+  actorRole: Role;
 }
 
 export type CreateReviewResponseDto = ReviewResponseDto;
 
+// DETELE REVIEW
 export interface DeleteProductReviewParamsDto {
   productId: ProductId;
   reviewId: ReviewId;
@@ -171,6 +184,7 @@ export interface DeleteProductReviewResponseDto {
   message: string;
 }
 
+// UPDATE PRODUCT CATEGORY
 export interface UpdateProductCategoryParamsDto {
   productId: ProductId;
 }
@@ -179,22 +193,11 @@ export interface UpdateProductCategoryBodyDto {
   categoryId: CategoryId;
 }
 
-export interface UpdateProductCategoryDto {
-  productId: ProductId;
-  categoryId: CategoryId;
+export interface UpdateProductCategoryDto
+  extends UpdateProductCategoryParamsDto,
+    UpdateProductCategoryBodyDto {
+  actorId: UserId;
+  actorRole: Role;
 }
 
-export interface UpdateProductCategoryResponseDto {
-  message: string;
-}
-
-export interface RemoveProductCategoryParamsDto {
-  productId: ProductId;
-}
-
-export interface RemoveProductCategoryDto {
-  productId: ProductId;
-}
-export interface RemoveProductCategoryResponseDto {
-  message: string;
-}
+export type UpdateProductCategoryResponseDto = FullProductResponseDto;

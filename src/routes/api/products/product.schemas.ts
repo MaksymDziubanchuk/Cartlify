@@ -27,8 +27,9 @@ const getProductByIdRouterSchema = {
 
 const getProductReviewsRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
+  querystring: { $ref: 'getProductReviewsQuerySchema#' },
   response: {
-    200: { $ref: 'reviewResponseSchema#' },
+    200: { $ref: 'reviewsResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -98,7 +99,7 @@ const deleteProductByIdRouterSchema = {
 } satisfies FastifySchema;
 
 const deleteProductReviewRouterSchema = {
-  params: { $ref: 'productReviewIdsParamSchema#' },
+  params: { $ref: 'deleteProductReviewParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
@@ -114,7 +115,7 @@ export const patchProductCategorySchema = {
   params: { $ref: 'productsUpdateCategoryParamsSchema#' },
   body: { $ref: 'productsUpdateCategoryBodySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'productResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -122,19 +123,6 @@ export const patchProductCategorySchema = {
     404: { $ref: 'errorResponseSchema#' },
     409: { $ref: 'errorResponseSchema#' },
     422: { $ref: 'errorResponseSchema#' },
-    500: { $ref: 'errorResponseSchema#' },
-  },
-} satisfies FastifySchema;
-
-export const deleteProductCategorySchema = {
-  params: { $ref: 'productsRemoveCategoryParamsSchema#' },
-  response: {
-    200: { $ref: 'productsRemoveCategoryResponseSchema#' },
-
-    400: { $ref: 'errorResponseSchema#' },
-    401: { $ref: 'errorResponseSchema#' },
-    403: { $ref: 'errorResponseSchema#' },
-    404: { $ref: 'errorResponseSchema#' },
     500: { $ref: 'errorResponseSchema#' },
   },
 } satisfies FastifySchema;
@@ -149,5 +137,4 @@ export const productSchemas = {
   deleteProductByIdRouterSchema,
   deleteProductReviewRouterSchema,
   patchProductCategorySchema,
-  deleteProductCategorySchema,
 };

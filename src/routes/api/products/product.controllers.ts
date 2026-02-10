@@ -7,23 +7,27 @@ import type {
   GetProductByIdParamsDto,
   GetProductReviewsParamsDto,
   GetProductReviewsQueryDto,
+  FindProductReviewsDto,
+  ReviewsResponseDto,
   CreateProductBodyDto,
   CreateProductDto,
   CreateProductResponseDto,
   PostReviewParamsDto,
   CreateReviewBodyDto,
   CreateReviewDto,
+  CreateReviewResponseDto,
   UpdateProductParamsDto,
   UpdateProductBodyDto,
   UpdateProductDto,
   UpdateProductResponseDto,
   DeleteProductByIdParamsDto,
   DeleteProductReviewParamsDto,
+  DeleteProductReviewDto,
+  DeleteProductReviewResponseDto,
   UpdateProductCategoryParamsDto,
   UpdateProductCategoryBodyDto,
   UpdateProductCategoryDto,
-  RemoveProductCategoryParamsDto,
-  RemoveProductCategoryDto,
+  UpdateProductCategoryResponseDto,
 } from 'types/dto/products.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
@@ -97,13 +101,18 @@ const getProductReviews: ControllerRouter<
   GetProductReviewsParamsDto,
   {},
   GetProductReviewsQueryDto,
-  MessageResponseDto
+  ReviewsResponseDto
 > = async (req, reply) => {
-  const { page: qp, limit: ql } = req.query;
-  const page = qp ? Number(qp) : 1;
-  const limit = ql ? Number(ql) : 10;
+  // normalize cursor pagination inputs
+  const { cursorId: qc, limit: ql } = req.query;
+
   const productId = Number(req.params.productId);
-  const result = await productServices.findReviews({ productId, page, limit });
+  const cursorId = qc != null ? Number(qc) : undefined;
+  const limit = ql != null ? Number(ql) : 10;
+
+  const args = pickDefined<FindProductReviewsDto>({ productId, limit }, { cursorId });
+
+  const result = await productServices.findReviews(args);
   return reply.code(200).send(result);
 };
 
@@ -131,15 +140,16 @@ const postProductReview: ControllerRouter<
   PostReviewParamsDto,
   CreateReviewBodyDto,
   {},
-  unknown
+  CreateReviewResponseDto
 > = async (req, reply) => {
+  // normalize ids and bind actor
   const productId = Number(req.params.productId);
-  const userId = (req.user as User).id;
-  const args: CreateReviewDto = {
-    productId,
-    userId,
-    ...req.body,
-  };
+  const { id: userId, role: actorRole } = req.user as User;
+
+  const { rating, comment } = req.body;
+
+  const args = pickDefined<CreateReviewDto>({ productId, userId, actorRole }, { rating, comment });
+
   const result = await productServices.createReview(args);
   return reply.code(201).send(result);
 };
@@ -182,17 +192,17 @@ const deleteProductReview: ControllerRouter<
   DeleteProductReviewParamsDto,
   {},
   {},
-  MessageResponseDto
+  DeleteProductReviewResponseDto
 > = async (req, reply) => {
-  const productId = Number(req.params.productId);
-  const reviewId = Number(req.params.reviewId);
+  const { productId: pp, reviewId: pr } = req.params;
   const { id: actorId, role: actorRole } = req.user as User;
-  const result = await productServices.deleteProductReview({
-    productId,
-    reviewId,
-    actorId,
-    actorRole,
-  });
+
+  const productId = Number(pp);
+  const reviewId = Number(pr);
+
+  const args = pickDefined<DeleteProductReviewDto>({ productId, reviewId, actorId, actorRole }, {});
+
+  const result = await productServices.deleteProductReview(args);
   return reply.code(200).send(result);
 };
 
@@ -200,26 +210,17 @@ export const patchProductCategory: ControllerRouter<
   UpdateProductCategoryParamsDto,
   UpdateProductCategoryBodyDto,
   {},
-  MessageResponseDto
+  UpdateProductCategoryResponseDto
 > = async (req, reply) => {
   const { productId } = req.params;
   const { categoryId } = req.body;
+  const { id: actorId, role: actorRole } = req.user as User;
 
-  const args = pickDefined<UpdateProductCategoryDto>({ productId, categoryId }, {});
+  const args = pickDefined<UpdateProductCategoryDto>(
+    { productId, categoryId, actorId, actorRole },
+    {},
+  );
   const result = await productServices.updateProductCategory(args);
-  return reply.code(200).send(result);
-};
-
-export const deleteProductCategory: ControllerRouter<
-  RemoveProductCategoryParamsDto,
-  {},
-  {},
-  MessageResponseDto
-> = async (req, reply) => {
-  const { productId } = req.params;
-
-  const args = pickDefined<RemoveProductCategoryDto>({ productId }, {});
-  const result = await productServices.removeProductCategory(args);
   return reply.code(200).send(result);
 };
 
@@ -233,5 +234,4 @@ export const productController = {
   deleteProductById,
   deleteProductReview,
   patchProductCategory,
-  deleteProductCategory,
 };

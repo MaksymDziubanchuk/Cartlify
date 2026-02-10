@@ -1,4 +1,4 @@
-export const getAllProductsQuerySchema = {
+const getAllProductsQuerySchema = {
   $id: 'getAllProductsQuerySchema',
   type: 'object',
   properties: {
@@ -10,7 +10,7 @@ export const getAllProductsQuerySchema = {
   additionalProperties: false,
 } as const;
 
-export const createProductBodySchema = {
+const createProductBodySchema = {
   $id: 'createProductBodySchema',
   type: 'object',
   properties: {
@@ -24,7 +24,7 @@ export const createProductBodySchema = {
   additionalProperties: false,
 } as const;
 
-export const updateProductBodySchema = {
+const updateProductBodySchema = {
   $id: 'updateProductBodySchema',
   type: 'object',
   properties: {
@@ -37,28 +37,17 @@ export const updateProductBodySchema = {
   additionalProperties: false,
 } as const;
 
-export const createReviewBodySchema = {
+const createReviewBodySchema = {
   $id: 'createReviewBodySchema',
   type: 'object',
   properties: {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
     comment: { type: 'string' },
   },
-  required: ['rating'],
   additionalProperties: false,
 } as const;
 
-export const updateReviewBodySchema = {
-  $id: 'updateReviewBodySchema',
-  type: 'object',
-  properties: {
-    rating: { type: 'integer', minimum: 1, maximum: 5 },
-    comment: { type: 'string' },
-  },
-  additionalProperties: false,
-} as const;
-
-export const productsListQuerySchema = {
+const productsListQuerySchema = {
   $id: 'productsListQuerySchema',
   type: 'object',
   properties: {
@@ -74,7 +63,7 @@ export const productsListQuerySchema = {
   additionalProperties: false,
 } as const;
 
-export const productResponseSchema = {
+const productResponseSchema = {
   $id: 'productResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -121,21 +110,7 @@ export const productResponseSchema = {
   ],
 } as const;
 
-export const reviewResponseSchema = {
-  $id: 'reviewResponseSchema',
-  type: 'object',
-  properties: {
-    id: { type: 'integer' },
-    productId: { type: 'integer' },
-    rating: { type: 'integer', minimum: 1, maximum: 5 },
-    comment: { type: 'string' },
-    userId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
-  },
-  required: ['id', 'productId', 'rating', 'userId'],
-  additionalProperties: false,
-} as const;
-
-export const productsListResponseSchema = {
+const productsListResponseSchema = {
   $id: 'productsListResponseSchema',
   type: 'object',
   properties: {
@@ -151,7 +126,60 @@ export const productsListResponseSchema = {
   additionalProperties: false,
 } as const;
 
-export const productsUpdateCategoryParamsSchema = {
+const getProductReviewsQuerySchema = {
+  $id: 'getProductReviewsQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    cursorId: { type: 'integer', minimum: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
+  },
+} as const;
+
+const reviewResponseSchema = {
+  $id: 'reviewResponseSchema',
+  type: 'object',
+  properties: {
+    id: { type: 'integer' },
+    productId: { type: 'integer' },
+    rating: { type: 'integer', minimum: 1, maximum: 5 },
+    comment: { type: 'string' },
+    userId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+  },
+  required: ['id', 'productId', 'rating', 'userId', 'createdAt', 'updatedAt'],
+  additionalProperties: false,
+} as const;
+
+const reviewsResponseSchema = {
+  $id: 'reviewsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      items: { $ref: 'reviewResponseSchema#' },
+    },
+    limit: { type: 'integer' },
+    total: { type: 'integer' },
+    nextCursorId: { type: 'integer' },
+  },
+  required: ['items', 'limit', 'total'],
+} as const;
+
+const deleteProductReviewParamsSchema = {
+  $id: 'deleteProductReviewParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    productId: { type: 'integer', minimum: 1 },
+    reviewId: { type: 'integer', minimum: 1 },
+  },
+  required: ['productId', 'reviewId'],
+} as const;
+
+const productsUpdateCategoryParamsSchema = {
   $id: 'productsUpdateCategoryParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -161,7 +189,7 @@ export const productsUpdateCategoryParamsSchema = {
   required: ['productId'],
 } as const;
 
-export const productsUpdateCategoryBodySchema = {
+const productsUpdateCategoryBodySchema = {
   $id: 'productsUpdateCategoryBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -171,28 +199,8 @@ export const productsUpdateCategoryBodySchema = {
   required: ['categoryId'],
 } as const;
 
-export const productsRemoveCategoryParamsSchema = {
-  $id: 'productsRemoveCategoryParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    productId: { type: 'number' },
-  },
-  required: ['productId'],
-} as const;
-
-export const productsUpdateCategoryResponseSchema = {
+const productsUpdateCategoryResponseSchema = {
   $id: 'productsUpdateCategoryResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    message: { type: 'string' },
-  },
-  required: ['message'],
-} as const;
-
-export const productsRemoveCategoryResponseSchema = {
-  $id: 'productsRemoveCategoryResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -206,14 +214,14 @@ export const productDtoSchemas = [
   createProductBodySchema,
   updateProductBodySchema,
   createReviewBodySchema,
-  updateReviewBodySchema,
   productsListQuerySchema,
   productResponseSchema,
+  getProductReviewsQuerySchema,
   reviewResponseSchema,
+  reviewsResponseSchema,
+  deleteProductReviewParamsSchema,
   productsListResponseSchema,
   productsUpdateCategoryParamsSchema,
   productsUpdateCategoryBodySchema,
-  productsRemoveCategoryParamsSchema,
   productsUpdateCategoryResponseSchema,
-  productsRemoveCategoryResponseSchema,
 ];

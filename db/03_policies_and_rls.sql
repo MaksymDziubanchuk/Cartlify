@@ -289,7 +289,7 @@ DROP POLICY IF EXISTS reviews_select ON cartlify.reviews;
 
 DROP POLICY IF EXISTS reviews_insert ON cartlify.reviews;
 
-DROP POLICY IF EXISTS reviews_update_deny ON cartlify.reviews;
+DROP POLICY IF EXISTS reviews_update_owner_comment_null ON cartlify.reviews;
 
 DROP POLICY IF EXISTS reviews_delete ON cartlify.reviews;
 
@@ -303,12 +303,18 @@ CREATE POLICY reviews_insert ON cartlify.reviews FOR INSERT
 WITH
   CHECK (cartlify.current_actor_role () = 'USER');
 
--- UPDATE (deny for all)
-CREATE POLICY reviews_update_deny ON cartlify.reviews
+-- UPDATE (only owner can update comment)
+CREATE POLICY reviews_update_owner_comment_null ON cartlify.reviews
 FOR UPDATE
-  USING (false)
+  USING (
+    cartlify.is_owner ("userId")
+    AND (
+      "comment" IS NULL
+      OR btrim("comment") = ''
+    )
+  )
 WITH
-  CHECK (false);
+  CHECK (cartlify.is_owner ("userId"));
 
 -- DELETE (owner or admin/root)
 CREATE POLICY reviews_delete ON cartlify.reviews FOR DELETE USING (cartlify.is_owner_or_admin ("userId"));

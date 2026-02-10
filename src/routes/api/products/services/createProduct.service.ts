@@ -113,17 +113,17 @@ export async function createProduct({
       });
     }
 
-    // fetch primary image url for response mapping
-    const primary = await prisma.productImage.findFirst({
-      where: { productId: created.id, isPrimary: true },
-      select: { url: true },
+    // fetch all product images and map urls
+    const imageRows = await prisma.productImage.findMany({
+      where: { productId: created.id },
+      select: { url: true, position: true },
       orderBy: { position: 'asc' },
     });
 
     // map db row into api dto
     return mapProductRowToResponse({
       product: created,
-      ...(primary?.url ? { primaryImageUrl: primary.url } : {}),
+      ...(imageRows?.length ? { images: imageRows } : {}),
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
