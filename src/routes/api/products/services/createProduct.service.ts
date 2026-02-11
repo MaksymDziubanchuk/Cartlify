@@ -2,15 +2,17 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { AppError, BadRequestError, ForbiddenError, isAppError } from '@utils/errors.js';
+import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
 
-import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import {
   normalizeMultipartFiles,
   uploadProductImages,
   persistProductImages,
   mapProductRowToResponse,
   writeAdminAuditLog,
+  readProductImageUrls,
+  assertAdminActor,
+  normalizeCreateProductInput,
 } from './helpers/index.js';
 
 import type { CreateProductDto, CreateProductResponseDto } from 'types/dto/products.dto.js';
@@ -24,38 +26,33 @@ export async function createProduct({
   price,
   categoryId,
   images,
+  stock,
 }: CreateProductDto): Promise<CreateProductResponseDto> {
   // validate actor context for rls and admin-only create
-  if (!Number.isInteger(actorId)) throw new ForbiddenError('ACTOR_ID_INVALID');
-  if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN');
+  assertAdminActor(actorId, actorRole);
 
   // unwrap and validate required scalar fields
-  const nameRaw = toStringSafe(name);
-  const descriptionRaw = description != null ? toStringSafe(description) : undefined;
-  const priceRaw = toNumberSafe(price);
-  const categoryIdRaw = toNumberSafe(categoryId);
-
-  const nameNorm = (nameRaw ?? '').trim();
-  if (!nameNorm) throw new BadRequestError('PRODUCT_NAME_REQUIRED');
-
-  if (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0) {
-    throw new BadRequestError('PRODUCT_PRICE_INVALID');
-  }
-
-  if (categoryIdRaw == null || !Number.isInteger(categoryIdRaw) || categoryIdRaw <= 0) {
-    throw new BadRequestError('CATEGORY_ID_INVALID');
-  }
-
-  const descriptionNorm = typeof descriptionRaw === 'string' ? descriptionRaw.trim() : undefined;
+  const { nameNorm, descriptionNorm, priceRaw, categoryIdRaw, stockNorm } =
+    normalizeCreateProductInput({
+      name,
+      description,
+      price,
+      categoryId,
+      stock,
+    });
 
   // normalize multipart images into file parts for upload
   const imageParts = normalizeMultipartFiles(images);
+
+  // reject invalid payload (images required)
+  if (!imageParts.length) throw new BadRequestError('PRODUCT_IMAGES_REQUIRED');
 
   // prepare audit changes list for create
   const auditChanges: AuditChange[] = [
     { field: 'name', old: null, new: nameNorm },
     { field: 'description', old: null, new: descriptionNorm ?? null },
     { field: 'price', old: null, new: priceRaw },
+    { field: 'stock', old: null, new: stockNorm },
     { field: 'categoryId', old: null, new: categoryIdRaw },
   ];
 
@@ -70,6 +67,7 @@ export async function createProduct({
           name: nameNorm,
           description: descriptionNorm ? descriptionNorm : null,
           price: new Prisma.Decimal(priceRaw),
+          stock: stockNorm,
           categoryId: categoryIdRaw,
         },
         select: {
@@ -77,11 +75,13 @@ export async function createProduct({
           name: true,
           description: true,
           price: true,
+          stock: true,
           categoryId: true,
           views: true,
           popularity: true,
           avgRating: true,
           reviewsCount: true,
+          deletedAt: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -101,29 +101,23 @@ export async function createProduct({
     });
 
     // upload images outside tx to avoid external calls inside db transaction
-    if (imageParts.length) {
-      const uploads = await uploadProductImages({ productId: created.id, imageParts });
+    const uploads = await uploadProductImages({ productId: created.id, imageParts });
 
-      await prisma.$transaction(async (tx) => {
-        // set db session context for rls policies
-        await setUserContext(tx, { userId: actorId, role: actorRole });
+    await prisma.$transaction(async (tx) => {
+      // set db session context for rls policies
+      await setUserContext(tx, { userId: actorId, role: actorRole });
 
-        // persist uploaded image pointers
-        await persistProductImages({ tx, productId: created.id, uploads });
-      });
-    }
+      // persist uploaded image pointers
+      await persistProductImages({ tx, productId: created.id, uploads });
+    });
 
     // fetch all product images and map urls
-    const imageRows = await prisma.productImage.findMany({
-      where: { productId: created.id },
-      select: { url: true, position: true },
-      orderBy: { position: 'asc' },
-    });
+    const images = await readProductImageUrls(created.id);
 
     // map db row into api dto
     return mapProductRowToResponse({
       product: created,
-      ...(imageRows?.length ? { images: imageRows } : {}),
+      images,
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

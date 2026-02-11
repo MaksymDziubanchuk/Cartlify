@@ -147,3 +147,42 @@ BEGIN
       CHECK ("oldPrice" >= 0 AND "newPrice" >= 0 AND value >= 0);
   END IF;
 END $$;
+
+----------------------------------------
+-- REVIEWS: require rating OR comment (cannot be both empty)
+----------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'reviews_rating_or_comment_required'
+  ) THEN
+    ALTER TABLE cartlify.reviews
+      DROP CONSTRAINT reviews_rating_or_comment_required;
+  END IF;
+
+  ALTER TABLE cartlify.reviews
+    ADD CONSTRAINT reviews_rating_or_comment_required
+    CHECK (
+      "rating" IS NOT NULL
+      OR ("comment" IS NOT NULL AND btrim("comment") <> '')
+    );
+END $$;
+
+----------------------------------------
+-- PRODUCTS: stock non-negative
+----------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_stock_non_negative'
+  ) THEN
+    ALTER TABLE cartlify.products
+      DROP CONSTRAINT products_stock_non_negative;
+  END IF;
+
+  ALTER TABLE cartlify.products
+    ADD CONSTRAINT products_stock_non_negative
+    CHECK ("stock" >= 0);
+END $$;

@@ -24,14 +24,6 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION cartlify.set_current_context (cartlify."Role", integer, uuid)
-FROM
-  PUBLIC;
-
-GRANT
-EXECUTE ON FUNCTION cartlify.set_current_context (cartlify."Role", integer, uuid) TO cartlify_owner,
-cartlify_app;
-
 -- Get actor user id
 -- DROP FUNCTION IF EXISTS cartlify.current_actor_id ();
 CREATE OR REPLACE FUNCTION cartlify.current_actor_id () RETURNS integer LANGUAGE plpgsql STABLE AS $$
@@ -180,14 +172,6 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION cartlify.auth_get_user_for_login (text)
-FROM
-  PUBLIC;
-
-GRANT
-EXECUTE ON FUNCTION cartlify.auth_get_user_for_login (text) TO cartlify_app,
-cartlify_owner;
-
 ------------------------------------------------------------
 -- USERS TOKENS
 ------------------------------------------------------------
@@ -307,20 +291,11 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION cartlify.auth_resend_verify (text, text, timestamptz)
-FROM
-  PUBLIC;
-
-GRANT
-EXECUTE ON FUNCTION cartlify.auth_resend_verify (text, text, timestamptz) TO cartlify_owner,
-cartlify_app;
-
 -- "user_tokens" MAKE GUEST verify
 -- DROP FUNCTION IF EXISTS cartlify.auth_verify_email (text);
 CREATE OR REPLACE FUNCTION cartlify.auth_verify_email (p_token text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify,
-  pg_catalog AS $$
+  search_path = cartlify AS $$
 DECLARE
   v_prev_role text;
   v_prev_user_id text;
@@ -383,14 +358,6 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION cartlify.auth_verify_email (text)
-FROM
-  PUBLIC;
-
-GRANT
-EXECUTE ON FUNCTION cartlify.auth_verify_email (text) TO cartlify_owner,
-cartlify_app;
-
 ------------------------------------------------------------
 -- ORDERS
 ------------------------------------------------------------
@@ -407,6 +374,84 @@ BEGIN
 
   UPDATE cartlify.orders AS o
   SET "total" = v_total
+  WHERE o.id = p_order_id;
+END;
+$$;
+
+----------------------------------------
+-- ORDERS: confirm order (owner only) + consume stock
+----------------------------------------
+CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_actor_role text;
+  v_actor_id   integer;
+
+  v_user_id    integer;
+  v_confirmed  boolean;
+  v_status     text;
+
+  r record;
+BEGIN
+  v_actor_role := cartlify.current_actor_role();
+  v_actor_id   := cartlify.current_actor_id();
+
+  -- only real USER (no guest, no admin/root per твоїй вимозі)
+  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
+  END IF;
+
+  -- lock order row
+  SELECT o."userId", o.confirmed, o.status
+  INTO v_user_id, v_confirmed, v_status
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_NOT_FOUND';
+  END IF;
+
+  IF v_user_id IS DISTINCT FROM v_actor_id THEN
+    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
+  END IF;
+
+  IF v_confirmed THEN
+    RAISE EXCEPTION 'ORDER_ALREADY_CONFIRMED';
+  END IF;
+
+  IF v_status IS DISTINCT FROM 'pending' THEN
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_PENDING';
+  END IF;
+
+  -- lock all order items to freeze the cart at confirm moment
+  PERFORM 1
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+  END IF;
+
+  -- consume stock (deterministic lock order by productId)
+  FOR r IN
+    SELECT oi."productId" AS product_id,
+           SUM(oi.quantity)::integer AS qty
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    GROUP BY oi."productId"
+    ORDER BY oi."productId"
+  LOOP
+    PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
+  END LOOP;
+
+  -- confirm order
+  UPDATE cartlify.orders AS o
+  SET
+    confirmed = true,
+    status = 'paid'
   WHERE o.id = p_order_id;
 END;
 $$;
@@ -522,14 +567,16 @@ EXECUTE FUNCTION cartlify.orders_before_update ();
 ------------------------------------------------------------
 -- 'product' CALC avgRating
 -- DROP FUNCTION IF EXISTS cartlify.recalc_product_rating (integer)
-CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
 DECLARE
   v_avg   numeric(3, 2);
   v_count integer;
 BEGIN
   SELECT
-    COALESCE(AVG(r.rating)::numeric(3, 2), 0),
-    COUNT(*)::integer
+    COALESCE((AVG(r.rating) FILTER (WHERE r."rating" IS NOT NULL))::numeric(3, 2), 0),
+    (COUNT(*) FILTER (WHERE r."comment" IS NOT NULL AND btrim(r."comment") <> ''))::integer
   INTO v_avg, v_count
   FROM cartlify.reviews AS r
   WHERE r."productId" = p_product_id;
@@ -547,6 +594,10 @@ CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger 
 DECLARE
   v_product_id integer;
 BEGIN
+  IF TG_OP = 'UPDATE' AND NEW."rating" IS NOT DISTINCT FROM OLD."rating" THEN
+    RETURN NEW;
+  END IF;
+
   IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
     v_product_id := NEW."productId";
   ELSE
@@ -567,10 +618,92 @@ DROP TRIGGER IF EXISTS trg_reviews_after_mod_rating ON cartlify.reviews;
 
 CREATE TRIGGER trg_reviews_after_mod_rating
 AFTER INSERT
+OR DELETE
 OR
-UPDATE
-OR DELETE ON cartlify.reviews FOR EACH ROW
+UPDATE OF "rating" ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
+
+-- PRODUCTS: stock add (admin/root only)
+CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_role text;
+  v_stock integer;
+BEGIN
+  IF p_delta IS NULL OR p_delta <= 0 THEN
+    RAISE EXCEPTION 'STOCK_DELTA_INVALID';
+  END IF;
+
+  v_role := cartlify.current_actor_role();
+
+  IF v_role NOT IN ('ADMIN', 'ROOT') THEN
+    RAISE EXCEPTION 'STOCK_ADD_FORBIDDEN';
+  END IF;
+
+  -- lock product row
+  SELECT p."stock"
+  INTO v_stock
+  FROM cartlify.products AS p
+  WHERE p.id = p_product_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  v_stock := v_stock + p_delta;
+
+  UPDATE cartlify.products AS p
+  SET "stock" = v_stock
+  WHERE p.id = p_product_id;
+
+  RETURN v_stock;
+END;
+$$;
+
+-- PRODUCTS: stock consume (user/admin/root only)
+CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_role text;
+  v_stock integer;
+BEGIN
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'STOCK_QTY_INVALID';
+  END IF;
+
+  v_role := cartlify.current_actor_role();
+
+  IF v_role NOT IN ('USER', 'ADMIN', 'ROOT') THEN
+    RAISE EXCEPTION 'STOCK_CONSUME_FORBIDDEN';
+  END IF;
+
+  -- lock product row
+  SELECT p."stock"
+  INTO v_stock
+  FROM cartlify.products AS p
+  WHERE p.id = p_product_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  IF v_stock < p_qty THEN
+    RAISE EXCEPTION 'INSUFFICIENT_STOCK';
+  END IF;
+
+  v_stock := v_stock - p_qty;
+
+  UPDATE cartlify.products AS p
+  SET "stock" = v_stock
+  WHERE p.id = p_product_id;
+
+  RETURN v_stock;
+END;
+$$;
 
 ------------------------------------------------------------
 -- REVIEWS 
@@ -578,8 +711,12 @@ EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 -- PREVENT RATING CHANGE
 CREATE OR REPLACE FUNCTION cartlify.reviews_lock_rating_and_keys () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW."rating" IS DISTINCT FROM OLD."rating" THEN
-    RAISE EXCEPTION 'REVIEW_RATING_UPDATE_FORBIDDEN';
+  IF OLD."rating" IS NOT NULL AND NEW."rating" IS DISTINCT FROM OLD."rating" THEN
+    IF NEW."rating" IS NULL THEN
+      NEW."rating" := OLD."rating";
+    ELSE
+      RAISE EXCEPTION 'REVIEW_RATING_UPDATE_FORBIDDEN';
+    END IF;
   END IF;
 
   IF NEW."userId" IS DISTINCT FROM OLD."userId" THEN
@@ -588,6 +725,16 @@ BEGIN
 
   IF NEW."productId" IS DISTINCT FROM OLD."productId" THEN
     RAISE EXCEPTION 'REVIEW_PRODUCT_CHANGE_FORBIDDEN';
+  END IF;
+
+  IF (OLD."comment" IS NOT NULL AND btrim(OLD."comment") <> '')
+    AND NEW."comment" IS DISTINCT FROM OLD."comment"
+  THEN
+    IF NEW."comment" IS NULL OR btrim(NEW."comment") = '' THEN
+      NEW."comment" := OLD."comment";
+    ELSE
+      RAISE EXCEPTION 'REVIEW_COMMENT_UPDATE_FORBIDDEN';
+    END IF;
   END IF;
 
   RETURN NEW;
@@ -654,7 +801,9 @@ EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 
 -- 'products' CALC popularity
 -- DROP FUNCTION IF EXISTS cartlify.recalc_product_popularity (integer)
-CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
 DECLARE
   v_views           integer;
   v_favs_30d        integer;
@@ -667,7 +816,6 @@ DECLARE
   v_override_until  timestamptz;
   v_now             timestamptz := now();
 BEGIN
-
   SELECT
     p."views",
     p."popularityOverride",
@@ -683,7 +831,6 @@ BEGIN
     RETURN;
   END IF;
 
-
   IF v_override IS NOT NULL
      AND v_override_until IS NOT NULL
      AND v_now < v_override_until THEN
@@ -694,13 +841,11 @@ BEGIN
     RETURN;
   END IF;
 
-
   SELECT COUNT(*)::integer
   INTO v_favs_30d
   FROM cartlify.favorites AS f
   WHERE f."productId" = p_product_id
     AND f."createdAt" >= v_now - INTERVAL '30 days';
-
 
   SELECT COUNT(*)::integer
   INTO v_cart_adds_30d
@@ -710,7 +855,6 @@ BEGIN
     AND o."confirmed" = false
     AND oi."createdAt" >= v_now - INTERVAL '30 days';
 
-
   SELECT COUNT(*)::integer
   INTO v_purchases_30d
   FROM cartlify.order_items AS oi
@@ -719,20 +863,17 @@ BEGIN
     AND o."confirmed" = true
     AND o."updatedAt" >= v_now - INTERVAL '30 days';
 
-
   SELECT COUNT(*)::integer
   INTO v_reviews_30d
   FROM cartlify.reviews AS r
   WHERE r."productId" = p_product_id
     AND r."createdAt" >= v_now - INTERVAL '30 days';
 
-
   v_views          := COALESCE(v_views, 0);
   v_favs_30d       := COALESCE(v_favs_30d, 0);
   v_cart_adds_30d  := COALESCE(v_cart_adds_30d, 0);
   v_purchases_30d  := COALESCE(v_purchases_30d, 0);
   v_reviews_30d    := COALESCE(v_reviews_30d, 0);
-
 
   v_score :=
         1  * LN(1 + v_views)

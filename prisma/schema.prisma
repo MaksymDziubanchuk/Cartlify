@@ -178,6 +178,7 @@ model Product {
   description String?
 
   price Decimal @db.Decimal(10, 2)
+  stock Int     @default(0)
 
   categoryId Int
   category   Category @relation(fields: [categoryId], references: [id])
@@ -190,6 +191,8 @@ model Product {
 
   avgRating    Decimal @default(0) @db.Decimal(3, 2)
   reviewsCount Int     @default(0)
+
+  deletedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -238,7 +241,7 @@ model Review {
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  rating Int
+  rating Int?
 
   upVotes   Int @default(0)
   downVotes Int @default(0)

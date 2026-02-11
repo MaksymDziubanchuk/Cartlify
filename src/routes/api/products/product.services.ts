@@ -38,7 +38,8 @@ import { updateProduct } from './services/updateProduct.service.js';
 import { updateProductCategory } from './services/updateCategory.service.js';
 import { createReview } from './services/createReview.service.js';
 import { findReviews } from './services/findReviews.service.js';
-import { deleteProductReview } from './services/reviewDelete.service.js';
+import { deleteProductReview } from './services/deleteReview.service.js';
+import { findById } from './services/getProductById.service.js';
 
 async function findAll({
   page,
@@ -52,12 +53,6 @@ async function findAll({
 }: FindAllProductsDto): Promise<MessageResponseDto> {
   return {
     message: 'findAll not implemented',
-  };
-}
-
-async function findById({ productId }: FindProductByIdDto): Promise<MessageResponseDto> {
-  return {
-    message: 'findById not implemented',
   };
 }
 
