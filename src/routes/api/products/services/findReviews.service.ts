@@ -3,7 +3,7 @@ import { prisma } from '@db/client.js';
 import { AppError, BadRequestError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
-import { mapReviewRowToResponse } from './helpers/index.js';
+import { mapReviewRowToResponse, normalizeFindProductByIdInput } from './helpers/index.js';
 
 import type { FindProductReviewsDto, ReviewsResponseDto } from 'types/dto/products.dto.js';
 
@@ -13,10 +13,7 @@ export async function findReviews({
   cursorId: cursorIdIn,
 }: FindProductReviewsDto): Promise<ReviewsResponseDto> {
   // normalize and validate ids
-  const productId = toNumberSafe(productIdIn);
-  if (productId == null || !Number.isInteger(productId) || productId <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
-  }
+  const { productId } = normalizeFindProductByIdInput({ productId: productIdIn });
 
   const limitRaw = toNumberSafe(limitIn);
   const limit =

@@ -5,6 +5,8 @@ import type {
   GetAllProductsQueryDto,
   FindAllProductsDto,
   GetProductByIdParamsDto,
+  FindProductByIdDto,
+  FullProductResponseDto,
   GetProductReviewsParamsDto,
   GetProductReviewsQueryDto,
   FindProductReviewsDto,
@@ -21,6 +23,7 @@ import type {
   UpdateProductDto,
   UpdateProductResponseDto,
   DeleteProductByIdParamsDto,
+  DeleteProductByIdDto,
   DeleteProductReviewParamsDto,
   DeleteProductReviewDto,
   DeleteProductReviewResponseDto,
@@ -90,10 +93,12 @@ const getProductById: ControllerRouter<
   GetProductByIdParamsDto,
   {},
   {},
-  MessageResponseDto
+  FullProductResponseDto
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
-  const result = await productServices.findById({ productId });
+  const { id: actorId, role: actorRole } = req.user as User;
+  const args = pickDefined<FindProductByIdDto>({ productId, actorId, actorRole }, {});
+  const result = await productServices.findById(args);
   return reply.code(200).send(result);
 };
 
@@ -123,13 +128,13 @@ const postProduct: ControllerRouter<
   CreateProductResponseDto
 > = async (req, reply) => {
   // pass request payload as dto, keep parsing inside service for multipart shapes
-  const { name, description, price, categoryId, images } = req.body;
+  const { name, description, price, categoryId, images, stock } = req.body;
   // pass actor context for rls policies
   const { id: actorId, role: actorRole } = req.user as User;
 
   const args = pickDefined<CreateProductDto>(
-    { name, price, categoryId, actorId, actorRole },
-    { description, images },
+    { name, price, categoryId, actorId, actorRole, images, stock },
+    { description },
   );
 
   const result = await productServices.createProduct(args);
@@ -165,11 +170,29 @@ const updateProductById: ControllerRouter<
   const { id: actorId, role: actorRole } = req.user as User;
 
   // pass optional fields as-is, service validates multipart and values
-  const { name, description, price, categoryId, images, popularity } = req.body;
+  const {
+    name,
+    description,
+    price,
+    stock,
+    categoryId,
+    images,
+    popularityOverride,
+    popularityOverrideUntil,
+  } = req.body;
 
   const args = pickDefined<UpdateProductDto>(
     { productId, actorId, actorRole },
-    { name, description, price, categoryId, images, popularity },
+    {
+      name,
+      description,
+      price,
+      stock,
+      categoryId,
+      images,
+      popularityOverride,
+      popularityOverrideUntil,
+    },
   );
 
   const result = await productServices.updateProduct(args);
@@ -184,7 +207,8 @@ const deleteProductById: ControllerRouter<
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
   const { id: actorId, role: actorRole } = req.user as User;
-  const result = await productServices.deleteProductById({ productId, actorId, actorRole });
+  const args = pickDefined<DeleteProductByIdDto>({ productId, actorId, actorRole }, {});
+  const result = await productServices.deleteProductById(args);
   return reply.code(200).send(result);
 };
 

@@ -6,14 +6,16 @@ import { AppError, BadRequestError, NotFoundError, isAppError } from '@utils/err
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
   mapProductRowToResponse,
-  buildProductUpdateAuditChanges,
   writeAdminAuditLog,
+  readProductImageUrls,
+  normalizeFindProductByIdInput,
 } from './helpers/index.js';
 
 import type {
   UpdateProductCategoryDto,
   UpdateProductCategoryResponseDto,
 } from 'types/dto/products.dto.js';
+import type { AuditChange } from './helpers/index.js';
 
 export async function updateProductCategory({
   productId,
@@ -22,10 +24,7 @@ export async function updateProductCategory({
   actorRole,
 }: UpdateProductCategoryDto): Promise<UpdateProductCategoryResponseDto> {
   // normalize and validate ids
-  const productIdRaw = toNumberSafe(productId);
-  if (productIdRaw == null || !Number.isInteger(productIdRaw) || productIdRaw <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
-  }
+  const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId });
 
   const categoryIdRaw = toNumberSafe(categoryId);
   if (categoryIdRaw == null || !Number.isInteger(categoryIdRaw) || categoryIdRaw <= 0) {
@@ -53,53 +52,44 @@ export async function updateProductCategory({
           name: true,
           description: true,
           price: true,
+          stock: true,
           categoryId: true,
           views: true,
           popularity: true,
           avgRating: true,
           reviewsCount: true,
+          deletedAt: true,
           createdAt: true,
           updatedAt: true,
         },
       });
 
-      const auditChanges = buildProductUpdateAuditChanges(
-        {
-          name: product.name,
-          description: product.description,
-          price: product.price,
-          categoryId: before.categoryId,
-          popularity: product.popularity,
-        } as any,
-        {
-          after: product as any,
-          input: { categoryId },
-        },
-      );
+      // build audit changes only for category update
+      const changes: AuditChange[] =
+        before.categoryId !== product.categoryId
+          ? [{ field: 'categoryId', old: before.categoryId, new: product.categoryId }]
+          : [];
 
+      // write admin audit log for category update
       await writeAdminAuditLog(tx, {
-        actorId: actorId,
-        actorRole: actorRole,
+        actorId,
+        actorRole,
         entityType: 'product',
         entityId: product.id,
         action: 'PRODUCT_UPDATE',
-        changes: auditChanges,
+        changes,
       });
 
       return product;
     });
 
     // fetch all product images and map urls
-    const imageRows = await prisma.productImage.findMany({
-      where: { productId: updated.id },
-      select: { url: true, position: true },
-      orderBy: { position: 'asc' },
-    });
+    const images = await readProductImageUrls(updated.id);
 
     // map db row into api dto
     return mapProductRowToResponse({
       product: updated,
-      ...(imageRows?.length ? { images: imageRows } : {}),
+      images,
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

@@ -20,6 +20,10 @@ import {
   writeAdminAuditLog,
   writeProductPriceChangeLog,
   computeFixedDelta,
+  readProductImageUrls,
+  normalizeFindProductByIdInput,
+  normalizeUpdateProductInput,
+  assertAdminActor,
 } from './helpers/index.js';
 
 import type { UpdateProductDto, UpdateProductResponseDto } from 'types/dto/products.dto.js';
@@ -31,48 +35,36 @@ export async function updateProduct({
   name,
   description,
   price,
+  stock,
   categoryId,
   images,
-  popularity,
+  popularityOverride,
+  popularityOverrideUntil,
 }: UpdateProductDto): Promise<UpdateProductResponseDto> {
   // validate actor context for rls and admin-only update
-  if (!Number.isInteger(actorId)) throw new ForbiddenError('ACTOR_ID_INVALID');
-  if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN');
+  assertAdminActor(actorId, actorRole);
 
-  // normalize and validate ids
-  const productIdRaw = toNumberSafe(productId);
-  if (productIdRaw == null || !Number.isInteger(productIdRaw) || productIdRaw <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
-  }
-
-  const categoryIdRaw = categoryId != null ? toNumberSafe(categoryId) : undefined;
-  if (categoryId != null) {
-    if (categoryIdRaw == null || !Number.isInteger(categoryIdRaw) || categoryIdRaw <= 0) {
-      throw new BadRequestError('CATEGORY_ID_INVALID');
-    }
-  }
+  // normalize and validate id
+  const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId });
 
   // normalize and validate scalar fields when provided
-  const nameRaw = name != null ? toStringSafe(name) : undefined;
-  const descriptionRaw = description != null ? toStringSafe(description) : undefined;
-  const priceRaw = price != null ? toNumberSafe(price) : undefined;
-  const popularityRaw = popularity != null ? toNumberSafe(popularity) : undefined;
-
-  const nameNorm = typeof nameRaw === 'string' ? nameRaw.trim() : undefined;
-  const descriptionNorm = typeof descriptionRaw === 'string' ? descriptionRaw.trim() : undefined;
-
-  if (name != null && (!nameNorm || !nameNorm.length))
-    throw new BadRequestError('PRODUCT_NAME_INVALID');
-
-  if (price != null && (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0)) {
-    throw new BadRequestError('PRODUCT_PRICE_INVALID');
-  }
-
-  if (popularity != null) {
-    if (popularityRaw == null || !Number.isInteger(popularityRaw) || popularityRaw < 0) {
-      throw new BadRequestError('POPULARITY_INVALID');
-    }
-  }
+  const {
+    nameNorm,
+    descriptionNorm,
+    priceRaw,
+    stockRaw,
+    categoryIdRaw,
+    popularityOverrideRaw,
+    popularityOverrideUntilDate,
+  } = normalizeUpdateProductInput({
+    name,
+    description,
+    price,
+    stock,
+    categoryId,
+    popularityOverride,
+    popularityOverrideUntil,
+  });
 
   // normalize multipart images into file parts for upload
   const imageParts = normalizeMultipartFiles(images);
@@ -91,8 +83,12 @@ export async function updateProduct({
           name: true,
           description: true,
           price: true,
+          stock: true,
           categoryId: true,
+          popularityOverride: true,
+          popularityOverrideUntil: true,
           popularity: true,
+          deletedAt: true,
         },
       });
       if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
@@ -106,19 +102,30 @@ export async function updateProduct({
           ...(name != null ? { name: nameNorm as string } : {}),
           ...(description != null ? { description: descriptionNorm ? descriptionNorm : null } : {}),
           ...(price != null ? { price: new Prisma.Decimal(priceRaw as number) } : {}),
+          ...(stock != null ? { stock: stockRaw as number } : {}),
           ...(categoryId != null ? { categoryId: categoryIdRaw as number } : {}),
-          ...(popularity != null ? { popularity: popularityRaw as number } : {}),
+
+          ...(popularityOverride !== undefined
+            ? { popularityOverride: popularityOverrideRaw as any }
+            : {}),
+          ...(popularityOverrideUntil !== undefined
+            ? { popularityOverrideUntil: popularityOverrideUntilDate as any }
+            : {}),
         },
         select: {
           id: true,
           name: true,
           description: true,
           price: true,
+          stock: true,
           categoryId: true,
-          views: true,
+          popularityOverride: true,
+          popularityOverrideUntil: true,
           popularity: true,
+          views: true,
           avgRating: true,
           reviewsCount: true,
+          deletedAt: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -127,7 +134,15 @@ export async function updateProduct({
       // build diff list for admin audit log
       const auditChanges = buildProductUpdateAuditChanges(before, {
         after: updated,
-        input: { name, description, price, categoryId, popularity },
+        input: {
+          name,
+          description,
+          price,
+          stock,
+          categoryId,
+          popularityOverride,
+          popularityOverrideUntil,
+        },
       });
 
       // write admin audit log for product update
@@ -172,16 +187,12 @@ export async function updateProduct({
     }
 
     // fetch all product images and map urls
-    const imageRows = await prisma.productImage.findMany({
-      where: { productId: updated.id },
-      select: { url: true, position: true },
-      orderBy: { position: 'asc' },
-    });
+    const images = await readProductImageUrls(updated.id);
 
     // map db row into api dto
     return mapProductRowToResponse({
       product: updated,
-      ...(imageRows?.length ? { images: imageRows } : {}),
+      images,
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

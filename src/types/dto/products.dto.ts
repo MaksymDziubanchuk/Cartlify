@@ -35,10 +35,12 @@ export interface ProductResponseDto {
   name: string;
   description?: string;
   price: number;
+  stock: number;
   categoryId: CategoryId;
+  images: ProductImagesUrls;
   createdAt: Date;
   updatedAt: Date;
-  images?: ProductImagesUrls;
+  deletedAt?: Date;
   popularity?: number;
   views?: number;
   avgRating?: number;
@@ -59,10 +61,12 @@ export interface GetProductByIdParamsDto {
 
 export interface FindProductByIdDto {
   productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
 }
 
 export type FullProductResponseDto = Omit<ProductResponseDto, 'images'> & {
-  images?: ProductImagesUrls[];
+  images: ProductImagesUrls[];
 };
 
 // GET PRODUCTS REVIEWS
@@ -102,8 +106,9 @@ export interface CreateProductBodyDto {
   name: string;
   description?: string;
   price: number;
+  stock: number;
   categoryId: CategoryId;
-  images?: MultipartFile[];
+  images: MultipartFile[];
 }
 
 export interface CreateProductDto extends CreateProductBodyDto {
@@ -122,9 +127,11 @@ export interface UpdateProductBodyDto {
   name?: string;
   description?: string;
   price?: number;
+  stock?: number;
   categoryId?: CategoryId;
   images?: MultipartFile[];
-  popularity?: number;
+  popularityOverride?: number | null;
+  popularityOverrideUntil?: string | null;
 }
 
 export interface UpdateProductDto extends UpdateProductBodyDto {

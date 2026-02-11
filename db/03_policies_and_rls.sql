@@ -182,7 +182,7 @@ CREATE POLICY categories_delete ON cartlify.categories FOR DELETE USING (cartlif
 -- enable RLS
 ALTER TABLE cartlify.products ENABLE ROW LEVEL SECURITY;
 
-ALTER TABLE cartlify.products FORCE ROW LEVEL SECURITY;
+ALTER TABLE cartlify.products NO FORCE ROW LEVEL SECURITY;
 
 -- reset policies (safe rerun)
 DROP POLICY IF EXISTS products_select ON cartlify.products;
@@ -219,15 +219,11 @@ FOR UPDATE
   USING (true)
 WITH
   CHECK (
-    cartlify.current_actor_role () IN ('GUEST', 'USER', 'ADMIN', 'ROOT')
+    cartlify.current_actor_role () IN ('GUEST', 'USER')
     AND (
-      (
-        to_jsonb(products) - 'views' - 'popularity' - 'avgRating' - 'reviewsCount' - 'updatedAt'
-      ) = (
+      (to_jsonb(products) - 'views' - 'updatedAt') = (
         SELECT
-          (
-            to_jsonb(p) - 'views' - 'popularity' - 'avgRating' - 'reviewsCount' - 'updatedAt'
-          )
+          (to_jsonb(p) - 'views' - 'updatedAt')
         FROM
           cartlify.products p
         WHERE
@@ -301,24 +297,35 @@ SELECT
 -- INSERT (user only)
 CREATE POLICY reviews_insert ON cartlify.reviews FOR INSERT
 WITH
-  CHECK (cartlify.current_actor_role () = 'USER');
-
--- UPDATE (only owner can update comment)
-CREATE POLICY reviews_update_owner_comment_null ON cartlify.reviews
-FOR UPDATE
-  USING (
-    cartlify.is_owner ("userId")
+  CHECK (
+    cartlify.current_actor_role () = 'USER'
     AND (
-      "comment" IS NULL
-      OR btrim("comment") = ''
+      "rating" IS NOT NULL
+      OR (
+        "comment" IS NOT NULL
+        AND btrim("comment") <> ''
+      )
     )
+  );
+
+-- UPDATE (only owner can update with rules)
+CREATE POLICY reviews_update_owner_comment_null ON cartlify.reviews USING (
+  cartlify.is_owner ("userId")
+  AND (
+    "rating" IS NULL
+    OR "comment" IS NULL
+    OR btrim("comment") = ''
   )
+)
 WITH
   CHECK (
     cartlify.is_owner ("userId")
     AND (
-      "comment" IS NOT NULL
-      AND btrim("comment") <> ''
+      "rating" IS NOT NULL
+      OR (
+        "comment" IS NOT NULL
+        AND btrim("comment") <> ''
+      )
     )
   );
 

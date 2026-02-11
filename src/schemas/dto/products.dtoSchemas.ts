@@ -17,24 +17,34 @@ const createProductBodySchema = {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
     price: { type: 'number', minimum: 0 },
+    stock: { type: 'integer', minimum: 0 },
     categoryId: { type: 'integer', minimum: 1 },
     images: { type: 'array', items: { type: 'object' } },
   },
-  required: ['name', 'price', 'categoryId'],
+  required: ['name', 'price', 'stock', 'categoryId'],
   additionalProperties: false,
 } as const;
 
 const updateProductBodySchema = {
   $id: 'updateProductBodySchema',
   type: 'object',
+  additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
+
     price: { type: 'number', minimum: 0 },
+
+    stock: { type: 'integer', minimum: 0 },
+
     categoryId: { type: 'integer', minimum: 1 },
+
     images: { type: 'array', items: { type: 'object' } },
+
+    popularityOverride: { anyOf: [{ type: 'integer', minimum: 0 }, { type: 'null' }] },
+
+    popularityOverrideUntil: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
   },
-  additionalProperties: false,
 } as const;
 
 const createReviewBodySchema = {
@@ -63,7 +73,7 @@ const productsListQuerySchema = {
   additionalProperties: false,
 } as const;
 
-const productResponseSchema = {
+export const productResponseSchema = {
   $id: 'productResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -74,17 +84,21 @@ const productResponseSchema = {
     description: { type: 'string' },
 
     price: { type: 'number' },
+    stock: { type: 'number' },
     categoryId: { type: 'integer' },
 
     images: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        url200: { type: 'string' },
-        url400: { type: 'string' },
-        url800: { type: 'string' },
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          url200: { type: 'string' },
+          url400: { type: 'string' },
+          url800: { type: 'string' },
+        },
+        required: ['url200', 'url400', 'url800'],
       },
-      required: ['url200', 'url400', 'url800'],
     },
 
     views: { type: 'integer' },
@@ -100,7 +114,9 @@ const productResponseSchema = {
     'id',
     'name',
     'price',
+    'stock',
     'categoryId',
+    'images',
     'views',
     'popularity',
     'avgRating',

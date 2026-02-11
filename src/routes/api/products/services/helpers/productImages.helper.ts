@@ -1,5 +1,7 @@
 import { makePublicId, uploadImage } from '@utils/cloudinary.util.js';
-
+import { AppError } from '@utils/errors.js';
+import { prisma } from '@db/client.js';
+import type { ProductId } from 'types/ids.js';
 import type { Prisma } from '@prisma/client';
 
 export type ProductImagePart = {
@@ -30,7 +32,7 @@ export function normalizeMultipartFiles(images: unknown): ProductImagePart[] {
 }
 
 export async function uploadProductImages(args: {
-  productId: number;
+  productId: ProductId;
   imageParts: ProductImagePart[];
 }): Promise<UploadedProductImage[]> {
   // upload files to cloudinary outside tx
@@ -66,7 +68,7 @@ export async function uploadProductImages(args: {
 
 export async function persistProductImages(args: {
   tx: Prisma.TransactionClient;
-  productId: number;
+  productId: ProductId;
   uploads: UploadedProductImage[];
 }): Promise<void> {
   // persist uploaded image pointers in db
@@ -82,4 +84,20 @@ export async function persistProductImages(args: {
       isPrimary: u.position === 0,
     })),
   });
+}
+
+export async function readProductImageUrls(
+  productId: number,
+): Promise<Array<{ url: string; position: number }>> {
+  // load all image urls ordered by position
+  const rows = await prisma.productImage.findMany({
+    where: { productId },
+    select: { url: true, position: true },
+    orderBy: { position: 'asc' },
+  });
+
+  // reject invalid db state (product has no images)
+  if (!rows.length) throw new AppError('PRODUCT_IMAGES_NOT_FOUND', 500);
+
+  return rows.map((r) => ({ url: r.url, position: r.position }));
 }

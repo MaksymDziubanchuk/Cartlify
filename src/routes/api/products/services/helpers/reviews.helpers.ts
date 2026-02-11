@@ -1,16 +1,14 @@
 import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
+import { normalizeFindProductByIdInput } from './index.js';
 
 import type { CreateReviewDto, CreateReviewResponseDto } from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
 
 export function normalizeCreateReviewInput(dto: CreateReviewDto) {
   // normalize ids
-  const productIdRaw = toNumberSafe(dto.productId);
-  if (productIdRaw == null || !Number.isInteger(productIdRaw) || productIdRaw <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
-  }
+  const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId: dto.productId });
 
   const userIdRaw = toNumberSafe(dto.userId);
   if (userIdRaw == null || !Number.isInteger(userIdRaw) || userIdRaw <= 0) {
@@ -44,6 +42,33 @@ export function normalizeCreateReviewInput(dto: CreateReviewDto) {
   };
 }
 
+export function normalizeDeleteReviewInput(dto: {
+  productId: unknown;
+  reviewId: unknown;
+  actorId: unknown;
+  actorRole: Role;
+}) {
+  // normalize ids for db
+  const { productId } = normalizeFindProductByIdInput({ productId: dto.productId });
+
+  const reviewId = toNumberSafe(dto.reviewId);
+  if (reviewId == null || !Number.isInteger(reviewId) || reviewId <= 0) {
+    throw new BadRequestError('REVIEW_ID_INVALID');
+  }
+
+  const actorId = toNumberSafe(dto.actorId);
+  if (actorId == null || !Number.isInteger(actorId) || actorId <= 0) {
+    throw new ForbiddenError('ACTOR_ID_INVALID');
+  }
+
+  // validate actor role for admin-only delete
+  if (dto.actorRole !== 'ADMIN' && dto.actorRole !== 'ROOT') {
+    throw new ForbiddenError('FORBIDDEN');
+  }
+
+  return { productId, reviewId, actorId, actorRole: dto.actorRole };
+}
+
 export function mapReviewRowToResponse(row: {
   id: number;
   productId: number;
@@ -63,34 +88,4 @@ export function mapReviewRowToResponse(row: {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
-}
-
-export function normalizeDeleteReviewInput(dto: {
-  productId: unknown;
-  reviewId: unknown;
-  actorId: unknown;
-  actorRole: Role;
-}) {
-  // normalize ids for db
-  const productId = toNumberSafe(dto.productId);
-  if (productId == null || !Number.isInteger(productId) || productId <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
-  }
-
-  const reviewId = toNumberSafe(dto.reviewId);
-  if (reviewId == null || !Number.isInteger(reviewId) || reviewId <= 0) {
-    throw new BadRequestError('REVIEW_ID_INVALID');
-  }
-
-  const actorId = toNumberSafe(dto.actorId);
-  if (actorId == null || !Number.isInteger(actorId) || actorId <= 0) {
-    throw new ForbiddenError('ACTOR_ID_INVALID');
-  }
-
-  // validate actor role for admin-only delete
-  if (dto.actorRole !== 'ADMIN' && dto.actorRole !== 'ROOT') {
-    throw new ForbiddenError('FORBIDDEN');
-  }
-
-  return { productId, reviewId, actorId, actorRole: dto.actorRole };
 }
