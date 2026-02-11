@@ -164,7 +164,7 @@ const reviewResponseSchema = {
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
-  required: ['id', 'productId', 'rating', 'userId', 'createdAt', 'updatedAt'],
+  required: ['id', 'productId', 'userId', 'createdAt', 'updatedAt'],
   additionalProperties: false,
 } as const;
 
