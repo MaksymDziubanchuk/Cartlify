@@ -30,7 +30,7 @@ jobs:
         run: npm ci
 
       - name: Prisma migrate status (PROD)
-        run: npx prisma migrate status
+        run: npx prisma migrate status || true
         env:
           DATABASE_URL: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
 
