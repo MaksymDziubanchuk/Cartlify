@@ -24,10 +24,9 @@ export interface FindMeByIdDto {
   userId: UserId;
 }
 
-export type UserReviewResponseDto = Omit<ReviewResponseDto, 'comment'> & { comment: string } & Pick<
-    VoteReviewResponseDto,
-    'upVotes' | 'downVotes' | 'userVote' | 'updatedAt'
-  >;
+export type UserReviewResponseDto = Omit<ReviewResponseDto, 'comment' | 'rating'> & {
+  comment: string;
+} & Pick<VoteReviewResponseDto, 'upVotes' | 'downVotes' | 'userVote' | 'updatedAt'>;
 
 export interface UserResponseDto {
   id: UserId;
