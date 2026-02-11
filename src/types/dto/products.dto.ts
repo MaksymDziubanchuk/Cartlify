@@ -87,7 +87,7 @@ export interface FindProductReviewsDto {
 export interface ReviewResponseDto {
   id: ReviewId;
   productId: ProductId;
-  rating: number;
+  rating?: number;
   userId: UserId;
   createdAt: Date;
   updatedAt: Date;

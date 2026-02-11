@@ -72,7 +72,7 @@ export function normalizeDeleteReviewInput(dto: {
 export function mapReviewRowToResponse(row: {
   id: number;
   productId: number;
-  rating: number;
+  rating: number | null;
   comment: string | null;
   userId: number;
   createdAt: Date;
@@ -82,7 +82,7 @@ export function mapReviewRowToResponse(row: {
   return {
     id: row.id,
     productId: row.productId as any,
-    rating: row.rating,
+    ...(row.rating ? { rating: row.rating } : {}),
     userId: row.userId as any,
     ...(row.comment ? { comment: row.comment } : {}),
     createdAt: row.createdAt,
