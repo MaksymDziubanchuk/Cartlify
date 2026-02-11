@@ -65,7 +65,6 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
         select: {
           id: true,
           productId: true,
-          rating: true,
           userId: true,
           createdAt: true,
           comment: true,
@@ -95,7 +94,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
           return {
             id: r.id as any,
             productId: r.productId as any,
-            rating: r.rating,
+
             userId: r.userId as any,
             createdAt: r.createdAt,
             comment,
@@ -263,7 +262,6 @@ async function updateMe({
         select: {
           id: true,
           productId: true,
-          rating: true,
           userId: true,
           createdAt: true,
           comment: true,
@@ -291,7 +289,6 @@ async function updateMe({
           return {
             id: r.id as any,
             productId: r.productId as any,
-            rating: r.rating,
             userId: r.userId as any,
             createdAt: r.createdAt,
             comment,
