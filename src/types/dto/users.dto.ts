@@ -4,12 +4,19 @@ import type { Email } from 'types/common.js';
 import type { ReviewResponseDto } from './products.dto.js';
 import type { VoteReviewResponseDto } from './reviews.dto.js';
 import type { MultipartFile } from '@fastify/multipart';
+import type { UploadImageResult } from '@utils/cloudinary.util.js';
 
 export type AvatarUrls = {
   url32: string;
   url64: string;
   url128: string;
   url256: string;
+};
+
+export type AvatarPart = {
+  file: NodeJS.ReadableStream;
+  mimetype: string;
+  filename?: string;
 };
 
 export interface GetUserByIdParamsDto {
@@ -55,8 +62,15 @@ export interface UpdateMeBodyDto {
   avatar?: MultipartFile;
 }
 
-export interface UpdateMeDto extends UpdateMeBodyDto {
+export interface UpdateMeDto {
   userId: UserId;
+  userRole: Role;
+
+  name?: string;
+  locale?: string;
+  phone?: string;
+
+  avatarUploaded?: UploadImageResult | null;
 }
 
 export interface DeleteUserByIdDto {
