@@ -18,6 +18,9 @@ export default async function usersRouter(app: FastifyInstance, opt: unknown) {
     '/me',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER'])],
+      preValidation: async (req) => {
+        if (req.isMultipart()) (req as any).body = {};
+      },
       schema: usersSchema.patchMeSchema,
     },
     usersController.patchMe,

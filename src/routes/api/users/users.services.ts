@@ -9,9 +9,10 @@ import {
 import { setUserContext, setAdminContext } from '@db/dbContext.service.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 import { assertEmail } from '@helpers/validateEmail.js';
-import { makePublicId, overwriteImage } from '@utils/cloudinary.util.js';
+import { makePublicId, overwriteImage, requireNonEmptyStream } from '@utils/cloudinary.util.js';
 
 import type {
+  AvatarPart,
   FindUserByIdDto,
   FindMeByIdDto,
   UpdateMeDto,
@@ -21,6 +22,9 @@ import type {
   DeleteUserByIdDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
+import type { FastifyBaseLogger } from 'fastify';
+import type { UploadImageResult } from '@utils/cloudinary.util.js';
+import type { UserId } from 'types/ids.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
   // normalize user id from dto
@@ -137,17 +141,45 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
   }
 }
 
-async function updateMe({
-  userId,
-  name,
-  avatar,
-  locale,
-  phone,
-}: UpdateMeDto): Promise<UserResponseDto> {
+async function beginAvatarUpload(args: {
+  userId: UserId;
+  avatar: AvatarPart;
+}): Promise<UploadImageResult> {
+  const s: any = args.avatar.file;
+
+  // fast fail: stream already dead
+  if (!s || s.destroyed || s.readableEnded) {
+    throw new BadRequestError('AVATAR_EMPTY');
+  }
+
+  const publicId = makePublicId({ kind: 'avatar', userId: args.userId });
+
+  const safeStream = await requireNonEmptyStream(args.avatar.file, 'AVATAR_EMPTY');
+
+  return overwriteImage({
+    publicId,
+    file: safeStream,
+    mimetype: args.avatar.mimetype,
+    ...(args.avatar.filename ? { filename: args.avatar.filename } : {}),
+    tags: ['avatar', `user:${args.userId}`],
+  });
+}
+
+async function updateMe(
+  { userId, userRole, name, locale, phone, avatarUploaded }: UpdateMeDto,
+  log?: FastifyBaseLogger,
+): Promise<UserResponseDto> {
   // normalize user id from dto
   const id = typeof userId === 'string' ? Number(userId) : userId;
   // guard against unauthenticated/invalid context
   if (!Number.isInteger(id)) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  // normalize actor role from dto/context
+  const rawRole = userRole as unknown as string;
+  if (rawRole !== 'USER' && rawRole !== 'ADMIN' && rawRole !== 'ROOT') {
+    throw new AppError('ACTOR_ROLE_INVALID', 500);
+  }
+  const role = rawRole as 'USER' | 'ADMIN' | 'ROOT';
 
   // unwrap multipart attached fields to plain strings
   const readStr = (v: unknown): string | undefined => {
@@ -161,6 +193,12 @@ async function updateMe({
       return (v as any).value;
     }
     return undefined;
+  };
+
+  const normalizePhone = (input: string): string => {
+    const cleaned = input.trim().replace(/[\s()-]/g, '');
+    if (!/^\+[1-9]\d{7,14}$/.test(cleaned)) throw new BadRequestError('PHONE_INVALID');
+    return cleaned;
   };
 
   // build partial update payload for db
@@ -178,61 +216,32 @@ async function updateMe({
     data.locale = v ? v : null;
   }
 
-  const phoneRaw = readStr(phone);
-  if (phoneRaw !== undefined) {
-    const v = phoneRaw.trim();
-    data.phone = v ? v : null;
+  // clear phone explicitly
+  if (phone === null) {
+    data.phone = null;
+  } else {
+    const phoneRaw = readStr(phone);
+    if (phoneRaw !== undefined) {
+      const v = phoneRaw.trim();
+      data.phone = v ? normalizePhone(v) : null;
+    }
   }
 
-  // detect multipart file field
-  const filePart = avatar as any;
-  const hasAvatar =
-    typeof filePart === 'object' &&
-    filePart !== null &&
-    typeof filePart.mimetype === 'string' &&
-    filePart.file;
+  // apply uploaded avatar identifiers (cloudinary upload is done elsewhere)
+  if (avatarUploaded) {
+    data.publicId = avatarUploaded.publicId;
+    data.avatarUrl = avatarUploaded.urlBase;
+  }
 
   // reject empty updates to avoid silent no-op
-  if (!hasAvatar && !Object.keys(data).length) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
-
-  // upload avatar outside tx to avoid external calls inside db transaction
-  let uploaded: { publicId: string; urlBase: string } | null = null;
+  if (!Object.keys(data).length) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
   try {
-    if (hasAvatar) {
-      // ensure user exists before uploading to avoid orphan images
-      await prisma.$transaction(async (tx) => {
-        await setUserContext(tx, { userId: id, role: 'USER' });
-
-        const exists = await tx.user.findUnique({
-          where: { id },
-          select: { id: true },
-        });
-
-        if (!exists) throw new AppError('User not found', 500);
-      });
-
-      // use stable public id to keep one avatar per user
-      const publicId = makePublicId({ kind: 'avatar', userId: id });
-
-      uploaded = await overwriteImage({
-        publicId,
-        file: filePart.file,
-        mimetype: filePart.mimetype,
-        filename: typeof filePart.filename === 'string' ? filePart.filename : undefined,
-        tags: ['avatar', `user:${id}`],
-      });
-
-      // persist avatar fields in the same update call
-      data.publicId = uploaded.publicId;
-      data.avatarUrl = uploaded.urlBase;
-    }
-
     return await prisma.$transaction(async (tx) => {
-      // set db session context for RLS policies
-      await setUserContext(tx, { userId: id, role: 'USER' });
+      // set db session context for rls policies
+      await setUserContext(tx, { userId: id, role });
 
-      // update profile fields under RLS
+      // update profile fields under rls
       const user = await tx.user.update({
         where: { id },
         data,
@@ -277,7 +286,6 @@ async function updateMe({
         orderBy: { updatedAt: 'desc' },
       });
 
-      // map db shape to api dto, trimming comment and normalizing userVote values
       const reviews = rows
         .map((r) => {
           const comment = (r.comment ?? '').trim();
@@ -316,7 +324,6 @@ async function updateMe({
       };
     });
   } catch (err) {
-    // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
     const msg =
@@ -324,6 +331,7 @@ async function updateMe({
         ? String((err as { message: unknown }).message)
         : 'unknown';
 
+    log?.error({ err: msg }, 'users.updateMe failed');
     throw new AppError(`users.updateMe: unexpected (${msg})`, 500);
   }
 }
@@ -450,6 +458,7 @@ async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<M
 
 export const usersServices = {
   findMe,
+  beginAvatarUpload,
   updateMe,
   findById,
   deleteUserById,
