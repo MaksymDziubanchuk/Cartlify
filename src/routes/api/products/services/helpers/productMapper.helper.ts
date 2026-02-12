@@ -36,8 +36,8 @@ export function mapProductRowToResponse(args: {
     views: product.views,
     avgRating: decimalToNumber(product.avgRating),
     reviewsCount: product.reviewsCount,
-    ...(product.deletedAt ? { deletedAt: product.deletedAt } : {}),
-    createdAt: product.createdAt,
-    updatedAt: product.updatedAt,
+    ...(product.deletedAt ? { deletedAt: product.deletedAt.toISOString() } : {}),
+    createdAt: product.createdAt.toISOString(),
+    updatedAt: product.updatedAt.toISOString(),
   };
 }

@@ -3,7 +3,10 @@ import type { ProductId, ReviewId, CategoryId, UserId } from 'types/ids.js';
 import type { User } from 'types/user.js';
 import type {
   GetAllProductsQueryDto,
+  ProductsSortField,
+  SortOrder,
   FindAllProductsDto,
+  ProductsResponseDto,
   GetProductByIdParamsDto,
   FindProductByIdDto,
   FullProductResponseDto,
@@ -36,53 +39,45 @@ import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 
-const getAllProducts: ControllerRouter<{}, {}, GetAllProductsQueryDto, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
-  const {
-    page: qp,
-    limit: ql,
-    search: qs,
-    categoryIds: qcats,
-    minPrice: qmin,
-    maxPrice: qmax,
-    sortBy: qsort,
-    order: qorder,
-  } = req.query;
+const getAllProducts: ControllerRouter<
+  {},
+  {},
+  GetAllProductsQueryDto,
+  ProductsResponseDto
+> = async (req, reply) => {
+  const q = req.query;
 
-  const page = qp ? Number(qp) : 1;
-  const limit = ql ? Number(ql) : 10;
+  const limitRaw = q.limit != null ? Number(q.limit) : 20;
+  const limit = Number.isInteger(limitRaw) && limitRaw >= 1 && limitRaw <= 100 ? limitRaw : 20;
 
-  const categoryIds = Array.isArray(qcats)
-    ? (qcats as typeof qcats)
-    : typeof qcats === 'string'
-      ? ((qcats as any as string).split(',').map((s) => Number(s.trim())) as CategoryId[])
+  const cursor = typeof q.cursor === 'string' && q.cursor.trim() ? q.cursor.trim() : undefined;
+
+  const search = typeof q.search === 'string' && q.search.trim() ? q.search.trim() : undefined;
+
+  const minPrice = q.minPrice != null ? Number(q.minPrice) : undefined;
+  const maxPrice = q.maxPrice != null ? Number(q.maxPrice) : undefined;
+
+  const deleted = typeof q.deleted === 'boolean' ? q.deleted : undefined;
+  const inStock = typeof q.inStock === 'boolean' ? q.inStock : undefined;
+
+  const sort: ProductsSortField = (q.sort as ProductsSortField) ?? 'popularity';
+  const order: SortOrder = (q.order as SortOrder) ?? 'desc';
+
+  const categoryIds = Array.isArray(q.categoryIds)
+    ? (q.categoryIds
+        .flatMap((v) => String(v).split(','))
+        .map((s) => Number(String(s).trim()))
+        .filter((n) => Number.isInteger(n) && n > 0) as CategoryId[])
+    : typeof q.categoryIds === 'string' && q.categoryIds.trim()
+      ? (q.categoryIds
+          .split(',')
+          .map((s) => Number(s.trim()))
+          .filter((n) => Number.isInteger(n) && n > 0) as CategoryId[])
       : undefined;
 
-  const minPrice = qmin != null ? Number(qmin) : undefined;
-  const maxPrice = qmax != null ? Number(qmax) : undefined;
-
-  const allowedSortBy: Array<'price' | 'createdAt' | 'popular' | 'name'> = [
-    'price',
-    'createdAt',
-    'popular',
-    'name',
-  ];
-  const sortBy = allowedSortBy.includes(qsort as any)
-    ? (qsort as (typeof allowedSortBy)[number])
-    : 'createdAt';
-
-  const allowedOrder: Array<'asc' | 'desc'> = ['asc', 'desc'];
-  const order = allowedOrder.includes(qorder as any)
-    ? (qorder as (typeof allowedOrder)[number])
-    : 'desc';
-
-  const search = typeof qs === 'string' && qs.trim() ? qs.trim() : undefined;
-
   const args = pickDefined<FindAllProductsDto>(
-    { page, limit, sortBy, order },
-    { search, categoryIds, minPrice, maxPrice },
+    { limit, sort, order },
+    { cursor, search, categoryIds, minPrice, maxPrice, deleted, inStock },
   );
 
   const result = await productServices.findAll(args);
