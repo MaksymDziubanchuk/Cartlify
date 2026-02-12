@@ -10,26 +10,59 @@ export type ProductImagesUrls = {
 
 //GET ALL PRODUCTS
 
+export type ProductsSortField =
+  | 'createdAt'
+  | 'updatedAt'
+  | 'deletedAt'
+  | 'price'
+  | 'popularity'
+  | 'views'
+  | 'avgRating'
+  | 'reviewsCount'
+  | 'stock'
+  | 'name';
+
+export type SortOrder = 'asc' | 'desc';
+
 export interface GetAllProductsQueryDto {
-  page?: number;
-  limit?: number;
+  // cursor pagination
+  limit?: number; // default 20, max 100
+  cursor?: string; // opaque string, created by server (optional for first page)
+
+  // filters
   search?: string;
-  categoryIds?: CategoryId[];
+  categoryIds?: string | string[];
   minPrice?: number;
   maxPrice?: number;
-  sortBy?: 'price' | 'createdAt' | 'name' | 'popular';
-  order?: 'asc' | 'desc';
+
+  // if true -> only deleted, if false -> only not deleted
+  deleted?: boolean;
+
+  // if true -> only stock > 0, if false -> only stock == 0
+  inStock?: boolean;
+
+  // sorting (default popularity desc)
+  sort?: ProductsSortField;
+  order?: SortOrder;
 }
+
 export interface FindAllProductsDto {
-  page: number;
   limit: number;
+  cursor?: string;
+
   search?: string;
-  categoryIds?: CategoryId[];
+  categoryIds?: ProductId[];
+
   minPrice?: number;
   maxPrice?: number;
-  sortBy: 'price' | 'createdAt' | 'popular' | 'name';
-  order: 'asc' | 'desc';
+
+  deleted?: boolean;
+  inStock?: boolean;
+
+  sort: ProductsSortField;
+  order: SortOrder;
 }
+
 export interface ProductResponseDto {
   id: ProductId;
   name: string;
@@ -38,20 +71,19 @@ export interface ProductResponseDto {
   stock: number;
   categoryId: CategoryId;
   images: ProductImagesUrls;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt?: Date;
-  popularity?: number;
-  views?: number;
-  avgRating?: number;
-  reviewsCount?: number;
+  createdAt: string;
+  updatedAt: string;
+  popularity: number;
+  views: number;
+  avgRating: number;
+  reviewsCount: number;
+  deletedAt?: string;
 }
 
 export interface ProductsResponseDto {
   items: ProductResponseDto[];
-  page?: number;
-  limit?: number;
-  total?: number;
+  limit: number;
+  nextCursor?: string;
 }
 
 //GET PRODUCT BY ID
