@@ -32,7 +32,6 @@ export type UploadImageArgs = {
   mimetype: string;
   bytes?: number;
   filename?: string;
-  folder?: string;
   publicId?: string;
   tags?: string[];
   invalidate?: boolean;
@@ -251,14 +250,6 @@ export function isCloudinaryUrl(value: unknown): value is string {
   return false;
 }
 
-// keep folder formatting consistent
-function normalizeFolder(input: string | undefined): string | undefined {
-  if (!input) return undefined;
-
-  const v = input.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-  return v.length > 0 ? v : undefined;
-}
-
 function toReadable(file: Buffer | NodeJS.ReadableStream): NodeJS.ReadableStream {
   if (Buffer.isBuffer(file)) return Readable.from(file);
   return file;
@@ -289,11 +280,8 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
     ...(args.bytes != null ? { bytes: args.bytes } : {}),
   });
 
-  const folder = normalizeFolder(args.folder);
-
   const options: UploadApiOptions = { resource_type: 'image' };
 
-  if (folder) options.folder = folder;
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
 
@@ -339,9 +327,6 @@ export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadIm
   options.public_id = args.publicId;
   options.overwrite = true;
 
-  const folder = normalizeFolder(args.folder);
-
-  if (folder) options.folder = folder;
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
 

@@ -2,6 +2,19 @@ import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
 
+export type ProductImagePart = {
+  file: NodeJS.ReadableStream;
+  mimetype: string;
+  filename?: string;
+};
+
+export type UploadedProductImage = {
+  publicId: string;
+  urlBase: string;
+  position: number; // 0..N-1 (0 is primary)
+  alt?: string;
+};
+
 export type ProductImagesUrls = {
   url200: string;
   url400: string;
@@ -143,9 +156,16 @@ export interface CreateProductBodyDto {
   images: MultipartFile[];
 }
 
-export interface CreateProductDto extends CreateProductBodyDto {
+export interface CreateProductDto {
   actorId: UserId;
   actorRole: Role;
+  productId: ProductId;
+  name: string;
+  description?: string;
+  price: number;
+  stock: number;
+  categoryId: CategoryId;
+  images: UploadedProductImage[];
 }
 
 export type CreateProductResponseDto = FullProductResponseDto;
@@ -161,7 +181,7 @@ export interface UpdateProductBodyDto {
   price?: number;
   stock?: number;
   categoryId?: CategoryId;
-  images?: MultipartFile[];
+  images?: UploadedProductImage[];
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
 }

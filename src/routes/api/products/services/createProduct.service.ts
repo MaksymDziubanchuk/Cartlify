@@ -5,8 +5,6 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
 
 import {
-  normalizeMultipartFiles,
-  uploadProductImages,
   persistProductImages,
   mapProductRowToResponse,
   writeAdminAuditLog,
@@ -21,6 +19,7 @@ import type { AuditChange } from './helpers/index.js';
 export async function createProduct({
   actorId,
   actorRole,
+  productId,
   name,
   description,
   price,
@@ -31,7 +30,7 @@ export async function createProduct({
   // validate actor context for rls and admin-only create
   assertAdminActor(actorId, actorRole);
 
-  // unwrap and validate required scalar fields
+  // normalize and validate required scalar fields
   const { nameNorm, descriptionNorm, priceRaw, categoryIdRaw, stockNorm } =
     normalizeCreateProductInput({
       name,
@@ -41,11 +40,10 @@ export async function createProduct({
       stock,
     });
 
-  // normalize multipart images into file parts for upload
-  const imageParts = normalizeMultipartFiles(images);
-
-  // reject invalid payload (images required)
-  if (!imageParts.length) throw new BadRequestError('PRODUCT_IMAGES_REQUIRED');
+  // reject invalid payload when controller sent no uploads
+  if (!Array.isArray(images) || images.length === 0) {
+    throw new BadRequestError('PRODUCT_IMAGES_REQUIRED');
+  }
 
   // prepare audit changes list for create
   const auditChanges: AuditChange[] = [
@@ -57,13 +55,15 @@ export async function createProduct({
   ];
 
   try {
-    // create product row and log admin action in same tx
+    // create product row, persist images, and log admin action in one tx
     const created = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
+      // create product row with reserved id from controller flow
       const product = await tx.product.create({
         data: {
+          id: productId,
           name: nameNorm,
           description: descriptionNorm ? descriptionNorm : null,
           price: new Prisma.Decimal(priceRaw),
@@ -87,6 +87,13 @@ export async function createProduct({
         },
       });
 
+      // persist uploaded image pointers in db
+      await persistProductImages({
+        tx,
+        productId: product.id,
+        uploads: images,
+      });
+
       // write admin audit log for product create
       await writeAdminAuditLog(tx, {
         actorId,
@@ -100,24 +107,13 @@ export async function createProduct({
       return product;
     });
 
-    // upload images outside tx to avoid external calls inside db transaction
-    const uploads = await uploadProductImages({ productId: created.id, imageParts });
-
-    await prisma.$transaction(async (tx) => {
-      // set db session context for rls policies
-      await setUserContext(tx, { userId: actorId, role: actorRole });
-
-      // persist uploaded image pointers
-      await persistProductImages({ tx, productId: created.id, uploads });
-    });
-
     // fetch all product images and map urls
-    const images = await readProductImageUrls(created.id);
+    const imageRows = await readProductImageUrls(created.id);
 
     // map db row into api dto
     return mapProductRowToResponse({
       product: created,
-      images,
+      images: imageRows,
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

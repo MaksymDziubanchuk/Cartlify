@@ -10,10 +10,7 @@ import {
   isAppError,
 } from '@utils/errors.js';
 
-import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import {
-  normalizeMultipartFiles,
-  uploadProductImages,
   persistProductImages,
   mapProductRowToResponse,
   buildProductUpdateAuditChanges,
@@ -47,7 +44,7 @@ export async function updateProduct({
   // normalize and validate id
   const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId });
 
-  // normalize and validate scalar fields when provided
+  // normalize and validate provided fields
   const {
     nameNorm,
     descriptionNorm,
@@ -66,11 +63,21 @@ export async function updateProduct({
     popularityOverrideUntil,
   });
 
-  // normalize multipart images into file parts for upload
-  const imageParts = normalizeMultipartFiles(images);
+  // reject empty patch
+  const hasImages = Array.isArray(images) && images.length > 0;
+  const hasAnyUpdates =
+    hasImages ||
+    name !== undefined ||
+    description !== undefined ||
+    price !== undefined ||
+    stock !== undefined ||
+    categoryId !== undefined ||
+    popularityOverride !== undefined ||
+    popularityOverrideUntil !== undefined;
+
+  if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
   try {
-    // update product and optionally clear old image pointers
     const updated = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId: actorId, role: actorRole });
@@ -93,25 +100,43 @@ export async function updateProduct({
       });
       if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
-      if (imageParts.length)
+      // replace image pointers only when new images provided
+      if (hasImages) {
         await tx.productImage.deleteMany({ where: { productId: productIdRaw } });
+        await persistProductImages({ tx, productId: productIdRaw, uploads: images! });
+      }
 
-      const updated = await tx.product.update({
+      // build update payload only for provided fields
+      const data: Prisma.ProductUpdateInput = {
+        ...(name !== undefined ? { name: nameNorm! } : {}),
+        ...(description !== undefined
+          ? { description: descriptionNorm ? descriptionNorm : null }
+          : {}),
+        ...(price !== undefined ? { price: new Prisma.Decimal(priceRaw!) } : {}),
+        ...(stock !== undefined ? { stock: stockRaw! } : {}),
+        ...(categoryId !== undefined ? { categoryId: categoryIdRaw! } : {}),
+      };
+
+      if (popularityOverride === null) {
+        data.popularityOverride = null; // explicit clear
+      } else if (popularityOverride !== undefined) {
+        data.popularityOverride = popularityOverrideRaw as number; // set number
+      }
+
+      if (popularityOverrideUntil === null) {
+        data.popularityOverrideUntil = null; // explicit clear
+      } else if (popularityOverrideUntil !== undefined) {
+        data.popularityOverrideUntil = popularityOverrideUntilDate as Date; // set date
+      }
+
+      // touch when images-only update
+      if (!Object.keys(data).length) {
+        data.updatedAt = new Date();
+      }
+
+      const after = await tx.product.update({
         where: { id: productIdRaw },
-        data: {
-          ...(name != null ? { name: nameNorm as string } : {}),
-          ...(description != null ? { description: descriptionNorm ? descriptionNorm : null } : {}),
-          ...(price != null ? { price: new Prisma.Decimal(priceRaw as number) } : {}),
-          ...(stock != null ? { stock: stockRaw as number } : {}),
-          ...(categoryId != null ? { categoryId: categoryIdRaw as number } : {}),
-
-          ...(popularityOverride !== undefined
-            ? { popularityOverride: popularityOverrideRaw as any }
-            : {}),
-          ...(popularityOverrideUntil !== undefined
-            ? { popularityOverrideUntil: popularityOverrideUntilDate as any }
-            : {}),
-        },
+        data,
         select: {
           id: true,
           name: true,
@@ -131,9 +156,11 @@ export async function updateProduct({
         },
       });
 
+      if (!after) throw new NotFoundError('PRODUCT_NOT_FOUND');
+
       // build diff list for admin audit log
       const auditChanges = buildProductUpdateAuditChanges(before, {
-        after: updated,
+        after,
         input: {
           name,
           description,
@@ -145,57 +172,38 @@ export async function updateProduct({
         },
       });
 
-      // write admin audit log for product update
+      // write admin audit log when something actually changed
       if (auditChanges.length) {
-        // write admin audit log for product update
         await writeAdminAuditLog(tx, {
           actorId,
           actorRole,
           entityType: 'product',
-          entityId: updated.id,
+          entityId: after.id,
           action: 'PRODUCT_UPDATE',
           changes: auditChanges,
         });
       }
 
-      // write product price change log when price actually changed
-      if (price != null && before.price.toString() !== updated.price.toString()) {
+      // write product price change log when price changed
+      if (price !== undefined && before.price.toString() !== after.price.toString()) {
         await writeProductPriceChangeLog(tx, {
-          productId: updated.id,
+          productId: after.id,
           actorId,
           beforePrice: before.price,
-          afterPrice: updated.price,
+          afterPrice: after.price,
           mode: 'fixed',
-          value: computeFixedDelta(before.price, updated.price),
+          value: computeFixedDelta(before.price, after.price),
         });
       }
 
-      return updated;
+      return after;
     });
 
-    // upload images outside tx to avoid external calls inside db transaction
-    if (imageParts.length) {
-      const uploads = await uploadProductImages({ productId: updated.id, imageParts });
+    // fetch images and map urls
+    const imageRows = await readProductImageUrls(updated.id as any);
 
-      await prisma.$transaction(async (tx) => {
-        // set db session context for rls policies
-        await setUserContext(tx, { userId: actorId, role: actorRole });
-
-        // persist uploaded image pointers
-        await persistProductImages({ tx, productId: updated.id, uploads });
-      });
-    }
-
-    // fetch all product images and map urls
-    const images = await readProductImageUrls(updated.id);
-
-    // map db row into api dto
-    return mapProductRowToResponse({
-      product: updated,
-      images,
-    });
+    return mapProductRowToResponse({ product: updated, images: imageRows });
   } catch (err) {
-    // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
     const msg =
