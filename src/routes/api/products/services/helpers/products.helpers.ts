@@ -27,33 +27,47 @@ export function normalizeCreateProductInput(args: {
   stock: unknown;
   categoryId: unknown;
 }) {
-  // unwrap and validate required scalar fields
-  const nameRaw = toStringSafe(args.name);
-  const descriptionRaw = args.description != null ? toStringSafe(args.description) : undefined;
-  const priceRaw = toNumberSafe(args.price);
-  const stockNorm = toNumberSafe(args.stock);
+  // normalize required category id
   const categoryIdRaw = toNumberSafe(args.categoryId);
-
-  const nameNorm = (nameRaw ?? '').trim();
-  if (!nameNorm) throw new BadRequestError('PRODUCT_NAME_REQUIRED');
-
-  if (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0) {
-    throw new BadRequestError('PRODUCT_PRICE_INVALID');
-  }
-
-  if (stockNorm == null || !Number.isFinite(stockNorm) || stockNorm < 0) {
-    throw new BadRequestError('PRODUCT_STOCK_INVALID');
-  }
-
   if (categoryIdRaw == null || !Number.isInteger(categoryIdRaw) || categoryIdRaw <= 0) {
     throw new BadRequestError('CATEGORY_ID_INVALID');
   }
 
-  const descriptionNorm = typeof descriptionRaw === 'string' ? descriptionRaw.trim() : undefined;
+  // normalize required scalars
+  const nameRaw = toStringSafe(args.name);
+  const priceRaw = toNumberSafe(args.price);
+  const stockRaw = toNumberSafe(args.stock);
 
-  return { nameNorm, descriptionNorm, priceRaw, categoryIdRaw, stockNorm };
+  // normalize optional description
+  const descriptionRaw = args.description != null ? toStringSafe(args.description) : undefined;
+
+  const nameNorm = typeof nameRaw === 'string' ? nameRaw.trim() : '';
+  const descriptionNorm =
+    typeof descriptionRaw === 'string' ? descriptionRaw.trim() || undefined : undefined;
+
+  // validate required name
+  if (!nameNorm.length) {
+    throw new BadRequestError('PRODUCT_NAME_INVALID');
+  }
+
+  // validate required price
+  if (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0) {
+    throw new BadRequestError('PRODUCT_PRICE_INVALID');
+  }
+
+  // validate required stock
+  if (stockRaw == null || !Number.isInteger(stockRaw) || stockRaw < 0) {
+    throw new BadRequestError('PRODUCT_STOCK_INVALID');
+  }
+
+  return {
+    nameNorm,
+    descriptionNorm,
+    priceRaw,
+    stockNorm: stockRaw,
+    categoryIdRaw,
+  };
 }
-
 export function normalizeUpdateProductInput(args: {
   name?: unknown;
   description?: unknown;

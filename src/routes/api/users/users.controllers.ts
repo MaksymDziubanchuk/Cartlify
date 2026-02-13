@@ -91,7 +91,7 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
   );
 
   // persist changes and return the updated user dto
-  const result = await usersServices.updateMe(args, req.log);
+  const result = await usersServices.updateMe(args);
   return reply.code(200).send(result);
 };
 

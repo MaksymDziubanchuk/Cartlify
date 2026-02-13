@@ -45,6 +45,9 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      preValidation: async (req) => {
+        if (req.isMultipart()) (req as any).body = {};
+      },
       schema: productSchemas.postProductRouterSchema,
     },
     productController.postProduct,
@@ -63,6 +66,9 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     '/:productId',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      preValidation: async (req) => {
+        if (req.isMultipart()) (req as any).body = {};
+      },
       schema: productSchemas.updateProductByIdRouterSchema,
     },
     productController.updateProductById,

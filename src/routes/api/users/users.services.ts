@@ -7,9 +7,14 @@ import {
   NotFoundError,
 } from '@utils/errors.js';
 import { setUserContext, setAdminContext } from '@db/dbContext.service.js';
-import { buildImageUrls } from '@utils/cloudinary.util.js';
 import { assertEmail } from '@helpers/validateEmail.js';
-import { makePublicId, overwriteImage, requireNonEmptyStream } from '@utils/cloudinary.util.js';
+import {
+  makePublicId,
+  overwriteImage,
+  requireNonEmptyStream,
+  UploadImageResult,
+  buildImageUrls,
+} from '@utils/cloudinary.util.js';
 
 import type {
   AvatarPart,
@@ -22,8 +27,6 @@ import type {
   DeleteUserByIdDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { FastifyBaseLogger } from 'fastify';
-import type { UploadImageResult } from '@utils/cloudinary.util.js';
 import type { UserId } from 'types/ids.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
@@ -154,7 +157,7 @@ async function beginAvatarUpload(args: {
 
   const publicId = makePublicId({ kind: 'avatar', userId: args.userId });
 
-  const safeStream = await requireNonEmptyStream(args.avatar.file, 'AVATAR_EMPTY');
+  const safeStream = await requireNonEmptyStream(args.avatar.file, 'AVATAR_STREAM_ERROR');
 
   return overwriteImage({
     publicId,
@@ -165,10 +168,14 @@ async function beginAvatarUpload(args: {
   });
 }
 
-async function updateMe(
-  { userId, userRole, name, locale, phone, avatarUploaded }: UpdateMeDto,
-  log?: FastifyBaseLogger,
-): Promise<UserResponseDto> {
+async function updateMe({
+  userId,
+  userRole,
+  name,
+  locale,
+  phone,
+  avatarUploaded,
+}: UpdateMeDto): Promise<UserResponseDto> {
   // normalize user id from dto
   const id = typeof userId === 'string' ? Number(userId) : userId;
   // guard against unauthenticated/invalid context
@@ -331,7 +338,6 @@ async function updateMe(
         ? String((err as { message: unknown }).message)
         : 'unknown';
 
-    log?.error({ err: msg }, 'users.updateMe failed');
     throw new AppError(`users.updateMe: unexpected (${msg})`, 500);
   }
 }
