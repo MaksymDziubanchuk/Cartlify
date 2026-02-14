@@ -1,174 +1,179 @@
-# 🛒 Cartlify – Modern E-Commerce Platform
+# Cartlify — Backend-First E‑Commerce API (Portfolio)
 
-## 📌 Overview
+Cartlify is a backend-first e-commerce platform built as a production-style portfolio project.  
+The focus is **API design**, **database design**, and **security** — with features implemented incrementally.
 
-<!-- Project preview image (placeholder) -->
-
-[![Homepage](./assets/images/home_preview.jpg 'Cartlify')](#)
-
-**Cartlify** is a backend-focused, full-stack e-commerce platform built as a **production-grade portfolio project**.
-
-The project emphasizes **clean architecture, database design, security, and scalability**, rather than quick feature delivery. Cartlify is intentionally developed step-by-step to reflect how real commercial systems evolve over time.
-
-> ⚠️ **Project status:** Active development  
-> Core architecture and database design are completed.  
-> Features are implemented incrementally according to a strict technical roadmap.
+**Current snapshot**
+- **51 REST endpoints** across auth, users, products, categories, orders, favorites, reviews, admin, root, and system
+- **PostgreSQL + Prisma**: **15 models**, **29 migrations**
+- Cookie-based auth with **JWT access tokens + refresh token rotation** and **RBAC** (`GUEST`, `USER`, `ADMIN`, `ROOT`)
 
 ---
 
-## 🎯 Mission
+## Tech stack
 
-To build a realistic e-commerce system that demonstrates:
+- **Runtime:** Node.js (ESM)
+- **Backend:** Fastify, TypeScript
+- **Database:** PostgreSQL, Prisma ORM
+- **Auth/Security:** JWT, HttpOnly cookies, bcrypt, RBAC, rate limiting, helmet
+- **Uploads:** Cloudinary (images/files)
+- **Email:** SendGrid (verification / reset flows)
+- **Logging:** Pino
 
-- strong backend engineering skills
-- deep understanding of PostgreSQL & data integrity
-- secure authentication & authorization flows
-- scalable architecture suitable for real production use
-
----
-
-## ✨ Features
-
-### 👤 Users & Authentication
-
-- User registration & login
-- OAuth authentication (Google / GitHub / Facebook)
-- JWT-based authentication (HttpOnly cookies)
-- Role-based access control: `USER`, `ADMIN`, `ROOT`
-- User preferences (language, theme)
-- Favorites list
-
-### 🛍 Products & Catalog
-
-- Product categories
-- Product CRUD (ADMIN / ROOT)
-- Image uploads via Cloudinary
-- Product ratings & reviews
-- View counters
-- Popularity calculation (orders, views, ratings)
-- Manual popularity override (ROOT)
-
-### 🧾 Orders
-
-- Cart & checkout flow
-- Order price snapshots (price consistency)
-- Order statuses: Pending → Processing → Shipped → Delivered
-- User order history
-- Admin order management
-
-### ⭐ Reviews
-
-- Reviews from verified users only
-- Rating aggregation (average & count)
-- Like / dislike system
-- Automatic product rating recalculation
-
-### 💬 Chat (Planned)
-
-- Real-time messaging via WebSockets
-- Guest & authenticated chats
-- Admin / support monitoring
-
-### 📊 Admin Panel & Analytics
-
-- Users & orders overview
-- Top products (by views & orders)
-- Revenue metrics
-- Manual popularity control
-- Admin audit logging (planned)
-
-### 🌍 UI / SSR
-
-- Server-side rendering (Fastify + Handlebars)
-- Pages: Home, Catalog, Product, Cart, Admin
-- Light / Dark theme
-- Multi-language support (UA / EN)
-- Cookie consent banner
+> GraphQL, WebSockets/real-time chat, CI/CD, and full test coverage are planned/in progress.
 
 ---
 
-## 🛠 Tech Stack
+## Features (implemented)
 
-### 🖥 Backend
+### Authentication & Users
+- Local auth (email/password)
+- OAuth flows present in codebase (Google, GitHub, LinkedIn)
+- JWT access tokens + refresh token rotation (HttpOnly cookies)
+- Role-based access control and route guards
+- Login logs and token storage (DB)
 
-![NodeJS](https://img.shields.io/badge/node.js-6DA55F?style=for-the-badge&logo=node.js&logoColor=white)
-![Fastify](https://img.shields.io/badge/fastify-000000?style=for-the-badge&logo=fastify&logoColor=white)
-![TypeScript](https://img.shields.io/badge/typescript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/postgresql-316192?style=for-the-badge&logo=postgresql&logoColor=white)
-![Prisma](https://img.shields.io/badge/prisma-2D3748?style=for-the-badge&logo=prisma&logoColor=white)
-![GraphQL](https://img.shields.io/badge/graphql-E10098?style=for-the-badge&logo=graphql&logoColor=white)
-![JWT](https://img.shields.io/badge/jwt-black?style=for-the-badge&logo=jsonwebtokens)
-![Redis](https://img.shields.io/badge/redis-DC382D?style=for-the-badge&logo=redis&logoColor=white)
-![Cloudinary](https://img.shields.io/badge/cloudinary-3448C5?style=for-the-badge&logo=cloudinary&logoColor=white)
-![Docker](https://img.shields.io/badge/docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
-![Railway](https://img.shields.io/badge/railway-0B0D0E?style=for-the-badge&logo=railway&logoColor=white)
+### Catalog
+- Categories and products API
+- Product images (Cloudinary)
+- Reviews and rating aggregation (API layer)
 
-> Also used: Supabase Auth, Socket.io / Fastify WS, Jest, Supertest, ESLint, Prettier, dotenv
+### Orders
+- Orders API with status handling and order items
 
----
+### Admin / Root
+- Admin endpoints for moderation/management
+- Root endpoints for privileged operations (where applicable)
 
-## 🧠 Architecture Highlights
-
-- Modular service-oriented architecture
-- Clear separation of concerns:
-  - GraphQL resolvers
-  - Services (business logic)
-  - Database layer
-
-- Strict TypeScript everywhere
-- PostgreSQL **Row Level Security (RLS)**
-- Centralized caching strategy
-- Transaction-safe order processing
-- Prepared for analytics via SQL views & materialized views
+### System
+- Health/readiness/info endpoints
 
 ---
 
-## 🗺 Roadmap
+## Database & security notes
 
-- [x] Project architecture & database design
-- [x] PostgreSQL roles, schemas & RLS baseline
-- [x] Prisma models & migrations
-- [x] Authentication & RBAC foundation
-- [ ] Product & category module
-- [ ] Orders & checkout
-- [ ] Reviews & ratings
-- [ ] Admin analytics
-- [ ] Chat (WebSockets)
-- [ ] Full test coverage
-- [ ] CI/CD automation
+This repository includes:
+- Prisma migrations (`prisma/migrations/`)
+- SQL scripts for roles/schemas/RLS and related DB logic (`db/`)
+
+If you want to use a dedicated schema (e.g., `cartlify`), set it via the Postgres connection string (for example by adding a `schema=...` parameter) and run the scripts in `db/` accordingly.
 
 ---
 
-## 🚧 Project Status
+## Getting started (local)
 
-Cartlify is **not a finished product**.
+### Prerequisites
+- Node.js 18+
+- PostgreSQL 14+
 
-This repository is intentionally public to demonstrate:
+### 1) Install
+```bash
+npm install
+```
 
-- architectural thinking
-- backend-first development approach
-- database design & data integrity
-- ability to plan and build complex systems step-by-step
+### 2) Configure environment
+Create `.env` in the project root (minimal example):
+
+```bash
+NODE_ENV=development
+PORT=3000
+WEB_ORIGIN=http://localhost:3000
+
+DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/cartlify"
+
+COOKIE_SECRET=changeme
+
+JWT_ACCESS_SECRET=changeme
+JWT_REFRESH_SECRET=changeme
+
+# Optional (only needed if you use the related flows)
+CLOUDINARY_URL=
+SENDGRID_API_KEY=
+EMAIL_FROM=
+EMAIL_FROM_NAME=
+EMAIL_REPLY_TO=
+
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=
+GOOGLE_STATE_SECRET=
+
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_REDIRECT_URI=
+GITHUB_STATE_SECRET=
+
+LINKEDIN_CLIENT_ID=
+LINKEDIN_CLIENT_SECRET=
+LINKEDIN_REDIRECT_URI=
+LINKEDIN_STATE_SECRET=
+```
+
+### 3) Generate Prisma client & migrate
+```bash
+npm run prisma:generate
+npm run prisma:migrate
+```
+
+### 4) Run in dev
+```bash
+npm run dev
+```
+
+### 5) Quick checks
+- `GET /health`
+- `GET /ready`
+- `GET /info`
 
 ---
 
-## 👨‍💻 Author
+## Useful scripts
 
-**Maksym Dziubanchuk**  
-Backend Developer (Node.js / TypeScript / PostgreSQL)
-
-Cartlify builds upon experience gained from previous full-stack projects and focuses on advancing backend engineering skills to a production-ready level.
+```bash
+npm run dev            # dev server (watch)
+npm run build          # compile TypeScript
+npm start              # run compiled build
+npm run prisma:migrate # prisma migrate dev
+npm run migrate:deploy # prisma migrate deploy
+npm test               # jest (in progress)
+npm run lint
+npm run format
+npm run typecheck
+```
 
 ---
 
-## 📄 License
+## Project structure (high level)
+
+```
+src/
+  app.ts
+  routes/api/          # REST routes by module
+  middlewares/         # auth, errors, logging, guards
+  services/            # business logic
+  schemas/             # shared JSON schemas + DTO schemas
+  db/                  # prisma client
+prisma/
+  schema.prisma
+  migrations/
+db/
+  01_roles_and_schemas.sql
+  03_policies_and_rls.sql
+  ...
+```
+
+---
+
+## Roadmap (short)
+
+- WebSockets / real-time chat module
+- Admin analytics (views/materialized views)
+- GraphQL endpoint (optional)
+- More tests (Jest/Supertest)
+- CI/CD
+
+---
+
+## License
 
 MIT (planned)
-
----
-
-## 🔗 Links
-
-- 📂 Repository: this repository
-- 🚀 Deployment: planned
-- 📊 Admin panel: planned
