@@ -1,12 +1,12 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
 
 import {
-  assertAdminActor,
-  writeAdminAuditLog,
   writeProductPriceChangeLog,
   normalizeBulkUpdateProductsPriceInput,
 } from './helpers/index.js';
@@ -15,7 +15,7 @@ import type {
   BulkUpdateProductsPriceDto,
   BulkUpdateProductsPriceResponseDto,
 } from 'types/dto/products.dto.js';
-import type { AuditChange } from './helpers/index.js';
+import type { AuditChange } from '@db/adminAudit.helper.js';
 
 export async function updateProductsBulkPrice(
   dto: BulkUpdateProductsPriceDto,

@@ -34,12 +34,15 @@ export interface CategoriesListResponseDto {
 
 export interface CreateCategoryBodyDto {
   name: string;
-  slug?: string;
+  slug: string;
   description?: string;
   parentId?: CategoryId;
 }
 
-export type CreateCategoryDto = CreateCategoryBodyDto;
+export interface CreateCategoryDto extends CreateCategoryBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
 
 export type CreateCategoryResponseDto = CategoryResponseDto;
 

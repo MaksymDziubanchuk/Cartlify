@@ -15,7 +15,7 @@ export const getCategoriesSchema = {
 export const postCategorySchema = {
   body: { $ref: 'categoriesCreateBodySchema#' },
   response: {
-    201: { $ref: 'messageResponseSchema#' },
+    201: { $ref: 'categoriesCreateResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },

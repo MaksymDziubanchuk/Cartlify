@@ -6,6 +6,8 @@ import type {
 } from 'types/dto/categories.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
+import { createCategory } from './services/create.service.js';
+
 async function findAll({
   page = 1,
   limit = 10,
@@ -13,15 +15,6 @@ async function findAll({
   parentId,
 }: FindAllCategoriesDto): Promise<MessageResponseDto> {
   return { message: 'categories list not implemented' };
-}
-
-async function create({
-  name,
-  slug,
-  description,
-  parentId,
-}: CreateCategoryDto): Promise<MessageResponseDto> {
-  return { message: 'create category not implemented' };
 }
 
 async function update({
@@ -42,7 +35,7 @@ async function remove({ categoryId }: DeleteCategoryDto): Promise<MessageRespons
 
 export const categoriesServices = {
   findAll,
-  create,
+  createCategory,
   update,
   remove,
 };

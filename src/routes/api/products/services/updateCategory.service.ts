@@ -1,12 +1,13 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import { AppError, BadRequestError, NotFoundError, isAppError } from '@utils/errors.js';
+import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
   mapProductRowToResponse,
-  writeAdminAuditLog,
   readProductImageUrls,
   normalizeFindProductByIdInput,
 } from './helpers/index.js';
@@ -15,7 +16,7 @@ import type {
   UpdateProductCategoryDto,
   UpdateProductCategoryResponseDto,
 } from 'types/dto/products.dto.js';
-import type { AuditChange } from './helpers/index.js';
+import type { AuditChange } from '@db/adminAudit.helper.js';
 
 export async function updateProductCategory({
   productId,
@@ -23,6 +24,9 @@ export async function updateProductCategory({
   actorId,
   actorRole,
 }: UpdateProductCategoryDto): Promise<UpdateProductCategoryResponseDto> {
+  // validate actor context for rls and admin-only create
+  assertAdminActor(actorId, actorRole);
+
   // normalize and validate ids
   const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId });
 
