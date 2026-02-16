@@ -85,6 +85,21 @@ const updateProductByIdRouterSchema = {
   },
 } satisfies FastifySchema;
 
+const patchProductsBulkPriceRouterSchema = {
+  body: { $ref: 'bulkUpdateProductsPriceBodySchema#' },
+  response: {
+    200: { $ref: 'bulkUpdateProductsPriceResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    409: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+    501: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 const deleteProductByIdRouterSchema = {
   params: { $ref: 'productIdParamSchema#' },
   response: {
@@ -134,6 +149,7 @@ export const productSchemas = {
   postProductRouterSchema,
   postProductReviewRouterSchema,
   updateProductByIdRouterSchema,
+  patchProductsBulkPriceRouterSchema,
   deleteProductByIdRouterSchema,
   deleteProductReviewRouterSchema,
   patchProductCategorySchema,

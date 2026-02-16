@@ -26,6 +26,9 @@ import type {
   UpdateProductBodyDto,
   UpdateProductDto,
   UpdateProductResponseDto,
+  BulkUpdateProductsPriceBodyDto,
+  BulkUpdateProductsPriceResponseDto,
+  BulkUpdateProductsPriceDto,
   DeleteProductByIdParamsDto,
   DeleteProductByIdDto,
   DeleteProductReviewParamsDto,
@@ -347,6 +350,26 @@ const updateProductById: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+const updateProductsBulkPrice: ControllerRouter<
+  {},
+  BulkUpdateProductsPriceBodyDto,
+  {},
+  BulkUpdateProductsPriceResponseDto
+> = async (req, reply) => {
+  // bind actor
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const { mode, value, scope, dryRun, reason } = req.body;
+
+  const args = pickDefined<BulkUpdateProductsPriceDto>(
+    { actorId, actorRole, mode, value },
+    { scope, dryRun, reason },
+  );
+
+  const result = await productServices.updateProductsBulkPrice(args);
+  return reply.code(200).send(result);
+};
+
 const deleteProductById: ControllerRouter<
   DeleteProductByIdParamsDto,
   {},
@@ -378,7 +401,7 @@ const deleteProductReview: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-export const patchProductCategory: ControllerRouter<
+const patchProductCategory: ControllerRouter<
   UpdateProductCategoryParamsDto,
   UpdateProductCategoryBodyDto,
   {},
@@ -403,6 +426,7 @@ export const productController = {
   postProduct,
   postProductReview,
   updateProductById,
+  updateProductsBulkPrice,
   deleteProductById,
   deleteProductReview,
   patchProductCategory,

@@ -252,6 +252,51 @@ const updateProductBodySchema = {
   },
 } as const;
 
+const bulkUpdateProductsPriceBodySchema = {
+  $id: 'bulkUpdateProductsPriceBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    mode: { type: 'string', enum: ['percent', 'fixed'] },
+    value: { type: 'number' },
+
+    scope: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        categoryId: { type: 'integer', minimum: 1 },
+        productIds: {
+          type: 'array',
+          items: { type: 'integer', minimum: 1 },
+          minItems: 1,
+          uniqueItems: true,
+        },
+
+        minPrice: { type: 'number', minimum: 0 },
+        maxPrice: { type: 'number', minimum: 0 },
+
+        inStock: { type: 'boolean' },
+        deleted: { type: 'boolean' },
+      },
+    },
+
+    dryRun: { type: 'boolean' },
+    reason: { type: 'string', minLength: 1, maxLength: 200 },
+  },
+  required: ['mode', 'value'],
+} as const;
+
+const bulkUpdateProductsPriceResponseSchema = {
+  $id: 'bulkUpdateProductsPriceResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message: { type: 'string' },
+    updatedCount: { type: 'integer', minimum: 0 },
+  },
+  required: ['message', 'updatedCount'],
+} as const;
+
 const createReviewBodySchema = {
   $id: 'createReviewBodySchema',
   type: 'object',
@@ -296,6 +341,8 @@ export const productDtoSchemas = [
   getAllProductsQuerySchema,
   createProductBodySchema,
   updateProductBodySchema,
+  bulkUpdateProductsPriceBodySchema,
+  bulkUpdateProductsPriceResponseSchema,
   createReviewBodySchema,
   productResponseSchema,
   getProductReviewsQuerySchema,
