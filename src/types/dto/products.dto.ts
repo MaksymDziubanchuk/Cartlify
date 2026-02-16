@@ -194,6 +194,45 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
 
 export type UpdateProductResponseDto = FullProductResponseDto;
 
+// BULK UPDATE PRODUCT PRICE
+
+export type BulkProductPriceMode = 'percent' | 'fixed';
+
+export interface BulkProductPriceScopeDto {
+  // optional filters (all optional, combined with AND in service)
+  categoryId?: CategoryId;
+  productIds?: ProductId[];
+
+  minPrice?: number;
+  maxPrice?: number;
+
+  inStock?: boolean;
+  deleted?: boolean;
+}
+
+export interface BulkUpdateProductsPriceBodyDto {
+  // how to change price
+  mode: BulkProductPriceMode; // 'percent' | 'fixed'
+  value: number; // +10 / -10 (percent or fixed depending on mode)
+
+  // optional filters
+  scope?: BulkProductPriceScopeDto;
+
+  // optional flags
+  dryRun?: boolean;
+  reason?: string;
+}
+
+export interface BulkUpdateProductsPriceDto extends BulkUpdateProductsPriceBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface BulkUpdateProductsPriceResponseDto {
+  message: string;
+  updatedCount: number;
+}
+
 // DELETE PRODUCT BY ID
 export interface DeleteProductByIdParamsDto {
   productId: ProductId;

@@ -74,6 +74,15 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
     productController.updateProductById,
   );
 
+  app.patch(
+    '/',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.patchProductsBulkPriceRouterSchema,
+    },
+    productController.updateProductsBulkPrice,
+  );
+
   app.delete(
     '/:productId',
     {
