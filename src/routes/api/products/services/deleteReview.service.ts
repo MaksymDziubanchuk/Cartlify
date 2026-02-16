@@ -1,9 +1,10 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
 
-import { writeAdminAuditLog, normalizeDeleteReviewInput } from './helpers/index.js';
+import { normalizeDeleteReviewInput } from './helpers/index.js';
 
 import type {
   DeleteProductReviewDto,

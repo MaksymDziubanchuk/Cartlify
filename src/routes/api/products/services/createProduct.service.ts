@@ -1,20 +1,20 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
+import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import {
   persistProductImages,
   mapProductRowToResponse,
-  writeAdminAuditLog,
   readProductImageUrls,
-  assertAdminActor,
   normalizeCreateProductInput,
 } from './helpers/index.js';
 
 import type { CreateProductDto, CreateProductResponseDto } from 'types/dto/products.dto.js';
-import type { AuditChange } from './helpers/index.js';
+import type { AuditChange } from '@db/adminAudit.helper.js';
 
 export async function createProduct({
   actorId,

@@ -15,12 +15,6 @@ export function normalizeFindProductByIdInput(dto: { productId: unknown }) {
   return { productId };
 }
 
-export function assertAdminActor(actorId: unknown, actorRole: Role) {
-  // validate actor context for rls and admin-only actions
-  if (!Number.isInteger(actorId)) throw new ForbiddenError('ACTOR_ID_INVALID');
-  if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN');
-}
-
 export function normalizeCreateProductInput(args: {
   name: unknown;
   description?: unknown;
@@ -272,26 +266,5 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
     where,
     dryRun,
     ...(reason ? { reason } : {}),
-  };
-}
-
-export function normalizeDeleteProductByIdInput(args: {
-  productId: unknown;
-  actorId: unknown;
-  actorRole: Role;
-}) {
-  // validate actor context for admin-only action
-  assertAdminActor(args.actorId, args.actorRole);
-
-  // validate product id
-  const productId = toNumberSafe(args.productId);
-  if (productId == null || !Number.isInteger(productId) || productId <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
-  }
-
-  return {
-    productId,
-    actorId: args.actorId as UserId,
-    actorRole: args.actorRole as Role,
   };
 }

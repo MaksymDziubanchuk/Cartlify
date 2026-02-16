@@ -1,6 +1,8 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import {
   AppError,
@@ -13,14 +15,11 @@ import {
 import {
   persistProductImages,
   mapProductRowToResponse,
-  buildProductUpdateAuditChanges,
-  writeAdminAuditLog,
   writeProductPriceChangeLog,
   computeFixedDelta,
   readProductImageUrls,
   normalizeFindProductByIdInput,
   normalizeUpdateProductInput,
-  assertAdminActor,
 } from './helpers/index.js';
 
 import type { UpdateProductDto, UpdateProductResponseDto } from 'types/dto/products.dto.js';

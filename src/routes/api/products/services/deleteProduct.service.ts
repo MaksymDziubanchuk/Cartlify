@@ -1,16 +1,21 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
-
-import { normalizeDeleteProductByIdInput, writeAdminAuditLog } from './helpers/index.js';
+import { assertAdminActor } from '@helpers/roleGuard.js';
+import { normalizeFindProductByIdInput } from './helpers/index.js';
 
 import type { DeleteProductByIdDto, DeleteProductByIdResponseDto } from 'types/dto/products.dto.js';
 
 export async function deleteProductById(
   dto: DeleteProductByIdDto,
 ): Promise<DeleteProductByIdResponseDto> {
-  const { productId, actorId, actorRole } = normalizeDeleteProductByIdInput(dto);
+  // validate actor context for rls
+  assertAdminActor(dto.actorId, dto.actorRole);
+
+  const { productId } = normalizeFindProductByIdInput(dto);
+  const { actorId, actorRole } = dto;
 
   try {
     await prisma.$transaction(async (tx) => {

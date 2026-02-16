@@ -6,6 +6,7 @@ import type {
   FindAllCategoriesDto,
   CreateCategoryBodyDto,
   CreateCategoryDto,
+  CreateCategoryResponseDto,
   UpdateCategoryParamsDto,
   UpdateCategoryBodyDto,
   UpdateCategoryDto,
@@ -30,14 +31,21 @@ const getCategories: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-const postCategory: ControllerRouter<{}, CreateCategoryBodyDto, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
+const postCategory: ControllerRouter<
+  {},
+  CreateCategoryBodyDto,
+  {},
+  CreateCategoryResponseDto
+> = async (req, reply) => {
   const { name, slug, description, parentId } = req.body;
+  const { id: actorId, role: actorRole } = req.user as User;
 
-  const args = pickDefined<CreateCategoryDto>({ name }, { slug, description, parentId });
-  const result = await categoriesServices.create(args);
+  const args = pickDefined<CreateCategoryDto>(
+    { name, slug, actorId, actorRole },
+    { description, parentId },
+  );
+
+  const result = await categoriesServices.createCategory(args);
   return reply.code(201).send(result);
 };
 
