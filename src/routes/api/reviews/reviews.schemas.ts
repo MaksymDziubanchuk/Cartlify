@@ -4,7 +4,7 @@ export const postVoteReviewSchema = {
   params: { $ref: 'reviewsVoteParamsSchema#' },
   body: { $ref: 'reviewsVoteBodySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'reviewsVoteResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },

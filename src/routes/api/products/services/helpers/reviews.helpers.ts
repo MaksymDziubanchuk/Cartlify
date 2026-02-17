@@ -3,7 +3,7 @@ import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import { normalizeFindProductByIdInput } from './index.js';
 
-import type { CreateReviewDto, CreateReviewResponseDto } from 'types/dto/products.dto.js';
+import type { CreateReviewDto, ReviewResponseDto } from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
 
 export function normalizeCreateReviewInput(dto: CreateReviewDto) {
@@ -77,14 +77,21 @@ export function mapReviewRowToResponse(row: {
   userId: number;
   createdAt: Date;
   updatedAt: Date;
-}): CreateReviewResponseDto {
+
+  upVotes?: number;
+  downVotes?: number;
+  userVote?: 'up' | 'down' | null;
+}): ReviewResponseDto {
   // map db row to api dto
   return {
-    id: row.id,
+    id: row.id as any,
     productId: row.productId as any,
-    ...(row.rating ? { rating: row.rating } : {}),
+    ...(row.rating != null ? { rating: row.rating } : {}),
     userId: row.userId as any,
     ...(row.comment ? { comment: row.comment } : {}),
+    upVotes: row.upVotes ?? 0,
+    downVotes: row.downVotes ?? 0,
+    ...(row.userVote !== undefined ? { userVote: row.userVote } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

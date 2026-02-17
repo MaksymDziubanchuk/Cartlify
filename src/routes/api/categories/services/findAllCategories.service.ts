@@ -1,40 +1,12 @@
 import { prisma } from '@db/client.js';
-import { b64urlJson } from '@helpers/b64Payload.js';
 import { AppError, isAppError } from '@utils/errors.js';
+import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 
 import type {
   FindAllCategoriesDto,
   CategoriesListResponseDto,
   CategoryResponseDto,
 } from 'types/dto/categories.dto.js';
-type CursorPayload = { name: string; id: number };
-
-function encodeCursor(payload: CursorPayload): string {
-  // keep cursor as compact base64url json
-  return b64urlJson(payload);
-}
-
-function decodeCursor(cursor: string): CursorPayload {
-  try {
-    // reject non base64url input early
-    if (typeof cursor !== 'string' || !cursor.length || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
-      throw new Error('bad cursor');
-    }
-
-    // decode base64url json payload
-    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
-    const obj = JSON.parse(raw) as CursorPayload;
-
-    // validate cursor shape for stable keyset pagination
-    if (!obj || typeof obj.name !== 'string' || !obj.name.length) throw new Error('bad cursor');
-    if (!Number.isInteger(obj.id) || obj.id <= 0) throw new Error('bad cursor');
-
-    return obj;
-  } catch {
-    // keep api error stable for any cursor parsing issues
-    throw new AppError('CURSOR_INVALID', 400);
-  }
-}
 
 function assertLimit(limit: unknown): number {
   // enforce integer limit and cap to prevent heavy queries
@@ -98,7 +70,16 @@ export async function findAllCategories(
   }
 
   // build keyset cursor filter for name desc + id desc ordering
-  const c = cursor ? decodeCursor(cursor) : undefined;
+  const cRaw = cursor ? decodeCursor(cursor) : undefined;
+
+  const c =
+    cRaw && typeof cRaw.v === 'string' && cRaw.v.length
+      ? { id: cRaw.id, name: cRaw.v }
+      : cRaw
+        ? (() => {
+            throw new AppError('CURSOR_INVALID', 400);
+          })()
+        : undefined;
 
   const cursorWhere = c
     ? {
@@ -133,7 +114,7 @@ export async function findAllCategories(
     return {
       items: pageRows.map(mapCategoryRowToResponse),
       limit,
-      ...(hasNext && last ? { nextCursor: encodeCursor({ name: last.name, id: last.id }) } : {}),
+      ...(hasNext && last ? { nextCursor: encodeCursor({ id: last.id, v: last.name }) } : {}),
     };
   } catch (err) {
     // keep app errors unchanged and wrap unknown failures
