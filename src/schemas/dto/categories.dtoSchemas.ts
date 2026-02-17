@@ -3,14 +3,15 @@ export const categoriesGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
+    limit: { type: 'number', minimum: 1, maximum: 100 },
+    cursor: { type: 'string' },
+
     search: { type: 'string' },
     parentId: { type: 'number', minimum: 1 },
   },
 } as const;
 
-export const categoriesCategoryResponseSchema = {
+const categoriesCategoryResponseSchema = {
   $id: 'categoriesCategoryResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -32,14 +33,13 @@ export const categoriesListResponseSchema = {
   additionalProperties: false,
   properties: {
     items: { type: 'array', items: { $ref: 'categoriesCategoryResponseSchema#' } },
-    page: { type: 'number' },
     limit: { type: 'number' },
-    total: { type: 'number' },
+    nextCursor: { type: 'string' },
   },
-  required: ['items'],
+  required: ['items', 'limit'],
 } as const;
 
-export const categoriesCreateBodySchema = {
+const categoriesCreateBodySchema = {
   $id: 'categoriesCreateBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -52,12 +52,12 @@ export const categoriesCreateBodySchema = {
   required: ['name'],
 } as const;
 
-export const categoriesCreateResponseSchema = {
+const categoriesCreateResponseSchema = {
   $id: 'categoriesCreateResponseSchema',
   allOf: [{ $ref: 'categoriesCategoryResponseSchema#' }],
 } as const;
 
-export const categoriesUpdateParamsSchema = {
+const categoriesUpdateParamsSchema = {
   $id: 'categoriesUpdateParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -67,7 +67,7 @@ export const categoriesUpdateParamsSchema = {
   required: ['categoryId'],
 } as const;
 
-export const categoriesUpdateBodySchema = {
+const categoriesUpdateBodySchema = {
   $id: 'categoriesUpdateBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -79,12 +79,12 @@ export const categoriesUpdateBodySchema = {
   },
 } as const;
 
-export const categoriesUpdateResponseSchema = {
+const categoriesUpdateResponseSchema = {
   $id: 'categoriesUpdateResponseSchema',
   allOf: [{ $ref: 'categoriesCategoryResponseSchema#' }],
 } as const;
 
-export const categoriesDeleteParamsSchema = {
+const categoriesDeleteParamsSchema = {
   $id: 'categoriesDeleteParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -94,7 +94,7 @@ export const categoriesDeleteParamsSchema = {
   required: ['categoryId'],
 } as const;
 
-export const categoriesDeleteResponseSchema = {
+const categoriesDeleteResponseSchema = {
   $id: 'categoriesDeleteResponseSchema',
   type: 'object',
   additionalProperties: false,
