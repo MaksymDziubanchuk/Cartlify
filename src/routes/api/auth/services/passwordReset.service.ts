@@ -119,6 +119,9 @@ export async function passwordReset({
   if (!cleanNewPassword) throw new BadRequestError('NEW_PASSWORD_REQUIRED');
   if (cleanNewPassword.length < 6) throw new BadRequestError('PASSWORD_TOO_SHORT');
 
+  // hash new password
+  const passwordHash = await hashPass(cleanNewPassword);
+
   // hash incoming reset token
   const tokenHash = hashToken(cleanToken);
   const now = new Date();
@@ -153,9 +156,6 @@ export async function passwordReset({
       if (!u) throw new AppError('USER_NOT_FOUND_FOR_RESET', 500);
 
       await setUserContext(tx, { userId: u.id, role: u.role });
-
-      // hash new password
-      const passwordHash = await hashPass(cleanNewPassword);
 
       await tx.user.update({
         where: { id: userId },

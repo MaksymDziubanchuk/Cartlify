@@ -17,7 +17,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
   app.post(
     '/',
     {
-      preHandler: [authGuard, requireRole(['ADMIN'])],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
       schema: categoriesSchema.postCategorySchema,
     },
     categoriesController.postCategory,
@@ -25,7 +25,7 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
   app.patch(
     '/:categoryId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('categoryId')],
       schema: categoriesSchema.patchCategorySchema,
     },
     categoriesController.patchCategory,
@@ -33,8 +33,8 @@ export default async function categoriesRouter(app: FastifyInstance, opt: unknow
   app.delete(
     '/:categoryId',
     {
-      preHandler: [authGuard, requireRole(['ADMIN']), validateId('categoryId')],
-      schema: categoriesSchema.getCategoriesSchema,
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('categoryId')],
+      schema: categoriesSchema.deleteCategorySchema,
     },
     categoriesController.deleteCategory,
   );

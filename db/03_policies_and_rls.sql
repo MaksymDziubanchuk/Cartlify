@@ -182,7 +182,7 @@ CREATE POLICY categories_delete ON cartlify.categories FOR DELETE USING (cartlif
 -- enable RLS
 ALTER TABLE cartlify.products ENABLE ROW LEVEL SECURITY;
 
-ALTER TABLE cartlify.products FORCE ROW LEVEL SECURITY;
+ALTER TABLE cartlify.products NO FORCE ROW LEVEL SECURITY;
 
 -- reset policies (safe rerun)
 DROP POLICY IF EXISTS products_select ON cartlify.products;
@@ -219,15 +219,11 @@ FOR UPDATE
   USING (true)
 WITH
   CHECK (
-    cartlify.current_actor_role () IN ('GUEST', 'USER', 'ADMIN', 'ROOT')
+    cartlify.current_actor_role () IN ('GUEST', 'USER')
     AND (
-      (
-        to_jsonb(products) - 'views' - 'popularity' - 'avgRating' - 'reviewsCount' - 'updatedAt'
-      ) = (
+      (to_jsonb(products) - 'views' - 'updatedAt') = (
         SELECT
-          (
-            to_jsonb(p) - 'views' - 'popularity' - 'avgRating' - 'reviewsCount' - 'updatedAt'
-          )
+          (to_jsonb(p) - 'views' - 'updatedAt')
         FROM
           cartlify.products p
         WHERE
@@ -289,7 +285,7 @@ DROP POLICY IF EXISTS reviews_select ON cartlify.reviews;
 
 DROP POLICY IF EXISTS reviews_insert ON cartlify.reviews;
 
-DROP POLICY IF EXISTS reviews_update_deny ON cartlify.reviews;
+DROP POLICY IF EXISTS reviews_update_owner_comment_null ON cartlify.reviews;
 
 DROP POLICY IF EXISTS reviews_delete ON cartlify.reviews;
 
@@ -301,14 +297,37 @@ SELECT
 -- INSERT (user only)
 CREATE POLICY reviews_insert ON cartlify.reviews FOR INSERT
 WITH
-  CHECK (cartlify.current_actor_role () = 'USER');
+  CHECK (
+    cartlify.current_actor_role () = 'USER'
+    AND (
+      "rating" IS NOT NULL
+      OR (
+        "comment" IS NOT NULL
+        AND btrim("comment") <> ''
+      )
+    )
+  );
 
--- UPDATE (deny for all)
-CREATE POLICY reviews_update_deny ON cartlify.reviews
-FOR UPDATE
-  USING (false)
+-- UPDATE (only owner can update with rules)
+CREATE POLICY reviews_update_owner_comment_null ON cartlify.reviews USING (
+  cartlify.is_owner ("userId")
+  AND (
+    "rating" IS NULL
+    OR "comment" IS NULL
+    OR btrim("comment") = ''
+  )
+)
 WITH
-  CHECK (false);
+  CHECK (
+    cartlify.is_owner ("userId")
+    AND (
+      "rating" IS NOT NULL
+      OR (
+        "comment" IS NOT NULL
+        AND btrim("comment") <> ''
+      )
+    )
+  );
 
 -- DELETE (owner or admin/root)
 CREATE POLICY reviews_delete ON cartlify.reviews FOR DELETE USING (cartlify.is_owner_or_admin ("userId"));

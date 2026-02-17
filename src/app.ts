@@ -75,7 +75,7 @@ app.register(multipart, {
     fileSize: 10_000_000,
   },
   // expose fields in body
-  attachFieldsToBody: true,
+  attachFieldsToBody: false,
 });
 
 // parse x-www-form-urlencoded

@@ -2,109 +2,175 @@ import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
 
+export type ProductImagePart = {
+  file: NodeJS.ReadableStream;
+  mimetype: string;
+  filename?: string;
+};
+
+export type UploadedProductImage = {
+  publicId: string;
+  urlBase: string;
+  position: number; // 0..N-1 (0 is primary)
+  alt?: string;
+};
+
 export type ProductImagesUrls = {
   url200: string;
   url400: string;
   url800: string;
 };
 
+//GET ALL PRODUCTS
+
+export type ProductsSortField =
+  | 'createdAt'
+  | 'updatedAt'
+  | 'deletedAt'
+  | 'price'
+  | 'popularity'
+  | 'views'
+  | 'avgRating'
+  | 'reviewsCount'
+  | 'stock'
+  | 'name';
+
+export type SortOrder = 'asc' | 'desc';
+
 export interface GetAllProductsQueryDto {
-  page?: number;
-  limit?: number;
+  // cursor pagination
+  limit?: number; // default 20, max 100
+  cursor?: string; // opaque string, created by server (optional for first page)
+
+  // filters
   search?: string;
-  categoryIds?: CategoryId[];
+  categoryIds?: string | string[];
   minPrice?: number;
   maxPrice?: number;
-  sortBy?: 'price' | 'createdAt' | 'name' | 'popular';
-  order?: 'asc' | 'desc';
+
+  // if true -> only deleted, if false -> only not deleted
+  deleted?: boolean;
+
+  // if true -> only stock > 0, if false -> only stock == 0
+  inStock?: boolean;
+
+  // sorting (default popularity desc)
+  sort?: ProductsSortField;
+  order?: SortOrder;
 }
+
 export interface FindAllProductsDto {
-  page: number;
   limit: number;
+  cursor?: string;
+
   search?: string;
-  categoryIds?: CategoryId[];
+  categoryIds?: ProductId[];
+
   minPrice?: number;
   maxPrice?: number;
-  sortBy: 'price' | 'createdAt' | 'popular' | 'name';
-  order: 'asc' | 'desc';
+
+  deleted?: boolean;
+  inStock?: boolean;
+
+  sort: ProductsSortField;
+  order: SortOrder;
 }
+
 export interface ProductResponseDto {
   id: ProductId;
   name: string;
   description?: string;
   price: number;
+  stock: number;
   categoryId: CategoryId;
-  createdAt: Date;
-  updatedAt: Date;
-  images?: ProductImagesUrls;
-  popularity?: number;
-  views?: number;
-  avgRating?: number;
-  reviewsCount?: number;
+  images: ProductImagesUrls;
+  createdAt: string;
+  updatedAt: string;
+  popularity: number;
+  views: number;
+  avgRating: number;
+  reviewsCount: number;
+  deletedAt?: string;
 }
 
 export interface ProductsResponseDto {
   items: ProductResponseDto[];
-  page?: number;
-  limit?: number;
-  total?: number;
+  limit: number;
+  nextCursor?: string;
 }
 
+//GET PRODUCT BY ID
 export interface GetProductByIdParamsDto {
   productId: ProductId;
 }
 
 export interface FindProductByIdDto {
   productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
 }
 
-export type GetProductByIdResponseDto = ProductResponseDto;
+export type FullProductResponseDto = Omit<ProductResponseDto, 'images'> & {
+  images: ProductImagesUrls[];
+};
 
+// GET PRODUCTS REVIEWS
 export interface GetProductReviewsParamsDto {
   productId: ProductId;
 }
 export interface GetProductReviewsQueryDto {
-  page?: number;
+  cursorId?: ReviewId;
   limit?: number;
 }
 
 export interface FindProductReviewsDto {
   productId: ProductId;
-  page: number;
   limit: number;
+  cursorId?: ReviewId;
 }
 
 export interface ReviewResponseDto {
   id: ReviewId;
   productId: ProductId;
-  rating: number;
+  rating?: number;
   userId: UserId;
   createdAt: Date;
+  updatedAt: Date;
   comment?: string;
 }
 
 export interface ReviewsResponseDto {
   items: ReviewResponseDto[];
-  page?: number;
-  limit?: number;
-  total?: number;
+  limit: number;
+  total: number;
+  nextCursorId?: ReviewId;
 }
 
+// CREATE PRODUCT
 export interface CreateProductBodyDto {
   name: string;
   description?: string;
   price: number;
+  stock: number;
   categoryId: CategoryId;
-  images?: MultipartFile[];
+  images: MultipartFile[];
 }
 
-export interface CreateProductDto extends CreateProductBodyDto {
+export interface CreateProductDto {
   actorId: UserId;
   actorRole: Role;
+  productId: ProductId;
+  name: string;
+  description?: string;
+  price: number;
+  stock: number;
+  categoryId: CategoryId;
+  images: UploadedProductImage[];
 }
 
-export type CreateProductResponseDto = ProductResponseDto;
+export type CreateProductResponseDto = FullProductResponseDto;
 
+// UPDATE PRODUCT
 export interface UpdateProductParamsDto {
   productId: ProductId;
 }
@@ -113,9 +179,11 @@ export interface UpdateProductBodyDto {
   name?: string;
   description?: string;
   price?: number;
+  stock?: number;
   categoryId?: CategoryId;
-  images?: MultipartFile[];
-  popularity?: number;
+  images?: UploadedProductImage[];
+  popularityOverride?: number | null;
+  popularityOverrideUntil?: string | null;
 }
 
 export interface UpdateProductDto extends UpdateProductBodyDto {
@@ -124,8 +192,48 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
   actorRole: Role;
 }
 
-export type UpdateProductResponseDto = ProductResponseDto;
+export type UpdateProductResponseDto = FullProductResponseDto;
 
+// BULK UPDATE PRODUCT PRICE
+
+export type BulkProductPriceMode = 'percent' | 'fixed';
+
+export interface BulkProductPriceScopeDto {
+  // optional filters (all optional, combined with AND in service)
+  categoryId?: CategoryId;
+  productIds?: ProductId[];
+
+  minPrice?: number;
+  maxPrice?: number;
+
+  inStock?: boolean;
+  deleted?: boolean;
+}
+
+export interface BulkUpdateProductsPriceBodyDto {
+  // how to change price
+  mode: BulkProductPriceMode; // 'percent' | 'fixed'
+  value: number; // +10 / -10 (percent or fixed depending on mode)
+
+  // optional filters
+  scope?: BulkProductPriceScopeDto;
+
+  // optional flags
+  dryRun?: boolean;
+  reason?: string;
+}
+
+export interface BulkUpdateProductsPriceDto extends BulkUpdateProductsPriceBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface BulkUpdateProductsPriceResponseDto {
+  message: string;
+  updatedCount: number;
+}
+
+// DELETE PRODUCT BY ID
 export interface DeleteProductByIdParamsDto {
   productId: ProductId;
 }
@@ -140,21 +248,24 @@ export interface DeleteProductByIdResponseDto {
   message: string;
 }
 
+// CREATE REVIEW
 export interface PostReviewParamsDto {
   productId: ProductId;
 }
 export interface CreateReviewBodyDto {
-  rating: number;
+  rating?: number;
   comment?: string;
 }
 
 export interface CreateReviewDto extends CreateReviewBodyDto {
   productId: ProductId;
   userId: UserId;
+  actorRole: Role;
 }
 
 export type CreateReviewResponseDto = ReviewResponseDto;
 
+// DETELE REVIEW
 export interface DeleteProductReviewParamsDto {
   productId: ProductId;
   reviewId: ReviewId;
@@ -171,6 +282,7 @@ export interface DeleteProductReviewResponseDto {
   message: string;
 }
 
+// UPDATE PRODUCT CATEGORY
 export interface UpdateProductCategoryParamsDto {
   productId: ProductId;
 }
@@ -179,22 +291,11 @@ export interface UpdateProductCategoryBodyDto {
   categoryId: CategoryId;
 }
 
-export interface UpdateProductCategoryDto {
-  productId: ProductId;
-  categoryId: CategoryId;
+export interface UpdateProductCategoryDto
+  extends UpdateProductCategoryParamsDto,
+    UpdateProductCategoryBodyDto {
+  actorId: UserId;
+  actorRole: Role;
 }
 
-export interface UpdateProductCategoryResponseDto {
-  message: string;
-}
-
-export interface RemoveProductCategoryParamsDto {
-  productId: ProductId;
-}
-
-export interface RemoveProductCategoryDto {
-  productId: ProductId;
-}
-export interface RemoveProductCategoryResponseDto {
-  message: string;
-}
+export type UpdateProductCategoryResponseDto = FullProductResponseDto;

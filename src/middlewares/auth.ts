@@ -107,6 +107,8 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
         req.log.info('need login (access invalid, refresh missing/failed)');
       }
 
+      clearRefreshTokenCookie(reply);
+
       // force login when refresh missing
       throw new BadRequestError('LOGIN_REQUIRED');
     }
