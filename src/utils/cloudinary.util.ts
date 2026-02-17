@@ -1,4 +1,4 @@
-import { Readable } from 'node:stream';
+import { Readable, PassThrough } from 'node:stream';
 
 import cloudinary from '@config/cloudinary.js';
 import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
@@ -32,7 +32,6 @@ export type UploadImageArgs = {
   mimetype: string;
   bytes?: number;
   filename?: string;
-  folder?: string;
   publicId?: string;
   tags?: string[];
   invalidate?: boolean;
@@ -62,6 +61,131 @@ function cleanSegment(input: string | number): string {
     .join('_')
     .replaceAll(' ', '-')
     .replace(/[^a-zA-Z0-9._-]/g, '');
+}
+
+export async function requireNonEmptyStream(
+  stream: NodeJS.ReadableStream,
+  code: string,
+): Promise<NodeJS.ReadableStream> {
+  // fastify-multipart gives a one-shot readable stream for file parts
+  // this helper ensures the stream is not empty and returns a new readable that
+  // starts with the first chunk we "peeked" and then continues streaming the rest
+  const s: any = stream;
+
+  // reject immediately if input is not a readable stream instance
+  if (!stream || typeof (stream as any).on !== 'function') {
+    throw new BadRequestError(code);
+  }
+
+  // reject immediately if the stream is already finished or destroyed
+  // in this case there is no way to read bytes and we must not call external upload
+  if (s.destroyed || s.readableEnded) {
+    throw new BadRequestError(code);
+  }
+
+  return new Promise((resolve, reject) => {
+    // tracks whether we observed at least one data chunk
+    // "empty file" means: end/close happens before the first data chunk
+    let seen = false;
+
+    // ensures we resolve/reject the promise only once
+    let settled = false;
+
+    // PassThrough becomes the new stream we return to callers
+    // we write the first chunk into it and then pipe the original stream into it
+    const out = new PassThrough();
+
+    // finalize helper: cleanup listeners and settle exactly once
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+
+    // propagate stream errors
+    const onErr = (e: unknown) => {
+      done(() => reject(e));
+    };
+
+    // if the stream ends before any data chunk was received -> treat as empty file
+    // if we already saw data -> just finish the passthrough and resolve it
+    const onEnd = () => {
+      done(() => {
+        out.end();
+        if (!seen) reject(new BadRequestError(code));
+        else resolve(out);
+      });
+    };
+
+    // some implementations emit 'close' instead of (or before) 'end'
+    // we handle it the same way to avoid hanging requests
+    const onClose = () => {
+      done(() => {
+        out.end();
+        if (!seen) reject(new BadRequestError(code));
+        else resolve(out);
+      });
+    };
+
+    // first data chunk is the "proof" that the file is not empty
+    // we immediately:
+    // 1) pause source stream to avoid race while wiring pipes
+    // 2) write the first chunk into out
+    // 3) pipe the rest of source stream into out
+    // 4) resume reading
+    // 5) resolve with out so caller can pass it to cloudinary as a live stream
+    const onData = (chunk: any) => {
+      seen = true;
+
+      // optional introspection, not used but kept for debugging
+      const _len =
+        typeof chunk === 'string'
+          ? Buffer.byteLength(chunk)
+          : Buffer.isBuffer(chunk)
+            ? chunk.length
+            : chunk?.length;
+
+      // prevent extra reads while connecting the pipe
+      (stream as any).pause?.();
+
+      // preserve the first bytes we already pulled from the source stream
+      out.write(chunk);
+
+      // forward the remaining bytes
+      stream.pipe(out);
+
+      // resume streaming
+      (stream as any).resume?.();
+
+      // resolve immediately: at this point the returned stream will continue producing bytes
+      done(() => resolve(out));
+    };
+
+    // remove listeners and cancel timeout
+    const cleanup = () => {
+      clearTimeout(t);
+      stream.off('error', onErr);
+      stream.off('end', onEnd);
+      stream.off('close', onClose);
+      stream.off('data', onData);
+    };
+
+    // guard against "no events ever happen" situations (broken clients, aborted uploads)
+    // this prevents the request from hanging indefinitely
+    const t = setTimeout(() => {
+      done(() => reject(new BadRequestError(code)));
+    }, 8000);
+
+    // listen once because we only care about the first chunk and terminal events
+    stream.once('error', onErr);
+    stream.once('end', onEnd);
+    stream.once('close', onClose);
+    stream.once('data', onData);
+
+    // kick off reading in case the stream is in paused mode
+    (stream as any).resume?.();
+  });
 }
 
 // build deterministic public_id for overwrite and cleanup flows
@@ -126,14 +250,6 @@ export function isCloudinaryUrl(value: unknown): value is string {
   return false;
 }
 
-// keep folder formatting consistent
-function normalizeFolder(input: string | undefined): string | undefined {
-  if (!input) return undefined;
-
-  const v = input.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-  return v.length > 0 ? v : undefined;
-}
-
 function toReadable(file: Buffer | NodeJS.ReadableStream): NodeJS.ReadableStream {
   if (Buffer.isBuffer(file)) return Readable.from(file);
   return file;
@@ -164,11 +280,8 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
     ...(args.bytes != null ? { bytes: args.bytes } : {}),
   });
 
-  const folder = normalizeFolder(args.folder);
-
   const options: UploadApiOptions = { resource_type: 'image' };
 
-  if (folder) options.folder = folder;
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
 
@@ -214,9 +327,6 @@ export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadIm
   options.public_id = args.publicId;
   options.overwrite = true;
 
-  const folder = normalizeFolder(args.folder);
-
-  if (folder) options.folder = folder;
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
 

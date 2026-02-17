@@ -3,7 +3,7 @@ export const usersGetByIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    userId: { type: 'number' },
+    userId: { type: 'string' },
   },
   required: ['userId'],
 } as const;
@@ -117,7 +117,12 @@ export const usersUpdateMeBodySchema = {
     name: { type: 'string' },
     avatar: { type: 'object' },
     locale: { type: 'string' },
-    phone: { type: 'string' },
+    phone: {
+      type: 'string',
+      minLength: 8,
+      maxLength: 16,
+      pattern: '^\\+[1-9]\\d{7,14}$',
+    },
   },
 } as const;
 

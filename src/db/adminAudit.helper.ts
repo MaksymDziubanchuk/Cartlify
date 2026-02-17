@@ -10,23 +10,32 @@ export function buildProductUpdateAuditChanges(
     name: string;
     description: string | null;
     price: { toString(): string };
+    stock: number;
     categoryId: number;
-    popularity: number;
+    popularityOverride: number | null;
+    popularityOverrideUntil: Date | null;
+    deletedAt: Date | null;
   },
   args: {
     after: {
       name: string;
       description: string | null;
       price: { toString(): string };
+      stock: number;
       categoryId: number;
-      popularity: number;
+      popularityOverride: number | null;
+      popularityOverrideUntil: Date | null;
+      deletedAt: Date | null;
     };
     input: {
       name?: unknown;
       description?: unknown;
       price?: unknown;
+      stock?: unknown;
       categoryId?: unknown;
-      popularity?: unknown;
+      popularityOverride?: unknown;
+      popularityOverrideUntil?: unknown;
+      deletedAt?: unknown;
     };
   },
 ): AuditChange[] {
@@ -45,15 +54,48 @@ export function buildProductUpdateAuditChanges(
     changes.push({ field: 'categoryId', old: before.categoryId, new: args.after.categoryId });
   }
 
-  if (args.input.popularity != null && before.popularity !== args.after.popularity) {
-    changes.push({ field: 'popularity', old: before.popularity, new: args.after.popularity });
-  }
-
   if (args.input.price != null && before.price.toString() !== args.after.price.toString()) {
     changes.push({
       field: 'price',
       old: before.price.toString(),
       new: args.after.price.toString(),
+    });
+  }
+
+  if (args.input.stock !== undefined && before.stock !== args.after.stock) {
+    changes.push({ field: 'stock', old: before.stock, new: args.after.stock });
+  }
+
+  if (
+    args.input.popularityOverride !== undefined &&
+    before.popularityOverride !== args.after.popularityOverride
+  ) {
+    changes.push({
+      field: 'popularityOverride',
+      old: before.popularityOverride,
+      new: args.after.popularityOverride,
+    });
+  }
+
+  const beforeIso = before.popularityOverrideUntil
+    ? before.popularityOverrideUntil.toISOString()
+    : null;
+  const afterIso = args.after.popularityOverrideUntil
+    ? args.after.popularityOverrideUntil.toISOString()
+    : null;
+
+  if (args.input.popularityOverrideUntil !== undefined && beforeIso !== afterIso) {
+    changes.push({ field: 'popularityOverrideUntil', old: beforeIso, new: afterIso });
+  }
+
+  const beforeDeletedIso = before.deletedAt ? before.deletedAt.toISOString() : null;
+  const afterDeletedIso = args.after.deletedAt ? args.after.deletedAt.toISOString() : null;
+
+  if (args.input.deletedAt !== undefined && beforeDeletedIso !== afterDeletedIso) {
+    changes.push({
+      field: 'deletedAt',
+      old: beforeDeletedIso,
+      new: afterDeletedIso,
     });
   }
 
