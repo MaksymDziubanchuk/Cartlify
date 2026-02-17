@@ -3,7 +3,7 @@ import type { FastifySchema } from 'fastify';
 export const getCategoriesSchema = {
   querystring: { $ref: 'categoriesGetQuerySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'categoriesListResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
@@ -30,7 +30,7 @@ export const patchCategorySchema = {
   params: { $ref: 'categoriesUpdateParamsSchema#' },
   body: { $ref: 'categoriesUpdateBodySchema#' },
   response: {
-    200: { $ref: 'messageResponseSchema#' },
+    200: { $ref: 'categoriesUpdateResponseSchema#' },
 
     400: { $ref: 'errorResponseSchema#' },
     401: { $ref: 'errorResponseSchema#' },
