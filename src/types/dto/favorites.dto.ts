@@ -23,16 +23,16 @@ export interface GetFavoritesResponseDto {
   total?: number;
 }
 
-export interface ToggleFavoriteParamsDto {
+export interface AddFavoriteParamsDto {
   productId: ProductId;
 }
 
-export interface ToggleFavoriteDto {
+export interface AddFavoriteDto {
   userId: UserId;
   productId: ProductId;
 }
 
-export interface ToggleFavoriteResponseDto {
+export interface AddFavoriteResponseDto {
   isFavorite: boolean;
 }
 
@@ -46,5 +46,5 @@ export interface DeleteFavoriteDto {
 }
 
 export interface DeleteFavoriteResponseDto {
-  message: string;
+  isFavorite: boolean;
 }

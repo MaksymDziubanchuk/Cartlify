@@ -12,8 +12,8 @@ export const getFavoritesSchema = {
   },
 } satisfies FastifySchema;
 
-export const postToggleFavoriteSchema = {
-  params: { $ref: 'favoritesToggleParamsSchema#' },
+export const postAddFavoriteSchema = {
+  params: { $ref: 'favoritesAddParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
 
@@ -41,6 +41,6 @@ export const deleteFavoriteSchema = {
 
 export const favoritesSchema = {
   getFavoritesSchema,
-  postToggleFavoriteSchema,
+  postAddFavoriteSchema,
   deleteFavoriteSchema,
 };
