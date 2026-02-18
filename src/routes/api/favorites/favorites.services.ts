@@ -1,6 +1,6 @@
 import type {
   FindFavoritesDto,
-  ToggleFavoriteDto,
+  AddFavoriteDto,
   DeleteFavoriteDto,
 } from 'types/dto/favorites.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
@@ -13,10 +13,7 @@ async function findFavorites({
   return { message: 'favorites list not implemented' };
 }
 
-async function toggleFavorite({
-  userId,
-  productId,
-}: ToggleFavoriteDto): Promise<MessageResponseDto> {
+async function toggleFavorite({ userId, productId }: AddFavoriteDto): Promise<MessageResponseDto> {
   return { message: 'toggle favorite not implemented' };
 }
 

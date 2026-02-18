@@ -4,8 +4,8 @@ import type { UserEntity } from 'types/user.js';
 import type {
   GetFavoritesQueryDto,
   FindFavoritesDto,
-  ToggleFavoriteParamsDto,
-  ToggleFavoriteDto,
+  AddFavoriteParamsDto,
+  AddFavoriteDto,
   DeleteFavoriteParamsDto,
   DeleteFavoriteDto,
 } from 'types/dto/favorites.dto.js';
@@ -26,16 +26,14 @@ const getFavorites: ControllerRouter<{}, {}, GetFavoritesQueryDto, MessageRespon
   return reply.code(200).send(result);
 };
 
-const postToggleFavorite: ControllerRouter<
-  ToggleFavoriteParamsDto,
-  {},
-  {},
-  MessageResponseDto
-> = async (req, reply) => {
+const postAddFavorite: ControllerRouter<AddFavoriteParamsDto, {}, {}, MessageResponseDto> = async (
+  req,
+  reply,
+) => {
   const { id } = req.user as UserEntity;
   const { productId } = req.params;
 
-  const args = pickDefined<ToggleFavoriteDto>({ userId: id, productId }, {});
+  const args = pickDefined<AddFavoriteDto>({ userId: id, productId }, {});
   const result = await favoritesServices.toggleFavorite(args);
   return reply.code(200).send(result);
 };
@@ -56,6 +54,6 @@ const deleteFavorite: ControllerRouter<
 
 export const favoritesController = {
   getFavorites,
-  postToggleFavorite,
+  postAddFavorite,
   deleteFavorite,
 };

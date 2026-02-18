@@ -32,8 +32,8 @@ export const favoritesGetResponseSchema = {
   required: ['items'],
 } as const;
 
-export const favoritesToggleParamsSchema = {
-  $id: 'favoritesToggleParamsSchema',
+export const favoritesAddParamsSchema = {
+  $id: 'favoritesAddParamsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -42,8 +42,8 @@ export const favoritesToggleParamsSchema = {
   required: ['productId'],
 } as const;
 
-export const favoritesToggleResponseSchema = {
-  $id: 'favoritesToggleResponseSchema',
+export const favoritesAddResponseSchema = {
+  $id: 'favoritesAddResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -76,8 +76,8 @@ export const favoritesDtoSchemas = [
   favoritesGetQuerySchema,
   favoritesFavoriteItemSchema,
   favoritesGetResponseSchema,
-  favoritesToggleParamsSchema,
-  favoritesToggleResponseSchema,
+  favoritesAddParamsSchema,
+  favoritesAddResponseSchema,
   favoritesDeleteParamsSchema,
   favoritesDeleteResponseSchema,
 ];

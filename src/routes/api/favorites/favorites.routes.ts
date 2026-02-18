@@ -9,18 +9,18 @@ export default async function favoritesRouter(app: FastifyInstance, opt: unknown
   app.get(
     '/',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
+      preHandler: [authGuard, requireRole(['GUEST', 'USER'])],
       schema: favoritesSchema.getFavoritesSchema,
     },
     favoritesController.getFavorites,
   );
   app.post(
-    '/:productId/toggle',
+    '/:productId',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
-      schema: favoritesSchema.postToggleFavoriteSchema,
+      schema: favoritesSchema.postAddFavoriteSchema,
     },
-    favoritesController.postToggleFavorite,
+    favoritesController.postAddFavorite,
   );
   app.delete(
     '/:productId',
