@@ -49,11 +49,6 @@ export async function deleteCategoryById(dto: {
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`categories.deleteCategoryById: unexpected (${msg})`, 500);
+    throw new AppError(`categories.deleteCategoryById: unexpected`, 500);
   }
 }

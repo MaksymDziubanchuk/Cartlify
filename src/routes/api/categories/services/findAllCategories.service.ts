@@ -120,11 +120,6 @@ export async function findAllCategories(
     // keep app errors unchanged and wrap unknown failures
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`categories.findAll: unexpected (${msg})`, 500);
+    throw new AppError(`categories.findAll: unexpected`, 500);
   }
 }

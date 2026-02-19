@@ -1,5 +1,5 @@
 import { prisma } from '@db/client.js';
-import { setUserContext } from '@db/dbContext.service.js';
+import { setActorContext } from '@db/dbContext.service.js';
 
 import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
 
@@ -13,7 +13,7 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
   try {
     const { product, images } = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
-      await setUserContext(tx, { userId: dto.actorId, role: dto.actorRole });
+      await setActorContext(tx, { actorId: dto.actorId, role: dto.actorRole });
 
       // ensure product exists for 404
       const exists = await tx.product.findUnique({
@@ -62,11 +62,6 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`products.findById: unexpected (${msg})`, 500);
+    throw new AppError(`products.findById: unexpected`, 500);
   }
 }

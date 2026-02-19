@@ -96,12 +96,7 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`passwordForgot: unexpected (${msg})`, 500);
+    throw new AppError(`passwordForgot: unexpected`, 500);
   }
 }
 
@@ -177,11 +172,6 @@ export async function passwordReset({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`passwordReset: unexpected (${msg})`, 500);
+    throw new AppError(`passwordReset: unexpected`, 500);
   }
 }

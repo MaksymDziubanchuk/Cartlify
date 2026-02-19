@@ -97,12 +97,7 @@ async function createVoteReview({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`reviews.voteReview: unexpected (${msg})`, 500);
+    throw new AppError(`reviews.voteReview: unexpected`, 500);
   }
 }
 

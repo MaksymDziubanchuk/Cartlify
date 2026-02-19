@@ -135,12 +135,8 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
     if (isAppError(err)) throw err;
 
     // keep a short diagnostic message without leaking full error objects
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
 
-    throw new AppError(`users.findMe: unexpected (${msg})`, 500);
+    throw new AppError(`users.findMe: unexpected`, 500);
   }
 }
 
@@ -333,12 +329,7 @@ async function updateMe({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`users.updateMe: unexpected (${msg})`, 500);
+    throw new AppError(`users.updateMe: unexpected`, 500);
   }
 }
 
@@ -350,21 +341,29 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
 
   try {
     return await prisma.$transaction(async (tx) => {
-      // use guest context for public profile reads
-      await setAdminContext(tx);
+      // read minimal profile via security definer and keep rls rules in db
+      const rows = await tx.$queryRaw<
+        Array<{
+          id: number;
+          email: string;
+          createdAt: Date;
+          updatedAt: Date;
+          name: string | null;
+          avatarUrl: string | null;
+        }>
+      >`
+        select
+          id,
+          email,
+          created_at as "createdAt",
+          updated_at as "updatedAt",
+          name,
+          avatar_url as "avatarUrl"
+        from cartlify.users_get_profile_for_actor(${id}::int)
+        limit 1
+      `;
 
-      // select only public profile fields
-      const user = await tx.user.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          email: true,
-          createdAt: true,
-          updatedAt: true,
-          name: true,
-          avatarUrl: true,
-        },
-      });
+      const user = rows[0] ?? null;
 
       // hide rls-missed rows as not found
       if (!user) throw new NotFoundError('USER_NOT_FOUND');
@@ -385,12 +384,7 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`users.findById: unexpected (${msg})`, 500);
+    throw new AppError(`users.findById: unexpected`, 500);
   }
 }
 
@@ -453,12 +447,7 @@ async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<M
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`users.deleteUserById: unexpected (${msg})`, 500);
+    throw new AppError(`users.deleteUserById: unexpected`, 500);
   }
 }
 
