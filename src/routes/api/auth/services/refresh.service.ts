@@ -25,11 +25,6 @@ export async function refresh({ refreshToken }: RefreshDto): Promise<{
     // map unexpected errors
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`refresh(service): unexpected (${msg})`, 500);
+    throw new AppError(`refresh(service): unexpected`, 500);
   }
 }

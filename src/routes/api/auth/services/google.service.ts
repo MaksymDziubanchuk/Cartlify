@@ -139,11 +139,8 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
 
-    throw new AppError(`Google(service): unexpected (${msg})`, 500);
+
+    throw new AppError(`Google(service): unexpected`, 500);
   }
 }

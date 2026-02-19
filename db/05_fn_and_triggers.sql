@@ -172,6 +172,50 @@ BEGIN
 END;
 $$;
 
+-- "users" GET user for public request
+CREATE OR REPLACE FUNCTION cartlify.users_get_public_profile (p_user_id int) RETURNS TABLE (
+  id int,
+  email text,
+  created_at timestamptz,
+  updated_at timestamptz,
+  name text,
+  avatar_url text
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  prev_role text;
+  prev_uid  text;
+  prev_gid  text;
+BEGIN
+  -- save current actor context (rls session vars)
+  prev_role := current_setting('cartlify.role', true);
+  prev_uid  := current_setting('cartlify.user_id', true);
+  prev_gid  := current_setting('cartlify.guest_id', true);
+
+  -- elevate context for the duration of this function
+  PERFORM cartlify.set_current_context('ADMIN'::cartlify."Role", NULL, NULL);
+
+  -- fetch only allowed fields
+  RETURN QUERY
+  SELECT
+    u.id,
+    u.email,
+    u."createdAt",
+    u."updatedAt",
+    u.name,
+    u."avatarUrl"
+  FROM cartlify.users u
+  WHERE u.id = p_user_id
+  LIMIT 1;
+
+  -- restore previous context
+  PERFORM set_config('cartlify.role',     COALESCE(prev_role, ''), true);
+  PERFORM set_config('cartlify.user_id',  COALESCE(prev_uid,  ''), true);
+  PERFORM set_config('cartlify.guest_id', COALESCE(prev_gid,  ''), true);
+END;
+$$;
+
 ------------------------------------------------------------
 -- USERS TOKENS
 ------------------------------------------------------------

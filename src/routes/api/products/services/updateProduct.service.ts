@@ -1,15 +1,16 @@
 import { Prisma } from '@prisma/client';
-import { prisma } from '@db/client.js';
+import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
+import { isRetryableTxError } from '@db/client.js';
 
 import {
   AppError,
   BadRequestError,
-  ForbiddenError,
   NotFoundError,
   isAppError,
+  ResourceBusyError,
 } from '@utils/errors.js';
 
 import {
@@ -77,139 +78,155 @@ export async function updateProduct({
   if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
   try {
-    const updated = await prisma.$transaction(async (tx) => {
-      // set db session context for rls policies
-      await setUserContext(tx, { userId: actorId, role: actorRole });
+    const updated = await tx(
+      async (db) => {
+        // set db session context for rls policies
+        await setUserContext(db, { userId: actorId, role: actorRole });
 
-      // load previous state for audit and price change log
-      const before = await tx.product.findUnique({
-        where: { id: productIdRaw },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          categoryId: true,
-          popularityOverride: true,
-          popularityOverrideUntil: true,
-          popularity: true,
-          deletedAt: true,
-        },
-      });
-      if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
+        // bound lock wait to avoid hanging on concurrent updates
+        await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-      // replace image pointers only when new images provided
-      if (hasImages) {
-        await tx.productImage.deleteMany({ where: { productId: productIdRaw } });
-        await persistProductImages({ tx, productId: productIdRaw, uploads: images! });
-      }
+        // lock product row to serialize concurrent patches (including stock)
+        await db.$queryRaw`SELECT id FROM cartlify.products WHERE id = ${productIdRaw} FOR UPDATE`;
 
-      // build update payload only for provided fields
-      const data: Prisma.ProductUpdateInput = {
-        ...(name !== undefined ? { name: nameNorm! } : {}),
-        ...(description !== undefined
-          ? { description: descriptionNorm ? descriptionNorm : null }
-          : {}),
-        ...(price !== undefined ? { price: new Prisma.Decimal(priceRaw!) } : {}),
-        ...(stock !== undefined ? { stock: stockRaw! } : {}),
-        ...(categoryId !== undefined ? { categoryId: categoryIdRaw! } : {}),
-      };
-
-      if (popularityOverride === null) {
-        data.popularityOverride = null; // explicit clear
-      } else if (popularityOverride !== undefined) {
-        data.popularityOverride = popularityOverrideRaw as number; // set number
-      }
-
-      if (popularityOverrideUntil === null) {
-        data.popularityOverrideUntil = null; // explicit clear
-      } else if (popularityOverrideUntil !== undefined) {
-        data.popularityOverrideUntil = popularityOverrideUntilDate as Date; // set date
-      }
-
-      // touch when images-only update
-      if (!Object.keys(data).length) {
-        data.updatedAt = new Date();
-      }
-
-      const after = await tx.product.update({
-        where: { id: productIdRaw },
-        data,
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          categoryId: true,
-          popularityOverride: true,
-          popularityOverrideUntil: true,
-          popularity: true,
-          views: true,
-          avgRating: true,
-          reviewsCount: true,
-          deletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
-
-      if (!after) throw new NotFoundError('PRODUCT_NOT_FOUND');
-
-      // build diff list for admin audit log
-      const auditChanges = buildProductUpdateAuditChanges(before, {
-        after,
-        input: {
-          name,
-          description,
-          price,
-          stock,
-          categoryId,
-          popularityOverride,
-          popularityOverrideUntil,
-        },
-      });
-
-      // write admin audit log when something actually changed
-      if (auditChanges.length) {
-        await writeAdminAuditLog(tx, {
-          actorId,
-          actorRole,
-          entityType: 'product',
-          entityId: after.id,
-          action: 'PRODUCT_UPDATE',
-          changes: auditChanges,
+        // load previous state for audit and price change log
+        const before = await db.product.findUnique({
+          where: { id: productIdRaw },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            price: true,
+            stock: true,
+            categoryId: true,
+            popularityOverride: true,
+            popularityOverrideUntil: true,
+            popularity: true,
+            deletedAt: true,
+          },
         });
-      }
+        if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
-      // write product price change log when price changed
-      if (price !== undefined && before.price.toString() !== after.price.toString()) {
-        await writeProductPriceChangeLog(tx, {
-          productId: after.id,
-          actorId,
-          beforePrice: before.price,
-          afterPrice: after.price,
-          mode: 'fixed',
-          value: computeFixedDelta(before.price, after.price),
+        // replace image pointers only when new images provided
+        if (hasImages) {
+          await db.productImage.deleteMany({ where: { productId: productIdRaw } });
+          await persistProductImages({ tx: db, productId: productIdRaw, uploads: images! });
+        }
+
+        // build update payload only for provided fields
+        const data: Prisma.ProductUpdateInput = {
+          ...(name !== undefined ? { name: nameNorm! } : {}),
+          ...(description !== undefined
+            ? { description: descriptionNorm ? descriptionNorm : null }
+            : {}),
+          ...(price !== undefined ? { price: new Prisma.Decimal(priceRaw!) } : {}),
+          ...(stock !== undefined ? { stock: stockRaw! } : {}),
+          ...(categoryId !== undefined ? { categoryId: categoryIdRaw! } : {}),
+        };
+
+        // apply explicit nulls only when client asked to clear values
+        if (popularityOverride === null) {
+          data.popularityOverride = null;
+        } else if (popularityOverride !== undefined) {
+          data.popularityOverride = popularityOverrideRaw as number;
+        }
+
+        if (popularityOverrideUntil === null) {
+          data.popularityOverrideUntil = null;
+        } else if (popularityOverrideUntil !== undefined) {
+          data.popularityOverrideUntil = popularityOverrideUntilDate as Date;
+        }
+
+        // touch when images-only update
+        if (!Object.keys(data).length) {
+          data.updatedAt = new Date();
+        }
+
+        // persist product update under row lock
+        const after = await db.product.update({
+          where: { id: productIdRaw },
+          data,
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            price: true,
+            stock: true,
+            categoryId: true,
+            popularityOverride: true,
+            popularityOverrideUntil: true,
+            popularity: true,
+            views: true,
+            avgRating: true,
+            reviewsCount: true,
+            deletedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         });
-      }
 
-      return after;
-    });
+        // build diff list for admin audit log
+        const auditChanges = buildProductUpdateAuditChanges(before, {
+          after,
+          input: {
+            name,
+            description,
+            price,
+            stock,
+            categoryId,
+            popularityOverride,
+            popularityOverrideUntil,
+          },
+        });
+
+        // write admin audit log when something actually changed
+        if (auditChanges.length) {
+          await writeAdminAuditLog(db, {
+            actorId,
+            actorRole,
+            entityType: 'product',
+            entityId: after.id,
+            action: 'PRODUCT_UPDATE',
+            changes: auditChanges,
+          });
+        }
+
+        // write product price change log when price changed
+        if (price !== undefined && before.price.toString() !== after.price.toString()) {
+          await writeProductPriceChangeLog(db, {
+            productId: after.id,
+            actorId,
+            beforePrice: before.price,
+            afterPrice: after.price,
+            mode: 'fixed',
+            value: computeFixedDelta(before.price, after.price),
+          });
+        }
+
+        return after;
+      },
+      {
+        // keep default isolation and retry only transient lock/conflict errors
+        maxRetries: 3,
+        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
+        maxWait: 1500,
+        timeout: 10_000,
+      },
+    );
 
     // fetch images and map urls
     const imageRows = await readProductImageUrls(updated.id as any);
 
+    // map db row into api dto
     return mapProductRowToResponse({ product: updated, images: imageRows });
   } catch (err) {
+    // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`products.updateProduct: unexpected (${msg})`, 500);
+    // map lock/tx contention errors to a stable 409 for clients
+    if (isRetryableTxError(err)) {
+      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+    }
+    throw new AppError(`products.updateProduct: unexpected`, 500);
   }
 }

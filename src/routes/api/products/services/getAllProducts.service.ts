@@ -85,11 +85,6 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`products.findAll: unexpected (${msg})`, 500);
+    throw new AppError(`products.findAll: unexpected`, 500);
   }
 }

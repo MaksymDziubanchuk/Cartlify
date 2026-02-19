@@ -111,11 +111,6 @@ export async function updateProductsBulkPrice(
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`products.updateProductsBulkPrice: unexpected (${msg})`, 500);
+    throw new AppError(`products.updateProductsBulkPrice: unexpected`, 500);
   }
 }
