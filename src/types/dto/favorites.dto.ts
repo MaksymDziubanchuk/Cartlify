@@ -1,26 +1,27 @@
 import type { UserId, ProductId } from 'types/ids.js';
 import type { ProductResponseDto } from 'types/dto/products.dto.js';
+import type { Role } from 'types/user.js';
 
 export interface GetFavoritesQueryDto {
-  page?: number;
   limit?: number;
+  cursor?: string;
 }
 
 export interface FindFavoritesDto {
-  userId: UserId;
-  page: number;
+  actorId: UserId;
+  actorRole: Role;
   limit: number;
+  cursor?: string;
 }
 
 export interface FavoriteItemDto {
   product: ProductResponseDto;
   addedAt: Date;
 }
+
 export interface GetFavoritesResponseDto {
   items: FavoriteItemDto[];
-  page?: number;
-  limit?: number;
-  total?: number;
+  nextCursor: string | null;
 }
 
 export interface AddFavoriteParamsDto {
@@ -28,12 +29,14 @@ export interface AddFavoriteParamsDto {
 }
 
 export interface AddFavoriteDto {
-  userId: UserId;
+  actorId: UserId;
+  actorRole: Role;
   productId: ProductId;
 }
 
 export interface AddFavoriteResponseDto {
-  isFavorite: boolean;
+  productId: ProductId;
+  isFavorite: true;
 }
 
 export interface DeleteFavoriteParamsDto {
@@ -41,10 +44,12 @@ export interface DeleteFavoriteParamsDto {
 }
 
 export interface DeleteFavoriteDto {
-  userId: UserId;
+  actorId: UserId;
+  actorRole: Role;
   productId: ProductId;
 }
 
 export interface DeleteFavoriteResponseDto {
-  isFavorite: boolean;
+  productId: ProductId;
+  isFavorite: false;
 }

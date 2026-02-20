@@ -1,19 +1,13 @@
 import { prisma } from '@db/client.js';
 import { AppError, isAppError } from '@utils/errors.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
+import { assertLimit } from '@helpers/assertLimit.js';
 
 import type {
   FindAllCategoriesDto,
   CategoriesListResponseDto,
   CategoryResponseDto,
 } from 'types/dto/categories.dto.js';
-
-function assertLimit(limit: unknown): number {
-  // enforce integer limit and cap to prevent heavy queries
-  const n = typeof limit === 'number' ? limit : Number(limit);
-  if (!Number.isInteger(n) || n < 1) throw new AppError('LIMIT_INVALID', 400);
-  return Math.min(n, 100);
-}
 
 function mapCategoryRowToResponse(row: {
   id: number;

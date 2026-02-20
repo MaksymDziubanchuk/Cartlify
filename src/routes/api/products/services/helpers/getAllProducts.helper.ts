@@ -2,6 +2,7 @@ import { AppError } from '@utils/errors.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
+import { assertLimit } from '@helpers/assertLimit.js';
 
 import type {
   ProductsSortField,
@@ -9,12 +10,6 @@ import type {
   FindAllProductsDto,
   ProductResponseDto,
 } from 'types/dto/products.dto.js';
-
-export function assertLimit(limit: unknown): number {
-  const n = typeof limit === 'number' ? limit : Number(limit);
-  if (!Number.isInteger(n) || n < 1) throw new AppError('LIMIT_INVALID', 400);
-  return Math.min(n, 100);
-}
 
 export function normalizeFindAllProductsInput(dto: FindAllProductsDto) {
   const limit = assertLimit(dto.limit ?? 20);
