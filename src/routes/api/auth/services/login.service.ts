@@ -130,11 +130,6 @@ export async function login({
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`Login(service): unexpected (${msg})`, 500);
+    throw new AppError(`Login(service): unexpected`, 500);
   }
 }

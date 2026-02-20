@@ -104,11 +104,6 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`products.createReview: unexpected (${msg})`, 500);
+    throw new AppError(`products.createReview: unexpected`, 500);
   }
 }

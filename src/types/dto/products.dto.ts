@@ -126,7 +126,10 @@ export interface GetProductReviewsQueryDto {
 export interface FindProductReviewsDto {
   productId: ProductId;
   limit: number;
-  cursorId?: ReviewId;
+  cursorId?: string;
+
+  actorId: UserId;
+  actorRole: Role;
 }
 
 export interface ReviewResponseDto {
@@ -137,6 +140,10 @@ export interface ReviewResponseDto {
   createdAt: Date;
   updatedAt: Date;
   comment?: string;
+
+  upVotes: number;
+  downVotes: number;
+  userVote?: 'up' | 'down' | null;
 }
 
 export interface ReviewsResponseDto {

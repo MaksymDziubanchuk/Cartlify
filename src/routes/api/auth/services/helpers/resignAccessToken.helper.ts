@@ -109,6 +109,6 @@ export async function refreshAccessTokenByRefreshToken({
           ? String((err as { message: unknown }).message)
           : 'unknown';
 
-      throw new AppError(`refresh: unexpected error (${msg})`, 500);
+      throw new AppError(`refresh: unexpected error`, 500);
     });
 }

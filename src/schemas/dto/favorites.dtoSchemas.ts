@@ -3,8 +3,8 @@ export const favoritesGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
   },
 } as const;
 
@@ -13,7 +13,7 @@ export const favoritesFavoriteItemSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    product: { $ref: 'productsProductResponseSchema#' },
+    product: { $ref: 'productItemResponseSchema#' },
     addedAt: { type: 'string', format: 'date-time' },
   },
   required: ['product', 'addedAt'],
@@ -25,15 +25,15 @@ export const favoritesGetResponseSchema = {
   additionalProperties: false,
   properties: {
     items: { type: 'array', items: { $ref: 'favoritesFavoriteItemSchema#' } },
-    page: { type: 'number' },
-    limit: { type: 'number' },
-    total: { type: 'number' },
+    nextCursor: {
+      anyOf: [{ type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' }, { type: 'null' }],
+    },
   },
-  required: ['items'],
+  required: ['items', 'nextCursor'],
 } as const;
 
-export const favoritesToggleParamsSchema = {
-  $id: 'favoritesToggleParamsSchema',
+export const favoritesAddParamsSchema = {
+  $id: 'favoritesAddParamsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -42,14 +42,15 @@ export const favoritesToggleParamsSchema = {
   required: ['productId'],
 } as const;
 
-export const favoritesToggleResponseSchema = {
-  $id: 'favoritesToggleResponseSchema',
+export const favoritesAddResponseSchema = {
+  $id: 'favoritesAddResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    isFavorite: { type: 'boolean' },
+    productId: { type: 'integer', minimum: 1 },
+    isFavorite: { const: true },
   },
-  required: ['isFavorite'],
+  required: ['productId', 'isFavorite'],
 } as const;
 
 export const favoritesDeleteParamsSchema = {
@@ -57,7 +58,7 @@ export const favoritesDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'number' },
+    productId: { type: 'integer', minimum: 1 },
   },
   required: ['productId'],
 } as const;
@@ -67,17 +68,18 @@ export const favoritesDeleteResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    message: { type: 'string' },
+    productId: { type: 'integer', minimum: 1 },
+    isFavorite: { const: false },
   },
-  required: ['message'],
+  required: ['productId', 'isFavorite'],
 } as const;
 
 export const favoritesDtoSchemas = [
   favoritesGetQuerySchema,
   favoritesFavoriteItemSchema,
   favoritesGetResponseSchema,
-  favoritesToggleParamsSchema,
-  favoritesToggleResponseSchema,
+  favoritesAddParamsSchema,
+  favoritesAddResponseSchema,
   favoritesDeleteParamsSchema,
   favoritesDeleteResponseSchema,
 ];

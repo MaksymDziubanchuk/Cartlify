@@ -5,7 +5,7 @@ const getAllProductsQuerySchema = {
   properties: {
     // cursor pagination
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursor: { type: 'string', minLength: 1 },
+    cursorId: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
 
     // filters
     search: { type: 'string', minLength: 1 },
@@ -157,7 +157,9 @@ const productsListResponseSchema = {
       items: { $ref: 'productItemResponseSchema#' },
     },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    nextCursor: { anyOf: [{ type: 'string', minLength: 1 }, { type: 'null' }] },
+    nextCursor: {
+      anyOf: [{ type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1 }, { type: 'null' }],
+    },
   },
   required: ['items', 'limit'],
 } as const;
@@ -167,7 +169,7 @@ const getProductReviewsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    cursorId: { type: 'integer', minimum: 1 },
+    cursorId: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
   },
 } as const;
@@ -181,6 +183,11 @@ const reviewResponseSchema = {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
     comment: { type: 'string' },
     userId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+
+    upVotes: { type: 'integer', minimum: 0 },
+    downVotes: { type: 'integer', minimum: 0 },
+    userVote: { anyOf: [{ type: 'string', enum: ['up', 'down'] }, { type: 'null' }] },
+
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
@@ -199,7 +206,7 @@ const reviewsResponseSchema = {
     },
     limit: { type: 'integer' },
     total: { type: 'integer' },
-    nextCursorId: { type: 'integer' },
+    nextCursorId: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1 },
   },
   required: ['items', 'limit', 'total'],
 } as const;

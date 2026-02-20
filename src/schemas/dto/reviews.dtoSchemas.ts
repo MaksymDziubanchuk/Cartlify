@@ -3,7 +3,7 @@ export const reviewsVoteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    reviewId: { type: 'number' },
+    reviewId: { type: 'integer', minimum: 1 },
   },
   required: ['reviewId'],
 } as const;
