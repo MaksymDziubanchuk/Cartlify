@@ -112,14 +112,21 @@ const getProductReviews: ControllerRouter<
   GetProductReviewsQueryDto,
   ReviewsResponseDto
 > = async (req, reply) => {
+  // actor identity comes from authGuard
+  const { id: actorId, role: actorRole } = req.user as User;
   // normalize cursor pagination inputs
-  const { cursorId: qc, limit: ql } = req.query;
+  const ql = req.query.limit;
+  const qc = req.query?.cursorId;
 
   const productId = Number(req.params.productId);
-  const cursorId = qc != null ? Number(qc) : undefined;
+
+  const cursorId = typeof qc === 'string' ? qc : undefined;
   const limit = ql != null ? Number(ql) : 10;
 
-  const args = pickDefined<FindProductReviewsDto>({ productId, limit }, { cursorId });
+  const args = pickDefined<FindProductReviewsDto>(
+    { productId, limit, actorId, actorRole },
+    { cursorId },
+  );
 
   const result = await productServices.findReviews(args);
   return reply.code(200).send(result);

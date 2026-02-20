@@ -1,7 +1,8 @@
 import { AppError } from '@utils/errors.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
-import { b64urlJson } from '@helpers/b64Payload.js';
+import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
+import { assertLimit } from '@helpers/assertLimit.js';
 
 import type {
   ProductsSortField,
@@ -9,35 +10,6 @@ import type {
   FindAllProductsDto,
   ProductResponseDto,
 } from 'types/dto/products.dto.js';
-
-export type CursorPayload = { id: number; v: string | number | null };
-
-export function encodeCursor(payload: CursorPayload): string {
-  return b64urlJson(payload);
-}
-
-export function decodeCursor(cursor: string): CursorPayload {
-  try {
-    if (typeof cursor !== 'string' || !cursor.length || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
-      throw new Error('bad cursor');
-    }
-
-    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
-    const obj = JSON.parse(raw) as CursorPayload;
-
-    if (!obj || !Number.isInteger(obj.id) || obj.id <= 0) throw new Error('bad cursor');
-
-    return obj;
-  } catch {
-    throw new AppError('CURSOR_INVALID', 400);
-  }
-}
-
-export function assertLimit(limit: unknown): number {
-  const n = typeof limit === 'number' ? limit : Number(limit);
-  if (!Number.isInteger(n) || n < 1) throw new AppError('LIMIT_INVALID', 400);
-  return Math.min(n, 100);
-}
 
 export function normalizeFindAllProductsInput(dto: FindAllProductsDto) {
   const limit = assertLimit(dto.limit ?? 20);

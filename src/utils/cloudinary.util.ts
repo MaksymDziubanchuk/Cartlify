@@ -302,12 +302,7 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
     // avoid leaking sdk errors to clients
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`cloudinary: unexpected (${msg})`, 500);
+    throw new AppError(`cloudinary: unexpected`, 500);
   }
 }
 
@@ -341,12 +336,7 @@ export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadIm
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`cloudinary: unexpected (${msg})`, 500);
+    throw new AppError(`cloudinary: unexpected`, 500);
   }
 }
 

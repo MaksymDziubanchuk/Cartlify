@@ -20,6 +20,12 @@ export class UnauthorizedError extends AppError {
   }
 }
 
+export class AccessTokenExpiredError extends AppError {
+  constructor(message = 'ACCESS_TOKEN_EXPIRED') {
+    super(message, 401);
+  }
+}
+
 export class ForbiddenError extends AppError {
   constructor(message = 'Forbidden') {
     super(message, 403);
@@ -38,15 +44,15 @@ export class AlreadyAuthenticatedError extends AppError {
   }
 }
 
-export class TooManyRequestsError extends AppError {
-  constructor(message = 'Too Many Requests') {
-    super(message, 429);
+export class ResourceBusyError extends AppError {
+  constructor(message = 'Resource is busy, try again') {
+    super(message, 409);
   }
 }
 
-export class AccessTokenExpiredError extends AppError {
-  constructor(message = 'ACCESS_TOKEN_EXPIRED') {
-    super(message, 401);
+export class TooManyRequestsError extends AppError {
+  constructor(message = 'Too Many Requests') {
+    super(message, 429);
   }
 }
 

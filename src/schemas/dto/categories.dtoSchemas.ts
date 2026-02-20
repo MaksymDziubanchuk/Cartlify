@@ -4,7 +4,7 @@ export const categoriesGetQuerySchema = {
   additionalProperties: false,
   properties: {
     limit: { type: 'number', minimum: 1, maximum: 100 },
-    cursor: { type: 'string' },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
 
     search: { type: 'string' },
     parentId: { type: 'number', minimum: 1 },
@@ -34,7 +34,9 @@ export const categoriesListResponseSchema = {
   properties: {
     items: { type: 'array', items: { $ref: 'categoriesCategoryResponseSchema#' } },
     limit: { type: 'number' },
-    nextCursor: { type: 'string' },
+    nextCursor: {
+      anyOf: [{ type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1 }, { type: 'null' }],
+    },
   },
   required: ['items', 'limit'],
 } as const;

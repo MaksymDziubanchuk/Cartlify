@@ -1,9 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
-import { BadRequestError, ForbiddenError } from '@utils/errors.js';
-
-import type { Role } from 'types/user.js';
-import type { UserId } from 'types/ids.js';
+import { BadRequestError } from '@utils/errors.js';
 
 export function normalizeFindProductByIdInput(dto: { productId: unknown }) {
   // normalize and validate product id

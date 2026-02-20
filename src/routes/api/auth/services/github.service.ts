@@ -136,11 +136,6 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-    const msg =
-      typeof err === 'object' && err !== null && 'message' in err
-        ? String((err as { message: unknown }).message)
-        : 'unknown';
-
-    throw new AppError(`Github(service): unexpected (${msg})`, 500);
+    throw new AppError(`Github(service): unexpected`, 500);
   }
 }
