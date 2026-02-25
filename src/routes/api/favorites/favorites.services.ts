@@ -67,7 +67,7 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
       // apply cursor window when provided
       const finalWhere = cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
 
-      // fetch limit+1 to detect next page
+      // fetch to detect next page
       const rows = await tx.favorite.findMany({
         where: finalWhere,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
