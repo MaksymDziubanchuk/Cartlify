@@ -112,7 +112,7 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
 
       const last = pageRows.length ? pageRows[pageRows.length - 1] : null;
 
-      // derive next cursor from last row
+      // next cursor from last row
       const nextCursor =
         hasNext && last ? encodeCursor({ id: last.id, v: last.createdAt.toISOString() }) : null;
 
