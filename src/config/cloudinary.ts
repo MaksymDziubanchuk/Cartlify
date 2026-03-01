@@ -23,12 +23,25 @@ function parseCloudinaryUrl(raw: string): CloudinaryCreds {
 
   try {
     u = new URL(raw);
-  } catch {
-    throw new AppError('Server misconfigured: CLOUDINARY_URL invalid', 500);
+  } catch (err) {
+    throw new AppError({
+      statusCode: 500,
+      errorCode: 'CONFIG_INVALID',
+      message: 'Internal Server Error',
+      details: { key: 'CLOUDINARY_URL', reason: 'invalid_url' },
+      expose: false,
+      cause: err,
+    });
   }
 
   if (u.protocol !== 'cloudinary:') {
-    throw new AppError('Server misconfigured: CLOUDINARY_URL protocol', 500);
+    throw new AppError({
+      statusCode: 500,
+      errorCode: 'CONFIG_INVALID',
+      message: 'Internal Server Error',
+      details: { key: 'CLOUDINARY_URL', reason: 'invalid_protocol' },
+      expose: false,
+    });
   }
 
   const apiKey = decodeURIComponent(u.username || '').trim();
@@ -36,7 +49,13 @@ function parseCloudinaryUrl(raw: string): CloudinaryCreds {
   const cloudName = (u.hostname || '').trim();
 
   if (!apiKey || !apiSecret || !cloudName) {
-    throw new AppError('Server misconfigured: CLOUDINARY_URL incomplete', 500);
+    throw new AppError({
+      statusCode: 500,
+      errorCode: 'CONFIG_INCOMPLETE',
+      message: 'Internal Server Error',
+      details: { key: 'CLOUDINARY_URL', reason: 'missing_parts' },
+      expose: false,
+    });
   }
 
   return { cloudName, apiKey, apiSecret };
@@ -51,7 +70,17 @@ function getCloudinaryCreds(): CloudinaryCreds {
   const apiSecret = readEnvString('CLOUDINARY_API_SECRET');
 
   if (!cloudName || !apiKey || !apiSecret) {
-    throw new AppError('Server misconfigured: CLOUDINARY credentials', 500);
+    throw new AppError({
+      statusCode: 500,
+      errorCode: 'CONFIG_INCOMPLETE',
+      message: 'Internal Server Error',
+      details: {
+        key: 'CLOUDINARY',
+        reason: 'missing_env_vars',
+        required: ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'],
+      },
+      expose: false,
+    });
   }
 
   return { cloudName, apiKey, apiSecret };

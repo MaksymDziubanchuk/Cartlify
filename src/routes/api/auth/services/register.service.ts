@@ -1,6 +1,6 @@
 import { Prisma, Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
-import { AppError, BadRequestError } from '@utils/errors.js';
+import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
 
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass } from '@helpers/safePass.js';
@@ -25,12 +25,12 @@ export async function register({
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = name?.trim() || undefined;
 
-  if (!cleanEmail) throw new BadRequestError('Email is required');
+  if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
 
   assertEmail(cleanEmail);
 
   if (!password || password.length < 6) {
-    throw new BadRequestError('Password must be at least 6 characters');
+    throw new BadRequestError('PASSWORD_TOO_SHORT', { minLength: 6 });
   }
 
   // prepare password and verify token
@@ -91,7 +91,7 @@ export async function register({
         },
       });
 
-      if (!u) throw new AppError('User creation failed', 500);
+      if (!u) throw new InternalError({ reason: 'USER_CREATION_FAILED' });
 
       return {
         id: u.id,
@@ -109,7 +109,7 @@ export async function register({
   } catch (err) {
     // map unique email conflict
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new AppError('Email already in use', 409);
+      throw new ConflictError('EMAIL_ALREADY_IN_USE');
     }
     // map raw sql unique conflict
     if (
@@ -117,7 +117,7 @@ export async function register({
       err.code === 'P2010' &&
       (err.meta as any)?.code === '23505'
     ) {
-      throw new AppError('Email already in use', 409);
+      throw new ConflictError('EMAIL_ALREADY_IN_USE');
     }
     throw err;
   }

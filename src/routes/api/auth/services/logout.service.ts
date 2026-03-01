@@ -1,7 +1,7 @@
 import type { Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
-import { AppError, isAppError } from '@utils/errors.js';
+import { InternalError, isAppError } from '@utils/errors.js';
 import { verifyRefreshToken } from '@utils/jwt.js';
 import { verifyTokenHash } from '@helpers/tokenHash.js';
 
@@ -33,7 +33,7 @@ export async function logout({
   } catch (err) {
     // ignore invalid refresh token
     if (isAppError(err)) return { message: 'ok' };
-    throw new AppError('logout: unexpected verify error', 500);
+    throw new InternalError({ reason: 'LOGOUT_VERIFY_UNEXPECTED' }, err);
   }
 
   const now = new Date();
@@ -67,6 +67,6 @@ export async function logout({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`logout: unexpected`, 500);
+    throw new InternalError({ reason: 'LOGOUT_SERVICE_UNEXPECTED' }, err);
   }
 }

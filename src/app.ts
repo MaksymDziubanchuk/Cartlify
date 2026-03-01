@@ -55,6 +55,10 @@ if (env.NODE_ENV === 'development') {
 // enable ajv coercion
 export const app = fastify({
   logger: loggerOptions,
+
+  // disable fastify built-in request logs (incoming/completed)
+  disableRequestLogging: true,
+
   // coerce query/body types
   ajv: { customOptions: { coerceTypes: true } },
 });

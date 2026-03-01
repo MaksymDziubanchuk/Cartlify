@@ -1,6 +1,6 @@
 import { prisma } from '@db/client.js';
 
-import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
+import { AppError, BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
 import { hashPass } from '@helpers/safePass.js';
@@ -21,7 +21,7 @@ import type { Role } from 'types/user.js';
 // return generic response
 export async function passwordForgot({ email }: PasswordForgotDto): Promise<MessageResponseDto> {
   const cleanEmail = email?.trim().toLowerCase();
-  if (!cleanEmail) throw new BadRequestError('Email is required');
+  if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
 
   assertEmail(cleanEmail);
 
@@ -88,15 +88,20 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
 
     try {
       await sendResetPasswordEmail(sendJob);
-    } catch {
-      throw new AppError('PASSWORD_FORGOT_EMAIL_SEND_FAILED', 500);
+    } catch (err) {
+      throw new AppError({
+        statusCode: 502,
+        errorCode: 'PASSWORD_FORGOT_EMAIL_SEND_FAILED',
+        message: 'Bad Gateway',
+        cause: err,
+      });
     }
 
     return res;
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`passwordForgot: unexpected`, 500);
+    throw new InternalError({ reason: 'PASSWORD_FORGOT_UNEXPECTED' }, err);
   }
 }
 
@@ -137,7 +142,7 @@ export async function passwordReset({
 
       // require consumed token row
       const userId = consumed[0]?.userId;
-      if (!userId) throw new AppError('Invalid or expired token', 400);
+      if (!userId) throw new BadRequestError('RESET_TOKEN_INVALID_OR_EXPIRED');
 
       // load user role and switch into owner context
       const userRows = await tx.$queryRaw<{ id: number; role: Role }[]>`
@@ -148,7 +153,7 @@ export async function passwordReset({
       `;
 
       const u = userRows[0];
-      if (!u) throw new AppError('USER_NOT_FOUND_FOR_RESET', 500);
+      if (!u) throw new InternalError({ reason: 'USER_NOT_FOUND_FOR_RESET' });
 
       await setUserContext(tx, { userId: u.id, role: u.role });
 
@@ -172,6 +177,6 @@ export async function passwordReset({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`passwordReset: unexpected`, 500);
+    throw new InternalError({ reason: 'PASSWORD_RESET_UNEXPECTED' }, err);
   }
 }

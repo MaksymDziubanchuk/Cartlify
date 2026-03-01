@@ -1,7 +1,13 @@
 import type { Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
-import { AppError, BadRequestError, ForbiddenError } from '@utils/errors.js';
+import {
+  AppError,
+  AlreadyAuthenticatedError,
+  BadRequestError,
+  ForbiddenError,
+  InternalError,
+} from '@utils/errors.js';
 
 import env from '@config/env.js';
 import { assertEmail } from '@helpers/validateEmail.js';
@@ -29,8 +35,8 @@ export async function googleStart({
   guestId,
   role,
 }: GoogleStartDto): Promise<GoogleStartResponseDto> {
-  if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
-  if (!guestId) throw new AppError('Guest id is required', 400);
+  if (role !== 'GUEST') throw new AlreadyAuthenticatedError({ flow: 'GOOGLE_START' });
+  if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
   // build oauth redirect url
   const url = buildGoogleAuthUrl(String(guestId));
   return { url };
@@ -139,8 +145,6 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-
-
-    throw new AppError(`Google(service): unexpected`, 500);
+    throw new InternalError({ reason: 'GOOGLE_SERVICE_UNEXPECTED' }, err);
   }
 }

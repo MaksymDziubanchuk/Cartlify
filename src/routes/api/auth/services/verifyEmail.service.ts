@@ -1,5 +1,5 @@
 import { prisma } from '@db/client.js';
-import { AppError, BadRequestError } from '@utils/errors.js';
+import { AppError, BadRequestError, InternalError } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 
@@ -43,7 +43,8 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
     try {
       await sendVerifyEmail(sendPayload);
     } catch (err) {
-      throw new AppError(`VERIFY_EMAIL_RESEND_SEND_FAILED. Email: ${cleanEmail}`, 500);
+      if (err instanceof AppError) throw err;
+      throw new InternalError({ reason: 'VERIFY_EMAIL_RESEND_SEND_FAILED' }, err);
     }
   }
 
@@ -53,7 +54,7 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
 
 export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageResponseDto> {
   const cleanToken = token?.trim();
-  if (!cleanToken) throw new BadRequestError('Token is required');
+  if (!cleanToken) throw new BadRequestError('TOKEN_REQUIRED');
 
   try {
     const ok = await prisma.$transaction(async (tx) => {
@@ -68,12 +69,12 @@ export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageRes
     });
 
     // reject invalid token
-    if (!ok) throw new AppError('Invalid or expired token', 400);
+    if (!ok) throw new BadRequestError('VERIFY_TOKEN_INVALID_OR_EXPIRED');
 
     return { message: 'Email verified' };
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-    throw new AppError(`verifyEmail: unexpected`, 500);
+    throw new InternalError({ reason: 'VERIFY_EMAIL_UNEXPECTED' }, err);
   }
 }

@@ -3,8 +3,7 @@ import { randomUUID } from 'node:crypto';
 
 import env from '@config/env.js';
 import { verifyAccessToken, getTtl } from '@utils/jwt.js';
-import { AppError, BadRequestError, UnauthorizedError } from '@utils/errors.js';
-import { isErrorNamed } from '@utils/errors.js';
+import { AppError, UnauthorizedError } from '@utils/errors.js';
 import {
   setAccessTokenCookie,
   setRefreshTokenCookie,
@@ -18,7 +17,7 @@ import { refreshAccessTokenByRefreshToken } from '@routes/api/auth/services/help
 
 const GUEST_ID_TTL = Number(env.GUEST_ID_TTL);
 
-type SilentRefreshResult = { ok: true } | { ok: false; reason: 'invalid' | 'transient' };
+type SilentRefreshResult = { ok: true } | { ok: false; reason: 'invalid' };
 
 // refresh access token silently
 async function trySilentRefresh(
@@ -53,9 +52,11 @@ async function trySilentRefresh(
       return { ok: false, reason: 'invalid' };
     }
 
-    // treat refresh errors as transient
-    req.log.info('silent refresh failed');
-    return { ok: false, reason: 'transient' };
+    throw new AppError({
+      statusCode: 503,
+      errorCode: 'AUTH_TEMPORARILY_UNAVAILABLE',
+      message: 'Service Unavailable',
+    });
   }
 }
 
@@ -86,7 +87,7 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
     try {
       // verify access token payload
       const { userId, role, type } = verifyAccessToken(accessToken);
-      if (type !== 'access') throw new Error('bad access type');
+      if (type !== 'access') throw new UnauthorizedError('LOGIN_REQUIRED');
 
       // attach user to request
       req.user = { id: userId, role };
@@ -101,16 +102,7 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
         if (res.ok) return;
       }
 
-      if (isErrorNamed(err, 'TokenExpiredError')) {
-        req.log.info('need login (access expired, refresh missing/failed)');
-      } else {
-        req.log.info('need login (access invalid, refresh missing/failed)');
-      }
-
-      clearRefreshTokenCookie(reply);
-
-      // force login when refresh missing
-      throw new BadRequestError('LOGIN_REQUIRED');
+      throw new UnauthorizedError('LOGIN_REQUIRED');
     }
   }
 
@@ -120,15 +112,7 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
 
     if (res.ok) return;
 
-    if (res.reason === 'invalid') {
-      // force login on invalid refresh
-      req.log.info('need login (refresh invalid/expired)');
-      throw new UnauthorizedError('LOGIN_REQUIRED');
-    }
-
-    // return 503 on transient refresh errors
-    req.log.info('need login (no access, refresh invalid/expired)');
-    throw new AppError('AUTH_TEMPORARILY_UNAVAILABLE', 503);
+    throw new UnauthorizedError('LOGIN_REQUIRED');
   }
 
   // fallback to guest context

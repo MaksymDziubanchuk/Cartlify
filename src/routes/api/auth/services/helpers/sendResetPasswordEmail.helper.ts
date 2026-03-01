@@ -50,8 +50,13 @@ export async function sendResetPasswordEmail(
         },
       ],
     });
-  } catch {
-    throw new AppError('RESET_EMAIL_SEND_FAILED', 502);
+  } catch (err) {
+    throw new AppError({
+      statusCode: 502,
+      errorCode: 'RESET_EMAIL_SEND_FAILED',
+      message: 'Bad Gateway',
+      cause: err,
+    });
   }
 }
 

@@ -1,4 +1,5 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import { ResourceBusyError } from '@utils/errors.js';
 
 export const prisma = new PrismaClient();
 
@@ -59,7 +60,19 @@ export async function tx<T>(
     try {
       return txOpts ? await prisma.$transaction(fn, txOpts) : await prisma.$transaction(fn);
     } catch (err) {
-      if (!isRetryableTxError(err) || attempt >= maxRetries) throw err;
+      if (!isRetryableTxError(err)) throw err;
+
+      if (attempt >= maxRetries) {
+        throw new ResourceBusyError(
+          {
+            attempts: attempt + 1,
+            maxRetries,
+            pgCode: getPgCode(err),
+            prismaCode: err instanceof Prisma.PrismaClientKnownRequestError ? err.code : undefined,
+          },
+          err,
+        );
+      }
 
       const backoff = 25 * 2 ** attempt + Math.floor(Math.random() * 25);
       await sleep(backoff);

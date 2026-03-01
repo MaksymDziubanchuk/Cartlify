@@ -8,7 +8,7 @@ export default function validateId(paramName: string): preHandlerHookHandler {
     const num = Number(value);
 
     if (!Number.isInteger(num) || num <= 0 || Number.isNaN(num)) {
-      throw new BadRequestError(`Invalid ${paramName}`);
+      throw new BadRequestError('INVALID_ID_PARAM');
     }
   };
 }

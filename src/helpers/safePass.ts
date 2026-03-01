@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import env from '@config/env.js';
-import { AppError } from '@utils/errors.js';
+import { InternalError } from '@utils/errors.js';
 
 // parse bcrypt cost from env
 const roundsRaw = (env as Record<string, unknown>).BCRYPT_ROUNDS;
@@ -12,7 +12,7 @@ const rounds =
       : 12;
 // validate bcrypt cost bounds
 if (!Number.isInteger(rounds) || rounds < 10 || rounds > 15) {
-  throw new AppError('Server misconfigured: BCRYPT_ROUNDS', 500);
+  throw new InternalError({ key: 'BCRYPT_ROUNDS' });
 }
 
 // hash password with configured cost

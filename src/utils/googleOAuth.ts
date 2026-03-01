@@ -1,5 +1,5 @@
 import env from '@config/env.js';
-import { AppError } from '@utils/errors.js';
+import { AppError, BadRequestError, InternalError, UnauthorizedError } from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
@@ -42,7 +42,7 @@ const GOOGLE_SCOPE = 'openid email profile';
 // build signed oauth state
 export function createGoogleOAuthState(guestId: string) {
   const secret = GOOGLE_STATE_SECRET;
-  if (!secret) throw new AppError('GOOGLE_STATE_SECRET is missing', 500);
+  if (!secret) throw new InternalError({ reason: 'GOOGLE_STATE_SECRET_MISSING' });
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -66,8 +66,8 @@ export function buildGoogleAuthUrl(guestId: string) {
   const clientId = GOOGLE_CLIENT_ID;
   const redirectUri = GOOGLE_REDIRECT_URI;
 
-  if (!clientId) throw new AppError('GOOGLE_CLIENT_ID is missing', 500);
-  if (!redirectUri) throw new AppError('GOOGLE_REDIRECT_URI is missing', 500);
+  if (!clientId) throw new InternalError({ reason: 'GOOGLE_CLIENT_ID_MISSING' });
+  if (!redirectUri) throw new InternalError({ reason: 'GOOGLE_REDIRECT_URI_MISSING' });
 
   // attach state to redirect
   const state = createGoogleOAuthState(guestId);
@@ -85,15 +85,15 @@ export function buildGoogleAuthUrl(guestId: string) {
 // verify oauth state signature
 export function verifyGoogleOAuthState(state: string): StatePayload {
   const secret = GOOGLE_STATE_SECRET;
-  if (!secret) throw new AppError('GOOGLE_STATE_SECRET is missing', 500);
+  if (!secret) throw new InternalError({ reason: 'GOOGLE_STATE_SECRET_MISSING' });
 
   // split payload and signature
   const [payloadB64, sig] = state.split('.');
-  if (!payloadB64 || !sig) throw new AppError('INVALID_STATE', 500);
+  if (!payloadB64 || !sig) throw new BadRequestError('INVALID_STATE');
 
   // compare expected signature
   const expected = signState(payloadB64, secret);
-  if (sig !== expected) throw new AppError('INVALID_PAYLOAD', 500);
+  if (sig !== expected) throw new BadRequestError('INVALID_PAYLOAD');
 
   try {
     // decode state json payload
@@ -104,25 +104,25 @@ export function verifyGoogleOAuthState(state: string): StatePayload {
 
     // enforce state expiration
     if (typeof payload.exp !== 'number' || payload.exp < now) {
-      throw new AppError('GOOGLE_OAUTH_STATE_EXPIRED', 401);
+      throw new UnauthorizedError('GOOGLE_OAUTH_STATE_EXPIRED');
     }
 
     if (typeof payload.iat !== 'number') {
-      throw new AppError('GOOGLE_OAUTH_STATE_IAT_INVALID', 401);
+      throw new UnauthorizedError('GOOGLE_OAUTH_STATE_IAT_INVALID');
     }
 
     if (payload.iat > now + 30) {
-      throw new AppError('GOOGLE_OAUTH_STATE_IAT_IN_FUTURE', 401);
+      throw new UnauthorizedError('GOOGLE_OAUTH_STATE_IAT_IN_FUTURE');
     }
 
     if (payload.exp <= payload.iat) {
-      throw new AppError('GOOGLE_OAUTH_STATE_TIME_RANGE_INVALID', 401);
+      throw new UnauthorizedError('GOOGLE_OAUTH_STATE_TIME_RANGE_INVALID');
     }
 
     return payload as StatePayload;
   } catch (err) {
     if (err instanceof AppError) throw err;
-    throw new AppError('Parsing payload failed!', 500);
+    throw new InternalError({ reason: 'GOOGLE_OAUTH_STATE_PARSE_FAILED' }, err);
   }
 }
 
@@ -132,9 +132,9 @@ export async function exchangeGoogleCodeForTokens(code: string): Promise<GoogleT
   const clientSecret = GOOGLE_CLIENT_SECRET;
   const redirectUri = GOOGLE_REDIRECT_URI;
 
-  if (!clientId) throw new AppError('GOOGLE_CLIENT_ID is missing', 500);
-  if (!clientSecret) throw new AppError('GOOGLE_CLIENT_SECRET is missing', 500);
-  if (!redirectUri) throw new AppError('GOOGLE_REDIRECT_URI is missing', 500);
+  if (!clientId) throw new InternalError({ reason: 'GOOGLE_CLIENT_ID_MISSING' });
+  if (!clientSecret) throw new InternalError({ reason: 'GOOGLE_CLIENT_SECRET_MISSING' });
+  if (!redirectUri) throw new InternalError({ reason: 'GOOGLE_REDIRECT_URI_MISSING' });
 
   const body = new URLSearchParams({
     code,
@@ -153,8 +153,12 @@ export async function exchangeGoogleCodeForTokens(code: string): Promise<GoogleT
 
   const text = await res.text();
   if (!res.ok) {
-    throw new AppError('GOOGLE_OAUTH_TOKEN_EXCHANGE_FAILED', 401);
+    throw new UnauthorizedError('GOOGLE_OAUTH_TOKEN_EXCHANGE_FAILED', { status: res.status });
   }
 
-  return JSON.parse(text) as GoogleTokenResponse;
+  try {
+    return JSON.parse(text) as GoogleTokenResponse;
+  } catch (err) {
+    throw new InternalError({ reason: 'GOOGLE_OAUTH_TOKEN_PARSE_FAILED' }, err);
+  }
 }
