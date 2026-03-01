@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { AppError } from '@utils/errors.js';
+import { BadRequestError } from '@utils/errors.js';
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 
@@ -16,7 +16,7 @@ export async function setAdminContext(tx: Tx): Promise<void> {
 
 // sets guest role with guestId (uuid)
 export async function setGuestContext(tx: Tx, guestId: UserId): Promise<void> {
-  if (!guestId) throw new AppError('GUEST_ID_REQUIRED', 400);
+  if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
 
   await tx.$executeRaw`select cartlify.set_current_context(
     'GUEST'::cartlify."Role",
@@ -32,13 +32,13 @@ export async function setUserContext(
 ): Promise<void> {
   const { userId, role } = args;
 
-  if (role === null || role === undefined) throw new AppError('ROLE_REQUIRED', 400);
+  if (role === null || role === undefined) throw new BadRequestError('ROLE_REQUIRED');
 
   // normalize userId to a positive integer (accepts number or numeric string)
   const idNum =
     typeof userId === 'number' ? userId : typeof userId === 'string' ? Number(userId) : Number.NaN;
 
-  if (!Number.isInteger(idNum) || idNum <= 0) throw new AppError('USER_ID_INVALID', 400);
+  if (!Number.isInteger(idNum) || idNum <= 0) throw new BadRequestError('USER_ID_INVALID');
 
   // applies context used by RLS policies inside this transaction
   await tx.$executeRaw`select cartlify.set_current_context(
@@ -86,8 +86,8 @@ export async function setActorContext(
 
   // guest actorId must be uuid
   if (role === 'GUEST') {
-    if (!actorId) throw new AppError('GUEST_ID_REQUIRED', 400);
-    if (!isUuid(actorId)) throw new AppError('GUEST_ID_INVALID', 400);
+    if (!actorId) throw new BadRequestError('GUEST_ID_REQUIRED');
+    if (!isUuid(actorId)) throw new BadRequestError('GUEST_ID_INVALID');
 
     await setGuestContext(tx, actorId as unknown as UserId);
     return;
@@ -95,7 +95,7 @@ export async function setActorContext(
 
   // non-guest actorId must be a positive integer
   const userId = parsePositiveInt(actorId);
-  if (userId === null) throw new AppError('USER_ID_INVALID', 400);
+  if (userId === null) throw new BadRequestError('USER_ID_INVALID');
 
   await setUserContext(tx, { userId: userId as unknown as UserId, role });
 }

@@ -1,7 +1,7 @@
 import { Readable, PassThrough } from 'node:stream';
 
 import cloudinary from '@config/cloudinary.js';
-import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
 
@@ -265,7 +265,7 @@ async function uploadViaStream(
 
     const uploadStream = cloudinary.uploader.upload_stream(options, (err, result) => {
       if (err) return reject(err);
-      if (!result) return reject(new Error('cloudinary upload returned empty result'));
+      if (!result) return reject(new InternalError({ reason: 'CLOUDINARY_UPLOAD_EMPTY_RESULT' }));
       return resolve(result);
     });
 
@@ -302,7 +302,7 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
     // avoid leaking sdk errors to clients
     if (isAppError(err)) throw err;
 
-    throw new AppError(`cloudinary: unexpected`, 500);
+    throw new InternalError({ reason: 'CLOUDINARY_UPLOAD_UNEXPECTED' }, err);
   }
 }
 
@@ -336,7 +336,7 @@ export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadIm
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`cloudinary: unexpected`, 500);
+    throw new InternalError({ reason: 'CLOUDINARY_OVERWRITE_UNEXPECTED' }, err);
   }
 }
 

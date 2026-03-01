@@ -8,7 +8,7 @@ export default function requireRole(roles: Role[]) {
       return;
     }
 
-    throw new ForbiddenError();
+    throw new ForbiddenError('INSUFFICIENT_ROLE');
   }
   return roleGuard;
 }

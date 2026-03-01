@@ -2,7 +2,12 @@ import jwt from 'jsonwebtoken';
 import type { Secret, SignOptions } from 'jsonwebtoken';
 import type { Role } from '@prisma/client';
 import env from '@config/env.js';
-import { AppError, AccessTokenExpiredError, isErrorNamed } from '@utils/errors.js';
+import {
+  AccessTokenExpiredError,
+  InternalError,
+  UnauthorizedError,
+  isErrorNamed,
+} from '@utils/errors.js';
 
 export type AccessTokenPayload = {
   userId: number;
@@ -41,30 +46,24 @@ export function getTtl(rememberMe: boolean, type: TokenType): ExpiresIn | number
   const raw = (env as Record<string, unknown>)[envKey];
 
   if (typeof raw !== 'string') {
-    throw new AppError(`Server misconfigured: ${envKey} is missing`, 500);
+    throw new InternalError({ reason: 'JWT_TTL_ENV_MISSING', envKey });
   }
 
   const compact = raw.trim();
 
   if (!compact) {
-    throw new AppError(`Server misconfigured: ${envKey} is empty`, 500);
+    throw new InternalError({ reason: 'JWT_TTL_ENV_EMPTY', envKey });
   }
 
   // validate ttl format and range
   if (!/^\d+$/.test(compact)) {
-    throw new AppError(
-      `Server misconfigured: ${envKey} (seconds integer expected, e.g. "3600")`,
-      500,
-    );
+    throw new InternalError({ reason: 'JWT_TTL_ENV_FORMAT_INVALID', envKey });
   }
 
   const seconds = Number(compact);
 
   if (!Number.isSafeInteger(seconds) || seconds <= 0) {
-    throw new AppError(
-      `Server misconfigured: ${envKey} (must be a positive safe integer seconds)`,
-      500,
-    );
+    throw new InternalError({ reason: 'JWT_TTL_ENV_VALUE_INVALID', envKey });
   }
 
   return seconds;
@@ -101,14 +100,14 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
     decoded = jwt.verify(token, secret);
 
     if (typeof decoded !== 'object' || decoded === null) {
-      throw new AppError('Invalid access token payload', 401);
+      throw new UnauthorizedError('ACCESS_TOKEN_PAYLOAD_INVALID');
     }
 
     // verify access token signature
     const { userId, role, type, exp } = decoded as Partial<AccessTokenPayload & { exp: number }>;
 
     if (typeof userId !== 'number' || !role || type !== 'access' || typeof exp !== 'number') {
-      throw new AppError('Invalid access token payload', 401);
+      throw new UnauthorizedError('ACCESS_TOKEN_PAYLOAD_INVALID');
     }
 
     return { userId, role: role as Role, type, exp };
@@ -117,7 +116,7 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
       throw new AccessTokenExpiredError();
     }
 
-    throw new AppError('Invalid access token', 401);
+    throw new UnauthorizedError('ACCESS_TOKEN_INVALID');
   }
 }
 
@@ -128,12 +127,12 @@ export function verifyRefreshToken(token: string): VerifiedRefreshToken {
   let decoded: unknown;
   try {
     decoded = jwt.verify(token, secret);
-  } catch (e) {
-    throw new AppError('Invalid refresh token', 401);
+  } catch {
+    throw new UnauthorizedError('REFRESH_TOKEN_INVALID');
   }
 
   if (typeof decoded !== 'object' || decoded === null) {
-    throw new AppError('Invalid refresh token payload', 401);
+    throw new UnauthorizedError('REFRESH_TOKEN_PAYLOAD_INVALID');
   }
 
   // validate refresh token payload
@@ -149,7 +148,7 @@ export function verifyRefreshToken(token: string): VerifiedRefreshToken {
     typeof exp !== 'number' ||
     typeof rememberMe !== 'boolean'
   ) {
-    throw new AppError('Invalid refresh token payload', 401);
+    throw new UnauthorizedError('REFRESH_TOKEN_PAYLOAD_INVALID');
   }
 
   return { userId, role: role as Role, type, jwtId, exp, rememberMe };
