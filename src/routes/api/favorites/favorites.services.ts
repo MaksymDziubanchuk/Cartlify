@@ -5,7 +5,7 @@ import { encodeCursor, decodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 import { mapProductListRowToResponse } from '../products/services/helpers/getAllProducts.helper.js';
 
-import { BadRequestError, NotFoundError, isAppError, AppError } from '@utils/errors.js';
+import { BadRequestError, NotFoundError, InternalError, isAppError } from '@utils/errors.js';
 import type {
   FindFavoritesDto,
   GetFavoritesResponseDto,
@@ -29,12 +29,12 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
     cRaw && typeof cRaw.v === 'string' && cRaw.v.length
       ? (() => {
           const d = new Date(cRaw.v);
-          if (Number.isNaN(d.getTime())) throw new AppError('CURSOR_INVALID', 400);
+          if (Number.isNaN(d.getTime())) throw new BadRequestError('CURSOR_INVALID');
           return { id: cRaw.id, createdAt: d };
         })()
       : cRaw
         ? (() => {
-            throw new AppError('CURSOR_INVALID', 400);
+            throw new BadRequestError('CURSOR_INVALID');
           })()
         : undefined;
 
@@ -120,7 +120,7 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
     });
   } catch (err) {
     if (isAppError(err)) throw err;
-    throw new AppError('favorites.findFavorites: unexpected', 500);
+    throw new InternalError({ reason: 'FAVORITES_FIND_UNEXPECTED' }, err);
   }
 }
 
@@ -173,7 +173,7 @@ async function addFavorite(dto: AddFavoriteDto): Promise<AddFavoriteResponseDto>
     });
   } catch (err) {
     if (isAppError(err)) throw err;
-    throw new AppError('favorites.addFavorite: unexpected', 500);
+    throw new InternalError({ reason: 'FAVORITES_ADD_UNEXPECTED' }, err);
   }
 }
 
@@ -198,7 +198,7 @@ async function deleteFavorite(dto: DeleteFavoriteDto): Promise<DeleteFavoriteRes
     return { productId, isFavorite: false };
   } catch (err) {
     if (isAppError(err)) throw err;
-    throw new AppError('favorites.deleteFavorite: unexpected', 500);
+    throw new InternalError({ reason: 'FAVORITES_DELETE_UNEXPECTED' }, err);
   }
 }
 

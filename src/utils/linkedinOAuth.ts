@@ -1,5 +1,5 @@
 import env from '@config/env.js';
-import { AppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, UnauthorizedError } from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
@@ -61,7 +61,7 @@ const LINKEDIN_SCOPE = 'openid profile email';
 // limits replay window
 export function createLinkedInOAuthState(guestId: string) {
   const secret = LINKEDIN_STATE_SECRET;
-  if (!secret) throw new AppError('LINKEDIN_STATE_SECRET is missing', 500);
+  if (!secret) throw new InternalError({ reason: 'LINKEDIN_STATE_SECRET_MISSING' });
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -86,8 +86,8 @@ export function buildLinkedInAuthUrl(guestId: string) {
   const clientId = LINKEDIN_CLIENT_ID;
   const redirectUri = LINKEDIN_REDIRECT_URI;
 
-  if (!clientId) throw new AppError('LINKEDIN_CLIENT_ID is missing', 500);
-  if (!redirectUri) throw new AppError('LINKEDIN_REDIRECT_URI is missing', 500);
+  if (!clientId) throw new InternalError({ reason: 'LINKEDIN_CLIENT_ID_MISSING' });
+  if (!redirectUri) throw new InternalError({ reason: 'LINKEDIN_REDIRECT_URI_MISSING' });
 
   // bind auth start to callback
   const state = createLinkedInOAuthState(guestId);
@@ -106,37 +106,43 @@ export function buildLinkedInAuthUrl(guestId: string) {
 // block tamper and replay
 export function verifyLinkedInOAuthState(state: string): StatePayload {
   const secret = LINKEDIN_STATE_SECRET;
-  if (!secret) throw new AppError('LINKEDIN_STATE_SECRET is missing', 500);
+  if (!secret) throw new InternalError({ reason: 'LINKEDIN_STATE_SECRET_MISSING' });
 
   const [payloadB64, sig] = state.split('.');
-  if (!payloadB64 || !sig) throw new AppError('INVALID_STATE', 500);
+  if (!payloadB64 || !sig) throw new BadRequestError('INVALID_STATE');
 
   // verify state signature
   const expected = signState(payloadB64, secret);
-  if (sig !== expected) throw new AppError('INVALID_PAYLOAD', 500);
+  if (sig !== expected) throw new BadRequestError('INVALID_PAYLOAD');
 
   // decode state payload
   const raw = decodePlaceholderInternal(payloadB64, 'base64url').toString('utf8');
-  const payload = JSON.parse(raw) as StatePayload;
+  let payload: StatePayload;
+
+  try {
+    payload = JSON.parse(raw) as StatePayload;
+  } catch (err) {
+    throw new InternalError({ reason: 'LINKEDIN_OAUTH_STATE_PARSE_FAILED' }, err);
+  }
 
   const now = Math.floor(Date.now() / 1000);
 
   // enforce expiry window
   if (typeof payload.exp !== 'number' || payload.exp < now) {
-    throw new AppError('LINKEDIN_OAUTH_STATE_EXPIRED', 401);
+    throw new UnauthorizedError('LINKEDIN_OAUTH_STATE_EXPIRED');
   }
 
   // validate issued-at bounds
   if (typeof payload.iat !== 'number') {
-    throw new AppError('LINKEDIN_OAUTH_STATE_IAT_INVALID', 401);
+    throw new UnauthorizedError('LINKEDIN_OAUTH_STATE_IAT_INVALID');
   }
 
   if (payload.iat > now + 30) {
-    throw new AppError('LINKEDIN_OAUTH_STATE_IAT_IN_FUTURE', 401);
+    throw new UnauthorizedError('LINKEDIN_OAUTH_STATE_IAT_IN_FUTURE');
   }
 
   if (payload.exp <= payload.iat) {
-    throw new AppError('LINKEDIN_OAUTH_STATE_TIME_RANGE_INVALID', 401);
+    throw new UnauthorizedError('LINKEDIN_OAUTH_STATE_TIME_RANGE_INVALID');
   }
 
   return payload;
@@ -149,9 +155,9 @@ export async function exchangeLinkedInCodeForTokens(code: string): Promise<Linke
   const clientSecret = LINKEDIN_CLIENT_SECRET;
   const redirectUri = LINKEDIN_REDIRECT_URI;
 
-  if (!clientId) throw new AppError('LINKEDIN_CLIENT_ID is missing', 500);
-  if (!clientSecret) throw new AppError('LINKEDIN_CLIENT_SECRET is missing', 500);
-  if (!redirectUri) throw new AppError('LINKEDIN_REDIRECT_URI is missing', 500);
+  if (!clientId) throw new InternalError({ reason: 'LINKEDIN_CLIENT_ID_MISSING' });
+  if (!clientSecret) throw new InternalError({ reason: 'LINKEDIN_CLIENT_SECRET_MISSING' });
+  if (!redirectUri) throw new InternalError({ reason: 'LINKEDIN_REDIRECT_URI_MISSING' });
 
   // build token exchange body
   const body = new URLSearchParams({
@@ -170,15 +176,24 @@ export async function exchangeLinkedInCodeForTokens(code: string): Promise<Linke
   });
 
   const text = await res.text();
+
   if (!res.ok) {
-    throw new AppError('LINKEDIN_OAUTH_TOKEN_EXCHANGE_FAILED', 401);
+    throw new UnauthorizedError('LINKEDIN_OAUTH_TOKEN_EXCHANGE_FAILED', {
+      status: res.status,
+    });
   }
 
   // parse token response
-  const data = JSON.parse(text) as LinkedInTokenResponse;
+  let data: LinkedInTokenResponse;
+
+  try {
+    data = JSON.parse(text) as LinkedInTokenResponse;
+  } catch (err) {
+    throw new InternalError({ reason: 'LINKEDIN_OAUTH_TOKEN_PARSE_FAILED' }, err);
+  }
 
   // require access token for next step
-  if (!data.access_token) throw new AppError('LINKEDIN_OAUTH_NO_ACCESS_TOKEN', 401);
+  if (!data.access_token) throw new UnauthorizedError('LINKEDIN_OAUTH_NO_ACCESS_TOKEN');
 
   return data;
 }

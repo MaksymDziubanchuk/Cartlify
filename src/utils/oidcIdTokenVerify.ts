@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
-import { AppError } from '@utils/errors.js';
+import { InternalError, UnauthorizedError } from '@utils/errors.js';
 
 type Jwk = {
   kty: string;
@@ -49,13 +49,19 @@ function b64urlToUtf8(input: string) {
 // require kid and alg
 function readJwtHeader(token: string): JwtHeader {
   const [h] = token.split('.');
-  if (!h) throw new AppError('INVALID_ID_TOKEN', 401);
+  if (!h) throw new UnauthorizedError('INVALID_ID_TOKEN');
 
   const raw = b64urlToUtf8(h);
-  const header = JSON.parse(raw);
+  let header: Record<string, unknown>;
 
-  if (!header.kid) throw new AppError('ID_TOKEN_NO_KID', 401);
-  if (!header.alg) throw new AppError('ID_TOKEN_NO_ALG', 401);
+  try {
+    header = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    throw new UnauthorizedError('INVALID_ID_TOKEN', undefined, err);
+  }
+
+  if (!header.kid) throw new UnauthorizedError('ID_TOKEN_NO_KID');
+  if (!header.alg) throw new UnauthorizedError('ID_TOKEN_NO_ALG');
 
   return { kid: header.kid, alg: header.alg, typ: header.typ } as JwtHeader;
 }
@@ -75,10 +81,17 @@ async function getJwkByKid(jwksUri: string, kid: string) {
   const res = await fetch(jwksUri, { method: 'GET', headers: { accept: 'application/json' } });
   const text = await res.text();
 
-  if (!res.ok) throw new AppError('JWKS_FETCH_FAILED', 401);
+  if (!res.ok) throw new UnauthorizedError('JWKS_FETCH_FAILED', { status: res.status });
 
-  const jwks = JSON.parse(text) as Jwks;
-  if (!jwks?.keys?.length) throw new AppError('JWKS_EMPTY', 401);
+  let jwks: Jwks;
+
+  try {
+    jwks = JSON.parse(text) as Jwks;
+  } catch (err) {
+    throw new InternalError({ reason: 'JWKS_PARSE_FAILED' }, err);
+  }
+
+  if (!jwks?.keys?.length) throw new UnauthorizedError('JWKS_EMPTY');
 
   const keysByKid = new Map<string, Jwk>();
   for (const k of jwks.keys) {
@@ -88,7 +101,7 @@ async function getJwkByKid(jwksUri: string, kid: string) {
   jwksCache.set(jwksUri, { fetchedAtMs: now, keysByKid });
 
   const key = keysByKid.get(kid);
-  if (!key) throw new AppError('JWKS_KID_NOT_FOUND', 401);
+  if (!key) throw new UnauthorizedError('JWKS_KID_NOT_FOUND');
 
   return key;
 }
@@ -98,8 +111,8 @@ async function getJwkByKid(jwksUri: string, kid: string) {
 function jwkToPublicKey(jwk: Jwk) {
   try {
     return crypto.createPublicKey({ key: jwk as any, format: 'jwk' });
-  } catch {
-    throw new AppError('JWK_TO_KEY_FAILED', 401);
+  } catch (err) {
+    throw new UnauthorizedError('JWK_TO_KEY_FAILED', undefined, err);
   }
 }
 
@@ -123,7 +136,7 @@ function verifyAgainstIssList<T>(token: string, key: crypto.KeyObject, opt: Veri
     }
   }
 
-  throw new AppError('ID_TOKEN_VERIFY_FAILED', 401);
+  throw new UnauthorizedError('ID_TOKEN_VERIFY_FAILED');
 }
 
 // validate header and key
@@ -132,7 +145,7 @@ export async function verifyOidcIdToken<T>(token: string, opt: VerifyOpts): Prom
   const header = readJwtHeader(token);
 
   if (header.alg !== 'RS256') {
-    throw new AppError('ID_TOKEN_UNSUPPORTED_ALG', 401);
+    throw new UnauthorizedError('ID_TOKEN_UNSUPPORTED_ALG');
   }
 
   const jwk = await getJwkByKid(opt.jwksUri, header.kid);

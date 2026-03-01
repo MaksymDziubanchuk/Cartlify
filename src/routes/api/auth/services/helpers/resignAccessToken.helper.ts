@@ -1,6 +1,6 @@
 import type { Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
-import { AppError, BadRequestError, UnauthorizedError } from '@utils/errors.js';
+import { AppError, BadRequestError, UnauthorizedError, InternalError } from '@utils/errors.js';
 import { verifyRefreshToken } from '@utils/jwt.js';
 
 import { setUserContext } from '@db/dbContext.service.js';
@@ -33,16 +33,16 @@ export async function refreshAccessTokenByRefreshToken({
 }: RefreshAccessDto): Promise<RefreshAccessResult> {
   // validate refresh token input
   const rt = refreshToken?.trim();
-  if (!rt) throw new BadRequestError('refresh: refreshToken required');
+  if (!rt) throw new BadRequestError('REFRESH_TOKEN_REQUIRED');
 
   // decode refresh token payload
   const { userId, role: tokenRole, jwtId, rememberMe } = verifyRefreshToken(rt);
 
   if (!Number.isInteger(userId) || userId <= 0)
-    throw new UnauthorizedError('refresh: bad payload userId');
+    throw new UnauthorizedError('REFRESH_PAYLOAD_USER_ID_INVALID');
   if (!Number.isInteger(jwtId) || jwtId <= 0)
-    throw new UnauthorizedError('refresh: bad payload jwtId');
-  if (tokenRole === 'GUEST') throw new UnauthorizedError('refresh: guest token forbidden');
+    throw new UnauthorizedError('REFRESH_PAYLOAD_JWT_ID_INVALID');
+  if (tokenRole === 'GUEST') throw new UnauthorizedError('REFRESH_GUEST_TOKEN_FORBIDDEN');
 
   // open tx and set db context
   return prisma
@@ -51,7 +51,7 @@ export async function refreshAccessTokenByRefreshToken({
 
       // load refresh token row
       const tokenRow = await getRefreshTokenRow(tx, jwtId);
-      if (!tokenRow) throw new UnauthorizedError('refresh: token row not found');
+      if (!tokenRow) throw new UnauthorizedError('REFRESH_TOKEN_ROW_NOT_FOUND');
 
       // basic token row checks
       assertRefreshRowBasicsOrThrow(tokenRow, { userId });
@@ -64,8 +64,8 @@ export async function refreshAccessTokenByRefreshToken({
         refreshToken: rt,
         now,
         userId,
-        reuseMessage: 'refresh: token reuse detected',
-        hashMismatchMessage: 'refresh: token hash mismatch',
+        reuseMessage: 'REFRESH_TOKEN_REUSE_DETECTED',
+        hashMismatchMessage: 'REFRESH_TOKEN_HASH_MISMATCH',
       });
 
       // block expired token in db
@@ -81,8 +81,8 @@ export async function refreshAccessTokenByRefreshToken({
         select: { id: true, role: true },
       });
 
-      if (!dbUser) throw new UnauthorizedError('refresh: user not found');
-      if (dbUser.role === 'GUEST') throw new UnauthorizedError('refresh: guest forbidden');
+      if (!dbUser) throw new UnauthorizedError('REFRESH_USER_NOT_FOUND');
+      if (dbUser.role === 'GUEST') throw new UnauthorizedError('REFRESH_GUEST_USER_FORBIDDEN');
 
       // rotate tokens with fixed deadline
       const rotated = await rotateFixedDeadlineTokens(tx, {
@@ -104,11 +104,6 @@ export async function refreshAccessTokenByRefreshToken({
     .catch((err) => {
       if (err instanceof AppError) throw err;
 
-      const msg =
-        typeof err === 'object' && err !== null && 'message' in err
-          ? String((err as { message: unknown }).message)
-          : 'unknown';
-
-      throw new AppError(`refresh: unexpected error`, 500);
+      throw new InternalError(undefined, err);
     });
 }

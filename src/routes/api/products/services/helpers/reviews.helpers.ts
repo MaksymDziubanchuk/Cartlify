@@ -63,7 +63,7 @@ export function normalizeDeleteReviewInput(dto: {
 
   // validate actor role for admin-only delete
   if (dto.actorRole !== 'ADMIN' && dto.actorRole !== 'ROOT') {
-    throw new ForbiddenError('FORBIDDEN');
+    throw new ForbiddenError('INSUFFICIENT_ROLE');
   }
 
   return { productId, reviewId, actorId, actorRole: dto.actorRole };

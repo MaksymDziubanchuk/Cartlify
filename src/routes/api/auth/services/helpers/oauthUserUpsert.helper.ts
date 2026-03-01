@@ -1,5 +1,5 @@
 import type { Prisma, Role } from '@prisma/client';
-import { AppError } from '@utils/errors.js';
+import { AppError, InternalError, ForbiddenError } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 type Tx = Prisma.TransactionClient;
@@ -47,7 +47,6 @@ export async function upsertOAuthUserByEmail(
     avatarUrl,
     locale,
     userNotFoundAfterConflictMsg,
-    providerSubMismatchMsg,
   } = args;
 
   // upsert oauth user by email
@@ -119,7 +118,7 @@ export async function upsertOAuthUserByEmail(
     u = rows[0];
 
     // fallback select on conflict
-    if (!u) throw new AppError(userNotFoundAfterConflictMsg, 500);
+    if (!u) throw new InternalError({ reason: userNotFoundAfterConflictMsg });
 
     // allow oauth takeover
     const canAdoptUnverifiedLocal =
@@ -128,7 +127,9 @@ export async function upsertOAuthUserByEmail(
     // provider mismatch on existing account
     if (u.authProvider !== authProvider) {
       if (!canAdoptUnverifiedLocal) {
-        throw new AppError(`Use ${u.authProvider} login for this account`, 403);
+        throw new ForbiddenError('AUTH_PROVIDER_MISMATCH', {
+          authProvider: u.authProvider,
+        });
       }
 
       // set user db context
@@ -160,7 +161,7 @@ export async function upsertOAuthUserByEmail(
       `;
 
       const uu = updated[0];
-      if (!uu) throw new AppError('USER_TAKEOVER_FAILED', 500);
+      if (!uu) throw new InternalError({ reason: 'USER_TAKEOVER_FAILED' });
 
       // invalidate pending verify tokens
       await tx.$executeRaw`
@@ -177,7 +178,7 @@ export async function upsertOAuthUserByEmail(
 
     // prevent sub takeover
     if (u.authProvider === authProvider && u.providerSub && u.providerSub !== providerSub) {
-      throw new AppError(providerSubMismatchMsg, 403);
+      throw new ForbiddenError('PROVIDER_SUB_MISMATCH');
     }
   }
 

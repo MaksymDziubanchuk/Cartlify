@@ -1,4 +1,4 @@
-import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import type { RefreshDto, RefreshResponseDto } from 'types/dto/auth.dto.js';
 
@@ -25,6 +25,6 @@ export async function refresh({ refreshToken }: RefreshDto): Promise<{
     // map unexpected errors
     if (isAppError(err)) throw err;
 
-    throw new AppError(`refresh(service): unexpected`, 500);
+    throw new InternalError({ reason: 'REFRESH_SERVICE_UNEXPECTED' }, err);
   }
 }

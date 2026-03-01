@@ -1,5 +1,5 @@
 import { prisma } from '@db/client.js';
-import { AppError, isAppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 
@@ -45,7 +45,8 @@ export async function findAllCategories(
     dto.parentId != null
       ? (() => {
           const n = Number(dto.parentId);
-          if (!Number.isInteger(n) || n <= 0) throw new AppError('CATEGORY_PARENT_ID_INVALID', 400);
+          if (!Number.isInteger(n) || n <= 0)
+            throw new BadRequestError('CATEGORY_PARENT_ID_INVALID');
           return n;
         })()
       : undefined;
@@ -71,7 +72,7 @@ export async function findAllCategories(
       ? { id: cRaw.id, name: cRaw.v }
       : cRaw
         ? (() => {
-            throw new AppError('CURSOR_INVALID', 400);
+            throw new BadRequestError('CURSOR_INVALID');
           })()
         : undefined;
 
@@ -114,6 +115,6 @@ export async function findAllCategories(
     // keep app errors unchanged and wrap unknown failures
     if (isAppError(err)) throw err;
 
-    throw new AppError(`categories.findAll: unexpected`, 500);
+    throw new InternalError({ reason: 'CATEGORIES_FIND_ALL_UNEXPECTED' }, err);
   }
 }

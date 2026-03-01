@@ -49,7 +49,12 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
     });
   } catch (err) {
     // avoid leaking provider details
-    throw new AppError('VERIFY_EMAIL_SEND_FAILED', 502);
+    throw new AppError({
+      statusCode: 502,
+      errorCode: 'VERIFY_EMAIL_SEND_FAILED',
+      message: 'Bad Gateway',
+      cause: err,
+    });
   }
 }
 

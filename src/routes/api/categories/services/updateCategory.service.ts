@@ -4,7 +4,14 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
-import { AppError, BadRequestError, NotFoundError, isAppError } from '@utils/errors.js';
+import {
+  AppError,
+  BadRequestError,
+  ConflictError,
+  InternalError,
+  NotFoundError,
+  isAppError,
+} from '@utils/errors.js';
 
 import { normalizeFindCategoryByIdInput, normalizeUpdateCategoryInput } from './helpers/index.js';
 
@@ -126,17 +133,21 @@ export async function updateCategory({
   } catch (err) {
     // map unique slug conflict
     if (typeof err === 'object' && err !== null && 'code' in err && (err as any).code === 'P2002') {
-      throw new AppError('CATEGORY_SLUG_TAKEN', 409);
+      throw new ConflictError('CATEGORY_SLUG_TAKEN', { field: 'slug' });
     }
 
     // map invalid parentId foreign key
     if (typeof err === 'object' && err !== null && 'code' in err && (err as any).code === 'P2003') {
-      throw new AppError('CATEGORY_PARENT_NOT_FOUND', 422);
+      throw new AppError({
+        statusCode: 422,
+        errorCode: 'CATEGORY_PARENT_NOT_FOUND',
+        message: 'Unprocessable Entity',
+      });
     }
 
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`categories.update: unexpected`, 500);
+    throw new InternalError({ reason: 'CATEGORIES_UPDATE_UNEXPECTED' }, err);
   }
 }

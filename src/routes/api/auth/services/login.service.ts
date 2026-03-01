@@ -1,7 +1,13 @@
 import type { Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
-import { AppError, BadRequestError } from '@utils/errors.js';
+import {
+  AppError,
+  BadRequestError,
+  ForbiddenError,
+  InternalError,
+  UnauthorizedError,
+} from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { verifyPass } from '@helpers/safePass.js';
 
@@ -29,10 +35,10 @@ export async function login({
 
   assertEmail(cleanEmail);
 
-  if (!cleanEmail) throw new BadRequestError('Email is required');
-  if (!password) throw new BadRequestError('Password is required');
+  if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
+  if (!password) throw new BadRequestError('PASSWORD_REQUIRED');
 
-  const invalidCreds = () => new AppError('Invalid email or password', 401);
+  const invalidCreds = () => new UnauthorizedError('INVALID_CREDENTIALS');
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -55,12 +61,14 @@ export async function login({
 
       // require local auth provider
       if (u.auth_provider !== 'LOCAL') {
-        throw new AppError(`Use ${u.auth_provider} login for this account`, 403);
+        throw new ForbiddenError('AUTH_PROVIDER_MISMATCH', {
+          authProvider: u.auth_provider,
+        });
       }
 
       // verify password hash
       if (!u.password_hash) {
-        throw new AppError('Local account has no password hash', 500);
+        throw new InternalError({ reason: 'LOCAL_ACCOUNT_PASSWORD_HASH_MISSING' });
       }
 
       const ok = await verifyPass(password, u.password_hash);
@@ -68,7 +76,7 @@ export async function login({
 
       // require verified email
       if (!u.is_verified) {
-        throw new AppError('Email is not verified', 403);
+        throw new ForbiddenError('EMAIL_NOT_VERIFIED');
       }
 
       // switch to user db context
@@ -101,7 +109,7 @@ export async function login({
         },
       });
 
-      if (!user) throw new AppError('User not found after login', 500);
+      if (!user) if (!user) throw new InternalError({ reason: 'USER_NOT_FOUND_AFTER_LOGIN' });
 
       assertEmail(user.email);
 
@@ -130,6 +138,6 @@ export async function login({
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-    throw new AppError(`Login(service): unexpected`, 500);
+    throw new InternalError({ reason: 'LOGIN_SERVICE_UNEXPECTED' }, err);
   }
 }

@@ -1,4 +1,4 @@
-import { AppError } from '@utils/errors.js';
+import { BadRequestError, InternalError } from '@utils/errors.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
@@ -29,13 +29,13 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto) {
   const maxPrice = dto.maxPrice != null ? Number(dto.maxPrice) : undefined;
 
   if (minPrice != null && (!Number.isFinite(minPrice) || minPrice < 0)) {
-    throw new AppError('MIN_PRICE_INVALID', 400);
+    throw new BadRequestError('MIN_PRICE_INVALID');
   }
   if (maxPrice != null && (!Number.isFinite(maxPrice) || maxPrice < 0)) {
-    throw new AppError('MAX_PRICE_INVALID', 400);
+    throw new BadRequestError('MAX_PRICE_INVALID');
   }
   if (minPrice != null && maxPrice != null && minPrice > maxPrice) {
-    throw new AppError('PRICE_RANGE_INVALID', 400);
+    throw new BadRequestError('PRICE_RANGE_INVALID');
   }
 
   const deleted = typeof dto.deleted === 'boolean' ? dto.deleted : undefined;
@@ -149,7 +149,7 @@ export function mapProductListRowToResponse(row: {
   images: Array<{ url: string; position: number; isPrimary: boolean }>;
 }): ProductResponseDto {
   const primaryUrl = row.images?.[0]?.url;
-  if (!primaryUrl) throw new AppError('PRODUCT_PRIMARY_IMAGE_NOT_FOUND', 500);
+  if (!primaryUrl) throw new InternalError({ reason: 'PRODUCT_PRIMARY_IMAGE_NOT_FOUND' });
 
   return {
     id: row.id as any,

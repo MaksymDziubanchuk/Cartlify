@@ -1,5 +1,5 @@
 import env from '@config/env.js';
-import { BadRequestError } from '@utils/errors.js';
+import { AppError, BadRequestError, InternalError } from '@utils/errors.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
 
 export type SendEmailInput = {
@@ -23,9 +23,9 @@ type AnyJson = Record<string, unknown> | unknown[] | string | number | boolean |
 // map provider errors to app
 export async function sendEmail(input: SendEmailInput): Promise<{ status: number }> {
   // require email config
-  if (!env.SENDGRID_API_KEY) throw new BadRequestError('SENDGRID_API_KEY_REQUIRED');
-  if (!env.EMAIL_FROM) throw new BadRequestError('EMAIL_FROM_REQUIRED');
-  if (!env.EMAIL_REPLY_TO) throw new BadRequestError('EMAIL_REPLY_TO_REQUIRED');
+  if (!env.SENDGRID_API_KEY) throw new InternalError({ reason: 'SENDGRID_API_KEY_REQUIRED' });
+  if (!env.EMAIL_FROM) throw new InternalError({ reason: 'EMAIL_FROM_REQUIRED' });
+  if (!env.EMAIL_REPLY_TO) throw new InternalError({ reason: 'EMAIL_REPLY_TO_REQUIRED' });
 
   const to = input.to?.trim();
   const subject = input.subject?.trim();
@@ -85,9 +85,10 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
     }
 
     // normalize provider failure
-    const err = new BadRequestError('SENDGRID_SEND_FAILED');
-    (err as any).meta = { status: res.status, body };
-    throw err;
+    throw new InternalError({ reason: 'SENDGRID_SEND_FAILED' }, { status: res.status, body });
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    throw new InternalError({ reason: 'SENDGRID_REQUEST_FAILED' }, err);
   } finally {
     clearTimeout(timeout);
   }
