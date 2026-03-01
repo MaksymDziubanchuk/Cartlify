@@ -1,5 +1,5 @@
 import type { ControllerRouter } from 'types/controller.js';
-import type { ProductId, ReviewId, CategoryId, UserId } from 'types/ids.js';
+import type { ProductId, CategoryId } from 'types/ids.js';
 import type { User } from 'types/user.js';
 import type {
   GetAllProductsQueryDto,

@@ -2,7 +2,7 @@ import { ReviewVoteAction as ReviewVoteActionDb } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 import type { VoteReviewDto, VoteReviewResponseDto } from 'types/dto/reviews.dto.js';
 
 async function createVoteReview({
@@ -15,7 +15,7 @@ async function createVoteReview({
     return await prisma.$transaction(async (tx) => {
       // check user id ('USER' only)
       const userId = Number(actorId);
-      if (!Number.isInteger(userId) || userId <= 0) throw new AppError('USER_ID_INVALID', 400);
+      if (!Number.isInteger(userId) || userId <= 0) throw new BadRequestError('USER_ID_INVALID');
 
       // apply rls session context for vote operations
       await setUserContext(tx, { userId, role: actorRole });
@@ -97,7 +97,7 @@ async function createVoteReview({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`reviews.voteReview: unexpected`, 500);
+    throw new InternalError({ reason: 'REVIEWS_VOTE_REVIEW_UNEXPECTED' }, err);
   }
 }
 

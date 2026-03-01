@@ -2,7 +2,7 @@ import { prisma } from '@db/client.js';
 
 import { normalizeDeleteCategoryInput } from './helpers/categories.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
-import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
+import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import type { MessageResponseDto } from 'types/common.js';
@@ -29,7 +29,7 @@ export async function deleteCategoryById(dto: {
 
       // deny delete when category has products
       const productsCount = await tx.product.count({ where: { categoryId } });
-      if (productsCount > 0) throw new AppError('CATEGORY_HAS_PRODUCTS', 409);
+      if (productsCount > 0) throw new ConflictError('CATEGORY_HAS_PRODUCTS');
 
       // hard delete category row
       await tx.category.delete({ where: { id: categoryId } });
@@ -49,6 +49,6 @@ export async function deleteCategoryById(dto: {
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`categories.deleteCategoryById: unexpected`, 500);
+    throw new InternalError({ reason: 'CATEGORIES_DELETE_UNEXPECTED' }, err);
   }
 }

@@ -2,7 +2,7 @@ import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
-import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
+import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { normalizeDeleteReviewInput } from './helpers/index.js';
 
@@ -55,6 +55,6 @@ export async function deleteProductReview(
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.deleteProductReview: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_DELETE_REVIEW_UNEXPECTED' }, err);
   }
 }
