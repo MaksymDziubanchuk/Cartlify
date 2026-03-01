@@ -1,7 +1,7 @@
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 
-import { AppError, NotFoundError, isAppError } from '@utils/errors.js';
+import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { mapProductRowToResponse, normalizeFindProductByIdInput } from './helpers/index.js';
 
@@ -51,7 +51,7 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
       });
 
       // reject invalid db state (product has no images)
-      if (!imageRows.length) throw new AppError('PRODUCT_IMAGES_NOT_FOUND', 500);
+      if (!imageRows.length) throw new InternalError({ reason: 'PRODUCT_IMAGES_NOT_FOUND' });
 
       return { product, images: imageRows };
     });
@@ -62,6 +62,6 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.findById: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_FIND_BY_ID_UNEXPECTED' }, err);
   }
 }

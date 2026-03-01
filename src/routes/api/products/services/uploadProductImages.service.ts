@@ -1,7 +1,7 @@
 import { prisma } from '@db/client.js';
 import { Prisma } from '@prisma/client';
 
-import { AppError, BadRequestError } from '@utils/errors.js';
+import { BadRequestError, InternalError } from '@utils/errors.js';
 import { makePublicId, overwriteImage, requireNonEmptyStream } from '@utils/cloudinary.util.js';
 
 import type { ProductImagePart, UploadedProductImage } from 'types/dto/products.dto.js';
@@ -18,7 +18,7 @@ export async function reserveNextProductId(): Promise<ProductId> {
 
   // validate reserved id to keep public ids stable
   if (!Number.isInteger(id) || id <= 0) {
-    throw new AppError('PRODUCT_ID_NEXTVAL_INVALID', 500);
+    throw new InternalError({ reason: 'PRODUCT_ID_NEXTVAL_INVALID' });
   }
 
   return id as ProductId;
@@ -33,10 +33,10 @@ export async function beginProductImageUpload(args: {
 
   // validate product id and position
   if (!Number.isInteger(productId) || productId <= 0) {
-    throw new AppError('PRODUCT_ID_INVALID', 500);
+    throw new InternalError({ reason: 'PRODUCT_ID_INVALID' });
   }
   if (!Number.isInteger(position) || position < 0) {
-    throw new AppError('PRODUCT_IMAGE_POSITION_INVALID', 500);
+    throw new InternalError({ reason: 'PRODUCT_IMAGE_POSITION_INVALID' });
   }
 
   // fast fail when stream is already dead
