@@ -1,7 +1,13 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { AppError, NotFoundError, isAppError, BadRequestError } from '@utils/errors.js';
+import {
+  ConflictError,
+  NotFoundError,
+  isAppError,
+  BadRequestError,
+  InternalError,
+} from '@utils/errors.js';
 
 import { normalizeCreateReviewInput, mapReviewRowToResponse } from './helpers/index.js';
 
@@ -46,7 +52,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
 
       // 1) no comment in new payload -> reject if review already exists
       if (!hasNewComment && existing) {
-        throw new AppError('REVIEW_ALREADY_EXISTS', 409);
+        throw new ConflictError('REVIEW_ALREADY_EXISTS');
       }
 
       // 2) comment provided and existing has no comment -> allow comment update only
@@ -55,7 +61,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
         existing &&
         (existing.comment == null || existing.comment.trim() === '')
       ) {
-        if (hasNewRating) throw new AppError('REVIEW_RATING_UPDATE_FORBIDDEN', 409);
+        if (hasNewRating) throw new ConflictError('REVIEW_RATING_UPDATE_FORBIDDEN');
 
         return tx.review.update({
           where: { id: existing.id },
@@ -74,7 +80,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
 
       // 3) any other existing review case -> reject (already has rating; comment may exist)
       if (existing) {
-        throw new AppError('REVIEW_ALREADY_EXISTS', 409);
+        throw new ConflictError('REVIEW_ALREADY_EXISTS');
       }
 
       // create new review requires rating
@@ -104,6 +110,6 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.createReview: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_CREATE_REVIEW_UNEXPECTED' }, err);
   }
 }

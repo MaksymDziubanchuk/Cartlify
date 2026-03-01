@@ -4,7 +4,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
-import { AppError, BadRequestError, isAppError } from '@utils/errors.js';
+import { InternalError, BadRequestError, isAppError } from '@utils/errors.js';
 
 import {
   writeProductPriceChangeLog,
@@ -111,6 +111,6 @@ export async function updateProductsBulkPrice(
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.updateProductsBulkPrice: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_BULK_PRICE_UPDATE_UNEXPECTED' }, err);
   }
 }

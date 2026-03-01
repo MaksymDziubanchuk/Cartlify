@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
-import { AppError, isAppError } from '@utils/errors.js';
+import { AppError, ConflictError, InternalError, isAppError } from '@utils/errors.js';
 import { normalizeCreateCategoryInput } from './helpers/index.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
@@ -87,16 +87,21 @@ export async function createCategory({
     };
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      throw new AppError('CATEGORY_SLUG_TAKEN', 409);
+      throw new ConflictError('CATEGORY_SLUG_TAKEN', { field: 'slug' });
     }
 
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
-      throw new AppError('CATEGORY_PARENT_NOT_FOUND', 422);
+      throw new AppError({
+        statusCode: 422,
+        errorCode: 'CATEGORY_PARENT_NOT_FOUND',
+        message: 'Unprocessable Entity',
+        details: { field: 'parentId' },
+      });
     }
 
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`categories.create: unexpected`, 500);
+    throw new InternalError({ reason: 'CATEGORIES_CREATE_UNEXPECTED' }, err);
   }
 }

@@ -1,5 +1,5 @@
 import env from '@config/env.js';
-import { AppError } from '@utils/errors.js';
+import { AppError, BadRequestError, InternalError, UnauthorizedError } from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
@@ -45,7 +45,7 @@ const GITHUB_SCOPE = 'read:user user:email';
 // build signed oauth state
 export function createGithubOAuthState(guestId: string) {
   const secret = GITHUB_STATE_SECRET;
-  if (!secret) throw new AppError('GITHUB_STATE_SECRET is missing', 500);
+  if (!secret) throw new InternalError({ reason: 'GITHUB_STATE_SECRET_MISSING' });
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -69,8 +69,8 @@ export function buildGithubAuthUrl(guestId: string) {
   const clientId = GITHUB_CLIENT_ID;
   const redirectUri = GITHUB_REDIRECT_URI;
 
-  if (!clientId) throw new AppError('GITHUB_CLIENT_ID is missing', 500);
-  if (!redirectUri) throw new AppError('GITHUB_REDIRECT_URI is missing', 500);
+  if (!clientId) throw new InternalError({ reason: 'GITHUB_CLIENT_ID_MISSING' });
+  if (!redirectUri) throw new InternalError({ reason: 'GITHUB_REDIRECT_URI_MISSING' });
 
   // attach state to redirect
   const state = createGithubOAuthState(guestId);
@@ -87,15 +87,15 @@ export function buildGithubAuthUrl(guestId: string) {
 // verify oauth state signature
 export function verifyGithubOAuthState(state: string): StatePayload | null {
   const secret = GITHUB_STATE_SECRET;
-  if (!secret) throw new AppError('GITHUB_STATE_SECRET is missing', 500);
+  if (!secret) throw new InternalError({ reason: 'GITHUB_STATE_SECRET_MISSING' });
 
   // split payload and signature
   const [payloadB64, sig] = state.split('.');
-  if (!payloadB64 || !sig) throw new AppError('INVALID_STATE', 500);
+  if (!payloadB64 || !sig) throw new BadRequestError('INVALID_STATE');
 
   // compare expected signature
   const expected = signState(payloadB64, secret);
-  if (sig !== expected) throw new AppError('INVALID_PAYLOAD', 500);
+  if (sig !== expected) throw new BadRequestError('INVALID_PAYLOAD');
 
   try {
     // decode signed state payload
@@ -106,25 +106,25 @@ export function verifyGithubOAuthState(state: string): StatePayload | null {
 
     // enforce state expiration
     if (typeof payload.exp !== 'number' || payload.exp < now) {
-      throw new AppError('GITHUB_OAUTH_STATE_EXPIRED', 401);
+      throw new UnauthorizedError('GITHUB_OAUTH_STATE_EXPIRED');
     }
 
     if (typeof payload.iat !== 'number') {
-      throw new AppError('GITHUB_OAUTH_STATE_IAT_INVALID', 401);
+      throw new UnauthorizedError('GITHUB_OAUTH_STATE_IAT_INVALID');
     }
 
     if (payload.iat > now + 30) {
-      throw new AppError('GITHUB_OAUTH_STATE_IAT_IN_FUTURE', 401);
+      throw new UnauthorizedError('GITHUB_OAUTH_STATE_IAT_IN_FUTURE');
     }
 
     if (payload.exp <= payload.iat) {
-      throw new AppError('GITHUB_OAUTH_STATE_TIME_RANGE_INVALID', 401);
+      throw new UnauthorizedError('GITHUB_OAUTH_STATE_TIME_RANGE_INVALID');
     }
 
     return payload;
   } catch (err) {
     if (err instanceof AppError) throw err;
-    throw new AppError('Parsing payload failed!', 500);
+    throw new InternalError({ reason: 'GITHUB_OAUTH_STATE_PARSE_FAILED' }, err);
   }
 }
 
@@ -137,9 +137,9 @@ export async function exchangeGithubCodeForTokens(
   const clientSecret = GITHUB_CLIENT_SECRET;
   const redirectUri = GITHUB_REDIRECT_URI;
 
-  if (!clientId) throw new AppError('GITHUB_CLIENT_ID is missing', 500);
-  if (!clientSecret) throw new AppError('GITHUB_CLIENT_SECRET is missing', 500);
-  if (!redirectUri) throw new AppError('GITHUB_REDIRECT_URI is missing', 500);
+  if (!clientId) throw new InternalError({ reason: 'GITHUB_CLIENT_ID_MISSING' });
+  if (!clientSecret) throw new InternalError({ reason: 'GITHUB_CLIENT_SECRET_MISSING' });
+  if (!redirectUri) throw new InternalError({ reason: 'GITHUB_REDIRECT_URI_MISSING' });
 
   const body = new URLSearchParams({
     client_id: clientId,
@@ -161,7 +161,9 @@ export async function exchangeGithubCodeForTokens(
 
   const text = await res.text();
   if (!res.ok) {
-    throw new AppError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', 401);
+    throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', undefined, {
+      status: res.status,
+    });
   }
 
   // parse token response union
@@ -169,13 +171,10 @@ export async function exchangeGithubCodeForTokens(
 
   // surface oauth error response
   if ('error' in data) {
-    throw new AppError(
-      data.error_description ?? data.error ?? 'GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED',
-      401,
-    );
+    throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', undefined, {});
   }
 
-  if (!data.access_token) throw new AppError('GITHUB_OAUTH_NO_ACCESS_TOKEN', 401);
+  if (!data.access_token) throw new UnauthorizedError('GITHUB_OAUTH_NO_ACCESS_TOKEN');
 
   return data;
 }
@@ -194,7 +193,9 @@ export async function fetchGithubUser(accessToken: string): Promise<GithubUserRe
 
   const text = await res.text();
   if (!res.ok) {
-    throw new AppError('GITHUB_OAUTH_FETCH_USER_FAILED', 401);
+    throw new UnauthorizedError('GITHUB_OAUTH_FETCH_USER_FAILED', undefined, {
+      status: res.status,
+    });
   }
 
   return JSON.parse(text) as GithubUserResponse;
@@ -214,7 +215,9 @@ export async function fetchGithubEmails(accessToken: string): Promise<GithubEmai
 
   const text = await res.text();
   if (!res.ok) {
-    throw new AppError('GITHUB_OAUTH_FETCH_EMAILS_FAILED', 401);
+    throw new UnauthorizedError('GITHUB_OAUTH_FETCH_EMAILS_FAILED', undefined, {
+      status: res.status,
+    });
   }
 
   const data = JSON.parse(text) as GithubEmailItem[];

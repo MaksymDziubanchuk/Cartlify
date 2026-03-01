@@ -1,10 +1,11 @@
 import { prisma } from '@db/client.js';
 import {
-  AppError,
   UnauthorizedError,
   isAppError,
   BadRequestError,
   NotFoundError,
+  ConflictError,
+  InternalError,
 } from '@utils/errors.js';
 import { setUserContext, setAdminContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
@@ -58,7 +59,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
       });
 
       // should never happen after successful auth, treat as server inconsistency
-      if (!user) throw new AppError('User not found', 500);
+      if (!user) throw new InternalError({ reason: 'USER_NOT_FOUND_AFTER_AUTH' });
 
       // validate email format before returning it to client
       assertEmail(user.email);
@@ -136,7 +137,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
 
     // keep a short diagnostic message without leaking full error objects
 
-    throw new AppError(`users.findMe: unexpected`, 500);
+    throw new InternalError({ reason: 'USERS_FIND_ME_UNEXPECTED' }, err);
   }
 }
 
@@ -180,7 +181,7 @@ async function updateMe({
   // normalize actor role from dto/context
   const rawRole = userRole as unknown as string;
   if (rawRole !== 'USER' && rawRole !== 'ADMIN' && rawRole !== 'ROOT') {
-    throw new AppError('ACTOR_ROLE_INVALID', 500);
+    throw new InternalError({ reason: 'ACTOR_ROLE_INVALID' });
   }
   const role = rawRole as 'USER' | 'ADMIN' | 'ROOT';
 
@@ -329,7 +330,7 @@ async function updateMe({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`users.updateMe: unexpected`, 500);
+    throw new InternalError({ reason: 'USERS_UPDATE_ME_UNEXPECTED' }, err);
   }
 }
 
@@ -384,7 +385,7 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`users.findById: unexpected`, 500);
+    throw new InternalError({ reason: 'USERS_FIND_BY_ID_UNEXPECTED' }, err);
   }
 }
 
@@ -397,7 +398,7 @@ async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<M
   if (!Number.isInteger(targetId) || targetId <= 0) throw new BadRequestError('USER_ID_INVALID');
 
   // avoid locking yourself out
-  if (targetId === rootId) throw new AppError('ROOT_CANNOT_DELETE_SELF', 409);
+  if (targetId === rootId) throw new ConflictError('ROOT_CANNOT_DELETE_SELF');
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -447,7 +448,7 @@ async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<M
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`users.deleteUserById: unexpected`, 500);
+    throw new InternalError({ reason: 'USERS_DELETE_BY_ID_UNEXPECTED' }, err);
   }
 }
 

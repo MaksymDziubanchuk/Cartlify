@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { AppError } from '@utils/errors.js';
+import { InternalError } from '@utils/errors.js';
 
 export type PlaceholderEncoding = 'hex' | 'base64url';
 
@@ -11,7 +11,7 @@ export function createPlaceholder(
   encoding: PlaceholderEncoding = 'hex',
 ): string {
   if (!Number.isInteger(bytes) || bytes <= 0) {
-    throw new AppError(`Invalid placeholder bytes: ${bytes}`, 500);
+    throw new InternalError(undefined, new Error(`Invalid placeholder bytes: ${bytes}`));
   }
   return crypto.randomBytes(bytes).toString(encoding);
 }
@@ -22,24 +22,24 @@ export function decodePlaceholderInternal(
   encoding: PlaceholderEncoding = 'hex',
 ): Buffer {
   if (typeof value !== 'string' || value.length === 0) {
-    throw new AppError('Internal placeholder is empty or not a string', 500);
+    throw new InternalError();
   }
 
   // validate placeholder format by encoding
   if (encoding === 'hex') {
     if (value.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(value)) {
-      throw new AppError('Internal hex placeholder is invalid', 500);
+      throw new InternalError();
     }
   } else {
     if (!/^[A-Za-z0-9_-]+$/.test(value)) {
-      throw new AppError('Internal base64url placeholder is invalid', 500);
+      throw new InternalError();
     }
   }
 
   // decode placeholder to bytes
   try {
     return Buffer.from(value, encoding);
-  } catch {
-    throw new AppError('Failed to decode internal placeholder', 500);
+  } catch (err) {
+    throw new InternalError(undefined, err);
   }
 }

@@ -3,7 +3,7 @@ import { ReviewVoteAction as ReviewVoteActionDb } from '@prisma/client';
 import { encodeCursor, decodeCursor } from '@helpers/codeCursor.js';
 
 import { setUserContext } from '@db/dbContext.service.js';
-import { AppError, BadRequestError, NotFoundError, isAppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import { mapReviewRowToResponse, normalizeFindProductByIdInput } from './helpers/index.js';
@@ -31,7 +31,7 @@ export async function findReviews({
   // bind cursor to this product to prevent cross-product reuse
   if (c) {
     const v = typeof c.v === 'number' ? c.v : Number(c.v);
-    if (!Number.isInteger(v) || v !== productId) throw new AppError('CURSOR_INVALID', 400);
+    if (!Number.isInteger(v) || v !== productId) throw new BadRequestError('CURSOR_INVALID');
   }
 
   const cursorId = c ? c.id : null;
@@ -126,6 +126,6 @@ export async function findReviews({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.findReviews: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_FIND_REVIEWS_UNEXPECTED' }, err);
   }
 }

@@ -6,8 +6,8 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 import { isRetryableTxError } from '@db/client.js';
 
 import {
-  AppError,
   BadRequestError,
+  InternalError,
   NotFoundError,
   isAppError,
   ResourceBusyError,
@@ -227,6 +227,6 @@ export async function updateProduct({
     if (isRetryableTxError(err)) {
       throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
     }
-    throw new AppError(`products.updateProduct: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_UPDATE_UNEXPECTED' }, err);
   }
 }

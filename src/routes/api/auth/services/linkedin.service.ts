@@ -1,7 +1,13 @@
 import type { Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
-import { AppError, BadRequestError, ForbiddenError } from '@utils/errors.js';
+import {
+  AppError,
+  AlreadyAuthenticatedError,
+  BadRequestError,
+  ForbiddenError,
+  InternalError,
+} from '@utils/errors.js';
 
 import env from '@config/env.js';
 import { assertEmail } from '@helpers/validateEmail.js';
@@ -32,8 +38,10 @@ export async function linkedInStart({
   guestId,
   role,
 }: LinkedInStartDto): Promise<LinkedInStartResponseDto> {
-  if (role !== 'GUEST') throw new AppError('Already authenticated', 409);
-  if (!guestId) throw new AppError('Guest id is required', 400);
+  if (role !== 'GUEST') {
+    throw new AlreadyAuthenticatedError({ flow: 'LINKEDIN_START' });
+  }
+  if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
 
   // build oauth redirect url
   const url = buildLinkedInAuthUrl(String(guestId));
@@ -60,7 +68,8 @@ export async function linkedInCallback({
   // exchange code for provider tokens
   const tokens = await exchangeLinkedInCodeForTokens(code);
 
-  if (!tokens.id_token) throw new BadRequestError('LINKEDIN_NO_ID_TOKEN');
+  if (!tokens.id_token)
+    throw new BadRequestError('LINKEDIN_NO_ID_TOKEN', { stage: 'TOKEN_EXCHANGE' });
 
   // verify id_token signature and core claims
   const idp = await verifyOidcIdToken<LinkedInIdTokenPayload>(tokens.id_token, {
@@ -144,6 +153,6 @@ export async function linkedInCallback({
   } catch (err) {
     if (err instanceof AppError) throw err;
 
-    throw new AppError(`LinkedIn(service): unexpected`, 500);
+    throw new InternalError({ reason: 'LINKEDIN_SERVICE_UNEXPECTED' }, err);
   }
 }

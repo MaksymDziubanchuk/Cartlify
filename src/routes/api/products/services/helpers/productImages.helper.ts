@@ -1,5 +1,5 @@
 import { prisma } from '@db/client.js';
-import { AppError } from '@utils/errors.js';
+import { InternalError } from '@utils/errors.js';
 
 import type { Prisma } from '@prisma/client';
 import type { ProductId } from 'types/ids.js';
@@ -36,7 +36,7 @@ export async function readProductImageUrls(
   });
 
   // reject invalid db state when product has no images
-  if (!rows.length) throw new AppError('PRODUCT_IMAGES_NOT_FOUND', 500);
+  if (!rows.length) throw new InternalError({ reason: 'PRODUCT_IMAGES_NOT_FOUND' });
 
   return rows.map((r) => ({ url: r.url, position: r.position }));
 }

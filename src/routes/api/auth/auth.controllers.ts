@@ -38,7 +38,12 @@ import type {
 
 import { authServices } from './auth.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
-import { AppError, BadRequestError } from '@utils/errors.js';
+import {
+  AlreadyAuthenticatedError,
+  BadRequestError,
+  InternalError,
+  UnauthorizedError,
+} from '@utils/errors.js';
 import { getTtl } from '@utils/jwt.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { verifyRefreshToken } from '@utils/jwt.js';
@@ -96,9 +101,9 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
   const refreshTtl = rememberMe ? getTtl(rememberMe, 'refresh') : getTtl(false, 'refresh');
   const accessTtl = rememberMe ? getTtl(rememberMe, 'access') : getTtl(false, 'access');
 
-  if (!refreshTtl || !accessTtl)
-    throw new BadRequestError('Invalid JWT TTL: (expected e.g. "3600")');
-
+  if (!refreshTtl || !accessTtl) {
+    throw new InternalError({ reason: 'AUTH_TTL_INVALID' });
+  }
   // set auth cookies
   clearGuestIdCookie(reply);
   setAccessTokenCookie(reply, accessToken, accessTtl as number);
@@ -132,7 +137,7 @@ const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = asy
 
   // allow oauth start for guest
   if (role !== 'GUEST') {
-    throw new AppError('Already authenticated', 409);
+    throw new AlreadyAuthenticatedError();
   }
 
   const ip = req.ip;
@@ -161,13 +166,12 @@ const getGoogleCallback: ControllerRouter<
   // handle oauth error callback
   if ('error' in q && typeof q.error === 'string') {
     const code = q.error;
-    const desc = q.error_description;
 
     if (code === 'access_denied') {
-      throw new AppError(desc ?? 'OAuth access denied', 401);
+      throw new UnauthorizedError('OAUTH_ACCESS_DENIED');
     }
 
-    throw new AppError(desc ?? code, 400);
+    throw new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError: code });
   }
 
   const { code, state } = q as GoogleCallbackSuccessQueryDto;
@@ -195,7 +199,7 @@ const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = asy
 
   // allow oauth start for guest
   if (role !== 'GUEST') {
-    throw new AppError('Already authenticated', 409);
+    throw new AlreadyAuthenticatedError();
   }
 
   const ip = req.ip;
@@ -224,13 +228,12 @@ const getGithubCallback: ControllerRouter<
   // handle oauth error callback
   if ('error' in q && typeof q.error === 'string') {
     const code = q.error;
-    const desc = q.error_description;
 
     if (code === 'access_denied') {
-      throw new AppError(desc ?? 'OAuth access denied', 401);
+      throw new UnauthorizedError('OAUTH_ACCESS_DENIED');
     }
 
-    throw new AppError(desc ?? code, 400);
+    throw new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError: code });
   }
 
   const { code, state } = q as GithubCallbackSuccessQueryDto;
@@ -261,7 +264,7 @@ const getLinkedInStart: ControllerRouter<{}, {}, {}, LinkedInStartResponseDto> =
 
   // allow oauth start for guest
   if (role !== 'GUEST') {
-    throw new AppError('Already authenticated', 409);
+    throw new AlreadyAuthenticatedError();
   }
 
   const ip = req.ip;
@@ -290,13 +293,12 @@ const getLinkedInCallback: ControllerRouter<
   // handle oauth error callback
   if ('error' in q && typeof q.error === 'string') {
     const code = q.error;
-    const desc = q.error_description;
 
     if (code === 'access_denied') {
-      throw new AppError(desc ?? 'OAuth access denied', 401);
+      throw new UnauthorizedError('OAUTH_ACCESS_DENIED');
     }
 
-    throw new AppError(desc ?? code, 400);
+    throw new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError: code });
   }
 
   const { code, state } = q as LinkedInCallbackSuccessQueryDto;

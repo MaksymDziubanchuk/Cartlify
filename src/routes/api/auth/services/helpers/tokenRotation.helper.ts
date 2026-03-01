@@ -1,6 +1,6 @@
 import type { Prisma, Role, UserTokenType } from '@prisma/client';
 
-import { AppError, ForbiddenError, UnauthorizedError } from '@utils/errors.js';
+import { ForbiddenError, InternalError, UnauthorizedError } from '@utils/errors.js';
 import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken, verifyTokenHash } from '@helpers/tokenHash.js';
 import { signRefreshToken, signAccessToken, verifyRefreshToken } from '@utils/jwt.js';
@@ -84,7 +84,7 @@ export async function createRefreshRowFixedDeadline(
   });
 
   const newJwtId = created?.id;
-  if (!newJwtId) throw new AppError('refresh: failed to create refresh token row', 500);
+  if (!newJwtId) throw new InternalError({ reason: 'REFRESH_TOKEN_ROW_CREATE_FAILED' });
 
   return newJwtId;
 }
@@ -113,8 +113,8 @@ export function assertRefreshRowBasicsOrThrow(
 ): void {
   const { userId } = args;
 
-  if (row.userId !== userId) throw new UnauthorizedError('refresh: token user mismatch');
-  if (row.type !== 'REFRESH_TOKEN') throw new UnauthorizedError('refresh: wrong token type');
+  if (row.userId !== userId) throw new UnauthorizedError('REFRESH_TOKEN_USER_MISMATCH');
+  if (row.type !== 'REFRESH_TOKEN') throw new UnauthorizedError('REFRESH_TOKEN_WRONG_TYPE');
 }
 
 // block reused token and revoke all
@@ -235,7 +235,7 @@ export async function issueTokensOnLogin(
   `;
 
   const jwtId = created[0]?.id;
-  if (!jwtId) throw new AppError('Failed to create refresh token row', 500);
+  if (!jwtId) throw new InternalError({ reason: 'REFRESH_TOKEN_ROW_CREATE_FAILED' });
 
   // sign refresh token and read exp
   const refreshToken = signRefreshToken(
@@ -245,7 +245,7 @@ export async function issueTokensOnLogin(
 
   // compute db expiresAt from jwt exp
   const { exp } = verifyRefreshToken(refreshToken);
-  if (!exp) throw new AppError('Failed to decode refresh token exp', 500);
+  if (!exp) throw new InternalError({ reason: 'REFRESH_TOKEN_EXP_DECODE_FAILED' });
 
   // store refresh hash and expiresAt
   const refreshExpiresAt = new Date(exp * 1000);

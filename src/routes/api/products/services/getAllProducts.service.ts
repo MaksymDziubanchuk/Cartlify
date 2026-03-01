@@ -7,7 +7,7 @@ import {
   buildOrderBy,
   makeNextCursor,
 } from './helpers/index.js';
-import { AppError, isAppError } from '@utils/errors.js';
+import { InternalError, isAppError } from '@utils/errors.js';
 
 import type { FindAllProductsDto, ProductsResponseDto } from 'types/dto/products.dto.js';
 
@@ -85,6 +85,6 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.findAll: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_FIND_ALL_UNEXPECTED' }, err);
   }
 }

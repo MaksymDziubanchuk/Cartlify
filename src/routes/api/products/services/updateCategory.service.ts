@@ -2,7 +2,7 @@ import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
-import { AppError, BadRequestError, NotFoundError, isAppError } from '@utils/errors.js';
+import { InternalError, BadRequestError, NotFoundError, isAppError } from '@utils/errors.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
@@ -99,6 +99,6 @@ export async function updateProductCategory({
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
-    throw new AppError(`products.updateProductCategory: unexpected`, 500);
+    throw new InternalError({ reason: 'PRODUCTS_UPDATE_CATEGORY_UNEXPECTED' }, err);
   }
 }
