@@ -6,10 +6,14 @@ import {
   buildCursorWhere,
   buildOrderBy,
   makeNextCursor,
+  buildProductSearchIdsQuery,
 } from './helpers/index.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 
 import type { FindAllProductsDto, ProductsResponseDto } from 'types/dto/products.dto.js';
+import type { ProductId } from 'types/ids.js';
+
+type ProductIdRow = { id: ProductId };
 
 export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponseDto> {
   const { limit, sort, order, search, categoryIds, minPrice, maxPrice, deleted, inStock, cursor } =
@@ -37,9 +41,74 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
       };
     }
 
-    // search (simple contains; later можна замінити на raw + immutable_unaccent + trigram)
+    // indexed search
     if (search) {
-      where.name = { contains: search, mode: 'insensitive' };
+      const idRows = await prisma.$queryRaw<ProductIdRow[]>(
+        buildProductSearchIdsQuery({
+          limit,
+          sort,
+          order,
+          search,
+          ...(categoryIds !== undefined ? { categoryIds } : {}),
+          ...(minPrice !== undefined ? { minPrice } : {}),
+          ...(maxPrice !== undefined ? { maxPrice } : {}),
+          ...(deleted !== undefined ? { deleted } : {}),
+          ...(inStock !== undefined ? { inStock } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
+        }),
+      );
+
+      // detect next page
+      const hasNext = idRows.length > limit;
+
+      // keep only current page ids
+      const pageIds = (hasNext ? idRows.slice(0, limit) : idRows).map((row) => row.id);
+
+      // empty page
+      if (!pageIds.length) {
+        return { items: [], limit };
+      }
+
+      // preserve raw sql order after findMany by ids
+      const position = new Map(pageIds.map((id, index) => [id, index]));
+
+      // fetch full rows by ids
+      const rows = await prisma.product.findMany({
+        where: { id: { in: pageIds } },
+        select: {
+          id: true,
+          name: true,
+          description: true,
+          price: true,
+          stock: true,
+          reservedStock: true,
+          categoryId: true,
+          views: true,
+          popularity: true,
+          avgRating: true,
+          reviewsCount: true,
+          createdAt: true,
+          updatedAt: true,
+          deletedAt: true,
+          images: {
+            where: { isPrimary: true },
+            select: { url: true, position: true, isPrimary: true },
+            orderBy: { position: 'asc' },
+            take: 1,
+          },
+        },
+      });
+
+      // restore original order from raw query
+      rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
+
+      const items = rows.map(mapProductListRowToResponse);
+
+      return {
+        items,
+        limit,
+        ...(hasNext ? { nextCursor: makeNextCursor(sort, rows[rows.length - 1]) } : {}),
+      };
     }
 
     const cursorWhere = buildCursorWhere({ sort, order, cursor });
@@ -55,6 +124,7 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
         description: true,
         price: true,
         stock: true,
+        reservedStock: true,
         categoryId: true,
         views: true,
         popularity: true,

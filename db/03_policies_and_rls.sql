@@ -451,6 +451,12 @@ DROP POLICY IF EXISTS orders_insert ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_update ON cartlify.orders;
 
+DROP POLICY IF EXISTS orders_update_admin_shipping_status ON cartlify.orders;
+
+DROP POLICY IF EXISTS orders_update_owner_waiting ON cartlify.orders;
+
+DROP POLICY IF EXISTS orders_update_root_waiting ON cartlify.orders;
+
 DROP POLICY IF EXISTS orders_delete ON cartlify.orders;
 
 -- SELECT (owner or admin/root)
@@ -475,6 +481,55 @@ FOR UPDATE
   )
 WITH
   CHECK (cartlify.is_owner ("userId"));
+
+-- UPDATE (admin/root) - allow only shipping status change
+CREATE POLICY orders_update_admin_shipping_status ON cartlify.orders
+FOR UPDATE
+  USING (
+    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+    AND status IN ('paid', 'shipped')
+  )
+WITH
+  CHECK (
+    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+    AND status IN ('shipped', 'delivered', 'cancelled')
+    AND (
+      (to_jsonb(orders) - 'status' - 'updatedAt') = (
+        SELECT
+          (to_jsonb(o) - 'status' - 'updatedAt')
+        FROM
+          cartlify.orders o
+        WHERE
+          o.id = id
+      )
+    )
+  );
+
+-- UPDATE (owner only, waiting/confirmed) - for pay + unconfirm
+CREATE POLICY orders_update_owner_waiting ON cartlify.orders
+FOR UPDATE
+  USING (
+    cartlify.current_actor_role () = 'USER'
+    AND cartlify.is_owner ("userId")
+    AND confirmed = true
+    AND status = 'waiting'
+  )
+WITH
+  CHECK (
+    cartlify.current_actor_role () = 'USER'
+    AND cartlify.is_owner ("userId")
+  );
+
+-- UPDATE (root only, waiting/confirmed) - for expire job
+CREATE POLICY orders_update_root_waiting ON cartlify.orders
+FOR UPDATE
+  USING (
+    cartlify.current_actor_role () = 'ROOT'
+    AND confirmed = true
+    AND status = 'waiting'
+  )
+WITH
+  CHECK (cartlify.current_actor_role () = 'ROOT');
 
 -- DELETE (owner only, USER role, not confirmed)
 CREATE POLICY orders_delete ON cartlify.orders FOR DELETE USING (

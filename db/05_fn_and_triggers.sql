@@ -403,100 +403,234 @@ END;
 $$;
 
 ------------------------------------------------------------
--- ORDERS
+-- PRODUCTS
 ------------------------------------------------------------
--- "orders" CALC total
--- DROP FUNCTION IF EXISTS cartlify.recalc_order_total (integer)
-CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql AS $$
-DECLARE
-  v_total cartlify.orders.total%TYPE;
-BEGIN
-  SELECT COALESCE(SUM(oi."totalPrice"), 0)
-  INTO v_total
-  FROM cartlify.order_items AS oi
-  WHERE oi."orderId" = p_order_id;
-
-  UPDATE cartlify.orders AS o
-  SET "total" = v_total
-  WHERE o.id = p_order_id;
-END;
-$$;
-
-----------------------------------------
--- ORDERS: confirm order (owner only) + consume stock
-----------------------------------------
-CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
+-- 'product' CALC avgRating
+-- DROP FUNCTION IF EXISTS cartlify.recalc_product_rating (integer)
+CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify AS $$
 DECLARE
-  v_actor_role text;
-  v_actor_id   integer;
-
-  v_user_id    integer;
-  v_confirmed  boolean;
-  v_status     text;
-
-  r record;
+  v_avg   numeric(3, 2);
+  v_count integer;
 BEGIN
-  v_actor_role := cartlify.current_actor_role();
-  v_actor_id   := cartlify.current_actor_id();
+  SELECT
+    COALESCE((AVG(r.rating) FILTER (WHERE r."rating" IS NOT NULL))::numeric(3, 2), 0),
+    (COUNT(*) FILTER (WHERE r."comment" IS NOT NULL AND btrim(r."comment") <> ''))::integer
+  INTO v_avg, v_count
+  FROM cartlify.reviews AS r
+  WHERE r."productId" = p_product_id;
 
-  -- only real USER (no guest, no admin/root per твоїй вимозі)
-  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
-    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
-  END IF;
-
-  -- lock order row
-  SELECT o."userId", o.confirmed, o.status
-  INTO v_user_id, v_confirmed, v_status
-  FROM cartlify.orders AS o
-  WHERE o.id = p_order_id
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'ORDER_NOT_FOUND';
-  END IF;
-
-  IF v_user_id IS DISTINCT FROM v_actor_id THEN
-    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
-  END IF;
-
-  IF v_confirmed THEN
-    RAISE EXCEPTION 'ORDER_ALREADY_CONFIRMED';
-  END IF;
-
-  IF v_status IS DISTINCT FROM 'pending' THEN
-    RAISE EXCEPTION 'ORDER_STATUS_NOT_PENDING';
-  END IF;
-
-  -- lock all order items to freeze the cart at confirm moment
-  PERFORM 1
-  FROM cartlify.order_items AS oi
-  WHERE oi."orderId" = p_order_id
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
-  END IF;
-
-  -- consume stock (deterministic lock order by productId)
-  FOR r IN
-    SELECT oi."productId" AS product_id,
-           SUM(oi.quantity)::integer AS qty
-    FROM cartlify.order_items AS oi
-    WHERE oi."orderId" = p_order_id
-    GROUP BY oi."productId"
-    ORDER BY oi."productId"
-  LOOP
-    PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
-  END LOOP;
-
-  -- confirm order
-  UPDATE cartlify.orders AS o
+  UPDATE cartlify.products AS p
   SET
-    confirmed = true,
-    status = 'paid'
-  WHERE o.id = p_order_id;
+    "avgRating"    = v_avg,
+    "reviewsCount" = v_count
+  WHERE p.id = p_product_id;
+END;
+$$;
+
+-- DROP FUNCTION IF EXISTS cartlify.reviews_after_mod_rating ()
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_product_id integer;
+BEGIN
+  IF TG_OP = 'UPDATE' AND NEW."rating" IS NOT DISTINCT FROM OLD."rating" THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
+    v_product_id := NEW."productId";
+  ELSE
+    v_product_id := OLD."productId";
+  END IF;
+
+  PERFORM cartlify.recalc_product_rating(v_product_id);
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  ELSE
+    RETURN NEW;
+  END IF;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_reviews_after_mod_rating ON cartlify.reviews;
+
+CREATE TRIGGER trg_reviews_after_mod_rating
+AFTER INSERT
+OR DELETE
+OR
+UPDATE OF "rating" ON cartlify.reviews FOR EACH ROW
+EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
+
+-- PRODUCTS: stock add (admin/root only)
+CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_role text;
+  v_stock integer;
+BEGIN
+  IF p_delta IS NULL OR p_delta <= 0 THEN
+    RAISE EXCEPTION 'STOCK_DELTA_INVALID';
+  END IF;
+
+  v_role := cartlify.current_actor_role();
+
+  IF v_role NOT IN ('ADMIN', 'ROOT') THEN
+    RAISE EXCEPTION 'STOCK_ADD_FORBIDDEN';
+  END IF;
+
+  -- lock product row
+  SELECT p."stock"
+  INTO v_stock
+  FROM cartlify.products AS p
+  WHERE p.id = p_product_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  v_stock := v_stock + p_delta;
+
+  UPDATE cartlify.products AS p
+  SET "stock" = v_stock
+  WHERE p.id = p_product_id;
+
+  RETURN v_stock;
+END;
+$$;
+
+-- PRODUCTS: stock reserve
+CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+BEGIN
+  -- validate input
+  IF p_product_id IS NULL OR p_product_id <= 0 THEN
+    RAISE EXCEPTION 'PRODUCT_ID_INVALID';
+  END IF;
+
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'RESERVE_QTY_INVALID';
+  END IF;
+
+  -- reserve only available stock
+  UPDATE cartlify.products p
+  SET "reservedStock" = p."reservedStock" + p_qty
+  WHERE p.id = p_product_id
+    AND p."deletedAt" IS NULL
+    AND (p.stock - p."reservedStock") >= p_qty;
+
+  -- nothing updated
+  IF NOT FOUND THEN
+    -- distinguish not found from insufficient stock
+    IF NOT EXISTS (
+      SELECT 1
+      FROM cartlify.products p
+      WHERE p.id = p_product_id
+        AND p."deletedAt" IS NULL
+    ) THEN
+      RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    END IF;
+
+    RAISE EXCEPTION 'INSUFFICIENT_AVAILABLE_STOCK';
+  END IF;
+END;
+$$;
+
+-- PRODUCTS: stock release
+CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_reserved_stock integer;
+BEGIN
+  -- validate input
+  IF p_product_id IS NULL OR p_product_id <= 0 THEN
+    RAISE EXCEPTION 'PRODUCT_ID_INVALID';
+  END IF;
+
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'RELEASE_QTY_INVALID';
+  END IF;
+
+  -- lock product row
+  SELECT p."reservedStock"
+  INTO v_reserved_stock
+  FROM cartlify.products AS p
+  WHERE p.id = p_product_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  IF v_reserved_stock < p_qty THEN
+    RAISE EXCEPTION 'INSUFFICIENT_RESERVED_STOCK';
+  END IF;
+
+  v_reserved_stock := v_reserved_stock - p_qty;
+
+  UPDATE cartlify.products AS p
+  SET "reservedStock" = v_reserved_stock
+  WHERE p.id = p_product_id;
+
+  RETURN v_reserved_stock;
+END;
+$$;
+
+-- PRODUCTS: stock consume (user/admin/root only)
+CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_role           text;
+  v_stock          integer;
+  v_reserved_stock integer;
+BEGIN
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'STOCK_QTY_INVALID';
+  END IF;
+
+  v_role := cartlify.current_actor_role();
+
+  IF v_role NOT IN ('USER', 'ADMIN', 'ROOT') THEN
+    RAISE EXCEPTION 'STOCK_CONSUME_FORBIDDEN';
+  END IF;
+
+  -- lock product row
+  SELECT p."stock", p."reservedStock"
+  INTO v_stock, v_reserved_stock
+  FROM cartlify.products AS p
+  WHERE p.id = p_product_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  -- reserved units must exist before final consume
+  IF v_reserved_stock < p_qty THEN
+    RAISE EXCEPTION 'INSUFFICIENT_RESERVED_STOCK';
+  END IF;
+
+  -- defensive check for broken state
+  IF v_stock < p_qty THEN
+    RAISE EXCEPTION 'INSUFFICIENT_STOCK';
+  END IF;
+
+  v_stock := v_stock - p_qty;
+  v_reserved_stock := v_reserved_stock - p_qty;
+
+  UPDATE cartlify.products AS p
+  SET
+    "stock" = v_stock,
+    "reservedStock" = v_reserved_stock
+  WHERE p.id = p_product_id;
+
+  RETURN v_stock;
 END;
 $$;
 
@@ -606,146 +740,374 @@ CREATE TRIGGER trg_orders_before_update BEFORE
 UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_before_update ();
 
-------------------------------------------------------------
--- PRODUCTS
-------------------------------------------------------------
--- 'product' CALC avgRating
--- DROP FUNCTION IF EXISTS cartlify.recalc_product_rating (integer)
-CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+-- "orders" CALC total
+-- DROP FUNCTION IF EXISTS cartlify.recalc_order_total (integer)
+CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  v_total cartlify.orders.total%TYPE;
+BEGIN
+  SELECT COALESCE(SUM(oi."totalPrice"), 0)
+  INTO v_total
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id;
+
+  UPDATE cartlify.orders AS o
+  SET "total" = v_total
+  WHERE o.id = p_order_id;
+END;
+$$;
+
+----------------------------------------
+-- ORDERS: confirm order (owner only) + reserve stock
+----------------------------------------
+CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer, p_reserve_for interval) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify AS $$
 DECLARE
-  v_avg   numeric(3, 2);
-  v_count integer;
-BEGIN
-  SELECT
-    COALESCE((AVG(r.rating) FILTER (WHERE r."rating" IS NOT NULL))::numeric(3, 2), 0),
-    (COUNT(*) FILTER (WHERE r."comment" IS NOT NULL AND btrim(r."comment") <> ''))::integer
-  INTO v_avg, v_count
-  FROM cartlify.reviews AS r
-  WHERE r."productId" = p_product_id;
+  v_actor_role text;
+  v_actor_id   integer;
 
-  UPDATE cartlify.products AS p
+  v_user_id    integer;
+  v_confirmed  boolean;
+  v_status     text;
+
+  r record;
+BEGIN
+  v_actor_role := cartlify.current_actor_role();
+  v_actor_id   := cartlify.current_actor_id();
+
+  -- only real USER
+  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
+  END IF;
+
+  -- validate reservation duration
+  IF p_reserve_for IS NULL OR p_reserve_for <= interval '0 seconds' THEN
+    RAISE EXCEPTION 'ORDER_RESERVATION_DURATION_INVALID';
+  END IF;
+
+  -- lock order row
+  SELECT o."userId", o.confirmed, o.status
+  INTO v_user_id, v_confirmed, v_status
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_NOT_FOUND';
+  END IF;
+
+  IF v_user_id IS DISTINCT FROM v_actor_id THEN
+    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
+  END IF;
+
+  IF v_confirmed THEN
+    RAISE EXCEPTION 'ORDER_ALREADY_CONFIRMED';
+  END IF;
+
+  IF v_status IS DISTINCT FROM 'pending' THEN
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_PENDING';
+  END IF;
+
+  -- lock all order items to freeze the cart at confirm moment
+  PERFORM 1
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+  END IF;
+
+  -- reserve stock (deterministic lock order by productId)
+  FOR r IN
+    SELECT oi."productId" AS product_id,
+           SUM(oi.quantity)::integer AS qty
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    GROUP BY oi."productId"
+    ORDER BY oi."productId"
+  LOOP
+    PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
+  END LOOP;
+
+  -- confirm order and set reservation deadline
+  UPDATE cartlify.orders AS o
   SET
-    "avgRating"    = v_avg,
-    "reviewsCount" = v_count
-  WHERE p.id = p_product_id;
+    confirmed = true,
+    status = 'waiting',
+    "reservationExpiresAt" = clock_timestamp() + p_reserve_for
+  WHERE o.id = p_order_id;
 END;
 $$;
 
--- DROP FUNCTION IF EXISTS cartlify.reviews_after_mod_rating ()
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-  v_product_id integer;
-BEGIN
-  IF TG_OP = 'UPDATE' AND NEW."rating" IS NOT DISTINCT FROM OLD."rating" THEN
-    RETURN NEW;
-  END IF;
-
-  IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
-    v_product_id := NEW."productId";
-  ELSE
-    v_product_id := OLD."productId";
-  END IF;
-
-  PERFORM cartlify.recalc_product_rating(v_product_id);
-
-  IF TG_OP = 'DELETE' THEN
-    RETURN OLD;
-  ELSE
-    RETURN NEW;
-  END IF;
-END;
-$$;
-
-DROP TRIGGER IF EXISTS trg_reviews_after_mod_rating ON cartlify.reviews;
-
-CREATE TRIGGER trg_reviews_after_mod_rating
-AFTER INSERT
-OR DELETE
-OR
-UPDATE OF "rating" ON cartlify.reviews FOR EACH ROW
-EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
-
--- PRODUCTS: stock add (admin/root only)
-CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+----------------------------------------
+-- ORDERS: unconfirm order (owner only) + reslease stock
+----------------------------------------
+CREATE OR REPLACE FUNCTION cartlify.unconfirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify AS $$
 DECLARE
-  v_role text;
-  v_stock integer;
+  v_actor_role text;
+  v_actor_id   integer;
+
+  v_user_id    integer;
+  v_confirmed  boolean;
+  v_status     text;
+
+  r record;
 BEGIN
-  IF p_delta IS NULL OR p_delta <= 0 THEN
-    RAISE EXCEPTION 'STOCK_DELTA_INVALID';
+  v_actor_role := cartlify.current_actor_role();
+  v_actor_id   := cartlify.current_actor_id();
+
+  -- only real USER
+  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_UNCONFIRM_FORBIDDEN';
   END IF;
 
-  v_role := cartlify.current_actor_role();
-
-  IF v_role NOT IN ('ADMIN', 'ROOT') THEN
-    RAISE EXCEPTION 'STOCK_ADD_FORBIDDEN';
-  END IF;
-
-  -- lock product row
-  SELECT p."stock"
-  INTO v_stock
-  FROM cartlify.products AS p
-  WHERE p.id = p_product_id
+  -- lock order row
+  SELECT o."userId", o.confirmed, o.status
+  INTO v_user_id, v_confirmed, v_status
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'ORDER_NOT_FOUND';
   END IF;
 
-  v_stock := v_stock + p_delta;
+  -- only owner can unconfirm
+  IF v_user_id IS DISTINCT FROM v_actor_id THEN
+    RAISE EXCEPTION 'ORDER_UNCONFIRM_FORBIDDEN';
+  END IF;
 
-  UPDATE cartlify.products AS p
-  SET "stock" = v_stock
-  WHERE p.id = p_product_id;
+  IF NOT v_confirmed THEN
+    RAISE EXCEPTION 'ORDER_NOT_CONFIRMED';
+  END IF;
 
-  RETURN v_stock;
+  IF v_status IS DISTINCT FROM 'waiting' THEN
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_WAITING';
+  END IF;
+
+  -- lock all order items
+  PERFORM 1
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+  END IF;
+
+  -- release reserved stock (deterministic lock order by productId)
+  FOR r IN
+    SELECT oi."productId" AS product_id,
+           SUM(oi.quantity)::integer AS qty
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    GROUP BY oi."productId"
+    ORDER BY oi."productId"
+  LOOP
+    PERFORM cartlify.release_product_stock(r.product_id, r.qty);
+  END LOOP;
+
+  -- rollback order state
+  UPDATE cartlify.orders AS o
+  SET
+    confirmed = false,
+    status = 'pending',
+    "reservationExpiresAt" = NULL
+  WHERE o.id = p_order_id;
 END;
 $$;
 
--- PRODUCTS: stock consume (user/admin/root only)
-CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+----------------------------------------
+-- ORDERS: expire reservation + release stock
+----------------------------------------
+CREATE OR REPLACE FUNCTION cartlify.expire_order_reservation (p_order_id integer) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify AS $$
 DECLARE
-  v_role text;
-  v_stock integer;
+  prev_role        text;
+  prev_uid         text;
+  prev_gid         text;
+
+  v_confirmed      boolean;
+  v_status         text;
+  v_reserve_until  timestamptz;
+
+  r record;
 BEGIN
-  IF p_qty IS NULL OR p_qty <= 0 THEN
-    RAISE EXCEPTION 'STOCK_QTY_INVALID';
+  -- save current actor context (rls session vars)
+  prev_role := current_setting('cartlify.role', true);
+  prev_uid  := current_setting('cartlify.user_id', true);
+  prev_gid  := current_setting('cartlify.guest_id', true);
+
+  -- elevate context for the duration of this function
+  PERFORM cartlify.set_current_context('ROOT'::cartlify."Role", NULL, NULL);
+
+  BEGIN
+    -- lock order row
+    SELECT o.confirmed, o.status, o."reservationExpiresAt"
+    INTO v_confirmed, v_status, v_reserve_until
+    FROM cartlify.orders AS o
+    WHERE o.id = p_order_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'ORDER_NOT_FOUND';
+    END IF;
+
+    -- stale job or nothing to expire
+    IF NOT v_confirmed
+       OR v_status IS DISTINCT FROM 'waiting'
+       OR v_reserve_until IS NULL
+       OR v_reserve_until > clock_timestamp() THEN
+      -- restore previous context
+      PERFORM set_config('cartlify.role',     COALESCE(prev_role, ''), true);
+      PERFORM set_config('cartlify.user_id',  COALESCE(prev_uid,  ''), true);
+      PERFORM set_config('cartlify.guest_id', COALESCE(prev_gid,  ''), true);
+
+      RETURN false;
+    END IF;
+
+    -- lock all order items
+    PERFORM 1
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+    END IF;
+
+    -- release reserved stock (deterministic lock order by productId)
+    FOR r IN
+      SELECT oi."productId" AS product_id,
+             SUM(oi.quantity)::integer AS qty
+      FROM cartlify.order_items AS oi
+      WHERE oi."orderId" = p_order_id
+      GROUP BY oi."productId"
+      ORDER BY oi."productId"
+    LOOP
+      PERFORM cartlify.release_product_stock(r.product_id, r.qty);
+    END LOOP;
+
+    -- rollback expired reservation
+    UPDATE cartlify.orders AS o
+    SET
+      confirmed = false,
+      status = 'pending',
+      "reservationExpiresAt" = NULL
+    WHERE o.id = p_order_id;
+
+    -- restore previous context
+    PERFORM set_config('cartlify.role',     COALESCE(prev_role, ''), true);
+    PERFORM set_config('cartlify.user_id',  COALESCE(prev_uid,  ''), true);
+    PERFORM set_config('cartlify.guest_id', COALESCE(prev_gid,  ''), true);
+
+    RETURN true;
+  EXCEPTION
+    WHEN OTHERS THEN
+      -- restore previous context
+      PERFORM set_config('cartlify.role',     COALESCE(prev_role, ''), true);
+      PERFORM set_config('cartlify.user_id',  COALESCE(prev_uid,  ''), true);
+      PERFORM set_config('cartlify.guest_id', COALESCE(prev_gid,  ''), true);
+
+      RAISE;
+  END;
+END;
+$$;
+
+----------------------------------------
+-- ORDERS: pay order (owner only) + consume stock
+----------------------------------------
+CREATE OR REPLACE FUNCTION cartlify.pay_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify AS $$
+DECLARE
+  v_actor_role     text;
+  v_actor_id       integer;
+
+  v_user_id        integer;
+  v_confirmed      boolean;
+  v_status         text;
+  v_reserve_until  timestamptz;
+
+  r record;
+BEGIN
+  v_actor_role := cartlify.current_actor_role();
+  v_actor_id   := cartlify.current_actor_id();
+
+  -- only real USER
+  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_PAY_FORBIDDEN';
   END IF;
 
-  v_role := cartlify.current_actor_role();
-
-  IF v_role NOT IN ('USER', 'ADMIN', 'ROOT') THEN
-    RAISE EXCEPTION 'STOCK_CONSUME_FORBIDDEN';
-  END IF;
-
-  -- lock product row
-  SELECT p."stock"
-  INTO v_stock
-  FROM cartlify.products AS p
-  WHERE p.id = p_product_id
+  -- lock order row
+  SELECT o."userId", o.confirmed, o.status, o."reservationExpiresAt"
+  INTO v_user_id, v_confirmed, v_status, v_reserve_until
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'ORDER_NOT_FOUND';
   END IF;
 
-  IF v_stock < p_qty THEN
-    RAISE EXCEPTION 'INSUFFICIENT_STOCK';
+  -- only owner can pay
+  IF v_user_id IS DISTINCT FROM v_actor_id THEN
+    RAISE EXCEPTION 'ORDER_PAY_FORBIDDEN';
   END IF;
 
-  v_stock := v_stock - p_qty;
+  -- order must be confirmed first
+  IF NOT v_confirmed THEN
+    RAISE EXCEPTION 'ORDER_NOT_CONFIRMED';
+  END IF;
 
-  UPDATE cartlify.products AS p
-  SET "stock" = v_stock
-  WHERE p.id = p_product_id;
+  -- only waiting orders can be paid
+  IF v_status IS DISTINCT FROM 'waiting' THEN
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_WAITING';
+  END IF;
 
-  RETURN v_stock;
+  -- reservation must exist
+  IF v_reserve_until IS NULL THEN
+    RAISE EXCEPTION 'ORDER_RESERVATION_MISSING';
+  END IF;
+
+  -- reservation must still be active
+  IF v_reserve_until < clock_timestamp() THEN
+    RAISE EXCEPTION 'ORDER_RESERVATION_EXPIRED';
+  END IF;
+
+  -- lock all order items
+  PERFORM 1
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+  END IF;
+
+  -- finalize reserved stock (deterministic lock order by productId)
+  FOR r IN
+    SELECT oi."productId" AS product_id,
+           SUM(oi.quantity)::integer AS qty
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    GROUP BY oi."productId"
+    ORDER BY oi."productId"
+  LOOP
+    PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
+  END LOOP;
+
+  -- mark order as paid and clear reservation deadline
+  UPDATE cartlify.orders AS o
+  SET
+    status = 'paid',
+    "reservationExpiresAt" = NULL
+  WHERE o.id = p_order_id;
 END;
 $$;
 
