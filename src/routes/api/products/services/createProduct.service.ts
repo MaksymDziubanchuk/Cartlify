@@ -76,6 +76,7 @@ export async function createProduct({
           description: true,
           price: true,
           stock: true,
+          reservedStock: true,
           categoryId: true,
           views: true,
           popularity: true,

@@ -152,6 +152,7 @@ export async function updateProduct({
             description: true,
             price: true,
             stock: true,
+            reservedStock: true,
             categoryId: true,
             popularityOverride: true,
             popularityOverrideUntil: true,

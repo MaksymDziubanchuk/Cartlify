@@ -10,6 +10,7 @@ export function mapProductRowToResponse(args: {
     description: string | null;
     price: unknown;
     stock: number;
+    reservedStock: number;
     categoryId: number;
     views: number;
     popularity: number;
@@ -23,13 +24,14 @@ export function mapProductRowToResponse(args: {
 }): FullProductResponseDto {
   // map db row to api dto shape
   const { product, images } = args;
+  const realStosk = product.stock - product.reservedStock;
 
   return {
     id: product.id as any,
     name: product.name,
     ...(product.description ? { description: product.description } : {}),
     price: decimalToNumber(product.price),
-    stock: product.stock,
+    stock: realStosk,
     categoryId: product.categoryId as any,
     images: images.map((r) => buildImageUrls(r.url, 'product')),
     popularity: product.popularity,

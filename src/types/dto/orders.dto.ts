@@ -1,7 +1,7 @@
 import type { UserId, ProductId, OrderId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
-export type OrderStatus = 'pending' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
+export type OrderStatus = 'pending' | 'waiting' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
 export type ConfirmedStatus = true | false;
 
 export interface GetOrdersQueryDto {

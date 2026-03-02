@@ -35,6 +35,7 @@ enum ReviewVoteAction {
 
 enum OrderStatus {
   pending
+  waiting
   paid
   shipped
   delivered
@@ -177,8 +178,9 @@ model Product {
   name        String
   description String?
 
-  price Decimal @db.Decimal(10, 2)
-  stock Int     @default(0)
+  price         Decimal @db.Decimal(10, 2)
+  stock         Int     @default(0)
+  reservedStock Int     @default(0)
 
   categoryId Int
   category   Category @relation(fields: [categoryId], references: [id])
@@ -204,11 +206,15 @@ model Product {
   images          ProductImage[]
 
   @@index([categoryId])
-  @@index([price])
-  @@index([createdAt])
-  @@index([name])
-  @@index([popularity])
-  @@index([views])
+  @@index([price, id])
+  @@index([createdAt, id])
+  @@index([name, id])
+  @@index([popularity, id])
+  @@index([views, id])
+  @@index([stock, id])
+  @@index([updatedAt, id])
+  @@index([avgRating, id])
+  @@index([reviewsCount, id])
   @@map("products")
 }
 
@@ -302,8 +308,9 @@ model Order {
   userId Int
   user   User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
-  status    OrderStatus @default(pending)
-  confirmed Boolean     @default(false)
+  status               OrderStatus @default(pending)
+  reservationExpiresAt DateTime?
+  confirmed            Boolean     @default(false)
 
   total Decimal @db.Decimal(10, 2)
 
@@ -317,6 +324,7 @@ model Order {
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
+  @@index([confirmed, reservationExpiresAt])
   @@map("orders")
 }
 
