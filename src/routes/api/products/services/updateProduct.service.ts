@@ -113,6 +113,9 @@ export async function updateProduct({
           await persistProductImages({ tx: db, productId: productIdRaw, uploads: images! });
         }
 
+        // use stock as delta
+        const newStock = stockRaw !== undefined ? before.stock + stockRaw : undefined;
+
         // build update payload only for provided fields
         const data: Prisma.ProductUpdateInput = {
           ...(name !== undefined ? { name: nameNorm! } : {}),
@@ -120,7 +123,7 @@ export async function updateProduct({
             ? { description: descriptionNorm ? descriptionNorm : null }
             : {}),
           ...(price !== undefined ? { price: new Prisma.Decimal(priceRaw!) } : {}),
-          ...(stock !== undefined ? { stock: stockRaw! } : {}),
+          ...(stock !== undefined ? { stock: newStock! } : {}),
           ...(categoryId !== undefined ? { categoryId: categoryIdRaw! } : {}),
         };
 

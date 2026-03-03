@@ -75,6 +75,15 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
   );
 
   app.patch(
+    '/:productId/category',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.patchProductCategorySchema,
+    },
+    productController.patchProductCategory,
+  );
+
+  app.patch(
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
@@ -104,13 +113,5 @@ export default async function productsRouter(app: FastifyInstance, opt: unknown)
       schema: productSchemas.deleteProductReviewRouterSchema,
     },
     productController.deleteProductReview,
-  );
-  app.patch(
-    '/:productId/category',
-    {
-      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
-      schema: productSchemas.patchProductCategorySchema,
-    },
-    productController.patchProductCategory,
   );
 }
