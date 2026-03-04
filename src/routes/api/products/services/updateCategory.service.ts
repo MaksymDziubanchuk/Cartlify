@@ -57,6 +57,7 @@ export async function updateProductCategory({
           description: true,
           price: true,
           stock: true,
+          reservedStock: true,
           categoryId: true,
           views: true,
           popularity: true,

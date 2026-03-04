@@ -5,7 +5,10 @@ export const ordersGetQuerySchema = {
   properties: {
     page: { type: 'number', minimum: 1 },
     limit: { type: 'number', minimum: 1 },
-    status: { type: 'string', enum: ['pending', 'paid', 'shipped', 'delivered', 'cancelled'] },
+    status: {
+      type: 'string',
+      enum: ['pending', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+    },
     confirmed: { type: 'boolean', enum: ['true', 'false'] },
   },
 } as const;
@@ -63,7 +66,10 @@ export const ordersOrderResponseSchema = {
   properties: {
     id: { type: 'number' },
     userId: { type: 'number' },
-    status: { type: 'string', enum: ['pending', 'paid', 'shipped', 'delivered', 'cancelled'] },
+    status: {
+      type: 'string',
+      enum: ['pending', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+    },
     items: { type: 'array', items: { $ref: 'ordersOrderItemSchema#' } },
     total: { type: 'number' },
     createdAt: { type: 'string', format: 'date-time' },
@@ -103,7 +109,10 @@ export const ordersUpdateStatusBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    status: { type: 'string', enum: ['pending', 'paid', 'shipped', 'delivered', 'cancelled'] },
+    status: {
+      type: 'string',
+      enum: ['pending', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+    },
   },
   required: ['status'],
 } as const;
