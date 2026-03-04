@@ -1,4 +1,3 @@
-
 BEGIN;
 
 ------------------------------------------------------------
@@ -26,14 +25,26 @@ $$;
 ------------------------------------------------------------
 -- 1a. SEARCH_PATH + public
 ------------------------------------------------------------
+ALTER ROLE cartlify_owner
+SET
+  search_path = 'cartlify',
+  'public';
 
-ALTER ROLE cartlify_owner    SET search_path = 'cartlify', 'public';
-ALTER ROLE cartlify_app      SET search_path = 'cartlify';
-ALTER ROLE cartlify_readonly SET search_path = 'cartlify';
+ALTER ROLE cartlify_app
+SET
+  search_path = 'cartlify';
 
+ALTER ROLE cartlify_readonly
+SET
+  search_path = 'cartlify';
 
-REVOKE ALL ON SCHEMA public FROM cartlify_app;
-REVOKE ALL ON SCHEMA public FROM cartlify_readonly;
+REVOKE ALL ON SCHEMA public
+FROM
+  cartlify_app;
+
+REVOKE ALL ON SCHEMA public
+FROM
+  cartlify_readonly;
 
 ------------------------------------------------------------
 -- 2. 
@@ -56,66 +67,90 @@ $$;
 ------------------------------------------------------------
 -- 3. 
 ------------------------------------------------------------
-
-
-REVOKE ALL ON SCHEMA cartlify FROM PUBLIC;
-
+REVOKE ALL ON SCHEMA cartlify
+FROM
+  PUBLIC;
 
 GRANT USAGE ON SCHEMA cartlify TO cartlify_app;
+
 GRANT USAGE ON SCHEMA cartlify TO cartlify_readonly;
 
 ------------------------------------------------------------
 -- 4. 
 ------------------------------------------------------------
+GRANT
+SELECT
+,
+  INSERT,
+UPDATE,
+DELETE ON ALL TABLES IN SCHEMA cartlify TO cartlify_app;
 
+GRANT
+SELECT
+  ON ALL TABLES IN SCHEMA cartlify TO cartlify_readonly;
 
-GRANT SELECT, INSERT, UPDATE, DELETE
-  ON ALL TABLES IN SCHEMA cartlify
-  TO cartlify_app;
+GRANT USAGE,
+SELECT
+,
+UPDATE ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_app;
 
-GRANT SELECT
-  ON ALL TABLES IN SCHEMA cartlify
-  TO cartlify_readonly;
-
-
-GRANT USAGE, SELECT, UPDATE
-  ON ALL SEQUENCES IN SCHEMA cartlify
-  TO cartlify_app;
-
-GRANT USAGE, SELECT
-  ON ALL SEQUENCES IN SCHEMA cartlify
-  TO cartlify_readonly;
+GRANT USAGE,
+SELECT
+  ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_readonly;
 
 ------------------------------------------------------------
 -- 5. DEFAULT PRIVILEGES 
 ------------------------------------------------------------
-
+ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
+GRANT
+SELECT
+,
+  INSERT,
+UPDATE,
+DELETE ON TABLES TO cartlify_app;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO cartlify_app;
+GRANT
+SELECT
+  ON TABLES TO cartlify_readonly;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-  GRANT SELECT ON TABLES TO cartlify_readonly;
+GRANT USAGE,
+SELECT
+,
+UPDATE ON SEQUENCES TO cartlify_app;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-  GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO cartlify_app;
-
-ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-  GRANT USAGE, SELECT ON SEQUENCES TO cartlify_readonly;
+GRANT USAGE,
+SELECT
+  ON SEQUENCES TO cartlify_readonly;
 
 ------------------------------------------------------------
 -- 5a. 
 ------------------------------------------------------------
+REVOKE
+EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify
+FROM
+  PUBLIC;
 
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify TO cartlify_app;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify TO cartlify_readonly;
+GRANT
+EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify TO cartlify_app;
 
+GRANT
+EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify TO cartlify_readonly;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner
+REVOKE
+EXECUTE ON FUNCTIONS
+FROM
+  PUBLIC;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-  GRANT EXECUTE ON FUNCTIONS TO cartlify_app;
+GRANT
+EXECUTE ON FUNCTIONS TO cartlify_app;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-  GRANT EXECUTE ON FUNCTIONS TO cartlify_readonly;
-
+GRANT
+EXECUTE ON FUNCTIONS TO cartlify_readonly;
 
 COMMIT;

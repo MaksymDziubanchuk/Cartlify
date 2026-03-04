@@ -14,6 +14,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.getOrders,
   );
+
   app.get(
     '/:orderId',
     {
@@ -22,6 +23,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.getOrderById,
   );
+
   app.post(
     '/',
     {
@@ -30,6 +32,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.postOrder,
   );
+
   app.patch(
     '/:orderId/status',
     {
@@ -42,7 +45,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
   app.patch(
     '/:orderId/confirm',
     {
-      preHandler: [authGuard, requireRole(['ADMIN']), validateId('orderId')],
+      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
       schema: ordersSchema.patchOrderConfirmSchema,
     },
     ordersController.putOrderConfirmStatus,
