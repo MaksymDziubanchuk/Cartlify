@@ -50,13 +50,4 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.putOrderConfirmStatus,
   );
-
-  app.delete(
-    '/:orderId',
-    {
-      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
-      schema: ordersSchema.deleteOrderSchema,
-    },
-    ordersController.deleteOrder,
-  );
 }
