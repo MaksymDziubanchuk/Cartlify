@@ -2,21 +2,32 @@ import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { UserEntity } from 'types/user.js';
 import type {
+  CurrentAddItemBodyDto,
+  CurrentAddItemDto,
   GetOrdersQueryDto,
   FindOrdersDto,
   GetOrderByIdParamsDto,
   FindOrderByIdDto,
-  CreateOrderBodyDto,
-  CreateOrderDto,
   UpdateOrderStatusParamsDto,
   UpdateOrderStatusBodyDto,
   UpdateOrderStatusDto,
-  DeleteOrderParamsDto,
-  ConfirmOrderParamsDto,
-  ConfirmOrderDto,
+  OrderResponseDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
+
+const postCurrentItems: ControllerRouter<{}, CurrentAddItemBodyDto, {}, OrderResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { productId, quantity } = req.body;
+
+  const args = pickDefined<CurrentAddItemDto>({ actorId, actorRole, productId, quantity }, {});
+
+  const result = await ordersServices.addCurrentItem(args);
+  return reply.code(200).send(result);
+};
 
 const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, MessageResponseDto> = async (
   req,
@@ -46,19 +57,6 @@ const getOrderById: ControllerRouter<GetOrderByIdParamsDto, {}, {}, MessageRespo
   return reply.code(200).send(result);
 };
 
-const postOrder: ControllerRouter<{}, CreateOrderBodyDto, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
-  const { id: userId } = req.user as UserEntity;
-  const { items, note, shippingAddress } = req.body;
-
-  const args = pickDefined<CreateOrderDto>({ userId, items, shippingAddress }, { note });
-
-  const result = await ordersServices.createOrder(args);
-  return reply.code(201).send(result);
-};
-
 const putOrderStatus: ControllerRouter<
   UpdateOrderStatusParamsDto,
   UpdateOrderStatusBodyDto,
@@ -75,36 +73,10 @@ const putOrderStatus: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-const putOrderConfirmStatus: ControllerRouter<
-  ConfirmOrderParamsDto,
-  {},
-  {},
-  MessageResponseDto
-> = async (req, reply) => {
-  const { orderId } = req.params;
-
-  const args = pickDefined<ConfirmOrderDto>({ orderId }, {});
-
-  const result = await ordersServices.updateOrderConfirmStatus(args);
-  return reply.code(200).send(result);
-};
-
-const deleteOrder: ControllerRouter<DeleteOrderParamsDto, {}, {}, MessageResponseDto> = async (
-  req,
-  reply,
-) => {
-  const { id } = req.user as UserEntity;
-  const { orderId } = req.params;
-
-  const result = await ordersServices.deleteOrder({ actorId: id, orderId });
-  return reply.code(204).send(result);
-};
-
 export const ordersController = {
+  postCurrentItems,
+
   getOrders,
   getOrderById,
-  postOrder,
   putOrderStatus,
-  putOrderConfirmStatus,
-  deleteOrder,
 };
