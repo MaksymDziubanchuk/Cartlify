@@ -1,6 +1,21 @@
 import type { FastifySchema } from 'fastify';
 
-export const getOrdersSchema = {
+const postCurrentItemsSchema = {
+  body: { $ref: 'ordersCurrentAddItemBodySchema#' },
+  response: {
+    200: { $ref: 'ordersOrderResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    404: { $ref: 'errorResponseSchema#' },
+    409: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+const getOrdersSchema = {
   querystring: { $ref: 'ordersGetQuerySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -12,7 +27,7 @@ export const getOrdersSchema = {
   },
 } satisfies FastifySchema;
 
-export const getOrderByIdSchema = {
+const getOrderByIdSchema = {
   params: { $ref: 'ordersGetByIdParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -25,21 +40,7 @@ export const getOrderByIdSchema = {
   },
 } satisfies FastifySchema;
 
-export const postOrderSchema = {
-  body: { $ref: 'ordersCreateBodySchema#' },
-  response: {
-    201: { $ref: 'messageResponseSchema#' },
-
-    400: { $ref: 'errorResponseSchema#' },
-    401: { $ref: 'errorResponseSchema#' },
-    403: { $ref: 'errorResponseSchema#' },
-    409: { $ref: 'errorResponseSchema#' },
-    422: { $ref: 'errorResponseSchema#' },
-    500: { $ref: 'errorResponseSchema#' },
-  },
-} satisfies FastifySchema;
-
-export const patchOrderStatusSchema = {
+const patchOrderStatusSchema = {
   params: { $ref: 'ordersUpdateStatusParamsSchema#' },
   body: { $ref: 'ordersUpdateStatusBodySchema#' },
   response: {
@@ -55,38 +56,10 @@ export const patchOrderStatusSchema = {
   },
 } satisfies FastifySchema;
 
-export const patchOrderConfirmSchema = {
-  params: { $ref: 'ordersUpdateConfirmStatusParamsSchema#' },
-  response: {
-    200: { $ref: 'messageResponseSchema#' },
-
-    400: { $ref: 'errorResponseSchema#' },
-    401: { $ref: 'errorResponseSchema#' },
-    403: { $ref: 'errorResponseSchema#' },
-    404: { $ref: 'errorResponseSchema#' },
-    409: { $ref: 'errorResponseSchema#' },
-    422: { $ref: 'errorResponseSchema#' },
-    500: { $ref: 'errorResponseSchema#' },
-  },
-} satisfies FastifySchema;
-
-export const deleteOrderSchema = {
-  params: { $ref: 'ordersDeleteParamsSchema#' },
-  response: {
-    204: { $ref: 'messageResponseSchema#' },
-    400: { $ref: 'errorResponseSchema#' },
-    401: { $ref: 'errorResponseSchema#' },
-    403: { $ref: 'errorResponseSchema#' },
-    404: { $ref: 'errorResponseSchema#' },
-    500: { $ref: 'errorResponseSchema#' },
-  },
-} satisfies FastifySchema;
-
 export const ordersSchema = {
+  postCurrentItemsSchema,
+
   getOrdersSchema,
   getOrderByIdSchema,
-  postOrderSchema,
   patchOrderStatusSchema,
-  patchOrderConfirmSchema,
-  deleteOrderSchema,
 };

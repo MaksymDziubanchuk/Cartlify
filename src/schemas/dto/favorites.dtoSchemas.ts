@@ -1,4 +1,4 @@
-export const favoritesGetQuerySchema = {
+const favoritesGetQuerySchema = {
   $id: 'favoritesGetQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -8,7 +8,7 @@ export const favoritesGetQuerySchema = {
   },
 } as const;
 
-export const favoritesFavoriteItemSchema = {
+const favoritesFavoriteItemSchema = {
   $id: 'favoritesFavoriteItemSchema',
   type: 'object',
   additionalProperties: false,
@@ -19,7 +19,7 @@ export const favoritesFavoriteItemSchema = {
   required: ['product', 'addedAt'],
 } as const;
 
-export const favoritesGetResponseSchema = {
+const favoritesGetResponseSchema = {
   $id: 'favoritesGetResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -32,7 +32,7 @@ export const favoritesGetResponseSchema = {
   required: ['items', 'nextCursor'],
 } as const;
 
-export const favoritesAddParamsSchema = {
+const favoritesAddParamsSchema = {
   $id: 'favoritesAddParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -42,7 +42,7 @@ export const favoritesAddParamsSchema = {
   required: ['productId'],
 } as const;
 
-export const favoritesAddResponseSchema = {
+const favoritesAddResponseSchema = {
   $id: 'favoritesAddResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -53,7 +53,7 @@ export const favoritesAddResponseSchema = {
   required: ['productId', 'isFavorite'],
 } as const;
 
-export const favoritesDeleteParamsSchema = {
+const favoritesDeleteParamsSchema = {
   $id: 'favoritesDeleteParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -63,7 +63,7 @@ export const favoritesDeleteParamsSchema = {
   required: ['productId'],
 } as const;
 
-export const favoritesDeleteResponseSchema = {
+const favoritesDeleteResponseSchema = {
   $id: 'favoritesDeleteResponseSchema',
   type: 'object',
   additionalProperties: false,

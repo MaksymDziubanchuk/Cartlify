@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const getMeSchema = {
+const getMeSchema = {
   response: {
     200: { $ref: 'usersUserResponseSchema#' },
 
@@ -14,7 +14,7 @@ export const getMeSchema = {
   },
 } satisfies FastifySchema;
 
-export const patchMeSchema = {
+const patchMeSchema = {
   body: { $ref: 'usersUpdateMeBodySchema#' },
   response: {
     200: { $ref: 'usersUpdateMeResponseSchema#' },
@@ -28,7 +28,7 @@ export const patchMeSchema = {
   },
 } satisfies FastifySchema;
 
-export const getUserByIdSchema = {
+const getUserByIdSchema = {
   params: { $ref: 'usersGetByIdParamsSchema#' },
   response: {
     200: { $ref: 'usersGetByIdResponseSchema#' },
@@ -41,7 +41,7 @@ export const getUserByIdSchema = {
   },
 } satisfies FastifySchema;
 
-export const deleteUserByIdSchema = {
+const deleteUserByIdSchema = {
   params: { $ref: 'usersGetByIdParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },

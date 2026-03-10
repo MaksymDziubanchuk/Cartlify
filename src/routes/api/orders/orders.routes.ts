@@ -6,6 +6,40 @@ import { ordersSchema } from './orders.schemas.js';
 import { ordersController } from './orders.controllers.js';
 
 export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
+  app.get('/current', { preHandler: [authGuard, requireRole(['USER'])] }, async (req, reply) =>
+    reply.code(200).send({ message: 'orders.current: not implemented' }),
+  );
+
+  app.post(
+    '/current/items',
+    {
+      preHandler: [authGuard, requireRole(['USER'])],
+      schema: ordersSchema.postCurrentItemsSchema,
+    },
+    ordersController.postCurrentItems,
+  );
+
+  app.patch(
+    '/current/items/:itemId',
+    { preHandler: [authGuard, requireRole(['USER']), validateId('itemId')] },
+    async (req, reply) =>
+      reply.code(200).send({ message: 'orders.current.items.update: not implemented' }),
+  );
+
+  app.delete(
+    '/current/items/:itemId',
+    { preHandler: [authGuard, requireRole(['USER']), validateId('itemId')] },
+    async (req, reply) =>
+      reply.code(200).send({ message: 'orders.current.items.delete: not implemented' }),
+  );
+
+  app.post(
+    '/current/confirm',
+    { preHandler: [authGuard, requireRole(['USER'])] },
+    async (req, reply) =>
+      reply.code(200).send({ message: 'orders.current.confirm: not implemented' }),
+  );
+
   app.get(
     '/',
     {
@@ -24,39 +58,12 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     ordersController.getOrderById,
   );
 
-  app.post(
-    '/',
-    {
-      preHandler: [authGuard, requireRole(['USER'])],
-      schema: ordersSchema.postOrderSchema,
-    },
-    ordersController.postOrder,
-  );
-
   app.patch(
     '/:orderId/status',
     {
-      preHandler: [authGuard, requireRole(['ADMIN']), validateId('orderId')],
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
       schema: ordersSchema.patchOrderStatusSchema,
     },
     ordersController.putOrderStatus,
-  );
-
-  app.patch(
-    '/:orderId/confirm',
-    {
-      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
-      schema: ordersSchema.patchOrderConfirmSchema,
-    },
-    ordersController.putOrderConfirmStatus,
-  );
-
-  app.delete(
-    '/:orderId',
-    {
-      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
-      schema: ordersSchema.deleteOrderSchema,
-    },
-    ordersController.deleteOrder,
   );
 }

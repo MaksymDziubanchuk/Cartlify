@@ -1,4 +1,15 @@
-export const ordersGetQuerySchema = {
+const ordersCurrentAddItemBodySchema = {
+  $id: 'ordersCurrentAddItemBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    productId: { type: 'number', minimum: 1 },
+    quantity: { type: 'number', minimum: 1 },
+  },
+  required: ['productId', 'quantity'],
+} as const;
+
+const ordersGetQuerySchema = {
   $id: 'ordersGetQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -13,7 +24,7 @@ export const ordersGetQuerySchema = {
   },
 } as const;
 
-export const ordersGetByIdParamsSchema = {
+const ordersGetByIdParamsSchema = {
   $id: 'ordersGetByIdParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -23,30 +34,7 @@ export const ordersGetByIdParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersCreateItemSchema = {
-  $id: 'ordersCreateItemSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    productId: { type: 'number' },
-    quantity: { type: 'number', minimum: 1 },
-  },
-  required: ['productId', 'quantity'],
-} as const;
-
-export const ordersCreateBodySchema = {
-  $id: 'ordersCreateBodySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    items: { type: 'array', minItems: 1, items: { $ref: 'ordersCreateItemSchema#' } },
-    note: { type: 'string' },
-    shippingAddress: { type: 'string' },
-  },
-  required: ['items', 'shippingAddress'],
-} as const;
-
-export const ordersOrderItemSchema = {
+const ordersOrderItemSchema = {
   $id: 'ordersOrderItemSchema',
   type: 'object',
   additionalProperties: false,
@@ -59,7 +47,7 @@ export const ordersOrderItemSchema = {
   required: ['productId', 'quantity', 'unitPrice', 'totalPrice'],
 } as const;
 
-export const ordersOrderResponseSchema = {
+const ordersOrderResponseSchema = {
   $id: 'ordersOrderResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -76,6 +64,7 @@ export const ordersOrderResponseSchema = {
     updatedAt: { type: 'string', format: 'date-time' },
     note: { type: 'string' },
     shippingAddress: { type: 'string' },
+    confirmed: { type: 'boolean' },
   },
   required: [
     'id',
@@ -86,15 +75,11 @@ export const ordersOrderResponseSchema = {
     'createdAt',
     'updatedAt',
     'shippingAddress',
+    'confirmed',
   ],
 } as const;
 
-export const ordersCreateResponseSchema = {
-  $id: 'ordersCreateResponseSchema',
-  allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
-} as const;
-
-export const ordersUpdateStatusParamsSchema = {
+const ordersUpdateStatusParamsSchema = {
   $id: 'ordersUpdateStatusParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -104,7 +89,7 @@ export const ordersUpdateStatusParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersUpdateStatusBodySchema = {
+const ordersUpdateStatusBodySchema = {
   $id: 'ordersUpdateStatusBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -117,27 +102,12 @@ export const ordersUpdateStatusBodySchema = {
   required: ['status'],
 } as const;
 
-export const ordersUpdateStatusResponseSchema = {
+const ordersUpdateStatusResponseSchema = {
   $id: 'ordersUpdateStatusResponseSchema',
   allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
 } as const;
 
-export const ordersUpdateConfirmStatusParamsSchema = {
-  $id: 'ordersUpdateConfirmStatusParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    orderId: { type: 'number' },
-  },
-  required: ['orderId'],
-} as const;
-
-export const ordersUpdateConfirmStatusResponseSchema = {
-  $id: 'ordersUpdateConfirmStatusResponseSchema',
-  allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
-} as const;
-
-export const ordersListResponseSchema = {
+const ordersListResponseSchema = {
   $id: 'ordersListResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -150,40 +120,15 @@ export const ordersListResponseSchema = {
   required: ['items'],
 } as const;
 
-export const ordersDeleteParamsSchema = {
-  $id: 'ordersDeleteParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    orderId: { type: 'number', minimum: 1 },
-  },
-  required: ['orderId'],
-} as const;
-
-export const ordersDeleteResponseSchema = {
-  $id: 'ordersDeleteResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    message: { type: 'string' },
-  },
-  required: ['message'],
-} as const;
-
 export const ordersDtoSchemas = [
+  ordersCurrentAddItemBodySchema,
+
   ordersGetQuerySchema,
   ordersGetByIdParamsSchema,
-  ordersCreateItemSchema,
-  ordersCreateBodySchema,
   ordersOrderItemSchema,
   ordersOrderResponseSchema,
-  ordersCreateResponseSchema,
   ordersUpdateStatusParamsSchema,
   ordersUpdateStatusBodySchema,
   ordersUpdateStatusResponseSchema,
-  ordersUpdateConfirmStatusParamsSchema,
-  ordersUpdateConfirmStatusResponseSchema,
   ordersListResponseSchema,
-  ordersDeleteParamsSchema,
-  ordersDeleteResponseSchema,
 ];

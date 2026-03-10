@@ -1,9 +1,8 @@
 import { Prisma } from '@prisma/client';
-import { tx } from '@db/client.js';
+import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
-import { isRetryableTxError } from '@db/client.js';
 
 import {
   BadRequestError,

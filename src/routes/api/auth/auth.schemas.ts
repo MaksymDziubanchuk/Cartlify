@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const setRegisterSchema = {
+const setRegisterSchema = {
   body: { $ref: 'authRegisterBodySchema#' },
   response: {
     201: { $ref: 'authRegisterResponseSchema#' },
@@ -12,7 +12,7 @@ export const setRegisterSchema = {
   },
 } satisfies FastifySchema;
 
-export const setLoginSchema = {
+const setLoginSchema = {
   body: { $ref: 'authLoginBodySchema#' },
   response: {
     200: { $ref: 'authLoginResponseSchema#' },
@@ -24,7 +24,7 @@ export const setLoginSchema = {
   },
 } satisfies FastifySchema;
 
-export const setGoogleStartSchema = {
+const setGoogleStartSchema = {
   response: {
     302: { type: 'null' },
 
@@ -36,7 +36,7 @@ export const setGoogleStartSchema = {
   },
 } satisfies FastifySchema;
 
-export const setGoogleCallbackSchema = {
+const setGoogleCallbackSchema = {
   querystring: { $ref: 'authGoogleCallbackQuerySchema#' },
   response: {
     200: { $ref: 'authLoginResponseSchema#' },
@@ -50,7 +50,7 @@ export const setGoogleCallbackSchema = {
   },
 } satisfies FastifySchema;
 
-export const setGithubStartSchema = {
+const setGithubStartSchema = {
   response: {
     302: { type: 'null' },
 
@@ -62,7 +62,7 @@ export const setGithubStartSchema = {
   },
 } satisfies FastifySchema;
 
-export const setGithubCallbackSchema = {
+const setGithubCallbackSchema = {
   querystring: { $ref: 'authGithubCallbackQuerySchema#' },
   response: {
     200: { $ref: 'authLoginResponseSchema#' },
@@ -76,7 +76,7 @@ export const setGithubCallbackSchema = {
   },
 } satisfies FastifySchema;
 
-export const setLinkedInStartSchema: FastifySchema = {
+const setLinkedInStartSchema: FastifySchema = {
   response: {
     302: { type: 'null' },
 
@@ -88,7 +88,7 @@ export const setLinkedInStartSchema: FastifySchema = {
   },
 } satisfies FastifySchema;
 
-export const setLinkedInCallbackSchema: FastifySchema = {
+const setLinkedInCallbackSchema: FastifySchema = {
   querystring: { $ref: 'authLinkedInCallbackQuerySchema#' },
   response: {
     200: { $ref: 'authLoginResponseSchema#' },
@@ -101,7 +101,7 @@ export const setLinkedInCallbackSchema: FastifySchema = {
   },
 } satisfies FastifySchema;
 
-export const setVerifyResendSchema = {
+const setVerifyResendSchema = {
   body: { $ref: 'authResendVerifyBodySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -114,7 +114,7 @@ export const setVerifyResendSchema = {
   },
 } satisfies FastifySchema;
 
-export const authVerifyEmailSchema = {
+const authVerifyEmailSchema = {
   querystring: { $ref: 'authVerifyEmailQuerySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -125,7 +125,7 @@ export const authVerifyEmailSchema = {
   },
 } as const;
 
-export const setPasswordForgotSchema = {
+const setPasswordForgotSchema = {
   body: { $ref: 'authPasswordForgotBodySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -136,7 +136,7 @@ export const setPasswordForgotSchema = {
   },
 } satisfies FastifySchema;
 
-export const setPasswordResetSchema = {
+const setPasswordResetSchema = {
   querystring: { $ref: 'authPasswordResetQuerySchema#' },
   body: { $ref: 'authPasswordResetBodySchema#' },
   response: {
@@ -149,7 +149,7 @@ export const setPasswordResetSchema = {
   },
 } satisfies FastifySchema;
 
-export const setLogoutSchema = {
+const setLogoutSchema = {
   body: { $ref: 'authLogoutBodySchema#' },
   response: {
     204: { $ref: 'messageResponseSchema#' },
@@ -160,7 +160,7 @@ export const setLogoutSchema = {
   },
 } satisfies FastifySchema;
 
-export const setRefreshSchema = {
+const setRefreshSchema = {
   response: {
     200: { $ref: 'authRefreshResponseSchema#' },
 

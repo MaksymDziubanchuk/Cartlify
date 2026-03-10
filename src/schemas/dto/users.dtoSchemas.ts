@@ -1,4 +1,4 @@
-export const usersGetByIdParamsSchema = {
+const usersGetByIdParamsSchema = {
   $id: 'usersGetByIdParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -8,7 +8,7 @@ export const usersGetByIdParamsSchema = {
   required: ['userId'],
 } as const;
 
-export const usersUserReviewResponseSchema = {
+const usersUserReviewResponseSchema = {
   $id: 'usersUserReviewResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -42,7 +42,7 @@ export const usersUserReviewResponseSchema = {
   ],
 } as const;
 
-export const usersUserResponseSchema = {
+const usersUserResponseSchema = {
   $id: 'usersUserResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -77,12 +77,12 @@ export const usersUserResponseSchema = {
   required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
 } as const;
 
-export const usersGetMeResponseSchema = {
+const usersGetMeResponseSchema = {
   $id: 'usersGetMeResponseSchema',
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
-export const usersGetByIdResponseSchema = {
+const usersGetByIdResponseSchema = {
   $id: 'usersGetByIdResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -109,7 +109,7 @@ export const usersGetByIdResponseSchema = {
   required: ['id', 'email', 'createdAt', 'updatedAt'],
 } as const;
 
-export const usersUpdateMeBodySchema = {
+const usersUpdateMeBodySchema = {
   $id: 'usersUpdateMeBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -126,7 +126,7 @@ export const usersUpdateMeBodySchema = {
   },
 } as const;
 
-export const usersUpdateMeResponseSchema = {
+const usersUpdateMeResponseSchema = {
   $id: 'usersUpdateMeResponseSchema',
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;

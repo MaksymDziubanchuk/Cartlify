@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const getStatsSchema = {
+const getStatsSchema = {
   querystring: { $ref: 'adminStatsQuerySchema#' },
   response: {
     200: { $ref: 'adminStatsResponseSchema#' },
@@ -12,7 +12,7 @@ export const getStatsSchema = {
   },
 } satisfies FastifySchema;
 
-export const setProductPopularitySchema = {
+const setProductPopularitySchema = {
   params: { $ref: 'adminSetPopularityParamsSchema#' },
   body: { $ref: 'adminSetPopularityBodySchema#' },
   response: {
@@ -27,7 +27,7 @@ export const setProductPopularitySchema = {
   },
 } satisfies FastifySchema;
 
-export const getChatsSchema = {
+const getChatsSchema = {
   querystring: { $ref: 'adminChatsQuerySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
