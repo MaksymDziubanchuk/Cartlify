@@ -1,4 +1,4 @@
-export const reviewsVoteParamsSchema = {
+const reviewsVoteParamsSchema = {
   $id: 'reviewsVoteParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -8,7 +8,7 @@ export const reviewsVoteParamsSchema = {
   required: ['reviewId'],
 } as const;
 
-export const reviewsVoteBodySchema = {
+const reviewsVoteBodySchema = {
   $id: 'reviewsVoteBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -18,7 +18,7 @@ export const reviewsVoteBodySchema = {
   required: ['action'],
 } as const;
 
-export const reviewsVoteResponseSchema = {
+const reviewsVoteResponseSchema = {
   $id: 'reviewsVoteResponseSchema',
   type: 'object',
   additionalProperties: false,

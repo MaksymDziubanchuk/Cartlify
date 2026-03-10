@@ -1,4 +1,4 @@
-export const chatsGetQuerySchema = {
+const chatsGetQuerySchema = {
   $id: 'chatsGetQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -10,7 +10,7 @@ export const chatsGetQuerySchema = {
   },
 } as const;
 
-export const chatsChatItemSchema = {
+const chatsChatItemSchema = {
   $id: 'chatsChatItemSchema',
   type: 'object',
   additionalProperties: false,
@@ -25,7 +25,7 @@ export const chatsChatItemSchema = {
   required: ['id', 'type', 'status', 'lastMessageAt'],
 } as const;
 
-export const chatsGetResponseSchema = {
+const chatsGetResponseSchema = {
   $id: 'chatsGetResponseSchema',
   type: 'object',
   additionalProperties: false,

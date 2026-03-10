@@ -1,4 +1,4 @@
-export const ordersGetQuerySchema = {
+const ordersGetQuerySchema = {
   $id: 'ordersGetQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -13,7 +13,7 @@ export const ordersGetQuerySchema = {
   },
 } as const;
 
-export const ordersGetByIdParamsSchema = {
+const ordersGetByIdParamsSchema = {
   $id: 'ordersGetByIdParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -23,7 +23,7 @@ export const ordersGetByIdParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersCreateItemSchema = {
+const ordersCreateItemSchema = {
   $id: 'ordersCreateItemSchema',
   type: 'object',
   additionalProperties: false,
@@ -34,7 +34,7 @@ export const ordersCreateItemSchema = {
   required: ['productId', 'quantity'],
 } as const;
 
-export const ordersCreateBodySchema = {
+const ordersCreateBodySchema = {
   $id: 'ordersCreateBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -46,7 +46,7 @@ export const ordersCreateBodySchema = {
   required: ['items', 'shippingAddress'],
 } as const;
 
-export const ordersOrderItemSchema = {
+const ordersOrderItemSchema = {
   $id: 'ordersOrderItemSchema',
   type: 'object',
   additionalProperties: false,
@@ -59,7 +59,7 @@ export const ordersOrderItemSchema = {
   required: ['productId', 'quantity', 'unitPrice', 'totalPrice'],
 } as const;
 
-export const ordersOrderResponseSchema = {
+const ordersOrderResponseSchema = {
   $id: 'ordersOrderResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -89,12 +89,12 @@ export const ordersOrderResponseSchema = {
   ],
 } as const;
 
-export const ordersCreateResponseSchema = {
+const ordersCreateResponseSchema = {
   $id: 'ordersCreateResponseSchema',
   allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
 } as const;
 
-export const ordersUpdateStatusParamsSchema = {
+const ordersUpdateStatusParamsSchema = {
   $id: 'ordersUpdateStatusParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -104,7 +104,7 @@ export const ordersUpdateStatusParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersUpdateStatusBodySchema = {
+const ordersUpdateStatusBodySchema = {
   $id: 'ordersUpdateStatusBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -117,12 +117,12 @@ export const ordersUpdateStatusBodySchema = {
   required: ['status'],
 } as const;
 
-export const ordersUpdateStatusResponseSchema = {
+const ordersUpdateStatusResponseSchema = {
   $id: 'ordersUpdateStatusResponseSchema',
   allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
 } as const;
 
-export const ordersUpdateConfirmStatusParamsSchema = {
+const ordersUpdateConfirmStatusParamsSchema = {
   $id: 'ordersUpdateConfirmStatusParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -132,12 +132,12 @@ export const ordersUpdateConfirmStatusParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersUpdateConfirmStatusResponseSchema = {
+const ordersUpdateConfirmStatusResponseSchema = {
   $id: 'ordersUpdateConfirmStatusResponseSchema',
   allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
 } as const;
 
-export const ordersListResponseSchema = {
+const ordersListResponseSchema = {
   $id: 'ordersListResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -150,7 +150,7 @@ export const ordersListResponseSchema = {
   required: ['items'],
 } as const;
 
-export const ordersDeleteParamsSchema = {
+const ordersDeleteParamsSchema = {
   $id: 'ordersDeleteParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -160,7 +160,7 @@ export const ordersDeleteParamsSchema = {
   required: ['orderId'],
 } as const;
 
-export const ordersDeleteResponseSchema = {
+const ordersDeleteResponseSchema = {
   $id: 'ordersDeleteResponseSchema',
   type: 'object',
   additionalProperties: false,

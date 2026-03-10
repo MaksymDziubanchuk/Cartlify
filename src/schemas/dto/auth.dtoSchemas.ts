@@ -1,4 +1,4 @@
-export const authLoginBodySchema = {
+const authLoginBodySchema = {
   $id: 'authLoginBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -10,7 +10,7 @@ export const authLoginBodySchema = {
   required: ['email', 'password'],
 } as const;
 
-export const authLoginResponseSchema = {
+const authLoginResponseSchema = {
   $id: 'authLoginResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -40,7 +40,7 @@ export const authLoginResponseSchema = {
   required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
 } as const;
 
-export const authGoogleCallbackQuerySchema = {
+const authGoogleCallbackQuerySchema = {
   $id: 'authGoogleCallbackQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -54,7 +54,7 @@ export const authGoogleCallbackQuerySchema = {
   required: ['code', 'state'],
 } as const;
 
-export const authGithubCallbackQuerySchema = {
+const authGithubCallbackQuerySchema = {
   $id: 'authGithubCallbackQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -69,7 +69,7 @@ export const authGithubCallbackQuerySchema = {
   required: ['code', 'state'],
 } as const;
 
-export const authLinkedInCallbackQuerySchema = {
+const authLinkedInCallbackQuerySchema = {
   $id: 'authLinkedInCallbackQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -84,7 +84,7 @@ export const authLinkedInCallbackQuerySchema = {
   required: ['code', 'state'],
 } as const;
 
-export const authRegisterBodySchema = {
+const authRegisterBodySchema = {
   $id: 'authRegisterBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -96,7 +96,7 @@ export const authRegisterBodySchema = {
   required: ['email', 'password'],
 } as const;
 
-export const authRegisterResponseSchema = {
+const authRegisterResponseSchema = {
   $id: 'authRegisterResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -124,7 +124,7 @@ export const authRegisterResponseSchema = {
   required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
 } as const;
 
-export const authResendVerifyBodySchema = {
+const authResendVerifyBodySchema = {
   $id: 'authResendVerifyBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -134,7 +134,7 @@ export const authResendVerifyBodySchema = {
   required: ['email'],
 } as const;
 
-export const authVerifyEmailQuerySchema = {
+const authVerifyEmailQuerySchema = {
   $id: 'authVerifyEmailQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -144,7 +144,7 @@ export const authVerifyEmailQuerySchema = {
   required: ['token'],
 } as const;
 
-export const authPasswordForgotBodySchema = {
+const authPasswordForgotBodySchema = {
   $id: 'authPasswordForgotBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -154,7 +154,7 @@ export const authPasswordForgotBodySchema = {
   required: ['email'],
 } as const;
 
-export const authPasswordResetQuerySchema = {
+const authPasswordResetQuerySchema = {
   $id: 'authPasswordResetQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -164,7 +164,7 @@ export const authPasswordResetQuerySchema = {
   required: ['token'],
 } as const;
 
-export const authPasswordResetBodySchema = {
+const authPasswordResetBodySchema = {
   $id: 'authPasswordResetBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -174,7 +174,7 @@ export const authPasswordResetBodySchema = {
   required: ['newPassword'],
 } as const;
 
-export const authLogoutBodySchema = {
+const authLogoutBodySchema = {
   $id: 'authLogoutBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -183,12 +183,12 @@ export const authLogoutBodySchema = {
   },
 } as const;
 
-export const authLogoutResponseSchema = {
+const authLogoutResponseSchema = {
   $id: 'authLogoutResponseSchema',
   type: 'null',
 } as const;
 
-export const authRefreshResponseSchema = {
+const authRefreshResponseSchema = {
   $id: 'authRefreshResponseSchema',
   type: 'object',
   additionalProperties: false,

@@ -1,4 +1,4 @@
-export const adminStatsQuerySchema = {
+const adminStatsQuerySchema = {
   $id: 'adminStatsQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -9,7 +9,7 @@ export const adminStatsQuerySchema = {
   },
 };
 
-export const adminStatsUsersSchema = {
+const adminStatsUsersSchema = {
   $id: 'adminStatsUsersSchema',
   type: 'object',
   additionalProperties: false,
@@ -22,7 +22,7 @@ export const adminStatsUsersSchema = {
   required: ['total', 'new7d', 'new30d', 'verifiedRate'],
 };
 
-export const adminStatsOrdersByStatusSchema = {
+const adminStatsOrdersByStatusSchema = {
   $id: 'adminStatsOrdersByStatusSchema',
   type: 'object',
   additionalProperties: false,
@@ -36,7 +36,7 @@ export const adminStatsOrdersByStatusSchema = {
   required: ['pending', 'paid', 'shipped', 'delivered', 'cancelled'],
 };
 
-export const adminStatsOrdersRevenueSchema = {
+const adminStatsOrdersRevenueSchema = {
   $id: 'adminStatsOrdersRevenueSchema',
   type: 'object',
   additionalProperties: false,
@@ -48,7 +48,7 @@ export const adminStatsOrdersRevenueSchema = {
   required: ['total', 'last7d', 'last30d'],
 };
 
-export const adminStatsOrdersSchema = {
+const adminStatsOrdersSchema = {
   $id: 'adminStatsOrdersSchema',
   type: 'object',
   additionalProperties: false,
@@ -61,7 +61,7 @@ export const adminStatsOrdersSchema = {
   required: ['total', 'byStatus', 'revenue', 'averageOrderValue'],
 };
 
-export const adminTopProductRevenueSchema = {
+const adminTopProductRevenueSchema = {
   $id: 'adminTopProductRevenueSchema',
   type: 'object',
   additionalProperties: false,
@@ -73,7 +73,7 @@ export const adminTopProductRevenueSchema = {
   required: ['id', 'name', 'revenue'],
 };
 
-export const adminTopCategoryRevenueSchema = {
+const adminTopCategoryRevenueSchema = {
   $id: 'adminTopCategoryRevenueSchema',
   type: 'object',
   additionalProperties: false,
@@ -85,7 +85,7 @@ export const adminTopCategoryRevenueSchema = {
   required: ['id', 'name', 'revenue'],
 };
 
-export const adminStatsProductsSchema = {
+const adminStatsProductsSchema = {
   $id: 'adminStatsProductsSchema',
   type: 'object',
   additionalProperties: false,
@@ -97,7 +97,7 @@ export const adminStatsProductsSchema = {
   required: ['total', 'topProductsByRevenue', 'topCategoriesByRevenue'],
 };
 
-export const adminStatsReviewsSchema = {
+const adminStatsReviewsSchema = {
   $id: 'adminStatsReviewsSchema',
   type: 'object',
   additionalProperties: false,
@@ -109,7 +109,7 @@ export const adminStatsReviewsSchema = {
   required: ['total', 'avgRating', 'negativeCount'],
 };
 
-export const adminStatsResponseSchema = {
+const adminStatsResponseSchema = {
   $id: 'adminStatsResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -123,7 +123,7 @@ export const adminStatsResponseSchema = {
   required: ['users', 'orders', 'products', 'reviews', 'createdAt'],
 };
 
-export const adminSetPopularityParamsSchema = {
+const adminSetPopularityParamsSchema = {
   $id: 'adminSetPopularityParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -133,7 +133,7 @@ export const adminSetPopularityParamsSchema = {
   required: ['productId'],
 };
 
-export const adminSetPopularityBodySchema = {
+const adminSetPopularityBodySchema = {
   $id: 'adminSetPopularityBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -143,7 +143,7 @@ export const adminSetPopularityBodySchema = {
   required: ['popularity'],
 };
 
-export const adminSetPopularityResponseSchema = {
+const adminSetPopularityResponseSchema = {
   $id: 'adminSetPopularityResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -154,7 +154,7 @@ export const adminSetPopularityResponseSchema = {
   required: ['id', 'popularity'],
 };
 
-export const adminChatsQuerySchema = {
+const adminChatsQuerySchema = {
   $id: 'adminChatsQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -166,7 +166,7 @@ export const adminChatsQuerySchema = {
   },
 };
 
-export const adminChatItemSchema = {
+const adminChatItemSchema = {
   $id: 'adminChatItemSchema',
   type: 'object',
   additionalProperties: false,
@@ -182,7 +182,7 @@ export const adminChatItemSchema = {
   required: ['id', 'userId', 'type', 'status', 'lastMessageAt'],
 };
 
-export const adminChatsResponseSchema = {
+const adminChatsResponseSchema = {
   $id: 'adminChatsResponseSchema',
   type: 'object',
   additionalProperties: false,
