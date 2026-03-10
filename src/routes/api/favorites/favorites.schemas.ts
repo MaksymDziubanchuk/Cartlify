@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const getFavoritesSchema = {
+const getFavoritesSchema = {
   querystring: { $ref: 'favoritesGetQuerySchema#' },
   response: {
     200: { $ref: 'favoritesGetResponseSchema#' },
@@ -12,7 +12,7 @@ export const getFavoritesSchema = {
   },
 } satisfies FastifySchema;
 
-export const postAddFavoriteSchema = {
+const postAddFavoriteSchema = {
   params: { $ref: 'favoritesAddParamsSchema#' },
   response: {
     200: { $ref: 'favoritesAddResponseSchema#' },
@@ -27,7 +27,7 @@ export const postAddFavoriteSchema = {
   },
 } satisfies FastifySchema;
 
-export const deleteFavoriteSchema = {
+const deleteFavoriteSchema = {
   params: { $ref: 'favoritesDeleteParamsSchema#' },
   response: {
     200: { $ref: 'favoritesDeleteResponseSchema#' },

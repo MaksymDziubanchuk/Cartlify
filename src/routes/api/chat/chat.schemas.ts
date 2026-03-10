@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const getChatsSchema = {
+const getChatsSchema = {
   querystring: { $ref: 'chatsGetQuerySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },

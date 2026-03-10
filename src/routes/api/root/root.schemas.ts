@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const getRootAdminsSchema = {
+const getRootAdminsSchema = {
   querystring: { $ref: 'rootAdminsGetQuerySchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },
@@ -12,7 +12,7 @@ export const getRootAdminsSchema = {
   },
 } satisfies FastifySchema;
 
-export const postRootAdminSchema = {
+const postRootAdminSchema = {
   body: { $ref: 'rootAdminsAddBodySchema#' },
   response: {
     201: { $ref: 'messageResponseSchema#' },
@@ -26,7 +26,7 @@ export const postRootAdminSchema = {
   },
 } satisfies FastifySchema;
 
-export const deleteRootAdminSchema = {
+const deleteRootAdminSchema = {
   params: { $ref: 'rootAdminsDeleteParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },

@@ -12,9 +12,11 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
 
   app.post(
     '/current/items',
-    { preHandler: [authGuard, requireRole(['USER'])] },
-    async (req, reply) =>
-      reply.code(200).send({ message: 'orders.current.items.add: not implemented' }),
+    {
+      preHandler: [authGuard, requireRole(['USER'])],
+      schema: ordersSchema.postCurrentItemsSchema,
+    },
+    ordersController.postCurrentItems,
   );
 
   app.patch(

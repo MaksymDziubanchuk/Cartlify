@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const postVoteReviewSchema = {
+const postVoteReviewSchema = {
   params: { $ref: 'reviewsVoteParamsSchema#' },
   body: { $ref: 'reviewsVoteBodySchema#' },
   response: {
