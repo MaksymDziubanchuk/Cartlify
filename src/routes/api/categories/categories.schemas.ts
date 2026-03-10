@@ -1,6 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
-export const getCategoriesSchema = {
+const getCategoriesSchema = {
   querystring: { $ref: 'categoriesGetQuerySchema#' },
   response: {
     200: { $ref: 'categoriesListResponseSchema#' },
@@ -12,7 +12,7 @@ export const getCategoriesSchema = {
   },
 } satisfies FastifySchema;
 
-export const postCategorySchema = {
+const postCategorySchema = {
   body: { $ref: 'categoriesCreateBodySchema#' },
   response: {
     201: { $ref: 'categoriesCreateResponseSchema#' },
@@ -26,7 +26,7 @@ export const postCategorySchema = {
   },
 } satisfies FastifySchema;
 
-export const patchCategorySchema = {
+const patchCategorySchema = {
   params: { $ref: 'categoriesUpdateParamsSchema#' },
   body: { $ref: 'categoriesUpdateBodySchema#' },
   response: {
@@ -42,7 +42,7 @@ export const patchCategorySchema = {
   },
 } satisfies FastifySchema;
 
-export const deleteCategorySchema = {
+const deleteCategorySchema = {
   params: { $ref: 'categoriesDeleteParamsSchema#' },
   response: {
     200: { $ref: 'messageResponseSchema#' },

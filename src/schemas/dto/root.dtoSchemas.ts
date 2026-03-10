@@ -1,4 +1,4 @@
-export const rootAdminsGetQuerySchema = {
+const rootAdminsGetQuerySchema = {
   $id: 'rootAdminsGetQuerySchema',
   type: 'object',
   additionalProperties: false,
@@ -9,12 +9,12 @@ export const rootAdminsGetQuerySchema = {
   },
 } as const;
 
-export const rootAdminsItemSchema = {
+const rootAdminsItemSchema = {
   $id: 'rootAdminsItemSchema',
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
-export const rootAdminsGetResponseSchema = {
+const rootAdminsGetResponseSchema = {
   $id: 'rootAdminsGetResponseSchema',
   type: 'object',
   additionalProperties: false,
@@ -27,7 +27,7 @@ export const rootAdminsGetResponseSchema = {
   required: ['items'],
 } as const;
 
-export const rootAdminsAddBodySchema = {
+const rootAdminsAddBodySchema = {
   $id: 'rootAdminsAddBodySchema',
   type: 'object',
   additionalProperties: false,
@@ -37,12 +37,12 @@ export const rootAdminsAddBodySchema = {
   required: ['userId'],
 } as const;
 
-export const rootAdminsAddResponseSchema = {
+const rootAdminsAddResponseSchema = {
   $id: 'rootAdminsAddResponseSchema',
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
-export const rootAdminsDeleteParamsSchema = {
+const rootAdminsDeleteParamsSchema = {
   $id: 'rootAdminsDeleteParamsSchema',
   type: 'object',
   additionalProperties: false,
@@ -52,7 +52,7 @@ export const rootAdminsDeleteParamsSchema = {
   required: ['adminId'],
 } as const;
 
-export const rootAdminsDeleteResponseSchema = {
+const rootAdminsDeleteResponseSchema = {
   $id: 'rootAdminsDeleteResponseSchema',
   type: 'object',
   additionalProperties: false,
