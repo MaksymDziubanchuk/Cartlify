@@ -15,6 +15,36 @@ const postCurrentItemsSchema = {
   },
 } satisfies FastifySchema;
 
+const patchCurrentItemsSchema = {
+  params: { $ref: 'ordersCurrentItemIdParamsSchema#' },
+  body: { $ref: 'ordersCurrentUpdateItemBodySchema#' },
+  response: {
+    200: { $ref: 'ordersOrderResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    404: { $ref: 'errorResponseSchema#' },
+    409: { $ref: 'errorResponseSchema#' },
+    422: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
+const deleteCurrentItemsSchema = {
+  params: { $ref: 'ordersCurrentItemIdParamsSchema#' },
+  response: {
+    200: { $ref: 'ordersOrderResponseSchema#' },
+
+    400: { $ref: 'errorResponseSchema#' },
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    404: { $ref: 'errorResponseSchema#' },
+    409: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 const getOrdersSchema = {
   querystring: { $ref: 'ordersGetQuerySchema#' },
   response: {
@@ -58,6 +88,8 @@ const patchOrderStatusSchema = {
 
 export const ordersSchema = {
   postCurrentItemsSchema,
+  patchCurrentItemsSchema,
+  deleteCurrentItemsSchema,
 
   getOrdersSchema,
   getOrderByIdSchema,

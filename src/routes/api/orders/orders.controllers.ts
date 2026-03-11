@@ -4,6 +4,10 @@ import type { UserEntity } from 'types/user.js';
 import type {
   CurrentAddItemBodyDto,
   CurrentAddItemDto,
+  CurrentItemIdParamsDto,
+  CurrentUpdateItemBodyDto,
+  CurrentUpdateItemDto,
+  CurrentDeleteItemDto,
   GetOrdersQueryDto,
   FindOrdersDto,
   GetOrderByIdParamsDto,
@@ -26,6 +30,37 @@ const postCurrentItems: ControllerRouter<{}, CurrentAddItemBodyDto, {}, OrderRes
   const args = pickDefined<CurrentAddItemDto>({ actorId, actorRole, productId, quantity }, {});
 
   const result = await ordersServices.addCurrentItem(args);
+  return reply.code(200).send(result);
+};
+
+const patchCurrentItems: ControllerRouter<
+  CurrentItemIdParamsDto,
+  CurrentUpdateItemBodyDto,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { itemId } = req.params;
+  const { quantity } = req.body;
+
+  const args = pickDefined<CurrentUpdateItemDto>({ actorId, actorRole, itemId, quantity }, {});
+
+  const result = await ordersServices.updateCurrentItem(args);
+  return reply.code(200).send(result);
+};
+
+const deleteCurrentItems: ControllerRouter<
+  CurrentItemIdParamsDto,
+  {},
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { itemId } = req.params;
+
+  const args = pickDefined<CurrentDeleteItemDto>({ actorId, actorRole, itemId }, {});
+
+  const result = await ordersServices.deleteCurrentItem(args);
   return reply.code(200).send(result);
 };
 
@@ -75,6 +110,8 @@ const putOrderStatus: ControllerRouter<
 
 export const ordersController = {
   postCurrentItems,
+  patchCurrentItems,
+  deleteCurrentItems,
 
   getOrders,
   getOrderById,
