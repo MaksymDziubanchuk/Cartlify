@@ -14,6 +14,24 @@ export interface CurrentAddItemDto extends CurrentAddItemBodyDto {
   actorRole: Role;
 }
 
+export interface CurrentItemIdParamsDto {
+  itemId: number;
+}
+
+export interface CurrentUpdateItemBodyDto {
+  quantity: number;
+}
+
+export interface CurrentUpdateItemDto extends CurrentItemIdParamsDto, CurrentUpdateItemBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface CurrentDeleteItemDto extends CurrentItemIdParamsDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
 export interface GetOrdersQueryDto {
   page?: number;
   limit?: number;

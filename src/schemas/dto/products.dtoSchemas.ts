@@ -5,15 +5,13 @@ const getAllProductsQuerySchema = {
   properties: {
     // cursor pagination
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursorId: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
 
     // filters
     search: { type: 'string', minLength: 1 },
     categoryIds: {
-      type: 'array',
-      items: { type: 'integer', minimum: 1 },
-      minItems: 1,
-      uniqueItems: true,
+      type: 'string',
+      pattern: '^[0-9]+(,[0-9]+)*$',
     },
     minPrice: { type: 'number', minimum: 0 },
     maxPrice: { type: 'number', minimum: 0 },
@@ -169,7 +167,7 @@ const getProductReviewsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    cursorId: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
   },
 } as const;
@@ -206,7 +204,7 @@ const reviewsResponseSchema = {
     },
     limit: { type: 'integer' },
     total: { type: 'integer' },
-    nextCursorId: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1 },
+    nextCursor: { type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1 },
   },
   required: ['items', 'limit', 'total'],
 } as const;
