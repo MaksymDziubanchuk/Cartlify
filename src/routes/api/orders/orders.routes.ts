@@ -21,16 +21,20 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
 
   app.patch(
     '/current/items/:itemId',
-    { preHandler: [authGuard, requireRole(['USER']), validateId('itemId')] },
-    async (req, reply) =>
-      reply.code(200).send({ message: 'orders.current.items.update: not implemented' }),
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('itemId')],
+      schema: ordersSchema.patchCurrentItemsSchema,
+    },
+    ordersController.patchCurrentItems,
   );
 
   app.delete(
     '/current/items/:itemId',
-    { preHandler: [authGuard, requireRole(['USER']), validateId('itemId')] },
-    async (req, reply) =>
-      reply.code(200).send({ message: 'orders.current.items.delete: not implemented' }),
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('itemId')],
+      schema: ordersSchema.deleteCurrentItemsSchema,
+    },
+    ordersController.deleteCurrentItems,
   );
 
   app.post(
