@@ -9,6 +9,26 @@ const ordersCurrentAddItemBodySchema = {
   required: ['productId', 'quantity'],
 } as const;
 
+const ordersCurrentItemIdParamsSchema = {
+  $id: 'ordersCurrentItemIdParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    itemId: { type: 'number', minimum: 1 },
+  },
+  required: ['itemId'],
+} as const;
+
+const ordersCurrentUpdateItemBodySchema = {
+  $id: 'ordersCurrentUpdateItemBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    quantity: { type: 'number', minimum: 1 },
+  },
+  required: ['quantity'],
+} as const;
+
 const ordersGetQuerySchema = {
   $id: 'ordersGetQuerySchema',
   type: 'object',
@@ -122,6 +142,8 @@ const ordersListResponseSchema = {
 
 export const ordersDtoSchemas = [
   ordersCurrentAddItemBodySchema,
+  ordersCurrentItemIdParamsSchema,
+  ordersCurrentUpdateItemBodySchema,
 
   ordersGetQuerySchema,
   ordersGetByIdParamsSchema,

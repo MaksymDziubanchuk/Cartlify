@@ -8,6 +8,10 @@ import type { MessageResponseDto } from 'types/common.js';
 
 import { addCurrentItem } from './services/addCurrentItem.service.js';
 
+import { updateCurrentItem } from './services/updateCurrentItem.service.js';
+
+import { deleteCurrentItem } from './services/deleteCurrentItem.service.js';
+
 async function findOrders({
   userId,
   page,
@@ -31,6 +35,8 @@ async function updateOrderStatus({
 
 export const ordersServices = {
   addCurrentItem,
+  updateCurrentItem,
+  deleteCurrentItem,
 
   findOrders,
   findOrderById,

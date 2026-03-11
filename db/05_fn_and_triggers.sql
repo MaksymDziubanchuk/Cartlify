@@ -1152,7 +1152,8 @@ BEGIN
   SELECT o."confirmed"
   INTO v_confirmed
   FROM cartlify.orders AS o
-  WHERE o.id = NEW."orderId";
+  WHERE o.id = NEW."orderId"
+  FOR UPDATE;
 
   IF v_confirmed THEN
     RAISE EXCEPTION 'Order % is already confirmed; items cannot be changed', NEW."orderId"
