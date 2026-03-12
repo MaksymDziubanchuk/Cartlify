@@ -2,12 +2,15 @@ import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { UserEntity } from 'types/user.js';
 import type {
+  GetCurrentOrderDto,
   CurrentAddItemBodyDto,
   CurrentAddItemDto,
   CurrentItemIdParamsDto,
   CurrentUpdateItemBodyDto,
   CurrentUpdateItemDto,
   CurrentDeleteItemDto,
+  ConfirmCurrentOrderBodyDto,
+  ConfirmCurrentOrderDto,
   GetOrdersQueryDto,
   FindOrdersDto,
   GetOrderByIdParamsDto,
@@ -19,6 +22,15 @@ import type {
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
+
+const getCurrentOrder: ControllerRouter<{}, {}, {}, OrderResponseDto> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const args = pickDefined<GetCurrentOrderDto>({ actorId, actorRole }, {});
+
+  const result = await ordersServices.getCurrent(args);
+  return reply.code(200).send(result);
+};
 
 const postCurrentItems: ControllerRouter<{}, CurrentAddItemBodyDto, {}, OrderResponseDto> = async (
   req,
@@ -61,6 +73,19 @@ const deleteCurrentItems: ControllerRouter<
   const args = pickDefined<CurrentDeleteItemDto>({ actorId, actorRole, itemId }, {});
 
   const result = await ordersServices.deleteCurrentItem(args);
+  return reply.code(200).send(result);
+};
+
+const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { orderId } = req.body;
+
+  const args = pickDefined<ConfirmCurrentOrderDto>({ actorId, actorRole, orderId }, {});
+
+  const result = await ordersServices.confirmOrder(args);
   return reply.code(200).send(result);
 };
 
@@ -109,9 +134,11 @@ const putOrderStatus: ControllerRouter<
 };
 
 export const ordersController = {
+  getCurrentOrder,
   postCurrentItems,
   patchCurrentItems,
   deleteCurrentItems,
+  postConfirm,
 
   getOrders,
   getOrderById,

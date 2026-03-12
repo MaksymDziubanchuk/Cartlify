@@ -6,11 +6,15 @@ import type {
 } from 'types/dto/orders.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
+import { getCurrent } from './services/getCurrent.service.js';
+
 import { addCurrentItem } from './services/addCurrentItem.service.js';
 
 import { updateCurrentItem } from './services/updateCurrentItem.service.js';
 
 import { deleteCurrentItem } from './services/deleteCurrentItem.service.js';
+
+import { confirmOrder } from './services/confirmOrder.service.js';
 
 async function findOrders({
   userId,
@@ -34,9 +38,11 @@ async function updateOrderStatus({
 }
 
 export const ordersServices = {
+  getCurrent,
   addCurrentItem,
   updateCurrentItem,
   deleteCurrentItem,
+  confirmOrder,
 
   findOrders,
   findOrderById,
