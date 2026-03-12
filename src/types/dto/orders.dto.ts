@@ -1,52 +1,11 @@
 import type { UserId, ProductId, OrderId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
+// types
 export type OrderStatus = 'pending' | 'waiting' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
 export type ConfirmedStatus = true | false;
 
-export interface CurrentAddItemBodyDto {
-  productId: ProductId;
-  quantity: number;
-}
-
-export interface CurrentAddItemDto extends CurrentAddItemBodyDto {
-  actorId: UserId;
-  actorRole: Role;
-}
-
-export interface CurrentItemIdParamsDto {
-  itemId: number;
-}
-
-export interface CurrentUpdateItemBodyDto {
-  quantity: number;
-}
-
-export interface CurrentUpdateItemDto extends CurrentItemIdParamsDto, CurrentUpdateItemBodyDto {
-  actorId: UserId;
-  actorRole: Role;
-}
-
-export interface CurrentDeleteItemDto extends CurrentItemIdParamsDto {
-  actorId: UserId;
-  actorRole: Role;
-}
-
-export interface GetOrdersQueryDto {
-  page?: number;
-  limit?: number;
-  status?: OrderStatus;
-  confirmed?: ConfirmedStatus;
-}
-
-export interface FindOrdersDto {
-  userId: UserId;
-  page: number;
-  limit: number;
-  status?: OrderStatus;
-  confirmed?: ConfirmedStatus;
-}
-
+// shared response shapes
 export interface OrderItemDto {
   productId: ProductId;
   quantity: number;
@@ -69,6 +28,67 @@ export interface OrderResponseDto {
   note?: string;
 }
 
+// GET /current
+export interface GetCurrentOrderDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// POST /current/items
+export interface CurrentAddItemBodyDto {
+  productId: ProductId;
+  quantity: number;
+}
+
+export interface CurrentAddItemDto extends CurrentAddItemBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// PATCH /current/items/:itemId
+export interface CurrentItemIdParamsDto {
+  itemId: number;
+}
+
+export interface CurrentUpdateItemBodyDto {
+  quantity: number;
+}
+
+export interface CurrentUpdateItemDto extends CurrentItemIdParamsDto, CurrentUpdateItemBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// DELETE /current/items/:itemId
+export interface CurrentDeleteItemDto extends CurrentItemIdParamsDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// POST /current/confirm
+export interface ConfirmCurrentOrderDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export type ConfirmCurrentOrderResponseDto = OrderResponseDto;
+
+// GET /
+export interface GetOrdersQueryDto {
+  page?: number;
+  limit?: number;
+  status?: OrderStatus;
+  confirmed?: ConfirmedStatus;
+}
+
+export interface FindOrdersDto {
+  userId: UserId;
+  page: number;
+  limit: number;
+  status?: OrderStatus;
+  confirmed?: ConfirmedStatus;
+}
+
 export interface GetOrdersResponseDto {
   items: OrderResponseDto[];
   page?: number;
@@ -76,6 +96,7 @@ export interface GetOrdersResponseDto {
   total?: number;
 }
 
+// GET /:orderId
 export interface GetOrderByIdParamsDto {
   orderId: OrderId;
 }
@@ -87,9 +108,11 @@ export interface FindOrderByIdDto {
 
 export type GetOrderByIdResponseDto = OrderResponseDto;
 
+// PATCH /:orderId/status
 export interface UpdateOrderStatusParamsDto {
   orderId: OrderId;
 }
+
 export interface UpdateOrderStatusBodyDto {
   status: OrderStatus;
 }

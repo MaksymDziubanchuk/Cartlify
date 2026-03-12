@@ -1,5 +1,16 @@
 import type { FastifySchema } from 'fastify';
 
+const getCurrentOrderSchema = {
+  response: {
+    200: { $ref: 'ordersOrderResponseSchema#' },
+
+    401: { $ref: 'errorResponseSchema#' },
+    403: { $ref: 'errorResponseSchema#' },
+    404: { $ref: 'errorResponseSchema#' },
+    500: { $ref: 'errorResponseSchema#' },
+  },
+} satisfies FastifySchema;
+
 const postCurrentItemsSchema = {
   body: { $ref: 'ordersCurrentAddItemBodySchema#' },
   response: {
@@ -87,6 +98,7 @@ const patchOrderStatusSchema = {
 } satisfies FastifySchema;
 
 export const ordersSchema = {
+  getCurrentOrderSchema,
   postCurrentItemsSchema,
   patchCurrentItemsSchema,
   deleteCurrentItemsSchema,
