@@ -92,7 +92,29 @@ export async function updateCurrentItem({
             createdAt: true,
             updatedAt: true,
             items: {
-              select: { productId: true, quantity: true, unitPrice: true, totalPrice: true },
+              select: {
+                productId: true,
+                quantity: true,
+                unitPrice: true,
+                totalPrice: true,
+
+                // include minimal product snapshot for order ui
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    categoryId: true,
+                    stock: true,
+                    reservedStock: true,
+                    deletedAt: true,
+                    images: {
+                      select: { url: true, position: true, isPrimary: true },
+                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
+                      take: 1,
+                    },
+                  },
+                },
+              },
               orderBy: { id: 'asc' },
             },
           },
@@ -100,7 +122,7 @@ export async function updateCurrentItem({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
 
-        return mapOrderRowToResponse(order as any);
+        return mapOrderRowToResponse(order);
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

@@ -37,7 +37,29 @@ export async function getCurrent({
           createdAt: true,
           updatedAt: true,
           items: {
-            select: { productId: true, quantity: true, unitPrice: true, totalPrice: true },
+            select: {
+              productId: true,
+              quantity: true,
+              unitPrice: true,
+              totalPrice: true,
+
+              // include minimal product snapshot for order ui
+              product: {
+                select: {
+                  id: true,
+                  name: true,
+                  categoryId: true,
+                  stock: true,
+                  reservedStock: true,
+                  deletedAt: true,
+                  images: {
+                    select: { url: true, position: true, isPrimary: true },
+                    orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
+                    take: 1,
+                  },
+                },
+              },
+            },
             orderBy: { id: 'asc' },
           },
         },
@@ -45,7 +67,7 @@ export async function getCurrent({
 
       if (!order) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');
 
-      return mapOrderRowToResponse(order as any);
+      return mapOrderRowToResponse(order);
     });
   } catch (err) {
     if (isAppError(err)) throw err;
