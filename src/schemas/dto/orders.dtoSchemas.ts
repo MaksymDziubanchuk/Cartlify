@@ -29,6 +29,16 @@ const ordersCurrentUpdateItemBodySchema = {
   required: ['quantity'],
 } as const;
 
+const ordersCurrentConfirmBodySchema = {
+  $id: 'ordersCurrentConfirmBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'number', minimum: 1 },
+  },
+  required: ['orderId'],
+} as const;
+
 const ordersGetQuerySchema = {
   $id: 'ordersGetQuerySchema',
   type: 'object',
@@ -38,7 +48,7 @@ const ordersGetQuerySchema = {
     limit: { type: 'number', minimum: 1 },
     status: {
       type: 'string',
-      enum: ['pending', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+      enum: ['pending', 'waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
     confirmed: { type: 'boolean', enum: ['true', 'false'] },
   },
@@ -54,17 +64,47 @@ const ordersGetByIdParamsSchema = {
   required: ['orderId'],
 } as const;
 
+const ordersOrderItemProductSchema = {
+  $id: 'ordersOrderItemProductSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'integer' },
+    name: { type: 'string' },
+    categoryId: { type: 'integer' },
+
+    images: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        url200: { type: 'string' },
+        url400: { type: 'string' },
+        url800: { type: 'string' },
+      },
+      required: ['url200', 'url400', 'url800'],
+    },
+
+    // computed in API: stock - reservedStock (clamp to 0)
+    availableStock: { type: 'integer', minimum: 0 },
+
+    deletedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+  },
+  required: ['id', 'name', 'categoryId', 'images', 'availableStock'],
+} as const;
+
 const ordersOrderItemSchema = {
   $id: 'ordersOrderItemSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'number' },
+    productId: { type: 'integer' },
+    product: { $ref: 'ordersOrderItemProductSchema#' },
+
     quantity: { type: 'number' },
     unitPrice: { type: 'number' },
     totalPrice: { type: 'number' },
   },
-  required: ['productId', 'quantity', 'unitPrice', 'totalPrice'],
+  required: ['productId', 'product', 'quantity', 'unitPrice', 'totalPrice'],
 } as const;
 
 const ordersOrderResponseSchema = {
@@ -76,7 +116,7 @@ const ordersOrderResponseSchema = {
     userId: { type: 'number' },
     status: {
       type: 'string',
-      enum: ['pending', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+      enum: ['pending', 'unconfirmed', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
     items: { type: 'array', items: { $ref: 'ordersOrderItemSchema#' } },
     total: { type: 'number' },
@@ -116,7 +156,7 @@ const ordersUpdateStatusBodySchema = {
   properties: {
     status: {
       type: 'string',
-      enum: ['pending', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+      enum: ['pending', 'unconfirmed', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
   },
   required: ['status'],
@@ -144,9 +184,11 @@ export const ordersDtoSchemas = [
   ordersCurrentAddItemBodySchema,
   ordersCurrentItemIdParamsSchema,
   ordersCurrentUpdateItemBodySchema,
+  ordersCurrentConfirmBodySchema,
 
   ordersGetQuerySchema,
   ordersGetByIdParamsSchema,
+  ordersOrderItemProductSchema,
   ordersOrderItemSchema,
   ordersOrderResponseSchema,
   ordersUpdateStatusParamsSchema,

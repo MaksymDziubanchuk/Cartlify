@@ -6,8 +6,13 @@ import { ordersSchema } from './orders.schemas.js';
 import { ordersController } from './orders.controllers.js';
 
 export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
-  app.get('/current', { preHandler: [authGuard, requireRole(['USER'])] }, async (req, reply) =>
-    reply.code(200).send({ message: 'orders.current: not implemented' }),
+  app.get(
+    '/current',
+    {
+      preHandler: [authGuard, requireRole(['USER'])],
+      schema: ordersSchema.getCurrentOrderSchema,
+    },
+    ordersController.getCurrentOrder,
   );
 
   app.post(
@@ -39,9 +44,11 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
 
   app.post(
     '/current/confirm',
-    { preHandler: [authGuard, requireRole(['USER'])] },
-    async (req, reply) =>
-      reply.code(200).send({ message: 'orders.current.confirm: not implemented' }),
+    {
+      preHandler: [authGuard, requireRole(['USER'])],
+      schema: ordersSchema.postCurrentConfirmSchema,
+    },
+    ordersController.postConfirm,
   );
 
   app.get(

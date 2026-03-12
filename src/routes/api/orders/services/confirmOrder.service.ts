@@ -2,58 +2,39 @@ import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import {
+  BadRequestError,
+  ConflictError,
   ForbiddenError,
   InternalError,
   NotFoundError,
-  isAppError,
   ResourceBusyError,
+  isAppError,
 } from '@utils/errors.js';
 import { mapOrderRowToResponse } from './helpers/index.js';
 
-import type { CurrentDeleteItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
+import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
-export async function deleteCurrentItem({
+const DEFAULT_RESERVE_FOR = '15 minutes';
+
+export async function confirmOrder({
   actorId,
   actorRole,
-  itemId,
-}: CurrentDeleteItemDto): Promise<OrderResponseDto> {
-  // enforce user-only cart writes
+  orderId,
+}: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
-
-  const itemIdRaw = Number(itemId);
-  const actorIdRaw = Number(actorId);
 
   try {
     return await tx(
       async (db) => {
-        // set rls session context
         await setUserContext(db, { userId: actorId, role: actorRole });
-
-        // bound lock wait
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // lock item row and ensure it belongs to actor open order; keep orderId before delete
-        const locked = await db.$queryRaw<{ order_id: number }[]>`
-          SELECT oi.order_id
-          FROM cartlify.order_items oi
-          JOIN cartlify.orders o ON o.id = oi.order_id
-          WHERE oi.id = ${itemIdRaw}
-            AND o.user_id = ${actorIdRaw}
-            AND o.confirmed = false
-            AND o.status = 'pending'
-          FOR UPDATE OF oi
-        `;
-        if (!locked.length) throw new NotFoundError('ORDER_ITEM_NOT_FOUND', { itemId: itemIdRaw });
+        // confirm in db
+        await db.$executeRaw`select cartlify.confirm_order(
+          ${Number(orderId)}::int,
+          ${DEFAULT_RESERVE_FOR}::interval
+        )`;
 
-        const orderId = locked[0]!.order_id;
-
-        // delete item (totals are maintained by db triggers)
-        await db.orderItem.delete({
-          where: { id: itemIdRaw },
-          select: { id: true },
-        });
-
-        // fetch current order after delete
         const order = await db.order.findUnique({
           where: { id: orderId },
           select: {
@@ -95,7 +76,7 @@ export async function deleteCurrentItem({
           },
         });
 
-        if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_DELETE' });
+        if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
 
         return mapOrderRowToResponse(order);
       },
@@ -110,10 +91,29 @@ export async function deleteCurrentItem({
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    // map lock/tx contention errors to a stable 409 for clients
     if (isRetryableTxError(err)) {
       throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
     }
-    throw new InternalError({ reason: 'ORDERS_CURRENT_DELETE_ITEM_UNEXPECTED' }, err);
+
+    // db function errors come as P2010
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2010') {
+      const msg = String((err.meta as any)?.message ?? err.message);
+
+      if (msg.includes('ORDER_NOT_FOUND')) throw new NotFoundError('ORDER_NOT_FOUND');
+      if (msg.includes('ORDER_CONFIRM_FORBIDDEN'))
+        throw new ForbiddenError('ORDER_CONFIRM_FORBIDDEN');
+      if (msg.includes('ORDER_ALREADY_CONFIRMED'))
+        throw new ConflictError('ORDER_ALREADY_CONFIRMED');
+      if (msg.includes('ORDER_STATUS_NOT_ALLOWED'))
+        throw new ConflictError('ORDER_STATUS_NOT_ALLOWED');
+      if (msg.includes('ORDER_ITEMS_REQUIRED')) throw new BadRequestError('ORDER_ITEMS_REQUIRED');
+      if (msg.includes('INSUFFICIENT_AVAILABLE_STOCK'))
+        throw new ConflictError('INSUFFICIENT_AVAILABLE_STOCK');
+      if (msg.includes('PRODUCT_NOT_FOUND')) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      if (msg.includes('ORDER_RESERVATION_DURATION_INVALID'))
+        throw new BadRequestError('ORDER_RESERVATION_DURATION_INVALID');
+    }
+
+    throw new InternalError({ reason: 'ORDERS_CURRENT_CONFIRM_UNEXPECTED' }, err);
   }
 }
