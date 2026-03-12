@@ -676,7 +676,7 @@ WITH
       )
       OR (
         confirmed = false
-        AND status = 'pending'
+        AND status = 'unconfirmed'
         AND "reservationExpiresAt" IS NULL
         AND (
           (

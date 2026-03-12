@@ -865,9 +865,9 @@ BEGIN
     RAISE EXCEPTION 'ORDER_ALREADY_CONFIRMED';
   END IF;
 
-  IF v_status IS DISTINCT FROM 'pending' THEN
-    RAISE EXCEPTION 'ORDER_STATUS_NOT_PENDING';
-  END IF;
+IF v_status NOT IN ('pending', 'unconfirmed') THEN
+  RAISE EXCEPTION 'ORDER_STATUS_NOT_ALLOWED';
+END IF;
 
   -- lock all order items to freeze the cart at confirm moment
   PERFORM 1
@@ -973,7 +973,7 @@ BEGIN
   UPDATE cartlify.orders AS o
   SET
     confirmed = false,
-    status = 'pending',
+    status = 'unconfirmed',
     "reservationExpiresAt" = NULL
   WHERE o.id = p_order_id;
 END;
@@ -1129,7 +1129,7 @@ BEGIN
     UPDATE cartlify.orders AS o
     SET
       confirmed = false,
-      status = 'pending',
+      status = 'unconfirmed',
       "reservationExpiresAt" = NULL
     WHERE o.id = p_order_id;
 

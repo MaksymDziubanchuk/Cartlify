@@ -14,6 +14,8 @@ import { updateCurrentItem } from './services/updateCurrentItem.service.js';
 
 import { deleteCurrentItem } from './services/deleteCurrentItem.service.js';
 
+import { confirmOrder } from './services/confirmOrder.service.js';
+
 async function findOrders({
   userId,
   page,
@@ -40,6 +42,7 @@ export const ordersServices = {
   addCurrentItem,
   updateCurrentItem,
   deleteCurrentItem,
+  confirmOrder,
 
   findOrders,
   findOrderById,

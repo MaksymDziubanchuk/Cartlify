@@ -9,6 +9,8 @@ import type {
   CurrentUpdateItemBodyDto,
   CurrentUpdateItemDto,
   CurrentDeleteItemDto,
+  ConfirmCurrentOrderBodyDto,
+  ConfirmCurrentOrderDto,
   GetOrdersQueryDto,
   FindOrdersDto,
   GetOrderByIdParamsDto,
@@ -74,6 +76,19 @@ const deleteCurrentItems: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { orderId } = req.body;
+
+  const args = pickDefined<ConfirmCurrentOrderDto>({ actorId, actorRole, orderId }, {});
+
+  const result = await ordersServices.confirmOrder(args);
+  return reply.code(200).send(result);
+};
+
 const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, MessageResponseDto> = async (
   req,
   reply,
@@ -123,6 +138,7 @@ export const ordersController = {
   postCurrentItems,
   patchCurrentItems,
   deleteCurrentItems,
+  postConfirm,
 
   getOrders,
   getOrderById,
