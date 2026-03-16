@@ -324,7 +324,10 @@ model Order {
   items OrderItem[]
 
   @@index([userId, createdAt])
+  @@index([userId, updatedAt])
+  @@index([userId, confirmed, status, updatedAt])
   @@index([status, createdAt])
+  @@index([status, updatedAt])
   @@index([confirmed, reservationExpiresAt])
   @@map("orders")
 }
