@@ -99,26 +99,38 @@ export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
 }
 
 // GET /
+export type OrdersSortBy = 'updatedAt' | 'total' | 'shippingAddress';
+export type OrdersSortDir = 'asc' | 'desc';
+
 export interface GetOrdersQueryDto {
-  page?: number;
   limit?: number;
+  cursor?: string;
+
   status?: OrderStatus;
   confirmed?: ConfirmedStatus;
+
+  sortBy?: OrdersSortBy;
+  sortDir?: OrdersSortDir;
 }
 
 export interface FindOrdersDto {
-  userId: UserId;
-  page: number;
+  actorId: UserId;
+  actorRole: Role;
   limit: number;
+  cursor?: string;
+
   status?: OrderStatus;
   confirmed?: ConfirmedStatus;
+
+  sortBy: OrdersSortBy;
+  sortDir: OrdersSortDir;
 }
 
 export interface GetOrdersResponseDto {
   items: OrderResponseDto[];
-  page?: number;
-  limit?: number;
-  total?: number;
+  limit: number;
+  nextCursor: string | null;
+  total: number;
 }
 
 // GET /:orderId
@@ -127,7 +139,8 @@ export interface GetOrderByIdParamsDto {
 }
 
 export interface FindOrderByIdDto {
-  userId: UserId;
+  actorId: UserId;
+  actorRole: Role;
   orderId: OrderId;
 }
 

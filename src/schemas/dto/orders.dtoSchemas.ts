@@ -1,69 +1,3 @@
-const ordersCurrentAddItemBodySchema = {
-  $id: 'ordersCurrentAddItemBodySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    productId: { type: 'number', minimum: 1 },
-    quantity: { type: 'number', minimum: 1 },
-  },
-  required: ['productId', 'quantity'],
-} as const;
-
-const ordersCurrentItemIdParamsSchema = {
-  $id: 'ordersCurrentItemIdParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    itemId: { type: 'number', minimum: 1 },
-  },
-  required: ['itemId'],
-} as const;
-
-const ordersCurrentUpdateItemBodySchema = {
-  $id: 'ordersCurrentUpdateItemBodySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    quantity: { type: 'number', minimum: 1 },
-  },
-  required: ['quantity'],
-} as const;
-
-const ordersCurrentConfirmBodySchema = {
-  $id: 'ordersCurrentConfirmBodySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    orderId: { type: 'number', minimum: 1 },
-  },
-  required: ['orderId'],
-} as const;
-
-const ordersGetQuerySchema = {
-  $id: 'ordersGetQuerySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
-    status: {
-      type: 'string',
-      enum: ['pending', 'waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
-    },
-    confirmed: { type: 'boolean', enum: ['true', 'false'] },
-  },
-} as const;
-
-const ordersGetByIdParamsSchema = {
-  $id: 'ordersGetByIdParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    orderId: { type: 'number' },
-  },
-  required: ['orderId'],
-} as const;
-
 const ordersOrderItemProductSchema = {
   $id: 'ordersOrderItemProductSchema',
   type: 'object',
@@ -149,22 +83,72 @@ const ordersUpdateStatusParamsSchema = {
   required: ['orderId'],
 } as const;
 
-const ordersUpdateStatusBodySchema = {
-  $id: 'ordersUpdateStatusBodySchema',
+const ordersCurrentAddItemBodySchema = {
+  $id: 'ordersCurrentAddItemBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    status: {
-      type: 'string',
-      enum: ['pending', 'unconfirmed', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
-    },
+    productId: { type: 'number', minimum: 1 },
+    quantity: { type: 'number', minimum: 1 },
   },
-  required: ['status'],
+  required: ['productId', 'quantity'],
 } as const;
 
-const ordersUpdateStatusResponseSchema = {
-  $id: 'ordersUpdateStatusResponseSchema',
-  allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
+const ordersCurrentItemIdParamsSchema = {
+  $id: 'ordersCurrentItemIdParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    itemId: { type: 'number', minimum: 1 },
+  },
+  required: ['itemId'],
+} as const;
+
+const ordersCurrentUpdateItemBodySchema = {
+  $id: 'ordersCurrentUpdateItemBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    quantity: { type: 'number', minimum: 1 },
+  },
+  required: ['quantity'],
+} as const;
+
+const ordersCurrentConfirmBodySchema = {
+  $id: 'ordersCurrentConfirmBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'number', minimum: 1 },
+  },
+  required: ['orderId'],
+} as const;
+
+const ordersGetQuerySchema = {
+  $id: 'ordersGetQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+
+    // filters
+    status: {
+      type: 'string',
+      enum: ['pending', 'waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
+    },
+    confirmed: { type: 'boolean' },
+
+    // sorting
+    sortBy: {
+      type: 'string',
+      enum: ['updatedAt', 'total', 'shippingAddress'],
+    },
+    sortDir: {
+      type: 'string',
+      enum: ['asc', 'desc'],
+    },
+  },
 } as const;
 
 const ordersListResponseSchema = {
@@ -173,11 +157,41 @@ const ordersListResponseSchema = {
   additionalProperties: false,
   properties: {
     items: { type: 'array', items: { $ref: 'ordersOrderResponseSchema#' } },
-    page: { type: 'number' },
-    limit: { type: 'number' },
-    total: { type: 'number' },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    nextCursor: {
+      anyOf: [{ type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' }, { type: 'null' }],
+    },
+    total: { type: 'integer', minimum: 0 },
   },
-  required: ['items'],
+  required: ['items', 'limit', 'total'],
+} as const;
+
+const ordersGetByIdParamsSchema = {
+  $id: 'ordersGetByIdParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: { type: 'number' },
+  },
+  required: ['orderId'],
+} as const;
+
+const ordersUpdateStatusBodySchema = {
+  $id: 'ordersUpdateStatusBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    status: {
+      type: 'string',
+      enum: ['shipped', 'delivered', 'cancelled'],
+    },
+  },
+  required: ['status'],
+} as const;
+
+const ordersUpdateStatusResponseSchema = {
+  $id: 'ordersUpdateStatusResponseSchema',
+  allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
 } as const;
 
 export const ordersDtoSchemas = [
