@@ -13,6 +13,7 @@ import type {
   ConfirmCurrentOrderDto,
   GetOrdersQueryDto,
   FindOrdersDto,
+  GetOrdersResponseDto,
   GetOrderByIdParamsDto,
   FindOrderByIdDto,
   UpdateOrderStatusParamsDto,
@@ -89,31 +90,39 @@ const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderRes
   return reply.code(200).send(result);
 };
 
-const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, MessageResponseDto> = async (
+const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDto> = async (
   req,
   reply,
 ) => {
-  const { id } = req.user as UserEntity;
-  const { page: qp, limit: ql, status, confirmed } = req.query;
-  const page = qp ? Number(qp) : 1;
-  const limit = ql ? Number(ql) : 10;
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
 
-  const args = pickDefined<FindOrdersDto>({ userId: id, page, limit }, { status, confirmed });
+  const { limit, cursor, status, confirmed, sortBy, sortDir } = req.query;
+
+  const args = pickDefined<FindOrdersDto>(
+    {
+      actorId,
+      actorRole,
+      limit: limit ?? 20,
+      sortBy: sortBy ?? 'updatedAt',
+      sortDir: sortDir ?? 'desc',
+    },
+    { cursor, status, confirmed },
+  );
 
   const result = await ordersServices.findOrders(args);
   return reply.code(200).send(result);
 };
 
-const getOrderById: ControllerRouter<GetOrderByIdParamsDto, {}, {}, MessageResponseDto> = async (
+const getOrderById: ControllerRouter<GetOrderByIdParamsDto, {}, {}, OrderResponseDto> = async (
   req,
   reply,
 ) => {
-  const { id } = req.user as UserEntity;
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
   const { orderId } = req.params;
 
-  const args = pickDefined<FindOrderByIdDto>({ userId: id, orderId }, {});
+  const args = pickDefined<FindOrderByIdDto>({ actorId, actorRole, orderId }, {});
 
-  const result = await ordersServices.findOrderById(args);
+  const result = await ordersServices.findById(args);
   return reply.code(200).send(result);
 };
 
@@ -121,7 +130,7 @@ const putOrderStatus: ControllerRouter<
   UpdateOrderStatusParamsDto,
   UpdateOrderStatusBodyDto,
   {},
-  MessageResponseDto
+  OrderResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const { orderId } = req.params;
