@@ -50,6 +50,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.postConfirm,
   );
+
   app.get(
     '/',
     {
@@ -58,6 +59,7 @@ export default async function ordersRouter(app: FastifyInstance, opt: unknown) {
     },
     ordersController.getOrders,
   );
+
   app.get(
     '/:orderId',
     {

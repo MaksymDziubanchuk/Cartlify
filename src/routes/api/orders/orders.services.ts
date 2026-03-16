@@ -1,11 +1,3 @@
-import type {
-  CurrentAddItemDto,
-  FindOrdersDto,
-  FindOrderByIdDto,
-  UpdateOrderStatusDto,
-} from 'types/dto/orders.dto.js';
-import type { MessageResponseDto } from 'types/common.js';
-
 import { getCurrent } from './services/getCurrent.service.js';
 
 import { addCurrentItem } from './services/addCurrentItem.service.js';
@@ -16,26 +8,11 @@ import { deleteCurrentItem } from './services/deleteCurrentItem.service.js';
 
 import { confirmOrder } from './services/confirmOrder.service.js';
 
-async function findOrders({
-  userId,
-  page,
-  limit,
-  status,
-}: FindOrdersDto): Promise<MessageResponseDto> {
-  return { message: 'orders list not implemented' };
-}
+import { findOrders } from './services/findOrders.service.js';
 
-async function findOrderById({ userId, orderId }: FindOrderByIdDto): Promise<MessageResponseDto> {
-  return { message: 'order by id not implemented' };
-}
+import { findById } from './services/findById.service.js';
 
-async function updateOrderStatus({
-  actorId,
-  orderId,
-  status,
-}: UpdateOrderStatusDto): Promise<MessageResponseDto> {
-  return { message: 'update order status not implemented' };
-}
+import { updateOrderStatus } from './services/updateOrderStatus.service.js';
 
 export const ordersServices = {
   getCurrent,
@@ -45,6 +22,6 @@ export const ordersServices = {
   confirmOrder,
 
   findOrders,
-  findOrderById,
+  findById,
   updateOrderStatus,
 };
