@@ -59,6 +59,9 @@ declare global {
       LINKEDIN_CLIENT_SECRET: string;
       LINKEDIN_REDIRECT_URI: string;
       LINKEDIN_STATE_SECRET: string;
+
+      REDIS_URL: string;
+      REDIS_ORDER_TIMEOUT_WORKER_MS?: string;
     }
   }
 }
@@ -133,4 +136,10 @@ export default {
   LINKEDIN_CLIENT_SECRET: process.env.LINKEDIN_CLIENT_SECRET || '',
   LINKEDIN_REDIRECT_URI: process.env.LINKEDIN_REDIRECT_URI || '',
   LINKEDIN_STATE_SECRET: process.env.LINKEDIN_STATE_SECRET || '',
+
+  // redis
+  REDIS_URL: process.env.REDIS_URL || '',
+  REDIS_ORDER_TIMEOUT_WORKER_MS: process.env.REDIS_ORDER_TIMEOUT_WORKER_MS
+    ? Number(process.env.REDIS_ORDER_TIMEOUT_WORKER_MS)
+    : 3000,
 };
