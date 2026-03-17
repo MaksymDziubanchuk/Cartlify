@@ -11,6 +11,7 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import { mapOrderRowToResponse } from './helpers/index.js';
+import { scheduleOrderReservationExpiry } from './helpers/index.js';
 
 import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
@@ -24,7 +25,7 @@ export async function confirmOrder({
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
   try {
-    return await tx(
+    const result = await tx(
       async (db) => {
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
@@ -42,6 +43,7 @@ export async function confirmOrder({
             userId: true,
             status: true,
             confirmed: true,
+            reservationExpiresAt: true,
             total: true,
             shippingAddress: true,
             note: true,
@@ -78,7 +80,10 @@ export async function confirmOrder({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
 
-        return mapOrderRowToResponse(order);
+        return {
+          response: mapOrderRowToResponse(order),
+          reservationExpiresAt: order.reservationExpiresAt,
+        };
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
@@ -88,6 +93,9 @@ export async function confirmOrder({
         timeout: 10_000,
       },
     );
+    await scheduleOrderReservationExpiry(result.response.id, result.reservationExpiresAt);
+
+    return result.response;
   } catch (err) {
     if (isAppError(err)) throw err;
 
