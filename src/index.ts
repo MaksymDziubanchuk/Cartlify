@@ -8,13 +8,13 @@ const protocol = env.NODE_ENV === 'production' ? 'https' : 'http';
 
 // initialize external dependencies and start background workers before app listen
 async function bootstrap() {
-  // try {
-  //   await getRedis();
-  //   startOrderTimeoutWorker(app.log);
-  //   app.log.info('redis connected, order timeout worker started');
-  // } catch (err: unknown) {
-  //   app.log.warn({ err }, 'redis is unavailable, worker is disabled in local dev');
-  // }
+  try {
+    await getRedis();
+    startOrderTimeoutWorker(app.log);
+    app.log.info('redis connected, order timeout worker started');
+  } catch (err: unknown) {
+    app.log.warn({ err }, 'redis is unavailable, worker is disabled in local dev');
+  }
 
   // start http server
   await app.listen({ port: env.PORT, host: env.HOST });
