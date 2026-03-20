@@ -233,7 +233,7 @@ HOST=0.0.0.0
 WEB_ORIGIN=http://localhost:3000
 
 # PostgreSQL
-DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/cartlify_dev
+DATABASE_URL=postgresql://cartlify_app:your_password@localhost:5432/cartlify_dev
 MIGRATION_DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/cartlify_dev
 DEV_SHADOW_DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/cartlify_shadow
 
