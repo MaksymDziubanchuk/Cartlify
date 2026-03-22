@@ -126,7 +126,7 @@ const deleteProductReviewRouterSchema = {
   },
 } satisfies FastifySchema;
 
-export const patchProductCategorySchema = {
+const patchProductCategorySchema = {
   params: { $ref: 'productsUpdateCategoryParamsSchema#' },
   body: { $ref: 'productsUpdateCategoryBodySchema#' },
   response: {
