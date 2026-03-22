@@ -4,28 +4,45 @@ import { prisma } from '@db/client.js';
 
 import type { OrderId } from 'types/ids.js';
 
+// give payment webhook processing extra time after reservation expiry
+const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
+
 export async function scheduleOrderReservationExpiry(
   orderId: OrderId,
   reservationExpiresAt: Date | null,
 ): Promise<void> {
+  // skip scheduling when the order has no reservation expiry time
   if (!reservationExpiresAt) return;
 
-  const runAtMs = reservationExpiresAt.getTime();
-  if (Number.isNaN(runAtMs)) {
+  // schedule the first job exactly at reservation expiry time
+  const baseRunAtMs = reservationExpiresAt.getTime();
+  if (Number.isNaN(baseRunAtMs)) {
     throw new Error(`invalid reservationExpiresAt for order ${orderId}`);
   }
 
+  // schedule the second job after the payment webhook grace window
+  const graceRunAtMs = baseRunAtMs + PAYMENT_WEBHOOK_GRACE_MS;
+
   const redis = await getRedis();
 
+  // queue the base-phase job that must run at reservation expiry time
+  await redis.zAdd(redisKeys.orderTimeoutBaseZset, [
+    {
+      score: baseRunAtMs,
+      value: String(orderId),
+    },
+  ]);
+
+  // queue the grace-phase job that will run after webhook waiting time
   await redis.zAdd(redisKeys.orderTimeoutZset, [
     {
-      score: runAtMs,
+      score: graceRunAtMs,
       value: String(orderId),
     },
   ]);
 }
 
-export async function claimDueOrderReservationExpiryIds(batchSize = 100): Promise<number[]> {
+async function claimDueOrderIdsByKey(redisKey: string, batchSize = 100): Promise<OrderId[]> {
   const redis = await getRedis();
   const nowMs = Date.now();
 
@@ -44,16 +61,28 @@ export async function claimDueOrderReservationExpiryIds(batchSize = 100): Promis
     return ids
   `;
 
+  // atomically claim due jobs from the target sorted set
   const raw = (await redis.sendCommand([
     'EVAL',
     lua,
     '1',
-    redisKeys.orderTimeoutZset,
+    redisKey,
     String(nowMs),
     String(batchSize),
   ])) as string[];
 
-  return raw.map((value) => Number(value)).filter((value) => Number.isInteger(value));
+  // convert claimed redis values into numeric order ids
+  return raw.map((value) => Number(value) as OrderId).filter((value) => Number.isInteger(value));
+}
+
+export async function claimDueOrderReservationExpiryIds(batchSize = 100): Promise<OrderId[]> {
+  // claim grace-phase jobs from the main timeout queue
+  return claimDueOrderIdsByKey(redisKeys.orderTimeoutZset, batchSize);
+}
+
+export async function claimDueOrderReservationBaseIds(batchSize = 100): Promise<OrderId[]> {
+  // claim base-phase jobs from the exact-expiry queue
+  return claimDueOrderIdsByKey(redisKeys.orderTimeoutBaseZset, batchSize);
 }
 
 export async function processClaimedOrderReservationExpiries(batchSize = 100): Promise<number> {
@@ -64,12 +93,14 @@ export async function processClaimedOrderReservationExpiries(batchSize = 100): P
 
   for (const orderId of orderIds) {
     try {
+      // expire the order reservation after the webhook grace window is over
       await prisma.$queryRaw`
         select cartlify.expire_order_reservation(${orderId}::int)
       `;
 
       processed += 1;
     } catch (err: unknown) {
+      // log per-order failures and continue processing the remaining jobs
       console.error({
         scope: 'redis-order-timeout',
         orderId,
@@ -81,7 +112,39 @@ export async function processClaimedOrderReservationExpiries(batchSize = 100): P
   return processed;
 }
 
+async function handleReservationExpiredBase(orderId: OrderId): Promise<void> {
+  // todo: add logic that must run exactly at reservation expiry time
+  void orderId;
+}
+
+export async function processClaimedOrderReservationBase(batchSize = 100): Promise<number> {
+  const orderIds = await claimDueOrderReservationBaseIds(batchSize);
+  if (orderIds.length === 0) return 0;
+
+  let processed = 0;
+
+  for (const orderId of orderIds) {
+    try {
+      // run the base-phase handler for jobs scheduled at reservation expiry time
+      await handleReservationExpiredBase(orderId);
+      processed += 1;
+    } catch (err: unknown) {
+      // log per-order failures and continue processing the remaining jobs
+      console.error({
+        scope: 'redis-order-timeout-base',
+        orderId,
+        err,
+      });
+    }
+  }
+
+  return processed;
+}
+
 export async function cancelOrderReservationExpiry(orderId: number): Promise<void> {
   const redis = await getRedis();
+
+  // remove both timeout jobs when the order no longer needs reservation cleanup
+  await redis.zRem(redisKeys.orderTimeoutBaseZset, String(orderId));
   await redis.zRem(redisKeys.orderTimeoutZset, String(orderId));
 }
