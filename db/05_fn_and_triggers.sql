@@ -1041,8 +1041,7 @@ BEGIN
   -- lock all order items
   PERFORM 1
   FROM cartlify.order_items AS oi
-  WHERE oi."orderId" = p_order_id
-  FOR UPDATE;
+  WHERE oi."orderId" = p_order_id;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
@@ -1207,8 +1206,9 @@ EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
 -- ORDERS AND ITEMS guard order updates and recalc total before confirmation
 CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_total cartlify.orders.total%TYPE;
 BEGIN
-
   IF OLD."confirmed" THEN
     IF NEW."userId" IS DISTINCT FROM OLD."userId"
        OR NEW."total" IS DISTINCT FROM OLD."total"
@@ -1223,14 +1223,18 @@ BEGIN
   END IF;
 
   IF NOT OLD."confirmed" AND NEW."confirmed" THEN
-
     IF NEW."shippingAddress" IS NULL
        OR btrim(NEW."shippingAddress") = '' THEN
       RAISE EXCEPTION 'Cannot confirm order % without shipping address', OLD.id
         USING ERRCODE = 'check_violation';
     END IF;
 
-    PERFORM cartlify.recalc_order_total(OLD.id);
+    SELECT COALESCE(SUM(oi."totalPrice"), 0)
+    INTO v_total
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = OLD.id;
+
+    NEW."total" := v_total;
   END IF;
 
   RETURN NEW;

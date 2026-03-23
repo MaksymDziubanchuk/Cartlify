@@ -22,6 +22,7 @@ import { reviewsDtoSchemas } from '@schemas/dto/reviews.dtoSchemas.js';
 import { usersDtoSchemas } from '@schemas/dto/users.dtoSchemas.js';
 import { rootAdminsDtoSchemas } from '@schemas/dto/root.dtoSchemas.js';
 import { chatsDtoSchemas } from '@schemas/dto/chat.dtoSchemas.js';
+import { paymentDtoSchemas } from '@schemas/dto/payment.dtoSchema.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
@@ -113,6 +114,7 @@ for (const schema of [
   ...usersDtoSchemas,
   ...rootAdminsDtoSchemas,
   ...chatsDtoSchemas,
+  ...paymentDtoSchemas,
 ]) {
   // add schemas to ajv
   app.addSchema(schema);
