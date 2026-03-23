@@ -131,4 +131,32 @@ BEGIN
 END
 $do$;
 
+-- 4) Explicit execute grants for extension/custom search functions.
+GRANT
+EXECUTE ON FUNCTION cartlify.unaccent (text) TO cartlify_app;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.unaccent (regdictionary, text) TO cartlify_app;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.immutable_unaccent (text) TO cartlify_app;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.unaccent (text) TO cartlify_readonly;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.unaccent (regdictionary, text) TO cartlify_readonly;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.immutable_unaccent (text) TO cartlify_readonly;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.unaccent (text) TO cartlify_owner;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.unaccent (regdictionary, text) TO cartlify_owner;
+
+GRANT
+EXECUTE ON FUNCTION cartlify.immutable_unaccent (text) TO cartlify_owner;
+
 COMMIT;

@@ -1,5 +1,5 @@
-const createCheckoutSessionBodyDtoSchema = {
-  $id: 'createCheckoutSessionBodyDtoSchema',
+const paymentsCreateCheckoutSessionBodySchema = {
+  $id: 'paymentsCreateCheckoutSessionBodySchema',
   type: 'object',
   additionalProperties: false,
   required: ['orderId'],
@@ -8,14 +8,16 @@ const createCheckoutSessionBodyDtoSchema = {
   },
 } as const;
 
-const checkoutSessionPublicDtoSchema = {
-  $id: 'checkoutSessionPublicDtoSchema',
+const paymentsCheckoutSessionPublicSchema = {
+  $id: 'paymentsCheckoutSessionPublicSchema',
   type: 'object',
   additionalProperties: false,
   required: ['sessionId', 'url', 'mode', 'status', 'paymentStatus', 'expiresAt'],
   properties: {
     sessionId: { type: 'string', minLength: 1 },
-    url: { type: 'string', format: 'uri' },
+    url: {
+      anyOf: [{ type: 'string', format: 'uri' }, { type: 'null' }],
+    },
     mode: {
       type: 'string',
       enum: ['payment'],
@@ -32,18 +34,51 @@ const checkoutSessionPublicDtoSchema = {
   },
 } as const;
 
-const createCheckoutSessionReplyDtoSchema = {
-  $id: 'createCheckoutSessionReplyDtoSchema',
+const paymentsCheckoutSessionResponseSchema = {
+  $id: 'paymentsCheckoutSessionResponseSchema',
   type: 'object',
   additionalProperties: false,
   required: ['checkoutSession'],
   properties: {
-    checkoutSession: { $ref: 'checkoutSessionPublicDtoSchema#' },
+    checkoutSession: { $ref: 'paymentsCheckoutSessionPublicSchema#' },
+  },
+} as const;
+
+const paymentsGetCheckoutSessionByIdParamsSchema = {
+  $id: 'paymentsGetCheckoutSessionByIdParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['sessionId'],
+  properties: {
+    sessionId: { type: 'string', minLength: 1 },
+  },
+} as const;
+
+const paymentsStripeWebhookHeadersSchema = {
+  $id: 'paymentsStripeWebhookHeadersSchema',
+  type: 'object',
+  additionalProperties: true,
+  required: ['stripe-signature'],
+  properties: {
+    'stripe-signature': { type: 'string', minLength: 1 },
+  },
+} as const;
+
+const paymentsStripeWebhookResponseSchema = {
+  $id: 'paymentsStripeWebhookResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['received'],
+  properties: {
+    received: { type: 'boolean', const: true },
   },
 } as const;
 
 export const paymentDtoSchemas = [
-  createCheckoutSessionBodyDtoSchema,
-  checkoutSessionPublicDtoSchema,
-  createCheckoutSessionReplyDtoSchema,
+  paymentsCreateCheckoutSessionBodySchema,
+  paymentsCheckoutSessionPublicSchema,
+  paymentsCheckoutSessionResponseSchema,
+  paymentsGetCheckoutSessionByIdParamsSchema,
+  paymentsStripeWebhookHeadersSchema,
+  paymentsStripeWebhookResponseSchema,
 ];
