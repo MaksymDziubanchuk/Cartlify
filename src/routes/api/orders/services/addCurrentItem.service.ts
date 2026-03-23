@@ -147,7 +147,7 @@ export async function addCurrentItem({
         // keep default isolation and retry only transient lock/conflict errors
         maxRetries: 3,
         isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-        maxWait: 1500,
+        maxWait: 10_000,
         timeout: 10_000,
       },
     );
