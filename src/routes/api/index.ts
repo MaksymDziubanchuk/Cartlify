@@ -9,6 +9,7 @@ import { usersRouter } from '@routes/api/users/index.js';
 import { productRouter } from '@routes/api/products/index.js';
 import { categoriesRouter } from '@routes/api/categories/index.js';
 import { ordersRouter } from '@routes/api/orders/index.js';
+import { paymentsRouter } from '@routes/api/payments/index.js';
 import { favoritesRouter } from '@routes/api/favorites/index.js';
 import { reviewsRouter } from '@routes/api/reviews/index.js';
 import { adminRouter } from '@routes/api/admin/index.js';
@@ -24,6 +25,7 @@ export async function registerRoutes(app: FastifyInstance) {
   app.register(productRouter, { prefix: 'api/products' });
   app.register(categoriesRouter, { prefix: 'api/categories' });
   app.register(ordersRouter, { prefix: 'api/orders' });
+  app.register(paymentsRouter, { prefix: 'api/payments' });
   app.register(favoritesRouter, { prefix: 'api/favorites' });
   app.register(reviewsRouter, { prefix: 'api/reviews' });
   app.register(adminRouter, { prefix: 'api/admin' });

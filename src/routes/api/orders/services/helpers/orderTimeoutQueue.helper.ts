@@ -1,8 +1,10 @@
 import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 import { prisma } from '@db/client.js';
+import { expireCheckoutSession } from '@routes/api/payments/services/helpers/checkoutSession.helper.js';
 
 import type { OrderId } from 'types/ids.js';
+import { AppError } from '@utils/errors.js';
 
 // give payment webhook processing extra time after reservation expiry
 const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
@@ -112,9 +114,35 @@ export async function processClaimedOrderReservationExpiries(batchSize = 100): P
   return processed;
 }
 
-async function handleReservationExpiredBase(orderId: OrderId): Promise<void> {
-  // todo: add logic that must run exactly at reservation expiry time
-  void orderId;
+export async function setOrderPaymentSessionLink(
+  orderId: OrderId,
+  paymentSessionId: string,
+): Promise<void> {
+  const redis = await getRedis();
+
+  await redis.hSet(redisKeys.orderPaymentSessionMap, String(orderId), String(paymentSessionId));
+}
+
+async function getOrderPaymentSessionLink(orderId: OrderId): Promise<string | null> {
+  const redis = await getRedis();
+
+  const paymentSessionId = await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId));
+
+  if (!paymentSessionId) return null;
+  return paymentSessionId;
+}
+
+async function deleteOrderPaymentSessionLink(orderId: OrderId): Promise<void> {
+  const redis = await getRedis();
+  await redis.hDel(redisKeys.orderPaymentSessionMap, String(orderId));
+}
+
+async function handleReservationExpiredBase(
+  orderId: OrderId,
+  paymentSessionId: string,
+): Promise<void> {
+  await expireCheckoutSession({ sessionId: paymentSessionId });
+  await deleteOrderPaymentSessionLink(orderId);
 }
 
 export async function processClaimedOrderReservationBase(batchSize = 100): Promise<number> {
@@ -126,7 +154,11 @@ export async function processClaimedOrderReservationBase(batchSize = 100): Promi
   for (const orderId of orderIds) {
     try {
       // run the base-phase handler for jobs scheduled at reservation expiry time
-      await handleReservationExpiredBase(orderId);
+      const paymentSessionId = await getOrderPaymentSessionLink(orderId);
+
+      if (!paymentSessionId) throw new Error();
+
+      await handleReservationExpiredBase(orderId, paymentSessionId);
       processed += 1;
     } catch (err: unknown) {
       // log per-order failures and continue processing the remaining jobs

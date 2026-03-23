@@ -19,7 +19,7 @@ export interface CreateCheckoutSessionDto extends CreateCheckoutSessionBodyDto {
 
 export interface CheckoutSessionDto {
   sessionId: string;
-  url: string;
+  url: string | null;
   mode: StripeCheckoutMode;
   status: StripeCheckoutSessionStatus;
   paymentStatus: StripeCheckoutPaymentStatus;
@@ -28,4 +28,24 @@ export interface CheckoutSessionDto {
 
 export interface CheckoutSessionResponseDto {
   checkoutSession: CheckoutSessionDto;
+}
+
+// GET /checkout/sessions/:sessionId
+export interface GetCheckoutSessionByIdParamsDto {
+  sessionId: string;
+}
+
+export interface GetCheckoutSessionByIdDto extends GetCheckoutSessionByIdParamsDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// POST /webhook
+export interface HandleStripeWebhookDto {
+  stripeSignature: string;
+  rawBody: string | Buffer;
+}
+
+export interface StripeWebhookResponseDto {
+  received: true;
 }
