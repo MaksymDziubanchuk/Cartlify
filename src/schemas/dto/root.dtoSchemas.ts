@@ -3,8 +3,8 @@ const rootAdminsGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
+    limit: { type: 'number', minimum: 1, maximum: 100 },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
     search: { type: 'string' },
   },
 } as const;
@@ -20,11 +20,13 @@ const rootAdminsGetResponseSchema = {
   additionalProperties: false,
   properties: {
     items: { type: 'array', items: { $ref: 'rootAdminsItemSchema#' } },
-    page: { type: 'number' },
     limit: { type: 'number' },
+    nextCursor: {
+      anyOf: [{ type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' }, { type: 'null' }],
+    },
     total: { type: 'number' },
   },
-  required: ['items'],
+  required: ['items', 'limit', 'total'],
 } as const;
 
 const rootAdminsAddBodySchema = {

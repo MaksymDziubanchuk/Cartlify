@@ -3,14 +3,17 @@ import type { UserResponseDto } from 'types/dto/users.dto.js';
 import type { Role } from 'types/user.js';
 
 export interface GetAdminsQueryDto {
-  page?: number;
+  cursor?: string;
   limit?: number;
   search?: string;
 }
 
 export interface FindAdminsDto {
-  page: number;
+  actorId: UserId;
+  actorRole: Role;
+
   limit: number;
+  cursor?: string;
   search?: string;
 }
 
@@ -18,8 +21,8 @@ export type AdminItemDto = UserResponseDto;
 
 export interface GetAdminsResponseDto {
   items: AdminItemDto[];
-  page?: number;
   limit?: number;
+  nextCursor?: string | null;
   total?: number;
 }
 
