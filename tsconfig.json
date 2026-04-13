@@ -21,6 +21,7 @@
       "@routes/*": ["routes/*"],
       "@schemas/*": ["schemas/*"],
       "@helpers/*": ["helpers/*"],
+      "@redis/*": ["redis/*"],
       "@db/*": ["db/*"]
     }
   },
