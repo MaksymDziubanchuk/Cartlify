@@ -40,18 +40,18 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
       };
     },
   );
-  app.post(
-    '/threads/:threadId/messages',
-    {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      // schema: chatsSchemas.createChatMessageSchema,
-    },
-    async () => {
-      return {
-        message: 'create chat message not implemented',
-      };
-    },
-  );
+  // app.post(
+  //   '/threads/:threadId/messages',
+  //   {
+  //     preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
+  //     // schema: chatsSchemas.createChatMessageSchema,
+  //   },
+  //   async () => {
+  //     return {
+  //       message: 'create chat message not implemented',
+  //     };
+  //   },
+  // );
   app.patch(
     '/threads/:threadId/read',
     {
