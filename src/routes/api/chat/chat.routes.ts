@@ -8,7 +8,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
     '/threads',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: chatsSchemas.getChatsSchema,
+      // schema: chatsSchemas.getChatsSchema,
     },
     async () => {
       return {
