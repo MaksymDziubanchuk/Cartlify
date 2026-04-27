@@ -8,7 +8,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
     '/threads',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      // schema: chatsSchemas.getChatsSchema,
+      schema: chatsSchemas.getChatsSchema,
     },
     async () => {
       return {
@@ -20,7 +20,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
     '/threads/:threadId/messages',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      // schema: chatsSchemas.getChatMessagesSchema,
+      schema: chatsSchemas.getChatMessagesSchema,
     },
     async () => {
       return {
@@ -32,7 +32,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
     '/threads',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      // schema: chatsSchemas.createChatThreadSchema,
+      schema: chatsSchemas.createChatThreadSchema,
     },
     async () => {
       return {
@@ -44,7 +44,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
     '/threads/:threadId/messages',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      // schema: chatsSchemas.createChatMessageSchema,
+      schema: chatsSchemas.createChatMessageSchema,
     },
     async () => {
       return {
@@ -56,7 +56,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
     '/threads/:threadId/read',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      // schema: chatsSchemas.markChatThreadReadSchema,
+      schema: chatsSchemas.markChatThreadReadSchema,
     },
     async () => {
       return {
