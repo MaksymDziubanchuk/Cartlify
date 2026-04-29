@@ -56,8 +56,6 @@ const markChatThreadReadSchema = {
   },
 } satisfies FastifySchema;
 
-
-
 export const chatsSchemas = {
   getChatsSchema,
   getChatMessagesSchema,
