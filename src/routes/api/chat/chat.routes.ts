@@ -52,16 +52,4 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
       };
     },
   );
-  app.patch(
-    '/threads/:threadId/read',
-    {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: chatsSchemas.markChatThreadReadSchema,
-    },
-    async () => {
-      return {
-        message: 'mark chat thread as read not implemented',
-      };
-    },
-  );
 }
