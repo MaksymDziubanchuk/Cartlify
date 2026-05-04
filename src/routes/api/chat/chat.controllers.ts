@@ -12,8 +12,15 @@ const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req,
     };
 };
 
+const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
+
+    return {
+        message: 'get chat messages not implemented',
+    };
+};
 
 
 export const chatController = {
-    getThreads
+    getThreads,
+    getThreadMessage
 };
