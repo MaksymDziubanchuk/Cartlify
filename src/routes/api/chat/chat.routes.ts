@@ -19,11 +19,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.getChatMessagesSchema,
     },
-    async () => {
-      return {
-        message: 'get chat messages not implemented',
-      };
-    },
+    chatController.getThreadMessage
   );
   app.post(
     '/threads',
