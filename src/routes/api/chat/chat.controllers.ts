@@ -26,8 +26,16 @@ const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req,
     };
 };
 
+const postThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
+
+    return {
+        message: 'create chat message not implemented',
+    };
+};
+
 export const chatController = {
     getThreads,
     getThreadMessage,
-    postThread
+    postThread,
+    postThreadMessage
 };
