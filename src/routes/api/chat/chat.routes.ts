@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import { chatsSchemas } from './chat.schemas.js';
+import { chatController } from './chat.controllers.js';
 
 export default async function chatRouter(app: FastifyInstance, opt: unknown) {
   app.get(
@@ -10,11 +11,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.getChatsSchema,
     },
-    async () => {
-      return {
-        message: 'get chat threads not implemented',
-      };
-    },
+    chatController.getThreads
   );
   app.get(
     '/threads/:threadId/messages',
