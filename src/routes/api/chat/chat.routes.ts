@@ -27,11 +27,7 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.createChatThreadSchema,
     },
-    async () => {
-      return {
-        message: 'create chat thread not implemented',
-      };
-    },
+    chatController.postThread
   );
   app.post(
     '/threads/:threadId/messages',
