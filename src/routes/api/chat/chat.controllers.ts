@@ -7,6 +7,8 @@ import pickDefined from '@helpers/parameterNormalize.js';
 
 const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
+    const { id: actorId, role: actorRole } = req.user as UserEntity;
+
     return {
         message: 'get chat threads not implemented',
     };
