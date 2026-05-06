@@ -16,6 +16,8 @@ const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req,
 
 const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
+    const { id: actorId, role: actorRole } = req.user as UserEntity;
+
     return {
         message: 'get chat messages not implemented',
     };
@@ -23,12 +25,16 @@ const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async
 
 const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
+    const { id: actorId, role: actorRole } = req.user as UserEntity;
+
     return {
         message: 'create chat thread not implemented',
     };
 };
 
 const postThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
+
+    const { id: actorId, role: actorRole } = req.user as UserEntity;
 
     return {
         message: 'create chat message not implemented',
