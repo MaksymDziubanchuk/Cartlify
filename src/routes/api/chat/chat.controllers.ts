@@ -1,13 +1,13 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { UserEntity } from 'types/user.js';
+import type { User } from 'types/user.js';
 
 import pickDefined from '@helpers/parameterNormalize.js';
 
 
 const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
-    const { id: actorId, role: actorRole } = req.user as UserEntity;
+    const { id: actorId, role: actorRole } = req.user as User;
 
     return {
         message: 'get chat threads not implemented',
@@ -16,7 +16,7 @@ const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req,
 
 const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
-    const { id: actorId, role: actorRole } = req.user as UserEntity;
+    const { id: actorId, role: actorRole } = req.user as User;
 
     return {
         message: 'get chat messages not implemented',
@@ -25,7 +25,7 @@ const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async
 
 const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
-    const { id: actorId, role: actorRole } = req.user as UserEntity;
+    const { id: actorId, role: actorRole } = req.user as User;
 
     return {
         message: 'create chat thread not implemented',
@@ -34,7 +34,7 @@ const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req,
 
 const postThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
 
-    const { id: actorId, role: actorRole } = req.user as UserEntity;
+    const { id: actorId, role: actorRole } = req.user as User;
 
     return {
         message: 'create chat message not implemented',
