@@ -1,49 +1,39 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { User } from 'types/user.js';
 
-import pickDefined from '@helpers/parameterNormalize.js';
+import { chatsServices } from './chat.services.js';
 
-
-const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
-
-    const { id: actorId, role: actorRole } = req.user as User;
-
-    return {
-        message: 'get chat threads not implemented',
-    };
+const getThreads: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (
+    req,
+    reply,
+) => {
+    return chatsServices.getThreads();
 };
 
-const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
-
-    const { id: actorId, role: actorRole } = req.user as User;
-
-    return {
-        message: 'get chat messages not implemented',
-    };
+const getThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (
+    req,
+    reply,
+) => {
+    return chatsServices.getThreadMessage();
 };
 
-const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
-
-    const { id: actorId, role: actorRole } = req.user as User;
-
-    return {
-        message: 'create chat thread not implemented',
-    };
+const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (
+    req,
+    reply,
+) => {
+    return chatsServices.postThread();
 };
 
-const postThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (req, reply) => {
-
-    const { id: actorId, role: actorRole } = req.user as User;
-
-    return {
-        message: 'create chat message not implemented',
-    };
+const postThreadMessage: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (
+    req,
+    reply,
+) => {
+    return chatsServices.postThreadMessage();
 };
 
 export const chatController = {
     getThreads,
     getThreadMessage,
     postThread,
-    postThreadMessage
+    postThreadMessage,
 };
