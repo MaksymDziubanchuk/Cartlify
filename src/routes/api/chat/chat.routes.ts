@@ -11,30 +11,33 @@ export default async function chatRouter(app: FastifyInstance, opt: unknown) {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.getChatsSchema,
     },
-    chatController.getThreads
+    chatController.getThreads,
   );
+
   app.get(
     '/threads/:threadId/messages',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.getChatMessagesSchema,
     },
-    chatController.getThreadMessage
+    chatController.getThreadMessage,
   );
+
   app.post(
     '/threads',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.createChatThreadSchema,
     },
-    chatController.postThread
+    chatController.postThread,
   );
+
   app.post(
     '/threads/:threadId/messages',
     {
       preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
       schema: chatsSchemas.createChatMessageSchema,
     },
-    chatController.postThreadMessage
+    chatController.postThreadMessage,
   );
 }
