@@ -1,6 +1,6 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { GetChatThreadsQueryDto, GetChatMessagesQueryDto } from 'types/dto/chats.dto.js';
+import type { GetChatThreadsQueryDto, GetChatMessagesQueryDto, CreateChatThreadBodyDto } from 'types/dto/chats.dto.js';
 
 import { chatsServices } from './chat.services.js';
 
@@ -22,7 +22,7 @@ const getThreadMessage: ControllerRouter<{}, {}, GetChatMessagesQueryDto, Messag
     return chatsServices.getThreadMessage();
 };
 
-const postThread: ControllerRouter<{}, {}, {}, MessageResponseDto> = async (
+const postThread: ControllerRouter<{}, CreateChatThreadBodyDto, {}, MessageResponseDto> = async (
     req,
     reply,
 ) => {
