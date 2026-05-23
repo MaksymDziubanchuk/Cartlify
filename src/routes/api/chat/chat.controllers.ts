@@ -1,6 +1,12 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { GetChatThreadsQueryDto, GetChatMessagesQueryDto, CreateChatThreadBodyDto, CreateChatMessageBodyDto } from 'types/dto/chats.dto.js';
+import type {
+    GetChatThreadsQueryDto,
+    GetChatMessagesQueryDto,
+    CreateChatThreadBodyDto,
+    CreateChatMessageBodyDto,
+    ChatThreadIdParamsDto
+} from 'types/dto/chats.dto.js';
 
 import { chatsServices } from './chat.services.js';
 
