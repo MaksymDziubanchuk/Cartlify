@@ -5,7 +5,7 @@ import type { GetChatThreadsQueryDto, GetChatMessagesQueryDto, CreateChatThreadB
 import { chatsServices } from './chat.services.js';
 
 const getThreads: ControllerRouter<
-    {},
+    ChatThreadIdParamsDto,
     {},
     GetChatThreadsQueryDto,
     MessageResponseDto
