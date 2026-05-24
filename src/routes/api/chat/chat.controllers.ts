@@ -9,6 +9,8 @@ import type {
 } from 'types/dto/chats.dto.js';
 
 import { chatsServices } from './chat.services.js';
+import { User } from '@prisma/client';
+import type { UserEntity } from 'types/user.js';
 
 const getThreads: ControllerRouter<
     ChatThreadIdParamsDto,
@@ -39,6 +41,7 @@ const postThreadMessage: ControllerRouter<{}, CreateChatMessageBodyDto, {}, Mess
     req,
     reply,
 ) => {
+    const { id, role } = req.user as UserEntity;
     return chatsServices.postThreadMessage();
 };
 
