@@ -27,6 +27,7 @@ const getThreadMessage: ControllerRouter<{}, {}, GetChatMessagesQueryDto, Messag
     req,
     reply,
 ) => {
+    const { id, role } = req.user as UserEntity;
     return chatsServices.getThreadMessage();
 };
 
