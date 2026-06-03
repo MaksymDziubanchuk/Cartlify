@@ -19,6 +19,8 @@ const getThreads: ControllerRouter<
     MessageResponseDto
 > = async (req, reply) => {
     const query = req.query;
+    const { id, role } = req.user as UserEntity;
+    const body = req.body;
 
     return chatsServices.getThreads();
 };
