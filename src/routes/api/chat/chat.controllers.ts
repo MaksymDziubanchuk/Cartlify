@@ -48,6 +48,7 @@ const postThreadMessage: ControllerRouter<{}, CreateChatMessageBodyDto, {}, Mess
     reply,
 ) => {
     const { id, role } = req.user as UserEntity;
+    const body = req.body;
     return chatsServices.postThreadMessage();
 };
 
