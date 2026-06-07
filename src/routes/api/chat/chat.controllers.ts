@@ -20,7 +20,7 @@ const getThreads: ControllerRouter<
 > = async (req, reply) => {
     const query = req.query;
     const { id, role } = req.user as UserEntity;
-    const body = req.body;
+
 
     return chatsServices.getThreads();
 };
@@ -30,6 +30,7 @@ const getThreadMessage: ControllerRouter<{}, {}, GetChatMessagesQueryDto, Messag
     reply,
 ) => {
     const { id, role } = req.user as UserEntity;
+
     return chatsServices.getThreadMessage();
 };
 
@@ -38,6 +39,7 @@ const postThread: ControllerRouter<{}, CreateChatThreadBodyDto, {}, MessageRespo
     reply,
 ) => {
     const { id, role } = req.user as UserEntity;
+    const body = req.body;
     return chatsServices.postThread();
 };
 
@@ -46,6 +48,7 @@ const postThreadMessage: ControllerRouter<{}, CreateChatMessageBodyDto, {}, Mess
     reply,
 ) => {
     const { id, role } = req.user as UserEntity;
+    const body = req.body;
     return chatsServices.postThreadMessage();
 };
 
