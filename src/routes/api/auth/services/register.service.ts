@@ -1,7 +1,7 @@
 import { Prisma, Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
-
+import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
@@ -62,6 +62,7 @@ export async function register({
 
       // switch to user db context
       await setUserContext(tx, { userId: id, role: 'USER' });
+      await migrateGuestDataToUser(tx, guestId, id);
 
       // store verify email token
       await tx.$executeRaw`
