@@ -3,41 +3,51 @@ import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import { chatsSchemas } from './chat.schemas.js';
 import { chatController } from './chat.controllers.js';
+import { chatWsController } from './ws/chatWs.controller.js';
 
 export default async function chatRouter(app: FastifyInstance, opt: unknown) {
   app.get(
-    '/threads',
+    '/thread/current',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: chatsSchemas.getChatsSchema,
+      preHandler: [authGuard, requireRole(['GUEST', 'USER'])],
+      schema: chatsSchemas.getCurrentChatSchema,
     },
-    chatController.getThreads,
+    chatController.getCurrentChat,
   );
 
   app.get(
-    '/threads/:threadId/messages',
+    '/admin/threads',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: chatsSchemas.getChatMessagesSchema,
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: chatsSchemas.getAdminChatThreadsSchema,
     },
-    chatController.getThreadMessage,
+    chatController.getAdminChatThreads,
   );
 
-  app.post(
-    '/threads',
+  app.get(
+    '/admin/threads/:threadId',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: chatsSchemas.createChatThreadSchema,
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: chatsSchemas.getAdminChatThreadSchema,
     },
-    chatController.postThread,
+    chatController.getAdminChatThread,
   );
 
-  app.post(
-    '/threads/:threadId/messages',
+  app.patch(
+    '/admin/threads/:threadId/close',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
-      schema: chatsSchemas.createChatMessageSchema,
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: chatsSchemas.closeAdminChatThreadSchema,
     },
-    chatController.postThreadMessage,
+    chatController.closeAdminChatThread,
+  );
+
+  app.get(
+    '/ws',
+    {
+      websocket: true,
+      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
+    },
+    chatWsController.connectChatWs,
   );
 }

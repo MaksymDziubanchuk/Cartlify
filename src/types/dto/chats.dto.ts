@@ -1,85 +1,166 @@
 import type { UserId } from 'types/ids.js';
+import type { Role } from 'types/user.js';
 
 export type ChatStatus = 'open' | 'closed';
 export type ChatType = 'bot' | 'admin';
-export type ChatSenderType = 'guest' | 'user' | 'admin' | 'root';
+export type ChatSenderType = 'user' | 'admin' | 'bot' | 'guest';
+export type AdminChatQueue = 'waiting' | 'active';
 
-export interface GetChatThreadsQueryDto {
-    page?: number;
-    limit?: number;
-    status?: ChatStatus;
-    type?: ChatType;
-}
-
-export interface FindChatThreadsDto {
-    page: number;
-    limit: number;
-    status?: ChatStatus;
-    type?: ChatType;
-}
+// common
 
 export interface ChatThreadIdParamsDto {
     threadId: string;
 }
 
-export interface GetChatMessagesQueryDto {
-    page?: number;
-    limit?: number;
-}
-
-export interface FindChatMessagesDto extends ChatThreadIdParamsDto {
-    page: number;
-    limit: number;
-}
-
-export interface CreateChatThreadBodyDto {
-    type: ChatType;
-    content?: string;
-}
-
-export interface CreateChatThreadDto extends CreateChatThreadBodyDto { }
-
-export interface CreateChatMessageBodyDto {
-    content: string;
-}
-
-export interface CreateChatMessageDto
-    extends ChatThreadIdParamsDto,
-    CreateChatMessageBodyDto { }
-
 export interface ChatThreadItemDto {
     id: string;
+    userId: UserId | null;
+    guestId: string | null;
     type: ChatType;
     status: ChatStatus;
-    lastMessageAt: Date | null;
+    lastMessageAt: Date;
     unreadCount: number;
+    adminRequestedAt: Date | null;
+    adminUnreadSince: Date | null;
     lastMessagePreview: string | null;
+    createdAt: Date;
+    updatedAt: Date;
 }
 
 export interface ChatMessageItemDto {
-    id: string;
+    id: number;
     threadId: string;
-    senderId: string | number | null;
+    senderId: number | null;
     senderType: ChatSenderType;
     content: string;
     isRead: boolean;
     createdAt: Date;
 }
 
-export interface GetChatThreadsResponseDto {
+// GET /thread/current
+
+export interface GetCurrentChatDto {
+    actorId: UserId;
+    actorRole: Role;
+}
+
+export interface CurrentChatWsDto {
+    url: string;
+    threadId: string;
+}
+
+export interface CurrentChatResponseDto {
+    thread: ChatThreadItemDto;
+    messages: ChatMessageItemDto[];
+    ws: CurrentChatWsDto;
+}
+
+// GET /admin/threads
+
+export interface AdminChatThreadsQueryDto {
+    page?: number;
+    limit?: number;
+    queue?: AdminChatQueue;
+}
+
+export interface FindAdminChatThreadsDto {
+    actorId: UserId;
+    actorRole: Role;
+    page: number;
+    limit: number;
+    queue: AdminChatQueue;
+}
+export interface AdminChatThreadsResponseDto {
     items: ChatThreadItemDto[];
     page: number;
     limit: number;
     total: number;
 }
 
-export interface GetChatMessagesResponseDto {
-    items: ChatMessageItemDto[];
-    page: number;
-    limit: number;
-    total: number;
+// GET /admin/threads/:threadId
+
+export interface FindAdminChatThreadDto extends ChatThreadIdParamsDto {
+    actorId: UserId;
+    actorRole: Role;
 }
 
-export type CreateChatThreadResponseDto = ChatThreadItemDto;
+export interface AdminChatThreadResponseDto {
+    thread: ChatThreadItemDto;
+    messages: ChatMessageItemDto[];
+    previousThreads: ChatThreadItemDto[];
+}
 
-export type CreateChatMessageResponseDto = ChatMessageItemDto;
+// PATCH /admin/threads/:threadId/close
+
+export interface CloseChatThreadDto extends ChatThreadIdParamsDto {
+    actorId: UserId;
+    actorRole: Role;
+}
+
+export interface CloseChatThreadResponseDto {
+    thread: ChatThreadItemDto;
+}
+
+// WS /ws
+
+export type ChatWsClientEventType =
+    | 'thread:join'
+    | 'message:send'
+    | 'thread:read'
+    | 'typing:start'
+    | 'typing:stop';
+
+export type ChatWsServerEventType =
+    | 'connection:ready'
+    | 'thread:joined'
+    | 'message:new'
+    | 'admin:requested'
+    | 'thread:closed'
+    | 'thread:read'
+    | 'typing:start'
+    | 'typing:stop'
+    | 'error';
+
+export interface ThreadJoinWsDto {
+    type: 'thread:join';
+    payload: {
+        threadId: string;
+    };
+}
+
+export interface MessageSendWsDto {
+    type: 'message:send';
+    payload: {
+        threadId: string;
+        content: string;
+    };
+}
+
+export interface TypingStartWsDto {
+    type: 'typing:start';
+    payload: {
+        threadId: string;
+    };
+}
+
+export interface TypingStopWsDto {
+    type: 'typing:stop';
+    payload: {
+        threadId: string;
+    };
+}
+
+export type ChatWsClientEventDto =
+    | ThreadJoinWsDto
+    | MessageSendWsDto
+    | ThreadReadWsDto
+    | TypingStartWsDto
+    | TypingStopWsDto;
+
+
+export interface ThreadReadWsDto {
+    type: 'thread:read';
+    payload: {
+        threadId: string;
+    };
+}
