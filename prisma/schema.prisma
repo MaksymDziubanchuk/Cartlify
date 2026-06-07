@@ -83,7 +83,7 @@ enum ChatMessageSenderType {
   user
   admin
   bot
-  system
+  guest
 }
 
 model User {
