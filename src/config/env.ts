@@ -36,6 +36,9 @@ declare global {
       CLOUDINARY_URL: string;
 
       OPENAI_API_KEY: string;
+      OPENAI_MODEL?: string;
+      OPENAI_TIMEOUT_MS?: string;
+      OPENAI_MAX_OUTPUT_TOKENS?: string;
 
       SENDGRID_API_KEY: string;
 
@@ -88,35 +91,48 @@ export default {
   // supabase client keys
   SUPABASE_URL: process.env.SUPABASE_URL || '',
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
+
   // supabase admin key
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
 
   // access token config
   JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET || 'changeme',
+
   // access ttl presets
   JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1200',
-
   JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '3600',
+
   // refresh token config
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || 'changeme',
   JWT_REFRESH_TTL_SHORT: process.env.JWT_REFRESH_TTL_SHORT || '86400',
   JWT_REFRESH_TTL_LONG: process.env.JWT_REFRESH_TTL_LONG || '2592000',
+
   // guest cookie lifetime
   GUEST_ID_TTL: process.env.GUEST_ID_TTL || '157680000',
 
+  // password reset ttl
   RESET_TTL_MS: process.env.RESET_TTL_MS ? Number(process.env.RESET_TTL_MS) : 3600000,
+
   // bcrypt cost factor
   BCRYPT_ROUNDS: process.env.BCRYPT_ROUNDS ? Number(process.env.BCRYPT_ROUNDS) : 12,
+
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
   CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY || '',
   CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET || '',
   CLOUDINARY_URL: process.env.CLOUDINARY_URL || '',
 
-  // openai and cookie secret
+  // openai api settings
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
+  OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
+  OPENAI_TIMEOUT_MS: process.env.OPENAI_TIMEOUT_MS
+    ? Number(process.env.OPENAI_TIMEOUT_MS)
+    : 12000,
+  OPENAI_MAX_OUTPUT_TOKENS: process.env.OPENAI_MAX_OUTPUT_TOKENS
+    ? Number(process.env.OPENAI_MAX_OUTPUT_TOKENS)
+    : 450,
 
-  // SendGrid variables
+  // sendgrid variables
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
   EMAIL_FROM: process.env.EMAIL_FROM || '',
   EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME || '',

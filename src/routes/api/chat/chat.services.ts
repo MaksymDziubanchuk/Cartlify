@@ -1,32 +1,17 @@
-import type { MessageResponseDto } from 'types/common.js';
-
-const getThreads = async (): Promise<MessageResponseDto> => {
-    return {
-        message: 'get chat threads not implemented',
-    };
-};
-
-const getThreadMessage = async (): Promise<MessageResponseDto> => {
-    return {
-        message: 'get chat messages not implemented',
-    };
-};
-
-const postThread = async (): Promise<MessageResponseDto> => {
-    return {
-        message: 'create chat thread not implemented',
-    };
-};
-
-const postThreadMessage = async (): Promise<MessageResponseDto> => {
-    return {
-        message: 'create chat message not implemented',
-    };
-};
+import { closeAdminChatThreadService } from './services/closeAdminChatThread.service.js';
+import { getAdminChatThreadService } from './services/getAdminChatThread.service.js';
+import { getAdminChatThreadsService } from './services/getAdminChatThreads.service.js';
+import { getCurrentChatService } from './services/getCurrentChat.service.js';
+import { markChatThreadReadService } from './services/markChatThreadRead.service.js';
+import { requestAdminService } from './services/requestAdmin.service.js';
+import { sendChatMessageService } from './services/sendChatMessage.service.js';
 
 export const chatsServices = {
-    getThreads,
-    getThreadMessage,
-    postThread,
-    postThreadMessage,
+    getCurrentChatService,
+    getAdminChatThreadsService,
+    getAdminChatThreadService,
+    closeAdminChatThreadService,
+    markChatThreadReadService,
+    requestAdminService,
+    sendChatMessageService,
 };
