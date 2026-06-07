@@ -1346,33 +1346,10 @@ EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 -- CHAT
 ------------------------------------------------------------
 -- CHAT === triggers & functions ===
--- CHAT sync thread updated time after message insert
-CREATE OR REPLACE FUNCTION cartlify.chat_messages_after_insert () RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE
-  v_preview text;
-BEGIN
-  v_preview := left(replace(NEW.content, E'\n', ' '), 200);
-
-  UPDATE cartlify.chat_threads AS t
-  SET
-    "lastMessageAt"      = NEW."createdAt",
-    "lastMessagePreview" = v_preview,
-    "unreadCount"        = CASE
-    WHEN NEW."senderType" <> 'user'
-        THEN t."unreadCount" + 1
-    ELSE t."unreadCount"
-        END
-  WHERE t.id = NEW."threadId";
-
-  RETURN NEW;
-END;
-$$;
-
+-- CHAT messages metadata is handled by application services
 DROP TRIGGER IF EXISTS trg_chat_messages_after_insert ON cartlify.chat_messages;
 
-CREATE TRIGGER trg_chat_messages_after_insert
-AFTER INSERT ON cartlify.chat_messages FOR EACH ROW
-EXECUTE FUNCTION cartlify.chat_messages_after_insert ();
+DROP FUNCTION IF EXISTS cartlify.chat_messages_after_insert ();
 
 ------------------------------------------------------------
 -- PRICE CHANGE LOGS
@@ -1472,6 +1449,9 @@ BEGIN
     RETURN;
   END IF;
 
+  -- allow RLS policies to recognize current guest migration
+  PERFORM set_config('cartlify.migrating_guest_id', p_guest_id::text, true);
+
   -- FAVORITES: remove conflicts (user already has same product)
   DELETE FROM cartlify.favorites f
   WHERE f."guestId" = p_guest_id
@@ -1488,11 +1468,126 @@ BEGIN
       "guestId" = NULL
   WHERE "guestId" = p_guest_id;
 
-  -- CHAT THREADS: migrate guest -> user
-  UPDATE cartlify.chat_threads
-  SET "userId"  = p_user_id,
-      "guestId" = NULL
-  WHERE "guestId" = p_guest_id;
+-- CHAT THREADS: migrate guest threads to user
+WITH selected_open_guest_thread AS (
+  SELECT
+    id
+  FROM
+    cartlify.chat_threads
+  WHERE
+    "guestId" = p_guest_id
+    AND status = 'open'
+  ORDER BY
+    "lastMessageAt" DESC
+  LIMIT
+    1
+),
+existing_open_user_thread AS (
+  SELECT
+    id
+  FROM
+    cartlify.chat_threads
+  WHERE
+    "userId" = p_user_id
+    AND status = 'open'
+  LIMIT
+    1
+)
+UPDATE cartlify.chat_threads t
+SET
+  "userId" = p_user_id,
+  "guestId" = NULL,
+  status = CASE
+    WHEN t.status = 'open'
+      AND (
+        EXISTS (
+          SELECT
+            1
+          FROM
+            existing_open_user_thread
+        )
+        OR t.id <> COALESCE(
+          (
+            SELECT
+              id
+            FROM
+              selected_open_guest_thread
+          ),
+          t.id
+        )
+      )
+    THEN 'closed'::cartlify."ChatStatus"
+    ELSE t.status
+  END,
+  "unreadCount" = CASE
+    WHEN t.status = 'open'
+      AND (
+        EXISTS (
+          SELECT
+            1
+          FROM
+            existing_open_user_thread
+        )
+        OR t.id <> COALESCE(
+          (
+            SELECT
+              id
+            FROM
+              selected_open_guest_thread
+          ),
+          t.id
+        )
+      )
+    THEN 0
+    ELSE t."unreadCount"
+  END,
+  "adminRequestedAt" = CASE
+    WHEN t.status = 'open'
+      AND (
+        EXISTS (
+          SELECT
+            1
+          FROM
+            existing_open_user_thread
+        )
+        OR t.id <> COALESCE(
+          (
+            SELECT
+              id
+            FROM
+              selected_open_guest_thread
+          ),
+          t.id
+        )
+      )
+    THEN NULL
+    ELSE t."adminRequestedAt"
+  END,
+  "adminUnreadSince" = CASE
+    WHEN t.status = 'open'
+      AND (
+        EXISTS (
+          SELECT
+            1
+          FROM
+            existing_open_user_thread
+        )
+        OR t.id <> COALESCE(
+          (
+            SELECT
+              id
+            FROM
+              selected_open_guest_thread
+          ),
+          t.id
+        )
+      )
+    THEN NULL
+    ELSE t."adminUnreadSince"
+  END,
+  "updatedAt" = now()
+WHERE
+  t."guestId" = p_guest_id;
 END;
 $$;
 

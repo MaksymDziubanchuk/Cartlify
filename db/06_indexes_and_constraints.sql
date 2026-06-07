@@ -61,7 +61,7 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- FAVORITES / CHAT_THREADS: exactly one owner (you already had these)
+-- FAVORITES / CHAT_THREADS: ownership + chat state
 ----------------------------------------
 DO $$
 BEGIN
@@ -88,6 +88,40 @@ BEGIN
       ADD CONSTRAINT chat_threads_unread_non_negative
       CHECK ("unreadCount" >= 0);
   END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chat_threads_admin_state_chk'
+  ) THEN
+    ALTER TABLE cartlify.chat_threads
+      DROP CONSTRAINT chat_threads_admin_state_chk;
+  END IF;
+
+  ALTER TABLE cartlify.chat_threads
+    ADD CONSTRAINT chat_threads_admin_state_chk
+    CHECK (
+      (
+        type = 'bot'
+        AND "adminRequestedAt" IS NULL
+        AND "adminUnreadSince" IS NULL
+      )
+      OR (
+        type = 'admin'
+        AND (
+          (
+            status = 'closed'
+            AND "adminRequestedAt" IS NULL
+            AND "adminUnreadSince" IS NULL
+          )
+          OR (
+            status = 'open'
+            AND NOT (
+              "adminRequestedAt" IS NOT NULL
+              AND "adminUnreadSince" IS NOT NULL
+            )
+          )
+        )
+      )
+    );
 END $$;
 
 ----------------------------------------
@@ -186,3 +220,93 @@ BEGIN
     ADD CONSTRAINT products_stock_non_negative
     CHECK ("stock" >= 0);
 END $$;
+
+----------------------------------------
+-- CHAT_MESSAGES: sender consistency + content
+----------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chat_messages_sender_consistency_chk'
+  ) THEN
+    ALTER TABLE cartlify.chat_messages
+      DROP CONSTRAINT chat_messages_sender_consistency_chk;
+  END IF;
+
+  ALTER TABLE cartlify.chat_messages
+    ADD CONSTRAINT chat_messages_sender_consistency_chk
+    CHECK (
+      (
+        "senderType" IN ('user', 'admin')
+        AND "senderId" IS NOT NULL
+      )
+      OR (
+        "senderType" IN ('bot', 'guest')
+        AND "senderId" IS NULL
+      )
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'chat_messages_content_not_blank_chk'
+  ) THEN
+    ALTER TABLE cartlify.chat_messages
+      DROP CONSTRAINT chat_messages_content_not_blank_chk;
+  END IF;
+
+  ALTER TABLE cartlify.chat_messages
+    ADD CONSTRAINT chat_messages_content_not_blank_chk
+    CHECK (length(btrim(content)) > 0);
+END $$;
+
+----------------------------------------
+-- CHAT_THREADS: one open thread per actor
+----------------------------------------
+CREATE UNIQUE INDEX IF NOT EXISTS chat_threads_one_open_user_idx ON cartlify.chat_threads ("userId")
+WHERE
+  status = 'open'
+  AND "userId" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS chat_threads_one_open_guest_idx ON cartlify.chat_threads ("guestId")
+WHERE
+  status = 'open'
+  AND "guestId" IS NOT NULL;
+
+----------------------------------------
+-- CHAT_THREADS: admin queues
+----------------------------------------
+CREATE INDEX IF NOT EXISTS chat_threads_admin_waiting_queue_idx ON cartlify.chat_threads ("adminUnreadSince" ASC, "lastMessageAt" DESC)
+WHERE
+  status = 'open'
+  AND type = 'admin'
+  AND "adminUnreadSince" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS chat_threads_admin_active_queue_idx ON cartlify.chat_threads ("lastMessageAt" DESC)
+WHERE
+  status = 'open'
+  AND type = 'admin'
+  AND "adminRequestedAt" IS NULL
+  AND "adminUnreadSince" IS NULL;
+
+----------------------------------------
+-- CHAT_THREADS: admin previous closed threads
+----------------------------------------
+CREATE INDEX IF NOT EXISTS chat_threads_closed_admin_user_history_idx ON cartlify.chat_threads ("userId", "lastMessageAt" DESC)
+WHERE
+  status = 'closed'
+  AND type = 'admin'
+  AND "userId" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS chat_threads_closed_admin_guest_history_idx ON cartlify.chat_threads ("guestId", "lastMessageAt" DESC)
+WHERE
+  status = 'closed'
+  AND type = 'admin'
+  AND "guestId" IS NOT NULL;
+
+----------------------------------------
+-- CHAT_MESSAGES: history and read updates
+----------------------------------------
+CREATE INDEX IF NOT EXISTS chat_messages_thread_created_idx ON cartlify.chat_messages ("threadId", "createdAt" ASC);
+
+CREATE INDEX IF NOT EXISTS chat_messages_unread_by_thread_sender_idx ON cartlify.chat_messages ("threadId", "senderType")
+WHERE
+  "isRead" = false;

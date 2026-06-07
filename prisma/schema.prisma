@@ -364,8 +364,10 @@ model ChatThread {
   type   ChatType
   status ChatStatus @default(open)
 
-  lastMessageAt      DateTime @default(now())
-  unreadCount        Int      @default(0)
+  lastMessageAt      DateTime  @default(now())
+  unreadCount        Int       @default(0)
+  adminUnreadSince   DateTime?
+  adminRequestedAt   DateTime?
   lastMessagePreview String?
 
   createdAt DateTime @default(now())
@@ -375,6 +377,7 @@ model ChatThread {
 
   @@index([userId, status, type, lastMessageAt])
   @@index([guestId, status, type, lastMessageAt])
+  @@index([status, adminUnreadSince])
   @@map("chat_threads")
 }
 

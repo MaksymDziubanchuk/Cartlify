@@ -517,13 +517,16 @@ WITH
     )
   );
 
--- UPDATE (guest to user only)
+-- UPDATE (guest to user migration only)
 CREATE POLICY favorites_update ON cartlify.favorites
 FOR UPDATE
   USING (
-    cartlify.current_actor_role () IN ('USER', 'ADMIN', 'ROOT')
+    cartlify.current_actor_role () = 'USER'
     AND "userId" IS NULL
-    AND "guestId" IS NOT NULL
+    AND "guestId" = NULLIF(
+      current_setting('cartlify.migrating_guest_id', true),
+      ''
+    )::uuid
   )
 WITH
   CHECK (
@@ -531,12 +534,20 @@ WITH
     AND "guestId" IS NULL
   );
 
--- DELETE (owner only)
+-- DELETE (owner, guest owner, or guest migration conflict cleanup)
 CREATE POLICY favorites_delete ON cartlify.favorites FOR DELETE USING (
   cartlify.is_owner ("userId")
   OR (
     cartlify.current_actor_role () = 'GUEST'
     AND "guestId" = cartlify.current_guest_id ()
+  )
+  OR (
+    cartlify.current_actor_role () = 'USER'
+    AND "userId" IS NULL
+    AND "guestId" = NULLIF(
+      current_setting('cartlify.migrating_guest_id', true),
+      ''
+    )::uuid
   )
 );
 
@@ -870,7 +881,7 @@ WITH
     )
   );
 
--- UPDATE (owner or admin/root)
+-- UPDATE (owner, admin/root, guest owner, or guest to user migration)
 CREATE POLICY chat_threads_update ON cartlify.chat_threads
 FOR UPDATE
   USING (
@@ -880,9 +891,12 @@ FOR UPDATE
       AND "guestId" = cartlify.current_guest_id ()
     )
     OR (
-      cartlify.current_actor_role () IN ('USER', 'ADMIN', 'ROOT')
+      cartlify.current_actor_role () = 'USER'
       AND "userId" IS NULL
-      AND "guestId" IS NOT NULL
+      AND "guestId" = NULLIF(
+        current_setting('cartlify.migrating_guest_id', true),
+        ''
+      )::uuid
     )
   )
 WITH
@@ -893,7 +907,8 @@ WITH
       AND "guestId" = cartlify.current_guest_id ()
     )
     OR (
-      "userId" = cartlify.current_actor_id ()
+      cartlify.current_actor_role () = 'USER'
+      AND "userId" = cartlify.current_actor_id ()
       AND "guestId" IS NULL
     )
   );
@@ -960,12 +975,107 @@ WITH
     )
   );
 
--- UPDATE (deny for all)
+-- UPDATE (allowed readers can change only isRead)
 CREATE POLICY chat_messages_update ON cartlify.chat_messages
 FOR UPDATE
-  USING (false)
+  USING (
+    (
+      cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+      AND "senderType" IN ('user', 'guest')
+      AND EXISTS (
+        SELECT
+          1
+        FROM
+          cartlify.chat_threads t
+        WHERE
+          t.id = "threadId"
+          AND t.type = 'admin'
+      )
+    )
+    OR (
+      cartlify.current_actor_role () = 'USER'
+      AND "senderType" IN ('bot', 'admin')
+      AND EXISTS (
+        SELECT
+          1
+        FROM
+          cartlify.chat_threads t
+        WHERE
+          t.id = "threadId"
+          AND t."userId" = cartlify.current_actor_id ()
+      )
+    )
+    OR (
+      cartlify.current_actor_role () = 'GUEST'
+      AND "senderType" = 'bot'
+      AND EXISTS (
+        SELECT
+          1
+        FROM
+          cartlify.chat_threads t
+        WHERE
+          t.id = "threadId"
+          AND t.type = 'bot'
+          AND t."guestId" = cartlify.current_guest_id ()
+      )
+    )
+  )
 WITH
-  CHECK (false);
+  CHECK (
+    "isRead" = true
+    AND (
+      (to_jsonb(chat_messages) - 'isRead') = (
+        SELECT
+          to_jsonb(m) - 'isRead'
+        FROM
+          cartlify.chat_messages m
+        WHERE
+          m.id = chat_messages.id
+      )
+    )
+    AND (
+      (
+        cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+        AND "senderType" IN ('user', 'guest')
+        AND EXISTS (
+          SELECT
+            1
+          FROM
+            cartlify.chat_threads t
+          WHERE
+            t.id = "threadId"
+            AND t.type = 'admin'
+        )
+      )
+      OR (
+        cartlify.current_actor_role () = 'USER'
+        AND "senderType" IN ('bot', 'admin')
+        AND EXISTS (
+          SELECT
+            1
+          FROM
+            cartlify.chat_threads t
+          WHERE
+            t.id = "threadId"
+            AND t."userId" = cartlify.current_actor_id ()
+        )
+      )
+      OR (
+        cartlify.current_actor_role () = 'GUEST'
+        AND "senderType" = 'bot'
+        AND EXISTS (
+          SELECT
+            1
+          FROM
+            cartlify.chat_threads t
+          WHERE
+            t.id = "threadId"
+            AND t.type = 'bot'
+            AND t."guestId" = cartlify.current_guest_id ()
+        )
+      )
+    )
+  );
 
 -- DELETE (deny for all)
 CREATE POLICY chat_messages_delete ON cartlify.chat_messages FOR DELETE USING (false);

@@ -1,4 +1,5 @@
 import fastify from 'fastify';
+import websocket from '@fastify/websocket';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -122,6 +123,8 @@ for (const schema of [
 
 // normalize errors to json
 errorNormalizer(app);
+
+await app.register(websocket);
 
 // register api routes
 await registerRoutes(app);
