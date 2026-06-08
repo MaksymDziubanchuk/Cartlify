@@ -66,6 +66,12 @@ const GUEST_ADMIN_REQUIRED_MESSAGE =
 const USER_ADMIN_TRANSFER_MESSAGE =
     'I will transfer this chat to an admin. The bot will stop replying in this thread now.';
 
+const LOOP_ASSISTANCE_MESSAGES = [
+    'I may be repeating myself. Could you clarify what exactly you want to know, or do you want admin support?',
+    'I want to avoid giving you the same answer again. Please rephrase the question, or tell me if you want admin support.',
+    'It looks like we may be stuck on the same topic. I can try again with more details, or you can ask for admin support.',
+] as const;
+
 const PRODUCT_CONTEXT_LIMIT = 6;
 const HISTORY_LIMIT = 12;
 
@@ -379,8 +385,11 @@ const generateAiBotText = async (
         });
 
         return result.text;
-    } catch {
+    } catch (error) {
         // keeps customer chat working even when AI provider fails
+        console.error('AI_BOT_ERROR');
+        console.dir(error, { depth: 10 });
+
         return generateFallbackBotText();
     }
 };
@@ -392,6 +401,19 @@ const buildEscalationBotText = (actorRole: ChatBotActorRole): string => {
     }
 
     return USER_ADMIN_TRANSFER_MESSAGE;
+};
+
+// rotates loop replies so the bot does not repeat the same escalation text
+const buildLoopAssistanceBotText = (
+    history: ChatBotHistoryMessageDto[],
+): string => {
+    const customerMessagesCount = history.filter((message) => {
+        return message.senderType !== 'bot';
+    }).length;
+
+    const messageIndex = customerMessagesCount % LOOP_ASSISTANCE_MESSAGES.length;
+
+    return LOOP_ASSISTANCE_MESSAGES[messageIndex];
 };
 
 // evaluates direct escalation before spending an AI request
@@ -552,20 +574,26 @@ export const handleChatBotTurn = async (
             context.history,
         );
 
-        // skips AI when escalation is already obvious
-        const aiText = preAiEscalation.shouldEscalate
-            ? buildEscalationBotText(actorRole)
-            : await generateAiBotText(context, actorRole, dto.userMessage);
+        // skips AI only for deterministic admin or loop responses
+        const aiText =
+            preAiEscalation.reason === 'LOOP_DETECTED'
+                ? buildLoopAssistanceBotText(context.history)
+                : preAiEscalation.shouldEscalate
+                    ? buildEscalationBotText(actorRole)
+                    : await generateAiBotText(context, actorRole, dto.userMessage);
 
         // checks whether AI answer itself says that human/admin help is needed
         const finalEscalation = preAiEscalation.shouldEscalate
             ? preAiEscalation
             : evaluatePostAiEscalation(dto.userMessage, aiText, context.history);
 
-        // replaces AI text with deterministic transfer/login text when escalation is needed
-        const finalBotText = finalEscalation.shouldEscalate
-            ? buildEscalationBotText(actorRole)
-            : aiText;
+        // keeps loop assistance text instead of forcing admin escalation text
+        const finalBotText =
+            finalEscalation.reason === 'LOOP_DETECTED'
+                ? aiText
+                : finalEscalation.shouldEscalate
+                    ? buildEscalationBotText(actorRole)
+                    : aiText;
 
         // saves final bot message and updates thread metadata
         const writeResult = await createBotMessage({
@@ -584,12 +612,16 @@ export const handleChatBotTurn = async (
             };
         }
 
-        // switches only logged-in users to admin mode
+        // requests admin only for real escalation reasons, not for loop assistance
+        const shouldRequestAdmin =
+            finalEscalation.shouldEscalate &&
+            finalEscalation.reason !== 'LOOP_DETECTED';
+
         const adminThread = await requestAdminIfNeeded({
             actorId: dto.actorId,
             actorRole,
             threadId: dto.threadId,
-            shouldEscalate: finalEscalation.shouldEscalate,
+            shouldEscalate: shouldRequestAdmin,
         });
 
         // returns final thread state and created bot message
@@ -599,6 +631,19 @@ export const handleChatBotTurn = async (
             adminPending: Boolean(adminThread),
         };
     } catch (err) {
+
+        console.error('CHAT_MESSAGE_SEND_ERROR');
+        console.dir(
+            {
+                isAppError: isAppError(err),
+                isRetryableTxError: isRetryableTxError(err),
+                name: err instanceof Error ? err.name : typeof err,
+                message: err instanceof Error ? err.message : String(err),
+                error: err,
+            },
+            { depth: 10 },
+        );
+
         // preserves known application errors
         if (isAppError(err)) {
             throw err;
