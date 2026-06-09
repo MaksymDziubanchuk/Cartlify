@@ -1024,16 +1024,6 @@ WITH
   CHECK (
     "isRead" = true
     AND (
-      (to_jsonb(chat_messages) - 'isRead') = (
-        SELECT
-          to_jsonb(m) - 'isRead'
-        FROM
-          cartlify.chat_messages m
-        WHERE
-          m.id = chat_messages.id
-      )
-    )
-    AND (
       (
         cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
         AND "senderType" IN ('user', 'guest')
