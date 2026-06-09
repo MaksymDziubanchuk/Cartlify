@@ -61,7 +61,6 @@ export async function register({
       `;
 
       // switch to user db context
-      await setUserContext(tx, { userId: id, role: 'USER' });
       await migrateGuestDataToUser(tx, guestId, id);
 
       // store verify email token

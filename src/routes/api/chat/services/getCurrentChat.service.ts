@@ -25,6 +25,16 @@ function toUserId(actorId: string | number): number {
     return id;
 }
 
+const CHAT_WELCOME_MESSAGE =
+    'Hi! I am Cartlify assistant. I can help you find products, answer store questions, or connect you with an admin if needed. How can I help?';
+
+const CHAT_MESSAGE_PREVIEW_LIMIT = 120;
+
+// builds short thread preview from message content
+function buildChatMessagePreview(content: string): string {
+    return content.slice(0, CHAT_MESSAGE_PREVIEW_LIMIT);
+}
+
 export async function getCurrentChatService({
     actorId,
     actorRole,
@@ -63,22 +73,45 @@ export async function getCurrentChatService({
             });
 
             // create initial bot thread
+            // create initial bot thread with welcome message
             if (!thread) {
+                const threadId = randomUUID();
+                const welcomeCreatedAt = new Date();
+
                 thread = await tx.chatThread.create({
                     data:
                         actorRole === 'GUEST'
                             ? {
-                                id: randomUUID(),
+                                id: threadId,
                                 guestId: String(actorId),
                                 type: 'bot',
                                 status: 'open',
+                                lastMessageAt: welcomeCreatedAt,
+                                lastMessagePreview: buildChatMessagePreview(
+                                    CHAT_WELCOME_MESSAGE,
+                                ),
                             }
                             : {
-                                id: randomUUID(),
+                                id: threadId,
                                 userId: toUserId(actorId),
                                 type: 'bot',
                                 status: 'open',
+                                lastMessageAt: welcomeCreatedAt,
+                                lastMessagePreview: buildChatMessagePreview(
+                                    CHAT_WELCOME_MESSAGE,
+                                ),
                             },
+                });
+
+                await tx.chatMessage.create({
+                    data: {
+                        threadId: thread.id,
+                        senderId: null,
+                        senderType: 'bot',
+                        content: CHAT_WELCOME_MESSAGE,
+                        isRead: true,
+                        createdAt: welcomeCreatedAt,
+                    },
                 });
             }
 

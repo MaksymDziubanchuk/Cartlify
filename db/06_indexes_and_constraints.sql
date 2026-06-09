@@ -97,31 +97,31 @@ BEGIN
   END IF;
 
   ALTER TABLE cartlify.chat_threads
-    ADD CONSTRAINT chat_threads_admin_state_chk
-    CHECK (
-      (
-        type = 'bot'
-        AND "adminRequestedAt" IS NULL
-        AND "adminUnreadSince" IS NULL
-      )
-      OR (
-        type = 'admin'
-        AND (
-          (
-            status = 'closed'
-            AND "adminRequestedAt" IS NULL
-            AND "adminUnreadSince" IS NULL
-          )
-          OR (
-            status = 'open'
-            AND NOT (
-              "adminRequestedAt" IS NOT NULL
-              AND "adminUnreadSince" IS NOT NULL
-            )
+  ADD CONSTRAINT chat_threads_admin_state_chk
+  CHECK (
+    (
+      type = 'bot'
+      AND "adminRequestedAt" IS NULL
+      AND "adminUnreadSince" IS NULL
+    )
+    OR (
+      type = 'admin'
+      AND (
+        (
+          status = 'closed'
+          AND "adminRequestedAt" IS NULL
+          AND "adminUnreadSince" IS NULL
+        )
+        OR (
+          status = 'open'
+          AND (
+            "adminRequestedAt" IS NOT NULL
+            OR "adminUnreadSince" IS NOT NULL
           )
         )
       )
-    );
+    )
+  );
 END $$;
 
 ----------------------------------------
@@ -274,18 +274,23 @@ WHERE
 ----------------------------------------
 -- CHAT_THREADS: admin queues
 ----------------------------------------
-CREATE INDEX IF NOT EXISTS chat_threads_admin_waiting_queue_idx ON cartlify.chat_threads ("adminUnreadSince" ASC, "lastMessageAt" DESC)
+DROP INDEX IF EXISTS cartlify.chat_threads_admin_waiting_queue_idx;
+
+DROP INDEX IF EXISTS cartlify.chat_threads_admin_active_queue_idx;
+
+CREATE INDEX chat_threads_admin_waiting_queue_idx ON cartlify.chat_threads ("adminRequestedAt" ASC, "lastMessageAt" DESC)
 WHERE
   status = 'open'
   AND type = 'admin'
+  AND "adminRequestedAt" IS NOT NULL
   AND "adminUnreadSince" IS NOT NULL;
 
-CREATE INDEX IF NOT EXISTS chat_threads_admin_active_queue_idx ON cartlify.chat_threads ("lastMessageAt" DESC)
+CREATE INDEX chat_threads_admin_active_queue_idx ON cartlify.chat_threads ("adminUnreadSince" DESC, "lastMessageAt" DESC)
 WHERE
   status = 'open'
   AND type = 'admin'
   AND "adminRequestedAt" IS NULL
-  AND "adminUnreadSince" IS NULL;
+  AND "adminUnreadSince" IS NOT NULL;
 
 ----------------------------------------
 -- CHAT_THREADS: admin previous closed threads

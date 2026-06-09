@@ -64,7 +64,7 @@ const GUEST_ADMIN_REQUIRED_MESSAGE =
     'To contact an admin, please log in or create an account first. After that, I will be able to transfer your chat to an admin.';
 
 const USER_ADMIN_TRANSFER_MESSAGE =
-    'I will transfer this chat to an admin. The bot will stop replying in this thread now.';
+    'Please describe your issue for the admin. An admin will be able to reply here later. The bot will stop replying in this thread now.';
 
 interface GenerateLanguageMatchedBotTextDto {
     userMessage: string;
@@ -462,7 +462,7 @@ const generateEscalationBotText = async (
         userMessage,
         fallbackText: USER_ADMIN_TRANSFER_MESSAGE,
         responseMeaning:
-            'Tell the customer that this chat will be transferred to an admin and the bot will stop replying in this thread.',
+            'Tell the customer to describe their issue for the admin. Explain that an admin will be able to reply in this chat later. Also mention that the bot will stop replying in this thread now.',
     });
 };
 

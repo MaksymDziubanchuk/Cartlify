@@ -156,6 +156,11 @@ async function createChatMessage({
             // resolves message sender type after access checks
             const senderType = getSenderType(actorRole);
 
+            // marks customer messages to bot as read immediately because bot processes them right away
+            const isReadByRecipient =
+                lockedThread.type === 'bot' &&
+                (senderType === 'guest' || senderType === 'user');
+
             // prevents admins from writing into bot-only threads
             if (senderType === 'admin' && lockedThread.type !== 'admin') {
                 throw new ConflictError('CHAT_THREAD_NOT_ESCALATED');
@@ -178,6 +183,7 @@ async function createChatMessage({
                             : null,
                     senderType,
                     content: normalizedContent,
+                    isRead: isReadByRecipient,
                 },
             });
 
@@ -216,15 +222,12 @@ async function createChatMessage({
 
                     ...(adminRequested && {
                         unreadCount: { increment: 1 },
-                        adminRequestedAt: null,
-                        adminUnreadSince:
-                            lockedThread.adminUnreadSince ?? message.createdAt,
+                        adminUnreadSince: message.createdAt,
                     }),
 
                     ...(adminAnswered && {
                         unreadCount: 0,
                         adminRequestedAt: null,
-                        adminUnreadSince: null,
                     }),
                 },
             });
@@ -313,6 +316,18 @@ export async function sendChatMessageService({
             result,
         });
     } catch (err) {
+        console.error('CHAT_MESSAGE_SEND_ERROR');
+        console.dir(
+            {
+                isAppError: isAppError(err),
+                isRetryableTxError: isRetryableTxError(err),
+                name: err instanceof Error ? err.name : typeof err,
+                message: err instanceof Error ? err.message : String(err),
+                error: err,
+            },
+            { depth: 10 },
+        );
+
         // preserves known application errors
         if (isAppError(err)) throw err;
 
