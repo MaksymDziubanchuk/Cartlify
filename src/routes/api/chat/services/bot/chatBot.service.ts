@@ -66,6 +66,49 @@ const GUEST_ADMIN_REQUIRED_MESSAGE =
 const USER_ADMIN_TRANSFER_MESSAGE =
     'I will transfer this chat to an admin. The bot will stop replying in this thread now.';
 
+interface GenerateLanguageMatchedBotTextDto {
+    userMessage: string;
+    fallbackText: string;
+    responseMeaning: string;
+}
+
+// generates a fixed-purpose bot response in the language of the latest customer message
+const generateLanguageMatchedBotText = async ({
+    userMessage,
+    fallbackText,
+    responseMeaning,
+}: GenerateLanguageMatchedBotTextDto): Promise<string> => {
+    try {
+        const result = await aiClientService.generateText({
+            instructions: [
+                'You are Cartlify assistant.',
+                'Write the response in the same natural language as the latest customer message.',
+                'Use the latest customer message only to detect the response language.',
+                'Do not answer the customer question directly.',
+                'Do not add facts, promises, policies, or actions that are not included in the response meaning.',
+                'Keep the response concise and natural.',
+            ].join('\n'),
+            messages: [
+                {
+                    role: 'developer',
+                    content: `response_meaning: ${responseMeaning}`,
+                },
+                {
+                    role: 'user',
+                    content: `latest_customer_message: ${userMessage.trim()}`,
+                },
+            ],
+            options: {
+                maxOutputTokens: 120,
+            },
+        });
+
+        return result.text;
+    } catch {
+        return fallbackText;
+    }
+};
+
 const LOOP_ASSISTANCE_MESSAGES = [
     'I may be repeating myself. Could you clarify what exactly you want to know, or do you want admin support?',
     'I want to avoid giving you the same answer again. Please rephrase the question, or tell me if you want admin support.',
@@ -358,9 +401,16 @@ const loadChatBotContext = async ({
     });
 };
 
-// returns deterministic text when OpenAI cannot be used safely
-const generateFallbackBotText = (): string => {
-    return BOT_FALLBACK_MESSAGE;
+// generates fallback text in the customer's latest language when AI answer fails
+const generateFallbackBotText = async (
+    userMessage: string,
+): Promise<string> => {
+    return generateLanguageMatchedBotText({
+        userMessage,
+        fallbackText: BOT_FALLBACK_MESSAGE,
+        responseMeaning:
+            'Tell the customer that the assistant cannot answer reliably right now. Ask them to try again later or ask for admin support.',
+    });
 };
 
 // calls AI client and protects chat flow from provider failures
@@ -390,30 +440,42 @@ const generateAiBotText = async (
         console.error('AI_BOT_ERROR');
         console.dir(error, { depth: 10 });
 
-        return generateFallbackBotText();
+        return generateFallbackBotText(userMessage);
     }
 };
 
-// builds deterministic escalation response based on customer role
-const buildEscalationBotText = (actorRole: ChatBotActorRole): string => {
+// generates admin-related response in the customer's latest language
+const generateEscalationBotText = async (
+    actorRole: ChatBotActorRole,
+    userMessage: string,
+): Promise<string> => {
     if (actorRole === 'GUEST') {
-        return GUEST_ADMIN_REQUIRED_MESSAGE;
+        return generateLanguageMatchedBotText({
+            userMessage,
+            fallbackText: GUEST_ADMIN_REQUIRED_MESSAGE,
+            responseMeaning:
+                'Tell the customer that to contact an admin, they need to log in or create an account first. After that, the chat can be transferred to an admin.',
+        });
     }
 
-    return USER_ADMIN_TRANSFER_MESSAGE;
+    return generateLanguageMatchedBotText({
+        userMessage,
+        fallbackText: USER_ADMIN_TRANSFER_MESSAGE,
+        responseMeaning:
+            'Tell the customer that this chat will be transferred to an admin and the bot will stop replying in this thread.',
+    });
 };
 
-// rotates loop replies so the bot does not repeat the same escalation text
-const buildLoopAssistanceBotText = (
-    history: ChatBotHistoryMessageDto[],
-): string => {
-    const customerMessagesCount = history.filter((message) => {
-        return message.senderType !== 'bot';
-    }).length;
-
-    const messageIndex = customerMessagesCount % LOOP_ASSISTANCE_MESSAGES.length;
-
-    return LOOP_ASSISTANCE_MESSAGES[messageIndex];
+// generates loop-assistance response in the customer's latest language
+const generateLoopAssistanceBotText = async (
+    userMessage: string,
+): Promise<string> => {
+    return generateLanguageMatchedBotText({
+        userMessage,
+        fallbackText: LOOP_ASSISTANCE_MESSAGES[0],
+        responseMeaning:
+            'Tell the customer that the conversation may be repeating. Ask them to clarify what exactly they want to know, or ask whether they want admin support. Do not say that admin support is required.',
+    });
 };
 
 // evaluates direct escalation before spending an AI request
@@ -577,9 +639,9 @@ export const handleChatBotTurn = async (
         // skips AI only for deterministic admin or loop responses
         const aiText =
             preAiEscalation.reason === 'LOOP_DETECTED'
-                ? buildLoopAssistanceBotText(context.history)
+                ? await generateLoopAssistanceBotText(dto.userMessage)
                 : preAiEscalation.shouldEscalate
-                    ? buildEscalationBotText(actorRole)
+                    ? await generateEscalationBotText(actorRole, dto.userMessage)
                     : await generateAiBotText(context, actorRole, dto.userMessage);
 
         // checks whether AI answer itself says that human/admin help is needed
@@ -592,7 +654,7 @@ export const handleChatBotTurn = async (
             finalEscalation.reason === 'LOOP_DETECTED'
                 ? aiText
                 : finalEscalation.shouldEscalate
-                    ? buildEscalationBotText(actorRole)
+                    ? await generateEscalationBotText(actorRole, dto.userMessage)
                     : aiText;
 
         // saves final bot message and updates thread metadata
