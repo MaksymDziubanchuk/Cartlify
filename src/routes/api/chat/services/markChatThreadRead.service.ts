@@ -140,7 +140,7 @@ export async function markChatThreadReadService({
                     },
                 });
 
-                // clear admin unread queue state only when admin reads
+                // move requested admin thread to active queue when admin reads it
                 if (shouldClearAdminUnreadState) {
                     const thread = await db.chatThread.update({
                         where: {
@@ -148,7 +148,7 @@ export async function markChatThreadReadService({
                         },
                         data: {
                             unreadCount: 0,
-                            adminUnreadSince: null,
+                            adminRequestedAt: null,
                         },
                     });
 

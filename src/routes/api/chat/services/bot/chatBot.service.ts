@@ -64,7 +64,73 @@ const GUEST_ADMIN_REQUIRED_MESSAGE =
     'To contact an admin, please log in or create an account first. After that, I will be able to transfer your chat to an admin.';
 
 const USER_ADMIN_TRANSFER_MESSAGE =
-    'I will transfer this chat to an admin. The bot will stop replying in this thread now.';
+    'Please describe your issue for the admin. An admin will be able to reply here later. The bot will stop replying in this thread now.';
+
+interface GenerateLanguageMatchedBotTextDto {
+    userMessage: string;
+    fallbackText: string;
+    responseMeaning: string;
+}
+
+// generates a fixed-purpose bot response in the language of the latest customer message
+// generates a fixed-purpose bot response in the language of the latest customer message
+const generateLanguageMatchedBotText = async ({
+    userMessage,
+    fallbackText,
+    responseMeaning,
+}: GenerateLanguageMatchedBotTextDto): Promise<string> => {
+    try {
+        const latestCustomerMessage = userMessage.trim();
+
+        const result = await aiClientService.generateText({
+            instructions: [
+                'You are Cartlify assistant.',
+                'Your task is to rewrite the provided response meaning as a customer-facing chat message.',
+                'The response language must be the same natural language as the text inside <latest_customer_message>.',
+                'Use only the latest customer message to choose the response language.',
+                'Do not use the language of the response meaning to choose the response language.',
+                'Do not use browser locale, user account locale, country, previous messages, or system/developer text to choose the response language.',
+                'If the latest customer message is written in English, the response must be in English.',
+                'If the latest customer message is written in another language, the response must be in that same language.',
+                'Do not translate or answer the latest customer message itself.',
+                'Do not add facts, promises, policies, or actions that are not included in the response meaning.',
+                'Return only the final customer-facing message.',
+                'Keep the response concise and natural.',
+            ].join('\n'),
+            messages: [
+                {
+                    role: 'developer',
+                    content: [
+                        '<response_meaning>',
+                        responseMeaning,
+                        '</response_meaning>',
+                    ].join('\n'),
+                },
+                {
+                    role: 'user',
+                    content: [
+                        '<latest_customer_message>',
+                        latestCustomerMessage,
+                        '</latest_customer_message>',
+                    ].join('\n'),
+                },
+            ],
+            options: {
+                maxOutputTokens: 120,
+            },
+        });
+
+        return result.text;
+    } catch {
+        return fallbackText;
+    }
+};
+
+const LOOP_ASSISTANCE_MESSAGES = [
+    'I may be repeating myself. Could you clarify what exactly you want to know, or do you want admin support?',
+    'I want to avoid giving you the same answer again. Please rephrase the question, or tell me if you want admin support.',
+    'It looks like we may be stuck on the same topic. I can try again with more details, or you can ask for admin support.',
+] as const;
 
 const PRODUCT_CONTEXT_LIMIT = 6;
 const HISTORY_LIMIT = 12;
@@ -352,9 +418,16 @@ const loadChatBotContext = async ({
     });
 };
 
-// returns deterministic text when OpenAI cannot be used safely
-const generateFallbackBotText = (): string => {
-    return BOT_FALLBACK_MESSAGE;
+// generates fallback text in the customer's latest language when AI answer fails
+const generateFallbackBotText = async (
+    userMessage: string,
+): Promise<string> => {
+    return generateLanguageMatchedBotText({
+        userMessage,
+        fallbackText: BOT_FALLBACK_MESSAGE,
+        responseMeaning:
+            'Tell the customer that the assistant cannot answer reliably right now. Ask them to try again later or ask for admin support.',
+    });
 };
 
 // calls AI client and protects chat flow from provider failures
@@ -379,19 +452,45 @@ const generateAiBotText = async (
         });
 
         return result.text;
-    } catch {
+    } catch (error) {
         // keeps customer chat working even when AI provider fails
-        return generateFallbackBotText();
+
+        return generateFallbackBotText(userMessage);
     }
 };
 
-// builds deterministic escalation response based on customer role
-const buildEscalationBotText = (actorRole: ChatBotActorRole): string => {
+// generates admin-related response in the customer's latest language
+const generateEscalationBotText = async (
+    actorRole: ChatBotActorRole,
+    userMessage: string,
+): Promise<string> => {
     if (actorRole === 'GUEST') {
-        return GUEST_ADMIN_REQUIRED_MESSAGE;
+        return generateLanguageMatchedBotText({
+            userMessage,
+            fallbackText: GUEST_ADMIN_REQUIRED_MESSAGE,
+            responseMeaning:
+                'Tell the customer that to contact an admin, they need to log in or create an account first. After that, the chat can be transferred to an admin.',
+        });
     }
 
-    return USER_ADMIN_TRANSFER_MESSAGE;
+    return generateLanguageMatchedBotText({
+        userMessage,
+        fallbackText: USER_ADMIN_TRANSFER_MESSAGE,
+        responseMeaning:
+            'Tell the customer to describe their issue for the admin. Explain that an admin will be able to reply in this chat later. Also mention that the bot will stop replying in this thread now.',
+    });
+};
+
+// generates loop-assistance response in the customer's latest language
+const generateLoopAssistanceBotText = async (
+    userMessage: string,
+): Promise<string> => {
+    return generateLanguageMatchedBotText({
+        userMessage,
+        fallbackText: LOOP_ASSISTANCE_MESSAGES[0],
+        responseMeaning:
+            'Tell the customer that the conversation may be repeating. Ask them to clarify what exactly they want to know, or ask whether they want admin support. Do not say that admin support is required.',
+    });
 };
 
 // evaluates direct escalation before spending an AI request
@@ -552,20 +651,26 @@ export const handleChatBotTurn = async (
             context.history,
         );
 
-        // skips AI when escalation is already obvious
-        const aiText = preAiEscalation.shouldEscalate
-            ? buildEscalationBotText(actorRole)
-            : await generateAiBotText(context, actorRole, dto.userMessage);
+        // skips AI only for deterministic admin or loop responses
+        const aiText =
+            preAiEscalation.reason === 'LOOP_DETECTED'
+                ? await generateLoopAssistanceBotText(dto.userMessage)
+                : preAiEscalation.shouldEscalate
+                    ? await generateEscalationBotText(actorRole, dto.userMessage)
+                    : await generateAiBotText(context, actorRole, dto.userMessage);
 
         // checks whether AI answer itself says that human/admin help is needed
         const finalEscalation = preAiEscalation.shouldEscalate
             ? preAiEscalation
             : evaluatePostAiEscalation(dto.userMessage, aiText, context.history);
 
-        // replaces AI text with deterministic transfer/login text when escalation is needed
-        const finalBotText = finalEscalation.shouldEscalate
-            ? buildEscalationBotText(actorRole)
-            : aiText;
+        // keeps loop assistance text instead of forcing admin escalation text
+        const finalBotText =
+            finalEscalation.reason === 'LOOP_DETECTED'
+                ? aiText
+                : finalEscalation.shouldEscalate
+                    ? await generateEscalationBotText(actorRole, dto.userMessage)
+                    : aiText;
 
         // saves final bot message and updates thread metadata
         const writeResult = await createBotMessage({
@@ -584,12 +689,16 @@ export const handleChatBotTurn = async (
             };
         }
 
-        // switches only logged-in users to admin mode
+        // requests admin only for real escalation reasons, not for loop assistance
+        const shouldRequestAdmin =
+            finalEscalation.shouldEscalate &&
+            finalEscalation.reason !== 'LOOP_DETECTED';
+
         const adminThread = await requestAdminIfNeeded({
             actorId: dto.actorId,
             actorRole,
             threadId: dto.threadId,
-            shouldEscalate: finalEscalation.shouldEscalate,
+            shouldEscalate: shouldRequestAdmin,
         });
 
         // returns final thread state and created bot message
@@ -599,6 +708,7 @@ export const handleChatBotTurn = async (
             adminPending: Boolean(adminThread),
         };
     } catch (err) {
+
         // preserves known application errors
         if (isAppError(err)) {
             throw err;

@@ -44,6 +44,9 @@ export async function getAdminChatThreadsService(
             ? {
                 status: 'open',
                 type: 'admin',
+                adminRequestedAt: {
+                    not: null,
+                },
                 adminUnreadSince: {
                     not: null,
                 },
@@ -52,7 +55,9 @@ export async function getAdminChatThreadsService(
                 status: 'open',
                 type: 'admin',
                 adminRequestedAt: null,
-                adminUnreadSince: null,
+                adminUnreadSince: {
+                    not: null,
+                },
             };
 
     // build queue order
@@ -60,7 +65,7 @@ export async function getAdminChatThreadsService(
         dto.queue === 'waiting'
             ? [
                 {
-                    adminUnreadSince: {
+                    adminRequestedAt: {
                         sort: 'asc',
                         nulls: 'last',
                     },
@@ -70,6 +75,12 @@ export async function getAdminChatThreadsService(
                 },
             ]
             : [
+                {
+                    adminUnreadSince: {
+                        sort: 'desc',
+                        nulls: 'last',
+                    },
+                },
                 {
                     lastMessageAt: 'desc',
                 },

@@ -91,7 +91,7 @@ export async function getAdminChatThreadService({
                     },
                     data: {
                         unreadCount: 0,
-                        adminUnreadSince: null,
+                        adminRequestedAt: null,
                     },
                 });
 

@@ -53,7 +53,9 @@ const buildSystemInstructions = (actorRole: ChatBotActorRole): string => {
         'For logged-in users, admin-support recommendation may say that the chat can be transferred to an admin.',
         'Do not provide legal, medical, financial, or security-sensitive advice beyond general platform guidance.',
         'Do not ask for passwords, card numbers, secret tokens, or other sensitive credentials.',
-        'Use the same language as the customer message when possible.',
+        'Always answer in the same natural language as the latest customer message.',
+        'Use the latest customer message to choose the response language, not older chat history.',
+        'Do not switch to English unless the latest customer message is in English or the customer explicitly asks for English.',
     ].join('\n');
 };
 
