@@ -80,7 +80,6 @@ export async function login({
       }
 
       // switch to user db context
-      await setUserContext(tx, { userId: u.id, role: u.role });
 
       await migrateGuestDataToUser(tx, guestId, u.id);
 
