@@ -73,29 +73,46 @@ interface GenerateLanguageMatchedBotTextDto {
 }
 
 // generates a fixed-purpose bot response in the language of the latest customer message
+// generates a fixed-purpose bot response in the language of the latest customer message
 const generateLanguageMatchedBotText = async ({
     userMessage,
     fallbackText,
     responseMeaning,
 }: GenerateLanguageMatchedBotTextDto): Promise<string> => {
     try {
+        const latestCustomerMessage = userMessage.trim();
+
         const result = await aiClientService.generateText({
             instructions: [
                 'You are Cartlify assistant.',
-                'Write the response in the same natural language as the latest customer message.',
-                'Use the latest customer message only to detect the response language.',
-                'Do not answer the customer question directly.',
+                'Your task is to rewrite the provided response meaning as a customer-facing chat message.',
+                'The response language must be the same natural language as the text inside <latest_customer_message>.',
+                'Use only the latest customer message to choose the response language.',
+                'Do not use the language of the response meaning to choose the response language.',
+                'Do not use browser locale, user account locale, country, previous messages, or system/developer text to choose the response language.',
+                'If the latest customer message is written in English, the response must be in English.',
+                'If the latest customer message is written in another language, the response must be in that same language.',
+                'Do not translate or answer the latest customer message itself.',
                 'Do not add facts, promises, policies, or actions that are not included in the response meaning.',
+                'Return only the final customer-facing message.',
                 'Keep the response concise and natural.',
             ].join('\n'),
             messages: [
                 {
                     role: 'developer',
-                    content: `response_meaning: ${responseMeaning}`,
+                    content: [
+                        '<response_meaning>',
+                        responseMeaning,
+                        '</response_meaning>',
+                    ].join('\n'),
                 },
                 {
                     role: 'user',
-                    content: `latest_customer_message: ${userMessage.trim()}`,
+                    content: [
+                        '<latest_customer_message>',
+                        latestCustomerMessage,
+                        '</latest_customer_message>',
+                    ].join('\n'),
                 },
             ],
             options: {
@@ -437,8 +454,6 @@ const generateAiBotText = async (
         return result.text;
     } catch (error) {
         // keeps customer chat working even when AI provider fails
-        console.error('AI_BOT_ERROR');
-        console.dir(error, { depth: 10 });
 
         return generateFallbackBotText(userMessage);
     }
@@ -693,18 +708,6 @@ export const handleChatBotTurn = async (
             adminPending: Boolean(adminThread),
         };
     } catch (err) {
-
-        console.error('CHAT_MESSAGE_SEND_ERROR');
-        console.dir(
-            {
-                isAppError: isAppError(err),
-                isRetryableTxError: isRetryableTxError(err),
-                name: err instanceof Error ? err.name : typeof err,
-                message: err instanceof Error ? err.message : String(err),
-                error: err,
-            },
-            { depth: 10 },
-        );
 
         // preserves known application errors
         if (isAppError(err)) {

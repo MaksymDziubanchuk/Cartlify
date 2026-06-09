@@ -316,18 +316,6 @@ export async function sendChatMessageService({
             result,
         });
     } catch (err) {
-        console.error('CHAT_MESSAGE_SEND_ERROR');
-        console.dir(
-            {
-                isAppError: isAppError(err),
-                isRetryableTxError: isRetryableTxError(err),
-                name: err instanceof Error ? err.name : typeof err,
-                message: err instanceof Error ? err.message : String(err),
-                error: err,
-            },
-            { depth: 10 },
-        );
-
         // preserves known application errors
         if (isAppError(err)) throw err;
 

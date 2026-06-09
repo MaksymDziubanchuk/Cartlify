@@ -2,9 +2,9 @@
 
 Backend-first e-commerce platform built as a production-oriented portfolio project.
 
-Cartlify is not presented as a finished storefront. It is a realistic engineering project focused on how a commercial e-commerce backend is structured: authentication, RBAC, catalog management, order flow, PostgreSQL policies, background jobs, and maintainable module boundaries.
+Cartlify is not presented as a finished storefront. It is a realistic engineering project focused on how a commercial e-commerce backend is structured: authentication, RBAC, catalog management, order flow, PostgreSQL policies, background jobs, real-time support chat, AI-assisted customer support, and maintainable module boundaries.
 
-The repository currently contains a working REST API foundation, PostgreSQL hardening scripts, Redis-based order timeout processing, and integrations for media/email/OAuth. Some parts of the roadmap are already implemented, some are partially scaffolded, and some are planned for the next stages.
+The repository currently contains a working REST API foundation, PostgreSQL hardening scripts, Redis-based order timeout processing, OAuth/media/email integrations, WebSocket-based chat, and an OpenAI-powered assistant for product and support conversations. Some parts of the roadmap are already implemented, some are partially scaffolded, and some are planned for the next stages.
 
 ---
 
@@ -20,6 +20,7 @@ The repository currently contains a working REST API foundation, PostgreSQL hard
 - [Local Setup](#local-setup)
 - [Run Commands](#run-commands)
 - [API Surface](#api-surface)
+- [Realtime Chat / AI Bot](#realtime-chat--ai-bot)
 - [Production Notes](#production-notes)
 
 ---
@@ -33,7 +34,9 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 - PostgreSQL-first design with custom SQL layer, RLS, functions, views, and indexes
 - role-based access control for `GUEST`, `USER`, `ADMIN`, and `ROOT`
 - consistent order flow with background timeout handling
-- API design that can later support SSR, GraphQL, and real-time features
+- real-time support chat with guest/user/admin flows
+- AI-assisted product and support conversations with fallback behavior
+- API design that can later support SSR, GraphQL, and additional real-time features
 
 ---
 
@@ -48,13 +51,16 @@ What this repo already shows well:
 - authentication and authorization flows beyond basic login/logout
 - PostgreSQL hardening beyond default Prisma usage
 - background processing with Redis
+- WebSocket-based chat flow
+- OpenAI-powered chatbot integration
+- guest-to-user chat continuity and admin escalation flow
 
 What is important to state honestly:
 
 - the project is **not feature-complete yet**
 - GraphQL exists in the repository as draft code, but is **not wired into the running app**
-- chat routes exist as a placeholder, but real-time chat is **not implemented yet**
 - SSR templates exist in the repo, but the storefront/UI layer is **not the finished focus of the current stage**
+- WebSocket chat and OpenAI chatbot logic are implemented, but the admin-chat workflow is still being actively refined
 - test coverage, Swagger/OpenAPI, Dockerized deployment, and broader observability are **planned**, not done in this snapshot
 
 ---
@@ -71,6 +77,8 @@ What is important to state honestly:
 | DB hardening layer            | raw SQL scripts for roles, schema, RLS, views, functions, triggers, indexes | Implemented |
 | Authentication                | JWT, HttpOnly cookies, refresh flow                                         | Implemented |
 | Authorization                 | RBAC + PostgreSQL RLS context                                               | Implemented |
+| Realtime chat                 | WebSocket chat endpoint and event-based messaging                           | Implemented |
+| AI assistant                  | OpenAI-powered chatbot service with product/support context                 | Implemented |
 | Media                         | Cloudinary                                                                  | Implemented |
 | Email                         | SendGrid                                                                    | Implemented |
 | OAuth                         | Google, GitHub, LinkedIn                                                    | Implemented |
@@ -84,7 +92,6 @@ What is important to state honestly:
 | ----------------- | ---------------------------------------------------- | -------------------------- |
 | GraphQL           | `graphql`, `@apollo/server`, schema/resolvers folder | Draft / not wired into app |
 | SSR UI foundation | Handlebars templates, static assets                  | Partial foundation         |
-| Chat              | chat module + DTO/schemas/routes                     | Placeholder                |
 
 ### Planned stack / next steps
 
@@ -93,7 +100,6 @@ What is important to state honestly:
 | Testing                  | Jest, Supertest, PostgreSQL integration tests | Planned |
 | API docs                 | Swagger / OpenAPI                             | Planned |
 | Deployment               | Docker, AWS ECS/Fargate                       | Planned |
-| Realtime                 | WebSockets / Socket.IO chat                   | Planned |
 | SSR delivery layer       | detachable Handlebars-based web module        | Planned |
 | Production observability | broader monitoring / metrics / reporting      | Planned |
 
@@ -111,6 +117,7 @@ What is important to state honestly:
 - forgot password / reset password
 - OAuth entry points and callbacks for Google, GitHub, and LinkedIn
 - guest-to-user data migration during login/OAuth flows
+- guest chat continuity after login/OAuth
 - user profile read/update endpoints
 - login logging
 
@@ -151,10 +158,27 @@ What is important to state honestly:
 - admin/root order status update endpoint
 - Redis-based timeout worker for order reservation expiry handling
 
+### Chat and AI assistant
+
+- current chat thread endpoint for guest/user sessions
+- WebSocket connection endpoint for realtime messaging
+- thread join/read/message events
+- bot welcome message for newly created chat threads
+- guest and authenticated-user chat flows
+- OpenAI-powered chatbot responses
+- product-aware bot answers based on product context
+- automatic response language matching based on the latest customer message
+- bot fallback behavior when AI response generation fails
+- admin escalation flow for authenticated users
+- guest admin-support guard that asks guests to log in or create an account first
+- admin queue state model based on `adminRequestedAt` and `adminUnreadSince`
+- message read-state handling for bot/user/admin chat scenarios
+
 ### Admin and root capabilities
 
 - admin stats endpoint
 - manual product popularity endpoint
+- admin chat queue endpoints
 - root-only admin management endpoints
 
 ### System endpoints
@@ -169,16 +193,15 @@ What is important to state honestly:
 
 ### In progress / partial
 
-- chat module is scaffolded, but currently returns a placeholder response
 - GraphQL folder exists, but the app currently runs as REST-only
 - Handlebars templates and static assets exist, but the SSR layer is not a finished storefront
+- admin chat queue behavior is implemented, but still being refined through manual testing
 - seeding approach exists on the database side, but there is no finalized end-to-end local seed command in this snapshot
 
 ### Planned
 
 - Swagger/OpenAPI docs for the REST API
 - automated tests with Jest, Supertest, and PostgreSQL integration coverage
-- real-time support chat instead of the current placeholder module
 - detachable SSR/web layer for showcase pages without coupling business logic to the UI
 - Dockerized local/dev/prod workflow and a production deployment target on AWS ECS/Fargate
 - broader admin analytics, observability, and reporting
@@ -253,6 +276,9 @@ BCRYPT_ROUNDS=12
 REDIS_URL=redis://localhost:6379
 REDIS_ORDER_TIMEOUT_WORKER_MS=3000
 
+# OpenAI / AI assistant
+OPENAI_API_KEY=
+
 # Cloudinary (required only if you test upload flows)
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
@@ -287,7 +313,6 @@ LINKEDIN_STATE_SECRET=
 SUPABASE_URL=
 SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-OPENAI_API_KEY=
 ```
 
 ---
@@ -444,5 +469,57 @@ Examples of implemented business endpoints:
 - favorites: get/add/remove
 - orders: current cart, item mutations, confirm, history, details, admin status update
 - reviews: vote on review
-- admin: stats, product popularity, admin chat list placeholder
+- admin: stats, product popularity, admin chat queues
 - root: manage admins
+
+---
+
+## Realtime Chat / AI Bot
+
+Cartlify includes a WebSocket-based chat flow for guest, user, bot, and admin support scenarios.
+
+Main chat flow:
+
+1. A guest or authenticated user opens the current chat thread through the REST endpoint.
+2. The client connects to the WebSocket endpoint.
+3. The client joins a thread with a `thread:join` event.
+4. Messages are sent with `message:send`.
+5. New messages are broadcast as `message:new` events.
+6. Read state is handled through `thread:read`.
+
+Implemented chat behavior:
+
+- guest bot chat
+- authenticated user bot chat
+- bot welcome message for new threads
+- product-aware OpenAI chatbot responses
+- automatic response language matching based on the latest customer message
+- guest guard for admin support requests
+- authenticated-user admin escalation
+- admin queue model using `adminRequestedAt` and `adminUnreadSince`
+- guest-to-user chat migration during authentication
+
+The chat module is implemented, but admin workflow details are still being refined through manual testing.
+
+---
+
+## Production Notes
+
+This repository is still in active development and should not be treated as a fully production-ready deployment package yet.
+
+Current production-oriented pieces already present:
+
+- PostgreSQL RLS and custom SQL hardening scripts
+- separate runtime and migration database credentials
+- Redis-backed order timeout worker
+- JWT cookie auth with refresh-token flow
+- OAuth support
+- structured backend module boundaries
+
+Planned production improvements:
+
+- Swagger/OpenAPI documentation
+- automated unit and integration tests
+- Dockerized local/dev/prod workflow
+- AWS ECS/Fargate deployment target
+- broader monitoring, metrics, and operational reporting
