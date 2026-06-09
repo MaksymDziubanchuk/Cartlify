@@ -180,6 +180,18 @@ export async function markChatThreadReadService({
             },
         );
     } catch (err) {
+        console.error('CHAT_MARK_READ_ERROR');
+        console.dir(
+            {
+                isAppError: isAppError(err),
+                isRetryableTxError: isRetryableTxError(err),
+                name: err instanceof Error ? err.name : typeof err,
+                message: err instanceof Error ? err.message : String(err),
+                error: err,
+            },
+            { depth: 10 },
+        );
+
         if (isAppError(err)) throw err;
 
         if (isRetryableTxError(err)) {
