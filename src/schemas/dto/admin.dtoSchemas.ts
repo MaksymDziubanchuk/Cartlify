@@ -1,202 +1,228 @@
+const adminOrderStatusValues = [
+  'pending',
+  'unconfirmed',
+  'waiting',
+  'paid',
+  'shipped',
+  'delivered',
+  'cancelled',
+] as const;
+
+const dateTimeSchema = {
+  type: 'string',
+  format: 'date-time',
+} as const;
+
+const nonNegativeIntegerSchema = {
+  type: 'integer',
+  minimum: 0,
+} as const;
+
+const positiveIntegerSchema = {
+  type: 'integer',
+  minimum: 1,
+} as const;
+
+const nonNegativeNumberSchema = {
+  type: 'number',
+  minimum: 0,
+} as const;
+
+const percentSchema = {
+  type: 'number',
+  minimum: 0,
+  maximum: 100,
+} as const;
+
+const ratingAverageSchema = {
+  type: 'number',
+  minimum: 0,
+  maximum: 5,
+} as const;
+
 const adminStatsQuerySchema = {
   $id: 'adminStatsQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    from: { type: 'string', format: 'date-time' },
-    to: { type: 'string', format: 'date-time' },
-    range: { type: 'string', enum: ['7d', '30d'] },
+    from: dateTimeSchema,
+    to: dateTimeSchema,
   },
-};
+} as const;
+
+const adminStatsPeriodSchema = {
+  $id: 'adminStatsPeriodSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    from: dateTimeSchema,
+    to: dateTimeSchema,
+  },
+  required: ['from', 'to'],
+} as const;
 
 const adminStatsUsersSchema = {
   $id: 'adminStatsUsersSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    total: { type: 'number' },
-    new7d: { type: 'number' },
-    new30d: { type: 'number' },
-    verifiedRate: { type: 'number' },
+    total: nonNegativeIntegerSchema,
+    newInPeriod: nonNegativeIntegerSchema,
+    new7d: nonNegativeIntegerSchema,
+    new30d: nonNegativeIntegerSchema,
+    verifiedTotal: nonNegativeIntegerSchema,
+    verifiedRate: percentSchema,
   },
-  required: ['total', 'new7d', 'new30d', 'verifiedRate'],
-};
+  required: ['total', 'newInPeriod', 'new7d', 'new30d', 'verifiedTotal', 'verifiedRate'],
+} as const;
 
 const adminStatsOrdersByStatusSchema = {
   $id: 'adminStatsOrdersByStatusSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    pending: { type: 'number' },
-    paid: { type: 'number' },
-    shipped: { type: 'number' },
-    delivered: { type: 'number' },
-    cancelled: { type: 'number' },
+    pending: nonNegativeIntegerSchema,
+    unconfirmed: nonNegativeIntegerSchema,
+    waiting: nonNegativeIntegerSchema,
+    paid: nonNegativeIntegerSchema,
+    shipped: nonNegativeIntegerSchema,
+    delivered: nonNegativeIntegerSchema,
+    cancelled: nonNegativeIntegerSchema,
   },
-  required: ['pending', 'paid', 'shipped', 'delivered', 'cancelled'],
-};
+  required: adminOrderStatusValues,
+} as const;
 
 const adminStatsOrdersRevenueSchema = {
   $id: 'adminStatsOrdersRevenueSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    total: { type: 'number' },
-    last7d: { type: 'number' },
-    last30d: { type: 'number' },
+    total: nonNegativeNumberSchema,
+    inPeriod: nonNegativeNumberSchema,
+    last7d: nonNegativeNumberSchema,
+    last30d: nonNegativeNumberSchema,
   },
-  required: ['total', 'last7d', 'last30d'],
-};
+  required: ['total', 'inPeriod', 'last7d', 'last30d'],
+} as const;
 
 const adminStatsOrdersSchema = {
   $id: 'adminStatsOrdersSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    total: { type: 'number' },
+    total: nonNegativeIntegerSchema,
+
+    // confirmed orders are real orders, pending carts are not revenue
+    confirmedTotal: nonNegativeIntegerSchema,
+    pendingCartsTotal: nonNegativeIntegerSchema,
+
     byStatus: { $ref: 'adminStatsOrdersByStatusSchema#' },
     revenue: { $ref: 'adminStatsOrdersRevenueSchema#' },
-    averageOrderValue: { type: 'number' },
+
+    averageOrderValue: nonNegativeNumberSchema,
+    itemsSold: nonNegativeIntegerSchema,
   },
-  required: ['total', 'byStatus', 'revenue', 'averageOrderValue'],
-};
+  required: [
+    'total',
+    'confirmedTotal',
+    'pendingCartsTotal',
+    'byStatus',
+    'revenue',
+    'averageOrderValue',
+    'itemsSold',
+  ],
+} as const;
 
 const adminTopProductRevenueSchema = {
   $id: 'adminTopProductRevenueSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'number' },
-    name: { type: 'string' },
-    revenue: { type: 'number' },
+    id: positiveIntegerSchema,
+    name: { type: 'string', minLength: 1 },
+    revenue: nonNegativeNumberSchema,
+    quantitySold: nonNegativeIntegerSchema,
   },
-  required: ['id', 'name', 'revenue'],
-};
+  required: ['id', 'name', 'revenue', 'quantitySold'],
+} as const;
 
 const adminTopCategoryRevenueSchema = {
   $id: 'adminTopCategoryRevenueSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'number' },
-    name: { type: 'string' },
-    revenue: { type: 'number' },
+    id: positiveIntegerSchema,
+    name: { type: 'string', minLength: 1 },
+    revenue: nonNegativeNumberSchema,
+    quantitySold: nonNegativeIntegerSchema,
   },
-  required: ['id', 'name', 'revenue'],
-};
+  required: ['id', 'name', 'revenue', 'quantitySold'],
+} as const;
 
 const adminStatsProductsSchema = {
   $id: 'adminStatsProductsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    total: { type: 'number' },
-    topProductsByRevenue: { type: 'array', items: { $ref: 'adminTopProductRevenueSchema#' } },
-    topCategoriesByRevenue: { type: 'array', items: { $ref: 'adminTopCategoryRevenueSchema#' } },
+    total: nonNegativeIntegerSchema,
+    activeTotal: nonNegativeIntegerSchema,
+    deletedTotal: nonNegativeIntegerSchema,
+    outOfStockTotal: nonNegativeIntegerSchema,
+
+    topProductsByRevenue: {
+      type: 'array',
+      items: { $ref: 'adminTopProductRevenueSchema#' },
+    },
+
+    topCategoriesByRevenue: {
+      type: 'array',
+      items: { $ref: 'adminTopCategoryRevenueSchema#' },
+    },
   },
-  required: ['total', 'topProductsByRevenue', 'topCategoriesByRevenue'],
-};
+  required: [
+    'total',
+    'activeTotal',
+    'deletedTotal',
+    'outOfStockTotal',
+    'topProductsByRevenue',
+    'topCategoriesByRevenue',
+  ],
+} as const;
 
 const adminStatsReviewsSchema = {
   $id: 'adminStatsReviewsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    total: { type: 'number' },
-    avgRating: { type: 'number' },
-    negativeCount: { type: 'number' },
+    total: nonNegativeIntegerSchema,
+    ratedTotal: nonNegativeIntegerSchema,
+    newInPeriod: nonNegativeIntegerSchema,
+    avgRating: ratingAverageSchema,
+
+    // negative review means rating <= 2
+    negativeCount: nonNegativeIntegerSchema,
   },
-  required: ['total', 'avgRating', 'negativeCount'],
-};
+  required: ['total', 'ratedTotal', 'newInPeriod', 'avgRating', 'negativeCount'],
+} as const;
 
 const adminStatsResponseSchema = {
   $id: 'adminStatsResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
+    period: { $ref: 'adminStatsPeriodSchema#' },
     users: { $ref: 'adminStatsUsersSchema#' },
     orders: { $ref: 'adminStatsOrdersSchema#' },
     products: { $ref: 'adminStatsProductsSchema#' },
     reviews: { $ref: 'adminStatsReviewsSchema#' },
-    createdAt: { type: 'string', format: 'date-time' },
+    createdAt: dateTimeSchema,
   },
-  required: ['users', 'orders', 'products', 'reviews', 'createdAt'],
-};
-
-const adminSetPopularityParamsSchema = {
-  $id: 'adminSetPopularityParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    productId: { type: 'number' },
-  },
-  required: ['productId'],
-};
-
-const adminSetPopularityBodySchema = {
-  $id: 'adminSetPopularityBodySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    popularity: { type: 'number', minimum: 0 },
-  },
-  required: ['popularity'],
-};
-
-const adminSetPopularityResponseSchema = {
-  $id: 'adminSetPopularityResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    id: { type: 'number' },
-    popularity: { type: 'number' },
-  },
-  required: ['id', 'popularity'],
-};
-
-const adminChatsQuerySchema = {
-  $id: 'adminChatsQuerySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    status: { type: 'string', enum: ['open', 'closed'] },
-    type: { type: 'string', enum: ['bot', 'admin'] },
-    page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
-  },
-};
-
-const adminChatItemSchema = {
-  $id: 'adminChatItemSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    id: { type: 'string' },
-    userId: { type: 'number' },
-    type: { type: 'string', enum: ['bot', 'admin'] },
-    status: { type: 'string', enum: ['open', 'closed'] },
-    lastMessageAt: { type: 'string', format: 'date-time' },
-    unreadCount: { type: 'number' },
-    lastMessagePreview: { type: 'string' },
-  },
-  required: ['id', 'userId', 'type', 'status', 'lastMessageAt'],
-};
-
-const adminChatsResponseSchema = {
-  $id: 'adminChatsResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    items: { type: 'array', items: { $ref: 'adminChatItemSchema#' } },
-    page: { type: 'number' },
-    limit: { type: 'number' },
-    total: { type: 'number' },
-  },
-  required: ['items'],
-};
+  required: ['period', 'users', 'orders', 'products', 'reviews', 'createdAt'],
+} as const;
 
 export const adminDtoSchemas = [
   adminStatsQuerySchema,
+  adminStatsPeriodSchema,
   adminStatsUsersSchema,
   adminStatsOrdersByStatusSchema,
   adminStatsOrdersRevenueSchema,
@@ -206,10 +232,4 @@ export const adminDtoSchemas = [
   adminStatsProductsSchema,
   adminStatsReviewsSchema,
   adminStatsResponseSchema,
-  adminSetPopularityParamsSchema,
-  adminSetPopularityBodySchema,
-  adminSetPopularityResponseSchema,
-  adminChatsQuerySchema,
-  adminChatItemSchema,
-  adminChatsResponseSchema,
 ];
