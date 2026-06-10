@@ -1,125 +1,106 @@
-import type { UserId, ProductId, CategoryId } from 'types/ids.js';
-import type { ChatStatus, ChatType } from './chats.dto.js';
+import type { CategoryId, ProductId, UserId } from 'types/ids.js';
+import type { Role } from 'types/user.js';
+import type { OrderStatus } from './orders.dto.js';
 
+export type AdminRevenueOrderStatus = Extract<OrderStatus, 'paid' | 'shipped' | 'delivered'>;
+
+// stats query
 export interface AdminStatsQueryDto {
   from?: string;
   to?: string;
-  range?: '7d' | '30d';
 }
 
-export interface AdminStatsQueryNormalizedDto {
+// normalized service input
+export interface AdminStatsDto {
   from: Date;
   to: Date;
-  userId: UserId;
+  actorId: UserId;
+  actorRole: Role;
 }
 
-export type AdminStatsDto = AdminStatsQueryNormalizedDto;
+// response period
+export interface AdminStatsPeriodDto {
+  from: Date;
+  to: Date;
+}
 
+// users
 export interface AdminStatsUsersDto {
   total: number;
+  newInPeriod: number;
   new7d: number;
   new30d: number;
+  verifiedTotal: number;
   verifiedRate: number;
 }
 
-export interface AdminStatsOrdersByStatus {
+// orders
+export interface AdminStatsOrdersByStatusDto {
   pending: number;
+  unconfirmed: number;
+  waiting: number;
   paid: number;
   shipped: number;
   delivered: number;
   cancelled: number;
 }
 
-export interface AdminStatsOrdersRevenue {
+export interface AdminStatsOrdersRevenueDto {
   total: number;
+  inPeriod: number;
   last7d: number;
   last30d: number;
 }
 
 export interface AdminStatsOrdersDto {
   total: number;
-  byStatus: AdminStatsOrdersByStatus;
-  revenue: AdminStatsOrdersRevenue;
+  confirmedTotal: number;
+  pendingCartsTotal: number;
+  byStatus: AdminStatsOrdersByStatusDto;
+  revenue: AdminStatsOrdersRevenueDto;
   averageOrderValue: number;
+  itemsSold: number;
 }
 
-export interface AdminTopProductRevenue {
+// products
+export interface AdminTopProductRevenueDto {
   id: ProductId;
   name: string;
   revenue: number;
+  quantitySold: number;
 }
 
-export interface AdminTopCategoryRevenue {
+export interface AdminTopCategoryRevenueDto {
   id: CategoryId;
   name: string;
   revenue: number;
+  quantitySold: number;
 }
 
 export interface AdminStatsProductsDto {
   total: number;
-  topProductsByRevenue: AdminTopProductRevenue[];
-  topCategoriesByRevenue: AdminTopCategoryRevenue[];
+  activeTotal: number;
+  deletedTotal: number;
+  outOfStockTotal: number;
+  topProductsByRevenue: AdminTopProductRevenueDto[];
+  topCategoriesByRevenue: AdminTopCategoryRevenueDto[];
 }
 
+// reviews
 export interface AdminStatsReviewsDto {
   total: number;
+  ratedTotal: number;
+  newInPeriod: number;
   avgRating: number;
   negativeCount: number;
 }
 
+// GET /admin/stats
 export interface GetAdminStatsResponseDto {
+  period: AdminStatsPeriodDto;
   users: AdminStatsUsersDto;
   orders: AdminStatsOrdersDto;
   products: AdminStatsProductsDto;
   reviews: AdminStatsReviewsDto;
   createdAt: Date;
-}
-
-export interface SetProductPopularityParamsDto {
-  productId: ProductId;
-}
-
-export interface SetProductPopularityBodyDto {
-  popularity: number;
-}
-export interface SetProductPopularityDto {
-  productId: ProductId;
-  popularity: number;
-  actorId: UserId;
-}
-
-export interface SetProductPopularityResponseDto {
-  id: ProductId;
-  popularity: number;
-}
-
-export interface GetAdminChatsQueryDto {
-  status?: ChatStatus;
-  page?: number;
-  type?: ChatType;
-  limit?: number;
-}
-
-export interface AdminChatsDto {
-  page: number;
-  limit: number;
-  offset: number;
-  userId: UserId;
-  status?: ChatStatus;
-  type?: ChatType;
-}
-
-export interface AdminChatItemDto {
-  id: string;
-  userId: UserId;
-  type: ChatType;
-  status: ChatStatus;
-  lastMessageAt: Date;
-}
-
-export interface GetAdminChatsResponseDto {
-  items: AdminChatItemDto[];
-  total: number;
-  page: number;
-  limit: number;
 }
