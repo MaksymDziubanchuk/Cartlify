@@ -30,3 +30,5 @@ psql "$DATABASE_URL" \
   --command="\copy \"${SCHEMA_NAME}\".\"${TABLE_NAME}\" FROM '${CSV_PATH_ESCAPED}' WITH (FORMAT csv, HEADER true)"
 
 echo "CSV imported into ${SCHEMA_NAME}.${TABLE_NAME}"
+
+# Usage: DATABASE_URL="postgresql://..." bash db/import_csv.sh <path/to/file.csv> <table_name>
