@@ -389,6 +389,8 @@ DROP POLICY IF EXISTS reviews_insert ON cartlify.reviews;
 
 DROP POLICY IF EXISTS reviews_update_owner_comment_null ON cartlify.reviews;
 
+DROP POLICY IF EXISTS reviews_update_owner_votes ON cartlify.reviews;
+
 DROP POLICY IF EXISTS reviews_delete ON cartlify.reviews;
 
 -- SELECT (public)
@@ -431,6 +433,16 @@ WITH
         AND btrim("comment") <> ''
       )
     )
+  );
+
+-- UPDATE vote counters by system functions
+CREATE POLICY reviews_update_owner_votes ON cartlify.reviews
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (
+    "upVotes" >= 0
+    AND "downVotes" >= 0
   );
 
 -- DELETE (owner or admin/root)
