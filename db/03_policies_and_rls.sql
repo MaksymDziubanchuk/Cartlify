@@ -389,6 +389,8 @@ DROP POLICY IF EXISTS reviews_insert ON cartlify.reviews;
 
 DROP POLICY IF EXISTS reviews_update_owner_comment_null ON cartlify.reviews;
 
+DROP POLICY IF EXISTS reviews_update_owner_votes ON cartlify.reviews;
+
 DROP POLICY IF EXISTS reviews_delete ON cartlify.reviews;
 
 -- SELECT (public)
@@ -431,6 +433,16 @@ WITH
         AND btrim("comment") <> ''
       )
     )
+  );
+
+-- UPDATE vote counters by system functions
+CREATE POLICY reviews_update_owner_votes ON cartlify.reviews
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (
+    "upVotes" >= 0
+    AND "downVotes" >= 0
   );
 
 -- DELETE (owner or admin/root)
@@ -484,6 +496,8 @@ ALTER TABLE cartlify.favorites FORCE ROW LEVEL SECURITY;
 -- reset policies (safe rerun)
 DROP POLICY IF EXISTS favorites_select ON cartlify.favorites;
 
+DROP POLICY IF EXISTS favorites_select_owner ON cartlify.favorites;
+
 DROP POLICY IF EXISTS favorites_insert ON cartlify.favorites;
 
 DROP POLICY IF EXISTS favorites_update ON cartlify.favorites;
@@ -500,6 +514,11 @@ SELECT
       AND "guestId" = cartlify.current_guest_id ()
     )
   );
+
+-- SELECT cartlify_owner for system functions
+CREATE POLICY favorites_select_owner ON cartlify.favorites FOR
+SELECT
+  TO cartlify_owner USING (true);
 
 -- INSERT (owner only)
 CREATE POLICY favorites_insert ON cartlify.favorites FOR INSERT
@@ -583,14 +602,10 @@ CREATE POLICY orders_select ON cartlify.orders FOR
 SELECT
   USING (cartlify.is_owner_or_admin ("userId"));
 
--- SELECT cartlify_owner
+-- SELECT cartlify_owner for system functions
 CREATE POLICY orders_select_owner ON cartlify.orders FOR
 SELECT
-  TO cartlify_owner USING (
-    confirmed = true
-    AND status = 'waiting'
-    AND "reservationExpiresAt" IS NOT NULL
-  );
+  TO cartlify_owner USING (true);
 
 -- INSERT (owner only, USER role)
 CREATE POLICY orders_insert ON cartlify.orders FOR INSERT
@@ -648,6 +663,23 @@ WITH
             to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
           FROM
             cartlify.orders o
+          WHERE
+            o.id = orders.id
+        )
+      )
+    )
+    OR (
+      confirmed = false
+      AND status = 'unconfirmed'
+      AND "reservationExpiresAt" IS NULL
+      AND (
+        (
+          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
+        ) = (
+          SELECT
+            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
+          FROM
+            cartlify.orders AS o
           WHERE
             o.id = orders.id
         )

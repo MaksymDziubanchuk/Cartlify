@@ -1,0 +1,101 @@
+id,userId,type,status,lastMessageAt,unreadCount,lastMessagePreview,createdAt,updatedAt,guestId,adminUnreadSince,adminRequestedAt
+c93a1846-ee31-455d-9847-d117b7596db9,41,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+b73691e9-bda0-4168-b0b9-62dffee66fa3,42,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+2b2992d9-c4b1-4d05-958f-90ac42dc2ac9,43,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+b9b794bd-a4df-42ee-b783-d45e60ba6559,44,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+4c22b49c-bbf3-4a10-a3e5-8b6113d946bf,45,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+d3ddfadc-69cd-4b49-87b7-23607ee0a7f1,46,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+6a574578-7f32-478e-83e5-631a310dc2cf,47,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+6841506b-af08-4f11-96ae-d69bbe78b954,48,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+baa387d1-f49a-4bfb-b7cd-da872c2392b6,49,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+9815e7f3-3516-489f-9b4d-18ee4caf3003,50,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+c49c6ab2-f8b5-4faf-aff0-a2016ce659a6,51,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+af9068f5-5385-4c87-8456-2ca46dd51c72,52,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+1b1a392f-6c17-4662-8075-4a17b4f35a89,53,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+94aef37a-81b6-4269-9b50-9b8bb6fdc682,54,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+509ec7be-09ef-4c49-a367-e11280a9b19f,55,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+ed7005db-01a4-49e2-b11f-05ec0f71c99b,56,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+803fa174-c60c-4675-b084-b3b46866beda,57,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+ac2761c9-a87d-4c49-ba22-11fd8441b85e,58,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+bb534060-47c6-4ecf-b40d-397a683397d2,59,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+7ef6f484-cb0e-4d7a-b969-1628af6e8fa1,60,bot,open,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+dceea9c4-9baf-46bf-8fe1-bd48590fd3b2,61,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+2919fef3-809c-46d7-afcf-c6444fa7e599,62,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+3d022cc3-2ed0-4c6a-924a-1a414842b150,63,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+f95e3446-337e-4267-b348-afa19fe11027,64,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+e668dbbe-d580-4919-af05-2527bdc183ba,65,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+7a428bde-40e2-4e04-a66a-1efa130d0ee0,66,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+aefe74a6-0139-4189-bd58-86f411002c42,67,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+bb48a8f4-d2b2-4f5e-92b5-a61e9673af77,68,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+d0b9feca-0d35-4375-bc06-20a253b6aa1f,69,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+64f21329-5ce1-41d6-a03d-723a44447fb6,70,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+f96f57b4-9469-4c09-ba8b-dd09e649203d,71,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+a81fdc36-0dcf-4fa2-b144-51d30596499a,72,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+7b364fc1-ecee-470c-8bef-2ed68f74d7ca,73,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+4caf79e2-663e-4475-a93d-d9ba0e3b803c,74,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+37df9de6-81c7-4b1c-84bb-49bc84bdb849,75,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+4970a62e-444f-4a68-a1a1-8b8af3ef3d68,76,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+3078fde5-6e94-4b86-bbf9-b03a0a583aeb,77,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+359101c7-abb1-4cd1-8891-6517e847589a,78,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+032f52e5-67ef-413d-83fd-8a62036f0c09,79,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+2f142fea-956c-4e6e-b1ff-eb4e085c7d76,80,bot,closed,2026-06-20T00:00:00Z,0,I need help with a product,6/19/2026,2026-06-20T00:00:00Z,,,
+338c124a-730c-40ab-9cf5-3796cd378270,81,admin,open,2026-06-20T00:00:00Z,3,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+8f11fa8a-c517-453e-99cc-028f70d75d3e,82,admin,open,2026-06-20T00:00:00Z,4,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+2283bd91-3568-4bdc-8661-0f1578755bf9,83,admin,open,2026-06-20T00:00:00Z,1,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+667586bc-bd0d-46c3-a9af-44df82cb73b8,84,admin,open,2026-06-20T00:00:00Z,5,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+0a41d69f-6586-44c7-bf5c-562463b33c0a,85,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+9741243f-a34d-4872-959b-64437b0f878d,86,admin,open,2026-06-20T00:00:00Z,4,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+ffde6d4a-56b5-477c-bc4f-36c76f082984,87,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+534cfcf1-9318-4086-924b-b5ff6eda9c76,88,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+2958613a-11f3-4bef-b04e-7e3307bab8d8,89,admin,open,2026-06-20T00:00:00Z,5,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+14206d56-bb05-45eb-8dba-b50a5b3ac378,90,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+bd72d532-2829-416f-8a53-126cc442841c,91,admin,open,2026-06-20T00:00:00Z,5,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+e0ef84f7-5285-4ba4-8d51-f0d356b4d02b,92,admin,open,2026-06-20T00:00:00Z,1,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+86125887-39e2-427c-afc6-8fccbdd948ac,93,admin,open,2026-06-20T00:00:00Z,1,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+c09a8902-968e-4efa-a229-27202aff74ed,94,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+2ae4c7b2-1b58-49cf-917b-cdbaf35f0557,95,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+94d3ccbb-25d9-4b5a-b2c5-44235ac6c159,96,admin,open,2026-06-20T00:00:00Z,2,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+59b1a160-a3d0-4c5d-baf9-10340dccb1a2,97,admin,open,2026-06-20T00:00:00Z,5,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+bea9be7a-9237-489d-897f-b3a95865a6da,98,admin,open,2026-06-20T00:00:00Z,5,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+fc45580c-3cda-47af-996a-cef5dacf8cef,99,admin,open,2026-06-20T00:00:00Z,4,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+9eef3938-61c4-4d9f-a67e-8c8735492bed,100,admin,open,2026-06-20T00:00:00Z,1,I need help with my order,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,6/19/2026
+c1972092-26a7-401a-a0c9-c09c46e0fbb3,101,admin,open,2026-06-20T00:00:00Z,2,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+41301071-e4c3-46fe-bdf0-9474b220a3fa,102,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+d3c62d9a-11ac-4f87-9901-c27776e4cc4e,103,admin,open,2026-06-20T00:00:00Z,3,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+95113611-e0dd-49e3-b303-6b4f53ddf1e9,104,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+31c0dfb9-840d-4c80-9a82-8c9780711aae,105,admin,open,2026-06-20T00:00:00Z,4,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+16f51617-c9b2-496f-85eb-30b57d6dfdd6,106,admin,open,2026-06-20T00:00:00Z,4,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+e4893d87-142c-4c5f-86f2-64585a8cc5e5,107,admin,open,2026-06-20T00:00:00Z,4,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+54e2360f-5a87-4c3e-9c62-ce6d25477dcc,108,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+d3b8ff66-de72-4770-b8fc-b81fdb37ddb9,109,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+a1779615-c041-427b-9ee5-c777e4d490fc,110,admin,open,2026-06-20T00:00:00Z,4,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+0cae5a0d-5710-4fce-b88e-ae59b1ee01c0,111,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+5a4a3304-9a07-4f7c-aa61-f80022d2e347,112,admin,open,2026-06-20T00:00:00Z,3,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+0287ed62-d576-4891-9601-60a68165f8aa,113,admin,open,2026-06-20T00:00:00Z,2,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+857a1388-9f93-44a8-8f6b-8a0ea5793eae,114,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+ed2d3ce1-c8be-434a-8d63-fd4256f3b007,115,admin,open,2026-06-20T00:00:00Z,3,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+e867da1e-5878-4431-8224-6f7a22e191bf,116,admin,open,2026-06-20T00:00:00Z,2,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+240f9a44-fa11-4936-8b4c-201aa9cc9620,117,admin,open,2026-06-20T00:00:00Z,1,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+8ab335f9-e38c-4544-8fa5-e94c835dd4f7,118,admin,open,2026-06-20T00:00:00Z,5,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+6b9f44cb-64ac-4fc8-96ef-b1954da3995b,119,admin,open,2026-06-20T00:00:00Z,3,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+ac6041d7-01ce-41b5-b1cc-2cb207219914,120,admin,open,2026-06-20T00:00:00Z,4,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,2026-06-20T00:00:00Z,
+21aa734f-944a-4be9-8187-a488c52c06b5,121,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+8964cb44-26a8-4003-9f15-027768db16bf,122,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+aa750d86-b6cd-4bc5-be45-ca99103c55f8,123,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+fb5fbce1-8786-4d4f-840c-7990a54169aa,124,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+c196f856-caaa-4fb1-abbe-c063dfccd38a,125,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+63385da4-66aa-4df4-a73e-e46456dbe267,126,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+32741991-6d93-4080-8c98-11d32a39a707,127,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+a6bd265b-ab40-4eda-a719-c7caff45c324,128,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+8b35b1d4-c38b-4c39-9c7b-c63bde35f9ee,129,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+cdb226b9-283c-4c9e-9893-a306d46d4e6c,130,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+55340f47-e83c-447e-b658-63616fcebd03,131,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+681407b2-e01b-4f6d-8814-1b53a2ed0b18,132,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+64d8151f-e8dc-49d9-ac6b-c6e5ac70b0a8,133,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+bb2805c1-0dcb-4dda-b048-a25c8548eaa3,134,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+c22b5f0e-82a6-48fb-8bf2-56378522e06a,135,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+2420ea51-2581-4ada-ae93-5349ff0ea0be,136,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+bfb01e8d-714a-40c9-9668-c1b94e9111ec,137,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+4eb050d8-429d-496d-a3d7-bbd76002371d,138,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+fb36ba0f-8017-4cd7-96c8-e7de12e8ba23,139,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
+553858b4-5128-41e4-8671-93afc99efcd0,140,admin,closed,2026-06-20T00:00:00Z,0,Thank you for your help,6/19/2026,2026-06-20T00:00:00Z,,,
