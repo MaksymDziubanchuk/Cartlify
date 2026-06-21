@@ -140,7 +140,8 @@ CREATE OR REPLACE FUNCTION cartlify.auth_get_user_for_login (p_email text) RETUR
   auth_provider cartlify."AuthProvider"
 ) LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 BEGIN
 
   RETURN QUERY
@@ -162,7 +163,8 @@ CREATE OR REPLACE FUNCTION cartlify.users_get_public_profile (p_user_id int) RET
   avatar_url text
 ) LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 BEGIN
 
   -- fetch only allowed fields
@@ -192,7 +194,8 @@ CREATE OR REPLACE FUNCTION cartlify.auth_resend_verify (
   p_expires_at timestamptz
 ) RETURNS TABLE (user_id int, token text, expires_at timestamptz) LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_user_id int;
   v_is_verified boolean;
@@ -275,7 +278,8 @@ $$;
 -- AUTH AND USER TOKENS consume email verification token and mark user as verified
 CREATE OR REPLACE FUNCTION cartlify.auth_verify_email (p_token text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_user_id int;
 BEGIN
@@ -328,7 +332,8 @@ $$;
 -- PRODUCTS recalc product rating from reviews
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_avg   numeric(3, 2);
   v_count integer;
@@ -351,7 +356,8 @@ $$;
 -- PRODUCTS add stock to product inventory
 CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_role text;
   v_stock integer;
@@ -390,7 +396,8 @@ $$;
 -- PRODUCTS reserve product stock for order confirmation
 CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 BEGIN
   -- validate input
   IF p_product_id IS NULL OR p_product_id <= 0 THEN
@@ -428,7 +435,8 @@ $$;
 -- PRODUCTS release stock after unconfirm or expiration
 CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_reserved_stock integer;
 BEGIN
@@ -469,7 +477,8 @@ $$;
 -- PRODUCTS consume reserved stock after payment
 CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_role           text;
   v_stock          integer;
@@ -522,7 +531,8 @@ $$;
 -- PRODUCTS recalc product popularity score
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_views           integer;
   v_favs_30d        integer;
@@ -613,7 +623,8 @@ $$;
 -- PRODUCTS recalc popularity for all products
 CREATE OR REPLACE FUNCTION cartlify.recalc_all_products_popularity () RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -803,7 +814,8 @@ EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 -- ORDERS AND ITEMS recalc order total from order items
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_total cartlify.orders.total%TYPE;
 BEGIN
@@ -822,7 +834,8 @@ $$;
 -- ORDERS AND ITEMS confirm order and reserve product stock
 CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer, p_reserve_for interval) RETURNS void LANGUAGE plpgsql
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_actor_role text;
   v_actor_id   integer;
@@ -904,7 +917,8 @@ $$;
 -- ORDERS AND ITEMS unconfirm order and release reserved stock
 CREATE OR REPLACE FUNCTION cartlify.unconfirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_actor_role text;
   v_actor_id   integer;
@@ -982,7 +996,8 @@ $$;
 -- ORDERS AND ITEMS pay order and consume reserved stock
 CREATE OR REPLACE FUNCTION cartlify.pay_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_actor_role     text;
   v_actor_id       integer;
@@ -1072,7 +1087,8 @@ $$;
 -- ORDERS AND ITEMS expire order reservation and release reserved stock
 CREATE OR REPLACE FUNCTION cartlify.expire_order_reservation (p_order_id integer) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
-  search_path = cartlify AS $$
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_confirmed      boolean;
   v_status         text;
@@ -1263,7 +1279,9 @@ BEGIN
   SELECT
     COUNT(*) FILTER (WHERE rv."action" = 'UP'),
     COUNT(*) FILTER (WHERE rv."action" = 'DOWN')
-  INTO v_up, v_down
+  INTO
+    v_up,
+    v_down
   FROM cartlify.review_votes AS rv
   WHERE rv."reviewId" = p_review_id;
 
