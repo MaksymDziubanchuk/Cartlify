@@ -1252,7 +1252,10 @@ EXECUTE FUNCTION cartlify.orders_before_update ();
 ------------------------------------------------------------
 -- REVIEWS AND VOTES === system functions ===
 -- REVIEWS AND VOTES recalc review vote counters
-CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_up integer;
   v_down integer;
