@@ -1254,19 +1254,19 @@ EXECUTE FUNCTION cartlify.orders_before_update ();
 -- REVIEWS AND VOTES recalc review vote counters
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
-  v_up   integer;
+  v_up integer;
   v_down integer;
 BEGIN
   SELECT
-    COUNT(*) FILTER (WHERE rv."action" = true),
-    COUNT(*) FILTER (WHERE rv."action" = false)
+    COUNT(*) FILTER (WHERE rv."action" = 'UP'),
+    COUNT(*) FILTER (WHERE rv."action" = 'DOWN')
   INTO v_up, v_down
   FROM cartlify.review_votes AS rv
   WHERE rv."reviewId" = p_review_id;
 
   UPDATE cartlify.reviews AS r
   SET
-    "upVotes"   = COALESCE(v_up, 0),
+    "upVotes" = COALESCE(v_up, 0),
     "downVotes" = COALESCE(v_down, 0)
   WHERE r.id = p_review_id;
 END;
