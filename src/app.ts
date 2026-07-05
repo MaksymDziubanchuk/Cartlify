@@ -26,6 +26,7 @@ import { chatsDtoSchemas } from '@schemas/dto/chat.dtoSchemas.js';
 import { paymentDtoSchemas } from '@schemas/dto/payment.dtoSchema.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
+import openApiPlugin from './plugins/openapi.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 
 // keep esm __dirname
@@ -120,6 +121,9 @@ for (const schema of [
   // add schemas to ajv
   app.addSchema(schema);
 }
+
+// register OpenAPI docs before API routes
+await app.register(openApiPlugin);
 
 // normalize errors to json
 errorNormalizer(app);

@@ -1,9 +1,9 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError, isAppError } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
 
 import {
+  mapOrderRowToResponse,
   normalizeFindOrdersInput,
   buildOrdersWhere,
   buildOrdersCursorWhere,
