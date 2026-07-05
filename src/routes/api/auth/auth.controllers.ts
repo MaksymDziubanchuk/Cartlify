@@ -44,9 +44,8 @@ import {
   InternalError,
   UnauthorizedError,
 } from '@utils/errors.js';
-import { getTtl } from '@utils/jwt.js';
 import { assertEmail } from '@helpers/validateEmail.js';
-import { verifyRefreshToken } from '@utils/jwt.js';
+import { getTtl, verifyRefreshToken } from '@utils/jwt.js';
 import {
   clearGuestIdCookie,
   setAccessTokenCookie,
