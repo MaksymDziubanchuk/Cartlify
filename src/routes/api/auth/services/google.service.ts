@@ -12,8 +12,7 @@ import {
 import env from '@config/env.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
-import { buildGoogleAuthUrl } from '@utils/googleOAuth.js';
-import { verifyGoogleOAuthState, exchangeGoogleCodeForTokens } from '@utils/googleOAuth.js';
+import { buildGoogleAuthUrl, verifyGoogleOAuthState, exchangeGoogleCodeForTokens } from '@utils/googleOAuth.js';
 import { verifyOidcIdToken } from '@utils/oidcIdTokenVerify.js';
 
 import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
