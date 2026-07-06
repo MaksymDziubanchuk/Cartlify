@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const postCheckoutSessionSchema = {
   body: { $ref: 'paymentsCreateCheckoutSessionBodySchema#' },
@@ -39,8 +40,11 @@ const postStripeWebhookSchema = {
   },
 } satisfies FastifySchema;
 
-export const paymentsSchema = {
-  postCheckoutSessionSchema,
-  getCheckoutSessionByIdSchema,
-  postStripeWebhookSchema,
-};
+export const paymentsSchema = withOpenApiTag(
+  {
+    postCheckoutSessionSchema,
+    getCheckoutSessionByIdSchema,
+    postStripeWebhookSchema,
+  },
+  'payments',
+);
