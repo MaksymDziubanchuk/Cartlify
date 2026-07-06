@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getMeSchema = {
   response: {
@@ -56,9 +57,12 @@ const deleteUserByIdSchema = {
   },
 } satisfies FastifySchema;
 
-export const usersSchema = {
-  getMeSchema,
-  patchMeSchema,
-  getUserByIdSchema,
-  deleteUserByIdSchema,
-};
+export const usersSchema = withOpenApiTag(
+  {
+    getMeSchema,
+    patchMeSchema,
+    getUserByIdSchema,
+    deleteUserByIdSchema,
+  },
+  'users',
+);

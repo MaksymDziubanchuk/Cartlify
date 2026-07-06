@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getStatsSchema = {
   querystring: { $ref: 'adminStatsQuerySchema#' },
@@ -12,6 +13,9 @@ const getStatsSchema = {
   },
 } satisfies FastifySchema;
 
-export const adminSchema = {
-  getStatsSchema,
-};
+export const adminSchema = withOpenApiTag(
+  {
+    getStatsSchema,
+  },
+  'admin',
+);
