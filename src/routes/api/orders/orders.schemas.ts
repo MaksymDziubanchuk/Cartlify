@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getCurrentOrderSchema = {
   response: {
@@ -112,14 +113,17 @@ const patchOrderStatusSchema = {
   },
 } satisfies FastifySchema;
 
-export const ordersSchema = {
-  getCurrentOrderSchema,
-  postCurrentItemsSchema,
-  patchCurrentItemsSchema,
-  deleteCurrentItemsSchema,
-  postCurrentConfirmSchema,
+export const ordersSchema = withOpenApiTag(
+  {
+    getCurrentOrderSchema,
+    postCurrentItemsSchema,
+    patchCurrentItemsSchema,
+    deleteCurrentItemsSchema,
+    postCurrentConfirmSchema,
 
-  getOrdersSchema,
-  getOrderByIdSchema,
-  patchOrderStatusSchema,
-};
+    getOrdersSchema,
+    getOrderByIdSchema,
+    patchOrderStatusSchema,
+  },
+  'orders',
+);

@@ -1,24 +1,15 @@
-import { FastifyInstance } from 'fastify';
-import settings from '../../../../package.json' with { type: 'json' };
+import type { FastifyInstance } from 'fastify';
+
 import env from '@config/env.js';
 
-export default async function getProjectInfoRouter(app: FastifyInstance, opt: unknown) {
+import settings from '../../../../package.json' with { type: 'json' };
+import { systemSchemas } from './system.schemas.js';
+
+export default async function getProjectInfoRouter(app: FastifyInstance) {
   app.get(
     '/',
     {
-      schema: {
-        response: {
-          200: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              version: { type: 'string' },
-              env: { type: 'string', enum: ['development', 'production', 'test'] },
-            },
-            required: ['name', 'version', 'env'],
-          },
-        },
-      },
+      schema: systemSchemas.infoSchema,
     },
     async () => {
       return {

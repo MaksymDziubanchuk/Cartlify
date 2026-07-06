@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getFavoritesSchema = {
   querystring: { $ref: 'favoritesGetQuerySchema#' },
@@ -39,8 +40,11 @@ const deleteFavoriteSchema = {
   },
 } satisfies FastifySchema;
 
-export const favoritesSchema = {
-  getFavoritesSchema,
-  postAddFavoriteSchema,
-  deleteFavoriteSchema,
-};
+export const favoritesSchema = withOpenApiTag(
+  {
+    getFavoritesSchema,
+    postAddFavoriteSchema,
+    deleteFavoriteSchema,
+  },
+  'favorites',
+);

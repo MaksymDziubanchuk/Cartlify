@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getAllProductsRouterSchema = {
   querystring: { $ref: 'getAllProductsQuerySchema#' },
@@ -142,15 +143,18 @@ const patchProductCategorySchema = {
   },
 } satisfies FastifySchema;
 
-export const productSchemas = {
-  getAllProductsRouterSchema,
-  getProductByIdRouterSchema,
-  getProductReviewsRouterSchema,
-  postProductRouterSchema,
-  postProductReviewRouterSchema,
-  updateProductByIdRouterSchema,
-  patchProductsBulkPriceRouterSchema,
-  deleteProductByIdRouterSchema,
-  deleteProductReviewRouterSchema,
-  patchProductCategorySchema,
-};
+export const productSchemas = withOpenApiTag(
+  {
+    getAllProductsRouterSchema,
+    getProductByIdRouterSchema,
+    getProductReviewsRouterSchema,
+    postProductRouterSchema,
+    postProductReviewRouterSchema,
+    updateProductByIdRouterSchema,
+    patchProductsBulkPriceRouterSchema,
+    deleteProductByIdRouterSchema,
+    deleteProductReviewRouterSchema,
+    patchProductCategorySchema,
+  },
+  'products',
+);

@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getCategoriesSchema = {
   querystring: { $ref: 'categoriesGetQuerySchema#' },
@@ -55,9 +56,12 @@ const deleteCategorySchema = {
   },
 } satisfies FastifySchema;
 
-export const categoriesSchema = {
-  getCategoriesSchema,
-  postCategorySchema,
-  patchCategorySchema,
-  deleteCategorySchema,
-};
+export const categoriesSchema = withOpenApiTag(
+  {
+    getCategoriesSchema,
+    postCategorySchema,
+    patchCategorySchema,
+    deleteCategorySchema,
+  },
+  'categories',
+);
