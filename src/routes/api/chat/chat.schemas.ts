@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getCurrentChatSchema = {
   response: {
@@ -50,9 +51,12 @@ const closeAdminChatThreadSchema = {
   },
 } satisfies FastifySchema;
 
-export const chatsSchemas = {
-  getCurrentChatSchema,
-  getAdminChatThreadsSchema,
-  getAdminChatThreadSchema,
-  closeAdminChatThreadSchema,
-};
+export const chatsSchemas = withOpenApiTag(
+  {
+    getCurrentChatSchema,
+    getAdminChatThreadsSchema,
+    getAdminChatThreadSchema,
+    closeAdminChatThreadSchema,
+  },
+  'chat',
+);

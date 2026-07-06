@@ -1,4 +1,5 @@
 import type { FastifySchema } from 'fastify';
+import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const getRootAdminsSchema = {
   querystring: { $ref: 'rootAdminsGetQuerySchema#' },
@@ -41,8 +42,11 @@ const deleteRootAdminSchema = {
   },
 } satisfies FastifySchema;
 
-export const rootAdminsSchemas = {
-  getRootAdminsSchema,
-  postRootAdminSchema,
-  deleteRootAdminSchema,
-};
+export const rootAdminsSchemas = withOpenApiTag(
+  {
+    getRootAdminsSchema,
+    postRootAdminSchema,
+    deleteRootAdminSchema,
+  },
+  'root',
+);

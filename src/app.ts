@@ -24,6 +24,7 @@ import { usersDtoSchemas } from '@schemas/dto/users.dtoSchemas.js';
 import { rootAdminsDtoSchemas } from '@schemas/dto/root.dtoSchemas.js';
 import { chatsDtoSchemas } from '@schemas/dto/chat.dtoSchemas.js';
 import { paymentDtoSchemas } from '@schemas/dto/payment.dtoSchema.js';
+import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import openApiPlugin from './plugins/openapi.plugin.js';
@@ -106,6 +107,7 @@ for (const schema of [
   ...commonSchemas,
   // register dto schemas
   ...paramsSchemas,
+  ...systemDtoSchemas,
   ...authDtoSchemas,
   ...productDtoSchemas,
   ...adminDtoSchemas,

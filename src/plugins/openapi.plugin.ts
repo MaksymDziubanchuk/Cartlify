@@ -1,7 +1,9 @@
-import type { FastifyPluginAsync } from 'fastify';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import { openApiInfo, openApiTags } from '@config/openapi.js';
+import fp from 'fastify-plugin';
+import type { FastifyPluginAsync } from 'fastify';
+
+import { openApiInfo, openApiSecuritySchemes, openApiTags } from '@config/openapi.js';
 
 const openApiPlugin: FastifyPluginAsync = async (app) => {
     await app.register(swagger, {
@@ -13,19 +15,7 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
             tags: [...openApiTags],
 
             components: {
-                securitySchemes: {
-                    accessTokenCookie: {
-                        type: 'apiKey',
-                        in: 'cookie',
-                        name: 'accessToken',
-                    },
-
-                    bearerAuth: {
-                        type: 'http',
-                        scheme: 'bearer',
-                        bearerFormat: 'JWT',
-                    },
-                },
+                securitySchemes: openApiSecuritySchemes,
             },
         },
     });
@@ -40,4 +30,6 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
     });
 };
 
-export default openApiPlugin;
+export default fp(openApiPlugin, {
+    name: 'openapi-plugin',
+});
