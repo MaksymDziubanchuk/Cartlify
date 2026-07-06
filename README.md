@@ -2,9 +2,9 @@
 
 Backend-first e-commerce platform built as a production-oriented portfolio project.
 
-Cartlify is not presented as a finished storefront. It is a realistic engineering project focused on how a commercial e-commerce backend is structured: authentication, RBAC, catalog management, order flow, PostgreSQL policies, background jobs, real-time support chat, AI-assisted customer support, and maintainable module boundaries.
+Cartlify is not presented as a finished storefront. It is a realistic engineering project focused on how a commercial e-commerce backend is structured: authentication, RBAC, catalog management, order flow, PostgreSQL policies, background jobs, real-time support chat, AI-assisted customer support, maintainable module boundaries, and documented REST API behavior.
 
-The repository currently contains a working REST API foundation, PostgreSQL hardening scripts, Redis-based order timeout processing, OAuth/media/email integrations, WebSocket-based chat, and an OpenAI-powered assistant for product and support conversations. Some parts of the roadmap are already implemented, some are partially scaffolded, and some are planned for the next stages.
+The repository currently contains a working REST API foundation, PostgreSQL hardening scripts, Redis-based order timeout processing, OAuth/media/email integrations, WebSocket-based chat, Swagger/OpenAPI documentation, and an OpenAI-powered assistant for product and support conversations. Some parts of the roadmap are already implemented, some are partially scaffolded, and some are planned for the next stages.
 
 ---
 
@@ -20,6 +20,7 @@ The repository currently contains a working REST API foundation, PostgreSQL hard
 - [Local Setup](#local-setup)
 - [Run Commands](#run-commands)
 - [API Surface](#api-surface)
+- [API Documentation](#api-documentation)
 - [Realtime Chat / AI Bot](#realtime-chat--ai-bot)
 - [Production Notes](#production-notes)
 
@@ -36,6 +37,7 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 - consistent order flow with background timeout handling
 - real-time support chat with guest/user/admin flows
 - AI-assisted product and support conversations with fallback behavior
+- documented REST API surface through Swagger/OpenAPI
 - API design that can later support SSR, GraphQL, and additional real-time features
 
 ---
@@ -54,6 +56,7 @@ What this repo already shows well:
 - WebSocket-based chat flow
 - OpenAI-powered chatbot integration
 - guest-to-user chat continuity and admin escalation flow
+- Swagger/OpenAPI documentation for the REST API
 
 What is important to state honestly:
 
@@ -61,7 +64,8 @@ What is important to state honestly:
 - GraphQL exists in the repository as draft code, but is **not wired into the running app**
 - SSR templates exist in the repo, but the storefront/UI layer is **not the finished focus of the current stage**
 - WebSocket chat and OpenAI chatbot logic are implemented, but the admin-chat workflow is still being actively refined
-- test coverage, Swagger/OpenAPI, Dockerized deployment, and broader observability are **planned**, not done in this snapshot
+- Swagger/OpenAPI is implemented and available, but route security metadata, operation ids, examples, and response descriptions are still being refined
+- test coverage, Dockerized deployment, and broader observability are **planned**, not done in this snapshot
 
 ---
 
@@ -77,6 +81,7 @@ What is important to state honestly:
 | DB hardening layer            | raw SQL scripts for roles, schema, RLS, views, functions, triggers, indexes | Implemented |
 | Authentication                | JWT, HttpOnly cookies, refresh flow                                         | Implemented |
 | Authorization                 | RBAC + PostgreSQL RLS context                                               | Implemented |
+| API documentation             | Swagger / OpenAPI                                                           | Implemented |
 | Realtime chat                 | WebSocket chat endpoint and event-based messaging                           | Implemented |
 | AI assistant                  | OpenAI-powered chatbot service with product/support context                 | Implemented |
 | Media                         | Cloudinary                                                                  | Implemented |
@@ -98,7 +103,7 @@ What is important to state honestly:
 | Area                     | Planned technologies                          | Status  |
 | ------------------------ | --------------------------------------------- | ------- |
 | Testing                  | Jest, Supertest, PostgreSQL integration tests | Planned |
-| API docs                 | Swagger / OpenAPI                             | Planned |
+| API docs refinement      | security metadata, operation ids, examples    | Planned |
 | Deployment               | Docker, AWS ECS/Fargate                       | Planned |
 | SSR delivery layer       | detachable Handlebars-based web module        | Planned |
 | Production observability | broader monitoring / metrics / reporting      | Planned |
@@ -187,6 +192,26 @@ What is important to state honestly:
 - `/ready`
 - `/info`
 
+### API documentation
+
+- Swagger UI for REST API documentation
+- OpenAPI 3.0.3 specification generation
+- grouped route documentation by domain module
+- reusable response schemas for system endpoints
+- cookie-based security schemes for access token, refresh token, and guest id flows
+- documented system readiness responses for healthy and unavailable states
+- raw OpenAPI JSON endpoint for external inspection and tooling
+- Swagger documentation is deployed together with the running API
+
+Current API documentation refinement work:
+
+- adding security metadata to all protected routes
+- adding operation ids for cleaner generated API documentation
+- improving summaries and descriptions for all domain modules
+- replacing generic response descriptions with explicit response meanings
+- adding request and response examples
+- adding server entries for local and deployed environments
+
 ---
 
 ## In Progress / Planned
@@ -197,11 +222,12 @@ What is important to state honestly:
 - Handlebars templates and static assets exist, but the SSR layer is not a finished storefront
 - admin chat queue behavior is implemented, but still being refined through manual testing
 - seeding approach exists on the database side, but there is no finalized end-to-end local seed command in this snapshot
+- Swagger/OpenAPI documentation is implemented, but route metadata is still being refined
 
 ### Planned
 
-- Swagger/OpenAPI docs for the REST API
 - automated tests with Jest, Supertest, and PostgreSQL integration coverage
+- Swagger/OpenAPI refinement for protected routes, operation ids, examples, and response descriptions
 - detachable SSR/web layer for showcase pages without coupling business logic to the UI
 - Dockerized local/dev/prod workflow and a production deployment target on AWS ECS/Fargate
 - broader admin analytics, observability, and reporting
@@ -219,6 +245,7 @@ Cartlify/
 │   ├── db/                     # Prisma context helpers, DB actor context
 │   ├── helpers/                # shared helpers / normalizers
 │   ├── middlewares/            # auth, RBAC, logging, error handling, id validation
+│   ├── plugins/                # Fastify plugins, including Swagger/OpenAPI registration
 │   ├── redis/                  # Redis client and keys
 │   ├── routes/api/
 │   │   ├── auth/
@@ -404,6 +431,18 @@ curl http://localhost:3000/ready
 curl http://localhost:3000/info
 ```
 
+Swagger UI is available at:
+
+```bash
+http://localhost:3000/documentation
+```
+
+Raw OpenAPI JSON is available at:
+
+```bash
+http://localhost:3000/documentation/json
+```
+
 ---
 
 ## Run Commands
@@ -449,6 +488,8 @@ Current REST modules exposed by the application:
 - `GET /health`
 - `GET /ready`
 - `GET /info`
+- `GET /documentation`
+- `GET /documentation/json`
 - `api/auth/*`
 - `api/users/*`
 - `api/products/*`
@@ -471,6 +512,54 @@ Examples of implemented business endpoints:
 - reviews: vote on review
 - admin: stats, product popularity, admin chat queues
 - root: manage admins
+
+---
+
+## API Documentation
+
+Cartlify exposes Swagger/OpenAPI documentation for the REST API.
+
+Local Swagger UI:
+
+```bash
+http://localhost:3000/documentation
+```
+
+Local OpenAPI JSON:
+
+```bash
+http://localhost:3000/documentation/json
+```
+
+Deployed Swagger UI:
+
+```bash
+https://cartlify.up.railway.app/documentation
+```
+
+Deployed OpenAPI JSON:
+
+```bash
+https://cartlify.up.railway.app/documentation/json
+```
+
+The current documentation includes:
+
+- OpenAPI 3.0.3 specification
+- grouped REST modules through Swagger tags
+- reusable schemas for system and DTO responses
+- cookie-based auth schemes for access token, refresh token, and guest id
+- health, readiness, and project information endpoints
+- separate readiness responses for healthy and unavailable states
+
+The documentation is being improved further with:
+
+- security metadata for all protected routes
+- operation ids for all documented operations
+- clearer summaries and descriptions for domain modules
+- explicit response descriptions instead of generic default responses
+- request and response examples
+- local and deployed server entries in the OpenAPI spec
 
 ---
 
@@ -515,11 +604,12 @@ Current production-oriented pieces already present:
 - JWT cookie auth with refresh-token flow
 - OAuth support
 - structured backend module boundaries
+- Swagger/OpenAPI documentation deployed with the running API
 
 Planned production improvements:
 
-- Swagger/OpenAPI documentation
 - automated unit and integration tests
+- Swagger/OpenAPI refinement with full protected-route security metadata and request/response examples
 - Dockerized local/dev/prod workflow
 - AWS ECS/Fargate deployment target
 - broader monitoring, metrics, and operational reporting
