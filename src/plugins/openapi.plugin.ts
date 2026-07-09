@@ -1,9 +1,14 @@
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
-import fp from 'fastify-plugin';
 import type { FastifyPluginAsync } from 'fastify';
+import fp from 'fastify-plugin';
 
-import { openApiInfo, openApiSecuritySchemes, openApiTags } from '@config/openapi.js';
+import {
+    openApiInfo,
+    openApiSecuritySchemes,
+    openApiServers,
+    openApiTags,
+} from '@config/openapi.js';
 
 const openApiPlugin: FastifyPluginAsync = async (app) => {
     await app.register(swagger, {
@@ -11,6 +16,8 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
             openapi: '3.0.3',
 
             info: openApiInfo,
+
+            servers: [...openApiServers],
 
             tags: [...openApiTags],
 
