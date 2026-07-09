@@ -1,9 +1,11 @@
+// OpenAPI general project information
 export const openApiInfo = {
     title: 'Cartlify REST API',
     description: 'REST API documentation for Cartlify.',
     version: '1.0.0',
 } as const;
 
+// OpenAPI server list for deployed and local environments
 export const openApiServers = [
     {
         url: 'https://cartlify.up.railway.app',
@@ -15,6 +17,7 @@ export const openApiServers = [
     },
 ] as const;
 
+// OpenAPI route groups shown in Swagger UI
 export const openApiTags = [
     { name: 'system', description: 'System health, readiness and project information' },
     { name: 'auth', description: 'Registration, login, logout, refresh and OAuth flows' },
@@ -30,6 +33,7 @@ export const openApiTags = [
     { name: 'root', description: 'Root-only administrator management' },
 ] as const;
 
+// Cookie-based security schemes used by Swagger authorization UI
 export const openApiSecuritySchemes = {
     accessTokenCookie: {
         type: 'apiKey',
@@ -53,6 +57,7 @@ export const openApiSecuritySchemes = {
     },
 } as const;
 
+// Reusable OpenAPI security presets for route schemas
 export const openApiSecurity = {
     accessTokenCookie: [{ accessTokenCookie: [] }],
     refreshTokenCookie: [{ refreshTokenCookie: [] }],
