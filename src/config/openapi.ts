@@ -4,6 +4,17 @@ export const openApiInfo = {
     version: '1.0.0',
 } as const;
 
+export const openApiServers = [
+    {
+        url: 'https://cartlify.up.railway.app',
+        description: 'Railway deployment',
+    },
+    {
+        url: 'http://localhost:3000',
+        description: 'Local development server',
+    },
+] as const;
+
 export const openApiTags = [
     { name: 'system', description: 'System health, readiness and project information' },
     { name: 'auth', description: 'Registration, login, logout, refresh and OAuth flows' },
