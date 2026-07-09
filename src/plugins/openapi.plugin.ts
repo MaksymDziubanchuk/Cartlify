@@ -10,7 +10,9 @@ import {
     openApiTags,
 } from '@config/openapi.js';
 
+// Register OpenAPI specification and Swagger UI
 const openApiPlugin: FastifyPluginAsync = async (app) => {
+    // Register OpenAPI generator before API routes are registered
     await app.register(swagger, {
         openapi: {
             openapi: '3.0.3',
@@ -27,6 +29,7 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
         },
     });
 
+    // Register Swagger UI page
     await app.register(swaggerUi, {
         routePrefix: '/documentation',
 
@@ -37,6 +40,7 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
     });
 };
 
+// Export as fastify-plugin to avoid plugin encapsulation issues
 export default fp(openApiPlugin, {
     name: 'openapi-plugin',
 });
