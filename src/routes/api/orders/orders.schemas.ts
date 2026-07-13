@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { openApiSecurity } from '@config/openapi.js';
+import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 
 const getCurrentOrderSchema = {
   response: {
@@ -113,17 +115,20 @@ const patchOrderStatusSchema = {
   },
 } satisfies FastifySchema;
 
-export const ordersSchema = withOpenApiTag(
-  {
-    getCurrentOrderSchema,
-    postCurrentItemsSchema,
-    patchCurrentItemsSchema,
-    deleteCurrentItemsSchema,
-    postCurrentConfirmSchema,
+export const ordersSchema = withOpenApiSecurity(
+  withOpenApiTag(
+    {
+      getCurrentOrderSchema,
+      postCurrentItemsSchema,
+      patchCurrentItemsSchema,
+      deleteCurrentItemsSchema,
+      postCurrentConfirmSchema,
 
-    getOrdersSchema,
-    getOrderByIdSchema,
-    patchOrderStatusSchema,
-  },
-  'orders',
+      getOrdersSchema,
+      getOrderByIdSchema,
+      patchOrderStatusSchema,
+    },
+    'orders',
+  ),
+  openApiSecurity.accessTokenCookie,
 );

@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { openApiSecurity } from '@config/openapi.js';
+import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 
 const getRootAdminsSchema = {
   querystring: { $ref: 'rootAdminsGetQuerySchema#' },
@@ -42,11 +44,14 @@ const deleteRootAdminSchema = {
   },
 } satisfies FastifySchema;
 
-export const rootAdminsSchemas = withOpenApiTag(
-  {
-    getRootAdminsSchema,
-    postRootAdminSchema,
-    deleteRootAdminSchema,
-  },
-  'root',
+export const rootAdminsSchemas = withOpenApiSecurity(
+  withOpenApiTag(
+    {
+      getRootAdminsSchema,
+      postRootAdminSchema,
+      deleteRootAdminSchema,
+    },
+    'root',
+  ),
+  openApiSecurity.accessTokenCookie,
 );
