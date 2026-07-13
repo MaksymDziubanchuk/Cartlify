@@ -63,4 +63,5 @@ export const openApiSecurity = {
     refreshTokenCookie: [{ refreshTokenCookie: [] }],
     authCookies: [{ accessTokenCookie: [] }, { refreshTokenCookie: [] }],
     guestIdCookie: [{ guestIdCookie: [] }],
+    userOrGuestCookie: [{ accessTokenCookie: [] }, { guestIdCookie: [] }],
 } as const;
