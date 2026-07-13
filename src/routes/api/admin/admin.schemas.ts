@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { openApiSecurity } from '@config/openapi.js';
+import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 
 const getStatsSchema = {
   querystring: { $ref: 'adminStatsQuerySchema#' },
@@ -13,9 +15,12 @@ const getStatsSchema = {
   },
 } satisfies FastifySchema;
 
-export const adminSchema = withOpenApiTag(
-  {
-    getStatsSchema,
-  },
-  'admin',
+export const adminSchema = withOpenApiSecurity(
+  withOpenApiTag(
+    {
+      getStatsSchema,
+    },
+    'admin',
+  ),
+  openApiSecurity.accessTokenCookie,
 );

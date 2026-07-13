@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { openApiSecurity } from '@config/openapi.js';
+import { withOpenApiSecurityFor } from '@helpers/withOpenApiSecurity.js';
 
 const getCurrentChatSchema = {
   response: {
@@ -51,12 +53,16 @@ const closeAdminChatThreadSchema = {
   },
 } satisfies FastifySchema;
 
-export const chatsSchemas = withOpenApiTag(
-  {
-    getCurrentChatSchema,
-    getAdminChatThreadsSchema,
-    getAdminChatThreadSchema,
-    closeAdminChatThreadSchema,
-  },
-  'chat',
+export const chatsSchemas = withOpenApiSecurityFor(
+  withOpenApiTag(
+    {
+      getCurrentChatSchema,
+      getAdminChatThreadsSchema,
+      getAdminChatThreadSchema,
+      closeAdminChatThreadSchema,
+    },
+    'chat',
+  ),
+  openApiSecurity.accessTokenCookie,
+  ['getAdminChatThreadsSchema', 'getAdminChatThreadSchema', 'closeAdminChatThreadSchema'],
 );

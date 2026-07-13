@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { openApiSecurity } from '@config/openapi.js';
+import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 
 const getFavoritesSchema = {
   querystring: { $ref: 'favoritesGetQuerySchema#' },
@@ -40,11 +42,14 @@ const deleteFavoriteSchema = {
   },
 } satisfies FastifySchema;
 
-export const favoritesSchema = withOpenApiTag(
-  {
-    getFavoritesSchema,
-    postAddFavoriteSchema,
-    deleteFavoriteSchema,
-  },
-  'favorites',
+export const favoritesSchema = withOpenApiSecurity(
+  withOpenApiTag(
+    {
+      getFavoritesSchema,
+      postAddFavoriteSchema,
+      deleteFavoriteSchema,
+    },
+    'favorites',
+  ),
+  openApiSecurity.userOrGuestCookie,
 );

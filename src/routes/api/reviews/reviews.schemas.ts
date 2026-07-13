@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { openApiSecurity } from '@config/openapi.js';
+import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 
 const postVoteReviewSchema = {
   params: { $ref: 'reviewsVoteParamsSchema#' },
@@ -17,9 +19,12 @@ const postVoteReviewSchema = {
   },
 } satisfies FastifySchema;
 
-export const reviewsSchemas = withOpenApiTag(
-  {
-    postVoteReviewSchema,
-  },
-  'reviews',
+export const reviewsSchemas = withOpenApiSecurity(
+  withOpenApiTag(
+    {
+      postVoteReviewSchema,
+    },
+    'reviews',
+  ),
+  openApiSecurity.accessTokenCookie,
 );
