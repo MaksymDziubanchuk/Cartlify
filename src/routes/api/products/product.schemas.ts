@@ -577,7 +577,7 @@ const patchProductCategorySchema = {
   response: {
     200: {
       description: 'Product category was updated successfully.',
-      $ref: 'productResponseSchema#',
+      $ref: 'productsUpdateCategoryResponseSchema#',
       examples: [
         {
           ...productResponseExample,
