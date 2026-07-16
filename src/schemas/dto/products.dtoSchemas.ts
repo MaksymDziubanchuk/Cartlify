@@ -334,12 +334,7 @@ const productsUpdateCategoryBodySchema = {
 
 const productsUpdateCategoryResponseSchema = {
   $id: 'productsUpdateCategoryResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    message: { type: 'string' },
-  },
-  required: ['message'],
+  allOf: [{ $ref: 'productResponseSchema#' }],
 } as const;
 
 export const productDtoSchemas = [
