@@ -5,10 +5,9 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import staticPlagin from '@fastify/static';
+import staticPlugin from '@fastify/static';
 import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
-import { fileURLToPath } from 'url';
 import path from 'path';
 import env from '@config/env.js';
 import { registerRoutes } from '@routes/api/index.js';
@@ -30,9 +29,6 @@ import errorNormalizer from '@middlewares/errorNormalizer.js';
 import openApiPlugin from './plugins/openapi.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 
-// keep esm __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // allow pino transport type
 type LoggerOptionsWithTransport = LoggerOptions & {
@@ -90,7 +86,7 @@ app.register(multipart, {
 app.register(formbody, { bodyLimit: 1048576 });
 
 // serve static assets
-app.register(staticPlagin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
+app.register(staticPlugin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
 app.register(rateLimit, {
   // protect from abuse
   max: 100,
