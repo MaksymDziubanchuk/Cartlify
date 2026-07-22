@@ -5,7 +5,6 @@ import { setActorContext } from '@db/dbContext.service.js';
 import { aiClientService } from '@services/ai/aiClient.service.js';
 import {
     BadRequestError,
-    ConflictError,
     ForbiddenError,
     InternalError,
     isAppError,
@@ -452,7 +451,7 @@ const generateAiBotText = async (
         });
 
         return result.text;
-    } catch (error) {
+    } catch {
         // keeps customer chat working even when AI provider fails
 
         return generateFallbackBotText(userMessage);
