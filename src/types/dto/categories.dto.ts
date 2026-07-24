@@ -1,5 +1,5 @@
 import type { CategoryId, UserId } from 'types/ids.js';
-import type { User, Role } from 'types/user.js';
+import type { Role } from 'types/user.js';
 
 export interface GetAllCategoriesQueryDto {
   limit?: number;
