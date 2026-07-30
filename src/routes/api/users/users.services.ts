@@ -7,7 +7,7 @@ import {
   ConflictError,
   InternalError,
 } from '@utils/errors.js';
-import { setUserContext, setAdminContext } from '@db/dbContext.service.js';
+import { setUserContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import {
   makePublicId,
