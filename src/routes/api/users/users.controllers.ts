@@ -1,5 +1,4 @@
 import type { ControllerRouter } from 'types/controller.js';
-import type { MultipartFile } from '@fastify/multipart';
 import type { UserEntity } from 'types/user.js';
 import type {
   GetUserByIdParamsDto,
