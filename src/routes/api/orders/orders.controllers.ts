@@ -1,5 +1,4 @@
 import type { ControllerRouter } from 'types/controller.js';
-import type { MessageResponseDto } from 'types/common.js';
 import type { UserEntity } from 'types/user.js';
 import type {
   GetCurrentOrderDto,

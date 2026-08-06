@@ -8,7 +8,7 @@ import { assertEmail } from '@helpers/validateEmail.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
-import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
+import { setGuestContext } from '@db/dbContext.service.js';
 
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 

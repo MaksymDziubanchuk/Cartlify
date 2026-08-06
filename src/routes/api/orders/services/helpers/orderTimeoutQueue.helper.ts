@@ -4,7 +4,6 @@ import { prisma } from '@db/client.js';
 import { expireCheckoutSession } from '@routes/api/payments/services/helpers/checkoutSession.helper.js';
 
 import type { OrderId } from 'types/ids.js';
-import { AppError } from '@utils/errors.js';
 
 // give payment webhook processing extra time after reservation expiry
 const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
