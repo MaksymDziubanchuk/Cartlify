@@ -5,7 +5,6 @@ import {
   InternalError,
   NotFoundError,
   isAppError,
-  ResourceBusyError,
 } from '@utils/errors.js';
 import { mapOrderRowToResponse } from './helpers/index.js';
 
