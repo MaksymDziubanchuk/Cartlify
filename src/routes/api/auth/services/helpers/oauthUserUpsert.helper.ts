@@ -1,5 +1,5 @@
 import type { Prisma, Role } from '@prisma/client';
-import { AppError, InternalError, ForbiddenError } from '@utils/errors.js';
+import { InternalError, ForbiddenError } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 type Tx = Prisma.TransactionClient;
