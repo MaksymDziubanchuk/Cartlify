@@ -13,7 +13,7 @@ import { verifyPass } from '@helpers/safePass.js';
 
 import type { LoginDto, LoginResponseDto } from 'types/dto/auth.dto.js';
 
-import { setGuestContext, setUserContext } from '@db/dbContext.service.js';
+import { setGuestContext } from '@db/dbContext.service.js';
 import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
