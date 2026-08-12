@@ -92,7 +92,7 @@ export default async function authGuard(req: FastifyRequest, reply: FastifyReply
       // attach user to request
       req.user = { id: userId, role };
       return;
-    } catch (err) {
+    } catch {
       // drop invalid access cookie
       clearAccessTokenCookie(reply);
 
