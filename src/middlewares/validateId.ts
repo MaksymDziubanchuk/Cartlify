@@ -1,9 +1,9 @@
-import { FastifyRequest, FastifyReply, preHandlerHookHandler } from 'fastify';
+import { FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { BadRequestError } from '@utils/errors.js';
 
 // validate numeric id param
 export default function validateId(paramName: string): preHandlerHookHandler {
-  return async function (req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  return async function (req: FastifyRequest): Promise<void> {
     const value = (req.params as Record<string, string>)[paramName];
     const num = Number(value);
 
