@@ -4,7 +4,7 @@ import requireRole from '@middlewares/requireRole.js';
 import { rootAdminsSchemas } from './root.schemas.js';
 import { rootAdminsController } from './root.controllers.js';
 
-export default async function rootRouter(app: FastifyInstance, opt: unknown) {
+export default async function rootRouter(app: FastifyInstance) {
   app.get(
     '/admins',
     {
