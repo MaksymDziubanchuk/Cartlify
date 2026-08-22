@@ -139,12 +139,12 @@ export async function requireNonEmptyStream(
       seen = true;
 
       // optional introspection, not used but kept for debugging
-      const _len =
-        typeof chunk === 'string'
-          ? Buffer.byteLength(chunk)
-          : Buffer.isBuffer(chunk)
-            ? chunk.length
-            : chunk?.length;
+      // const _len =
+      //   typeof chunk === 'string'
+      //     ? Buffer.byteLength(chunk)
+      //     : Buffer.isBuffer(chunk)
+      //       ? chunk.length
+      //       : chunk?.length;
 
       // prevent extra reads while connecting the pipe
       (stream as any).pause?.();

@@ -5,7 +5,7 @@ import validateId from '@middlewares/validateId.js';
 import { usersSchema } from './users.schemas.js';
 import { usersController } from './users.controllers.js';
 
-export default async function usersRouter(app: FastifyInstance, opt: unknown) {
+export default async function usersRouter(app: FastifyInstance) {
   app.get(
     '/me',
     {
