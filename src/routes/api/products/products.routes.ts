@@ -5,7 +5,7 @@ import validateId from '@middlewares/validateId.js';
 import { productController } from './product.controllers.js';
 import { productSchemas } from './product.schemas.js';
 
-export default async function productsRouter(app: FastifyInstance, opt: unknown) {
+export default async function productsRouter(app: FastifyInstance) {
   app.get(
     '/',
     {
