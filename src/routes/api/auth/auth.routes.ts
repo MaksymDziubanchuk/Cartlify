@@ -4,7 +4,7 @@ import requireRole from '@middlewares/requireRole.js';
 import { authSchema } from './auth.schemas.js';
 import { authController } from './auth.controllers.js';
 
-export default async function authRouter(app: FastifyInstance, opt: unknown) {
+export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/register',
     {
