@@ -1,6 +1,6 @@
 import { FastifyRequest, FastifyReply, FastifyInstance } from 'fastify';
 
-export default async function notFoundHandler(app: FastifyInstance, opt: unknown) {
+export default async function notFoundHandler(app: FastifyInstance) {
   app.setNotFoundHandler((req: FastifyRequest, reply: FastifyReply) => {
     return reply.status(404).send({
       code: 404,

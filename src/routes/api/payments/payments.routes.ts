@@ -19,7 +19,7 @@ function parsePaymentsJsonBody(req: FastifyRequest, body: string | Buffer<ArrayB
   }
 }
 
-export default async function paymentsRouter(app: FastifyInstance, opt: unknown) {
+export default async function paymentsRouter(app: FastifyInstance) {
   app.removeContentTypeParser('application/json');
 
   app.addContentTypeParser(
