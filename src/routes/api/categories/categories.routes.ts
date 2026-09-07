@@ -5,7 +5,7 @@ import validateId from '@middlewares/validateId.js';
 import { categoriesSchema } from './categories.schemas.js';
 import { categoriesController } from './categories.controllers.js';
 
-export default async function categoriesRouter(app: FastifyInstance, opt: unknown) {
+export default async function categoriesRouter(app: FastifyInstance) {
   app.get(
     '/',
     {

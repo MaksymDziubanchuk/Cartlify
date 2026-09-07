@@ -2,7 +2,7 @@ import { FastifyRequest, FastifyReply, HookHandlerDoneFunction, FastifyInstance 
 import fp from 'fastify-plugin';
 import env from '@config/env.js';
 
-async function requestResponseLogger(app: FastifyInstance, opt: unknown) {
+async function requestResponseLogger(app: FastifyInstance) {
   // track request start time
   app.addHook(
     'onRequest',
