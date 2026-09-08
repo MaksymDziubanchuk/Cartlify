@@ -5,7 +5,7 @@ import { chatsSchemas } from './chat.schemas.js';
 import { chatController } from './chat.controllers.js';
 import { chatWsController } from './ws/chatWs.controller.js';
 
-export default async function chatRouter(app: FastifyInstance, opt: unknown) {
+export default async function chatRouter(app: FastifyInstance) {
   app.get(
     '/thread/current',
     {
