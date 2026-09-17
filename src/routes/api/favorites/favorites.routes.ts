@@ -5,7 +5,7 @@ import validateId from '@middlewares/validateId.js';
 import { favoritesSchema } from './favorites.schemas.js';
 import { favoritesController } from './favorites.controllers.js';
 
-export default async function favoritesRouter(app: FastifyInstance, opt: unknown) {
+export default async function favoritesRouter(app: FastifyInstance) {
   app.get(
     '/',
     {
