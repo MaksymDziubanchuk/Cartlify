@@ -5,7 +5,7 @@ import validateId from '@middlewares/validateId.js';
 import { reviewsSchemas } from './reviews.schemas.js';
 import { reviewsController } from './reviews.controllers.js';
 
-export default async function reviewsRouter(app: FastifyInstance, opt: unknown) {
+export default async function reviewsRouter(app: FastifyInstance) {
   app.post(
     '/:reviewId/vote',
     {
