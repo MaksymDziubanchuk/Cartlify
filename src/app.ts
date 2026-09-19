@@ -30,6 +30,9 @@ import openApiPlugin from './plugins/openapi.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 
 
+const MAX_UPLOAD_SIZE_BYTES = 10_000_000;
+const FORM_BODY_LIMIT_BYTES = 1_048_576;
+
 // allow pino transport type
 type LoggerOptionsWithTransport = LoggerOptions & {
   transport?: TransportSingleOptions;
@@ -76,14 +79,14 @@ app.register(cookie, { secret: env.COOKIE_SECRET });
 app.register(multipart, {
   // file upload limits
   limits: {
-    fileSize: 10_000_000,
+    fileSize: MAX_UPLOAD_SIZE_BYTES,
   },
   // expose fields in body
   attachFieldsToBody: false,
 });
 
 // parse x-www-form-urlencoded
-app.register(formbody, { bodyLimit: 1048576 });
+app.register(formbody, { bodyLimit: FORM_BODY_LIMIT_BYTES });
 
 // serve static assets
 app.register(staticPlugin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
