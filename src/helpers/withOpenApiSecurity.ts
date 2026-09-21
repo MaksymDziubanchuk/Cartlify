@@ -11,7 +11,7 @@ type OpenApiRouteSchema = FastifySchema & {
 // Object with route schema names as keys
 type RouteSchemas = Record<string, OpenApiRouteSchema>;
 
-// Add OpenAPI security to all schemas in a module
+/** Adds OpenAPI security to all schemas in a module. */
 export const withOpenApiSecurity = <T extends RouteSchemas>(
     schemas: T,
     security: OpenApiSecurity,
@@ -27,7 +27,7 @@ export const withOpenApiSecurity = <T extends RouteSchemas>(
     ) as T;
 };
 
-// Add OpenAPI security only to selected schemas in a module
+/** Adds OpenAPI security only to selected schemas in a module. */
 export const withOpenApiSecurityFor = <T extends RouteSchemas>(
     schemas: T,
     security: OpenApiSecurity,
