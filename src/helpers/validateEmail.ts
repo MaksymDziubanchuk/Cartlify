@@ -12,7 +12,7 @@ export function isEmail(value: unknown): value is Email {
 export function assertEmail(value: unknown): asserts value is Email {
   if (typeof value !== 'string' || !EMAIL_PATTERN.test(value)) {
     throw new BadRequestError('INVALID_EMAIL');
-  } else return;
+  }
 }
 
 export { EMAIL_PATTERN };
