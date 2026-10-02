@@ -2,7 +2,7 @@ import { ForbiddenError, BadRequestError } from '@utils/errors.js';
 
 import type { Role } from 'types/user.js';
 
-export function assertAdminActor(actorId: unknown, actorRole: Role) {
+export function assertAdminActor(actorId: unknown, actorRole: Role): void {
   // validate actor context for rls and admin-only actions
   if (!Number.isInteger(actorId)) throw new BadRequestError('ACTOR_ID_INVALID');
   if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
