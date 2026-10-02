@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
 
 // base64url encode helpers
-export function b64url(input: Buffer | string) {
+export function b64url(input: Buffer | string): string {
   const buf = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/g, '');
 }
