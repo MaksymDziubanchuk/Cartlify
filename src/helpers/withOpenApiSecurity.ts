@@ -33,12 +33,12 @@ export const withOpenApiSecurityFor = <T extends RouteSchemas>(
     security: OpenApiSecurity,
     schemaNames: readonly (keyof T)[],
 ): T => {
-    const protectedSchemaNames = new Set<keyof T>(schemaNames);
+    const securedSchemaNames = new Set<keyof T>(schemaNames);
 
     return Object.fromEntries(
         Object.entries(schemas).map(([schemaName, schema]) => [
             schemaName,
-            protectedSchemaNames.has(schemaName as keyof T)
+            securedSchemaNames.has(schemaName as keyof T)
                 ? {
                     ...schema,
                     security: schema.security ?? security,
