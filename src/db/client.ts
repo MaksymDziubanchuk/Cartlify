@@ -1,7 +1,8 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import env from '@config/env.js';
 import { ResourceBusyError } from '@utils/errors.js';
 
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({ datasourceUrl: env.DATABASE_URL });
 
 type TxOptions = {
   maxRetries?: number;

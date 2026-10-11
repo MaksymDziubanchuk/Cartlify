@@ -61,8 +61,7 @@ What this repo already shows well:
 What is important to state honestly:
 
 - the project is **not feature-complete yet**
-- GraphQL exists in the repository as draft code, but is **not wired into the running app**
-- SSR templates exist in the repo, but the storefront/UI layer is **not the finished focus of the current stage**
+- there is no storefront/UI layer in this repository yet; the current stage is the backend API
 - WebSocket chat and OpenAI chatbot logic are implemented, but the admin-chat workflow is still being actively refined
 - Swagger/OpenAPI is implemented and available, but route security metadata, operation ids, examples, and response descriptions are still being refined
 - test coverage, Dockerized deployment, and broader observability are **planned**, not done in this snapshot
@@ -90,13 +89,6 @@ What is important to state honestly:
 | Cache / background processing | Redis, order timeout worker                                                 | Implemented |
 | Lint / formatting             | ESLint, Prettier                                                            | Implemented |
 | CI utilities                  | GitHub Actions for DB migration / SQL execution                             | Implemented |
-
-### Present in the repo, but not fully integrated into runtime
-
-| Area              | Technologies                                         | Status                     |
-| ----------------- | ---------------------------------------------------- | -------------------------- |
-| GraphQL           | `graphql`, `@apollo/server`, schema/resolvers folder | Draft / not wired into app |
-| SSR UI foundation | Handlebars templates, static assets                  | Partial foundation         |
 
 ### Planned stack / next steps
 
@@ -132,7 +124,7 @@ What is important to state honestly:
 - Fastify route guards
 - database-level row-level security policies
 - per-transaction actor context passed into PostgreSQL
-- cookie-based auth flow with signed cookies
+- cookie-based auth flow with HttpOnly cookies
 - centralized error normalization and request/response logging
 
 ### Catalog and product management
@@ -218,8 +210,6 @@ Current API documentation refinement work:
 
 ### In progress / partial
 
-- GraphQL folder exists, but the app currently runs as REST-only
-- Handlebars templates and static assets exist, but the SSR layer is not a finished storefront
 - admin chat queue behavior is implemented, but still being refined through manual testing
 - seeding approach exists on the database side, but there is no finalized end-to-end local seed command in this snapshot
 - Swagger/OpenAPI documentation is implemented, but route metadata is still being refined
@@ -262,7 +252,6 @@ Cartlify/
 │   ├── services/               # cross-module services
 │   ├── types/                  # DTOs and shared TypeScript types
 │   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
-│   ├── views/                  # Handlebars templates (foundation only)
 │   └── workers/                # background workers
 ├── .github/workflows/          # DB migration and SQL execution workflows
 └── package.json
@@ -272,7 +261,7 @@ Cartlify/
 
 ## Environment Variables
 
-The repository already contains `.env.example`, but for the current runtime you should also include the variables used by `src/config/env.ts`.
+The repository contains `.env.example` with every variable read by `src/config/env.ts` and `prisma/schema.prisma`.
 
 A practical local example:
 
@@ -288,7 +277,6 @@ MIGRATION_DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/
 DEV_SHADOW_DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/cartlify_shadow
 
 # Auth / cookies
-COOKIE_SECRET=replace_this_cookie_secret
 JWT_ACCESS_SECRET=replace_this_access_secret
 JWT_ACCESS_TTL_SHORT=1200
 JWT_ACCESS_TTL_LONG=3600
@@ -305,6 +293,9 @@ REDIS_ORDER_TIMEOUT_WORKER_MS=3000
 
 # OpenAI / AI assistant
 OPENAI_API_KEY=
+OPENAI_MODEL=gpt-4.1-mini
+OPENAI_TIMEOUT_MS=12000
+OPENAI_MAX_OUTPUT_TOKENS=450
 
 # Cloudinary (required only if you test upload flows)
 CLOUDINARY_CLOUD_NAME=
@@ -336,10 +327,12 @@ LINKEDIN_CLIENT_SECRET=
 LINKEDIN_REDIRECT_URI=
 LINKEDIN_STATE_SECRET=
 
-# Reserved / future integrations
-SUPABASE_URL=
-SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+# Stripe (STRIPE_SECRET_KEY must be set and start with sk_, otherwise the app does not start)
+STRIPE_SECRET_KEY=sk_test_replace_this_key
+STRIPE_WEBHOOK_SECRET=
+STRIPE_SUCCESS_URL=
+STRIPE_CANCEL_URL=
+STRIPE_CURRENCY=eur
 ```
 
 ---

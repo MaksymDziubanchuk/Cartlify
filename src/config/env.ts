@@ -12,10 +12,6 @@ declare global {
 
       DATABASE_URL: string;
 
-      SUPABASE_URL: string;
-      SUPABASE_ANON_KEY: string;
-      SUPABASE_SERVICE_ROLE_KEY: string;
-
       JWT_ACCESS_SECRET: string;
       JWT_ACCESS_TTL_SHORT: string;
       JWT_ACCESS_TTL_LONG: string;
@@ -45,8 +41,6 @@ declare global {
       EMAIL_FROM: string;
       EMAIL_FROM_NAME: string;
       EMAIL_REPLY_TO: string;
-
-      COOKIE_SECRET: string;
 
       GOOGLE_CLIENT_ID: string;
       GOOGLE_CLIENT_SECRET: string;
@@ -78,6 +72,13 @@ declare global {
 // init dotenv before reads
 dotenv.config();
 
+// fail fast on missing required vars
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required env variable: ${name}`);
+  return value;
+}
+
 export default {
   // runtime mode and server bind
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -88,22 +89,15 @@ export default {
   DATABASE_URL: process.env.DATABASE_URL || '',
   WEB_ORIGIN: process.env.WEB_ORIGIN || '',
 
-  // supabase client keys
-  SUPABASE_URL: process.env.SUPABASE_URL || '',
-  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || '',
-
-  // supabase admin key
-  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
-
   // access token config
-  JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET || 'changeme',
+  JWT_ACCESS_SECRET: required('JWT_ACCESS_SECRET'),
 
   // access ttl presets
   JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1200',
   JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '3600',
 
   // refresh token config
-  JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || 'changeme',
+  JWT_REFRESH_SECRET: required('JWT_REFRESH_SECRET'),
   JWT_REFRESH_TTL_SHORT: process.env.JWT_REFRESH_TTL_SHORT || '86400',
   JWT_REFRESH_TTL_LONG: process.env.JWT_REFRESH_TTL_LONG || '2592000',
 
@@ -137,9 +131,6 @@ export default {
   EMAIL_FROM: process.env.EMAIL_FROM || '',
   EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME || '',
   EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO || '',
-
-  // cookie signing secret
-  COOKIE_SECRET: process.env.COOKIE_SECRET || 'changeme',
 
   // google oauth client config
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',
