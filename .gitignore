@@ -52,3 +52,6 @@ jest.config.ts.tmp
 # Build artifacts
 build/
 .cache/
+
+# Claude Code instructions
+CLAUDE.md
