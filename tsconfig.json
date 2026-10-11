@@ -16,7 +16,6 @@
       "@services/*": ["services/*"],
       "@middlewares/*": ["middlewares/*"],
       "@config/*": ["config/*"],
-      "@graphql/*": ["graphql/*"],
       "@utils/*": ["utils/*"],
       "@routes/*": ["routes/*"],
       "@schemas/*": ["schemas/*"],

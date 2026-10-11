@@ -73,9 +73,8 @@ app.register(requestResponseLogger);
 app.register(cors, { origin: true, credentials: true });
 app.register(helmet);
 
-// cookie secret for signing
-// enable signed cookies later
-app.register(cookie, { secret: env.COOKIE_SECRET });
+// parse cookies
+app.register(cookie);
 app.register(multipart, {
   // file upload limits
   limits: {
