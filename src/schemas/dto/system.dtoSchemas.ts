@@ -21,8 +21,31 @@ export const systemHealthResponseSchema = {
         pid: {
             type: 'number',
         },
+        redis: {
+            type: 'string',
+            enum: ['ready', 'down'],
+        },
+        features: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+                orderConfirmation: {
+                    type: 'string',
+                    enum: ['available', 'unavailable'],
+                },
+                checkout: {
+                    type: 'string',
+                    enum: ['available', 'unavailable'],
+                },
+                orderTimeoutQueue: {
+                    type: 'string',
+                    enum: ['running', 'paused'],
+                },
+            },
+            required: ['orderConfirmation', 'checkout', 'orderTimeoutQueue'],
+        },
     },
-    required: ['status', 'uptime', 'timestamp', 'env', 'pid'],
+    required: ['status', 'uptime', 'timestamp', 'env', 'pid', 'redis', 'features'],
 } as const;
 
 export const systemReadyOkResponseSchema = {

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { isRetryableTxError } from '@db/client.js';
 import stripe from '@config/stripe.js';
 import env from '@config/env.js';
+import { isRedisReady } from '@redis/client.js';
 
 import {
   BadRequestError,
@@ -59,7 +60,8 @@ export async function handleStripeWebhook({
         const orderId = getOrderIdFromCheckoutSession(session);
         const payResult = await payOrderFromStripeWebhook(orderId);
 
-        if (payResult.paidNow) {
+        // a leftover timeout job is harmless, so a redis outage must not fail a recorded payment
+        if (payResult.paidNow && isRedisReady()) {
           await cancelOrderReservationExpiry(orderId);
         }
 
@@ -78,7 +80,8 @@ export async function handleStripeWebhook({
         const orderId = getOrderIdFromCheckoutSession(session);
         const unconfirmResult = await unconfirmOrderFromStripeWebhook(orderId);
 
-        if (unconfirmResult.unconfirmedNow) {
+        // a leftover timeout job is harmless, so a redis outage must not fail the webhook
+        if (unconfirmResult.unconfirmedNow && isRedisReady()) {
           await cancelOrderReservationExpiry(orderId);
         }
 

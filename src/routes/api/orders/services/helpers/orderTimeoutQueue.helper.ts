@@ -1,12 +1,28 @@
 import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 import { prisma } from '@db/client.js';
+import { setAdminContext } from '@db/dbContext.service.js';
 import { expireCheckoutSession } from '@routes/api/payments/services/helpers/checkoutSession.helper.js';
+import { ServiceUnavailableError, isAppError } from '@utils/errors.js';
 
 import type { OrderId } from 'types/ids.js';
 
+type WorkerLogger = {
+  error: (obj: unknown, msg?: string) => void;
+};
+
 // give payment webhook processing extra time after reservation expiry
 const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
+
+// treat a reservation as missed by redis when it expired this long ago
+const MISSED_RESERVATION_EXPIRY_MS = 300_000;
+
+// report redis command failures to api callers as a stable 503
+function toRedisUnavailableError(err: unknown): unknown {
+  if (isAppError(err)) return err;
+
+  return new ServiceUnavailableError('REDIS_UNAVAILABLE', undefined, err);
+}
 
 export async function scheduleOrderReservationExpiry(
   orderId: OrderId,
@@ -24,23 +40,27 @@ export async function scheduleOrderReservationExpiry(
   // schedule the second job after the payment webhook grace window
   const graceRunAtMs = baseRunAtMs + PAYMENT_WEBHOOK_GRACE_MS;
 
-  const redis = await getRedis();
+  try {
+    const redis = await getRedis();
 
-  // queue the base-phase job that must run at reservation expiry time
-  await redis.zAdd(redisKeys.orderTimeoutBaseZset, [
-    {
-      score: baseRunAtMs,
-      value: String(orderId),
-    },
-  ]);
+    // queue the base-phase job that must run at reservation expiry time
+    await redis.zAdd(redisKeys.orderTimeoutBaseZset, [
+      {
+        score: baseRunAtMs,
+        value: String(orderId),
+      },
+    ]);
 
-  // queue the grace-phase job that will run after webhook waiting time
-  await redis.zAdd(redisKeys.orderTimeoutZset, [
-    {
-      score: graceRunAtMs,
-      value: String(orderId),
-    },
-  ]);
+    // queue the grace-phase job that will run after webhook waiting time
+    await redis.zAdd(redisKeys.orderTimeoutZset, [
+      {
+        score: graceRunAtMs,
+        value: String(orderId),
+      },
+    ]);
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
 }
 
 async function claimDueOrderIdsByKey(redisKey: string, batchSize = 100): Promise<OrderId[]> {
@@ -86,7 +106,10 @@ export async function claimDueOrderReservationBaseIds(batchSize = 100): Promise<
   return claimDueOrderIdsByKey(redisKeys.orderTimeoutBaseZset, batchSize);
 }
 
-export async function processClaimedOrderReservationExpiries(batchSize = 100): Promise<number> {
+export async function processClaimedOrderReservationExpiries(
+  log: WorkerLogger,
+  batchSize = 100,
+): Promise<number> {
   const orderIds = await claimDueOrderReservationExpiryIds(batchSize);
   if (orderIds.length === 0) return 0;
 
@@ -102,11 +125,48 @@ export async function processClaimedOrderReservationExpiries(batchSize = 100): P
       processed += 1;
     } catch (err: unknown) {
       // log per-order failures and continue processing the remaining jobs
-      console.error({
-        scope: 'redis-order-timeout',
-        orderId,
-        err,
-      });
+      log.error({ orderId, err }, 'order reservation expiry failed');
+    }
+  }
+
+  return processed;
+}
+
+export async function processMissedOrderReservationExpiries(
+  log: WorkerLogger,
+  batchSize = 100,
+): Promise<number> {
+  const expiredBefore = new Date(Date.now() - MISSED_RESERVATION_EXPIRY_MS);
+
+  // read overdue reservations from db, admin context is required to pass rls
+  const orders = await prisma.$transaction(async (db) => {
+    await setAdminContext(db);
+
+    return db.order.findMany({
+      where: {
+        confirmed: true,
+        status: 'waiting',
+        reservationExpiresAt: { lt: expiredBefore },
+      },
+      select: { id: true },
+      orderBy: { reservationExpiresAt: 'asc' },
+      take: batchSize,
+    });
+  });
+
+  let processed = 0;
+
+  for (const { id: orderId } of orders) {
+    try {
+      // db function rechecks the order state under lock, so repeated calls are safe
+      const rows = await prisma.$queryRaw<{ expired: boolean }[]>`
+        select cartlify.expire_order_reservation(${orderId}::int) as expired
+      `;
+
+      if (rows[0]?.expired) processed += 1;
+    } catch (err: unknown) {
+      // log per-order failures and continue processing the remaining orders
+      log.error({ orderId, err }, 'missed order reservation expiry failed');
     }
   }
 
@@ -117,9 +177,13 @@ export async function setOrderPaymentSessionLink(
   orderId: OrderId,
   paymentSessionId: string,
 ): Promise<void> {
-  const redis = await getRedis();
+  try {
+    const redis = await getRedis();
 
-  await redis.hSet(redisKeys.orderPaymentSessionMap, String(orderId), String(paymentSessionId));
+    await redis.hSet(redisKeys.orderPaymentSessionMap, String(orderId), String(paymentSessionId));
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
 }
 
 async function getOrderPaymentSessionLink(orderId: OrderId): Promise<string | null> {
@@ -144,7 +208,10 @@ async function handleReservationExpiredBase(
   await deleteOrderPaymentSessionLink(orderId);
 }
 
-export async function processClaimedOrderReservationBase(batchSize = 100): Promise<number> {
+export async function processClaimedOrderReservationBase(
+  log: WorkerLogger,
+  batchSize = 100,
+): Promise<number> {
   const orderIds = await claimDueOrderReservationBaseIds(batchSize);
   if (orderIds.length === 0) return 0;
 
@@ -161,11 +228,7 @@ export async function processClaimedOrderReservationBase(batchSize = 100): Promi
       processed += 1;
     } catch (err: unknown) {
       // log per-order failures and continue processing the remaining jobs
-      console.error({
-        scope: 'redis-order-timeout-base',
-        orderId,
-        err,
-      });
+      log.error({ orderId, err }, 'order reservation base expiry failed');
     }
   }
 
