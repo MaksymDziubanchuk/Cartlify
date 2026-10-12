@@ -77,6 +77,10 @@ const postCheckoutSessionSchema = {
       description: 'Unexpected server error while creating checkout session.',
       $ref: 'errorResponseSchema#',
     },
+    503: {
+      description: 'Checkout is temporarily unavailable because Redis is down.',
+      $ref: 'errorResponseSchema#',
+    },
   },
 } satisfies FastifySchema;
 

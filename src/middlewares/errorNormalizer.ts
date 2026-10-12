@@ -17,6 +17,8 @@ function defaultMessage(statusCode: number): string {
       return 'Unprocessable Entity';
     case 429:
       return 'Too Many Requests';
+    case 503:
+      return 'Service Unavailable';
     default:
       return 'Internal Server Error';
   }

@@ -1,5 +1,6 @@
 import { prisma } from '@db/client.js';
 import stripe from '@config/stripe.js';
+import { assertRedisReady } from '@redis/client.js';
 import { setOrderPaymentSessionLink } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
 
 import { setUserContext } from '@db/dbContext.service.js';
@@ -14,6 +15,7 @@ import {
 
 import {
   buildCheckoutSessionPayload,
+  expireCheckoutSession,
   mapCreatedCheckoutSession,
 } from './helpers/checkoutSession.helper.js';
 
@@ -29,6 +31,9 @@ export async function createCheckoutSession({
 }: CreateCheckoutSessionDto): Promise<CheckoutSessionResponseDto> {
   // enforce user-only checkout create
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
+
+  // refuse early so no stripe session is created while redis is down
+  assertRedisReady();
 
   try {
     const orderSnapshot = await prisma.$transaction(async (db) => {
@@ -119,8 +124,15 @@ export async function createCheckoutSession({
     // create checkout session in stripe
     const session = await stripe.checkout.sessions.create(checkoutSessionPayload);
 
-    // set sessionId & orderId connection to Redis for expiration
-    await setOrderPaymentSessionLink(orderSnapshot.orderId, session.id);
+    try {
+      // set sessionId & orderId connection to Redis for expiration
+      await setOrderPaymentSessionLink(orderSnapshot.orderId, session.id);
+    } catch (err) {
+      // close the stripe session that could not be linked to its order
+      await expireCheckoutSession({ sessionId: session.id }).catch(() => undefined);
+
+      throw err;
+    }
 
     // map stripe session into api dto
     return mapCreatedCheckoutSession(session, orderSnapshot.orderId);

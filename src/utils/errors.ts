@@ -168,6 +168,19 @@ export class InternalError extends AppError {
   }
 }
 
+// 503 service unavailable
+export class ServiceUnavailableError extends AppError {
+  constructor(errorCode = 'SERVICE_UNAVAILABLE', details?: ErrorDetails, cause?: unknown) {
+    super({
+      statusCode: 503,
+      errorCode,
+      message: 'Service Unavailable',
+      ...(details !== undefined ? { details } : {}),
+      ...(cause !== undefined ? { cause } : {}),
+    });
+  }
+}
+
 // checks error class name for narrow matches
 export function isErrorNamed(err: unknown, name: string): boolean {
   return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === name;
