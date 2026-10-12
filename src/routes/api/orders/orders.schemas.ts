@@ -328,6 +328,10 @@ const postCurrentConfirmSchema = {
       description: 'Unexpected server error while confirming order.',
       $ref: 'errorResponseSchema#',
     },
+    503: {
+      description: 'Order confirmation is temporarily unavailable because Redis is down.',
+      $ref: 'errorResponseSchema#',
+    },
   },
 } satisfies FastifySchema;
 

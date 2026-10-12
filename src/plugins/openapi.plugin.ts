@@ -10,6 +10,51 @@ import {
     openApiTags,
 } from '@config/openapi.js';
 
+// Swagger generator drops every key placed next to $ref, including route examples.
+// Wrap such references in allOf for documentation only, so examples reach the generated spec.
+const keepExamplesNextToRef = (node: unknown): unknown => {
+    if (typeof node !== 'object' || node === null) return node;
+
+    const { $ref, ...rest } = node as Record<string, unknown>;
+
+    if (typeof $ref !== 'string' || !Array.isArray(rest.examples)) return node;
+
+    return { ...rest, allOf: [{ $ref }] };
+};
+
+const isSchemaNode = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && !Array.isArray(value);
+
+// Parameters are documented one by one, so a single example object is spread over its properties.
+// The referenced schema is inlined for documentation only.
+const spreadExampleOverParams = (
+    node: unknown,
+    getSchema: (schemaId: string) => unknown,
+): unknown => {
+    if (!isSchemaNode(node) || !Array.isArray(node.examples)) return node;
+
+    const example: unknown = node.examples[0];
+    const target = typeof node.$ref === 'string' ? getSchema(node.$ref.split('#')[0]) : node;
+
+    if (!isSchemaNode(example) || !isSchemaNode(target) || !isSchemaNode(target.properties)) {
+        return node;
+    }
+
+    return {
+        ...Object.fromEntries(
+            Object.entries(target).filter(([key]) => key !== '$id' && key !== 'examples'),
+        ),
+        properties: Object.fromEntries(
+            Object.entries(target.properties).map(([name, property]) => [
+                name,
+                name in example && isSchemaNode(property)
+                    ? keepExamplesNextToRef({ ...property, examples: [example[name]] })
+                    : property,
+            ]),
+        ),
+    };
+};
+
 // Register OpenAPI specification and Swagger UI
 const openApiPlugin: FastifyPluginAsync = async (app) => {
     // Register OpenAPI generator before API routes are registered
@@ -26,6 +71,41 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
             components: {
                 securitySchemes: openApiSecuritySchemes,
             },
+        },
+
+        // Adjust route schemas for documentation only, validation and serialization keep the originals
+        transform: ({ schema, url }) => {
+            if (!schema) return { schema, url };
+
+            const response = schema.response as Record<string, unknown> | undefined;
+            const getSchema = (schemaId: string) => app.getSchema(schemaId);
+
+            return {
+                url,
+                schema: {
+                    ...schema,
+                    ...(schema.params
+                        ? { params: spreadExampleOverParams(schema.params, getSchema) }
+                        : {}),
+                    ...(schema.querystring
+                        ? { querystring: spreadExampleOverParams(schema.querystring, getSchema) }
+                        : {}),
+                    ...(schema.headers
+                        ? { headers: spreadExampleOverParams(schema.headers, getSchema) }
+                        : {}),
+                    ...(schema.body ? { body: keepExamplesNextToRef(schema.body) } : {}),
+                    ...(response
+                        ? {
+                              response: Object.fromEntries(
+                                  Object.entries(response).map(([statusCode, node]) => [
+                                      statusCode,
+                                      keepExamplesNextToRef(node),
+                                  ]),
+                              ),
+                          }
+                        : {}),
+                },
+            };
         },
     });
 

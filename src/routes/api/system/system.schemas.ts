@@ -8,6 +8,12 @@ const systemHealthResponseExample = {
     timestamp: '2026-01-01T10:00:00.000Z',
     env: 'development',
     pid: 12345,
+    redis: 'ready',
+    features: {
+        orderConfirmation: 'available',
+        checkout: 'available',
+        orderTimeoutQueue: 'running',
+    },
 };
 
 const systemReadyOkResponseExample = {
@@ -38,7 +44,8 @@ const systemInfoResponseExample = {
 const healthSchema = {
     operationId: 'getSystemHealth',
     summary: 'Get application health status',
-    description: 'Returns process uptime, current environment and runtime status.',
+    description:
+        'Returns process uptime, current environment, runtime status and availability of redis-dependent features.',
 
     response: {
         200: {

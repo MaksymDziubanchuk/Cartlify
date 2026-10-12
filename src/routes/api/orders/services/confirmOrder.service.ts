@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { assertRedisReady } from '@redis/client.js';
 import {
   BadRequestError,
   ConflictError,
@@ -22,6 +23,9 @@ export async function confirmOrder({
   orderId,
 }: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
+
+  // refuse early so nothing is confirmed in db while redis is down
+  assertRedisReady();
 
   try {
     const result = await tx(
@@ -79,10 +83,12 @@ export async function confirmOrder({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
 
-        return {
-          response: mapOrderRowToResponse(order),
-          reservationExpiresAt: order.reservationExpiresAt,
-        };
+        const response = mapOrderRowToResponse(order);
+
+        // schedule expiry before commit so a redis failure rolls the confirmation back
+        await scheduleOrderReservationExpiry(response.id, order.reservationExpiresAt);
+
+        return response;
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
@@ -92,9 +98,8 @@ export async function confirmOrder({
         timeout: 10_000,
       },
     );
-    await scheduleOrderReservationExpiry(result.response.id, result.reservationExpiresAt);
 
-    return result.response;
+    return result;
   } catch (err) {
     if (isAppError(err)) throw err;
 
