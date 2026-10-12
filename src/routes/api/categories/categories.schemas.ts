@@ -26,6 +26,10 @@ const categoriesQueryExample = {
   parentId: 1,
 };
 
+const categoryParamsExample = {
+  categoryId: 2,
+};
+
 const createCategoryBodyExample = {
   name: 'Smartphones',
   slug: 'smartphones',
@@ -132,7 +136,10 @@ const patchCategorySchema = {
   summary: 'Update category',
   description: 'Updates category data by category id. This operation is restricted to privileged users.',
 
-  params: { $ref: 'categoriesUpdateParamsSchema#' },
+  params: {
+    $ref: 'categoriesUpdateParamsSchema#',
+    examples: [categoryParamsExample],
+  },
 
   body: {
     $ref: 'categoriesUpdateBodySchema#',
@@ -191,7 +198,10 @@ const deleteCategorySchema = {
   summary: 'Delete category',
   description: 'Deletes a category by category id. This operation is restricted to privileged users.',
 
-  params: { $ref: 'categoriesDeleteParamsSchema#' },
+  params: {
+    $ref: 'categoriesDeleteParamsSchema#',
+    examples: [categoryParamsExample],
+  },
 
   response: {
     200: {
