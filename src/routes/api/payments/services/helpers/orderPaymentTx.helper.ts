@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { InternalError } from '@utils/errors.js';
+import { PAYMENT_WEBHOOK_GRACE_MS } from '@routes/api/orders/services/helpers/index.js';
 
 // answers of db pay_order function
 const PAY_ORDER_RESULTS = [
@@ -25,6 +26,12 @@ type PayOrderFromStripeWebhookArgs = {
   paymentIntentId: string;
   // decimal string in the same units as order total
   paidAmount: string;
+};
+
+type UnconfirmOrderFromStripeWebhookArgs = {
+  orderId: number;
+  // keep the reservation until the payment webhook grace window is over
+  waitForPaymentGrace: boolean;
 };
 
 function isPayOrderResult(value: unknown): value is PayOrderResult {
@@ -79,9 +86,10 @@ async function payOrderFromStripeWebhook({
 }
 
 // unconfirm waiting order from stripe webhook
-async function unconfirmOrderFromStripeWebhook(
-  orderId: number,
-): Promise<{ unconfirmedNow: boolean }> {
+async function unconfirmOrderFromStripeWebhook({
+  orderId,
+  waitForPaymentGrace,
+}: UnconfirmOrderFromStripeWebhookArgs): Promise<{ unconfirmedNow: boolean; orderFound: boolean }> {
   return tx(
     async (db) => {
       // set admin context for system-side order read
@@ -95,31 +103,43 @@ async function unconfirmOrderFromStripeWebhook(
           id: true,
           status: true,
           confirmed: true,
+          reservationExpiresAt: true,
         },
       });
 
-      // require existing order
+      // order is already deleted by its owner: nothing to unconfirm
+      // this is not a failure, an error answer would make stripe redeliver the same event for days
       if (!order) {
-        throw new InternalError({
-          reason: 'STRIPE_ORDER_NOT_FOUND',
-          orderId,
-        });
+        return { unconfirmedNow: false as const, orderFound: false as const };
       }
 
       // skip already paid order
       if (order.status === 'paid') {
-        return { unconfirmedNow: false as const };
+        return { unconfirmedNow: false as const, orderFound: true as const };
       }
 
       // skip order that no longer needs unconfirm
       if (!order.confirmed || order.status !== 'waiting') {
-        return { unconfirmedNow: false as const };
+        return { unconfirmedNow: false as const, orderFound: true as const };
+      }
+
+      // keep the reservation until the payment webhook grace window is over
+      // worker closes the stripe session right at reservation end and stripe reports it at once,
+      // while a payment made at the last moment can still be on its way: it must find the stock reserved
+      // an event from an old session of a re-confirmed order is skipped the same way, its reservation is still running
+      // the reservation itself is released by the order timeout worker after the same window
+      if (
+        waitForPaymentGrace &&
+        order.reservationExpiresAt &&
+        Date.now() <= order.reservationExpiresAt.getTime() + PAYMENT_WEBHOOK_GRACE_MS
+      ) {
+        return { unconfirmedNow: false as const, orderFound: true as const };
       }
 
       // keep admin context: unconfirm_order is a system-side function and refuses any other context
       await db.$executeRaw`select cartlify.unconfirm_order(${orderId}::int)`;
 
-      return { unconfirmedNow: true as const };
+      return { unconfirmedNow: true as const, orderFound: true as const };
     },
     {
       maxRetries: 3,

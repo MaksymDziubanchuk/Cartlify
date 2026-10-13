@@ -119,14 +119,14 @@ export interface GetProductReviewsParamsDto {
   productId: ProductId;
 }
 export interface GetProductReviewsQueryDto {
-  cursorId?: ReviewId;
+  cursor?: string;
   limit?: number;
 }
 
 export interface FindProductReviewsDto {
   productId: ProductId;
   limit: number;
-  cursorId?: string;
+  cursor?: string;
 
   actorId: UserId;
   actorRole: Role;
@@ -150,7 +150,7 @@ export interface ReviewsResponseDto {
   items: ReviewResponseDto[];
   limit: number;
   total: number;
-  nextCursorId?: ReviewId;
+  nextCursor?: string;
 }
 
 // CREATE PRODUCT

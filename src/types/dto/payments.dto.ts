@@ -49,4 +49,6 @@ export interface HandleStripeWebhookDto {
 
 export interface StripeWebhookResponseDto {
   received: true;
+  // event was acknowledged without any action, with the reason
+  skipped?: 'ORDER_NOT_FOUND';
 }

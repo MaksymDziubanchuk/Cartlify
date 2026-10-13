@@ -122,7 +122,18 @@ export async function handleStripeWebhook(
         }
 
         const orderId = getOrderIdFromCheckoutSession(session);
-        const unconfirmResult = await unconfirmOrderFromStripeWebhook(orderId);
+
+        // expired session can still have a last-moment payment on its way, so its reservation waits for the grace window
+        // failed async payment is final, nothing can arrive after it, so its reservation is released at once
+        const unconfirmResult = await unconfirmOrderFromStripeWebhook({
+          orderId,
+          waitForPaymentGrace: event.type === 'checkout.session.expired',
+        });
+
+        // order is already deleted by its owner: acknowledge the event and say why nothing was done
+        if (!unconfirmResult.orderFound) {
+          return { received: true, skipped: 'ORDER_NOT_FOUND' };
+        }
 
         // a leftover timeout job is harmless, so a redis outage must not fail the webhook
         if (unconfirmResult.unconfirmedNow && isRedisReady()) {

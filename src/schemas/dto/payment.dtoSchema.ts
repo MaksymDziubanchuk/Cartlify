@@ -76,6 +76,8 @@ const paymentsStripeWebhookResponseSchema = {
   required: ['received'],
   properties: {
     received: { type: 'boolean', const: true },
+    // event was acknowledged without any action, with the reason
+    skipped: { type: 'string', enum: ['ORDER_NOT_FOUND'] },
   },
 } as const;
 

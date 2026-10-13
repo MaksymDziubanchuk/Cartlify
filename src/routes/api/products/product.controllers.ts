@@ -116,16 +116,16 @@ const getProductReviews: ControllerRouter<
   const { id: actorId, role: actorRole } = req.user as User;
   // normalize cursor pagination inputs
   const ql = req.query.limit;
-  const qc = req.query?.cursorId;
+  const qc = req.query?.cursor;
 
   const productId = Number(req.params.productId);
 
-  const cursorId = typeof qc === 'string' ? qc : undefined;
+  const cursor = typeof qc === 'string' ? qc : undefined;
   const limit = ql != null ? Number(ql) : 10;
 
   const args = pickDefined<FindProductReviewsDto>(
     { productId, limit, actorId, actorRole },
-    { cursorId },
+    { cursor },
   );
 
   const result = await productServices.findReviews(args);

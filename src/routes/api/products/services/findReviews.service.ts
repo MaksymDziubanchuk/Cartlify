@@ -13,7 +13,7 @@ import type { FindProductReviewsDto, ReviewsResponseDto } from 'types/dto/produc
 export async function findReviews({
   productId: productIdIn,
   limit: limitIn,
-  cursorId: cursorIdIn,
+  cursor: cursorIn,
   actorId: actorIdIn,
   actorRole,
 }: FindProductReviewsDto): Promise<ReviewsResponseDto> {
@@ -25,7 +25,7 @@ export async function findReviews({
     limitRaw != null && Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
 
   const cursor =
-    typeof cursorIdIn === 'string' && cursorIdIn.trim() ? cursorIdIn.trim() : undefined;
+    typeof cursorIn === 'string' && cursorIn.trim() ? cursorIn.trim() : undefined;
   const c = cursor ? decodeCursor(cursor) : undefined;
 
   // bind cursor to this product to prevent cross-product reuse
@@ -120,7 +120,7 @@ export async function findReviews({
         items: rowsWithUserVote.map(mapReviewRowToResponse),
         limit,
         total,
-        ...(nextCursor ? { nextCursorId: nextCursor as any } : {}),
+        ...(nextCursor ? { nextCursor } : {}),
       };
     });
   } catch (err) {

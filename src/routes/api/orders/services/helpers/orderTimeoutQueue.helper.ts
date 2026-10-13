@@ -12,7 +12,7 @@ type WorkerLogger = {
 };
 
 // give payment webhook processing extra time after reservation expiry
-const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
+export const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
 
 // treat a reservation as missed by redis when it expired this long ago
 const MISSED_RESERVATION_EXPIRY_MS = 300_000;
