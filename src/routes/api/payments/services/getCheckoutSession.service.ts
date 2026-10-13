@@ -38,6 +38,7 @@ export async function getCheckoutSessionById({
         where: { id: orderId },
         select: {
           id: true,
+          reservationExpiresAt: true,
         },
       });
     });
@@ -47,7 +48,8 @@ export async function getCheckoutSessionById({
     }
 
     // map stripe session into api dto
-    return mapCreatedCheckoutSession(session, orderId);
+    // reservation time is empty once the order is paid or unconfirmed, stripe own expiry is used then
+    return mapCreatedCheckoutSession(session, orderId, order.reservationExpiresAt);
   } catch (err) {
     // preserve known app errors
     if (isAppError(err)) throw err;

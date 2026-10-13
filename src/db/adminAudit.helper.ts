@@ -129,10 +129,10 @@ export async function writeAdminAuditLog(
 
   await tx.$executeRaw`
     select cartlify.log_admin_action(
-      ${args.actorId},
+      ${args.actorId}::int,
       ${args.actorRole}::cartlify."Role",
       ${args.entityType}::cartlify."AdminAuditEntityType",
-      ${args.entityId},
+      ${args.entityId}::int,
       ${args.action}::cartlify."AdminAuditAction",
       ${changesJson}::jsonb
     )

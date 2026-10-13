@@ -35,7 +35,8 @@ const stripeWebhookResponseExample = {
 const postCheckoutSessionSchema = {
   operationId: 'createCheckoutSession',
   summary: 'Create checkout session',
-  description: 'Creates a Stripe checkout session for a confirmed user order.',
+  description:
+    'Creates a Stripe checkout session for a confirmed user order. A repeated request for the same order and reservation returns the same session. `expiresAt` is the time after which the checkout can no longer be paid.',
 
   body: {
     $ref: 'paymentsCreateCheckoutSessionBodySchema#',
@@ -129,7 +130,8 @@ const getCheckoutSessionByIdSchema = {
 const postStripeWebhookSchema = {
   operationId: 'handleStripeWebhook',
   summary: 'Handle Stripe webhook',
-  description: 'Handles Stripe checkout webhook events and updates linked order payment state.',
+  description:
+    'Handles Stripe checkout webhook events and updates linked order payment state. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log.',
 
   headers: {
     $ref: 'paymentsStripeWebhookHeadersSchema#',

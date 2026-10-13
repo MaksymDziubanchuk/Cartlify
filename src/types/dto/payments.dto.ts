@@ -23,6 +23,7 @@ export interface CheckoutSessionDto {
   mode: StripeCheckoutMode;
   status: StripeCheckoutSessionStatus;
   paymentStatus: StripeCheckoutPaymentStatus;
+  // time after which this checkout can no longer be paid
   expiresAt: string;
 }
 
