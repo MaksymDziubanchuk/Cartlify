@@ -81,9 +81,12 @@ const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderRes
   reply,
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { orderId } = req.body;
+  const { orderId, shippingAddress } = req.body;
 
-  const args = pickDefined<ConfirmCurrentOrderDto>({ actorId, actorRole, orderId }, {});
+  const args = pickDefined<ConfirmCurrentOrderDto>(
+    { actorId, actorRole, orderId },
+    { shippingAddress },
+  );
 
   const result = await ordersServices.confirmOrder(args);
   return reply.code(200).send(result);

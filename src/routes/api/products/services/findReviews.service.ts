@@ -13,7 +13,7 @@ import type { FindProductReviewsDto, ReviewsResponseDto } from 'types/dto/produc
 export async function findReviews({
   productId: productIdIn,
   limit: limitIn,
-  cursorId: cursorIdIn,
+  cursor: cursorIn,
   actorId: actorIdIn,
   actorRole,
 }: FindProductReviewsDto): Promise<ReviewsResponseDto> {
@@ -25,7 +25,7 @@ export async function findReviews({
     limitRaw != null && Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
 
   const cursor =
-    typeof cursorIdIn === 'string' && cursorIdIn.trim() ? cursorIdIn.trim() : undefined;
+    typeof cursorIn === 'string' && cursorIn.trim() ? cursorIn.trim() : undefined;
   const c = cursor ? decodeCursor(cursor) : undefined;
 
   // bind cursor to this product to prevent cross-product reuse
@@ -62,13 +62,13 @@ export async function findReviews({
       });
       if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
-      // read page and total
-      const [rows, total] = await Promise.all([
+      // read page and total, fetch limit + 1 to detect next page
+      const [rowsPlusOne, total] = await Promise.all([
         tx.review.findMany({
           where: { productId },
           orderBy: { id: 'desc' },
           ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-          take: limit,
+          take: limit + 1,
           select: {
             id: true,
             productId: true,
@@ -84,10 +84,14 @@ export async function findReviews({
         tx.review.count({ where: { productId } }),
       ]);
 
-      // compute next cursor from last item
-      const nextCursor = rows.length
-        ? encodeCursor({ id: rows[rows.length - 1].id, v: productId })
-        : undefined;
+      const hasNext = rowsPlusOne.length > limit;
+      const rows = hasNext ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
+
+      // compute next cursor from last item only when next page exists
+      const nextCursor =
+        hasNext && rows.length
+          ? encodeCursor({ id: rows[rows.length - 1].id, v: productId })
+          : undefined;
 
       // resolve current user votes for returned page only
       let userVoteByReviewId: Map<number, 'up' | 'down'> | null = null;
@@ -120,7 +124,7 @@ export async function findReviews({
         items: rowsWithUserVote.map(mapReviewRowToResponse),
         limit,
         total,
-        ...(nextCursor ? { nextCursorId: nextCursor as any } : {}),
+        ...(nextCursor ? { nextCursor } : {}),
       };
     });
   } catch (err) {

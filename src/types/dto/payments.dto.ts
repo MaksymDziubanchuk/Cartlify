@@ -23,6 +23,7 @@ export interface CheckoutSessionDto {
   mode: StripeCheckoutMode;
   status: StripeCheckoutSessionStatus;
   paymentStatus: StripeCheckoutPaymentStatus;
+  // time after which this checkout can no longer be paid
   expiresAt: string;
 }
 
@@ -48,4 +49,6 @@ export interface HandleStripeWebhookDto {
 
 export interface StripeWebhookResponseDto {
   received: true;
+  // event was acknowledged without any action, with the reason
+  skipped?: 'ORDER_NOT_FOUND';
 }

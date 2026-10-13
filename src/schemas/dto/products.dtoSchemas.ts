@@ -245,7 +245,8 @@ const updateProductBodySchema = {
 
     price: { type: 'number', minimum: 0 },
 
-    stock: { type: 'integer', minimum: 0 },
+    // stock is a delta: positive adds units, negative takes free units off
+    stock: { type: 'integer' },
 
     categoryId: { type: 'integer', minimum: 1 },
 

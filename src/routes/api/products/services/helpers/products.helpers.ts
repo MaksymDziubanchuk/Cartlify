@@ -110,9 +110,9 @@ export function normalizeUpdateProductInput(args: {
     throw new BadRequestError('PRODUCT_PRICE_INVALID');
   }
 
-  // validate optional stock
+  // validate optional stock delta (negative value takes units off)
   if (args.stock != null) {
-    if (stockRaw == null || !Number.isInteger(stockRaw) || stockRaw < 0) {
+    if (stockRaw == null || !Number.isInteger(stockRaw)) {
       throw new BadRequestError('PRODUCT_STOCK_INVALID');
     }
   }

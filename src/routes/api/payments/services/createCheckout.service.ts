@@ -14,8 +14,8 @@ import {
 } from '@utils/errors.js';
 
 import {
+  buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
-  expireCheckoutSession,
   mapCreatedCheckoutSession,
 } from './helpers/checkoutSession.helper.js';
 
@@ -45,6 +45,7 @@ export async function createCheckoutSession({
         where: { id: Number(orderId) },
         select: {
           id: true,
+          userId: true,
           status: true,
           confirmed: true,
           reservationExpiresAt: true,
@@ -111,31 +112,38 @@ export async function createCheckoutSession({
 
       return {
         orderId: order.id,
+        userId: order.userId,
         total: totalRaw,
+        reservationExpiresAt: order.reservationExpiresAt,
       };
     });
 
     // build checkout payload for stripe
     const checkoutSessionPayload = buildCheckoutSessionPayload({
       orderId: orderSnapshot.orderId,
+      userId: orderSnapshot.userId,
       total: orderSnapshot.total,
     });
 
     // create checkout session in stripe
-    const session = await stripe.checkout.sessions.create(checkoutSessionPayload);
+    // repeated request for the same order and reservation gets the same session, not a second payment
+    const session = await stripe.checkout.sessions.create(checkoutSessionPayload, {
+      idempotencyKey: buildCheckoutIdempotencyKey(
+        orderSnapshot.orderId,
+        orderSnapshot.reservationExpiresAt,
+      ),
+    });
 
-    try {
-      // set sessionId & orderId connection to Redis for expiration
-      await setOrderPaymentSessionLink(orderSnapshot.orderId, session.id);
-    } catch (err) {
-      // close the stripe session that could not be linked to its order
-      await expireCheckoutSession({ sessionId: session.id }).catch(() => undefined);
-
-      throw err;
-    }
+    // set sessionId & orderId connection to Redis for expiration
+    // session is not expired when this fails: the retry gets the same session back and links it
+    await setOrderPaymentSessionLink(orderSnapshot.orderId, session.id);
 
     // map stripe session into api dto
-    return mapCreatedCheckoutSession(session, orderSnapshot.orderId);
+    return mapCreatedCheckoutSession(
+      session,
+      orderSnapshot.orderId,
+      orderSnapshot.reservationExpiresAt,
+    );
   } catch (err) {
     // preserve known app errors
     if (isAppError(err)) throw err;

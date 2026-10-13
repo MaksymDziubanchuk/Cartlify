@@ -73,6 +73,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
         select: {
           id: true,
           productId: true,
+          rating: true,
           userId: true,
           createdAt: true,
           comment: true,
@@ -95,6 +96,9 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
           const comment = (r.comment ?? '').trim();
           if (!comment) return null;
 
+          // rating is required in the response; the api never creates a review with text and without rating
+          if (r.rating == null) return null;
+
           // derive current user's vote from enum stored in review_votes
           const action = r.votes[0]?.action;
           const userVote = action === 'UP' ? 'up' : action === 'DOWN' ? 'down' : null;
@@ -102,6 +106,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
           return {
             id: r.id as any,
             productId: r.productId as any,
+            rating: r.rating,
 
             userId: r.userId as any,
             createdAt: r.createdAt,
@@ -275,6 +280,7 @@ async function updateMe({
         select: {
           id: true,
           productId: true,
+          rating: true,
           userId: true,
           createdAt: true,
           comment: true,
@@ -295,12 +301,16 @@ async function updateMe({
           const comment = (r.comment ?? '').trim();
           if (!comment) return null;
 
+          // rating is required in the response; the api never creates a review with text and without rating
+          if (r.rating == null) return null;
+
           const action = r.votes[0]?.action;
           const userVote = action === 'UP' ? 'up' : action === 'DOWN' ? 'down' : null;
 
           return {
             id: r.id as any,
             productId: r.productId as any,
+            rating: r.rating,
             userId: r.userId as any,
             createdAt: r.createdAt,
             comment,

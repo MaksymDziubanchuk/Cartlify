@@ -30,7 +30,12 @@ const paymentsCheckoutSessionPublicSchema = {
       type: 'string',
       enum: ['paid', 'unpaid', 'no_payment_required'],
     },
-    expiresAt: { type: 'string', format: 'date-time' },
+    expiresAt: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Time after which this checkout can no longer be paid: order reservation end or Stripe session expiry, whichever comes first.',
+    },
   },
 } as const;
 
@@ -71,6 +76,8 @@ const paymentsStripeWebhookResponseSchema = {
   required: ['received'],
   properties: {
     received: { type: 'boolean', const: true },
+    // event was acknowledged without any action, with the reason
+    skipped: { type: 'string', enum: ['ORDER_NOT_FOUND'] },
   },
 } as const;
 

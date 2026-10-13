@@ -31,6 +31,8 @@ const ordersOrderItemSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    // order item id, used as itemId in cart item routes
+    id: { type: 'integer' },
     productId: { type: 'integer' },
     product: { $ref: 'ordersOrderItemProductSchema#' },
 
@@ -38,7 +40,7 @@ const ordersOrderItemSchema = {
     unitPrice: { type: 'number' },
     totalPrice: { type: 'number' },
   },
-  required: ['productId', 'product', 'quantity', 'unitPrice', 'totalPrice'],
+  required: ['id', 'productId', 'product', 'quantity', 'unitPrice', 'totalPrice'],
 } as const;
 
 const ordersOrderResponseSchema = {
@@ -120,6 +122,8 @@ const ordersCurrentConfirmBodySchema = {
   additionalProperties: false,
   properties: {
     orderId: { type: 'number', minimum: 1 },
+    // required for an order that has no shipping address yet
+    shippingAddress: { type: 'string', minLength: 1, maxLength: 500 },
   },
   required: ['orderId'],
 } as const;

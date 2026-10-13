@@ -34,11 +34,11 @@ export async function deleteCurrentItem({
 
         // lock item row and ensure it belongs to actor open order; keep orderId before delete
         const locked = await db.$queryRaw<{ order_id: number }[]>`
-          SELECT oi.order_id
+          SELECT oi."orderId" AS order_id
           FROM cartlify.order_items oi
-          JOIN cartlify.orders o ON o.id = oi.order_id
+          JOIN cartlify.orders o ON o.id = oi."orderId"
           WHERE oi.id = ${itemIdRaw}
-            AND o.user_id = ${actorIdRaw}
+            AND o."userId" = ${actorIdRaw}
             AND o.confirmed = false
             AND o.status = 'pending'
           FOR UPDATE OF oi
@@ -52,6 +52,10 @@ export async function deleteCurrentItem({
           where: { id: itemIdRaw },
           select: { id: true },
         });
+
+        // bring remaining items to current product prices
+        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // fetch current order after delete
         const order = await db.order.findUnique({
@@ -68,6 +72,7 @@ export async function deleteCurrentItem({
             updatedAt: true,
             items: {
               select: {
+                id: true,
                 productId: true,
                 quantity: true,
                 unitPrice: true,

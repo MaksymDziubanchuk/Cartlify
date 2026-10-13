@@ -38,9 +38,9 @@ export async function updateCurrentItem({
         const locked = await db.$queryRaw<{ id: number }[]>`
           SELECT oi.id
           FROM cartlify.order_items oi
-          JOIN cartlify.orders o ON o.id = oi.order_id
+          JOIN cartlify.orders o ON o.id = oi."orderId"
           WHERE oi.id = ${itemIdRaw}
-            AND o.user_id = ${actorIdRaw}
+            AND o."userId" = ${actorIdRaw}
             AND o.confirmed = false
             AND o.status = 'pending'
           FOR UPDATE OF oi
@@ -78,6 +78,10 @@ export async function updateCurrentItem({
           select: { id: true },
         });
 
+        // bring the other items to current product prices too
+        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        await db.$executeRaw`select cartlify.refresh_order_prices(${item.orderId}::int)`;
+
         // totals are maintained by db triggers; fetch current order
         const order = await db.order.findUnique({
           where: { id: item.orderId },
@@ -93,6 +97,7 @@ export async function updateCurrentItem({
             updatedAt: true,
             items: {
               select: {
+                id: true,
                 productId: true,
                 quantity: true,
                 unitPrice: true,

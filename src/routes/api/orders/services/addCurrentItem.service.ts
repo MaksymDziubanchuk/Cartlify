@@ -97,6 +97,10 @@ export async function addCurrentItem({
           });
         }
 
+        // bring the other items to current product prices too
+        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
+
         // totals are maintained by db triggers; fetch current order
         const order = await db.order.findUnique({
           where: { id: orderId },
@@ -112,6 +116,7 @@ export async function addCurrentItem({
             updatedAt: true,
             items: {
               select: {
+                id: true,
                 productId: true,
                 quantity: true,
                 unitPrice: true,

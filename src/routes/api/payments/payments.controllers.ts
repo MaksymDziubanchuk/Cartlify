@@ -78,7 +78,7 @@ const postStripeWebhook: ControllerRouter<{}, {}, {}, StripeWebhookResponseDto> 
     {},
   );
 
-  const result = await paymentsServices.handleStripeWebhook(args);
+  const result = await paymentsServices.handleStripeWebhook(args, req.log);
 
   return reply.code(200).send(result);
 };

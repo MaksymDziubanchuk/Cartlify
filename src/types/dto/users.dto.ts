@@ -33,6 +33,7 @@ export interface FindMeByIdDto {
 
 export type UserReviewResponseDto = Omit<ReviewResponseDto, 'comment' | 'rating'> & {
   comment: string;
+  rating: number;
 } & Pick<VoteReviewResponseDto, 'upVotes' | 'downVotes' | 'userVote' | 'updatedAt'>;
 
 export interface UserResponseDto {

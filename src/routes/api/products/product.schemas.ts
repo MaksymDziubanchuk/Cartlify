@@ -368,7 +368,8 @@ const postProductReviewRouterSchema = {
 const updateProductByIdRouterSchema = {
   operationId: 'updateProductById',
   summary: 'Update product by id',
-  description: 'Updates product details by product id. This operation is restricted to privileged users.',
+  description:
+    'Updates product details by product id. This operation is restricted to privileged users. Field stock is a delta: a positive value adds units, a negative value takes off only free units that are not reserved by confirmed orders.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -413,7 +414,8 @@ const updateProductByIdRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Product update conflicts with existing data.',
+      description:
+        'Product update conflicts with existing data, or stock decrease exceeds free units.',
       $ref: 'errorResponseSchema#',
     },
     422: {

@@ -32,12 +32,12 @@ export async function writeProductPriceChangeLog(
 
   await tx.$executeRaw`
     select cartlify.log_product_price_change(
-      ${args.productId},
-      ${args.actorId},
-      ${oldPriceNum},
-      ${newPriceNum},
+      ${args.productId}::int,
+      ${args.actorId}::int,
+      ${oldPriceNum}::numeric,
+      ${newPriceNum}::numeric,
       ${args.mode}::cartlify."PriceChangeMode",
-      ${args.value}
+      ${args.value}::numeric
     )
   `;
 }

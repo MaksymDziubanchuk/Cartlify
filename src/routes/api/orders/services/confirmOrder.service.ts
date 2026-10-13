@@ -21,8 +21,17 @@ export async function confirmOrder({
   actorId,
   actorRole,
   orderId,
+  shippingAddress,
 }: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
+
+  // normalize shipping address, it is optional when the order already has one
+  const shippingAddressNorm =
+    typeof shippingAddress === 'string' ? shippingAddress.trim() : undefined;
+
+  if (shippingAddress !== undefined && !shippingAddressNorm) {
+    throw new BadRequestError('SHIPPING_ADDRESS_INVALID');
+  }
 
   // refuse early so nothing is confirmed in db while redis is down
   assertRedisReady();
@@ -32,6 +41,15 @@ export async function confirmOrder({
       async (db) => {
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
+
+        // store shipping address before confirm, db refuses to confirm an order without it
+        // rls lets the owner change only an own unconfirmed order; any other case is reported by confirm_order
+        if (shippingAddressNorm) {
+          await db.order.updateMany({
+            where: { id: Number(orderId), confirmed: false },
+            data: { shippingAddress: shippingAddressNorm },
+          });
+        }
 
         // confirm in db
         await db.$executeRaw`select cartlify.confirm_order(
@@ -54,6 +72,7 @@ export async function confirmOrder({
             updatedAt: true,
             items: {
               select: {
+                id: true,
                 productId: true,
                 quantity: true,
                 unitPrice: true,
@@ -119,6 +138,14 @@ export async function confirmOrder({
       if (msg.includes('ORDER_STATUS_NOT_ALLOWED'))
         throw new ConflictError('ORDER_STATUS_NOT_ALLOWED');
       if (msg.includes('ORDER_ITEMS_REQUIRED')) throw new BadRequestError('ORDER_ITEMS_REQUIRED');
+
+      // order has no shipping address and the request did not bring one
+      if (msg.includes('without shipping address'))
+        throw new BadRequestError('SHIPPING_ADDRESS_REQUIRED');
+
+      // some item price differs from current product price
+      // nothing is reserved; client reloads the order to get fresh prices and confirms again
+      if (msg.includes('ORDER_PRICES_CHANGED')) throw new ConflictError('ORDER_PRICES_CHANGED');
       if (msg.includes('INSUFFICIENT_AVAILABLE_STOCK'))
         throw new ConflictError('INSUFFICIENT_AVAILABLE_STOCK');
       if (msg.includes('PRODUCT_NOT_FOUND')) throw new NotFoundError('PRODUCT_NOT_FOUND');

@@ -1,5 +1,8 @@
 BEGIN;
 
+-- everything below is created and owned by cartlify_owner, whoever runs the script
+SET LOCAL ROLE cartlify_owner;
+
 ------------------------------------------------------------
 -- CONTEXT HELPERS
 ------------------------------------------------------------
@@ -368,7 +371,7 @@ BEGIN
 
   v_role := cartlify.current_actor_role();
 
-  IF v_role NOT IN ('ADMIN', 'ROOT') THEN
+  IF v_role IS NULL OR v_role NOT IN ('ADMIN', 'ROOT') THEN
     RAISE EXCEPTION 'STOCK_ADD_FORBIDDEN';
   END IF;
 
@@ -394,7 +397,8 @@ END;
 $$;
 
 -- PRODUCTS reserve product stock for order confirmation
-CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+-- internal step: runs with caller rights, so only system functions pass rls on stock columns
+CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -433,7 +437,8 @@ END;
 $$;
 
 -- PRODUCTS release stock after unconfirm or expiration
-CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+-- internal step: runs with caller rights, so only system functions pass rls on stock columns
+CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -475,7 +480,8 @@ END;
 $$;
 
 -- PRODUCTS consume reserved stock after payment
-CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+-- internal step: runs with caller rights, so only system functions pass rls on stock columns
+CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -490,7 +496,7 @@ BEGIN
 
   v_role := cartlify.current_actor_role();
 
-  IF v_role NOT IN ('USER', 'ADMIN', 'ROOT') THEN
+  IF v_role IS NULL OR v_role NOT IN ('ADMIN', 'ROOT') THEN
     RAISE EXCEPTION 'STOCK_CONSUME_FORBIDDEN';
   END IF;
 
@@ -666,16 +672,41 @@ $$;
 DROP TRIGGER IF EXISTS trg_reviews_after_mod_rating ON cartlify.reviews;
 
 CREATE TRIGGER trg_reviews_after_mod_rating
-AFTER INSERT
-OR DELETE
-OR
-UPDATE OF "rating" ON cartlify.reviews FOR EACH ROW
+AFTER INSERT OR DELETE OR UPDATE OF "rating" ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 
--- PRODUCTS sync product views after product update
+-- PRODUCTS guard product views before update: guest and user can add only one view
+CREATE OR REPLACE FUNCTION cartlify.products_before_views_change () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."views" IS DISTINCT FROM OLD."views"
+     AND cartlify.current_actor_role() IN ('GUEST', 'USER')
+     AND NEW."views" IS DISTINCT FROM OLD."views" + 1
+  THEN
+    RAISE EXCEPTION 'PRODUCT_VIEWS_UPDATE_FORBIDDEN';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_products_before_views_change ON cartlify.products;
+
+CREATE TRIGGER trg_products_before_views_change
+BEFORE UPDATE ON cartlify.products FOR EACH ROW
+EXECUTE FUNCTION cartlify.products_before_views_change ();
+
+-- PRODUCTS sync popularity after product views change
+-- views enter the score through a logarithm, so one view rarely changes it:
+-- recalc while the counter is small, on every tenth view and on any manual change
 CREATE OR REPLACE FUNCTION cartlify.products_after_views_change () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW."views" IS DISTINCT FROM OLD."views" THEN
+  IF NEW."views" IS DISTINCT FROM OLD."views"
+     AND (
+       NEW."views" <= 20
+       OR NEW."views" % 10 = 0
+       OR NEW."views" IS DISTINCT FROM OLD."views" + 1
+     )
+  THEN
     PERFORM cartlify.recalc_product_popularity(NEW.id);
   END IF;
 
@@ -686,8 +717,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_products_after_views_change ON cartlify.products;
 
 CREATE TRIGGER trg_products_after_views_change
-AFTER
-UPDATE ON cartlify.products FOR EACH ROW
+AFTER UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_after_views_change ();
 
 -- PRODUCTS sync popularity after favorites change
@@ -714,8 +744,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_favorites_after_mod_popularity ON cartlify.favorites;
 
 CREATE TRIGGER trg_favorites_after_mod_popularity
-AFTER INSERT
-OR DELETE ON cartlify.favorites FOR EACH ROW
+AFTER INSERT OR DELETE ON cartlify.favorites FOR EACH ROW
 EXECUTE FUNCTION cartlify.favorites_after_mod_popularity ();
 
 -- PRODUCTS sync popularity after order items change
@@ -742,10 +771,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_order_items_after_mod_popularity ON cartlify.order_items;
 
 CREATE TRIGGER trg_order_items_after_mod_popularity
-AFTER INSERT
-OR
-UPDATE
-OR DELETE ON cartlify.order_items FOR EACH ROW
+AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod_popularity ();
 
 -- PRODUCTS sync popularity after review changes
@@ -772,10 +798,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_reviews_after_mod_popularity ON cartlify.reviews;
 
 CREATE TRIGGER trg_reviews_after_mod_popularity
-AFTER INSERT
-OR
-UPDATE
-OR DELETE ON cartlify.reviews FOR EACH ROW
+AFTER INSERT OR UPDATE OR DELETE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_popularity ();
 
 -- PRODUCTS sync popularity after order status change
@@ -803,8 +826,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_orders_after_update_popularity ON cartlify.orders;
 
 CREATE TRIGGER trg_orders_after_update_popularity
-AFTER
-UPDATE ON cartlify.orders FOR EACH ROW
+AFTER UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 
 ------------------------------------------------------------
@@ -831,8 +853,33 @@ END;
 $$;
 
 -- ORDERS AND ITEMS === user actions ===
+-- ORDERS AND ITEMS refresh item prices of an unconfirmed order from current product prices
+-- runs with caller rights: rls lets only the order owner change items, and only before confirmation
+-- returns the number of items whose price changed
+CREATE OR REPLACE FUNCTION cartlify.refresh_order_prices (p_order_id integer) RETURNS integer LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_changed integer;
+BEGIN
+  UPDATE cartlify.order_items AS oi
+  SET "unitPrice" = p."price"
+  FROM cartlify.products AS p
+  WHERE oi."orderId" = p_order_id
+    AND p.id = oi."productId"
+    AND oi."unitPrice" IS DISTINCT FROM p."price";
+
+  GET DIAGNOSTICS v_changed = ROW_COUNT;
+
+  RETURN v_changed;
+END;
+$$;
+
+-- ORDERS AND ITEMS === system functions ===
 -- ORDERS AND ITEMS confirm order and reserve product stock
-CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer, p_reserve_for interval) RETURNS void LANGUAGE plpgsql
+-- system function: acts only for the USER who owns the order
+CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer, p_reserve_for interval) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -850,7 +897,7 @@ BEGIN
   v_actor_id   := cartlify.current_actor_id();
 
   -- only real USER
-  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+  IF v_actor_role IS DISTINCT FROM 'USER' OR v_actor_id IS NULL THEN
     RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
   END IF;
 
@@ -859,11 +906,12 @@ BEGIN
     RAISE EXCEPTION 'ORDER_RESERVATION_DURATION_INVALID';
   END IF;
 
-  -- lock order row
+  -- lock order row; orders of other users stay hidden, as they were under rls
   SELECT o."userId", o.confirmed, o.status
   INTO v_user_id, v_confirmed, v_status
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id
+    AND o."userId" = v_actor_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
@@ -904,6 +952,18 @@ END IF;
     PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
   END LOOP;
 
+  -- product rows are locked by the reservation above, so prices cannot change until commit:
+  -- refuse if any item price differs, the user must confirm the amount they see
+  IF EXISTS (
+    SELECT 1
+    FROM cartlify.order_items AS oi
+    JOIN cartlify.products AS p ON p.id = oi."productId"
+    WHERE oi."orderId" = p_order_id
+      AND oi."unitPrice" IS DISTINCT FROM p."price"
+  ) THEN
+    RAISE EXCEPTION 'ORDER_PRICES_CHANGED';
+  END IF;
+
   -- confirm order and set reservation deadline
   UPDATE cartlify.orders AS o
   SET
@@ -915,42 +975,32 @@ END;
 $$;
 
 -- ORDERS AND ITEMS unconfirm order and release reserved stock
-CREATE OR REPLACE FUNCTION cartlify.unconfirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
+DROP FUNCTION IF EXISTS cartlify.unconfirm_order (integer);
+
+CREATE OR REPLACE FUNCTION cartlify.unconfirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_actor_role text;
-  v_actor_id   integer;
-
-  v_user_id    integer;
   v_confirmed  boolean;
   v_status     text;
 
   r record;
 BEGIN
-  v_actor_role := cartlify.current_actor_role();
-  v_actor_id   := cartlify.current_actor_id();
-
-  -- only real USER
-  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+  -- only system-side callers with admin context
+  IF NOT cartlify.is_admin() THEN
     RAISE EXCEPTION 'ORDER_UNCONFIRM_FORBIDDEN';
   END IF;
 
   -- lock order row
-  SELECT o."userId", o.confirmed, o.status
-  INTO v_user_id, v_confirmed, v_status
+  SELECT o.confirmed, o.status
+  INTO v_confirmed, v_status
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'ORDER_NOT_FOUND';
-  END IF;
-
-  -- only owner can unconfirm
-  IF v_user_id IS DISTINCT FROM v_actor_id THEN
-    RAISE EXCEPTION 'ORDER_UNCONFIRM_FORBIDDEN';
   END IF;
 
   IF NOT v_confirmed THEN
@@ -993,98 +1043,161 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS pay order and consume reserved stock
-CREATE OR REPLACE FUNCTION cartlify.pay_order (p_order_id integer) RETURNS void LANGUAGE plpgsql
+-- ORDERS AND ITEMS pay order from a verified payment webhook
+DROP FUNCTION IF EXISTS cartlify.pay_order (integer);
+
+DROP FUNCTION IF EXISTS cartlify.pay_order (integer, text, numeric);
+
+CREATE OR REPLACE FUNCTION cartlify.pay_order (
+  p_order_id integer,
+  p_payment_intent_id text,
+  p_paid_amount numeric
+) RETURNS text LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_actor_role     text;
-  v_actor_id       integer;
-
-  v_user_id        integer;
-  v_confirmed      boolean;
-  v_status         text;
-  v_reserve_until  timestamptz;
+  v_confirmed         boolean;
+  v_status            text;
+  v_shipping_address  text;
+  v_recorded_payment  text;
+  v_items_total       numeric;
 
   r record;
 BEGIN
-  v_actor_role := cartlify.current_actor_role();
-  v_actor_id   := cartlify.current_actor_id();
-
-  -- only real USER
-  IF v_actor_role <> 'USER' OR v_actor_id IS NULL THEN
+  -- only system-side callers with admin context
+  IF NOT cartlify.is_admin() THEN
     RAISE EXCEPTION 'ORDER_PAY_FORBIDDEN';
   END IF;
 
+  IF p_payment_intent_id IS NULL OR btrim(p_payment_intent_id) = '' THEN
+    RAISE EXCEPTION 'ORDER_PAYMENT_ID_REQUIRED';
+  END IF;
+
+  -- read state without a lock: paid orders are not lockable for system updates
+  SELECT o.status, o."paymentIntentId"
+  INTO v_status, v_recorded_payment
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id;
+
+  IF NOT FOUND THEN
+    RETURN 'ORDER_NOT_FOUND';
+  END IF;
+
+  -- already paid: same payment is a repeated delivery, another one is a second charge
+  IF v_status = 'paid' THEN
+    IF v_recorded_payment IS NOT DISTINCT FROM p_payment_intent_id THEN
+      RETURN 'ALREADY_PAID_SAME_PAYMENT';
+    END IF;
+
+    RETURN 'ALREADY_PAID_OTHER_PAYMENT';
+  END IF;
+
   -- lock order row
-  SELECT o."userId", o.confirmed, o.status, o."reservationExpiresAt"
-  INTO v_user_id, v_confirmed, v_status, v_reserve_until
+  SELECT o.confirmed, o.status, o."shippingAddress"
+  INTO v_confirmed, v_status, v_shipping_address
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'ORDER_NOT_FOUND';
-  END IF;
+    -- order changed while waiting for the lock and is no longer open for system updates
+    SELECT o.status, o."paymentIntentId"
+    INTO v_status, v_recorded_payment
+    FROM cartlify.orders AS o
+    WHERE o.id = p_order_id;
 
-  -- only owner can pay
-  IF v_user_id IS DISTINCT FROM v_actor_id THEN
-    RAISE EXCEPTION 'ORDER_PAY_FORBIDDEN';
-  END IF;
+    IF v_status = 'paid' THEN
+      IF v_recorded_payment IS NOT DISTINCT FROM p_payment_intent_id THEN
+        RETURN 'ALREADY_PAID_SAME_PAYMENT';
+      END IF;
 
-  -- order must be confirmed first
-  IF NOT v_confirmed THEN
-    RAISE EXCEPTION 'ORDER_NOT_CONFIRMED';
-  END IF;
+      RETURN 'ALREADY_PAID_OTHER_PAYMENT';
+    END IF;
 
-  -- only waiting orders can be paid
-  IF v_status IS DISTINCT FROM 'waiting' THEN
-    RAISE EXCEPTION 'ORDER_STATUS_NOT_WAITING';
-  END IF;
-
-  -- reservation must exist
-  IF v_reserve_until IS NULL THEN
-    RAISE EXCEPTION 'ORDER_RESERVATION_MISSING';
-  END IF;
-
-  -- reservation must still be active
-  IF v_reserve_until < clock_timestamp() THEN
-    RAISE EXCEPTION 'ORDER_RESERVATION_EXPIRED';
+    RETURN 'ORDER_NOT_PAYABLE';
   END IF;
 
   -- lock all order items
   PERFORM 1
   FROM cartlify.order_items AS oi
-  WHERE oi."orderId" = p_order_id;
+  WHERE oi."orderId" = p_order_id
+  FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+    RETURN 'ORDER_NOT_PAYABLE';
   END IF;
 
-  -- finalize reserved stock (deterministic lock order by productId)
-  FOR r IN
-    SELECT oi."productId" AS product_id,
-           SUM(oi.quantity)::integer AS qty
-    FROM cartlify.order_items AS oi
-    WHERE oi."orderId" = p_order_id
-    GROUP BY oi."productId"
-    ORDER BY oi."productId"
-  LOOP
-    PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
-  END LOOP;
+  -- paid amount must match the items being sold
+  SELECT COALESCE(SUM(oi."totalPrice"), 0)
+  INTO v_items_total
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id;
 
-  -- mark order as paid and clear reservation deadline
+  IF p_paid_amount IS NULL OR p_paid_amount <> v_items_total THEN
+    RETURN 'AMOUNT_MISMATCH';
+  END IF;
+
+  IF v_confirmed AND v_status = 'waiting' THEN
+    -- regular path: stock is still reserved for this order
+    FOR r IN
+      SELECT oi."productId" AS product_id,
+             SUM(oi.quantity)::integer AS qty
+      FROM cartlify.order_items AS oi
+      WHERE oi."orderId" = p_order_id
+      GROUP BY oi."productId"
+      ORDER BY oi."productId"
+    LOOP
+      PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
+    END LOOP;
+  ELSIF NOT v_confirmed AND v_status IN ('pending', 'unconfirmed') THEN
+    -- emergency path: reservation is gone, sell only when every item is still available
+    IF v_shipping_address IS NULL OR btrim(v_shipping_address) = '' THEN
+      RETURN 'ORDER_NOT_PAYABLE';
+    END IF;
+
+    BEGIN
+      FOR r IN
+        SELECT oi."productId" AS product_id,
+               SUM(oi.quantity)::integer AS qty
+        FROM cartlify.order_items AS oi
+        WHERE oi."orderId" = p_order_id
+        GROUP BY oi."productId"
+        ORDER BY oi."productId"
+      LOOP
+        PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
+        PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
+      END LOOP;
+    EXCEPTION
+      WHEN raise_exception THEN
+        -- all or nothing: stock changes made in this block are rolled back
+        IF SQLERRM IN ('INSUFFICIENT_AVAILABLE_STOCK', 'PRODUCT_NOT_FOUND') THEN
+          RETURN 'OUT_OF_STOCK';
+        END IF;
+
+        RAISE;
+    END;
+  ELSE
+    RETURN 'ORDER_NOT_PAYABLE';
+  END IF;
+
+  -- mark order as paid together with the payment that paid it
   UPDATE cartlify.orders AS o
   SET
+    confirmed = true,
     status = 'paid',
-    "reservationExpiresAt" = NULL
+    "reservationExpiresAt" = NULL,
+    "paymentIntentId" = p_payment_intent_id
   WHERE o.id = p_order_id;
+
+  RETURN 'PAID';
 END;
 $$;
 
 -- ORDERS AND ITEMS === system actions ===
 -- ORDERS AND ITEMS expire order reservation and release reserved stock
+DROP FUNCTION IF EXISTS cartlify.expire_order_reservation (integer);
+
 CREATE OR REPLACE FUNCTION cartlify.expire_order_reservation (p_order_id integer) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1098,6 +1211,25 @@ DECLARE
 BEGIN
 
   BEGIN
+    -- read state without a lock: only waiting orders are lockable for system updates
+    SELECT o.confirmed, o.status, o."reservationExpiresAt"
+    INTO v_confirmed, v_status, v_reserve_until
+    FROM cartlify.orders AS o
+    WHERE o.id = p_order_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'ORDER_NOT_FOUND';
+    END IF;
+
+    -- stale job or nothing to expire
+    IF NOT v_confirmed
+       OR v_status IS DISTINCT FROM 'waiting'
+       OR v_reserve_until IS NULL
+       OR v_reserve_until > clock_timestamp() THEN
+
+      RETURN false;
+    END IF;
+
     -- lock order row
     SELECT o.confirmed, o.status, o."reservationExpiresAt"
     INTO v_confirmed, v_status, v_reserve_until
@@ -1105,11 +1237,11 @@ BEGIN
     WHERE o.id = p_order_id
     FOR UPDATE;
 
+    -- order changed while waiting for the lock
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'ORDER_NOT_FOUND';
+      RETURN false;
     END IF;
 
-    -- stale job or nothing to expire
     IF NOT v_confirmed
        OR v_status IS DISTINCT FROM 'waiting'
        OR v_reserve_until IS NULL
@@ -1158,10 +1290,11 @@ END;
 $$;
 
 -- ORDERS AND ITEMS === triggers & functions ===
--- ORDERS AND ITEMS calculate order item total price before insert or update
+-- ORDERS AND ITEMS take unit price from product and calculate order item total price before insert or update
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
+  v_price cartlify.products.price%TYPE;
 BEGIN
 
   SELECT o."confirmed"
@@ -1170,11 +1303,28 @@ BEGIN
   WHERE o.id = NEW."orderId"
   FOR UPDATE;
 
+  -- rls hides orders the actor cannot change (foreign or confirmed): treat as forbidden
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Order % is not available for item changes', NEW."orderId"
+      USING ERRCODE = 'check_violation';
+  END IF;
+
   IF v_confirmed THEN
     RAISE EXCEPTION 'Order % is already confirmed; items cannot be changed', NEW."orderId"
       USING ERRCODE = 'check_violation';
   END IF;
 
+  -- unit price always comes from the product, never from the caller
+  SELECT p."price"
+  INTO v_price
+  FROM cartlify.products AS p
+  WHERE p.id = NEW."productId";
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  NEW."unitPrice" := v_price;
   NEW."totalPrice" := NEW."unitPrice" * NEW."quantity";
 
   RETURN NEW;
@@ -1184,9 +1334,8 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_order_items_before_ins_upd ON cartlify.order_items;
 
-CREATE TRIGGER trg_order_items_before_ins_upd BEFORE INSERT
-OR
-UPDATE ON cartlify.order_items FOR EACH ROW
+CREATE TRIGGER trg_order_items_before_ins_upd
+BEFORE INSERT OR UPDATE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_before_ins_upd ();
 
 -- ORDERS AND ITEMS recalc order total after order items change
@@ -1214,10 +1363,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_order_items_after_mod ON cartlify.order_items;
 
 CREATE TRIGGER trg_order_items_after_mod
-AFTER INSERT
-OR
-UPDATE
-OR DELETE ON cartlify.order_items FOR EACH ROW
+AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
 -- ORDERS AND ITEMS guard order updates and recalc total before confirmation
@@ -1259,8 +1405,8 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_orders_before_update ON cartlify.orders;
 
-CREATE TRIGGER trg_orders_before_update BEFORE
-UPDATE ON cartlify.orders FOR EACH ROW
+CREATE TRIGGER trg_orders_before_update
+BEFORE UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_before_update ();
 
 ------------------------------------------------------------
@@ -1329,8 +1475,8 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_reviews_lock_rating_and_keys ON cartlify.reviews;
 
-CREATE TRIGGER trg_reviews_lock_rating_and_keys BEFORE
-UPDATE ON cartlify.reviews FOR EACH ROW
+CREATE TRIGGER trg_reviews_lock_rating_and_keys
+BEFORE UPDATE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_lock_rating_and_keys ();
 
 -- REVIEWS AND VOTES sync review vote counters after vote changes
@@ -1357,10 +1503,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_review_votes_after_mod ON cartlify.review_votes;
 
 CREATE TRIGGER trg_review_votes_after_mod
-AFTER INSERT
-OR
-UPDATE
-OR DELETE ON cartlify.review_votes FOR EACH ROW
+AFTER INSERT OR UPDATE OR DELETE ON cartlify.review_votes FOR EACH ROW
 EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 
 ------------------------------------------------------------
@@ -1371,6 +1514,23 @@ EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 DROP TRIGGER IF EXISTS trg_chat_messages_after_insert ON cartlify.chat_messages;
 
 DROP FUNCTION IF EXISTS cartlify.chat_messages_after_insert ();
+
+-- CHAT guard chat messages before update: only read flag can change
+CREATE OR REPLACE FUNCTION cartlify.chat_messages_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (to_jsonb(NEW) - 'isRead') IS DISTINCT FROM (to_jsonb(OLD) - 'isRead') THEN
+    RAISE EXCEPTION 'CHAT_MESSAGE_UPDATE_FORBIDDEN';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_chat_messages_before_update ON cartlify.chat_messages;
+
+CREATE TRIGGER trg_chat_messages_before_update
+BEFORE UPDATE ON cartlify.chat_messages FOR EACH ROW
+EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 
 ------------------------------------------------------------
 -- PRICE CHANGE LOGS

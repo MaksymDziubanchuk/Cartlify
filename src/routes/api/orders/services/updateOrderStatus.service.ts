@@ -65,6 +65,7 @@ export async function updateOrderStatus({
             updatedAt: true,
             items: {
               select: {
+                id: true,
                 productId: true,
                 quantity: true,
                 unitPrice: true,

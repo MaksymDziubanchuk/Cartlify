@@ -29,6 +29,8 @@ export interface OrderItemProductDto {
 }
 
 export interface OrderItemDto {
+  // order item id, used as itemId in PATCH/DELETE /current/items/:itemId
+  id: number;
   productId: ProductId;
   product: OrderItemProductDto;
   quantity: number;
@@ -91,6 +93,8 @@ export interface CurrentDeleteItemDto extends CurrentItemIdParamsDto {
 // POST /current/confirm
 export interface ConfirmCurrentOrderBodyDto {
   orderId: OrderId;
+  // required for an order that has no shipping address yet
+  shippingAddress?: string;
 }
 
 export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
