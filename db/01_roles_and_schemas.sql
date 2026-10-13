@@ -23,7 +23,7 @@ END
 $$;
 
 ------------------------------------------------------------
--- 1a. SEARCH_PATH + public
+-- 1a. SEARCH_PATH
 ------------------------------------------------------------
 ALTER ROLE cartlify_owner
 SET
@@ -37,14 +37,6 @@ SET
 ALTER ROLE cartlify_readonly
 SET
   search_path = 'cartlify';
-
-REVOKE ALL ON SCHEMA public
-FROM
-  cartlify_app;
-
-REVOKE ALL ON SCHEMA public
-FROM
-  cartlify_readonly;
 
 ------------------------------------------------------------
 -- 2. 
@@ -99,7 +91,22 @@ SELECT
   ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_readonly;
 
 ------------------------------------------------------------
--- 5. DEFAULT PRIVILEGES 
+-- 4a. prisma migration history: owner only
+------------------------------------------------------------
+-- table appears after the first prisma migrate, so rerun this file after it
+DO $$
+BEGIN
+  IF to_regclass('cartlify._prisma_migrations') IS NOT NULL THEN
+    REVOKE ALL ON TABLE cartlify._prisma_migrations
+    FROM
+      cartlify_app,
+      cartlify_readonly;
+  END IF;
+END
+$$;
+
+------------------------------------------------------------
+-- 5. DEFAULT PRIVILEGES
 ------------------------------------------------------------
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
 GRANT
@@ -136,8 +143,11 @@ FROM
 GRANT
 EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify TO cartlify_app;
 
-GRANT
-EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify TO cartlify_readonly;
+-- readonly: no functions, except read-only helpers granted below
+REVOKE
+EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify
+FROM
+  cartlify_readonly;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner
 REVOKE
@@ -150,7 +160,35 @@ GRANT
 EXECUTE ON FUNCTIONS TO cartlify_app;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-GRANT
-EXECUTE ON FUNCTIONS TO cartlify_readonly;
+REVOKE
+EXECUTE ON FUNCTIONS
+FROM
+  cartlify_readonly;
+
+-- readonly: context readers used by rls policies and search helpers
+-- functions appear after db/02 and db/05, so rerun this file after them on a fresh database
+DO $$
+DECLARE
+  v_fn text;
+BEGIN
+  FOREACH v_fn IN ARRAY ARRAY[
+    'cartlify.current_actor_id()',
+    'cartlify.current_guest_id()',
+    'cartlify.current_actor_role()',
+    'cartlify.is_admin()',
+    'cartlify.is_root()',
+    'cartlify.is_owner(integer)',
+    'cartlify.is_owner_or_admin(integer)',
+    'cartlify.unaccent(text)',
+    'cartlify.unaccent(regdictionary, text)',
+    'cartlify.immutable_unaccent(text)'
+  ]
+  LOOP
+    IF to_regprocedure(v_fn) IS NOT NULL THEN
+      EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO cartlify_readonly', v_fn);
+    END IF;
+  END LOOP;
+END
+$$;
 
 COMMIT;

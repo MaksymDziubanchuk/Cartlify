@@ -1,3 +1,6 @@
+-- everything below is created and owned by cartlify_owner, whoever runs the script
+SET ROLE cartlify_owner;
+
 ----------------------------------------
 -- REVIEWS: rating + votes
 ----------------------------------------
@@ -155,6 +158,47 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- ORDERS: status must match confirmed / reservation / payment fields
+----------------------------------------
+-- NOT VALID: the rule applies to new and updated rows, rows written before it are not rechecked
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_state_consistency_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_state_consistency_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_state_consistency_chk
+    CHECK (
+      (
+        status IN ('pending', 'unconfirmed')
+        AND confirmed = false
+        AND "reservationExpiresAt" IS NULL
+        AND "paymentIntentId" IS NULL
+      )
+      OR (
+        status = 'waiting'
+        AND confirmed = true
+        AND "reservationExpiresAt" IS NOT NULL
+        AND "paymentIntentId" IS NULL
+      )
+      OR (
+        status = 'paid'
+        AND confirmed = true
+        AND "reservationExpiresAt" IS NULL
+        AND "paymentIntentId" IS NOT NULL
+      )
+      OR (
+        status IN ('shipped', 'delivered', 'cancelled')
+        AND confirmed = true
+      )
+    ) NOT VALID;
+END $$;
+
+----------------------------------------
 -- USER_TOKENS: expires must be after created
 ----------------------------------------
 DO $$
@@ -205,7 +249,7 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- PRODUCTS: stock non-negative
+-- PRODUCTS: stock non-negative, reserved stock within stock
 ----------------------------------------
 DO $$
 BEGIN
@@ -219,6 +263,17 @@ BEGIN
   ALTER TABLE cartlify.products
     ADD CONSTRAINT products_stock_non_negative
     CHECK ("stock" >= 0);
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_reserved_stock_within_stock'
+  ) THEN
+    ALTER TABLE cartlify.products
+      DROP CONSTRAINT products_reserved_stock_within_stock;
+  END IF;
+
+  ALTER TABLE cartlify.products
+    ADD CONSTRAINT products_reserved_stock_within_stock
+    CHECK ("reservedStock" >= 0 AND "reservedStock" <= "stock");
 END $$;
 
 ----------------------------------------

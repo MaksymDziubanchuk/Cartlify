@@ -1,5 +1,8 @@
 BEGIN;
 
+-- everything below is created and owned by cartlify_owner, whoever runs the script
+SET LOCAL ROLE cartlify_owner;
+
 ------------------------------------------------------------
 -- admin stats view
 ------------------------------------------------------------

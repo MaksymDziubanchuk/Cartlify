@@ -1,5 +1,8 @@
 BEGIN;
 
+-- everything below is created and owned by cartlify_owner, whoever runs the script
+SET LOCAL ROLE cartlify_owner;
+
 ----------------------------------------
 -- USERS
 ----------------------------------------
@@ -33,6 +36,8 @@ SELECT
 
 -- UPDATE:
 -- - owner can update self but role must stay same as actor role
+-- - owner cannot change email
+-- - owner cannot change isVerified, except unverified LOCAL account taken over by oauth provider
 -- - root can update anyone (including role changes)
 CREATE POLICY users_update ON cartlify.users
 FOR UPDATE
@@ -45,24 +50,61 @@ WITH
     (
       cartlify.is_owner (id)
       AND role = cartlify.current_actor_role ()
+      AND EXISTS (
+        SELECT
+          1
+        FROM
+          cartlify.users u
+        WHERE
+          u.id = users.id
+          AND u.email = users.email
+          AND (
+            u."isVerified" = users."isVerified"
+            OR (
+              u."authProvider" = 'LOCAL'
+              AND users."authProvider" <> 'LOCAL'
+              AND users."isVerified" = true
+              AND users."passwordHash" IS NULL
+            )
+          )
+      )
     )
     OR cartlify.is_root ()
   );
 
--- UPDATE cartlify_owner
+-- UPDATE cartlify_owner - email verification only, other fields stay the same
 CREATE POLICY users_update_owner ON cartlify.users
 FOR UPDATE
   TO cartlify_owner USING ("isVerified" = false)
 WITH
-  CHECK ("isVerified" = true);
+  CHECK (
+    "isVerified" = true
+    AND (
+      (to_jsonb(users) - 'isVerified' - 'updatedAt') = (
+        SELECT
+          to_jsonb(u) - 'isVerified' - 'updatedAt'
+        FROM
+          cartlify.users u
+        WHERE
+          u.id = users.id
+      )
+    )
+  );
 
 -- INSERT:
--- - registration can only create USER
+-- - registration can only create unverified USER
+-- - admin context (oauth sign-in) can create verified USER
 -- - root can create USER/ADMIN
 CREATE POLICY users_insert ON cartlify.users FOR INSERT
 WITH
   CHECK (
-    role = 'USER'
+    (
+      role = 'USER'
+      AND (
+        "isVerified" = false
+        OR cartlify.is_admin ()
+      )
+    )
     OR (
       cartlify.is_root ()
       AND role IN ('USER', 'ADMIN')
@@ -261,6 +303,7 @@ WITH
 
 -- UPDATE (GUEST/USER)
 -- allows changing: views, updatedAt
+-- views step is limited to +1 by trg_products_before_views_change
 CREATE POLICY products_update_computed ON cartlify.products
 FOR UPDATE
   USING (true)
@@ -274,7 +317,7 @@ WITH
         FROM
           cartlify.products p
         WHERE
-          p.id = id
+          p.id = products.id
       )
     )
   );
@@ -398,11 +441,12 @@ CREATE POLICY reviews_select ON cartlify.reviews FOR
 SELECT
   USING (true);
 
--- INSERT (user only)
+-- INSERT (user only, own review)
 CREATE POLICY reviews_insert ON cartlify.reviews FOR INSERT
 WITH
   CHECK (
     cartlify.current_actor_role () = 'USER'
+    AND cartlify.is_owner ("userId")
     AND (
       "rating" IS NOT NULL
       OR (
@@ -470,10 +514,13 @@ CREATE POLICY review_votes_select ON cartlify.review_votes FOR
 SELECT
   USING (true);
 
--- INSERT (user only)
+-- INSERT (user only, own vote)
 CREATE POLICY review_votes_insert ON cartlify.review_votes FOR INSERT
 WITH
-  CHECK (cartlify.current_actor_role () = 'USER');
+  CHECK (
+    cartlify.current_actor_role () = 'USER'
+    AND cartlify.is_owner ("userId")
+  );
 
 -- UPDATE (vote owner only)  -- switch UP <-> DOWN
 CREATE POLICY review_votes_update ON cartlify.review_votes
@@ -613,9 +660,13 @@ WITH
   CHECK (
     cartlify.current_actor_role () = 'USER'
     AND cartlify.is_owner ("userId")
+    AND confirmed = false
+    AND status = 'pending'
+    AND "reservationExpiresAt" IS NULL
+    AND "paymentIntentId" IS NULL
   );
 
--- UPDATE (owner only) 
+-- UPDATE (owner only, order stays unconfirmed; confirmation goes through cartlify.confirm_order)
 CREATE POLICY orders_update ON cartlify.orders
 FOR UPDATE
   USING (
@@ -623,7 +674,13 @@ FOR UPDATE
     AND confirmed = false
   )
 WITH
-  CHECK (cartlify.is_owner ("userId"));
+  CHECK (
+    cartlify.is_owner ("userId")
+    AND "paymentIntentId" IS NULL
+    AND confirmed = false
+    AND status IN ('pending', 'unconfirmed')
+    AND "reservationExpiresAt" IS NULL
+  );
 
 -- UPDATE cartlify_owner
 CREATE POLICY orders_update_owner ON cartlify.orders
@@ -685,53 +742,42 @@ WITH
         )
       )
     )
-  );
-
--- UPDATE (owner only, waiting/confirmed) - for pay + unconfirm 
-CREATE POLICY orders_update_owner_waiting ON cartlify.orders
-FOR UPDATE
-  USING (
-    cartlify.current_actor_role () = 'USER'
-    AND cartlify.is_owner ("userId")
-    AND confirmed = true
-    AND status = 'waiting'
-  )
-WITH
-  CHECK (
-    cartlify.current_actor_role () = 'USER'
-    AND cartlify.is_owner ("userId")
-    AND (
-      (
-        status = 'paid'
-        AND "reservationExpiresAt" IS NULL
-        AND (
-          (
-            to_jsonb(orders) - 'status' - 'reservationExpiresAt' - 'updatedAt'
-          ) = (
-            SELECT
-              to_jsonb(o) - 'status' - 'reservationExpiresAt' - 'updatedAt'
-            FROM
-              cartlify.orders o
-            WHERE
-              o.id = orders.id
-          )
+    OR (
+      confirmed = true
+      AND status = 'waiting'
+      AND "reservationExpiresAt" IS NOT NULL
+      AND "paymentIntentId" IS NULL
+      AND "total" >= 0
+      AND cartlify.is_owner ("userId")
+      AND (
+        (
+          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'total' - 'updatedAt'
+        ) = (
+          SELECT
+            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'total' - 'updatedAt'
+          FROM
+            cartlify.orders AS o
+          WHERE
+            o.id = orders.id
         )
       )
-      OR (
-        confirmed = false
-        AND status = 'unconfirmed'
-        AND "reservationExpiresAt" IS NULL
-        AND (
-          (
-            to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
-          ) = (
-            SELECT
-              to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
-            FROM
-              cartlify.orders o
-            WHERE
-              o.id = orders.id
-          )
+    )
+    OR (
+      confirmed = true
+      AND status = 'paid'
+      AND "reservationExpiresAt" IS NULL
+      AND "paymentIntentId" IS NOT NULL
+      AND "total" >= 0
+      AND (
+        (
+          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentIntentId' - 'total' - 'updatedAt'
+        ) = (
+          SELECT
+            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentIntentId' - 'total' - 'updatedAt'
+          FROM
+            cartlify.orders AS o
+          WHERE
+            o.id = orders.id
         )
       )
     )
@@ -755,7 +801,7 @@ WITH
         FROM
           cartlify.orders o
         WHERE
-          o.id = id
+          o.id = orders.id
       )
     )
   );
@@ -783,6 +829,8 @@ DROP POLICY IF EXISTS order_items_select_owner ON cartlify.order_items;
 DROP POLICY IF EXISTS order_items_insert ON cartlify.order_items;
 
 DROP POLICY IF EXISTS order_items_update ON cartlify.order_items;
+
+DROP POLICY IF EXISTS order_items_update_owner ON cartlify.order_items;
 
 DROP POLICY IF EXISTS order_items_delete ON cartlify.order_items;
 
@@ -853,6 +901,32 @@ WITH
         AND o.confirmed = false
     )
   );
+
+-- UPDATE cartlify_owner - row locks only, for unconfirm/pay/expire
+CREATE POLICY order_items_update_owner ON cartlify.order_items
+FOR UPDATE
+  TO cartlify_owner USING (
+    EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.orders o
+      WHERE
+        o.id = "orderId"
+        AND (
+          (
+            o.confirmed = true
+            AND o.status = 'waiting'
+          )
+          OR (
+            o.confirmed = false
+            AND o.status IN ('pending', 'unconfirmed')
+          )
+        )
+    )
+  )
+WITH
+  CHECK (false);
 
 -- DELETE (owner only, forbidden if confirmed)
 CREATE POLICY order_items_delete ON cartlify.order_items FOR DELETE USING (
@@ -986,7 +1060,11 @@ SELECT
     )
   );
 
--- INSERT (via parent thread)
+-- INSERT (via parent thread, sender must match the actor)
+-- - user writes as user with own id, in own thread
+-- - guest writes as guest, in own bot thread
+-- - admin/root writes as admin with own id, in admin thread only
+-- - bot messages are stored by the server in the customer context, in bot thread only
 CREATE POLICY chat_messages_insert ON cartlify.chat_messages FOR INSERT
 WITH
   CHECK (
@@ -996,18 +1074,42 @@ WITH
       FROM
         cartlify.chat_threads t
       WHERE
-        t.id = "threadId"
+        t.id = chat_messages."threadId"
         AND (
-          cartlify.is_owner_or_admin (t."userId")
+          (
+            cartlify.current_actor_role () = 'USER'
+            AND t."userId" = cartlify.current_actor_id ()
+            AND (
+              (
+                chat_messages."senderType" = 'user'
+                AND chat_messages."senderId" = cartlify.current_actor_id ()
+              )
+              OR (
+                chat_messages."senderType" = 'bot'
+                AND chat_messages."senderId" IS NULL
+                AND t.type = 'bot'
+              )
+            )
+          )
           OR (
             cartlify.current_actor_role () = 'GUEST'
             AND t."guestId" = cartlify.current_guest_id ()
+            AND t.type = 'bot'
+            AND chat_messages."senderType" IN ('guest', 'bot')
+            AND chat_messages."senderId" IS NULL
+          )
+          OR (
+            cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+            AND t.type = 'admin'
+            AND chat_messages."senderType" = 'admin'
+            AND chat_messages."senderId" = cartlify.current_actor_id ()
           )
         )
     )
   );
 
 -- UPDATE (allowed readers can change only isRead)
+-- other columns are locked by trg_chat_messages_before_update
 CREATE POLICY chat_messages_update ON cartlify.chat_messages
 FOR UPDATE
   USING (
