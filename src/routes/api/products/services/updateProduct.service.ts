@@ -6,6 +6,7 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import {
   BadRequestError,
+  ConflictError,
   InternalError,
   NotFoundError,
   isAppError,
@@ -97,6 +98,7 @@ export async function updateProduct({
             description: true,
             price: true,
             stock: true,
+            reservedStock: true,
             categoryId: true,
             popularityOverride: true,
             popularityOverrideUntil: true,
@@ -112,8 +114,17 @@ export async function updateProduct({
           await persistProductImages({ tx: db, productId: productIdRaw, uploads: images! });
         }
 
-        // use stock as delta
+        // use stock as delta (negative value takes units off)
         const newStock = stockRaw !== undefined ? before.stock + stockRaw : undefined;
+
+        // take off only free units (real stock = stock - reservedStock)
+        if (newStock !== undefined && newStock < before.reservedStock) {
+          throw new ConflictError('INSUFFICIENT_AVAILABLE_STOCK', {
+            productId: before.id,
+            available: before.stock - before.reservedStock,
+            requested: -stockRaw!,
+          });
+        }
 
         // build update payload only for provided fields
         const data: Prisma.ProductUpdateInput = {
