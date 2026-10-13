@@ -315,6 +315,8 @@ model Order {
 
   total Decimal @db.Decimal(10, 2)
 
+  paymentIntentId String? @unique
+
   shippingAddress String?
   note            String?
 
