@@ -127,4 +127,4 @@ SQL
 
 echo "CSV imported into ${SCHEMA_NAME}.${TABLE_NAME}"
 
-# Usage: MIGRATION_DATABASE_URL="postgresql://..." bash db/import_csv.sh <path/to/file.csv> <table_name>
+# Usage: MIGRATION_DATABASE_URL="postgresql://..." bash db/data/import_csv.sh <path/to/file.csv> <table_name>

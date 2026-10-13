@@ -1,6 +1,6 @@
 // structure snapshot of schema cartlify: one text line per object, data is not read
 // the reference describes what the scripts in the repo build, real databases are compared with it
-// usage: node db/structure_snapshot.mjs save | check | check db
+// usage: node db/tools/structure_snapshot.mjs save | check | check db
 //   save     - read the structure of the local test container and store it as the reference
 //   check    - compare the local test container with the reference
 //   check db - compare the database from DATABASE_URL with the reference
@@ -17,7 +17,7 @@ const { PrismaClient } = prismaPkg;
 const here = path.dirname(fileURLToPath(import.meta.url));
 const referenceFile = path.join(here, 'structure_snapshot.txt');
 
-// local container address, must match db/test_db_build.mjs
+// local container address, must match db/tools/test_db_build.mjs
 const CONTAINER_URL =
   'postgresql://cartlify_app:cartlify_app@127.0.0.1:54329/cartlify_test?schema=cartlify';
 
@@ -228,13 +228,13 @@ const FIX_STEPS = [
     'migrations',
     'prisma migrations (workflow "PROD DB — Prisma migrate deploy" or npm run migrate:deploy)',
   ],
-  ['01', 'db/01_roles_and_schemas.sql (psql as superuser)'],
-  ['02', 'db/02_extensions.sql (psql as superuser)'],
-  ['05', 'db/05_fn_and_triggers.sql (workflow "DB — run SQL script")'],
-  ['03', 'db/03_policies_and_rls.sql (workflow "DB — run SQL script")'],
-  ['04', 'db/04_views.sql (workflow "DB — run SQL script")'],
-  ['06', 'db/06_indexes_and_constraints.sql (workflow "DB — run SQL script")'],
-  ['migrations-or-06', 'prisma migrations or db/06_indexes_and_constraints.sql'],
+  ['01', 'db/schema/01_roles_and_schemas.sql (psql as superuser)'],
+  ['02', 'db/schema/02_extensions.sql (psql as superuser)'],
+  ['05', 'db/schema/05_fn_and_triggers.sql (workflow "DB — run SQL script")'],
+  ['03', 'db/schema/03_policies_and_rls.sql (workflow "DB — run SQL script")'],
+  ['04', 'db/schema/04_views.sql (workflow "DB — run SQL script")'],
+  ['06', 'db/schema/06_indexes_and_constraints.sql (workflow "DB — run SQL script")'],
+  ['migrations-or-06', 'prisma migrations or db/schema/06_indexes_and_constraints.sql'],
 ];
 
 // kinds whose third field is the owner of the object
@@ -281,7 +281,7 @@ function guessFix(ref, actual) {
 
     if (name.startsWith('immutable_unaccent(')) {
       return actual
-        ? { manual: 'db/02 creates this function only when it is missing, the existing text stays' }
+        ? { manual: 'db/schema/02_extensions.sql creates this function only when it is missing, the existing text stays' }
         : { step: '02' };
     }
 
@@ -371,13 +371,13 @@ async function save() {
 
   writeFileSync(referenceFile, lines.join('\n') + '\n');
 
-  console.log(`saved ${lines.length} lines to db/structure_snapshot.txt`);
+  console.log(`saved ${lines.length} lines to db/tools/structure_snapshot.txt`);
   console.log(summarize(lines));
 }
 
 async function check(target) {
   if (!existsSync(referenceFile)) {
-    console.error('db/structure_snapshot.txt not found, create it with: npm run db:snapshot:save');
+    console.error('db/tools/structure_snapshot.txt not found, create it with: npm run db:snapshot:save');
     process.exit(1);
   }
 
@@ -432,6 +432,6 @@ const [command, target] = process.argv.slice(2);
 if (command === 'save' && target === undefined) await save();
 else if (command === 'check' && (target === undefined || target === 'db')) await check(target);
 else {
-  console.error('usage: node db/structure_snapshot.mjs save | check | check db');
+  console.error('usage: node db/tools/structure_snapshot.mjs save | check | check db');
   process.exit(1);
 }
