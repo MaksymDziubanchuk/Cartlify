@@ -1,0 +1,495 @@
+server | 17.11 (Debian 17.11-1.pgdg13+2)
+database | UTF8 | en_US.utf8 | en_US.utf8 | -
+extension | pg_trgm | 1.6 | cartlify | postgres
+extension | plpgsql | 1.0 | pg_catalog | postgres
+extension | unaccent | 1.1 | cartlify | postgres
+role | cartlify_app | super=false | inherit=true | createrole=false | createdb=false | login=true | replication=false | bypassrls=false | connlimit=-1 | search_path=cartlify
+role | cartlify_owner | super=false | inherit=true | createrole=false | createdb=true | login=true | replication=false | bypassrls=false | connlimit=-1 | search_path=cartlify, public
+role | cartlify_readonly | super=false | inherit=true | createrole=false | createdb=false | login=true | replication=false | bypassrls=false | connlimit=-1 | search_path=cartlify
+membership | cartlify_owner is member of pg_read_all_stats
+schema | cartlify | cartlify_owner | cartlify_app=U/cartlify_owner,cartlify_owner=UC/cartlify_owner,cartlify_readonly=U/cartlify_owner
+schema | public | pg_database_owner | pg_database_owner=UC/pg_database_owner,=U/pg_database_owner
+table | _prisma_migrations | cartlify_owner | rls=false | force=false | cartlify_owner=arwdDxtm/cartlify_owner
+table | admin_audit_log | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | categories | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | chat_messages | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | chat_threads | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | favorites | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | login_logs | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | order_items | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | orders | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | product_images | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | product_price_change_logs | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | products | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | review_votes | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | reviews | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | user_tokens | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | users | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+column | _prisma_migrations | 1 | id | character varying(36) | notnull=true | default=- | identity=- | generated=- | -
+column | _prisma_migrations | 2 | checksum | character varying(64) | notnull=true | default=- | identity=- | generated=- | -
+column | _prisma_migrations | 3 | finished_at | timestamp with time zone | notnull=false | default=- | identity=- | generated=- | -
+column | _prisma_migrations | 4 | migration_name | character varying(255) | notnull=true | default=- | identity=- | generated=- | -
+column | _prisma_migrations | 5 | logs | text | notnull=false | default=- | identity=- | generated=- | -
+column | _prisma_migrations | 6 | rolled_back_at | timestamp with time zone | notnull=false | default=- | identity=- | generated=- | -
+column | _prisma_migrations | 7 | started_at | timestamp with time zone | notnull=true | default=now() | identity=- | generated=- | -
+column | _prisma_migrations | 8 | applied_steps_count | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | admin_audit_log | 1 | id | integer | notnull=true | default=nextval('admin_audit_log_id_seq'::regclass) | identity=- | generated=- | -
+column | admin_audit_log | 2 | actorId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | admin_audit_log | 3 | actorRole | "Role" | notnull=true | default=- | identity=- | generated=- | -
+column | admin_audit_log | 4 | entityType | "AdminAuditEntityType" | notnull=true | default=- | identity=- | generated=- | -
+column | admin_audit_log | 5 | entityId | integer | notnull=false | default=- | identity=- | generated=- | -
+column | admin_audit_log | 6 | action | "AdminAuditAction" | notnull=true | default=- | identity=- | generated=- | -
+column | admin_audit_log | 7 | meta | jsonb | notnull=false | default=- | identity=- | generated=- | -
+column | admin_audit_log | 8 | ip | text | notnull=false | default=- | identity=- | generated=- | -
+column | admin_audit_log | 9 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
+column | admin_audit_log | 10 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | categories | 1 | id | integer | notnull=true | default=nextval('categories_id_seq'::regclass) | identity=- | generated=- | -
+column | categories | 2 | name | text | notnull=true | default=- | identity=- | generated=- | -
+column | categories | 3 | slug | text | notnull=true | default=- | identity=- | generated=- | -
+column | categories | 4 | description | text | notnull=false | default=- | identity=- | generated=- | -
+column | categories | 5 | parentId | integer | notnull=false | default=- | identity=- | generated=- | -
+column | categories | 6 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | categories | 7 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | chat_messages | 1 | id | integer | notnull=true | default=nextval('chat_messages_id_seq'::regclass) | identity=- | generated=- | -
+column | chat_messages | 2 | threadId | uuid | notnull=true | default=- | identity=- | generated=- | -
+column | chat_messages | 3 | senderId | integer | notnull=false | default=- | identity=- | generated=- | -
+column | chat_messages | 4 | senderType | "ChatMessageSenderType" | notnull=true | default=- | identity=- | generated=- | -
+column | chat_messages | 5 | content | text | notnull=true | default=- | identity=- | generated=- | -
+column | chat_messages | 6 | isRead | boolean | notnull=true | default=false | identity=- | generated=- | -
+column | chat_messages | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | chat_threads | 1 | id | uuid | notnull=true | default=- | identity=- | generated=- | -
+column | chat_threads | 2 | userId | integer | notnull=false | default=- | identity=- | generated=- | -
+column | chat_threads | 3 | type | "ChatType" | notnull=true | default=- | identity=- | generated=- | -
+column | chat_threads | 4 | status | "ChatStatus" | notnull=true | default='open'::"ChatStatus" | identity=- | generated=- | -
+column | chat_threads | 5 | lastMessageAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | chat_threads | 6 | unreadCount | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | chat_threads | 7 | lastMessagePreview | text | notnull=false | default=- | identity=- | generated=- | -
+column | chat_threads | 8 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | chat_threads | 9 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | chat_threads | 10 | guestId | uuid | notnull=false | default=- | identity=- | generated=- | -
+column | chat_threads | 11 | adminUnreadSince | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | chat_threads | 12 | adminRequestedAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | favorites | 1 | id | integer | notnull=true | default=nextval('favorites_id_seq'::regclass) | identity=- | generated=- | -
+column | favorites | 2 | userId | integer | notnull=false | default=- | identity=- | generated=- | -
+column | favorites | 3 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | favorites | 4 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | favorites | 5 | guestId | uuid | notnull=false | default=- | identity=- | generated=- | -
+column | login_logs | 1 | id | integer | notnull=true | default=nextval('login_logs_id_seq'::regclass) | identity=- | generated=- | -
+column | login_logs | 2 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | login_logs | 3 | email | text | notnull=true | default=- | identity=- | generated=- | -
+column | login_logs | 4 | role | "Role" | notnull=true | default=- | identity=- | generated=- | -
+column | login_logs | 5 | ipAddress | text | notnull=false | default=- | identity=- | generated=- | -
+column | login_logs | 6 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
+column | login_logs | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | order_items | 1 | id | integer | notnull=true | default=nextval('order_items_id_seq'::regclass) | identity=- | generated=- | -
+column | order_items | 2 | orderId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | order_items | 3 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | order_items | 4 | quantity | integer | notnull=true | default=- | identity=- | generated=- | -
+column | order_items | 5 | unitPrice | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | order_items | 6 | totalPrice | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | order_items | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | order_items | 8 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | orders | 1 | id | integer | notnull=true | default=nextval('orders_id_seq'::regclass) | identity=- | generated=- | -
+column | orders | 2 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | orders | 3 | status | "OrderStatus" | notnull=true | default='pending'::"OrderStatus" | identity=- | generated=- | -
+column | orders | 4 | total | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | orders | 5 | shippingAddress | text | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 6 | note | text | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | orders | 8 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | orders | 9 | confirmed | boolean | notnull=true | default=false | identity=- | generated=- | -
+column | orders | 10 | reservationExpiresAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 11 | paymentIntentId | text | notnull=false | default=- | identity=- | generated=- | -
+column | product_images | 1 | id | integer | notnull=true | default=nextval('product_images_id_seq'::regclass) | identity=- | generated=- | -
+column | product_images | 2 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | product_images | 3 | url | text | notnull=true | default=- | identity=- | generated=- | -
+column | product_images | 4 | publicId | text | notnull=false | default=- | identity=- | generated=- | -
+column | product_images | 5 | alt | text | notnull=false | default=- | identity=- | generated=- | -
+column | product_images | 6 | position | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | product_images | 7 | isPrimary | boolean | notnull=true | default=false | identity=- | generated=- | -
+column | product_images | 8 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | product_images | 9 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | product_price_change_logs | 1 | id | integer | notnull=true | default=nextval('product_price_change_logs_id_seq'::regclass) | identity=- | generated=- | -
+column | product_price_change_logs | 2 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 3 | actorId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 4 | oldPrice | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 5 | newPrice | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 6 | mode | "PriceChangeMode" | notnull=true | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 7 | value | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 8 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | products | 1 | id | integer | notnull=true | default=nextval('products_id_seq'::regclass) | identity=- | generated=- | -
+column | products | 2 | name | text | notnull=true | default=- | identity=- | generated=- | -
+column | products | 3 | description | text | notnull=false | default=- | identity=- | generated=- | -
+column | products | 4 | price | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
+column | products | 5 | categoryId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | products | 6 | popularity | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | products | 7 | views | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | products | 8 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | products | 9 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | products | 10 | avgRating | numeric(3,2) | notnull=true | default=0 | identity=- | generated=- | -
+column | products | 11 | reviewsCount | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | products | 12 | popularityOverride | integer | notnull=false | default=- | identity=- | generated=- | -
+column | products | 13 | popularityOverrideUntil | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | products | 14 | stock | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | products | 15 | deletedAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | products | 16 | reservedStock | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | review_votes | 1 | id | integer | notnull=true | default=nextval('review_votes_id_seq'::regclass) | identity=- | generated=- | -
+column | review_votes | 2 | reviewId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | review_votes | 3 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | review_votes | 4 | action | "ReviewVoteAction" | notnull=true | default=- | identity=- | generated=- | -
+column | review_votes | 5 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | review_votes | 6 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | reviews | 1 | id | integer | notnull=true | default=nextval('reviews_id_seq'::regclass) | identity=- | generated=- | -
+column | reviews | 2 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | reviews | 3 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | reviews | 4 | rating | integer | notnull=false | default=- | identity=- | generated=- | -
+column | reviews | 5 | comment | text | notnull=false | default=- | identity=- | generated=- | -
+column | reviews | 6 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | reviews | 7 | downVotes | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | reviews | 8 | upVotes | integer | notnull=true | default=0 | identity=- | generated=- | -
+column | reviews | 9 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | user_tokens | 1 | id | integer | notnull=true | default=nextval('user_tokens_id_seq'::regclass) | identity=- | generated=- | -
+column | user_tokens | 2 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | user_tokens | 3 | type | "UserTokenType" | notnull=true | default=- | identity=- | generated=- | -
+column | user_tokens | 4 | token | text | notnull=true | default=- | identity=- | generated=- | -
+column | user_tokens | 5 | expiresAt | timestamp(3) without time zone | notnull=true | default=- | identity=- | generated=- | -
+column | user_tokens | 6 | usedAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | user_tokens | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | users | 1 | id | integer | notnull=true | default=nextval('users_id_seq'::regclass) | identity=- | generated=- | -
+column | users | 2 | email | text | notnull=true | default=- | identity=- | generated=- | -
+column | users | 3 | role | "Role" | notnull=true | default='USER'::"Role" | identity=- | generated=- | -
+column | users | 4 | isVerified | boolean | notnull=true | default=false | identity=- | generated=- | -
+column | users | 5 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | users | 6 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | users | 7 | name | text | notnull=false | default=- | identity=- | generated=- | -
+column | users | 8 | avatarUrl | text | notnull=false | default=- | identity=- | generated=- | -
+column | users | 9 | locale | text | notnull=false | default=- | identity=- | generated=- | -
+column | users | 10 | phone | text | notnull=false | default=- | identity=- | generated=- | -
+column | users | 11 | passwordHash | text | notnull=false | default=- | identity=- | generated=- | -
+column | users | 12 | authProvider | "AuthProvider" | notnull=true | default='LOCAL'::"AuthProvider" | identity=- | generated=- | -
+column | users | 13 | providerSub | text | notnull=false | default=- | identity=- | generated=- | -
+column | users | 14 | publicId | text | notnull=false | default=- | identity=- | generated=- | -
+constraint | _prisma_migrations | _prisma_migrations_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | admin_audit_log | admin_audit_log_actorId_fkey | f | validated=true | FOREIGN KEY ("actorId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | admin_audit_log | admin_audit_log_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | categories | categories_parentId_fkey | f | validated=true | FOREIGN KEY ("parentId") REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL
+constraint | categories | categories_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | chat_messages | chat_messages_content_not_blank_chk | c | validated=true | CHECK ((length(btrim(content)) > 0))
+constraint | chat_messages | chat_messages_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | chat_messages | chat_messages_senderId_fkey | f | validated=true | FOREIGN KEY ("senderId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE SET NULL
+constraint | chat_messages | chat_messages_sender_consistency_chk | c | validated=true | CHECK (((("senderType" = ANY (ARRAY['user'::"ChatMessageSenderType", 'admin'::"ChatMessageSenderType"])) AND ("senderId" IS NOT NULL)) OR (("senderType" = ANY (ARRAY['bot'::"ChatMessageSenderType", 'guest'::"ChatMessageSenderType"])) AND ("senderId" IS NULL))))
+constraint | chat_messages | chat_messages_threadId_fkey | f | validated=true | FOREIGN KEY ("threadId") REFERENCES chat_threads(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | chat_threads | chat_threads_actor_xor_chk | c | validated=true | CHECK ((("userId" IS NULL) <> ("guestId" IS NULL)))
+constraint | chat_threads | chat_threads_admin_state_chk | c | validated=true | CHECK ((((type = 'bot'::"ChatType") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NULL)) OR ((type = 'admin'::"ChatType") AND (((status = 'closed'::"ChatStatus") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NULL)) OR ((status = 'open'::"ChatStatus") AND (("adminRequestedAt" IS NOT NULL) OR ("adminUnreadSince" IS NOT NULL)))))))
+constraint | chat_threads | chat_threads_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | chat_threads | chat_threads_unread_non_negative | c | validated=true | CHECK (("unreadCount" >= 0))
+constraint | chat_threads | chat_threads_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | favorites | favorites_actor_xor_chk | c | validated=true | CHECK ((("userId" IS NULL) <> ("guestId" IS NULL)))
+constraint | favorites | favorites_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | favorites | favorites_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | favorites | favorites_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | login_logs | login_logs_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | login_logs | login_logs_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | order_items | order_items_orderId_fkey | f | validated=true | FOREIGN KEY ("orderId") REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | order_items | order_items_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | order_items | order_items_prices_non_negative | c | validated=true | CHECK ((("unitPrice" >= (0)::numeric) AND ("totalPrice" >= (0)::numeric)))
+constraint | order_items | order_items_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | order_items | order_items_qty_positive | c | validated=true | CHECK ((quantity > 0))
+constraint | orders | orders_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | orders | orders_state_consistency_chk | c | validated=false | CHECK ((((status = ANY (ARRAY['pending'::"OrderStatus", 'unconfirmed'::"OrderStatus"])) AND (confirmed = false) AND ("reservationExpiresAt" IS NULL) AND ("paymentIntentId" IS NULL)) OR ((status = 'waiting'::"OrderStatus") AND (confirmed = true) AND ("reservationExpiresAt" IS NOT NULL) AND ("paymentIntentId" IS NULL)) OR ((status = 'paid'::"OrderStatus") AND (confirmed = true) AND ("reservationExpiresAt" IS NULL) AND ("paymentIntentId" IS NOT NULL)) OR ((status = ANY (ARRAY['shipped'::"OrderStatus", 'delivered'::"OrderStatus", 'cancelled'::"OrderStatus"])) AND (confirmed = true)))) NOT VALID
+constraint | orders | orders_total_non_negative | c | validated=true | CHECK ((total >= (0)::numeric))
+constraint | orders | orders_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | product_images | product_images_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | product_images | product_images_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | product_price_change_logs | price_change_non_negative | c | validated=true | CHECK ((("oldPrice" >= (0)::numeric) AND ("newPrice" >= (0)::numeric) AND (value >= (0)::numeric)))
+constraint | product_price_change_logs | product_price_change_logs_actorId_fkey | f | validated=true | FOREIGN KEY ("actorId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | product_price_change_logs | product_price_change_logs_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | product_price_change_logs | product_price_change_logs_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | products | products_categoryId_fkey | f | validated=true | FOREIGN KEY ("categoryId") REFERENCES categories(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | products | products_counters_non_negative | c | validated=true | CHECK (((views >= 0) AND (popularity >= 0) AND ("reviewsCount" >= 0) AND ("avgRating" >= (0)::numeric) AND ("avgRating" <= (5)::numeric)))
+constraint | products | products_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | products | products_pop_override_non_negative | c | validated=true | CHECK ((("popularityOverride" IS NULL) OR ("popularityOverride" >= 0)))
+constraint | products | products_price_non_negative | c | validated=true | CHECK ((price >= (0)::numeric))
+constraint | products | products_reserved_stock_within_stock | c | validated=true | CHECK ((("reservedStock" >= 0) AND ("reservedStock" <= stock)))
+constraint | products | products_stock_non_negative | c | validated=true | CHECK ((stock >= 0))
+constraint | review_votes | review_votes_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | review_votes | review_votes_reviewId_fkey | f | validated=true | FOREIGN KEY ("reviewId") REFERENCES reviews(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | review_votes | review_votes_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | reviews | reviews_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | reviews | reviews_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | reviews | reviews_rating_1_5 | c | validated=true | CHECK (((rating >= 1) AND (rating <= 5)))
+constraint | reviews | reviews_rating_or_comment_required | c | validated=true | CHECK (((rating IS NOT NULL) OR ((comment IS NOT NULL) AND (btrim(comment) <> ''::text))))
+constraint | reviews | reviews_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | reviews | reviews_votes_non_negative | c | validated=true | CHECK ((("upVotes" >= 0) AND ("downVotes" >= 0)))
+constraint | user_tokens | user_tokens_expires_after_created | c | validated=true | CHECK (("expiresAt" > "createdAt"))
+constraint | user_tokens | user_tokens_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | user_tokens | user_tokens_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | users | users_pkey | p | validated=true | PRIMARY KEY (id)
+index | _prisma_migrations | _prisma_migrations_pkey | valid=true | ready=true | CREATE UNIQUE INDEX _prisma_migrations_pkey ON cartlify._prisma_migrations USING btree (id)
+index | admin_audit_log | admin_audit_log_actorId_createdAt_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_actorId_createdAt_idx" ON cartlify.admin_audit_log USING btree ("actorId", "createdAt")
+index | admin_audit_log | admin_audit_log_entityType_entityId_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_entityType_entityId_idx" ON cartlify.admin_audit_log USING btree ("entityType", "entityId")
+index | admin_audit_log | admin_audit_log_pkey | valid=true | ready=true | CREATE UNIQUE INDEX admin_audit_log_pkey ON cartlify.admin_audit_log USING btree (id)
+index | categories | categories_parentId_idx | valid=true | ready=true | CREATE INDEX "categories_parentId_idx" ON cartlify.categories USING btree ("parentId")
+index | categories | categories_pkey | valid=true | ready=true | CREATE UNIQUE INDEX categories_pkey ON cartlify.categories USING btree (id)
+index | categories | categories_slug_idx | valid=true | ready=true | CREATE INDEX categories_slug_idx ON cartlify.categories USING btree (slug)
+index | categories | categories_slug_key | valid=true | ready=true | CREATE UNIQUE INDEX categories_slug_key ON cartlify.categories USING btree (slug)
+index | chat_messages | chat_messages_pkey | valid=true | ready=true | CREATE UNIQUE INDEX chat_messages_pkey ON cartlify.chat_messages USING btree (id)
+index | chat_messages | chat_messages_threadId_createdAt_idx | valid=true | ready=true | CREATE INDEX "chat_messages_threadId_createdAt_idx" ON cartlify.chat_messages USING btree ("threadId", "createdAt")
+index | chat_messages | chat_messages_thread_created_idx | valid=true | ready=true | CREATE INDEX chat_messages_thread_created_idx ON cartlify.chat_messages USING btree ("threadId", "createdAt")
+index | chat_messages | chat_messages_unread_by_thread_sender_idx | valid=true | ready=true | CREATE INDEX chat_messages_unread_by_thread_sender_idx ON cartlify.chat_messages USING btree ("threadId", "senderType") WHERE ("isRead" = false)
+index | chat_threads | chat_threads_admin_active_queue_idx | valid=true | ready=true | CREATE INDEX chat_threads_admin_active_queue_idx ON cartlify.chat_threads USING btree ("adminUnreadSince" DESC, "lastMessageAt" DESC) WHERE ((status = 'open'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NOT NULL))
+index | chat_threads | chat_threads_admin_waiting_queue_idx | valid=true | ready=true | CREATE INDEX chat_threads_admin_waiting_queue_idx ON cartlify.chat_threads USING btree ("adminRequestedAt", "lastMessageAt" DESC) WHERE ((status = 'open'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("adminRequestedAt" IS NOT NULL) AND ("adminUnreadSince" IS NOT NULL))
+index | chat_threads | chat_threads_closed_admin_guest_history_idx | valid=true | ready=true | CREATE INDEX chat_threads_closed_admin_guest_history_idx ON cartlify.chat_threads USING btree ("guestId", "lastMessageAt" DESC) WHERE ((status = 'closed'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("guestId" IS NOT NULL))
+index | chat_threads | chat_threads_closed_admin_user_history_idx | valid=true | ready=true | CREATE INDEX chat_threads_closed_admin_user_history_idx ON cartlify.chat_threads USING btree ("userId", "lastMessageAt" DESC) WHERE ((status = 'closed'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("userId" IS NOT NULL))
+index | chat_threads | chat_threads_guestId_status_type_lastMessageAt_idx | valid=true | ready=true | CREATE INDEX "chat_threads_guestId_status_type_lastMessageAt_idx" ON cartlify.chat_threads USING btree ("guestId", status, type, "lastMessageAt")
+index | chat_threads | chat_threads_one_open_guest_idx | valid=true | ready=true | CREATE UNIQUE INDEX chat_threads_one_open_guest_idx ON cartlify.chat_threads USING btree ("guestId") WHERE ((status = 'open'::"ChatStatus") AND ("guestId" IS NOT NULL))
+index | chat_threads | chat_threads_one_open_user_idx | valid=true | ready=true | CREATE UNIQUE INDEX chat_threads_one_open_user_idx ON cartlify.chat_threads USING btree ("userId") WHERE ((status = 'open'::"ChatStatus") AND ("userId" IS NOT NULL))
+index | chat_threads | chat_threads_pkey | valid=true | ready=true | CREATE UNIQUE INDEX chat_threads_pkey ON cartlify.chat_threads USING btree (id)
+index | chat_threads | chat_threads_status_adminUnreadSince_idx | valid=true | ready=true | CREATE INDEX "chat_threads_status_adminUnreadSince_idx" ON cartlify.chat_threads USING btree (status, "adminUnreadSince")
+index | chat_threads | chat_threads_userId_status_type_lastMessageAt_idx | valid=true | ready=true | CREATE INDEX "chat_threads_userId_status_type_lastMessageAt_idx" ON cartlify.chat_threads USING btree ("userId", status, type, "lastMessageAt")
+index | favorites | favorites_guestId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "favorites_guestId_productId_key" ON cartlify.favorites USING btree ("guestId", "productId")
+index | favorites | favorites_pkey | valid=true | ready=true | CREATE UNIQUE INDEX favorites_pkey ON cartlify.favorites USING btree (id)
+index | favorites | favorites_productId_idx | valid=true | ready=true | CREATE INDEX "favorites_productId_idx" ON cartlify.favorites USING btree ("productId")
+index | favorites | favorites_userId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "favorites_userId_productId_key" ON cartlify.favorites USING btree ("userId", "productId")
+index | login_logs | login_logs_email_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_email_createdAt_idx" ON cartlify.login_logs USING btree (email, "createdAt")
+index | login_logs | login_logs_pkey | valid=true | ready=true | CREATE UNIQUE INDEX login_logs_pkey ON cartlify.login_logs USING btree (id)
+index | login_logs | login_logs_userId_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_userId_createdAt_idx" ON cartlify.login_logs USING btree ("userId", "createdAt")
+index | order_items | order_items_orderId_idx | valid=true | ready=true | CREATE INDEX "order_items_orderId_idx" ON cartlify.order_items USING btree ("orderId")
+index | order_items | order_items_pkey | valid=true | ready=true | CREATE UNIQUE INDEX order_items_pkey ON cartlify.order_items USING btree (id)
+index | order_items | order_items_productId_idx | valid=true | ready=true | CREATE INDEX "order_items_productId_idx" ON cartlify.order_items USING btree ("productId")
+index | orders | orders_confirmed_reservationExpiresAt_idx | valid=true | ready=true | CREATE INDEX "orders_confirmed_reservationExpiresAt_idx" ON cartlify.orders USING btree (confirmed, "reservationExpiresAt")
+index | orders | orders_paymentIntentId_key | valid=true | ready=true | CREATE UNIQUE INDEX "orders_paymentIntentId_key" ON cartlify.orders USING btree ("paymentIntentId")
+index | orders | orders_pkey | valid=true | ready=true | CREATE UNIQUE INDEX orders_pkey ON cartlify.orders USING btree (id)
+index | orders | orders_status_createdAt_idx | valid=true | ready=true | CREATE INDEX "orders_status_createdAt_idx" ON cartlify.orders USING btree (status, "createdAt")
+index | orders | orders_status_updatedAt_idx | valid=true | ready=true | CREATE INDEX "orders_status_updatedAt_idx" ON cartlify.orders USING btree (status, "updatedAt")
+index | orders | orders_userId_confirmed_status_updatedAt_idx | valid=true | ready=true | CREATE INDEX "orders_userId_confirmed_status_updatedAt_idx" ON cartlify.orders USING btree ("userId", confirmed, status, "updatedAt")
+index | orders | orders_userId_createdAt_idx | valid=true | ready=true | CREATE INDEX "orders_userId_createdAt_idx" ON cartlify.orders USING btree ("userId", "createdAt")
+index | orders | orders_userId_updatedAt_idx | valid=true | ready=true | CREATE INDEX "orders_userId_updatedAt_idx" ON cartlify.orders USING btree ("userId", "updatedAt")
+index | product_images | product_images_pkey | valid=true | ready=true | CREATE UNIQUE INDEX product_images_pkey ON cartlify.product_images USING btree (id)
+index | product_images | product_images_productId_position_idx | valid=true | ready=true | CREATE INDEX "product_images_productId_position_idx" ON cartlify.product_images USING btree ("productId", "position")
+index | product_price_change_logs | product_price_change_logs_actorId_createdAt_idx | valid=true | ready=true | CREATE INDEX "product_price_change_logs_actorId_createdAt_idx" ON cartlify.product_price_change_logs USING btree ("actorId", "createdAt")
+index | product_price_change_logs | product_price_change_logs_pkey | valid=true | ready=true | CREATE UNIQUE INDEX product_price_change_logs_pkey ON cartlify.product_price_change_logs USING btree (id)
+index | product_price_change_logs | product_price_change_logs_productId_createdAt_idx | valid=true | ready=true | CREATE INDEX "product_price_change_logs_productId_createdAt_idx" ON cartlify.product_price_change_logs USING btree ("productId", "createdAt")
+index | products | products_avgRating_id_idx | valid=true | ready=true | CREATE INDEX "products_avgRating_id_idx" ON cartlify.products USING btree ("avgRating", id)
+index | products | products_categoryId_idx | valid=true | ready=true | CREATE INDEX "products_categoryId_idx" ON cartlify.products USING btree ("categoryId")
+index | products | products_createdAt_id_idx | valid=true | ready=true | CREATE INDEX "products_createdAt_id_idx" ON cartlify.products USING btree ("createdAt", id)
+index | products | products_name_id_idx | valid=true | ready=true | CREATE INDEX products_name_id_idx ON cartlify.products USING btree (name, id)
+index | products | products_name_unaccent_trgm_idx | valid=true | ready=true | CREATE INDEX products_name_unaccent_trgm_idx ON cartlify.products USING gin (immutable_unaccent(name) gin_trgm_ops)
+index | products | products_pkey | valid=true | ready=true | CREATE UNIQUE INDEX products_pkey ON cartlify.products USING btree (id)
+index | products | products_popularity_id_idx | valid=true | ready=true | CREATE INDEX products_popularity_id_idx ON cartlify.products USING btree (popularity, id)
+index | products | products_price_id_idx | valid=true | ready=true | CREATE INDEX products_price_id_idx ON cartlify.products USING btree (price, id)
+index | products | products_reviewsCount_id_idx | valid=true | ready=true | CREATE INDEX "products_reviewsCount_id_idx" ON cartlify.products USING btree ("reviewsCount", id)
+index | products | products_stock_id_idx | valid=true | ready=true | CREATE INDEX products_stock_id_idx ON cartlify.products USING btree (stock, id)
+index | products | products_updatedAt_id_idx | valid=true | ready=true | CREATE INDEX "products_updatedAt_id_idx" ON cartlify.products USING btree ("updatedAt", id)
+index | products | products_views_id_idx | valid=true | ready=true | CREATE INDEX products_views_id_idx ON cartlify.products USING btree (views, id)
+index | review_votes | review_votes_pkey | valid=true | ready=true | CREATE UNIQUE INDEX review_votes_pkey ON cartlify.review_votes USING btree (id)
+index | review_votes | review_votes_reviewId_idx | valid=true | ready=true | CREATE INDEX "review_votes_reviewId_idx" ON cartlify.review_votes USING btree ("reviewId")
+index | review_votes | review_votes_userId_reviewId_key | valid=true | ready=true | CREATE UNIQUE INDEX "review_votes_userId_reviewId_key" ON cartlify.review_votes USING btree ("userId", "reviewId")
+index | reviews | reviews_pkey | valid=true | ready=true | CREATE UNIQUE INDEX reviews_pkey ON cartlify.reviews USING btree (id)
+index | reviews | reviews_productId_idx | valid=true | ready=true | CREATE INDEX "reviews_productId_idx" ON cartlify.reviews USING btree ("productId")
+index | reviews | reviews_userId_idx | valid=true | ready=true | CREATE INDEX "reviews_userId_idx" ON cartlify.reviews USING btree ("userId")
+index | reviews | reviews_userId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "reviews_userId_productId_key" ON cartlify.reviews USING btree ("userId", "productId")
+index | user_tokens | user_tokens_pkey | valid=true | ready=true | CREATE UNIQUE INDEX user_tokens_pkey ON cartlify.user_tokens USING btree (id)
+index | user_tokens | user_tokens_token_key | valid=true | ready=true | CREATE UNIQUE INDEX user_tokens_token_key ON cartlify.user_tokens USING btree (token)
+index | user_tokens | user_tokens_userId_type_createdAt_idx | valid=true | ready=true | CREATE INDEX "user_tokens_userId_type_createdAt_idx" ON cartlify.user_tokens USING btree ("userId", type, "createdAt")
+index | users | users_authProvider_idx | valid=true | ready=true | CREATE INDEX "users_authProvider_idx" ON cartlify.users USING btree ("authProvider")
+index | users | users_authProvider_providerSub_key | valid=true | ready=true | CREATE UNIQUE INDEX "users_authProvider_providerSub_key" ON cartlify.users USING btree ("authProvider", "providerSub")
+index | users | users_createdAt_idx | valid=true | ready=true | CREATE INDEX "users_createdAt_idx" ON cartlify.users USING btree ("createdAt")
+index | users | users_email_key | valid=true | ready=true | CREATE UNIQUE INDEX users_email_key ON cartlify.users USING btree (email)
+index | users | users_isVerified_createdAt_idx | valid=true | ready=true | CREATE INDEX "users_isVerified_createdAt_idx" ON cartlify.users USING btree ("isVerified", "createdAt")
+index | users | users_pkey | valid=true | ready=true | CREATE UNIQUE INDEX users_pkey ON cartlify.users USING btree (id)
+sequence | admin_audit_log_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | categories_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | chat_messages_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | favorites_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | login_logs_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | order_items_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | orders_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | product_images_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | product_price_change_logs_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | products_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | review_votes_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | reviews_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | user_tokens_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+sequence | users_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rwU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+enum | AdminAuditAction | cartlify_owner | USER_ROLE_CHANGE,PRODUCT_UPDATE,PRODUCT_PRICE_BULK_UPDATE,ORDER_STATUS_CHANGE,CATEGORY_UPDATE,OTHER,PRODUCT_CREATE,PRODUCT_DELETE,REVIEW_DELETE | -
+enum | AdminAuditEntityType | cartlify_owner | user,product,category,order,review,other | -
+enum | AuthProvider | cartlify_owner | LOCAL,GOOGLE,GITHUB,LINKEDIN | -
+enum | ChatMessageSenderType | cartlify_owner | user,admin,bot,guest | -
+enum | ChatStatus | cartlify_owner | open,closed | -
+enum | ChatType | cartlify_owner | bot,admin | -
+enum | OrderStatus | cartlify_owner | pending,paid,shipped,delivered,cancelled,waiting,unconfirmed | -
+enum | PriceChangeMode | cartlify_owner | percent,fixed | -
+enum | ReviewVoteAction | cartlify_owner | UP,DOWN | -
+enum | Role | cartlify_owner | USER,ADMIN,ROOT,GUEST | -
+enum | UserTokenType | cartlify_owner | VERIFY_EMAIL,RESET_PASSWORD,REFRESH_TOKEN | -
+function | add_product_stock(p_product_id integer, p_delta integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=0f0540c983566a3a5a2be1495d84ff4d | extension=-
+function | auth_get_user_for_login(p_email text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(id integer, password_hash text, role "Role", is_verified boolean, auth_provider "AuthProvider") | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d2c3ac16fe4aa0c58433a70d8911cd0f | extension=-
+function | auth_resend_verify(p_email text, p_token text, p_expires_at timestamp with time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(user_id integer, token text, expires_at timestamp with time zone) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=0d93ce74b1f588e6bf113e1f13b9ad27 | extension=-
+function | auth_verify_email(p_token text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=boolean | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=6fc018374a74df3da8ffaa61d554e696 | extension=-
+function | chat_messages_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=b9674297880f4b9679a333e029a718ad | extension=-
+function | confirm_order(p_order_id integer, p_reserve_for interval) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d6fc056cefea15aea95c65af9f4ce8be | extension=-
+function | consume_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=19e2a0e92542d1fd13b71d0fe0725aa5 | extension=-
+function | current_actor_id() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=integer | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=3ec0092e80af2290e10ab31e7e4b1c55 | extension=-
+function | current_actor_role() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns="Role" | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=4aa79b0b99df48b1895adc797376ce2e | extension=-
+function | current_guest_id() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=uuid | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=90517cefa847d8f6547cb591a04b2663 | extension=-
+function | expire_order_reservation(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=boolean | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=e69d08842a7c5ff573ec7113d2e8d70d | extension=-
+function | favorites_after_mod_popularity() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=3a05bf01d1efbc35a448b0f321379689 | extension=-
+function | gin_extract_query_trgm(text, internal, smallint, internal, internal, internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=bcc3d1b35e67c79fdd7743051b5bb54e | extension=pg_trgm
+function | gin_extract_value_trgm(text, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=c75ed6efb95d6922885e652c3b1ae63f | extension=pg_trgm
+function | gin_trgm_consistent(internal, smallint, text, integer, internal, internal, internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=1a51ef4f90da1f8206849b90da034f15 | extension=pg_trgm
+function | gin_trgm_triconsistent(internal, smallint, text, integer, internal, internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns="char" | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=2042fbe8e50aa61204b33362850572be | extension=pg_trgm
+function | gtrgm_compress(internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=0c5e51542dfa58ac5c28c29a37958c04 | extension=pg_trgm
+function | gtrgm_consistent(internal, text, smallint, oid, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=520315289c6207994f47bd6b574fcbe2 | extension=pg_trgm
+function | gtrgm_decompress(internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=92fd74d4efb9a0f25dd35b9b75f71a6b | extension=pg_trgm
+function | gtrgm_distance(internal, text, smallint, oid, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=double precision | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=96b6ebcb046f8c4a69cbe07f341d676e | extension=pg_trgm
+function | gtrgm_in(cstring) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=gtrgm | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=af406f0d6fd3f9f056beb474dc267883 | extension=pg_trgm
+function | gtrgm_options(internal) | postgres | c | definer=false | volatile=i | strict=false | leakproof=false | parallel=s | returns=void | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=e959830838e9384393160a2b19d70bb7 | extension=pg_trgm
+function | gtrgm_out(gtrgm) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=cstring | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=809b516b4474d75b7ea2606e56263a8b | extension=pg_trgm
+function | gtrgm_penalty(internal, internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=78a76e7fec267214504a675b59c13d82 | extension=pg_trgm
+function | gtrgm_picksplit(internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=c2073eb2953664de02fe1c5070a2c0e3 | extension=pg_trgm
+function | gtrgm_same(gtrgm, gtrgm, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=5b60e89adb1cae9e6b7e3b9e7512a859 | extension=pg_trgm
+function | gtrgm_union(internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=gtrgm | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=ac59a0687df15075468862ca946ee148 | extension=pg_trgm
+function | immutable_unaccent(text) | cartlify_owner | sql | definer=false | volatile=i | strict=true | leakproof=false | parallel=u | returns=text | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=e3f19592c5abf482dd2c71eb02b2222b | extension=-
+function | is_admin() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=eb2a191c4cbb6316a9ec68bcc3ecbaad | extension=-
+function | is_owner(p_user_id integer) | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=d2989c3341cc1aa6808d02b8b8591ec3 | extension=-
+function | is_owner_or_admin(p_user_id integer) | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=0591f617ac65110cad6fd57229f5b4de | extension=-
+function | is_root() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=54dc3c77ebc32655c7c693e006818395 | extension=-
+function | log_admin_action(p_actor_id integer, p_actor_role "Role", p_entity_type "AdminAuditEntityType", p_entity_id integer, p_action "AdminAuditAction", p_changes jsonb) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=ce4ceb9bfb4d16164fb970f65ae57d36 | extension=-
+function | log_product_price_change(p_product_id integer, p_actor_id integer, p_old_price numeric, p_new_price numeric, p_mode "PriceChangeMode", p_value numeric) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=ec78d3a3b0174ea78cce37573b977105 | extension=-
+function | migrate_guest_data_to_user(p_guest_id uuid, p_user_id integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=b6248f48ce11c2ea1180c30029e3597b | extension=-
+function | order_items_after_mod() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=c464775b367b589b66a6efddfd5ed7c1 | extension=-
+function | order_items_after_mod_popularity() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=5e6967abb339fdaa79ae11fc4c2d5811 | extension=-
+function | order_items_before_ins_upd() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=606b9cec689b77958b5c50f9955d7c8e | extension=-
+function | orders_after_update_popularity() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=566e83b57374f65226ac5c130b4b3e1b | extension=-
+function | orders_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=305662024ef5d5db5481e32a3707188f | extension=-
+function | pay_order(p_order_id integer, p_payment_intent_id text, p_paid_amount numeric) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=text | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=6e49b40293061e4544d9068e1e87b2c3 | extension=-
+function | products_after_views_change() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=c10e1db3faf79399d780d411395491ce | extension=-
+function | products_before_views_change() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=4b951a33433388d0222d4666fd65c6d9 | extension=-
+function | recalc_all_products_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=199b2b63eb148f9520ddc458fb0e6360 | extension=-
+function | recalc_order_total(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=5ead964e7a61a628b6dbed11737f081f | extension=-
+function | recalc_product_popularity(p_product_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d8c5a36e679e4181f7fc877e0a634564 | extension=-
+function | recalc_product_rating(p_product_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=7c706d37fa888c7211dbddbd4d0fb2d3 | extension=-
+function | recalc_review_votes(p_review_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=7dd6124a64aa057f14ca5122dea5b7b7 | extension=-
+function | refresh_order_prices(p_order_id integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=3d7c69a923ef9ce1ef3e7bf3eba1dd50 | extension=-
+function | release_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=f5370d8e96333a529594bc484b29a238 | extension=-
+function | reserve_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=9290c0300fa29b9325e98cb8b51760ac | extension=-
+function | review_votes_after_mod() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=f6c6bfcbbfc75da49882948c0b881e9c | extension=-
+function | reviews_after_mod_popularity() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=5e6967abb339fdaa79ae11fc4c2d5811 | extension=-
+function | reviews_after_mod_rating() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=adb9572919a27be49ec1a6bcb3261b97 | extension=-
+function | reviews_lock_rating_and_keys() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d8ac43311e76b2bd142351df279f3c73 | extension=-
+function | set_current_context(p_role "Role", p_user_id integer, p_guest_id uuid) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=461166c61080565773525bf26e3e0c3e | extension=-
+function | set_limit(real) | postgres | c | definer=false | volatile=v | strict=true | leakproof=false | parallel=u | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=79156a0336c67021d9428bff7da30542 | extension=pg_trgm
+function | show_limit() | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=3ab6c68b603f0310182efe3695d82a92 | extension=pg_trgm
+function | show_trgm(text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=text[] | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=bb20c15988887dca8023fcdec2e15705 | extension=pg_trgm
+function | similarity(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=a65b94a37c1cfdf8414dc6e5180328ee | extension=pg_trgm
+function | similarity_dist(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=ace88dc523cc3a38ee252b232a6f3233 | extension=pg_trgm
+function | similarity_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=4317659571d5d65d8c2c051c25c0cecd | extension=pg_trgm
+function | strict_word_similarity(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=658697160f2064b47734aebdbd38425f | extension=pg_trgm
+function | strict_word_similarity_commutator_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=d06f5838b6234053cb93ddd82002f172 | extension=pg_trgm
+function | strict_word_similarity_dist_commutator_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=21d307ff0ca968d7cb12e9ecdf15ed5e | extension=pg_trgm
+function | strict_word_similarity_dist_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=4a6a81f56250df9a7e29bb72de12835f | extension=pg_trgm
+function | strict_word_similarity_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=04fed7fd0767165a07b85c5ec4fd59a1 | extension=pg_trgm
+function | unaccent(regdictionary, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=text | config=- | acl=cartlify_app=X/postgres,cartlify_owner=X/postgres,cartlify_readonly=X/postgres,postgres=X/postgres | body=26018d65d186aaf6b4c5c0c20984ff03 | extension=unaccent
+function | unaccent(text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=text | config=- | acl=cartlify_app=X/postgres,cartlify_owner=X/postgres,cartlify_readonly=X/postgres,postgres=X/postgres | body=26018d65d186aaf6b4c5c0c20984ff03 | extension=unaccent
+function | unaccent_init(internal) | postgres | c | definer=false | volatile=v | strict=false | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=c6e36297e2acf527f1d99c82244c9033 | extension=unaccent
+function | unaccent_lexize(internal, internal, internal, internal) | postgres | c | definer=false | volatile=v | strict=false | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=a2c719ce86175b3b995e7e18bf5edd89 | extension=unaccent
+function | unconfirm_order(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=0eababe7682bc8add25e53aa61515837 | extension=-
+function | users_get_public_profile(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(id integer, email text, created_at timestamp with time zone, updated_at timestamp with time zone, name text, avatar_url text) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=e55e5174a1cfad8492fe380581d29a6b | extension=-
+function | word_similarity(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=b9d296bc7ed64b19e32192351e9b284f | extension=pg_trgm
+function | word_similarity_commutator_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=02611902707b5de0d52c0f6a91da6218 | extension=pg_trgm
+function | word_similarity_dist_commutator_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=d3dad69b1ecbf95b0cd4ad9d0b898eca | extension=pg_trgm
+function | word_similarity_dist_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=ba8863f446eceb450a04b6c324db7419 | extension=pg_trgm
+function | word_similarity_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=5412212962db1aa604d6b20bbcf89c75 | extension=pg_trgm
+trigger | chat_messages | trg_chat_messages_before_update | enabled=O | CREATE TRIGGER trg_chat_messages_before_update BEFORE UPDATE ON cartlify.chat_messages FOR EACH ROW EXECUTE FUNCTION chat_messages_before_update()
+trigger | favorites | trg_favorites_after_mod_popularity | enabled=O | CREATE TRIGGER trg_favorites_after_mod_popularity AFTER INSERT OR DELETE ON cartlify.favorites FOR EACH ROW EXECUTE FUNCTION favorites_after_mod_popularity()
+trigger | order_items | trg_order_items_after_mod | enabled=O | CREATE TRIGGER trg_order_items_after_mod AFTER INSERT OR DELETE OR UPDATE ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_after_mod()
+trigger | order_items | trg_order_items_after_mod_popularity | enabled=O | CREATE TRIGGER trg_order_items_after_mod_popularity AFTER INSERT OR DELETE OR UPDATE ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_after_mod_popularity()
+trigger | order_items | trg_order_items_before_ins_upd | enabled=O | CREATE TRIGGER trg_order_items_before_ins_upd BEFORE INSERT OR UPDATE ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_before_ins_upd()
+trigger | orders | trg_orders_after_update_popularity | enabled=O | CREATE TRIGGER trg_orders_after_update_popularity AFTER UPDATE ON cartlify.orders FOR EACH ROW EXECUTE FUNCTION orders_after_update_popularity()
+trigger | orders | trg_orders_before_update | enabled=O | CREATE TRIGGER trg_orders_before_update BEFORE UPDATE ON cartlify.orders FOR EACH ROW EXECUTE FUNCTION orders_before_update()
+trigger | products | trg_products_after_views_change | enabled=O | CREATE TRIGGER trg_products_after_views_change AFTER UPDATE ON cartlify.products FOR EACH ROW EXECUTE FUNCTION products_after_views_change()
+trigger | products | trg_products_before_views_change | enabled=O | CREATE TRIGGER trg_products_before_views_change BEFORE UPDATE ON cartlify.products FOR EACH ROW EXECUTE FUNCTION products_before_views_change()
+trigger | review_votes | trg_review_votes_after_mod | enabled=O | CREATE TRIGGER trg_review_votes_after_mod AFTER INSERT OR DELETE OR UPDATE ON cartlify.review_votes FOR EACH ROW EXECUTE FUNCTION review_votes_after_mod()
+trigger | reviews | trg_reviews_after_mod_popularity | enabled=O | CREATE TRIGGER trg_reviews_after_mod_popularity AFTER INSERT OR DELETE OR UPDATE ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_after_mod_popularity()
+trigger | reviews | trg_reviews_after_mod_rating | enabled=O | CREATE TRIGGER trg_reviews_after_mod_rating AFTER INSERT OR DELETE OR UPDATE OF rating ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_after_mod_rating()
+trigger | reviews | trg_reviews_lock_rating_and_keys | enabled=O | CREATE TRIGGER trg_reviews_lock_rating_and_keys BEFORE UPDATE ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_lock_rating_and_keys()
+policy | admin_audit_log | aal_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
+policy | admin_audit_log | aal_insert | PERMISSIVE | public | INSERT | using=- | check=is_admin()
+policy | admin_audit_log | aal_select | PERMISSIVE | public | SELECT | using=is_admin() | check=-
+policy | admin_audit_log | aal_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
+policy | categories | categories_delete | PERMISSIVE | public | DELETE | using=is_admin() | check=-
+policy | categories | categories_insert | PERMISSIVE | public | INSERT | using=- | check=is_admin()
+policy | categories | categories_select | PERMISSIVE | public | SELECT | using=true | check=-
+policy | categories | categories_update | PERMISSIVE | public | UPDATE | using=is_admin() | check=is_admin()
+policy | chat_messages | chat_messages_delete | PERMISSIVE | public | DELETE | using=false | check=-
+policy | chat_messages | chat_messages_insert | PERMISSIVE | public | INSERT | using=- | check=(EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (((current_actor_role() = 'USER'::"Role") AND (t."userId" = current_actor_id()) AND (((chat_messages."senderType" = 'user'::"ChatMessageSenderType") AND (chat_messages."senderId" = current_actor_id())) OR ((chat_messages."senderType" = 'bot'::"ChatMessageSenderType") AND (chat_messages."senderId" IS NULL) AND (t.type = 'bot'::"ChatType")))) OR ((current_actor_role() = 'GUEST'::"Role") AND (t."guestId" = current_guest_id()) AND (t.type = 'bot'::"ChatType") AND (chat_messages."senderType" = ANY (ARRAY['guest'::"ChatMessageSenderType", 'bot'::"ChatMessageSenderType"])) AND (chat_messages."senderId" IS NULL)) OR ((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (t.type = 'admin'::"ChatType") AND (chat_messages."senderType" = 'admin'::"ChatMessageSenderType") AND (chat_messages."senderId" = current_actor_id()))))))
+policy | chat_messages | chat_messages_select | PERMISSIVE | public | SELECT | using=(EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (is_owner_or_admin(t."userId") OR ((current_actor_role() = 'GUEST'::"Role") AND (t."guestId" = current_guest_id())))))) | check=-
+policy | chat_messages | chat_messages_update | PERMISSIVE | public | UPDATE | using=(((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND ("senderType" = ANY (ARRAY['user'::"ChatMessageSenderType", 'guest'::"ChatMessageSenderType"])) AND (EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (t.type = 'admin'::"ChatType"))))) OR ((current_actor_role() = 'USER'::"Role") AND ("senderType" = ANY (ARRAY['bot'::"ChatMessageSenderType", 'admin'::"ChatMessageSenderType"])) AND (EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (t."userId" = current_actor_id()))))) OR ((current_actor_role() = 'GUEST'::"Role") AND ("senderType" = 'bot'::"ChatMessageSenderType") AND (EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (t.type = 'bot'::"ChatType") AND (t."guestId" = current_guest_id())))))) | check=(("isRead" = true) AND (((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND ("senderType" = ANY (ARRAY['user'::"ChatMessageSenderType", 'guest'::"ChatMessageSenderType"])) AND (EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (t.type = 'admin'::"ChatType"))))) OR ((current_actor_role() = 'USER'::"Role") AND ("senderType" = ANY (ARRAY['bot'::"ChatMessageSenderType", 'admin'::"ChatMessageSenderType"])) AND (EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (t."userId" = current_actor_id()))))) OR ((current_actor_role() = 'GUEST'::"Role") AND ("senderType" = 'bot'::"ChatMessageSenderType") AND (EXISTS ( SELECT 1 FROM chat_threads t WHERE ((t.id = chat_messages."threadId") AND (t.type = 'bot'::"ChatType") AND (t."guestId" = current_guest_id())))))))
+policy | chat_threads | chat_threads_delete | PERMISSIVE | public | DELETE | using=false | check=-
+policy | chat_threads | chat_threads_insert | PERMISSIVE | public | INSERT | using=- | check=(((current_actor_role() = ANY (ARRAY['USER'::"Role", 'ADMIN'::"Role", 'ROOT'::"Role"])) AND is_owner("userId") AND ("guestId" IS NULL)) OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id()) AND ("userId" IS NULL)))
+policy | chat_threads | chat_threads_select | PERMISSIVE | public | SELECT | using=(is_owner_or_admin("userId") OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id()))) | check=-
+policy | chat_threads | chat_threads_update | PERMISSIVE | public | UPDATE | using=(is_owner_or_admin("userId") OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id())) OR ((current_actor_role() = 'USER'::"Role") AND ("userId" IS NULL) AND ("guestId" = (NULLIF(current_setting('cartlify.migrating_guest_id'::text, true), ''::text))::uuid))) | check=(is_owner_or_admin("userId") OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id())) OR ((current_actor_role() = 'USER'::"Role") AND ("userId" = current_actor_id()) AND ("guestId" IS NULL)))
+policy | favorites | favorites_delete | PERMISSIVE | public | DELETE | using=(is_owner("userId") OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id())) OR ((current_actor_role() = 'USER'::"Role") AND ("userId" IS NULL) AND ("guestId" = (NULLIF(current_setting('cartlify.migrating_guest_id'::text, true), ''::text))::uuid))) | check=-
+policy | favorites | favorites_insert | PERMISSIVE | public | INSERT | using=- | check=(((current_actor_role() = ANY (ARRAY['USER'::"Role", 'ADMIN'::"Role", 'ROOT'::"Role"])) AND is_owner("userId") AND ("guestId" IS NULL)) OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id()) AND ("userId" IS NULL)))
+policy | favorites | favorites_select | PERMISSIVE | public | SELECT | using=(is_owner_or_admin("userId") OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id()))) | check=-
+policy | favorites | favorites_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
+policy | favorites | favorites_update | PERMISSIVE | public | UPDATE | using=((current_actor_role() = 'USER'::"Role") AND ("userId" IS NULL) AND ("guestId" = (NULLIF(current_setting('cartlify.migrating_guest_id'::text, true), ''::text))::uuid)) | check=(("userId" = current_actor_id()) AND ("guestId" IS NULL))
+policy | login_logs | login_logs_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
+policy | login_logs | login_logs_insert | PERMISSIVE | public | INSERT | using=- | check=is_owner("userId")
+policy | login_logs | login_logs_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin("userId") | check=-
+policy | login_logs | login_logs_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
+policy | order_items | order_items_delete | PERMISSIVE | public | DELETE | using=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false))))) | check=-
+policy | order_items | order_items_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false)))))
+policy | order_items | order_items_select | PERMISSIVE | public | SELECT | using=(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner_or_admin(o."userId")))) | check=-
+policy | order_items | order_items_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
+policy | order_items | order_items_update | PERMISSIVE | public | UPDATE | using=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false))))) | check=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false)))))
+policy | order_items | order_items_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND (((o.confirmed = true) AND (o.status = 'waiting'::"OrderStatus")) OR ((o.confirmed = false) AND (o.status = ANY (ARRAY['pending'::"OrderStatus", 'unconfirmed'::"OrderStatus"]))))))) | check=false
+policy | orders | orders_delete | PERMISSIVE | public | DELETE | using=((current_actor_role() = 'USER'::"Role") AND is_owner("userId") AND (confirmed = false)) | check=-
+policy | orders | orders_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = 'USER'::"Role") AND is_owner("userId") AND (confirmed = false) AND (status = 'pending'::"OrderStatus") AND ("reservationExpiresAt" IS NULL) AND ("paymentIntentId" IS NULL))
+policy | orders | orders_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin("userId") | check=-
+policy | orders | orders_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
+policy | orders | orders_update | PERMISSIVE | public | UPDATE | using=(is_owner("userId") AND (confirmed = false)) | check=(is_owner("userId") AND ("paymentIntentId" IS NULL) AND (confirmed = false) AND (status = ANY (ARRAY['pending'::"OrderStatus", 'unconfirmed'::"OrderStatus"])) AND ("reservationExpiresAt" IS NULL))
+policy | orders | orders_update_admin_shipping_status | PERMISSIVE | public | UPDATE | using=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (status = ANY (ARRAY['paid'::"OrderStatus", 'shipped'::"OrderStatus"]))) | check=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (status = ANY (ARRAY['shipped'::"OrderStatus", 'delivered'::"OrderStatus", 'cancelled'::"OrderStatus"])) AND (((to_jsonb(orders.*) - 'status'::text) - 'updatedAt'::text) = ( SELECT ((to_jsonb(o.*) - 'status'::text) - 'updatedAt'::text) FROM orders o WHERE (o.id = orders.id))))
+policy | orders | orders_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=((confirmed = false) OR ((confirmed = true) AND (status = 'waiting'::"OrderStatus") AND ("reservationExpiresAt" IS NOT NULL))) | check=(((total >= (0)::numeric) AND (((to_jsonb(orders.*) - 'total'::text) - 'updatedAt'::text) = ( SELECT ((to_jsonb(o.*) - 'total'::text) - 'updatedAt'::text) FROM orders o WHERE (o.id = orders.id)))) OR ((confirmed = false) AND (status = 'pending'::"OrderStatus") AND ("reservationExpiresAt" IS NULL) AND (((((to_jsonb(orders.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'updatedAt'::text) = ( SELECT ((((to_jsonb(o.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'updatedAt'::text) FROM orders o WHERE (o.id = orders.id)))) OR ((confirmed = false) AND (status = 'unconfirmed'::"OrderStatus") AND ("reservationExpiresAt" IS NULL) AND (((((to_jsonb(orders.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'updatedAt'::text) = ( SELECT ((((to_jsonb(o.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'updatedAt'::text) FROM orders o WHERE (o.id = orders.id)))) OR ((confirmed = true) AND (status = 'waiting'::"OrderStatus") AND ("reservationExpiresAt" IS NOT NULL) AND ("paymentIntentId" IS NULL) AND (total >= (0)::numeric) AND is_owner("userId") AND ((((((to_jsonb(orders.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'total'::text) - 'updatedAt'::text) = ( SELECT (((((to_jsonb(o.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'total'::text) - 'updatedAt'::text) FROM orders o WHERE (o.id = orders.id)))) OR ((confirmed = true) AND (status = 'paid'::"OrderStatus") AND ("reservationExpiresAt" IS NULL) AND ("paymentIntentId" IS NOT NULL) AND (total >= (0)::numeric) AND (((((((to_jsonb(orders.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'paymentIntentId'::text) - 'total'::text) - 'updatedAt'::text) = ( SELECT ((((((to_jsonb(o.*) - 'confirmed'::text) - 'status'::text) - 'reservationExpiresAt'::text) - 'paymentIntentId'::text) - 'total'::text) - 'updatedAt'::text) FROM orders o WHERE (o.id = orders.id)))))
+policy | product_images | product_images_delete | PERMISSIVE | public | DELETE | using=is_admin() | check=-
+policy | product_images | product_images_insert | PERMISSIVE | public | INSERT | using=- | check=is_admin()
+policy | product_images | product_images_select | PERMISSIVE | public | SELECT | using=true | check=-
+policy | product_images | product_images_update | PERMISSIVE | public | UPDATE | using=is_admin() | check=is_admin()
+policy | product_price_change_logs | ppcl_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
+policy | product_price_change_logs | ppcl_insert | PERMISSIVE | public | INSERT | using=- | check=is_admin()
+policy | product_price_change_logs | ppcl_select | PERMISSIVE | public | SELECT | using=is_admin() | check=-
+policy | product_price_change_logs | ppcl_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
+policy | products | products_delete | PERMISSIVE | public | DELETE | using=is_admin() | check=-
+policy | products | products_insert | PERMISSIVE | public | INSERT | using=- | check=is_admin()
+policy | products | products_select | PERMISSIVE | public | SELECT | using=true | check=-
+policy | products | products_update_admin | PERMISSIVE | public | UPDATE | using=is_admin() | check=is_admin()
+policy | products | products_update_computed | PERMISSIVE | public | UPDATE | using=true | check=((current_actor_role() = ANY (ARRAY['GUEST'::"Role", 'USER'::"Role"])) AND (((to_jsonb(products.*) - 'views'::text) - 'updatedAt'::text) = ( SELECT ((to_jsonb(p.*) - 'views'::text) - 'updatedAt'::text) FROM products p WHERE (p.id = products.id))))
+policy | products | products_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=true | check=((("avgRating" >= (0)::numeric) AND ("avgRating" <= (5)::numeric) AND ("reviewsCount" >= 0) AND ((((to_jsonb(products.*) - 'avgRating'::text) - 'reviewsCount'::text) - 'updatedAt'::text) = ( SELECT (((to_jsonb(p.*) - 'avgRating'::text) - 'reviewsCount'::text) - 'updatedAt'::text) FROM products p WHERE (p.id = products.id)))) OR ((stock >= 0) AND ("reservedStock" >= 0) AND ("reservedStock" <= stock) AND ((((to_jsonb(products.*) - 'stock'::text) - 'reservedStock'::text) - 'updatedAt'::text) = ( SELECT (((to_jsonb(p.*) - 'stock'::text) - 'reservedStock'::text) - 'updatedAt'::text) FROM products p WHERE (p.id = products.id)))) OR ((popularity >= 0) AND (((to_jsonb(products.*) - 'popularity'::text) - 'updatedAt'::text) = ( SELECT ((to_jsonb(p.*) - 'popularity'::text) - 'updatedAt'::text) FROM products p WHERE (p.id = products.id)))))
+policy | review_votes | review_votes_delete | PERMISSIVE | public | DELETE | using=is_owner("userId") | check=-
+policy | review_votes | review_votes_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = 'USER'::"Role") AND is_owner("userId"))
+policy | review_votes | review_votes_select | PERMISSIVE | public | SELECT | using=true | check=-
+policy | review_votes | review_votes_update | PERMISSIVE | public | UPDATE | using=is_owner("userId") | check=is_owner("userId")
+policy | reviews | reviews_delete | PERMISSIVE | public | DELETE | using=is_owner_or_admin("userId") | check=-
+policy | reviews | reviews_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = 'USER'::"Role") AND is_owner("userId") AND ((rating IS NOT NULL) OR ((comment IS NOT NULL) AND (btrim(comment) <> ''::text))))
+policy | reviews | reviews_select | PERMISSIVE | public | SELECT | using=true | check=-
+policy | reviews | reviews_update_owner_comment_null | PERMISSIVE | public | UPDATE | using=(is_owner("userId") AND ((rating IS NULL) OR (comment IS NULL) OR (btrim(comment) = ''::text))) | check=(is_owner("userId") AND ((rating IS NOT NULL) OR ((comment IS NOT NULL) AND (btrim(comment) <> ''::text))))
+policy | reviews | reviews_update_owner_votes | PERMISSIVE | cartlify_owner | UPDATE | using=true | check=(("upVotes" >= 0) AND ("downVotes" >= 0))
+policy | user_tokens | user_tokens_delete | PERMISSIVE | public | DELETE | using=is_owner_or_admin("userId") | check=-
+policy | user_tokens | user_tokens_insert | PERMISSIVE | public | INSERT | using=- | check=is_owner_or_admin("userId")
+policy | user_tokens | user_tokens_insert_owner | PERMISSIVE | cartlify_owner | INSERT | using=- | check=((type = 'VERIFY_EMAIL'::"UserTokenType") AND ("usedAt" IS NULL) AND ("expiresAt" > now()))
+policy | user_tokens | user_tokens_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin("userId") | check=-
+policy | user_tokens | user_tokens_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=((type = 'VERIFY_EMAIL'::"UserTokenType") AND ("usedAt" IS NULL) AND ("expiresAt" > now())) | check=-
+policy | user_tokens | user_tokens_update | PERMISSIVE | public | UPDATE | using=is_owner_or_admin("userId") | check=is_owner_or_admin("userId")
+policy | user_tokens | user_tokens_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=((type = 'VERIFY_EMAIL'::"UserTokenType") AND ("usedAt" IS NULL) AND ("expiresAt" > now())) | check=((type = 'VERIFY_EMAIL'::"UserTokenType") AND ("usedAt" IS NOT NULL))
+policy | users | users_delete | PERMISSIVE | public | DELETE | using=is_root() | check=-
+policy | users | users_insert | PERMISSIVE | public | INSERT | using=- | check=(((role = 'USER'::"Role") AND (("isVerified" = false) OR is_admin())) OR (is_root() AND (role = ANY (ARRAY['USER'::"Role", 'ADMIN'::"Role"]))))
+policy | users | users_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin(id) | check=-
+policy | users | users_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
+policy | users | users_update | PERMISSIVE | public | UPDATE | using=(is_owner(id) OR is_root()) | check=((is_owner(id) AND (role = current_actor_role()) AND (EXISTS ( SELECT 1 FROM users u WHERE ((u.id = users.id) AND (u.email = users.email) AND ((u."isVerified" = users."isVerified") OR ((u."authProvider" = 'LOCAL'::"AuthProvider") AND (users."authProvider" <> 'LOCAL'::"AuthProvider") AND (users."isVerified" = true) AND (users."passwordHash" IS NULL))))))) OR is_root())
+policy | users | users_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=("isVerified" = false) | check=(("isVerified" = true) AND (((to_jsonb(users.*) - 'isVerified'::text) - 'updatedAt'::text) = ( SELECT ((to_jsonb(u.*) - 'isVerified'::text) - 'updatedAt'::text) FROM users u WHERE (u.id = users.id))))
+view | admin_stats_view | cartlify_owner | options=security_invoker=true | acl=cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner | body=3c2437ecf9709fb916b67eee15bcc63f
+default_acl | cartlify_owner | * | f | cartlify_owner=X/cartlify_owner
+default_acl | cartlify_owner | cartlify | S | cartlify_app=rwU/cartlify_owner,cartlify_readonly=rU/cartlify_owner
+default_acl | cartlify_owner | cartlify | f | cartlify_app=X/cartlify_owner
+default_acl | cartlify_owner | cartlify | r | cartlify_app=arwd/cartlify_owner,cartlify_readonly=r/cartlify_owner
