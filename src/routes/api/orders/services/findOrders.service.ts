@@ -44,6 +44,7 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
           updatedAt: true,
           items: {
             select: {
+              id: true,
               productId: true,
               quantity: true,
               unitPrice: true,

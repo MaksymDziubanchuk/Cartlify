@@ -18,6 +18,7 @@ const orderProductExample = {
 };
 
 const orderItemExample = {
+  id: 1,
   productId: 10,
   product: orderProductExample,
   quantity: 2,
@@ -68,6 +69,7 @@ const updateCurrentOrderItemBodyExample = {
 
 const confirmCurrentOrderBodyExample = {
   orderId: 1,
+  shippingAddress: 'Example shipping address',
 };
 
 const orderIdParamsExample = {
@@ -82,7 +84,8 @@ const updateOrderStatusBodyExample = {
 const getCurrentOrderSchema = {
   operationId: 'getCurrentOrder',
   summary: 'Get current order',
-  description: 'Returns the current authenticated user order or cart state.',
+  description:
+    'Returns the current authenticated user order or cart state. Item prices are brought to current product prices before the order is returned.',
 
   response: {
     200: {
@@ -101,6 +104,10 @@ const getCurrentOrderSchema = {
     },
     404: {
       description: 'Current order was not found.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'Order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -280,7 +287,8 @@ const deleteCurrentItemsSchema = {
 const postCurrentConfirmSchema = {
   operationId: 'confirmCurrentOrder',
   summary: 'Confirm current order',
-  description: 'Confirms the current order, reserves stock and prepares it for checkout.',
+  description:
+    'Confirms the current order, reserves stock and prepares it for checkout. `shippingAddress` is stored on the order and is required when the order has none yet. When an item price differs from the current product price, the order is not confirmed and `ORDER_PRICES_CHANGED` is returned: reload the order to get fresh prices and confirm again.',
 
   body: {
     $ref: 'ordersCurrentConfirmBodySchema#',
@@ -301,7 +309,7 @@ const postCurrentConfirmSchema = {
     },
 
     400: {
-      description: 'Invalid confirm order request.',
+      description: 'Invalid confirm order request or missing shipping address.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -317,7 +325,7 @@ const postCurrentConfirmSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order state or product stock does not allow confirmation.',
+      description: 'Order state, product stock or changed item prices do not allow confirmation.',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -376,7 +384,8 @@ const getOrdersSchema = {
 const getOrderByIdSchema = {
   operationId: 'getOrderById',
   summary: 'Get order by id',
-  description: 'Returns one order by id if it is visible to the authenticated user.',
+  description:
+    'Returns one order by id if it is visible to the authenticated user. For the owner of an unconfirmed order, item prices are brought to current product prices before the order is returned.',
 
   params: {
     $ref: 'ordersGetByIdParamsSchema#',
@@ -404,6 +413,10 @@ const getOrderByIdSchema = {
     },
     404: {
       description: 'Order was not found.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'Order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {

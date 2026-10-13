@@ -15,6 +15,7 @@ export function mapOrderRowToResponse(row: {
   createdAt: Date;
   updatedAt: Date;
   items: Array<{
+    id: number;
     productId: number;
     quantity: number;
     unitPrice: unknown;
@@ -44,6 +45,8 @@ export function mapOrderRowToResponse(row: {
       const availableStock = Math.max(0, it.product.stock - it.product.reservedStock);
 
       return {
+        // order item id, cart item routes take it as itemId
+        id: it.id,
         productId: it.productId as any,
         product: {
           id: it.product.id as any,
