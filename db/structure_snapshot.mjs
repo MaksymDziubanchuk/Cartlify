@@ -222,6 +222,148 @@ function summarize(lines) {
   return [...counts].map(([kind, count]) => `${kind}=${count}`).join(' ');
 }
 
+// scripts in the order they must be run, with the way each one is run
+const FIX_STEPS = [
+  [
+    'migrations',
+    'prisma migrations (workflow "PROD DB — Prisma migrate deploy" or npm run migrate:deploy)',
+  ],
+  ['01', 'db/01_roles_and_schemas.sql (psql as superuser)'],
+  ['02', 'db/02_extensions.sql (psql as superuser)'],
+  ['05', 'db/05_fn_and_triggers.sql (workflow "DB — run SQL script")'],
+  ['03', 'db/03_policies_and_rls.sql (workflow "DB — run SQL script")'],
+  ['04', 'db/04_views.sql (workflow "DB — run SQL script")'],
+  ['06', 'db/06_indexes_and_constraints.sql (workflow "DB — run SQL script")'],
+  ['migrations-or-06', 'prisma migrations or db/06_indexes_and_constraints.sql'],
+];
+
+// kinds whose third field is the owner of the object
+const KINDS_WITH_OWNER = ['schema', 'table', 'sequence', 'enum', 'function', 'view'];
+
+// position of the privileges field for kinds that get their grants from db/01
+const ACL_FIELD = { table: 5, sequence: 7, enum: 4, column: 9 };
+
+// fields that identify one object, so its reference line can be paired with the database line
+function objectKey(fields) {
+  const [kind] = fields;
+
+  if (kind === 'column') return `column | ${fields[1]} | ${fields[3]}`;
+  if (['constraint', 'index', 'trigger', 'policy'].includes(kind)) {
+    return fields.slice(0, 3).join(' | ');
+  }
+  if (kind === 'default_acl') return fields.slice(0, 4).join(' | ');
+  if (['server', 'database'].includes(kind)) return kind;
+  if (['membership', 'role_db_setting', 'event_trigger'].includes(kind)) return fields.join(' | ');
+
+  return fields.slice(0, 2).join(' | ');
+}
+
+// guess which script brings one differing object in line with the reference
+function guessFix(ref, actual) {
+  // scripts never drop objects they do not know about
+  if (!ref) return { manual: 'exists only in the database, scripts do not remove it' };
+
+  const [kind, name] = ref;
+  const changed = actual ? ref.flatMap((field, i) => (field === actual[i] ? [] : [i])) : [];
+  const onlyAclChanged = changed.length === 1 && changed[0] === ACL_FIELD[kind];
+
+  if (['server', 'database', 'event_trigger'].includes(kind)) {
+    return { manual: 'server or database setting, scripts do not manage it' };
+  }
+
+  // create or replace keeps the owner, so rerunning a script does not change it
+  if (actual && KINDS_WITH_OWNER.includes(kind) && changed.includes(2)) {
+    return { manual: 'owner differs, scripts keep the owner of an existing object' };
+  }
+
+  if (kind === 'function') {
+    const fromExtension = !ref[ref.length - 1].endsWith('extension=-');
+
+    if (name.startsWith('immutable_unaccent(')) {
+      return actual
+        ? { manual: 'db/02 creates this function only when it is missing, the existing text stays' }
+        : { step: '02' };
+    }
+
+    return { step: fromExtension ? '02' : '05' };
+  }
+
+  if (kind === 'extension') return { step: '02' };
+  if (['role', 'role_db_setting', 'membership', 'schema', 'default_acl'].includes(kind)) {
+    return { step: '01' };
+  }
+  if (kind === 'trigger') return { step: '05' };
+  if (kind === 'policy') return { step: '03' };
+  if (kind === 'view') return { step: '04' };
+
+  // check constraints come from db/06, keys and foreign keys from migrations
+  if (kind === 'constraint') return { step: ref[3] === 'c' ? '06' : 'migrations' };
+
+  if (kind === 'index') {
+    return { step: ref[2] === 'products_name_unaccent_trgm_idx' ? '02' : 'migrations-or-06' };
+  }
+
+  if (kind === 'table' && actual) {
+    // row level security flags are set in db/03, grants in db/01
+    if (changed.includes(3) || changed.includes(4)) return { step: '03' };
+    if (onlyAclChanged) return { step: '01' };
+  }
+
+  if (['sequence', 'enum', 'column'].includes(kind) && actual && onlyAclChanged) {
+    return { step: '01' };
+  }
+
+  // tables, columns, enums and sequences are created by migrations
+  return { step: 'migrations' };
+}
+
+// print which scripts most likely bring the database in line with the reference
+function printSuggestions(missing, extra) {
+  const refByKey = new Map(
+    missing.map((line) => [objectKey(line.split(' | ')), line.split(' | ')]),
+  );
+  const actualByKey = new Map(
+    extra.map((line) => [objectKey(line.split(' | ')), line.split(' | ')]),
+  );
+
+  const bySteps = new Map();
+  const byReason = new Map();
+
+  for (const key of new Set([...refByKey.keys(), ...actualByKey.keys()])) {
+    const fix = guessFix(refByKey.get(key), actualByKey.get(key));
+    const group = fix.step ? bySteps : byReason;
+    const groupKey = fix.step ?? fix.manual;
+
+    group.set(groupKey, [...(group.get(groupKey) ?? []), key]);
+  }
+
+  // show a few object names per group, the full lines are printed above
+  const sample = (keys) =>
+    keys.slice(0, 3).join('; ') + (keys.length > 3 ? `; and ${keys.length - 3} more` : '');
+
+  if (bySteps.size) {
+    console.error(
+      '\nmost likely these scripts were not run on this database, run them in this order:',
+    );
+
+    for (const [step, title] of FIX_STEPS) {
+      const keys = bySteps.get(step);
+
+      if (keys) console.error(`  ${title}: ${keys.length} objects (${sample(keys)})`);
+    }
+
+    console.error('then run this check again');
+  }
+
+  if (byReason.size) {
+    console.error('\nnot fixed by running the scripts again:');
+
+    for (const [reason, keys] of byReason) {
+      console.error(`  ${keys.length} objects: ${reason} (${sample(keys)})`);
+    }
+  }
+}
+
 async function save() {
   console.log(`reading structure from ${describeTarget(CONTAINER_URL)}`);
 
@@ -274,11 +416,13 @@ async function check(target) {
   for (const line of missing) console.error(`  only in reference: ${line}`);
   for (const line of extra) console.error(`  only in ${label}: ${line}`);
 
-  console.error(
-    isContainer
-      ? '\nif the scripts were changed on purpose, refresh the reference: npm run db:snapshot:save'
-      : '\nthis database does not match the scripts: a script was not run here or it was changed by hand',
-  );
+  if (isContainer) {
+    console.error(
+      '\nif the scripts were changed on purpose, refresh the reference: npm run db:snapshot:save',
+    );
+  } else {
+    printSuggestions(missing, extra);
+  }
 
   process.exit(1);
 }
