@@ -1,0 +1,34 @@
+# throwaway postgres and redis for integration tests
+# versions match the ones railway runs for dev (postgres 17.11, redis 8.2.9)
+# start and build the database with: npm run db:test:up
+name: cartlify-test
+
+services:
+  postgres:
+    image: postgres:17.11
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cartlify_test
+    ports:
+      # bind to localhost only, port differs from a locally installed postgres
+      - '127.0.0.1:54329:5432'
+    tmpfs:
+      # keep data in memory so it disappears with the container
+      - /var/lib/postgresql/data
+    healthcheck:
+      # check over tcp: during init the server listens on the unix socket only
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -U postgres -d cartlify_test']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:8.2.9
+    ports:
+      - '127.0.0.1:63799:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 30

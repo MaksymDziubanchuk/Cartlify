@@ -89,6 +89,10 @@ BEGIN
 END
 $do$;
 
+-- 2a) Function owner: this script runs as superuser, keep the function owned by cartlify_owner
+-- like the other non-extension objects.
+ALTER FUNCTION cartlify.immutable_unaccent (text) OWNER TO cartlify_owner;
+
 -- 3) Index: create if missing. If exists but not matching -> error.
 DO $do$
 DECLARE

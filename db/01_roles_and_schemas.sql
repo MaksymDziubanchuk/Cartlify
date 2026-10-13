@@ -39,6 +39,15 @@ SET
   search_path = 'cartlify';
 
 ------------------------------------------------------------
+-- 1b. owner role extras (were set by hand on railway)
+------------------------------------------------------------
+-- may create databases
+ALTER ROLE cartlify_owner CREATEDB;
+
+-- read access to server statistics views
+GRANT pg_read_all_stats TO cartlify_owner;
+
+------------------------------------------------------------
 -- 2. 
 ------------------------------------------------------------
 DO $$
