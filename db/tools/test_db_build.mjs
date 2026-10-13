@@ -1,11 +1,11 @@
 // builds a throwaway test database from scratch inside docker
-// usage: node db/test_db_build.mjs up | down  (npm run db:test:up / db:test:down)
+// usage: node db/tools/test_db_build.mjs up | down  (npm run db:test:up / db:test:down)
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const composeFile = 'docker-compose.test.yml';
 
 // local container address, must match docker-compose.test.yml
@@ -68,7 +68,7 @@ const psql = (...args) =>
 // feed the script through stdin with unix line endings: a windows checkout has crlf,
 // and function bodies would differ from the ones created on railway from a linux runner
 function sqlFile(file) {
-  const sql = readFileSync(path.join(rootDir, 'db', file), 'utf8').replace(/\r\n/g, '\n');
+  const sql = readFileSync(path.join(rootDir, 'db', 'schema', file), 'utf8').replace(/\r\n/g, '\n');
 
   run(file, 'docker', psql('-f', '-'), {}, sql);
 }
@@ -112,9 +112,9 @@ function up() {
   // rerun: grants for the migration table and functions created after the first run
   sqlFile('01_roles_and_schemas.sql');
 
-  // the built database must match the saved reference (db/structure_snapshot.txt)
+  // the built database must match the saved reference (db/tools/structure_snapshot.txt)
   run('compare structure with the reference', process.execPath, [
-    'db/structure_snapshot.mjs',
+    'db/tools/structure_snapshot.mjs',
     'check',
   ]);
 
@@ -128,6 +128,6 @@ const command = process.argv[2];
 if (command === 'up') up();
 else if (command === 'down') down();
 else {
-  console.error('usage: node db/test_db_build.mjs up | down');
+  console.error('usage: node db/tools/test_db_build.mjs up | down');
   process.exit(1);
 }

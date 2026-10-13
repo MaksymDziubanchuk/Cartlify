@@ -1,7 +1,7 @@
 name: DB — check structure against reference (manual)
 
-# read-only: compares a database with db/structure_snapshot.txt
-# use it after a script was run by hand through psql (db/01, db/02)
+# read-only: compares a database with db/tools/structure_snapshot.txt
+# use it after a script was run by hand through psql (db/schema/01, db/schema/02)
 
 on:
   workflow_dispatch:

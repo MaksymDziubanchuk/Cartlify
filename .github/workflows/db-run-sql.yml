@@ -16,14 +16,14 @@ on:
         required: true
         type: choice
         options:
-          # keep this list in sync with /db/*.sql
-          - db/01_roles_and_schemas.sql
-          - db/02_extensions.sql
-          - db/03_policies_and_rls.sql
-          - db/04_views.sql
-          - db/05_fn_and_triggers.sql
-          - db/06_indexes_and_constraints.sql
-          - db/reseed.sql
+          # keep this list in sync with /db/schema/*.sql
+          - db/schema/01_roles_and_schemas.sql
+          - db/schema/02_extensions.sql
+          - db/schema/03_policies_and_rls.sql
+          - db/schema/04_views.sql
+          - db/schema/05_fn_and_triggers.sql
+          - db/schema/06_indexes_and_constraints.sql
+          - db/data/reseed.sql
 
 concurrency:
   # prevent parallel db mutations per target
@@ -78,7 +78,7 @@ jobs:
           if [ ! -f "$SCRIPT" ]; then
             echo "file not found: $SCRIPT"
             echo "available sql files under db/:"
-            find db -maxdepth 2 -type f -name "*.sql" -print
+            find db -maxdepth 3 -type f -name "*.sql" -print
             exit 1
           fi
 
@@ -136,7 +136,7 @@ jobs:
       - name: Generate Prisma client
         run: npx prisma generate
 
-      # read-only: compare database structure with db/structure_snapshot.txt
+      # read-only: compare database structure with db/tools/structure_snapshot.txt
       # red means a script was not run on this database yet or it was changed by hand
       - name: Compare DEV structure with the reference
         if: inputs.target_db == 'dev'

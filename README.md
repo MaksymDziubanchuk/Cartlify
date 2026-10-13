@@ -228,7 +228,12 @@ Current API documentation refinement work:
 
 ```text
 Cartlify/
-├── db/                         # raw SQL: roles, schema, RLS, views, functions, indexes
+├── db/
+│   ├── schema/                 # raw SQL run in order: roles, extensions, RLS, views, functions, indexes
+│   ├── fixes/                  # one-time repair scripts
+│   ├── data/                   # reseed, clear and csv import scripts
+│   ├── seeds/                  # csv seed data
+│   └── tools/                  # test database build, structure snapshot, restore helpers
 ├── prisma/                     # Prisma schema and migrations
 ├── src/
 │   ├── config/                 # env and service configs
@@ -375,7 +380,7 @@ createdb cartlify_shadow
 Run the SQL bootstrap script before Prisma migrations so the `cartlify` schema and roles exist:
 
 ```bash
-psql -v ON_ERROR_STOP=1 -f "db/01_roles_and_schemas.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$DATABASE_URL"
 ```
 
 ### 5. Generate Prisma client
@@ -395,11 +400,11 @@ npm run prisma:migrate
 These scripts add extensions, RLS, functions, triggers, views, and additional indexes that go beyond basic Prisma migrations:
 
 ```bash
-psql -v ON_ERROR_STOP=1 -f "db/02_extensions.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/03_policies_and_rls.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/04_views.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/05_fn_and_triggers.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/06_indexes_and_constraints.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/02_extensions.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/03_policies_and_rls.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/04_views.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/05_fn_and_triggers.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/06_indexes_and_constraints.sql" "$DATABASE_URL"
 ```
 
 ### 8. Start Redis
