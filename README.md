@@ -64,7 +64,8 @@ What is important to state honestly:
 - there is no storefront/UI layer in this repository yet; the current stage is the backend API
 - WebSocket chat and OpenAI chatbot logic are implemented, but the admin-chat workflow is still being actively refined
 - Swagger/OpenAPI is implemented and available, but route security metadata, operation ids, examples, and response descriptions are still being refined
-- test coverage, Dockerized deployment, and broader observability are **planned**, not done in this snapshot
+- the test setup (Jest, Docker test database, launcher) is in place, but the test suite itself is only starting
+- Dockerized deployment and broader observability are **planned**, not done in this snapshot
 
 ---
 
@@ -92,13 +93,13 @@ What is important to state honestly:
 
 ### Planned stack / next steps
 
-| Area                     | Planned technologies                          | Status  |
-| ------------------------ | --------------------------------------------- | ------- |
-| Testing                  | Jest, Supertest, PostgreSQL integration tests | Planned |
-| API docs refinement      | security metadata, operation ids, examples    | Planned |
-| Deployment               | Docker, AWS ECS/Fargate                       | Planned |
-| SSR delivery layer       | detachable Handlebars-based web module        | Planned |
-| Production observability | broader monitoring / metrics / reporting      | Planned |
+| Area                     | Planned technologies                                  | Status      |
+| ------------------------ | ----------------------------------------------------- | ----------- |
+| Testing                  | Jest, PostgreSQL and Redis integration tests (Docker) | In progress |
+| API docs refinement      | security metadata, operation ids, examples            | Planned     |
+| Deployment               | Docker, AWS ECS/Fargate                               | Planned     |
+| SSR delivery layer       | detachable Handlebars-based web module                | Planned     |
+| Production observability | broader monitoring / metrics / reporting              | Planned     |
 
 ---
 
@@ -216,7 +217,7 @@ Current API documentation refinement work:
 
 ### Planned
 
-- automated tests with Jest, Supertest, and PostgreSQL integration coverage
+- automated tests with Jest: unit tests and integration tests against a disposable PostgreSQL and Redis in Docker
 - Swagger/OpenAPI refinement for protected routes, operation ids, examples, and response descriptions
 - detachable SSR/web layer for showcase pages without coupling business logic to the UI
 - Dockerized local/dev/prod workflow and a production deployment target on AWS ECS/Fargate
@@ -258,6 +259,15 @@ Cartlify/
 │   ├── types/                  # DTOs and shared TypeScript types
 │   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
 │   └── workers/                # background workers
+├── tests/
+│   ├── unit/                   # no database or network, mirrors src/ paths
+│   ├── integration/            # api/<module>, db, flows, worker against the Docker test stack
+│   ├── helpers/                # app startup for app.inject, test environment guard
+│   ├── fixtures/               # static files used by tests
+│   ├── setup/                  # per-project jest setup, keeps the local .env out of tests
+│   ├── coverage/               # generated coverage report (gitignored)
+│   └── run.mjs                 # test launcher behind npm test
+├── docker-compose.test.yml     # disposable PostgreSQL and Redis for integration tests
 ├── .github/workflows/          # DB migration and SQL execution workflows
 └── package.json
 ```
@@ -473,8 +483,23 @@ npm run format
 # type check
 npm run typecheck
 
-# tests (placeholder script exists, but test suite is not established in this snapshot)
+# tests: pick test parts in a checkbox list (all parts without an interactive terminal);
+# integration parts rebuild the Docker test database first and remove it after the run,
+# Docker must be running
 npm test
+
+# keep the test database running after the tests to look inside
+npm test -- api:orders --keep-db
+
+# tests by part name or group (all, unit, integration, api)
+npm test -- unit api:orders
+
+# rerun only the tests that failed last time
+npm test -- --failed
+
+# unit or integration tests only
+npm run test:unit
+npm run test:integration
 ```
 
 ---

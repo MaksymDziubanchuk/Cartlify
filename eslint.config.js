@@ -15,14 +15,13 @@ const compat = new FlatCompat({
 
 export default [
   {
-    ignores: ['node_modules/**', 'dist/**', 'coverage/**'],
+    ignores: ['node_modules/**', 'dist/**', 'tests/coverage/**'],
   },
 
   ...compat.config({
     env: {
       es2020: true,
       node: true,
-      jest: true,
     },
 
     parser: '@typescript-eslint/parser',
