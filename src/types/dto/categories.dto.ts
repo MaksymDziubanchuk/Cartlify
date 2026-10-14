@@ -1,4 +1,4 @@
-import type { CategoryId, UserId } from 'types/ids.js';
+import type { CategoryId, IdParam, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
 export interface GetAllCategoriesQueryDto {
@@ -48,7 +48,7 @@ export interface CreateCategoryDto extends CreateCategoryBodyDto {
 export type CreateCategoryResponseDto = CategoryResponseDto;
 
 export interface UpdateCategoryParamsDto {
-  categoryId: CategoryId;
+  categoryId: IdParam;
 }
 
 export interface UpdateCategoryBodyDto {
@@ -67,10 +67,11 @@ export interface UpdateCategoryDto extends UpdateCategoryBodyDto {
 export type UpdateCategoryResponseDto = CategoryResponseDto;
 
 export interface DeleteCategoryParamsDto {
-  categoryId: CategoryId;
+  categoryId: IdParam;
 }
 
-export interface DeleteCategoryDto extends DeleteCategoryParamsDto {
+export interface DeleteCategoryDto {
+  categoryId: CategoryId;
   actorId: UserId;
   actorRole: Role;
 }

@@ -1,4 +1,4 @@
-import type { CategoryId, ProductId, ReviewId, UserId } from '../ids.js';
+import type { CategoryId, IdParam, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
 
@@ -101,7 +101,7 @@ export interface ProductsResponseDto {
 
 //GET PRODUCT BY ID
 export interface GetProductByIdParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 
 export interface FindProductByIdDto {
@@ -116,7 +116,7 @@ export type FullProductResponseDto = Omit<ProductResponseDto, 'images'> & {
 
 // GET PRODUCTS REVIEWS
 export interface GetProductReviewsParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 export interface GetProductReviewsQueryDto {
   cursor?: string;
@@ -179,7 +179,7 @@ export type CreateProductResponseDto = FullProductResponseDto;
 
 // UPDATE PRODUCT
 export interface UpdateProductParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 
 export interface UpdateProductBodyDto {
@@ -242,7 +242,7 @@ export interface BulkUpdateProductsPriceResponseDto {
 
 // DELETE PRODUCT BY ID
 export interface DeleteProductByIdParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 
 export interface DeleteProductByIdDto {
@@ -257,7 +257,7 @@ export interface DeleteProductByIdResponseDto {
 
 // CREATE REVIEW
 export interface PostReviewParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 export interface CreateReviewBodyDto {
   rating?: number;
@@ -272,10 +272,16 @@ export interface CreateReviewDto extends CreateReviewBodyDto {
 
 export type CreateReviewResponseDto = ReviewResponseDto;
 
+// a new review answers 201, adding the missing part to an existing review answers 200
+export interface CreateReviewResultDto {
+  review: CreateReviewResponseDto;
+  created: boolean;
+}
+
 // DETELE REVIEW
 export interface DeleteProductReviewParamsDto {
-  productId: ProductId;
-  reviewId: ReviewId;
+  productId: IdParam;
+  reviewId: IdParam;
 }
 
 export interface DeleteProductReviewDto {
@@ -291,16 +297,15 @@ export interface DeleteProductReviewResponseDto {
 
 // UPDATE PRODUCT CATEGORY
 export interface UpdateProductCategoryParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 
 export interface UpdateProductCategoryBodyDto {
   categoryId: CategoryId;
 }
 
-export interface UpdateProductCategoryDto
-  extends UpdateProductCategoryParamsDto,
-    UpdateProductCategoryBodyDto {
+export interface UpdateProductCategoryDto extends UpdateProductCategoryBodyDto {
+  productId: ProductId;
   actorId: UserId;
   actorRole: Role;
 }

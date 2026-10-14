@@ -5,7 +5,7 @@ import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const voteReviewParamsExample = {
-  reviewId: 1,
+  reviewId: '1',
 };
 
 const voteReviewBodyExample = {

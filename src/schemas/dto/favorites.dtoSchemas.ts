@@ -37,7 +37,7 @@ const favoritesAddParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'number' },
+    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['productId'],
 } as const;
@@ -58,7 +58,7 @@ const favoritesDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'integer', minimum: 1 },
+    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['productId'],
 } as const;

@@ -232,7 +232,8 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
   const inStockVal = scopeObj ? scopeObj.inStock : undefined;
   const inStockRaw = typeof inStockVal === 'boolean' ? inStockVal : undefined;
 
-  const deletedRaw = typeof scopeObj.deleted === 'boolean' ? scopeObj.deleted : undefined;
+  // deleted products stay untouched unless the request asks for them
+  const deletedRaw = typeof scopeObj?.deleted === 'boolean' ? scopeObj.deleted : false;
 
   // build prisma where once, outside tx
   const and: Prisma.ProductWhereInput[] = [];

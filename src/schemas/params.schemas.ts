@@ -2,7 +2,7 @@ export const userIdParamSchema = {
   $id: 'userIdParamSchema',
   type: 'object',
   properties: {
-    userId: { type: 'integer', minimum: 1 },
+    userId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['userId'],
   additionalProperties: false,
@@ -12,7 +12,7 @@ export const productIdParamSchema = {
   $id: 'productIdParamSchema',
   type: 'object',
   properties: {
-    productId: { type: 'integer', minimum: 1 },
+    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['productId'],
   additionalProperties: false,
@@ -22,7 +22,7 @@ export const reviewIdParamSchema = {
   $id: 'reviewIdParamSchema',
   type: 'object',
   properties: {
-    reviewId: { type: 'integer', minimum: 1 },
+    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['reviewId'],
   additionalProperties: false,
@@ -32,8 +32,8 @@ export const productReviewIdsParamSchema = {
   $id: 'productReviewIdsParamSchema',
   type: 'object',
   properties: {
-    productId: { type: 'integer', minimum: 1 },
-    reviewId: { type: 'integer', minimum: 1 },
+    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['productId', 'reviewId'],
   additionalProperties: false,
@@ -43,7 +43,7 @@ export const categoryIdParamSchema = {
   $id: 'categoryIdParamSchema',
   type: 'object',
   properties: {
-    categoryId: { type: 'integer', minimum: 1 },
+    categoryId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['categoryId'],
   additionalProperties: false,
@@ -53,7 +53,7 @@ export const orderIdParamSchema = {
   $id: 'orderIdParamSchema',
   type: 'object',
   properties: {
-    orderId: { type: 'integer', minimum: 1 },
+    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['orderId'],
   additionalProperties: false,
@@ -63,7 +63,7 @@ export const adminIdParamSchema = {
   $id: 'adminIdParamSchema',
   type: 'object',
   properties: {
-    adminId: { type: 'integer', minimum: 1 },
+    adminId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['adminId'],
   additionalProperties: false,

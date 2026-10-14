@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import env from '@config/env.js';
 import { verifyAccessToken, getTtl } from '@utils/jwt.js';
 import { AppError, UnauthorizedError } from '@utils/errors.js';
+import { isUuid } from '@db/dbContext.service.js';
 import {
   setAccessTokenCookie,
   setRefreshTokenCookie,
@@ -64,8 +65,9 @@ async function ensureGuest(req: FastifyRequest, reply: FastifyReply) {
   const cookies = (req.cookies as Record<string, string | undefined>) ?? {};
   let guestId = cookies?.guestId;
 
-  // issue guest id cookie
-  if (!guestId) {
+  // issue guest id cookie when there is none or it is not a uuid,
+  // guest ids are uuid columns in the db and a broken one would fail every guest request
+  if (!isUuid(guestId)) {
     guestId = randomUUID();
 
     setGuestIdCookie(reply, guestId, GUEST_ID_TTL);

@@ -214,8 +214,8 @@ const deleteProductReviewParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'integer', minimum: 1 },
-    reviewId: { type: 'integer', minimum: 1 },
+    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['productId', 'reviewId'],
 } as const;
@@ -310,6 +310,8 @@ const createReviewBodySchema = {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
     comment: { type: 'string' },
   },
+  // the same rule as the db: a review has a rating, a comment or both
+  anyOf: [{ required: ['rating'] }, { required: ['comment'] }],
   additionalProperties: false,
 } as const;
 
@@ -318,7 +320,7 @@ const productsUpdateCategoryParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'number' },
+    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['productId'],
 } as const;

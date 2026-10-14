@@ -1,4 +1,4 @@
-import type { UserId, ProductId, OrderId, CategoryId } from 'types/ids.js';
+import type { UserId, ProductId, OrderId, CategoryId, IdParam } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
 // types
@@ -72,20 +72,22 @@ export interface CurrentAddItemDto extends CurrentAddItemBodyDto {
 
 // PATCH /current/items/:itemId
 export interface CurrentItemIdParamsDto {
-  itemId: number;
+  itemId: IdParam;
 }
 
 export interface CurrentUpdateItemBodyDto {
   quantity: number;
 }
 
-export interface CurrentUpdateItemDto extends CurrentItemIdParamsDto, CurrentUpdateItemBodyDto {
+export interface CurrentUpdateItemDto extends CurrentUpdateItemBodyDto {
+  itemId: number;
   actorId: UserId;
   actorRole: Role;
 }
 
 // DELETE /current/items/:itemId
-export interface CurrentDeleteItemDto extends CurrentItemIdParamsDto {
+export interface CurrentDeleteItemDto {
+  itemId: number;
   actorId: UserId;
   actorRole: Role;
 }
@@ -139,7 +141,7 @@ export interface GetOrdersResponseDto {
 
 // GET /:orderId
 export interface GetOrderByIdParamsDto {
-  orderId: OrderId;
+  orderId: IdParam;
 }
 
 export interface FindOrderByIdDto {
@@ -152,7 +154,7 @@ export type GetOrderByIdResponseDto = OrderResponseDto;
 
 // PATCH /:orderId/status
 export interface UpdateOrderStatusParamsDto {
-  orderId: OrderId;
+  orderId: IdParam;
 }
 
 export interface UpdateOrderStatusBodyDto {

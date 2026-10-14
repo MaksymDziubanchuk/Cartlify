@@ -1,4 +1,4 @@
-import type { UserId } from 'types/ids.js';
+import type { IdParam, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 import type { Email } from 'types/common.js';
 import type { ReviewResponseDto } from './products.dto.js';
@@ -20,7 +20,7 @@ export type AvatarPart = {
 };
 
 export interface GetUserByIdParamsDto {
-  userId: UserId;
+  userId: IdParam;
 }
 
 export interface FindUserByIdDto {

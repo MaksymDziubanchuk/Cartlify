@@ -67,7 +67,7 @@ const patchCategory: ControllerRouter<
   {},
   UpdateCategoryResponseDto
 > = async (req, reply) => {
-  const { categoryId } = req.params;
+  const categoryId = Number(req.params.categoryId);
   const { name, slug, description, parentId } = req.body;
   const { id: actorId, role: actorRole } = req.user as User;
 
@@ -86,7 +86,7 @@ const deleteCategory: ControllerRouter<
   {},
   MessageResponseDto
 > = async (req, reply) => {
-  const { categoryId } = req.params;
+  const categoryId = Number(req.params.categoryId);
   const { id: actorId, role: actorRole } = req.user as User;
 
   const args = pickDefined<DeleteCategoryDto>({ categoryId, actorId, actorRole }, {});

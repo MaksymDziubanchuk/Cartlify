@@ -18,7 +18,7 @@ const chatPaginationQuerySchema = {
   additionalProperties: false,
   properties: {
     page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
   },
 } as const;
 
@@ -28,7 +28,7 @@ const adminChatThreadsQuerySchema = {
   additionalProperties: false,
   properties: {
     page: { type: 'number', minimum: 1 },
-    limit: { type: 'number', minimum: 1 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
     queue: { type: 'string', enum: ['waiting', 'active'] },
   },
 } as const;
@@ -80,15 +80,7 @@ const chatMessageItemSchema = {
     isRead: { type: 'boolean' },
     createdAt: { type: 'string', format: 'date-time' },
   },
-  required: [
-    'id',
-    'threadId',
-    'senderId',
-    'senderType',
-    'content',
-    'isRead',
-    'createdAt',
-  ],
+  required: ['id', 'threadId', 'senderId', 'senderType', 'content', 'isRead', 'createdAt'],
 } as const;
 
 const chatWsInfoSchema = {

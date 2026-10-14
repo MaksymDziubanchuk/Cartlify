@@ -98,19 +98,6 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
   let decoded: unknown;
   try {
     decoded = jwt.verify(token, secret);
-
-    if (typeof decoded !== 'object' || decoded === null) {
-      throw new UnauthorizedError('ACCESS_TOKEN_PAYLOAD_INVALID');
-    }
-
-    // verify access token signature
-    const { userId, role, type, exp } = decoded as Partial<AccessTokenPayload & { exp: number }>;
-
-    if (typeof userId !== 'number' || !role || type !== 'access' || typeof exp !== 'number') {
-      throw new UnauthorizedError('ACCESS_TOKEN_PAYLOAD_INVALID');
-    }
-
-    return { userId, role: role as Role, type, exp };
   } catch (err) {
     if (isErrorNamed(err, 'TokenExpiredError')) {
       throw new AccessTokenExpiredError();
@@ -118,6 +105,20 @@ export function verifyAccessToken(token: string): VerifiedAccessToken {
 
     throw new UnauthorizedError('ACCESS_TOKEN_INVALID');
   }
+
+  // payload checks stay outside the try, so their own code is not replaced by ACCESS_TOKEN_INVALID
+  if (typeof decoded !== 'object' || decoded === null) {
+    throw new UnauthorizedError('ACCESS_TOKEN_PAYLOAD_INVALID');
+  }
+
+  // validate access token payload
+  const { userId, role, type, exp } = decoded as Partial<AccessTokenPayload & { exp: number }>;
+
+  if (typeof userId !== 'number' || !role || type !== 'access' || typeof exp !== 'number') {
+    throw new UnauthorizedError('ACCESS_TOKEN_PAYLOAD_INVALID');
+  }
+
+  return { userId, role: role as Role, type, exp };
 }
 
 export function verifyRefreshToken(token: string): VerifiedRefreshToken {

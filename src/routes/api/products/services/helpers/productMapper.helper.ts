@@ -24,7 +24,8 @@ export function mapProductRowToResponse(args: {
 }): FullProductResponseDto {
   // map db row to api dto shape
   const { product, images } = args;
-  const realStosk = product.stock - product.reservedStock;
+  // free units, never below zero, the same as the order mapper shows them
+  const realStosk = Math.max(0, product.stock - product.reservedStock);
 
   return {
     id: product.id as any,

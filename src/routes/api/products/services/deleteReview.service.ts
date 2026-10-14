@@ -2,7 +2,7 @@ import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
-import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
+import { ForbiddenError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { normalizeDeleteReviewInput } from './helpers/index.js';
 
@@ -31,8 +31,17 @@ export async function deleteProductReview(
       // prevent deleting review from a different product route
       if (review.productId !== productId) throw new NotFoundError('REVIEW_NOT_FOUND');
 
+      // an author deletes only own reviews, an admin any review, the same rule as the db policy
+      const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
+      if (!isAdmin && review.userId !== actorId) {
+        throw new ForbiddenError('REVIEW_DELETE_FORBIDDEN');
+      }
+
       // delete review row
       await tx.review.delete({ where: { id: reviewId } });
+
+      // the admin audit log keeps admin actions only, an author deleting own review is not one
+      if (!isAdmin) return;
 
       // write admin audit log for review delete
       await writeAdminAuditLog(tx, {

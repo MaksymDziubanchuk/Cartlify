@@ -39,7 +39,7 @@ const rootAdminsAddBodyExample = {
 };
 
 const rootAdminsDeleteParamsExample = {
-  adminId: 2,
+  adminId: '2',
 };
 
 const rootAdminsDeleteResponseExample = {
@@ -50,7 +50,8 @@ const rootAdminsDeleteResponseExample = {
 const getRootAdminsSchema = {
   operationId: 'getRootAdmins',
   summary: 'Get root admins',
-  description: 'Returns a paginated list of users with the ADMIN role. This operation is restricted to root users.',
+  description:
+    'Returns a paginated list of users with the ADMIN role. This operation is restricted to root users.',
 
   querystring: {
     $ref: 'rootAdminsGetQuerySchema#',
@@ -87,7 +88,8 @@ const getRootAdminsSchema = {
 const postRootAdminSchema = {
   operationId: 'createRootAdmin',
   summary: 'Create root admin',
-  description: 'Promotes an existing user to ADMIN role. This operation is restricted to root users.',
+  description:
+    'Promotes an existing user to ADMIN role. This operation is restricted to root users.',
 
   body: {
     $ref: 'rootAdminsAddBodySchema#',
@@ -132,7 +134,8 @@ const postRootAdminSchema = {
 const deleteRootAdminSchema = {
   operationId: 'deleteRootAdmin',
   summary: 'Delete root admin',
-  description: 'Demotes an ADMIN user back to USER role. This operation is restricted to root users.',
+  description:
+    'Demotes an ADMIN user back to USER role. This operation is restricted to root users.',
 
   params: {
     $ref: 'rootAdminsDeleteParamsSchema#',

@@ -1,4 +1,4 @@
-import type { UserId } from 'types/ids.js';
+import type { IdParam, UserId } from 'types/ids.js';
 import type { UserResponseDto } from 'types/dto/users.dto.js';
 import type { Role } from 'types/user.js';
 
@@ -39,7 +39,7 @@ export interface AddAdminDto {
 export type AddAdminResponseDto = AdminItemDto;
 
 export interface DeleteAdminParamsDto {
-  adminId: UserId;
+  adminId: IdParam;
 }
 
 export interface DeleteAdminDto {

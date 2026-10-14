@@ -3,7 +3,7 @@ const rootAdminsGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    limit: { type: 'number', minimum: 1, maximum: 100 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
     cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
     search: { type: 'string' },
   },
@@ -49,7 +49,7 @@ const rootAdminsDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    adminId: { type: 'number' },
+    adminId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['adminId'],
 } as const;
