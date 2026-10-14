@@ -1,0 +1,61 @@
+name: Tests
+
+# unit and integration tests; integration parts run against the docker test database
+# that npm test builds on the runner (docker-compose.test.yml), no real database is touched
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: 'test parts, for example: unit api:orders (empty runs all)'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+# a newer push to the same branch makes the older run pointless
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # postinstall in package.json generates the prisma client
+      - name: Install dependencies
+        run: npm ci
+
+      # no terminal here, so the launcher runs every part unless parts are given
+      - name: Run tests
+        env:
+          PARTS: ${{ inputs.parts }}
+        run: npm test -- $PARTS
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: tests/coverage/lcov-report
+          if-no-files-found: ignore
