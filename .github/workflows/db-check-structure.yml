@@ -32,6 +32,17 @@ jobs:
       TARGET_DB: ${{ inputs.target_db || 'prod' }}
 
     steps:
+      # the repo is public and so are its logs: prisma prints the database host,
+      # github hides only whole secrets, so every host is masked before anything connects
+      - name: Mask database hosts
+        env:
+          DB_URLS: ${{ secrets.DEV_DB_URL }} ${{ secrets.PROD_DB_URL }} ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: |
+          for url in $DB_URLS; do
+            host="${url#*://}"; host="${host##*@}"; host="${host%%[:/?]*}"
+            if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+          done
+
       # get repo files so runner can access the reference and the snapshot script
       - name: Checkout repo
         uses: actions/checkout@v7

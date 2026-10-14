@@ -177,11 +177,25 @@ const QUERIES = [
    order by evtname`,
 ];
 
-// describe the target without the password
-function describeTarget(url) {
+// the container address lives in this repo and may be shown; a database from DATABASE_URL
+// is named only by its role, its host, port, name and password never reach the output
+function describeTarget(url, isContainer) {
   const u = new URL(url);
+  const role = decodeURIComponent(u.username);
 
-  return `${u.hostname}:${u.port || '5432'}/${u.pathname.slice(1)} as ${decodeURIComponent(u.username)}`;
+  if (!isContainer) return `the database in DATABASE_URL as ${role}`;
+
+  return `${u.hostname}:${u.port || '5432'}/${u.pathname.slice(1)} as ${role}`;
+}
+
+// connection errors quote the server address, replace every part of the url in them
+function hideUrlParts(text, url) {
+  const u = new URL(url);
+  const parts = [u.password, decodeURIComponent(u.password), u.hostname, u.port]
+    .filter((part) => part && part.length >= 3)
+    .sort((a, b) => b.length - a.length);
+
+  return parts.reduce((out, part) => out.split(part).join('***'), String(text));
 }
 
 async function takeSnapshot(url) {
@@ -205,6 +219,10 @@ async function takeSnapshot(url) {
       },
       { maxWait: 20_000, timeout: 60_000 },
     );
+  } catch (err) {
+    // print the reason without the address, the stack would repeat it
+    console.error(`cannot read the structure: ${hideUrlParts(err?.message ?? err, url)}`);
+    process.exit(1);
   } finally {
     await prisma.$disconnect();
   }
@@ -365,7 +383,7 @@ function printSuggestions(missing, extra) {
 }
 
 async function save() {
-  console.log(`reading structure from ${describeTarget(CONTAINER_URL)}`);
+  console.log(`reading structure from ${describeTarget(CONTAINER_URL, true)}`);
 
   const lines = await takeSnapshot(CONTAINER_URL);
 
@@ -396,7 +414,7 @@ async function check(target) {
     .split(/\r?\n/)
     .filter((line) => line.length > 0);
 
-  console.log(`reading structure from ${describeTarget(url)}`);
+  console.log(`reading structure from ${describeTarget(url, isContainer)}`);
 
   const actual = await takeSnapshot(url);
 

@@ -20,10 +20,11 @@ export function assertTestServices(): void {
   const db = parseUrl('DATABASE_URL');
   const dbName = db.pathname.replace(/^\//, '');
 
+  // the messages never quote the url: a wrong one may hold a real host and password
   if (!LOCAL_HOSTS.has(db.hostname) || db.port !== TEST_DB_PORT || dbName !== TEST_DB_NAME) {
     throw new Error(
       `Test guard: DATABASE_URL must point to ${TEST_DB_NAME} on 127.0.0.1:${TEST_DB_PORT}, ` +
-        `got ${db.hostname}:${db.port}/${dbName}`,
+        'it points to another database',
     );
   }
 
@@ -31,8 +32,7 @@ export function assertTestServices(): void {
 
   if (!LOCAL_HOSTS.has(redis.hostname) || redis.port !== TEST_REDIS_PORT) {
     throw new Error(
-      `Test guard: REDIS_URL must point to 127.0.0.1:${TEST_REDIS_PORT}, ` +
-        `got ${redis.hostname}:${redis.port}`,
+      `Test guard: REDIS_URL must point to 127.0.0.1:${TEST_REDIS_PORT}, it points to another server`,
     );
   }
 }
