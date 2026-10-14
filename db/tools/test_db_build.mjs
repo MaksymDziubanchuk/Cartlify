@@ -1,5 +1,7 @@
 // builds a throwaway test database from scratch inside docker
-// usage: node db/tools/test_db_build.mjs up | down  (npm run db:test:up / db:test:down)
+// usage: node db/tools/test_db_build.mjs up | down [--verbose]  (npm run db:test:up / db:test:down)
+// docker steps always print their output, the database preparation steps run behind one
+// progress line and print their output only when they fail or with --verbose
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -21,17 +23,27 @@ const dbUrl = (role) =>
 // keep docker compose away from the project .env: it holds real credentials
 const baseEnv = { ...process.env, COMPOSE_DISABLE_ENV_FILE: '1' };
 
-// run one step and stop the whole build on the first failure
-function run(title, command, args, extraEnv = {}, input) {
-  console.log(`\n== ${title}`);
+const verbose = process.argv.includes('--verbose');
 
-  const res = spawnSync(command, args, {
+// a progress line can be redrawn in place only in a terminal, ci logs get one line per step
+const interactive = process.stdout.isTTY === true;
+
+// number of prepare() calls in up(), keep in sync when adding a step
+const PREPARE_STEPS = 10;
+let preparedSteps = 0;
+
+function spawnStep(command, args, extraEnv, input, stdio) {
+  return spawnSync(command, args, {
     cwd: rootDir,
-    stdio: [input === undefined ? 'inherit' : 'pipe', 'inherit', 'inherit'],
+    stdio,
     env: { ...baseEnv, ...extraEnv },
+    encoding: 'utf8',
     ...(input === undefined ? {} : { input }),
   });
+}
 
+// stop the whole build on the first failure
+function stopOnFailure(title, command, res) {
   if (res.error) {
     console.error(`\ncannot start "${command}": ${res.error.message}`);
     process.exit(1);
@@ -41,6 +53,51 @@ function run(title, command, args, extraEnv = {}, input) {
     console.error(`\ntest database build failed at step: ${title}`);
     process.exit(res.status ?? 1);
   }
+}
+
+// run one step with its output on screen
+function run(title, command, args, extraEnv = {}, input) {
+  console.log(`\n== ${title}`);
+
+  const stdio = [input === undefined ? 'inherit' : 'pipe', 'inherit', 'inherit'];
+  const res = spawnStep(command, args, extraEnv, input, stdio);
+
+  stopOnFailure(title, command, res);
+
+  return res;
+}
+
+function showProgress(title) {
+  const width = 10;
+  const done = Math.round(((preparedSteps - 1) / PREPARE_STEPS) * width);
+  const bar = `[${'#'.repeat(done)}${'-'.repeat(width - done)}]`;
+  const line = `Preparing the test database ${bar} ${preparedSteps}/${PREPARE_STEPS}  ${title}`;
+
+  // \r returns to the line start, \x1b[K clears what is left of the previous step name
+  if (interactive) process.stdout.write(`\r${line}\x1b[K`);
+  else console.log(line);
+}
+
+// run one database preparation step quietly behind the progress line
+function prepare(title, command, args, extraEnv = {}, input) {
+  if (verbose) return run(title, command, args, extraEnv, input);
+
+  preparedSteps += 1;
+  if (preparedSteps === 1) console.log('');
+  showProgress(title);
+
+  const res = spawnStep(command, args, extraEnv, input, 'pipe');
+
+  if (res.error || res.status !== 0) {
+    // a failed step shows everything it printed
+    if (interactive) process.stdout.write('\n');
+    if (res.stdout) process.stdout.write(res.stdout);
+    if (res.stderr) process.stderr.write(res.stderr);
+  }
+
+  stopOnFailure(title, command, res);
+
+  return res;
 }
 
 const compose = (...args) => ['compose', '-f', composeFile, ...args];
@@ -70,7 +127,7 @@ const psql = (...args) =>
 function sqlFile(file) {
   const sql = readFileSync(path.join(rootDir, 'db', 'schema', file), 'utf8').replace(/\r\n/g, '\n');
 
-  run(file, 'docker', psql('-f', '-'), {}, sql);
+  prepare(file, 'docker', psql('-f', '-'), {}, sql);
 }
 
 function down() {
@@ -79,21 +136,25 @@ function down() {
 }
 
 function up() {
+  const startedAt = Date.now();
+
   // always start from an empty database
   down();
-  run('start postgres and redis', 'docker', compose('up', '-d', '--wait'));
+  // --quiet-pull: a fresh ci runner downloads the images, without a terminal docker prints
+  // every layer step on its own line; container status lines stay
+  run('start postgres and redis', 'docker', compose('up', '-d', '--wait', '--quiet-pull'));
 
   // roles and schema must exist before prisma creates tables
   sqlFile('01_roles_and_schemas.sql');
 
-  run(
+  prepare(
     'set container passwords for roles',
     'docker',
     psql('-c', ROLES.map((role) => `ALTER ROLE ${role} PASSWORD '${role}';`).join(' ')),
   );
 
   // tables are created by the owner role, the same way migrations run on railway
-  run(
+  prepare(
     'prisma migrate deploy',
     process.execPath,
     ['node_modules/prisma/build/index.js', 'migrate', 'deploy'],
@@ -113,12 +174,23 @@ function up() {
   sqlFile('01_roles_and_schemas.sql');
 
   // the built database must match the saved reference (db/tools/structure_snapshot.txt)
-  run('compare structure with the reference', process.execPath, [
+  const check = prepare('compare structure with the reference', process.execPath, [
     'db/tools/structure_snapshot.mjs',
     'check',
   ]);
 
-  console.log('\ntest database is ready');
+  // the check prints "structure matches the reference: <n> lines" on success
+  const lines = check.stdout?.match(/matches the reference: (\d+) lines/)?.[1];
+  const seconds = Math.round((Date.now() - startedAt) / 1000);
+
+  // replace the progress line with the result
+  if (interactive && !verbose) process.stdout.write('\r\x1b[K');
+  else console.log('');
+
+  console.log(
+    `Test database is ready in ${seconds} s` +
+      (lines ? `, structure matches the reference (${lines} lines)` : ''),
+  );
   console.log(`  DATABASE_URL=${dbUrl('cartlify_app')}`);
   console.log(`  REDIS_URL=redis://${REDIS.host}:${REDIS.port}`);
 }

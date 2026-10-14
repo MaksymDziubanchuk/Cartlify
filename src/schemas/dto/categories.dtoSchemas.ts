@@ -3,7 +3,7 @@ export const categoriesGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    limit: { type: 'number', minimum: 1, maximum: 100 },
+    limit: { type: 'integer', minimum: 1, maximum: 100 },
     cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
 
     search: { type: 'string' },
@@ -64,7 +64,7 @@ const categoriesUpdateParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    categoryId: { type: 'number' },
+    categoryId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['categoryId'],
 } as const;
@@ -91,7 +91,7 @@ const categoriesDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    categoryId: { type: 'number' },
+    categoryId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['categoryId'],
 } as const;

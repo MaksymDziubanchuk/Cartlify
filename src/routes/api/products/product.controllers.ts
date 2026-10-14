@@ -250,8 +250,9 @@ const postProductReview: ControllerRouter<
 
   const args = pickDefined<CreateReviewDto>({ productId, userId, actorRole }, { rating, comment });
 
-  const result = await productServices.createReview(args);
-  return reply.code(201).send(result);
+  // a new review answers 201, a review that got its missing part answers 200
+  const { review, created } = await productServices.createReview(args);
+  return reply.code(created ? 201 : 200).send(review);
 };
 
 const updateProductById: ControllerRouter<
@@ -414,7 +415,7 @@ const patchProductCategory: ControllerRouter<
   {},
   UpdateProductCategoryResponseDto
 > = async (req, reply) => {
-  const { productId } = req.params;
+  const productId = Number(req.params.productId);
   const { categoryId } = req.body;
   const { id: actorId, role: actorRole } = req.user as User;
 

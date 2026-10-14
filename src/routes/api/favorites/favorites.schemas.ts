@@ -40,7 +40,7 @@ const favoritesGetResponseExample = {
 };
 
 const favoriteProductParamsExample = {
-  productId: 10,
+  productId: '10',
 };
 
 const addFavoriteResponseExample = {

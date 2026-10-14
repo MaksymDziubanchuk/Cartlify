@@ -35,9 +35,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # the repo is public and so are its logs: psql and prisma print the database host,
+      # github hides only whole secrets, so every host is masked before anything connects
+      - name: Mask database hosts
+        env:
+          DB_URLS: ${{ secrets.DEV_DB_URL }} ${{ secrets.PROD_DB_URL }} ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: |
+          for url in $DB_URLS; do
+            host="${url#*://}"; host="${host##*@}"; host="${host%%[:/?]*}"
+            if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+          done
+
       # get repo files so runner can access db scripts
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # install psql client for executing postgres scripts
       - name: Install psql client
@@ -125,9 +136,9 @@ jobs:
 
       # node and prisma client are needed only for the structure check below
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install dependencies

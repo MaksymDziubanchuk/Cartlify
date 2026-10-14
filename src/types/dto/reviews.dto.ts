@@ -1,8 +1,8 @@
-import type { UserId, ReviewId, ProductId } from 'types/ids.js';
+import type { UserId, ReviewId, ProductId, IdParam } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
 export interface VoteReviewParamsDto {
-  reviewId: ReviewId;
+  reviewId: IdParam;
 }
 export type ReviewVoteAction = 'up' | 'down' | 'remove';
 export interface VoteReviewBodyDto {

@@ -15,18 +15,23 @@ export function normalizeCreateReviewInput(dto: CreateReviewDto) {
     throw new BadRequestError('USER_ID_INVALID');
   }
 
-  // normalize rating
-  const ratingRaw = toNumberSafe(dto.rating);
-  if (ratingRaw == null || !Number.isInteger(ratingRaw) || ratingRaw < 1 || ratingRaw > 5) {
-    throw new BadRequestError('RATING_INVALID');
+  // normalize optional rating, a review may be only a comment
+  let ratingNorm: number | undefined;
+  if (dto.rating != null) {
+    const ratingRaw = toNumberSafe(dto.rating);
+    if (ratingRaw == null || !Number.isInteger(ratingRaw) || ratingRaw < 1 || ratingRaw > 5) {
+      throw new BadRequestError('RATING_INVALID');
+    }
+    ratingNorm = ratingRaw;
   }
 
-  // normalize optional comment
+  // normalize optional comment, a comment of spaces counts as no comment
   const commentRaw = dto.comment != null ? toStringSafe(dto.comment) : undefined;
-  const commentNorm = typeof commentRaw === 'string' ? commentRaw.trim() : undefined;
+  const commentNorm = typeof commentRaw === 'string' ? commentRaw.trim() || undefined : undefined;
 
-  // reject empty payload
-  if (ratingRaw == null && !commentNorm) {
+  // the request schema needs a rating or a comment,
+  // so this only catches a comment of spaces sent without a rating
+  if (ratingNorm === undefined && !commentNorm) {
     throw new BadRequestError('REVIEW_PAYLOAD_EMPTY');
   }
 
@@ -36,8 +41,8 @@ export function normalizeCreateReviewInput(dto: CreateReviewDto) {
   return {
     productId: productIdRaw,
     userId: userIdRaw,
-    rating: ratingRaw,
     actorRole,
+    ...(ratingNorm !== undefined ? { rating: ratingNorm } : {}),
     ...(commentNorm ? { comment: commentNorm } : {}),
   };
 }
@@ -61,8 +66,8 @@ export function normalizeDeleteReviewInput(dto: {
     throw new ForbiddenError('ACTOR_ID_INVALID');
   }
 
-  // validate actor role for admin-only delete
-  if (dto.actorRole !== 'ADMIN' && dto.actorRole !== 'ROOT') {
+  // an author deletes own reviews, an admin any review; the service checks the author
+  if (dto.actorRole !== 'USER' && dto.actorRole !== 'ADMIN' && dto.actorRole !== 'ROOT') {
     throw new ForbiddenError('INSUFFICIENT_ROLE');
   }
 

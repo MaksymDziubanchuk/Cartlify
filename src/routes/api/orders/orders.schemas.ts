@@ -60,7 +60,7 @@ const addCurrentOrderItemBodyExample = {
 };
 
 const currentOrderItemParamsExample = {
-  itemId: 1,
+  itemId: '1',
 };
 
 const updateCurrentOrderItemBodyExample = {
@@ -73,7 +73,7 @@ const confirmCurrentOrderBodyExample = {
 };
 
 const orderIdParamsExample = {
-  orderId: 1,
+  orderId: '1',
 };
 
 const updateOrderStatusBodyExample = {
@@ -430,7 +430,8 @@ const getOrderByIdSchema = {
 const patchOrderStatusSchema = {
   operationId: 'updateOrderStatus',
   summary: 'Update order status',
-  description: 'Updates order status by order id. This operation is restricted to privileged users.',
+  description:
+    'Updates order status by order id. This operation is restricted to privileged users.',
 
   params: {
     $ref: 'ordersUpdateStatusParamsSchema#',
@@ -502,4 +503,7 @@ const taggedOrdersSchema = withOpenApiTag(
 );
 
 // Add access token security to all order routes
-export const ordersSchema = withOpenApiSecurity(taggedOrdersSchema, openApiSecurity.accessTokenCookie);
+export const ordersSchema = withOpenApiSecurity(
+  taggedOrdersSchema,
+  openApiSecurity.accessTokenCookie,
+);

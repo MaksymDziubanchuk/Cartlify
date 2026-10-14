@@ -16,7 +16,7 @@ export const postVoteReview: ControllerRouter<
   VoteReviewResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as User;
-  const { reviewId } = req.params;
+  const reviewId = Number(req.params.reviewId);
   const { action } = req.body;
 
   const args = pickDefined<VoteReviewDto>({ actorId, actorRole, reviewId, action }, {});

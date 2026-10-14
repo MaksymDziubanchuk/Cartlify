@@ -1,23 +1,17 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import {
-  ConflictError,
-  NotFoundError,
-  isAppError,
-  BadRequestError,
-  InternalError,
-} from '@utils/errors.js';
+import { ConflictError, NotFoundError, isAppError, InternalError } from '@utils/errors.js';
 
 import { normalizeCreateReviewInput, mapReviewRowToResponse } from './helpers/index.js';
 
-import type { CreateReviewDto, CreateReviewResponseDto } from 'types/dto/products.dto.js';
+import type { CreateReviewDto, CreateReviewResultDto } from 'types/dto/products.dto.js';
 
-export async function createReview(dto: CreateReviewDto): Promise<CreateReviewResponseDto> {
+export async function createReview(dto: CreateReviewDto): Promise<CreateReviewResultDto> {
   const { productId, userId, rating, comment, actorRole } = normalizeCreateReviewInput(dto);
 
   try {
-    const row = await prisma.$transaction(async (tx) => {
+    const { row, created } = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId, role: actorRole });
 
@@ -42,70 +36,66 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
         },
       });
 
+      // the helper already made sure there is a rating, a comment or both
       const hasNewComment = typeof comment === 'string' && comment.length > 0;
       const hasNewRating = rating != null;
 
-      // reject empty payload
-      if (!hasNewComment && !hasNewRating) {
-        throw new BadRequestError('REVIEW_PAYLOAD_EMPTY');
-      }
+      const select = {
+        id: true,
+        productId: true,
+        rating: true,
+        comment: true,
+        userId: true,
+        createdAt: true,
+        updatedAt: true,
+      } as const;
 
-      // 1) no comment in new payload -> reject if review already exists
-      if (!hasNewComment && existing) {
-        throw new ConflictError('REVIEW_ALREADY_EXISTS');
-      }
-
-      // 2) comment provided and existing has no comment -> allow comment update only
-      if (
-        hasNewComment &&
-        existing &&
-        (existing.comment == null || existing.comment.trim() === '')
-      ) {
-        if (hasNewRating) throw new ConflictError('REVIEW_RATING_UPDATE_FORBIDDEN');
-
-        return tx.review.update({
-          where: { id: existing.id },
-          data: { comment },
-          select: {
-            id: true,
-            productId: true,
-            rating: true,
-            comment: true,
-            userId: true,
-            createdAt: true,
-            updatedAt: true,
+      // a new review may be only a rating, only a comment or both, as the db allows
+      if (!existing) {
+        const row = await tx.review.create({
+          data: {
+            productId,
+            userId,
+            ...(hasNewRating ? { rating } : {}),
+            ...(hasNewComment ? { comment } : {}),
           },
+          select,
         });
+
+        return { row, created: true };
       }
 
-      // 3) any other existing review case -> reject (already has rating; comment may exist)
-      if (existing) {
+      // an existing review only gets its missing part, a part that is set never changes
+      const existingHasComment = existing.comment != null && existing.comment.trim() !== '';
+
+      if (hasNewRating && existing.rating != null && existing.rating !== rating) {
+        throw new ConflictError('REVIEW_RATING_UPDATE_FORBIDDEN');
+      }
+      if (hasNewComment && existingHasComment && existing.comment !== comment) {
+        throw new ConflictError('REVIEW_COMMENT_UPDATE_FORBIDDEN');
+      }
+
+      const addRating = hasNewRating && existing.rating == null;
+      const addComment = hasNewComment && !existingHasComment;
+
+      // nothing new to add, the request repeats what the review already has
+      if (!addRating && !addComment) {
         throw new ConflictError('REVIEW_ALREADY_EXISTS');
       }
 
-      // create new review requires rating
-      if (!hasNewRating) throw new BadRequestError('RATING_REQUIRED');
-
-      return tx.review.create({
+      const row = await tx.review.update({
+        where: { id: existing.id },
         data: {
-          productId,
-          userId,
-          rating,
-          ...(hasNewComment ? { comment } : {}),
+          ...(addRating ? { rating } : {}),
+          ...(addComment ? { comment } : {}),
         },
-        select: {
-          id: true,
-          productId: true,
-          rating: true,
-          comment: true,
-          userId: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select,
       });
+
+      return { row, created: false };
     });
 
-    return mapReviewRowToResponse(row);
+    return { review: mapReviewRowToResponse(row), created };
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

@@ -27,7 +27,7 @@ const categoriesQueryExample = {
 };
 
 const categoryParamsExample = {
-  categoryId: 2,
+  categoryId: '2',
 };
 
 const createCategoryBodyExample = {
@@ -52,7 +52,8 @@ const deleteCategoryResponseExample = {
 const getCategoriesSchema = {
   operationId: 'getCategories',
   summary: 'Get categories',
-  description: 'Returns a paginated list of product categories with optional search and parent filtering.',
+  description:
+    'Returns a paginated list of product categories with optional search and parent filtering.',
 
   querystring: {
     $ref: 'categoriesGetQuerySchema#',
@@ -134,7 +135,8 @@ const postCategorySchema = {
 const patchCategorySchema = {
   operationId: 'updateCategory',
   summary: 'Update category',
-  description: 'Updates category data by category id. This operation is restricted to privileged users.',
+  description:
+    'Updates category data by category id. This operation is restricted to privileged users.',
 
   params: {
     $ref: 'categoriesUpdateParamsSchema#',
@@ -196,7 +198,8 @@ const patchCategorySchema = {
 const deleteCategorySchema = {
   operationId: 'deleteCategory',
   summary: 'Delete category',
-  description: 'Deletes a category by category id. This operation is restricted to privileged users.',
+  description:
+    'Deletes a category by category id. This operation is restricted to privileged users.',
 
   params: {
     $ref: 'categoriesDeleteParamsSchema#',

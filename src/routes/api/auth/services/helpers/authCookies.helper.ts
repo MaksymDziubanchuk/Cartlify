@@ -81,11 +81,12 @@ export function shouldClearRefreshCookieOnRefreshError(err: unknown): boolean {
   // handle app refresh errors
   if (isAppError(err)) {
     const status = (err as any).statusCode ?? (err as any).status;
-    const msg = String((err as any).message ?? '');
+    // the reason sits in errorCode, message is only the http phrase
+    const code = String(err.errorCode ?? '');
 
     // detect refresh invalid errors
     const isAuthStatus = status === 400 || status === 401 || status === 403;
-    const looksLikeRefreshInvalid = msg.startsWith('refresh:') || msg.includes('REFRESH');
+    const looksLikeRefreshInvalid = code.startsWith('refresh:') || code.includes('REFRESH');
 
     // clear cookie on match
     if (isAuthStatus && looksLikeRefreshInvalid) return true;

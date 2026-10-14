@@ -8,9 +8,11 @@ export function toNumberSafe(v: unknown): number | undefined {
         ? (v as any).value
         : undefined;
 
-  if (!s) return undefined;
+  // a blank field is not a number, Number('   ') would turn it into 0
+  const trimmed = typeof s === 'string' ? s.trim() : '';
+  if (!trimmed) return undefined;
 
-  const n = Number(String(s).trim());
+  const n = Number(trimmed);
   return Number.isFinite(n) ? n : undefined;
 }
 

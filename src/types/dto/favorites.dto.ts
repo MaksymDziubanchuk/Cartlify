@@ -1,4 +1,4 @@
-import type { UserId, ProductId } from 'types/ids.js';
+import type { UserId, ProductId, IdParam } from 'types/ids.js';
 import type { ProductResponseDto } from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
 
@@ -25,7 +25,7 @@ export interface GetFavoritesResponseDto {
 }
 
 export interface AddFavoriteParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 
 export interface AddFavoriteDto {
@@ -40,7 +40,7 @@ export interface AddFavoriteResponseDto {
 }
 
 export interface DeleteFavoriteParamsDto {
-  productId: ProductId;
+  productId: IdParam;
 }
 
 export interface DeleteFavoriteDto {

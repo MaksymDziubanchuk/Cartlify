@@ -29,7 +29,7 @@ pids
 *.pid.lock
 
 # Coverage
-coverage/
+tests/coverage/
 .nyc_output/
 
 # IDE / Editors
@@ -44,10 +44,6 @@ Thumbs.db
 docker-compose.override.yml
 .docker/
 *.tar
-
-# Jest cache
-jest-cache/
-jest.config.ts.tmp
 
 # Build artifacts
 build/

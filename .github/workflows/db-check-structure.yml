@@ -1,9 +1,15 @@
-name: DB — check structure against reference (manual)
+name: DB — check structure against reference
 
-# read-only: compares a database with db/tools/structure_snapshot.txt
-# use it after a script was run by hand through psql (db/schema/01, db/schema/02)
+# read-only: compares a database with db/tools/structure_snapshot.txt and checks
+# that every prisma migration is applied
+# - runs on every pull request into main against PROD: red means the prod database
+#   is behind the code, run the scripts and migrations on prod first, then re-run this check
+# - manual run for dev or prod, for example after a script was run by hand through psql
 
 on:
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       target_db:
@@ -14,36 +20,73 @@ on:
           - dev
           - prod
 
+permissions:
+  contents: read
+
 jobs:
   check_structure:
     runs-on: ubuntu-latest
 
+    # a pull request has no inputs and always checks prod
+    env:
+      TARGET_DB: ${{ inputs.target_db || 'prod' }}
+
     steps:
+      # the repo is public and so are its logs: prisma prints the database host,
+      # github hides only whole secrets, so every host is masked before anything connects
+      - name: Mask database hosts
+        env:
+          DB_URLS: ${{ secrets.DEV_DB_URL }} ${{ secrets.PROD_DB_URL }} ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: |
+          for url in $DB_URLS; do
+            host="${url#*://}"; host="${host##*@}"; host="${host%%[:/?]*}"
+            if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+          done
+
       # get repo files so runner can access the reference and the snapshot script
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
+      # postinstall in package.json generates the prisma client
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate Prisma client
-        run: npx prisma generate
-
       # red means a script was not run on this database yet or it was changed by hand
       - name: Compare DEV structure with the reference
-        if: inputs.target_db == 'dev'
+        if: env.TARGET_DB == 'dev'
         env:
           DATABASE_URL: ${{ secrets.DEV_DB_URL }}
         run: npm run db:snapshot:check:db
 
       - name: Compare PROD structure with the reference
-        if: inputs.target_db == 'prod'
+        if: env.TARGET_DB == 'prod'
         env:
           DATABASE_URL: ${{ secrets.PROD_DB_URL }}
         run: npm run db:snapshot:check:db
+
+      # the structure check reads no data, so applied migrations are checked separately;
+      # it runs even when the structure check failed, so both problems show up at once;
+      # the migration table is owner only, the url gets schema=cartlify when it has none
+      - name: Check DEV prisma migrations are applied
+        if: ${{ !cancelled() && env.TARGET_DB == 'dev' }}
+        env:
+          DB_URL: ${{ secrets.DEV_DB_URL }}
+        run: |
+          case "$DB_URL" in
+            *schema=*) url="$DB_URL" ;;
+            *\?*) url="$DB_URL&schema=cartlify" ;;
+            *) url="$DB_URL?schema=cartlify" ;;
+          esac
+          DATABASE_URL="$url" npx prisma migrate status
+
+      - name: Check PROD prisma migrations are applied
+        if: ${{ !cancelled() && env.TARGET_DB == 'prod' }}
+        env:
+          DATABASE_URL: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: npx prisma migrate status

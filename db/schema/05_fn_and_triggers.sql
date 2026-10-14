@@ -644,12 +644,16 @@ END;
 $$;
 
 -- PRODUCTS === triggers & functions ===
--- PRODUCTS sync product rating after review rating change
+-- PRODUCTS sync product rating and review count after review rating or comment change
 CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_product_id integer;
 BEGIN
-  IF TG_OP = 'UPDATE' AND NEW."rating" IS NOT DISTINCT FROM OLD."rating" THEN
+  -- avgRating comes from ratings and reviewsCount from comments, skip only when neither changed
+  IF TG_OP = 'UPDATE'
+    AND NEW."rating" IS NOT DISTINCT FROM OLD."rating"
+    AND NEW."comment" IS NOT DISTINCT FROM OLD."comment"
+  THEN
     RETURN NEW;
   END IF;
 
@@ -672,7 +676,7 @@ $$;
 DROP TRIGGER IF EXISTS trg_reviews_after_mod_rating ON cartlify.reviews;
 
 CREATE TRIGGER trg_reviews_after_mod_rating
-AFTER INSERT OR DELETE OR UPDATE OF "rating" ON cartlify.reviews FOR EACH ROW
+AFTER INSERT OR DELETE OR UPDATE OF "rating", "comment" ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 
 -- PRODUCTS guard product views before update: guest and user can add only one view

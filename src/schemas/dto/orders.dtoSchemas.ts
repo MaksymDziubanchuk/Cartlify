@@ -80,7 +80,7 @@ const ordersUpdateStatusParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'number' },
+    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['orderId'],
 } as const;
@@ -101,7 +101,7 @@ const ordersCurrentItemIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    itemId: { type: 'number', minimum: 1 },
+    itemId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['itemId'],
 } as const;
@@ -175,7 +175,7 @@ const ordersGetByIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'number' },
+    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['orderId'],
 } as const;

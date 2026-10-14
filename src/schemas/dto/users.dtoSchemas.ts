@@ -3,7 +3,7 @@ const usersGetByIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    userId: { type: 'string' },
+    userId: { type: 'string', pattern: '^[1-9][0-9]*$' },
   },
   required: ['userId'],
 } as const;

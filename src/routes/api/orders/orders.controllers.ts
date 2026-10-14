@@ -52,7 +52,7 @@ const patchCurrentItems: ControllerRouter<
   OrderResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { itemId } = req.params;
+  const itemId = Number(req.params.itemId);
   const { quantity } = req.body;
 
   const args = pickDefined<CurrentUpdateItemDto>({ actorId, actorRole, itemId, quantity }, {});
@@ -68,7 +68,7 @@ const deleteCurrentItems: ControllerRouter<
   OrderResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { itemId } = req.params;
+  const itemId = Number(req.params.itemId);
 
   const args = pickDefined<CurrentDeleteItemDto>({ actorId, actorRole, itemId }, {});
 
@@ -120,7 +120,7 @@ const getOrderById: ControllerRouter<GetOrderByIdParamsDto, {}, {}, OrderRespons
   reply,
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { orderId } = req.params;
+  const orderId = Number(req.params.orderId);
 
   const args = pickDefined<FindOrderByIdDto>({ actorId, actorRole, orderId }, {});
 
@@ -135,7 +135,7 @@ const putOrderStatus: ControllerRouter<
   OrderResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { orderId } = req.params;
+  const orderId = Number(req.params.orderId);
   const { status } = req.body;
 
   const args = pickDefined<UpdateOrderStatusDto>({ actorId, actorRole, orderId, status }, {});

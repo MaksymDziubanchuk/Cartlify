@@ -51,7 +51,7 @@ const productsListResponseExample = {
 };
 
 const productIdParamsExample = {
-  productId: 10,
+  productId: '10',
 };
 
 const productReviewsQueryExample = {
@@ -129,8 +129,8 @@ const bulkUpdateProductsPriceResponseExample = {
 };
 
 const deleteProductReviewParamsExample = {
-  productId: 10,
-  reviewId: 1,
+  productId: '10',
+  reviewId: '1',
 };
 
 const updateProductCategoryBodyExample = {
@@ -313,8 +313,13 @@ const postProductRouterSchema = {
 // Schema for authenticated user product review creation
 const postProductReviewRouterSchema = {
   operationId: 'createProductReview',
-  summary: 'Create product review',
-  description: 'Creates a review for a product by the authenticated user.',
+  summary: 'Create product review or add its missing part',
+  description:
+    'Creates a review for a product by the authenticated user (201). ' +
+    'A review has a rating, a comment or both; a comment of spaces counts as no comment. ' +
+    'One review per user and product: sending again adds the missing part (200), ' +
+    'a rating to a comment-only review or a comment to a rating-only review; ' +
+    'a rating or a comment that is already set never changes.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -323,10 +328,15 @@ const postProductReviewRouterSchema = {
 
   body: {
     $ref: 'createReviewBodySchema#',
-    examples: [createReviewBodyExample],
+    examples: [createReviewBodyExample, { rating: 4 }, { comment: 'Arrived fast, works well.' }],
   },
 
   response: {
+    200: {
+      description: 'The missing rating or comment was added to the existing review.',
+      $ref: 'reviewResponseSchema#',
+      examples: [reviewExample],
+    },
     201: {
       description: 'Product review was created successfully.',
       $ref: 'reviewResponseSchema#',
@@ -350,7 +360,9 @@ const postProductReviewRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Review conflicts with the current product or user state.',
+      description:
+        'The review already has this part: REVIEW_RATING_UPDATE_FORBIDDEN, ' +
+        'REVIEW_COMMENT_UPDATE_FORBIDDEN or REVIEW_ALREADY_EXISTS when nothing new is sent.',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -433,7 +445,11 @@ const updateProductByIdRouterSchema = {
 const patchProductsBulkPriceRouterSchema = {
   operationId: 'bulkUpdateProductPrices',
   summary: 'Bulk update product prices',
-  description: 'Updates product prices in bulk using selected filters and update mode.',
+  description:
+    'Updates product prices in bulk using selected filters and update mode. ' +
+    'The server always sets scope.deleted to false unless the request says otherwise, ' +
+    'so deleted products are changed only with scope.deleted: true. ' +
+    'Without scope every product that is not deleted is changed.',
 
   body: {
     $ref: 'bulkUpdateProductsPriceBodySchema#',
@@ -482,7 +498,8 @@ const patchProductsBulkPriceRouterSchema = {
 const deleteProductByIdRouterSchema = {
   operationId: 'deleteProductById',
   summary: 'Delete product by id',
-  description: 'Deletes or soft-deletes a product by product id. This operation is restricted to privileged users.',
+  description:
+    'Deletes or soft-deletes a product by product id. This operation is restricted to privileged users.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -523,7 +540,9 @@ const deleteProductByIdRouterSchema = {
 const deleteProductReviewRouterSchema = {
   operationId: 'deleteProductReview',
   summary: 'Delete product review',
-  description: 'Deletes a product review by product id and review id.',
+  description:
+    'Deletes a product review by product id and review id. ' +
+    'An author deletes own reviews, an admin or root deletes any review.',
 
   params: {
     $ref: 'deleteProductReviewParamsSchema#',
@@ -546,7 +565,7 @@ const deleteProductReviewRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to delete this product review.',
+      description: 'A user tries to delete a review of another user (REVIEW_DELETE_FORBIDDEN).',
       $ref: 'errorResponseSchema#',
     },
     404: {
@@ -564,7 +583,8 @@ const deleteProductReviewRouterSchema = {
 const patchProductCategorySchema = {
   operationId: 'updateProductCategory',
   summary: 'Update product category',
-  description: 'Moves a product to another category. This operation is restricted to privileged users.',
+  description:
+    'Moves a product to another category. This operation is restricted to privileged users.',
 
   params: {
     $ref: 'productsUpdateCategoryParamsSchema#',
@@ -641,11 +661,7 @@ const taggedProductSchemas = withOpenApiTag(
 const productSchemasWithGuestSecurity = withOpenApiSecurityFor(
   taggedProductSchemas,
   openApiSecurity.userOrGuestCookie,
-  [
-    'getAllProductsRouterSchema',
-    'getProductByIdRouterSchema',
-    'getProductReviewsRouterSchema',
-  ],
+  ['getAllProductsRouterSchema', 'getProductByIdRouterSchema', 'getProductReviewsRouterSchema'],
 );
 
 // Add access token security to product write and review write routes

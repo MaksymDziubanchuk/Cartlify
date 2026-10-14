@@ -31,7 +31,8 @@ export function decodePlaceholderInternal(
       throw new InternalError();
     }
   } else {
-    if (!/^[A-Za-z0-9_-]+$/.test(value)) {
+    // a length of 4n + 1 cannot encode whole bytes, Buffer.from would silently cut it
+    if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length % 4 === 1) {
       throw new InternalError();
     }
   }
