@@ -140,7 +140,9 @@ function up() {
 
   // always start from an empty database
   down();
-  run('start postgres and redis', 'docker', compose('up', '-d', '--wait'));
+  // --quiet-pull: a fresh ci runner downloads the images, without a terminal docker prints
+  // every layer step on its own line; container status lines stay
+  run('start postgres and redis', 'docker', compose('up', '-d', '--wait', '--quiet-pull'));
 
   // roles and schema must exist before prisma creates tables
   sqlFile('01_roles_and_schemas.sql');
