@@ -1,5 +1,11 @@
 import env from '@config/env.js';
-import { AppError, BadRequestError, InternalError, UnauthorizedError } from '@utils/errors.js';
+import {
+  AppError,
+  BadRequestError,
+  ForbiddenError,
+  InternalError,
+  UnauthorizedError,
+} from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
@@ -82,8 +88,8 @@ export function buildGoogleAuthUrl(guestId: string) {
   return url.toString();
 }
 
-// verify oauth state signature
-export function verifyGoogleOAuthState(state: string): StatePayload {
+// verify oauth state signature, time window and the guest who finishes the login
+export function verifyGoogleOAuthState(state: string, guestId: string): StatePayload {
   const secret = GOOGLE_STATE_SECRET;
   if (!secret) throw new InternalError({ reason: 'GOOGLE_STATE_SECRET_MISSING' });
 
@@ -117,6 +123,12 @@ export function verifyGoogleOAuthState(state: string): StatePayload {
 
     if (payload.exp <= payload.iat) {
       throw new UnauthorizedError('GOOGLE_OAUTH_STATE_TIME_RANGE_INVALID');
+    }
+
+    // the login was started by another guest, in another browser: finishing it here
+    // would sign this browser into someone else's account (login csrf)
+    if (payload.guestId !== guestId) {
+      throw new ForbiddenError('GOOGLE_OAUTH_STATE_GUEST_MISMATCH');
     }
 
     return payload as StatePayload;

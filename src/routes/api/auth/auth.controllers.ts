@@ -174,9 +174,11 @@ const getGoogleCallback: ControllerRouter<
   }
 
   const { code, state } = q as GoogleCallbackSuccessQueryDto;
+  // the guest of this browser, it has to be the one who started the login
+  const { id: guestId, role } = req.user as User;
 
   // build google callback dto
-  const args = pickDefined<GoogleCallbackDto>({ code, state }, { ip, userAgent });
+  const args = pickDefined<GoogleCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
 
   const { result, accessToken, refreshToken } = await authServices.googleCallback(args);
 
@@ -236,9 +238,11 @@ const getGithubCallback: ControllerRouter<
   }
 
   const { code, state } = q as GithubCallbackSuccessQueryDto;
+  // the guest of this browser, it has to be the one who started the login
+  const { id: guestId, role } = req.user as User;
 
-  // handle oauth error callback
-  const args = pickDefined<GithubCallbackDto>({ code, state }, { ip, userAgent });
+  // build github callback dto
+  const args = pickDefined<GithubCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
 
   const { result, accessToken, refreshToken } = await authServices.githubCallback(args);
 
@@ -301,9 +305,11 @@ const getLinkedInCallback: ControllerRouter<
   }
 
   const { code, state } = q as LinkedInCallbackSuccessQueryDto;
+  // the guest of this browser, it has to be the one who started the login
+  const { id: guestId, role } = req.user as User;
 
   // build linkedin callback dto
-  const args = pickDefined<LinkedInCallbackDto>({ code, state }, { ip, userAgent });
+  const args = pickDefined<LinkedInCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
 
   const { result, accessToken, refreshToken } = await authServices.linkedInCallback(args);
 

@@ -53,13 +53,37 @@ describe('buildGithubAuthUrl', () => {
   it('binds the state in the url to the guest who started the login', () => {
     const state = new URL(github.buildGithubAuthUrl('guest-1')).searchParams.get('state')!;
 
-    expect(github.verifyGithubOAuthState(state)?.guestId).toBe('guest-1');
+    expect(github.verifyGithubOAuthState(state, 'guest-1')?.guestId).toBe('guest-1');
   });
 });
 
 describe('verifyGithubOAuthState', () => {
+  // login csrf: a state from a login another browser started must not finish here
+  it('rejects a valid state when another guest finishes the login', () => {
+    const state = github.createGithubOAuthState('guest-1');
+
+    expect(thrownBy(() => github.verifyGithubOAuthState(state, 'guest-2'))).toMatchObject({
+      statusCode: 403,
+      errorCode: 'GITHUB_OAUTH_STATE_GUEST_MISMATCH',
+    });
+  });
+
+  it('reports an expired state as expired, whoever finishes it', () => {
+    const start = Date.now();
+    const state = github.createGithubOAuthState('guest-1');
+
+    jest.spyOn(Date, 'now').mockReturnValue(start + 11 * 60 * 1000);
+
+    expect(thrownBy(() => github.verifyGithubOAuthState(state, 'guest-2'))).toMatchObject({
+      errorCode: 'GITHUB_OAUTH_STATE_EXPIRED',
+    });
+  });
+
   it('returns the guest and lets the state live ten minutes', () => {
-    const payload = github.verifyGithubOAuthState(github.createGithubOAuthState('guest-7'));
+    const payload = github.verifyGithubOAuthState(
+      github.createGithubOAuthState('guest-7'),
+      'guest-7',
+    );
 
     expect(payload?.guestId).toBe('guest-7');
     expect(payload!.exp - payload!.iat).toBe(600);
@@ -70,7 +94,7 @@ describe('verifyGithubOAuthState', () => {
     const state = github.createGithubOAuthState('guest-1');
 
     jest.spyOn(Date, 'now').mockReturnValue(start + 11 * 60 * 1000);
-    const err = thrownBy(() => github.verifyGithubOAuthState(state));
+    const err = thrownBy(() => github.verifyGithubOAuthState(state, 'guest-1'));
 
     expect(err).toMatchObject({ errorCode: 'GITHUB_OAUTH_STATE_EXPIRED' });
     expect([400, 401]).toContain(statusOf(err));
@@ -83,7 +107,7 @@ describe('verifyGithubOAuthState', () => {
       signed({ guestId: 'g', nonce: 'n', iat: nowSec(), exp: nowSec() + 600 }, 'not-our-secret'),
     ],
   ])('rejects a state that %s', (_case, state) => {
-    expect(thrownBy(() => github.verifyGithubOAuthState(state))).toMatchObject({
+    expect(thrownBy(() => github.verifyGithubOAuthState(state, 'g'))).toMatchObject({
       statusCode: 400,
     });
   });
@@ -94,14 +118,14 @@ describe('verifyGithubOAuthState', () => {
     ['has no issue time', { exp: nowSec() + 600 }],
   ])('rejects a signed state that %s', (_case, times) => {
     const err = thrownBy(() =>
-      github.verifyGithubOAuthState(signed({ guestId: 'g', nonce: 'n', ...times })),
+      github.verifyGithubOAuthState(signed({ guestId: 'g', nonce: 'n', ...times }), 'g'),
     );
 
     expect([400, 401]).toContain(statusOf(err));
   });
 
   it('treats a signed state that is not json as a server fault, only we can sign one', () => {
-    expect(thrownBy(() => github.verifyGithubOAuthState(signed('not json')))).toMatchObject({
+    expect(thrownBy(() => github.verifyGithubOAuthState(signed('not json'), 'g'))).toMatchObject({
       statusCode: 500,
     });
   });
@@ -310,7 +334,9 @@ describe('github oauth without settings', () => {
 
   it('cannot start a login or check a state', () => {
     expect(thrownBy(() => bare.buildGithubAuthUrl('guest-1'))).toMatchObject({ statusCode: 500 });
-    expect(thrownBy(() => bare.verifyGithubOAuthState('a.b'))).toMatchObject({ statusCode: 500 });
+    expect(thrownBy(() => bare.verifyGithubOAuthState('a.b', 'g'))).toMatchObject({
+      statusCode: 500,
+    });
   });
 
   it('cannot exchange a code and does not call github', async () => {

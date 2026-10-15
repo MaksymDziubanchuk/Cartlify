@@ -61,13 +61,37 @@ describe('buildLinkedInAuthUrl', () => {
   it('binds the state in the url to the guest who started the login', () => {
     const state = new URL(linkedin.buildLinkedInAuthUrl('guest-1')).searchParams.get('state')!;
 
-    expect(linkedin.verifyLinkedInOAuthState(state).guestId).toBe('guest-1');
+    expect(linkedin.verifyLinkedInOAuthState(state, 'guest-1').guestId).toBe('guest-1');
   });
 });
 
 describe('verifyLinkedInOAuthState', () => {
+  // login csrf: a state from a login another browser started must not finish here
+  it('rejects a valid state when another guest finishes the login', () => {
+    const state = linkedin.createLinkedInOAuthState('guest-1');
+
+    expect(thrownBy(() => linkedin.verifyLinkedInOAuthState(state, 'guest-2'))).toMatchObject({
+      statusCode: 403,
+      errorCode: 'LINKEDIN_OAUTH_STATE_GUEST_MISMATCH',
+    });
+  });
+
+  it('reports an expired state as expired, whoever finishes it', () => {
+    const start = Date.now();
+    const state = linkedin.createLinkedInOAuthState('guest-1');
+
+    jest.spyOn(Date, 'now').mockReturnValue(start + 11 * 60 * 1000);
+
+    expect(thrownBy(() => linkedin.verifyLinkedInOAuthState(state, 'guest-2'))).toMatchObject({
+      errorCode: 'LINKEDIN_OAUTH_STATE_EXPIRED',
+    });
+  });
+
   it('returns the guest and lets the state live ten minutes', () => {
-    const payload = linkedin.verifyLinkedInOAuthState(linkedin.createLinkedInOAuthState('guest-7'));
+    const payload = linkedin.verifyLinkedInOAuthState(
+      linkedin.createLinkedInOAuthState('guest-7'),
+      'guest-7',
+    );
 
     expect(payload.guestId).toBe('guest-7');
     expect(payload.exp - payload.iat).toBe(600);
@@ -78,7 +102,7 @@ describe('verifyLinkedInOAuthState', () => {
     const state = linkedin.createLinkedInOAuthState('guest-1');
 
     jest.spyOn(Date, 'now').mockReturnValue(start + 11 * 60 * 1000);
-    const err = thrownBy(() => linkedin.verifyLinkedInOAuthState(state));
+    const err = thrownBy(() => linkedin.verifyLinkedInOAuthState(state, 'guest-1'));
 
     expect(err).toMatchObject({ errorCode: 'LINKEDIN_OAUTH_STATE_EXPIRED' });
     expect([400, 401]).toContain(statusOf(err));
@@ -91,7 +115,7 @@ describe('verifyLinkedInOAuthState', () => {
       signed({ guestId: 'g', nonce: 'n', iat: nowSec(), exp: nowSec() + 600 }, 'not-our-secret'),
     ],
   ])('rejects a state that %s', (_case, state) => {
-    expect(thrownBy(() => linkedin.verifyLinkedInOAuthState(state))).toMatchObject({
+    expect(thrownBy(() => linkedin.verifyLinkedInOAuthState(state, 'g'))).toMatchObject({
       statusCode: 400,
     });
   });
@@ -102,14 +126,16 @@ describe('verifyLinkedInOAuthState', () => {
     ['has no issue time', { exp: nowSec() + 600 }],
   ])('rejects a signed state that %s', (_case, times) => {
     const err = thrownBy(() =>
-      linkedin.verifyLinkedInOAuthState(signed({ guestId: 'g', nonce: 'n', ...times })),
+      linkedin.verifyLinkedInOAuthState(signed({ guestId: 'g', nonce: 'n', ...times }), 'g'),
     );
 
     expect([400, 401]).toContain(statusOf(err));
   });
 
   it('treats a signed state that is not json as a server fault, only we can sign one', () => {
-    expect(thrownBy(() => linkedin.verifyLinkedInOAuthState(signed('not json')))).toMatchObject({
+    expect(
+      thrownBy(() => linkedin.verifyLinkedInOAuthState(signed('not json'), 'g')),
+    ).toMatchObject({
       statusCode: 500,
     });
   });
@@ -176,7 +202,7 @@ describe('linkedin oauth without settings', () => {
     expect(thrownBy(() => bare.buildLinkedInAuthUrl('guest-1'))).toMatchObject({
       statusCode: 500,
     });
-    expect(thrownBy(() => bare.verifyLinkedInOAuthState('a.b'))).toMatchObject({
+    expect(thrownBy(() => bare.verifyLinkedInOAuthState('a.b', 'g'))).toMatchObject({
       statusCode: 500,
     });
   });

@@ -206,7 +206,8 @@ const setGoogleCallbackSchema = {
   operationId: 'handleGoogleOAuthCallback',
   summary: 'Handle Google OAuth callback',
   description:
-    'Handles Google OAuth callback, creates or finds user and sets authentication cookies.',
+    'Handles Google OAuth callback, creates or finds user and sets authentication cookies. ' +
+    'It has to reach the browser that started the login: its guestId cookie must match the guest in the state.',
 
   querystring: {
     $ref: 'authGoogleCallbackQuerySchema#',
@@ -229,7 +230,13 @@ const setGoogleCallbackSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Google OAuth account is not allowed to authenticate.',
+      description:
+        'Google OAuth account is not allowed to authenticate (GOOGLE_EMAIL_NOT_VERIFIED), ' +
+        'or the login was started in another browser (GOOGLE_OAUTH_STATE_GUEST_MISMATCH).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The user is already signed in (ALREADY_AUTHENTICATED).',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -287,7 +294,8 @@ const setGithubCallbackSchema = {
   operationId: 'handleGithubOAuthCallback',
   summary: 'Handle GitHub OAuth callback',
   description:
-    'Handles GitHub OAuth callback, creates or finds user and sets authentication cookies.',
+    'Handles GitHub OAuth callback, creates or finds user and sets authentication cookies. ' +
+    'It has to reach the browser that started the login: its guestId cookie must match the guest in the state.',
 
   querystring: {
     $ref: 'authGithubCallbackQuerySchema#',
@@ -310,7 +318,13 @@ const setGithubCallbackSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'GitHub OAuth account is not allowed to authenticate.',
+      description:
+        'GitHub OAuth account is not allowed to authenticate (GITHUB_EMAIL_NOT_VERIFIED), ' +
+        'or the login was started in another browser (GITHUB_OAUTH_STATE_GUEST_MISMATCH).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The user is already signed in (ALREADY_AUTHENTICATED).',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -368,7 +382,8 @@ const setLinkedInCallbackSchema = {
   operationId: 'handleLinkedInOAuthCallback',
   summary: 'Handle LinkedIn OAuth callback',
   description:
-    'Handles LinkedIn OAuth callback, creates or finds user and sets authentication cookies.',
+    'Handles LinkedIn OAuth callback, creates or finds user and sets authentication cookies. ' +
+    'It has to reach the browser that started the login: its guestId cookie must match the guest in the state.',
 
   querystring: {
     $ref: 'authLinkedInCallbackQuerySchema#',
@@ -391,7 +406,13 @@ const setLinkedInCallbackSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'LinkedIn OAuth account is not allowed to authenticate.',
+      description:
+        'LinkedIn OAuth account is not allowed to authenticate (LINKEDIN_EMAIL_NOT_VERIFIED), ' +
+        'or the login was started in another browser (LINKEDIN_OAUTH_STATE_GUEST_MISMATCH).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The user is already signed in (ALREADY_AUTHENTICATED).',
       $ref: 'errorResponseSchema#',
     },
     422: {

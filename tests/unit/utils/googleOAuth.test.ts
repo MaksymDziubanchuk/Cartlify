@@ -61,7 +61,7 @@ describe('buildGoogleAuthUrl', () => {
   it('binds the state in the url to the guest who started the login', () => {
     const state = new URL(google.buildGoogleAuthUrl('guest-1')).searchParams.get('state')!;
 
-    expect(google.verifyGoogleOAuthState(state).guestId).toBe('guest-1');
+    expect(google.verifyGoogleOAuthState(state, 'guest-1').guestId).toBe('guest-1');
   });
 
   it('gives every login its own state', () => {
@@ -72,8 +72,32 @@ describe('buildGoogleAuthUrl', () => {
 });
 
 describe('verifyGoogleOAuthState', () => {
+  // login csrf: a state from a login another browser started must not finish here
+  it('rejects a valid state when another guest finishes the login', () => {
+    const state = google.createGoogleOAuthState('guest-1');
+
+    expect(thrownBy(() => google.verifyGoogleOAuthState(state, 'guest-2'))).toMatchObject({
+      statusCode: 403,
+      errorCode: 'GOOGLE_OAUTH_STATE_GUEST_MISMATCH',
+    });
+  });
+
+  it('reports an expired state as expired, whoever finishes it', () => {
+    const start = Date.now();
+    const state = google.createGoogleOAuthState('guest-1');
+
+    jest.spyOn(Date, 'now').mockReturnValue(start + 11 * 60 * 1000);
+
+    expect(thrownBy(() => google.verifyGoogleOAuthState(state, 'guest-2'))).toMatchObject({
+      errorCode: 'GOOGLE_OAUTH_STATE_EXPIRED',
+    });
+  });
+
   it('returns the guest and lets the state live ten minutes', () => {
-    const payload = google.verifyGoogleOAuthState(google.createGoogleOAuthState('guest-7'));
+    const payload = google.verifyGoogleOAuthState(
+      google.createGoogleOAuthState('guest-7'),
+      'guest-7',
+    );
 
     expect(payload.guestId).toBe('guest-7');
     expect(payload.exp - payload.iat).toBe(600);
@@ -84,10 +108,10 @@ describe('verifyGoogleOAuthState', () => {
     const state = google.createGoogleOAuthState('guest-1');
 
     jest.spyOn(Date, 'now').mockReturnValue(start + 9 * 60 * 1000);
-    expect(google.verifyGoogleOAuthState(state).guestId).toBe('guest-1');
+    expect(google.verifyGoogleOAuthState(state, 'guest-1').guestId).toBe('guest-1');
 
     jest.spyOn(Date, 'now').mockReturnValue(start + 11 * 60 * 1000);
-    const err = thrownBy(() => google.verifyGoogleOAuthState(state));
+    const err = thrownBy(() => google.verifyGoogleOAuthState(state, 'guest-1'));
 
     expect(err).toMatchObject({ errorCode: 'GOOGLE_OAUTH_STATE_EXPIRED' });
     expect([400, 401]).toContain(statusOf(err));
@@ -98,7 +122,7 @@ describe('verifyGoogleOAuthState', () => {
     ['has no signature', 'payload-only'],
     ['has an empty signature', 'payload.'],
   ])('rejects a state that %s', (_case, state) => {
-    expect(thrownBy(() => google.verifyGoogleOAuthState(state))).toMatchObject({
+    expect(thrownBy(() => google.verifyGoogleOAuthState(state, 'guest-1'))).toMatchObject({
       statusCode: 400,
     });
   });
@@ -107,7 +131,7 @@ describe('verifyGoogleOAuthState', () => {
     const [, signature] = google.createGoogleOAuthState('guest-1').split('.');
     const forged = `${b64urlJson({ guestId: 'attacker', nonce: 'n', iat: nowSec(), exp: nowSec() + 600 })}.${signature}`;
 
-    expect(thrownBy(() => google.verifyGoogleOAuthState(forged))).toMatchObject({
+    expect(thrownBy(() => google.verifyGoogleOAuthState(forged, 'attacker'))).toMatchObject({
       statusCode: 400,
     });
   });
@@ -118,7 +142,7 @@ describe('verifyGoogleOAuthState', () => {
       'not-our-secret',
     );
 
-    expect(thrownBy(() => google.verifyGoogleOAuthState(state))).toMatchObject({
+    expect(thrownBy(() => google.verifyGoogleOAuthState(state, 'guest-1'))).toMatchObject({
       statusCode: 400,
     });
   });
@@ -138,7 +162,10 @@ describe('verifyGoogleOAuthState', () => {
     ],
   ])('rejects a signed state that %s', (_case, times, errorCode) => {
     const err = thrownBy(() =>
-      google.verifyGoogleOAuthState(signed({ guestId: 'guest-1', nonce: 'n', ...times })),
+      google.verifyGoogleOAuthState(
+        signed({ guestId: 'guest-1', nonce: 'n', ...times }),
+        'guest-1',
+      ),
     );
 
     expect(err).toMatchObject({ errorCode });
@@ -146,7 +173,9 @@ describe('verifyGoogleOAuthState', () => {
   });
 
   it('treats a signed state that is not json as a server fault, only we can sign one', () => {
-    expect(thrownBy(() => google.verifyGoogleOAuthState(signed('not json')))).toMatchObject({
+    expect(
+      thrownBy(() => google.verifyGoogleOAuthState(signed('not json'), 'guest-1')),
+    ).toMatchObject({
       statusCode: 500,
     });
   });
@@ -209,7 +238,9 @@ describe('google oauth without settings', () => {
   });
 
   it('cannot check a state', () => {
-    expect(thrownBy(() => bare.verifyGoogleOAuthState(signed({ guestId: 'g' })))).toMatchObject({
+    expect(
+      thrownBy(() => bare.verifyGoogleOAuthState(signed({ guestId: 'g' }), 'g')),
+    ).toMatchObject({
       statusCode: 500,
     });
   });

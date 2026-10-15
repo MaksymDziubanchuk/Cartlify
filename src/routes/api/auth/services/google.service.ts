@@ -41,18 +41,27 @@ export async function googleStart({
   return { url };
 }
 
-export async function googleCallback({ code, state, ip, userAgent }: GoogleCallbackDto): Promise<{
+export async function googleCallback({
+  code,
+  state,
+  guestId,
+  role,
+  ip,
+  userAgent,
+}: GoogleCallbackDto): Promise<{
   result: LoginResponseDto;
   refreshToken: string;
   accessToken: string;
 }> {
+  // a signed-in user cannot finish a login, the same as at the start
+  if (role !== 'GUEST') throw new AlreadyAuthenticatedError({ flow: 'GOOGLE_CALLBACK' });
+  if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
   if (!code) throw new BadRequestError('MISSING_CODE');
   if (!state) throw new BadRequestError('MISSING_STATE');
 
-  // verify oauth state payload
-  const st = verifyGoogleOAuthState(state);
-  if (!st) throw new BadRequestError('INVALID_STATE');
-  const guestId = st.guestId;
+  // verify oauth state payload and that this guest started the login,
+  // before the code is used: a code from someone else's login is never redeemed here
+  verifyGoogleOAuthState(state, String(guestId));
 
   // exchange code for google tokens
   const tokens = await exchangeGoogleCodeForTokens(code);

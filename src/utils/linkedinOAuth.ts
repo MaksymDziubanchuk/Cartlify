@@ -1,5 +1,10 @@
 import env from '@config/env.js';
-import { BadRequestError, InternalError, UnauthorizedError } from '@utils/errors.js';
+import {
+  BadRequestError,
+  ForbiddenError,
+  InternalError,
+  UnauthorizedError,
+} from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
@@ -103,8 +108,8 @@ export function buildLinkedInAuthUrl(guestId: string) {
 }
 
 // validate callback state token
-// block tamper and replay
-export function verifyLinkedInOAuthState(state: string): StatePayload {
+// block tamper, replay and a login finished by another guest
+export function verifyLinkedInOAuthState(state: string, guestId: string): StatePayload {
   const secret = LINKEDIN_STATE_SECRET;
   if (!secret) throw new InternalError({ reason: 'LINKEDIN_STATE_SECRET_MISSING' });
 
@@ -143,6 +148,12 @@ export function verifyLinkedInOAuthState(state: string): StatePayload {
 
   if (payload.exp <= payload.iat) {
     throw new UnauthorizedError('LINKEDIN_OAUTH_STATE_TIME_RANGE_INVALID');
+  }
+
+  // the login was started by another guest, in another browser: finishing it here
+  // would sign this browser into someone else's account (login csrf)
+  if (payload.guestId !== guestId) {
+    throw new ForbiddenError('LINKEDIN_OAUTH_STATE_GUEST_MISMATCH');
   }
 
   return payload;
