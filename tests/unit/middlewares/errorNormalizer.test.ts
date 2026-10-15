@@ -1,5 +1,5 @@
 import { STATUS_CODES } from 'node:http';
-import fastify from 'fastify';
+import fastify, { LogController } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import errorNormalizer from '@middlewares/errorNormalizer.js';
@@ -295,7 +295,7 @@ describe('errorNormalizer logging', () => {
   const lines: Array<Record<string, any>> = [];
   const logged = fastify({
     logger: { level: 'info', stream: { write: (line: string) => lines.push(JSON.parse(line)) } },
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
   });
 
   const lastRecord = () => lines.at(-1) ?? {};
