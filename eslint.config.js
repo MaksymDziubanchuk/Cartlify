@@ -1,56 +1,49 @@
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import { FlatCompat } from '@eslint/eslintrc';
 import js from '@eslint/js';
+import prettier from 'eslint-config-prettier';
+import { importX } from 'eslint-plugin-import-x';
+import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-  recommendedConfig: js.configs.recommended,
-  allConfig: js.configs.all,
-});
-
+// native flat config: eslint 10 has no eslintrc and no FlatCompat any more;
+// eslint-plugin-import does not support eslint 10, eslint-plugin-import-x is its fork that does
 export default [
   {
     ignores: ['node_modules/**', 'dist/**', 'tests/coverage/**'],
   },
 
-  ...compat.config({
-    env: {
-      es2020: true,
-      node: true,
-    },
+  js.configs.recommended,
+  ...tseslint.configs.recommended,
+  importX.flatConfigs.recommended,
+  importX.flatConfigs.typescript,
+  prettier,
 
-    parser: '@typescript-eslint/parser',
-
-    parserOptions: {
+  {
+    languageOptions: {
       ecmaVersion: 2020,
       sourceType: 'module',
+      globals: {
+        ...globals.es2020,
+        ...globals.node,
+      },
     },
-
-    plugins: ['@typescript-eslint', 'import'],
-
-    extends: [
-      'eslint:recommended',
-      'plugin:@typescript-eslint/recommended',
-      'plugin:import/recommended',
-      'plugin:import/typescript',
-      'prettier',
-    ],
 
     rules: {
       'no-unused-vars': 'off',
 
-      'import/no-unresolved': 'off',
-      'import/order': 'off',
+      'import-x/no-unresolved': 'off',
+      'import-x/order': 'off',
+
+      // typescript checks default and named imports of .ts files; these rules misread
+      // packages with `export =` types (fastify, bcrypt, ws) and a default import of a
+      // commonjs package in .mjs, which node allows
+      'import-x/default': 'off',
+      'import-x/no-named-as-default': 'off',
+      'import-x/no-named-as-default-member': 'off',
 
       '@typescript-eslint/no-unused-vars': ['warn'],
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-empty-object-type': 'off',
       '@typescript-eslint/no-namespace': 'off',
     },
-  }),
+  },
 ];

@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { isRetryableTxError } from '@db/client.js';
+import { getPgMessage, isRetryableTxError } from '@db/client.js';
 import stripe from '@config/stripe.js';
 import env from '@config/env.js';
 import { isRedisReady } from '@redis/client.js';
@@ -158,7 +158,7 @@ export async function handleStripeWebhook(
     }
 
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2010') {
-      const msg = String((err.meta as any)?.message ?? err.message);
+      const msg = String(getPgMessage(err) ?? err.message);
 
       if (msg.includes('ORDER_NOT_FOUND')) {
         throw new InternalError({ reason: 'STRIPE_ORDER_NOT_FOUND' });

@@ -13,9 +13,8 @@ let manager: Manager;
 // the manager is a module singleton, every test gets a fresh one
 beforeEach(async () => {
   jest.resetModules();
-  ({ chatWsConnectionManager: manager } = await import(
-    '@routes/api/chat/ws/chatWs.connectionManager.js'
-  ));
+  ({ chatWsConnectionManager: manager } =
+    await import('@routes/api/chat/ws/chatWs.connectionManager.js'));
 });
 
 describe('chatWsConnectionManager', () => {

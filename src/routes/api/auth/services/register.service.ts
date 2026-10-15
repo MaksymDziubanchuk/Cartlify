@@ -1,5 +1,5 @@
 import { Prisma, Role } from '@prisma/client';
-import { prisma } from '@db/client.js';
+import { getPgCode, prisma } from '@db/client.js';
 import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
 import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
@@ -119,7 +119,7 @@ export async function register({
     if (
       err instanceof Prisma.PrismaClientKnownRequestError &&
       err.code === 'P2010' &&
-      (err.meta as any)?.code === '23505'
+      getPgCode(err) === '23505'
     ) {
       throw new ConflictError('EMAIL_ALREADY_IN_USE');
     }

@@ -110,7 +110,7 @@ export function buildOrdersCursorWhere(args: {
 
 // build next cursor from last row
 export function makeNextOrdersCursor(sortBy: OrdersSortBy, last: any): string {
-  let v: string | number | null = null;
+  let v: string | number;
 
   if (sortBy === 'updatedAt') v = new Date(last.updatedAt).toISOString();
   else if (sortBy === 'shippingAddress') v = String(last.shippingAddress ?? '');

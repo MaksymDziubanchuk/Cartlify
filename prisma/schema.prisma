@@ -1,7 +1,6 @@
+// connection urls live in prisma.config.ts (prisma 7)
 datasource db {
-  provider          = "postgresql"
-  url               = env("DATABASE_URL")
-  shadowDatabaseUrl = env("DEV_SHADOW_DATABASE_URL")
+  provider = "postgresql"
 }
 
 generator client {

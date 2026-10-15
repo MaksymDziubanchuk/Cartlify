@@ -35,6 +35,8 @@ function getStripeSecretKey(): string {
 
 // creates stripe sdk once at module load
 const stripe = new Stripe(getStripeSecretKey(), {
+  // pinned, so a new sdk version does not change the api version of every request by itself
+  apiVersion: '2026-09-30.endive',
   maxNetworkRetries: 2,
 });
 

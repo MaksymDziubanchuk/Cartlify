@@ -1,9 +1,9 @@
-import fastify from 'fastify';
+import fastify, { LogController } from 'fastify';
 import websocket from '@fastify/websocket';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import cookie from '@fastify/cookie';
+import { fastifyCookie } from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import staticPlugin from '@fastify/static';
 import multipart from '@fastify/multipart';
@@ -59,8 +59,9 @@ if (env.NODE_ENV === 'development') {
 export const app = fastify({
   logger: loggerOptions,
 
-  // disable fastify built-in request logs (incoming/completed)
-  disableRequestLogging: true,
+  // disable fastify built-in request logs (incoming/completed); fastify 5.12 moved the option
+  // into the log controller, the top-level one is deprecated
+  logController: new LogController({ disableRequestLogging: true }),
 
   // coerce query/body types
   ajv: { customOptions: { coerceTypes: true } },
@@ -74,7 +75,7 @@ app.register(cors, { origin: true, credentials: true });
 app.register(helmet);
 
 // parse cookies
-app.register(cookie);
+app.register(fastifyCookie);
 app.register(multipart, {
   // file upload limits
   limits: {

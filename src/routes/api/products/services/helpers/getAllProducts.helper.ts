@@ -143,7 +143,7 @@ export function buildCursorWhere(args: {
 
 // build next cursor from last row
 export function makeNextCursor(sort: ProductsSortField, last: any): string {
-  let v: string | number | null = null;
+  let v: string | number | null;
 
   if (sort === 'name') v = last.name ?? '';
   else if (sort === 'createdAt') v = new Date(last.createdAt).toISOString();

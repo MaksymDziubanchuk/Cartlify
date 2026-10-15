@@ -69,8 +69,9 @@ declare global {
   }
 }
 
-// init dotenv before reads
-dotenv.config();
+// init dotenv before reads; quiet, since dotenv 17 prints a line of its own on every start,
+// outside the fastify logger
+dotenv.config({ quiet: true });
 
 // fail fast on missing required vars
 function required(name: string): string {

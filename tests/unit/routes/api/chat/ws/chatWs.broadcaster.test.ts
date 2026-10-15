@@ -26,9 +26,8 @@ const connect = (ws: FakeSocket, actorRole: 'GUEST' | 'USER' | 'ADMIN' | 'ROOT' 
 beforeEach(async () => {
   jest.resetModules();
   ({ chatWsBroadcaster: broadcaster } = await import('@routes/api/chat/ws/chatWs.broadcaster.js'));
-  ({ chatWsConnectionManager: manager } = await import(
-    '@routes/api/chat/ws/chatWs.connectionManager.js'
-  ));
+  ({ chatWsConnectionManager: manager } =
+    await import('@routes/api/chat/ws/chatWs.connectionManager.js'));
 });
 
 describe('chatWsBroadcaster', () => {

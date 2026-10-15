@@ -74,7 +74,7 @@ describe('buildCheckoutSessionPayload', () => {
   it('asks for a one time card payment of the order total in cents', () => {
     expect(payload()).toMatchObject({
       mode: 'payment',
-      payment_method_types: ['card'],
+      allowed_payment_method_types: ['card'],
       client_reference_id: '12',
       line_items: [
         {
@@ -293,6 +293,17 @@ describe('mapCreatedCheckoutSession', () => {
       'PAYMENTS_CHECKOUT_SESSION_MODE_INVALID',
     ],
     ['has no status', { status: null }, 'PAYMENTS_CHECKOUT_SESSION_STATUS_MISSING'],
+    // stripe may add values later, the api promises the client only the known ones
+    [
+      'has a status the api does not know',
+      { status: 'processing' as never },
+      'PAYMENTS_CHECKOUT_SESSION_STATUS_UNKNOWN',
+    ],
+    [
+      'has a payment status the api does not know',
+      { payment_status: 'pending' as never },
+      'PAYMENTS_CHECKOUT_SESSION_PAYMENT_STATUS_UNKNOWN',
+    ],
   ])('rejects a session that %s', (_case, patch, reason) => {
     expect(
       thrownBy(() => helper.mapCreatedCheckoutSession(session(patch), 12, null)),

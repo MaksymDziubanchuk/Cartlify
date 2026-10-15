@@ -114,8 +114,7 @@ export interface LinkedInCallbackErrorQueryDto {
 }
 
 export type LinkedInCallbackQueryDto =
-  | LinkedInCallbackSuccessQueryDto
-  | LinkedInCallbackErrorQueryDto;
+  LinkedInCallbackSuccessQueryDto | LinkedInCallbackErrorQueryDto;
 
 export interface LinkedInCallbackDto {
   code: string;
