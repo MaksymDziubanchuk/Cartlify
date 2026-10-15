@@ -117,10 +117,15 @@ export async function processClaimedOrderReservationExpiries(
 
   for (const orderId of orderIds) {
     try {
-      // expire the order reservation after the webhook grace window is over
-      await prisma.$queryRaw`
-        select cartlify.expire_order_reservation(${orderId}::int)
-      `;
+      // expire the order reservation after the webhook grace window is over;
+      // the db function accepts only the admin context
+      await prisma.$transaction(async (db) => {
+        await setAdminContext(db);
+
+        await db.$queryRaw`
+          select cartlify.expire_order_reservation(${orderId}::int)
+        `;
+      });
 
       processed += 1;
     } catch (err: unknown) {
@@ -158,10 +163,15 @@ export async function processMissedOrderReservationExpiries(
 
   for (const { id: orderId } of orders) {
     try {
-      // db function rechecks the order state under lock, so repeated calls are safe
-      const rows = await prisma.$queryRaw<{ expired: boolean }[]>`
-        select cartlify.expire_order_reservation(${orderId}::int) as expired
-      `;
+      // db function rechecks the order state under lock, so repeated calls are safe;
+      // it accepts only the admin context
+      const rows = await prisma.$transaction(async (db) => {
+        await setAdminContext(db);
+
+        return db.$queryRaw<{ expired: boolean }[]>`
+          select cartlify.expire_order_reservation(${orderId}::int) as expired
+        `;
+      });
 
       if (rows[0]?.expired) processed += 1;
     } catch (err: unknown) {

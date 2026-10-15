@@ -29,12 +29,15 @@ export async function register({
 
   assertEmail(cleanEmail);
 
-  if (!password || password.length < 6) {
+  // spaces at the edges of a password are dropped, the same at login and at password reset
+  const cleanPassword = password?.trim() ?? '';
+
+  if (cleanPassword.length < 6) {
     throw new BadRequestError('PASSWORD_TOO_SHORT', { minLength: 6 });
   }
 
   // prepare password and verify token
-  const passwordHash = await hashPass(password);
+  const passwordHash = await hashPass(cleanPassword);
   const { token, expiresAt } = makeVerifyToken();
 
   let result: RegisterResponseDto;
@@ -60,8 +63,9 @@ export async function register({
         select currval(pg_get_serial_sequence('cartlify.users', 'id'))::int as id
       `;
 
-      // switch to user db context
-      await migrateGuestDataToUser(tx, guestId, id);
+      // switches the transaction to the user context, everything below runs as this user;
+      // the insert above lets a guest create only a USER
+      await migrateGuestDataToUser(tx, guestId, { id, role: 'USER' });
 
       // store verify email token
       await tx.$executeRaw`

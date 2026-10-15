@@ -52,13 +52,20 @@ function readJwtHeader(token: string): JwtHeader {
   if (!h) throw new UnauthorizedError('INVALID_ID_TOKEN');
 
   const raw = b64urlToUtf8(h);
-  let header: Record<string, unknown>;
+  let parsed: unknown;
 
   try {
-    header = JSON.parse(raw) as Record<string, unknown>;
+    parsed = JSON.parse(raw);
   } catch (err) {
     throw new UnauthorizedError('INVALID_ID_TOKEN', undefined, err);
   }
+
+  // a jwt header is a json object; null, an array, a string or a number is not a token
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new UnauthorizedError('INVALID_ID_TOKEN');
+  }
+
+  const header = parsed as Record<string, unknown>;
 
   if (!header.kid) throw new UnauthorizedError('ID_TOKEN_NO_KID');
   if (!header.alg) throw new UnauthorizedError('ID_TOKEN_NO_ALG');
@@ -139,9 +146,27 @@ function verifyAgainstIssList<T>(token: string, key: crypto.KeyObject, opt: Veri
   throw new UnauthorizedError('ID_TOKEN_VERIFY_FAILED');
 }
 
+const isBlank = (value: unknown) => typeof value !== 'string' || value.trim() === '';
+
+// fail closed on our own settings: jsonwebtoken skips the aud and iss checks for an empty value,
+// so an empty client id would accept a token issued to any app; this is a server fault, so 500
+function assertVerifyOpts(opt: VerifyOpts): void {
+  if (
+    isBlank(opt.jwksUri) ||
+    isBlank(opt.audience) ||
+    !Array.isArray(opt.issuers) ||
+    opt.issuers.length === 0 ||
+    opt.issuers.some(isBlank)
+  ) {
+    throw new InternalError({ reason: 'OIDC_VERIFY_CONFIG_INVALID' });
+  }
+}
+
 // validate header and key
 // verify signature and claims
 export async function verifyOidcIdToken<T>(token: string, opt: VerifyOpts): Promise<T> {
+  assertVerifyOpts(opt);
+
   const header = readJwtHeader(token);
 
   if (header.alg !== 'RS256') {

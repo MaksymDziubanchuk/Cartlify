@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply, HookHandlerDoneFunction, FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
 import env from '@config/env.js';
+import { maskUrlSecrets } from '@helpers/maskUrlSecrets.js';
 
 async function requestResponseLogger(app: FastifyInstance) {
   // track request start time
@@ -23,11 +24,13 @@ async function requestResponseLogger(app: FastifyInstance) {
       // include current auth identity
       const role = req.user?.role ?? 'ANON';
       const userId = req.user?.id ?? 'unknown';
+      // the query may carry tokens, their values are hidden
+      const url = maskUrlSecrets(req.url);
 
       // dev: human readable log
       if (env.NODE_ENV === 'development') {
         req.log.info(
-          `[${timestamp}] ${req.method} ${req.url} ${reply.statusCode} ${role}(id=${userId}) - ${responseTime}ms`,
+          `[${timestamp}] ${req.method} ${url} ${reply.statusCode} ${role}(id=${userId}) - ${responseTime}ms`,
         );
         // prod: structured json log
       } else {
@@ -35,7 +38,7 @@ async function requestResponseLogger(app: FastifyInstance) {
           reqId: req.id,
           timestamp,
           method: req.method,
-          url: req.url,
+          url,
           statusCode: reply.statusCode,
           // attach user fields for search
           userId: req.user?.id,

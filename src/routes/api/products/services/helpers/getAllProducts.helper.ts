@@ -363,8 +363,8 @@ export function mapProductListRowToResponse(row: {
   const primaryUrl = row.images?.[0]?.url;
   if (!primaryUrl) throw new InternalError({ reason: 'PRODUCT_PRIMARY_IMAGE_NOT_FOUND' });
 
-  // hide reserved units from public stock
-  const realStock = row.stock - row.reservedStock;
+  // hide reserved units from public stock, never below zero, the same as the product card shows it
+  const realStock = Math.max(0, row.stock - row.reservedStock);
 
   return {
     id: row.id as any,

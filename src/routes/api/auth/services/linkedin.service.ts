@@ -51,6 +51,8 @@ export async function linkedInStart({
 export async function linkedInCallback({
   code,
   state,
+  guestId,
+  role,
   ip,
   userAgent,
 }: LinkedInCallbackDto): Promise<{
@@ -58,12 +60,15 @@ export async function linkedInCallback({
   refreshToken: string;
   accessToken: string;
 }> {
+  // a signed-in user cannot finish a login, the same as at the start
+  if (role !== 'GUEST') throw new AlreadyAuthenticatedError({ flow: 'LINKEDIN_CALLBACK' });
+  if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
   if (!code) throw new BadRequestError('MISSING_CODE');
   if (!state) throw new BadRequestError('MISSING_STATE');
 
-  // verify oauth state payload
-  const st = verifyLinkedInOAuthState(state);
-  const guestId = st.guestId;
+  // verify oauth state payload and that this guest started the login,
+  // before the code is used: a code from someone else's login is never redeemed here
+  verifyLinkedInOAuthState(state, String(guestId));
 
   // exchange code for provider tokens
   const tokens = await exchangeLinkedInCodeForTokens(code);
@@ -113,7 +118,7 @@ export async function linkedInCallback({
       });
 
       // migrate guest data into the authenticated account
-      await migrateGuestDataToUser(tx, guestId, u.id);
+      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
 
       // persist login audit record for security review
       await insertLoginLog(tx, {

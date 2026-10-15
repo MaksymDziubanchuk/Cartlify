@@ -17,6 +17,10 @@ export const errorResponseSchema = {
     'VALIDATION_ERROR (400): the request does not match the route schema, details is a list of ' +
     '{ in, field, message } for every failed rule, in is body, querystring, params or headers. ' +
     'ROUTE_NOT_FOUND (404): no route for this method and url, the response also has method and url. ' +
+    'Errors raised before the route runs, by the framework or a plugin, get a code from the status: ' +
+    'BAD_REQUEST (400, for example a body that is not valid json), PAYLOAD_TOO_LARGE (413), ' +
+    'UNSUPPORTED_MEDIA_TYPE (415), RATE_LIMITED (429, too many requests from this address), ' +
+    'SERVICE_UNAVAILABLE (503); any other server failure is INTERNAL_ERROR (500). ' +
     'Every other errorCode comes from the route itself, for example PRODUCT_NOT_FOUND or ' +
     'REVIEW_ALREADY_EXISTS, see the route description.',
   properties: {
@@ -26,7 +30,8 @@ export const errorResponseSchema = {
     errorCode: {
       type: 'string',
       description:
-        'Stable machine-readable code, for example VALIDATION_ERROR, ROUTE_NOT_FOUND, PRODUCT_NOT_FOUND.',
+        'Stable machine-readable code, for example VALIDATION_ERROR, ROUTE_NOT_FOUND, ' +
+        'RATE_LIMITED, PRODUCT_NOT_FOUND.',
     },
 
     // standard http phrase for status code

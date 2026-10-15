@@ -1,10 +1,28 @@
+// a password that is stored: printable ascii only, one byte per character,
+// so 64 characters always fit the 72 bytes bcrypt reads
+const newPasswordSchema = {
+  type: 'string',
+  minLength: 6,
+  maxLength: 64,
+  pattern: '^[\\x20-\\x7E]+$',
+  description:
+    '6 to 64 characters: Latin letters, digits, spaces and ASCII symbols. ' +
+    'Spaces at the start and the end are dropped.',
+} as const;
+
 const authLoginBodySchema = {
   $id: 'authLoginBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     email: { type: 'string', format: 'email' },
-    password: { type: 'string', minLength: 6 },
+    // wider than a new password, so passwords set before the limit still log in
+    password: {
+      type: 'string',
+      minLength: 6,
+      maxLength: 256,
+      description: 'Up to 256 characters. Spaces at the start and the end are dropped.',
+    },
     rememberMe: { type: 'boolean' },
   },
   required: ['email', 'password'],
@@ -90,7 +108,7 @@ const authRegisterBodySchema = {
   additionalProperties: false,
   properties: {
     email: { type: 'string', format: 'email' },
-    password: { type: 'string', minLength: 6 },
+    password: newPasswordSchema,
     name: { type: 'string' },
   },
   required: ['email', 'password'],
@@ -169,7 +187,7 @@ const authPasswordResetBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    newPassword: { type: 'string', minLength: 6 },
+    newPassword: newPasswordSchema,
   },
   required: ['newPassword'],
 } as const;

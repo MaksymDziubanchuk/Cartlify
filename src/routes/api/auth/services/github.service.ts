@@ -49,11 +49,25 @@ export async function githubStart({
   return { url };
 }
 
-export async function githubCallback({ code, state, ip, userAgent }: GithubCallbackDto): Promise<{
+export async function githubCallback({
+  code,
+  state,
+  guestId,
+  role,
+  ip,
+  userAgent,
+}: GithubCallbackDto): Promise<{
   result: LoginResponseDto;
   refreshToken: string;
   accessToken: string;
 }> {
+  // a signed-in user cannot finish a login, the same as at the start
+  if (role !== 'GUEST') throw new AlreadyAuthenticatedError({ flow: 'GITHUB_CALLBACK' });
+  if (!guestId) {
+    throw new BadRequestError('GUEST_ID_REQUIRED', {
+      flow: 'GITHUB_CALLBACK',
+    });
+  }
   if (!code) {
     throw new BadRequestError('MISSING_CODE', {
       flow: 'GITHUB_CALLBACK',
@@ -65,10 +79,9 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
     });
   }
 
-  // verify oauth state payload
-  const st = verifyGithubOAuthState(state);
-  if (!st) throw new BadRequestError('INVALID_STATE');
-  const guestId = st.guestId;
+  // verify oauth state payload and that this guest started the login,
+  // before the code is used: a code from someone else's login is never redeemed here
+  verifyGithubOAuthState(state, String(guestId));
 
   // exchange code for oauth tokens
   const tokens = await exchangeGithubCodeForTokens(code, state);
@@ -125,7 +138,7 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
         providerSubMismatchMsg: 'GITHUB_SUB_MISMATCH',
       });
 
-      await migrateGuestDataToUser(tx, guestId, u.id);
+      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
 
       await insertLoginLog(tx, {
         userId: u.id as any,

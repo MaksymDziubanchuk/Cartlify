@@ -48,6 +48,9 @@ export type GoogleCallbackQueryDto = GoogleCallbackSuccessQueryDto | GoogleCallb
 export interface GoogleCallbackDto {
   code: string;
   state: string;
+  // who finishes the login: it must be the guest who started it
+  guestId: UserId;
+  role: Role;
   ip?: string;
   userAgent?: string;
 }
@@ -80,6 +83,9 @@ export type GithubCallbackQueryDto = GithubCallbackSuccessQueryDto | GithubCallb
 export interface GithubCallbackDto {
   code: string;
   state: string;
+  // who finishes the login: it must be the guest who started it
+  guestId: UserId;
+  role: Role;
   ip?: string;
   userAgent?: string;
 }
@@ -114,6 +120,9 @@ export type LinkedInCallbackQueryDto =
 export interface LinkedInCallbackDto {
   code: string;
   state: string;
+  // who finishes the login: it must be the guest who started it
+  guestId: UserId;
+  role: Role;
   ip?: string;
   userAgent?: string;
 }

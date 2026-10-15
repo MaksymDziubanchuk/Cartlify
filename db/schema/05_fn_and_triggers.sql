@@ -135,6 +135,8 @@ $$;
 ------------------------------------------------------------
 -- AUTH AND USERS === user actions ===
 -- AUTH AND USERS fetch user credentials by email for login flow
+-- system function: runs as the owner, a guest cannot read users;
+-- callable only by a guest, a login always starts from the guest context
 CREATE OR REPLACE FUNCTION cartlify.auth_get_user_for_login (p_email text) RETURNS TABLE (
   id int,
   password_hash text,
@@ -146,6 +148,9 @@ SET
   search_path = cartlify,
   pg_temp AS $$
 BEGIN
+  IF cartlify.current_actor_role() IS DISTINCT FROM 'GUEST' THEN
+    RAISE EXCEPTION 'LOGIN_LOOKUP_FORBIDDEN';
+  END IF;
 
   RETURN QUERY
   SELECT u.id, u."passwordHash", u.role, u."isVerified", u."authProvider"
@@ -157,6 +162,8 @@ END;
 $$;
 
 -- AUTH AND USERS fetch public user profile fields by user id
+-- system function: runs as the owner, rls shows a user only their own row;
+-- callable only by a signed-in user, admin or root, never by a guest
 CREATE OR REPLACE FUNCTION cartlify.users_get_public_profile (p_user_id int) RETURNS TABLE (
   id int,
   email text,
@@ -169,14 +176,21 @@ SET
   search_path = cartlify,
   pg_temp AS $$
 BEGIN
+  IF cartlify.current_actor_role() IS NULL
+     OR cartlify.current_actor_role() NOT IN ('USER', 'ADMIN', 'ROOT')
+     OR cartlify.current_actor_id() IS NULL
+  THEN
+    RAISE EXCEPTION 'USER_PROFILE_READ_FORBIDDEN';
+  END IF;
 
-  -- fetch only allowed fields
+  -- fetch only allowed fields; prisma keeps dates as utc in columns without a time zone,
+  -- the result type wants timestamptz, so they are read as utc
   RETURN QUERY
   SELECT
     u.id,
     u.email,
-    u."createdAt",
-    u."updatedAt",
+    u."createdAt" AT TIME ZONE 'UTC',
+    u."updatedAt" AT TIME ZONE 'UTC',
     u.name,
     u."avatarUrl"
   FROM cartlify.users u
@@ -191,6 +205,8 @@ $$;
 ------------------------------------------------------------
 -- AUTH AND USER TOKENS === system functions === 
 -- AUTH AND USER TOKENS create or reuse active email verification token
+-- system function: runs as the owner, a guest cannot read users or tokens;
+-- callable only by a guest, the resend form is used before the first login
 CREATE OR REPLACE FUNCTION cartlify.auth_resend_verify (
   p_email text,
   p_token text,
@@ -206,6 +222,10 @@ DECLARE
   v_token text;
   v_expires_at timestamptz;
 BEGIN
+  IF cartlify.current_actor_role() IS DISTINCT FROM 'GUEST' THEN
+    RAISE EXCEPTION 'VERIFY_RESEND_FORBIDDEN';
+  END IF;
+
   -- normalize + validate inputs
   p_email := lower(btrim(p_email));
   p_token := btrim(p_token);
@@ -279,6 +299,8 @@ END;
 $$;
 
 -- AUTH AND USER TOKENS consume email verification token and mark user as verified
+-- system function: runs as the owner, a guest cannot read tokens or verify a user;
+-- callable only by a guest, the link from the email is opened before the first login
 CREATE OR REPLACE FUNCTION cartlify.auth_verify_email (p_token text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -286,6 +308,10 @@ SET
 DECLARE
   v_user_id int;
 BEGIN
+  IF cartlify.current_actor_role() IS DISTINCT FROM 'GUEST' THEN
+    RAISE EXCEPTION 'VERIFY_EMAIL_FORBIDDEN';
+  END IF;
+
   p_token := btrim(p_token);
   IF p_token IS NULL OR p_token = '' THEN
     RETURN false;
@@ -333,6 +359,7 @@ $$;
 ------------------------------------------------------------
 -- PRODUCTS === system functions === 
 -- PRODUCTS recalc product rating from reviews
+-- internal: only the reviews rating trigger calls it, the app has no execute right (db/01)
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -357,6 +384,7 @@ END;
 $$;
 
 -- PRODUCTS add stock to product inventory
+-- not used by the app yet, so it has no execute right (db/01); the role check stays for the day it is
 CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -397,7 +425,8 @@ END;
 $$;
 
 -- PRODUCTS reserve product stock for order confirmation
--- internal step: runs with caller rights, so only system functions pass rls on stock columns
+-- internal step: runs with caller rights, so only system functions pass rls on stock columns;
+-- the app has no execute right (db/01), confirm_order and pay_order call it as the owner
 CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -437,7 +466,8 @@ END;
 $$;
 
 -- PRODUCTS release stock after unconfirm or expiration
--- internal step: runs with caller rights, so only system functions pass rls on stock columns
+-- internal step: runs with caller rights, so only system functions pass rls on stock columns;
+-- the app has no execute right (db/01), unconfirm_order and expire_order_reservation call it
 CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -480,7 +510,8 @@ END;
 $$;
 
 -- PRODUCTS consume reserved stock after payment
--- internal step: runs with caller rights, so only system functions pass rls on stock columns
+-- internal step: runs with caller rights, so only system functions pass rls on stock columns;
+-- the app has no execute right (db/01), pay_order calls it as the owner
 CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -535,6 +566,8 @@ END;
 $$;
 
 -- PRODUCTS recalc product popularity score
+-- internal: only the popularity triggers and recalc_all_products_popularity call it,
+-- the app has no execute right (db/01)
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -627,6 +660,7 @@ $$;
 --psql "$MIGRATION_DATABASE_URL" \
 -- -c 'SELECT cartlify.recalc_all_products_popularity();'
 -- PRODUCTS recalc popularity for all products
+-- maintenance: run by hand as the owner (see above), the app has no execute right (db/01)
 CREATE OR REPLACE FUNCTION cartlify.recalc_all_products_popularity () RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -645,7 +679,12 @@ $$;
 
 -- PRODUCTS === triggers & functions ===
 -- PRODUCTS sync product rating and review count after review rating or comment change
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -702,7 +741,12 @@ EXECUTE FUNCTION cartlify.products_before_views_change ();
 -- PRODUCTS sync popularity after product views change
 -- views enter the score through a logarithm, so one view rarely changes it:
 -- recalc while the counter is small, on every tenth view and on any manual change
-CREATE OR REPLACE FUNCTION cartlify.products_after_views_change () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.products_after_views_change () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 BEGIN
   IF NEW."views" IS DISTINCT FROM OLD."views"
      AND (
@@ -725,7 +769,12 @@ AFTER UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_after_views_change ();
 
 -- PRODUCTS sync popularity after favorites change
-CREATE OR REPLACE FUNCTION cartlify.favorites_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.favorites_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -752,7 +801,12 @@ AFTER INSERT OR DELETE ON cartlify.favorites FOR EACH ROW
 EXECUTE FUNCTION cartlify.favorites_after_mod_popularity ();
 
 -- PRODUCTS sync popularity after order items change
-CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -779,7 +833,12 @@ AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod_popularity ();
 
 -- PRODUCTS sync popularity after review changes
-CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -806,7 +865,12 @@ AFTER INSERT OR UPDATE OR DELETE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_popularity ();
 
 -- PRODUCTS sync popularity after order status change
-CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_product_id integer;
 BEGIN
@@ -838,6 +902,7 @@ EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 ------------------------------------------------------------
 -- ORDERS AND ITEMS === system functions ===
 -- ORDERS AND ITEMS recalc order total from order items
+-- internal: only the order items trigger calls it, the app has no execute right (db/01)
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -979,8 +1044,6 @@ END;
 $$;
 
 -- ORDERS AND ITEMS unconfirm order and release reserved stock
-DROP FUNCTION IF EXISTS cartlify.unconfirm_order (integer);
-
 CREATE OR REPLACE FUNCTION cartlify.unconfirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1048,10 +1111,6 @@ END;
 $$;
 
 -- ORDERS AND ITEMS pay order from a verified payment webhook
-DROP FUNCTION IF EXISTS cartlify.pay_order (integer);
-
-DROP FUNCTION IF EXISTS cartlify.pay_order (integer, text, numeric);
-
 CREATE OR REPLACE FUNCTION cartlify.pay_order (
   p_order_id integer,
   p_payment_intent_id text,
@@ -1200,8 +1259,8 @@ $$;
 
 -- ORDERS AND ITEMS === system actions ===
 -- ORDERS AND ITEMS expire order reservation and release reserved stock
-DROP FUNCTION IF EXISTS cartlify.expire_order_reservation (integer);
-
+-- system function: runs as the owner, it changes orders and stock of any user;
+-- callable only in the admin context, the order timeout worker sets it before the call
 CREATE OR REPLACE FUNCTION cartlify.expire_order_reservation (p_order_id integer) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1213,6 +1272,9 @@ DECLARE
 
   r record;
 BEGIN
+  IF NOT cartlify.is_admin() THEN
+    RAISE EXCEPTION 'ORDER_EXPIRE_FORBIDDEN';
+  END IF;
 
   BEGIN
     -- read state without a lock: only waiting orders are lockable for system updates
@@ -1343,7 +1405,12 @@ BEFORE INSERT OR UPDATE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_before_ins_upd ();
 
 -- ORDERS AND ITEMS recalc order total after order items change
-CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_order_id integer;
 BEGIN
@@ -1418,6 +1485,7 @@ EXECUTE FUNCTION cartlify.orders_before_update ();
 ------------------------------------------------------------
 -- REVIEWS AND VOTES === system functions ===
 -- REVIEWS AND VOTES recalc review vote counters
+-- internal: only the review votes trigger calls it, the app has no execute right (db/01)
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1484,7 +1552,12 @@ BEFORE UPDATE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_lock_rating_and_keys ();
 
 -- REVIEWS AND VOTES sync review vote counters after vote changes
-CREATE OR REPLACE FUNCTION cartlify.review_votes_after_mod () RETURNS trigger LANGUAGE plpgsql AS $$
+-- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- a trigger function cannot be called directly, only the trigger fires it
+CREATE OR REPLACE FUNCTION cartlify.review_votes_after_mod () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 DECLARE
   v_review_id integer;
 BEGIN
@@ -1514,11 +1587,6 @@ EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 -- CHAT
 ------------------------------------------------------------
 -- CHAT === triggers & functions ===
--- CHAT messages metadata is handled by application services
-DROP TRIGGER IF EXISTS trg_chat_messages_after_insert ON cartlify.chat_messages;
-
-DROP FUNCTION IF EXISTS cartlify.chat_messages_after_insert ();
-
 -- CHAT guard chat messages before update: only read flag can change
 CREATE OR REPLACE FUNCTION cartlify.chat_messages_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -1588,14 +1656,12 @@ CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
   p_entity_id integer,
   p_action cartlify."AdminAuditAction",
   p_changes jsonb
-  --p_ip          text,
-  --p_user_agent  text
 ) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
 
   IF p_changes IS NOT NULL AND jsonb_typeof(p_changes) <> 'array' THEN
     RAISE EXCEPTION 'log_admin_action: p_changes must be JSON array'
-      USING HINT = 'Очікується масив обʼєктів {field, old, new}';
+      USING HINT = 'expected an array of {field, old, new} objects';
   END IF;
 
   INSERT INTO cartlify.admin_audit_log (
@@ -1605,8 +1671,6 @@ BEGIN
     "entityId",
     action,
     meta,
-    --ip,
-    --"userAgent",
     "createdAt"
   )
   VALUES (
@@ -1615,9 +1679,7 @@ BEGIN
     p_entity_type,
     p_entity_id,
     p_action,
-    p_changes,    
-    --p_ip,
-    --p_user_agent,
+    p_changes,
     now()
   );
 END;
@@ -1628,14 +1690,24 @@ $$;
 ------------------------------------------------------------
 -- MIGRATION AND MAINTENANCE === system functions ===
 -- MIGRATION AND MAINTENANCE migrate guest data to user after authentication
-CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user (p_guest_id uuid, p_user_id integer) RETURNS void LANGUAGE plpgsql AS $$
+-- system function: runs as the owner, a user cannot see or change guest rows;
+-- callable only by the user who has just signed in (user, admin or root), and only for themselves.
+-- guest rows are reached through the narrow *_owner policies in db/03, no session flag is involved
+CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user (p_guest_id uuid, p_user_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
 BEGIN
+  IF cartlify.current_actor_role() IS NULL
+     OR cartlify.current_actor_role() NOT IN ('USER', 'ADMIN', 'ROOT')
+     OR cartlify.current_actor_id() IS DISTINCT FROM p_user_id
+  THEN
+    RAISE EXCEPTION 'GUEST_MIGRATION_FORBIDDEN';
+  END IF;
+
   IF p_guest_id IS NULL OR p_user_id IS NULL THEN
     RETURN;
   END IF;
-
-  -- allow RLS policies to recognize current guest migration
-  PERFORM set_config('cartlify.migrating_guest_id', p_guest_id::text, true);
 
   -- FAVORITES: remove conflicts (user already has same product)
   DELETE FROM cartlify.favorites f
