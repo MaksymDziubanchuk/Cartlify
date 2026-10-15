@@ -28,9 +28,13 @@ function buildCheckoutSessionPayload({
   userId,
   total,
 }: BuildCheckoutSessionPayloadArgs): Stripe.Checkout.SessionCreateParams {
-  // build success return url
+  // build success return url; stripe replaces only the literal {CHECKOUT_SESSION_ID} with the
+  // session id, while URLSearchParams encodes the braces, so they are put back after encoding
   const successUrl = new URL(env.STRIPE_SUCCESS_URL);
   successUrl.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+  const successUrlText = successUrl
+    .toString()
+    .replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
 
   // build cancel return url
   const cancelUrl = new URL(env.STRIPE_CANCEL_URL);
@@ -58,7 +62,7 @@ function buildCheckoutSessionPayload({
         },
       },
     ],
-    success_url: successUrl.toString(),
+    success_url: successUrlText,
     cancel_url: cancelUrl.toString(),
   };
 }

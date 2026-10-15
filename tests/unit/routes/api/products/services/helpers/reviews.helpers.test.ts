@@ -104,6 +104,13 @@ describe('normalizeDeleteReviewInput', () => {
       errorCode: 'REVIEW_ID_INVALID',
     });
   });
+
+  it.each([0, 'x', null])('forbids a delete with the actor id %p', (actorId) => {
+    const err = thrownBy(() => normalizeDeleteReviewInput({ ...base, actorId }));
+
+    expect(err).toBeInstanceOf(ForbiddenError);
+    expect(err).toMatchObject({ errorCode: 'ACTOR_ID_INVALID' });
+  });
 });
 
 describe('mapReviewRowToResponse', () => {

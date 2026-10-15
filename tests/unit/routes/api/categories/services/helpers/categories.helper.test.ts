@@ -121,6 +121,12 @@ describe('normalizeDeleteCategoryInput', () => {
     });
   });
 
+  it.each(['bad', 0, -2, 1.5])('rejects the category id %p from an admin', (categoryId) => {
+    expect(
+      thrownBy(() => normalizeDeleteCategoryInput({ categoryId, actorId: 1, actorRole: 'ADMIN' })),
+    ).toMatchObject({ statusCode: 400, errorCode: 'CATEGORY_ID_INVALID' });
+  });
+
   it('forbids a user before looking at the category', () => {
     expect(
       thrownBy(() =>

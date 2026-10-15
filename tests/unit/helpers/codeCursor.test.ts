@@ -1,6 +1,12 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
+import {
+  cursorDate,
+  cursorNumber,
+  cursorString,
+  decodeCursor,
+  encodeCursor,
+} from '@helpers/codeCursor.js';
 import { BadRequestError } from '@utils/errors.js';
 
 // base64url of a json value, the same encoding the cursor uses
@@ -43,5 +49,59 @@ describe('codeCursor', () => {
 
     expect(error).toBeInstanceOf(BadRequestError);
     expect(error).toMatchObject({ statusCode: 400, errorCode: 'CURSOR_INVALID' });
+  });
+});
+
+// the sort value of a cursor: a value that does not fit the sort is a bad request
+describe('cursor sort values', () => {
+  const invalid = (fn: () => unknown) => {
+    let error: unknown;
+
+    try {
+      fn();
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(BadRequestError);
+    expect(error).toMatchObject({ statusCode: 400, errorCode: 'CURSOR_INVALID' });
+  };
+
+  it('reads an iso date', () => {
+    expect(cursorDate('2026-03-01T10:00:00.000Z')).toEqual(new Date('2026-03-01T10:00:00.000Z'));
+  });
+
+  it.each([
+    ['a word', 'yesterday'],
+    ['null', null],
+    ['a number', 1772359200000],
+  ])('rejects a date that is %s', (_case, v) => {
+    invalid(() => cursorDate(v));
+  });
+
+  it.each([
+    ['a number', 19.99, 19.99],
+    ['zero', 0, 0],
+    ['a numeric string', '25.5', 25.5],
+  ])('reads %s as a number', (_case, v, num) => {
+    expect(cursorNumber(v)).toBe(num);
+  });
+
+  it.each([
+    ['a word', 'cheap'],
+    ['a date', '2026-03-01T10:00:00.000Z'],
+    ['an empty string', ' '],
+    ['null', null],
+  ])('rejects a number that is %s', (_case, v) => {
+    invalid(() => cursorNumber(v));
+  });
+
+  it('reads a string, an empty one too', () => {
+    expect(cursorString('Kyiv')).toBe('Kyiv');
+    expect(cursorString('')).toBe('');
+  });
+
+  it.each([null, 42])('rejects the string %p', (v) => {
+    invalid(() => cursorString(v));
   });
 });

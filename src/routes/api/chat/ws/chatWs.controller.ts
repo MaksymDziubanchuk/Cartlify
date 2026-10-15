@@ -30,6 +30,7 @@ function connectChatWs(socket: WebSocket, req: FastifyRequest): void {
         void chatWsHandlers.handleMessage({
             socketId,
             raw,
+            log: req.log,
         });
     });
 

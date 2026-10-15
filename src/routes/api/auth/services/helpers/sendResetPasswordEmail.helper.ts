@@ -2,9 +2,10 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import env from '@config/env.js';
-import { AppError } from '@utils/errors.js';
+import { AppError, InternalError } from '@utils/errors.js';
+import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 
-import { sendEmail } from './sendEmail.helper.js';
+import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildResetPasswordTemplate } from '@services/email/templates/resetPassword.template.js';
 
 export type SendResetPasswordEmailArgs = {
@@ -51,6 +52,9 @@ export async function sendResetPasswordEmail(
       ],
     });
   } catch (err) {
+    // only a failure of the mail provider is a bad gateway, our own error stays a server error
+    if (!isEmailProviderFailure(err)) throw err;
+
     throw new AppError({
       statusCode: 502,
       errorCode: 'RESET_EMAIL_SEND_FAILED',
@@ -62,23 +66,14 @@ export async function sendResetPasswordEmail(
 
 // frontend reset entrypoint
 function buildWebResetUrl(token: string): string {
-  const base = (env.WEB_ORIGIN || '').trim() || 'http://localhost:3000';
-  const url = new URL('/web/auth/reset', base);
+  const origin = (env.WEB_ORIGIN || '').trim();
+
+  // a mail from production must link to the live site, a localhost link opens nothing there
+  if (!origin && env.NODE_ENV === 'production') {
+    throw new InternalError({ reason: 'WEB_ORIGIN_REQUIRED' });
+  }
+
+  const url = new URL('/web/auth/reset', origin || 'http://localhost:3000');
   url.searchParams.set('token', token);
   return url.toString();
-}
-
-// human ttl message
-function formatExpiresIn(expiresAt: Date): string {
-  const ms = expiresAt.getTime() - Date.now();
-  if (ms <= 0) return '0 minutes';
-
-  const minutes = Math.ceil(ms / 60000);
-  if (minutes < 60) return `${minutes} minutes`;
-
-  const hours = Math.ceil(minutes / 60);
-  if (hours < 48) return `${hours} hours`;
-
-  const days = Math.ceil(hours / 24);
-  return `${days} days`;
 }

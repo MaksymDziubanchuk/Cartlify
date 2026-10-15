@@ -134,7 +134,14 @@ const ordersGetQuerySchema = {
   additionalProperties: false,
   properties: {
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description:
+        'nextCursor of the previous page, with the same sortBy and sortDir. A changed cursor, or ' +
+        'one from another sort, is CURSOR_INVALID.',
+    },
 
     // filters
     status: {

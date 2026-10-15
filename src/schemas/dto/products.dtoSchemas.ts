@@ -5,19 +5,39 @@ const getAllProductsQuerySchema = {
   properties: {
     // cursor pagination
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description:
+        'nextCursor of the previous page, with the same sort and order. A changed cursor, or one ' +
+        'from another sort, is CURSOR_INVALID.',
+    },
 
     // filters
     search: { type: 'string', minLength: 1 },
     categoryIds: {
       type: 'string',
       pattern: '^[0-9]+(,[0-9]+)*$',
+      description:
+        'Category ids separated by commas, for example 1,2. Ids that are not positive are ' +
+        'dropped; a list with no valid id is CATEGORY_IDS_INVALID.',
     },
     minPrice: { type: 'number', minimum: 0 },
     maxPrice: { type: 'number', minimum: 0 },
 
-    deleted: { type: 'boolean' },
-    inStock: { type: 'boolean' },
+    deleted: {
+      type: 'boolean',
+      description:
+        'Admin and root only: true lists only deleted products. Without it, or with false, ' +
+        'every role gets products that are not deleted.',
+    },
+    inStock: {
+      type: 'boolean',
+      description:
+        'Free units, the stock the list shows: true lists products with some free, false ' +
+        'products with none. Units reserved by confirmed orders are not free.',
+    },
 
     // sorting
     sort: {

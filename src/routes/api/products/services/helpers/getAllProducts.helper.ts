@@ -1,9 +1,15 @@
 import { Prisma } from '@prisma/client';
 
-import { BadRequestError, InternalError } from '@utils/errors.js';
+import { BadRequestError, ForbiddenError, InternalError } from '@utils/errors.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
-import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
+import {
+  cursorDate,
+  cursorNumber,
+  cursorString,
+  decodeCursor,
+  encodeCursor,
+} from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 
 import type {
@@ -23,10 +29,12 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto) {
   const search =
     typeof dto.search === 'string' && dto.search.trim() ? dto.search.trim() : undefined;
 
-  const categoryIds =
-    Array.isArray(dto.categoryIds) && dto.categoryIds.length
-      ? dto.categoryIds.filter((n) => Number.isInteger(n) && n > 0)
-      : undefined;
+  // a sent category filter with no valid id must not turn into "every product";
+  // the controller drops invalid ids, so ?categoryIds=0 arrives here as an empty list
+  const categoryIds = Array.isArray(dto.categoryIds)
+    ? dto.categoryIds.filter((n) => Number.isInteger(n) && n > 0)
+    : undefined;
+  if (categoryIds && !categoryIds.length) throw new BadRequestError('CATEGORY_IDS_INVALID');
 
   const minPrice = dto.minPrice != null ? Number(dto.minPrice) : undefined;
   const maxPrice = dto.maxPrice != null ? Number(dto.maxPrice) : undefined;
@@ -42,7 +50,17 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto) {
     throw new BadRequestError('PRICE_RANGE_INVALID');
   }
 
-  const deleted = typeof dto.deleted === 'boolean' ? dto.deleted : undefined;
+  // deleted products are for admin and root only, and only on request:
+  // without the flag every role gets the products that are not deleted
+  const isAdmin = dto.actorRole === 'ADMIN' || dto.actorRole === 'ROOT';
+  if (dto.deleted === true && !isAdmin) throw new ForbiddenError('DELETED_PRODUCTS_FORBIDDEN');
+  const deleted = dto.deleted === true;
+
+  // only a deleted product has a deletedAt, a list of live products cannot be sorted by it
+  if (sort === 'deletedAt' && !deleted) {
+    throw new BadRequestError('SORT_DELETED_AT_REQUIRES_DELETED');
+  }
+
   const inStock = typeof dto.inStock === 'boolean' ? dto.inStock : undefined;
 
   // normalize cursor
@@ -96,17 +114,15 @@ export function buildCursorWhere(args: {
 
   // string sort branch
   if (args.sort === 'name') {
+    const val = cursorString(v);
     return {
-      OR: [
-        { name: { [op]: String(v ?? '') } },
-        { AND: [{ name: String(v ?? '') }, { id: { [op]: id } }] },
-      ],
+      OR: [{ name: { [op]: val } }, { AND: [{ name: val }, { id: { [op]: id } }] }],
     };
   }
 
-  // date sort branch
+  // date sort branch; a deletedAt sort lists only deleted products, so it has no nulls
   if (args.sort === 'createdAt' || args.sort === 'updatedAt' || args.sort === 'deletedAt') {
-    const val = v == null ? null : new Date(String(v));
+    const val = cursorDate(v);
     return {
       OR: [
         { [args.sort]: { [op]: val } } as any,
@@ -116,7 +132,7 @@ export function buildCursorWhere(args: {
   }
 
   // numeric sort branch
-  const num = v == null ? null : Number(v);
+  const num = cursorNumber(v);
   return {
     OR: [
       { [args.sort]: { [op]: num } } as any,
@@ -194,56 +210,9 @@ function buildSearchCursorSql(args: {
   const col = getSearchSortColumn(args.sort);
   const op = Prisma.raw(args.order === 'asc' ? '>' : '<');
 
-  // deletedAt cursor branch
-  if (args.sort === 'deletedAt') {
-    const value = v == null ? null : new Date(String(v));
-    if (value !== null && Number.isNaN(value.getTime())) {
-      throw new BadRequestError('CURSOR_INVALID');
-    }
-
-    // asc: non-null first, null last
-    if (args.order === 'asc') {
-      // cursor is in null segment
-      if (value == null) {
-        return Prisma.sql`
-        AND (
-          p."deletedAt" IS NULL
-          AND p."id" > ${id}
-        )
-      `;
-      }
-
-      // cursor is in non-null segment
-      return Prisma.sql`
-      AND (
-        p."deletedAt" > ${value}
-        OR p."deletedAt" IS NULL
-        OR (p."deletedAt" = ${value} AND p."id" > ${id})
-      )
-    `;
-    }
-
-    // desc: null first, non-null after
-    if (value == null) {
-      return Prisma.sql`
-      AND (
-        (p."deletedAt" IS NULL AND p."id" < ${id})
-        OR p."deletedAt" IS NOT NULL
-      )
-    `;
-    }
-
-    return Prisma.sql`
-    AND (
-      p."deletedAt" < ${value}
-      OR (p."deletedAt" = ${value} AND p."id" < ${id})
-    )
-  `;
-  }
-
   // string cursor branch
   if (args.sort === 'name') {
-    const value = String(v ?? '');
+    const value = cursorString(v);
 
     return Prisma.sql`
       AND (
@@ -253,10 +222,9 @@ function buildSearchCursorSql(args: {
     `;
   }
 
-  // date cursor branch
-  if (args.sort === 'createdAt' || args.sort === 'updatedAt') {
-    const value = new Date(String(v));
-    if (Number.isNaN(value.getTime())) throw new BadRequestError('CURSOR_INVALID');
+  // date cursor branch; a deletedAt sort lists only deleted products, so it has no nulls
+  if (args.sort === 'createdAt' || args.sort === 'updatedAt' || args.sort === 'deletedAt') {
+    const value = cursorDate(v);
 
     return Prisma.sql`
       AND (
@@ -267,8 +235,7 @@ function buildSearchCursorSql(args: {
   }
 
   // numeric cursor branch
-  const value = Number(v);
-  if (!Number.isFinite(value)) throw new BadRequestError('CURSOR_INVALID');
+  const value = cursorNumber(v);
 
   return Prisma.sql`
     AND (
@@ -288,9 +255,9 @@ export function buildProductSearchIdsQuery(args: ProductSearchIdsQueryArgs): Pri
   if (args.deleted === true) whereParts.push(Prisma.sql`p."deletedAt" IS NOT NULL`);
   if (args.deleted === false) whereParts.push(Prisma.sql`p."deletedAt" IS NULL`);
 
-  // stock filter
-  if (args.inStock === true) whereParts.push(Prisma.sql`p."stock" > 0`);
-  if (args.inStock === false) whereParts.push(Prisma.sql`p."stock" = 0`);
+  // stock filter by free units, the same number the list shows as stock
+  if (args.inStock === true) whereParts.push(Prisma.sql`p."stock" > p."reservedStock"`);
+  if (args.inStock === false) whereParts.push(Prisma.sql`p."stock" <= p."reservedStock"`);
 
   // category filter
   if (args.categoryIds?.length) {
@@ -307,11 +274,15 @@ export function buildProductSearchIdsQuery(args: ProductSearchIdsQueryArgs): Pri
     whereParts.push(Prisma.sql`p."price" <= ${args.maxPrice}`);
   }
 
+  // the search text is matched literally: % and _ are wildcards of ILIKE and \ is its escape,
+  // so each of them gets a \ in front
+  const searchText = args.search.trim().replace(/[\\%_]/g, '\\$&');
+
   // indexed search by immutable_unaccent(name)
   whereParts.push(
     Prisma.sql`
       cartlify.immutable_unaccent(p."name")
-      ILIKE '%' || cartlify.immutable_unaccent(${args.search.trim()}) || '%'
+      ILIKE '%' || cartlify.immutable_unaccent(${searchText}) || '%'
     `,
   );
 
@@ -319,14 +290,9 @@ export function buildProductSearchIdsQuery(args: ProductSearchIdsQueryArgs): Pri
   const sortCol = getSearchSortColumn(args.sort);
   const dir = Prisma.raw(args.order === 'asc' ? 'ASC' : 'DESC');
 
-  const orderBySql =
-    args.sort === 'deletedAt'
-      ? Prisma.sql`
-        ORDER BY ${sortCol} ${dir} ${Prisma.raw(args.order === 'asc' ? 'NULLS LAST' : 'NULLS FIRST')}, p."id" ${dir}
-      `
-      : Prisma.sql`
-        ORDER BY ${sortCol} ${dir}, p."id" ${dir}
-      `;
+  const orderBySql = Prisma.sql`
+    ORDER BY ${sortCol} ${dir}, p."id" ${dir}
+  `;
 
   return Prisma.sql`
     SELECT p."id" AS id

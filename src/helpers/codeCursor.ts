@@ -24,3 +24,27 @@ export function decodeCursor(cursor: string): CursorPayload {
     throw new BadRequestError('CURSOR_INVALID');
   }
 }
+
+// the sort value of a cursor comes back from the client: a value that does not fit the sort
+// is a bad request; passed on, an invalid date or NaN makes prisma fail with a server error
+
+export function cursorDate(v: CursorPayload['v']): Date {
+  const date = typeof v === 'string' ? new Date(v) : new Date(Number.NaN);
+  if (Number.isNaN(date.getTime())) throw new BadRequestError('CURSOR_INVALID');
+
+  return date;
+}
+
+export function cursorNumber(v: CursorPayload['v']): number {
+  const num =
+    typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : Number.NaN;
+  if (!Number.isFinite(num)) throw new BadRequestError('CURSOR_INVALID');
+
+  return num;
+}
+
+export function cursorString(v: CursorPayload['v']): string {
+  if (typeof v !== 'string') throw new BadRequestError('CURSOR_INVALID');
+
+  return v;
+}

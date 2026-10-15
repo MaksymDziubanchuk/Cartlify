@@ -37,6 +37,14 @@ type OpenAiResponsesPayloadDto = {
     instructions: string;
     input: OpenAiInputMessageDto[];
     max_output_tokens: number;
+    text?: {
+        format: {
+            type: 'json_schema';
+            name: string;
+            schema: Record<string, unknown>;
+            strict: true;
+        };
+    };
 };
 
 // shared guard for object-like values
@@ -110,9 +118,29 @@ const isOpenAiErrorBody = (value: unknown): value is OpenAiErrorBodyDto => {
     );
 };
 
-// checks minimal expected shape of OpenAI success body
+// checks one content part of an output item: an object whose text, if any, is a string
+const isOpenAiTextContent = (value: unknown): boolean => {
+    return (
+        isRecord(value) &&
+        !Array.isArray(value) &&
+        (value.text === undefined || typeof value.text === 'string')
+    );
+};
+
+// checks one output item: an object whose content, if any, is a list of content parts
+const isOpenAiOutputItem = (value: unknown): boolean => {
+    return (
+        isRecord(value) &&
+        !Array.isArray(value) &&
+        (value.content === undefined ||
+            (Array.isArray(value.content) && value.content.every(isOpenAiTextContent)))
+    );
+};
+
+// checks expected shape of OpenAI success body, down to the parts text is read from,
+// so reading the text never fails on a broken body
 const isOpenAiResponse = (value: unknown): value is OpenAiResponseDto => {
-    if (!isRecord(value)) {
+    if (!isRecord(value) || Array.isArray(value)) {
         return false;
     }
 
@@ -121,7 +149,8 @@ const isOpenAiResponse = (value: unknown): value is OpenAiResponseDto => {
         (value.model === undefined || typeof value.model === 'string') &&
         (value.output_text === undefined ||
             typeof value.output_text === 'string') &&
-        (value.output === undefined || Array.isArray(value.output))
+        (value.output === undefined ||
+            (Array.isArray(value.output) && value.output.every(isOpenAiOutputItem)))
     );
 };
 
@@ -188,6 +217,8 @@ const extractOpenAiText = (body: OpenAiResponseDto): string => {
 const buildOpenAiPayload = (
     request: AiGenerateTextRequestDto,
 ): OpenAiResponsesPayloadDto => {
+    const jsonSchema = request.options?.jsonSchema;
+
     return {
         model: getOpenAiModel(request.options?.model),
         instructions: request.instructions,
@@ -198,6 +229,19 @@ const buildOpenAiPayload = (
         max_output_tokens: getOpenAiMaxOutputTokens(
             request.options?.maxOutputTokens,
         ),
+        // structured output: the model answers with json that matches the schema
+        ...(jsonSchema
+            ? {
+                  text: {
+                      format: {
+                          type: 'json_schema' as const,
+                          name: jsonSchema.name,
+                          schema: jsonSchema.schema,
+                          strict: true as const,
+                      },
+                  },
+              }
+            : {}),
     };
 };
 
@@ -230,7 +274,8 @@ export const generateText = async (
     }, timeoutMs);
 
     try {
-        // sends http request to OpenAI
+        // sends http request to OpenAI; a TypeError means a network failure only when fetch
+        // itself throws it, one from reading the answer is not about the network
         const response = await fetch(OPENAI_RESPONSES_URL, {
             method: 'POST',
             headers: {
@@ -239,6 +284,17 @@ export const generateText = async (
             },
             body: JSON.stringify(payload),
             signal: controller.signal,
+        }).catch((error: unknown) => {
+            if (error instanceof TypeError) {
+                throw createAiApiUnavailableError(
+                    'openai',
+                    'OpenAI API request failed before receiving a response.',
+                    null,
+                    error,
+                );
+            }
+
+            throw error;
         });
 
         // maps non-success OpenAI responses into normalized AI errors
@@ -272,19 +328,9 @@ export const generateText = async (
             throw error;
         }
 
-        // maps AbortController cancellation to AI_TIMEOUT
+        // maps AbortController cancellation to AI_TIMEOUT, while waiting or while reading the answer
         if (isAbortError(error)) {
             throw createAiTimeoutError('openai', timeoutMs, error);
-        }
-
-        // maps network-level fetch failure to AI_API_UNAVAILABLE
-        if (error instanceof TypeError) {
-            throw createAiApiUnavailableError(
-                'openai',
-                'OpenAI API request failed before receiving a response.',
-                null,
-                error,
-            );
         }
 
         // maps unexpected failures to AI_UNKNOWN_ERROR

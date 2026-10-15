@@ -13,6 +13,7 @@ import {
 } from '@utils/errors.js';
 
 import { chatBotService } from './bot/chatBot.service.js';
+import type { ChatBotLogger } from './bot/chatBotAi.service.js';
 
 import type {
     ChatMessageItemDto,
@@ -27,6 +28,7 @@ interface SendChatMessageDto {
     actorRole: Role;
     threadId: string;
     content: string;
+    log: ChatBotLogger;
 }
 
 interface LockedChatThreadDto {
@@ -99,7 +101,7 @@ async function createChatMessage({
     actorRole,
     threadId,
     normalizedContent,
-}: SendChatMessageDto & {
+}: Omit<SendChatMessageDto, 'log'> & {
     normalizedContent: string;
 }): Promise<SendChatMessageResultDto> {
     return tx(
@@ -256,6 +258,7 @@ async function attachBotTurnIfNeeded({
     threadId,
     normalizedContent,
     result,
+    log,
 }: SendChatMessageDto & {
     normalizedContent: string;
     result: SendChatMessageResultDto;
@@ -273,6 +276,7 @@ async function attachBotTurnIfNeeded({
             threadId,
             userMessageId: result.message.id,
             userMessage: normalizedContent,
+            log,
         });
 
         // merges bot result into the original send-message response
@@ -282,8 +286,10 @@ async function attachBotTurnIfNeeded({
             botMessage: botResult.botMessage,
             adminRequested: result.adminRequested,
         };
-    } catch {
-        // keeps the customer message successful even if bot processing fails
+    } catch (err) {
+        // keeps the customer message successful even if bot processing fails, but not silently
+        log.error({ err, threadId }, 'chat bot turn failed');
+
         return result;
     }
 }
@@ -293,6 +299,7 @@ export async function sendChatMessageService({
     actorRole,
     threadId,
     content,
+    log,
 }: SendChatMessageDto): Promise<SendChatMessageResultDto> {
     const normalizedContent = normalizeContent(content);
 
@@ -314,6 +321,7 @@ export async function sendChatMessageService({
             content,
             normalizedContent,
             result,
+            log,
         });
     } catch (err) {
         // preserves known application errors

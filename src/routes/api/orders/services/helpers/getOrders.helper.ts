@@ -1,4 +1,10 @@
-import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
+import {
+  cursorDate,
+  cursorNumber,
+  cursorString,
+  decodeCursor,
+  encodeCursor,
+} from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { BadRequestError } from '@utils/errors.js';
@@ -78,7 +84,7 @@ export function buildOrdersCursorWhere(args: {
 
   // string sort
   if (args.sortBy === 'shippingAddress') {
-    const val = String(v ?? '');
+    const val = cursorString(v);
     return {
       OR: [
         { shippingAddress: { [op]: val } },
@@ -89,14 +95,14 @@ export function buildOrdersCursorWhere(args: {
 
   // date sort
   if (args.sortBy === 'updatedAt') {
-    const val = new Date(String(v));
+    const val = cursorDate(v);
     return {
       OR: [{ updatedAt: { [op]: val } }, { AND: [{ updatedAt: val }, { id: { [op]: id } }] }],
     };
   }
 
   // numeric sort (total)
-  const num = Number(v);
+  const num = cursorNumber(v);
   return {
     OR: [{ total: { [op]: num } }, { AND: [{ total: num }, { id: { [op]: id } }] }],
   };

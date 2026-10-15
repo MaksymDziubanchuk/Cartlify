@@ -89,6 +89,9 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
     try {
       await sendResetPasswordEmail(sendJob);
     } catch (err) {
+      // only a failure of the mail provider is a bad gateway, our own error stays a server error
+      if (!(err instanceof AppError && err.statusCode === 502)) throw err;
+
       throw new AppError({
         statusCode: 502,
         errorCode: 'PASSWORD_FORGOT_EMAIL_SEND_FAILED',

@@ -48,10 +48,10 @@ export interface GetAllProductsQueryDto {
   minPrice?: number;
   maxPrice?: number;
 
-  // if true -> only deleted, if false -> only not deleted
+  // admin and root only: true -> only deleted; without it or false -> only not deleted, for every role
   deleted?: boolean;
 
-  // if true -> only stock > 0, if false -> only stock == 0
+  // free units (stock - reservedStock): true -> some are free, false -> none are free
   inStock?: boolean;
 
   // sorting (default popularity desc)
@@ -60,6 +60,8 @@ export interface GetAllProductsQueryDto {
 }
 
 export interface FindAllProductsDto {
+  actorRole: Role;
+
   limit: number;
   cursor?: string;
 

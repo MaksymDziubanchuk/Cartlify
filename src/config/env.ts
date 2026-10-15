@@ -79,10 +79,24 @@ function required(name: string): string {
   return value;
 }
 
+// fail fast on a numeric setting that is not a positive whole number; unset gives the default.
+// Number() alone lets NaN and 0 through: a NaN or 0 interval makes node run it every 1 ms
+function positiveInt(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Invalid env variable: ${name} must be a positive whole number`);
+  }
+
+  return value;
+}
+
 export default {
   // runtime mode and server bind
   NODE_ENV: process.env.NODE_ENV || 'development',
-  PORT: process.env.PORT ? Number(process.env.PORT) : 3000,
+  PORT: positiveInt('PORT', 3000),
 
   // host bind and db url
   HOST: process.env.HOST ? process.env.HOST : '0.0.0.0',
@@ -105,7 +119,7 @@ export default {
   GUEST_ID_TTL: process.env.GUEST_ID_TTL || '157680000',
 
   // password reset ttl
-  RESET_TTL_MS: process.env.RESET_TTL_MS ? Number(process.env.RESET_TTL_MS) : 3600000,
+  RESET_TTL_MS: positiveInt('RESET_TTL_MS', 3600000),
 
   // bcrypt cost factor
   BCRYPT_ROUNDS: process.env.BCRYPT_ROUNDS ? Number(process.env.BCRYPT_ROUNDS) : 12,
@@ -119,9 +133,7 @@ export default {
   // openai api settings
   OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
   OPENAI_MODEL: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
-  OPENAI_TIMEOUT_MS: process.env.OPENAI_TIMEOUT_MS
-    ? Number(process.env.OPENAI_TIMEOUT_MS)
-    : 12000,
+  OPENAI_TIMEOUT_MS: process.env.OPENAI_TIMEOUT_MS ? Number(process.env.OPENAI_TIMEOUT_MS) : 12000,
   OPENAI_MAX_OUTPUT_TOKENS: process.env.OPENAI_MAX_OUTPUT_TOKENS
     ? Number(process.env.OPENAI_MAX_OUTPUT_TOKENS)
     : 450,
@@ -152,9 +164,7 @@ export default {
 
   // redis
   REDIS_URL: process.env.REDIS_URL || '',
-  REDIS_ORDER_TIMEOUT_WORKER_MS: process.env.REDIS_ORDER_TIMEOUT_WORKER_MS
-    ? Number(process.env.REDIS_ORDER_TIMEOUT_WORKER_MS)
-    : 3000,
+  REDIS_ORDER_TIMEOUT_WORKER_MS: positiveInt('REDIS_ORDER_TIMEOUT_WORKER_MS', 3000),
 
   // stripe
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',

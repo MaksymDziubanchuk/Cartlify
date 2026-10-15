@@ -1,5 +1,5 @@
 import env from '@config/env.js';
-import { AppError, BadRequestError, InternalError } from '@utils/errors.js';
+import { AppError, InternalError } from '@utils/errors.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
 
 export type SendEmailInput = {
@@ -18,6 +18,17 @@ export type SendEmailInput = {
 
 type AnyJson = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
+// reasons sendEmail gives when the provider refused or did not answer
+const PROVIDER_FAILURE_REASONS = new Set(['SENDGRID_SEND_FAILED', 'SENDGRID_REQUEST_FAILED']);
+
+// tells a failure of the mail provider (a bad gateway for the client) from our own error,
+// like a missing setting, which stays a server error
+export function isEmailProviderFailure(err: unknown): boolean {
+  const reason =
+    err instanceof AppError ? (err.details as { reason?: unknown } | undefined)?.reason : undefined;
+  return typeof reason === 'string' && PROVIDER_FAILURE_REASONS.has(reason);
+}
+
 // transactional email main flow
 // build provider payload
 // map provider errors to app
@@ -31,10 +42,11 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
   const subject = input.subject?.trim();
   const text = input.text?.trim();
 
-  // validate email request
-  if (!to) throw new BadRequestError('EMAIL_TO_REQUIRED');
-  if (!subject) throw new BadRequestError('EMAIL_SUBJECT_REQUIRED');
-  if (!text) throw new BadRequestError('EMAIL_TEXT_REQUIRED');
+  // validate email request: the address comes from the database, subject and text from a
+  // template, so an empty one is a server bug, not a bad request
+  if (!to) throw new InternalError({ reason: 'EMAIL_TO_REQUIRED' });
+  if (!subject) throw new InternalError({ reason: 'EMAIL_SUBJECT_REQUIRED' });
+  if (!text) throw new InternalError({ reason: 'EMAIL_TEXT_REQUIRED' });
 
   const html = input.html?.trim() || `<p>${escapeHtml(text)}</p>`;
 
@@ -74,14 +86,18 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
     // accept provider delivery
     if (res.ok) return { status: res.status };
 
-    // capture provider error details
+    // capture provider error details; a body can be read only once, so it is read as text
+    // and then parsed: a "json" answer that is not json still keeps its raw text
     const contentType = res.headers.get('content-type') || '';
-    let body: AnyJson = '';
+    const raw = await res.text().catch(() => '');
+    let body: AnyJson = raw;
 
-    try {
-      body = contentType.includes('application/json') ? await res.json() : await res.text();
-    } catch {
-      body = await res.text().catch(() => '');
+    if (contentType.includes('application/json')) {
+      try {
+        body = JSON.parse(raw) as AnyJson;
+      } catch {
+        body = raw;
+      }
     }
 
     // normalize provider failure
