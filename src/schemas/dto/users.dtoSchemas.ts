@@ -82,13 +82,13 @@ const usersGetMeResponseSchema = {
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
+// public profile of any user: no email, the user sees their own one in usersGetMeResponseSchema
 const usersGetByIdResponseSchema = {
   $id: 'usersGetByIdResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     id: { type: 'number' },
-    email: { type: 'string', format: 'email' },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
 
@@ -104,9 +104,8 @@ const usersGetByIdResponseSchema = {
       },
       required: ['url32', 'url64', 'url128', 'url256'],
     },
-    locale: { type: 'string' },
   },
-  required: ['id', 'email', 'createdAt', 'updatedAt'],
+  required: ['id', 'createdAt', 'updatedAt'],
 } as const;
 
 const usersUpdateMeBodySchema = {

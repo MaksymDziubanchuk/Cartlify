@@ -1,27 +1,47 @@
+import { STATUS_CODES } from 'node:http';
 import type { FastifyRequest, FastifyReply, FastifyInstance, FastifyError } from 'fastify';
 import { isAppError, ApiErrorResponse } from '@utils/errors.js';
+import { maskUrlSecrets } from '@helpers/maskUrlSecrets.js';
 
-function defaultMessage(statusCode: number): string {
-  switch (statusCode) {
-    case 400:
-      return 'Bad Request';
-    case 401:
-      return 'Unauthorized';
-    case 403:
-      return 'Forbidden';
-    case 404:
-      return 'Not Found';
-    case 409:
-      return 'Conflict';
-    case 422:
-      return 'Unprocessable Entity';
-    case 429:
-      return 'Too Many Requests';
-    case 503:
-      return 'Service Unavailable';
-    default:
-      return 'Internal Server Error';
-  }
+// the swagger contract: message is the standard http phrase of the status, for every error;
+// a status without a phrase gets the one of its class
+function httpPhrase(statusCode: number): string {
+  return STATUS_CODES[statusCode] ?? (statusCode < 500 ? 'Bad Request' : 'Internal Server Error');
+}
+
+// the codes our error classes use for these statuses, so an error from fastify or a plugin
+// carries the same code as our own error with that status
+const STATUS_ERROR_CODES: Record<number, string> = {
+  400: 'BAD_REQUEST',
+  401: 'UNAUTHORIZED',
+  403: 'FORBIDDEN',
+  404: 'NOT_FOUND',
+  409: 'CONFLICT',
+  429: 'RATE_LIMITED',
+  503: 'SERVICE_UNAVAILABLE',
+};
+
+// errorCode for an error that is not ours: from its status, for example PAYLOAD_TOO_LARGE
+// or UNSUPPORTED_MEDIA_TYPE; any other server failure stays INTERNAL_ERROR
+function statusErrorCode(statusCode: number): string {
+  const known = STATUS_ERROR_CODES[statusCode];
+  if (known) return known;
+  if (statusCode >= 500) return 'INTERNAL_ERROR';
+
+  const phrase = STATUS_CODES[statusCode];
+  return phrase
+    ? phrase
+        .toUpperCase()
+        .replace(/[^A-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+    : 'BAD_REQUEST';
+}
+
+// an error status must be 4xx or 5xx; anything else on an error is a server fault,
+// the same rule fastify itself follows
+function errorStatus(error: FastifyError): number {
+  const raw = error.statusCode;
+  return typeof raw === 'number' && raw >= 400 && raw <= 599 ? raw : 500;
 }
 
 // one entry per failed rule of a request schema, so a client can mark the wrong field
@@ -49,7 +69,7 @@ export default function errorNormalizer(app: FastifyInstance) {
     // a request that failed its route schema (body, query, params or headers)
     const isValidation = !isAppError(error) && Array.isArray(error.validation);
 
-    const statusCode = isAppError(error) ? error.statusCode : (error.statusCode ?? 500);
+    const statusCode = errorStatus(error);
 
     const payload: ApiErrorResponse = {
       code: statusCode,
@@ -57,10 +77,8 @@ export default function errorNormalizer(app: FastifyInstance) {
         ? error.errorCode
         : isValidation
           ? 'VALIDATION_ERROR'
-          : statusCode >= 500
-            ? 'INTERNAL_ERROR'
-            : 'ERROR',
-      message: isAppError(error) ? error.message : defaultMessage(statusCode),
+          : statusErrorCode(statusCode),
+      message: httpPhrase(statusCode),
       reqId: req.id,
       ...(isAppError(error) && error.expose && error.details !== undefined
         ? { details: error.details }
@@ -77,13 +95,13 @@ export default function errorNormalizer(app: FastifyInstance) {
       req.log.error({ err: error, ...extra }, 'request failed');
     } else {
       // a client error is expected traffic: one short info line without a stack;
-      // the query string stays out of the log, it may carry tokens
+      // the query may carry tokens, their values are hidden
       req.log.info(
         {
           statusCode,
           errorCode: payload.errorCode,
           method: req.method,
-          path: req.url.split('?')[0],
+          url: maskUrlSecrets(req.url),
           ...(isValidation ? { details: payload.details } : {}),
         },
         'request rejected',

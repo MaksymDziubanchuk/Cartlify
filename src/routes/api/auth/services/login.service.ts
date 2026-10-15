@@ -36,7 +36,10 @@ export async function login({
   assertEmail(cleanEmail);
 
   if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
-  if (!password) throw new BadRequestError('PASSWORD_REQUIRED');
+
+  // spaces at the edges of a password are dropped, the same at registration and password reset
+  const cleanPassword = password?.trim() ?? '';
+  if (!cleanPassword) throw new BadRequestError('PASSWORD_REQUIRED');
 
   const invalidCreds = () => new UnauthorizedError('INVALID_CREDENTIALS');
 
@@ -71,7 +74,11 @@ export async function login({
         throw new InternalError({ reason: 'LOCAL_ACCOUNT_PASSWORD_HASH_MISSING' });
       }
 
-      const ok = await verifyPass(password, u.password_hash);
+      // registration used to keep edge spaces in the hash, such a password is
+      // checked once more exactly as typed, so those accounts still log in
+      const ok =
+        (await verifyPass(cleanPassword, u.password_hash)) ||
+        (cleanPassword !== password && (await verifyPass(password, u.password_hash)));
       if (!ok) throw invalidCreds();
 
       // require verified email
@@ -79,9 +86,8 @@ export async function login({
         throw new ForbiddenError('EMAIL_NOT_VERIFIED');
       }
 
-      // switch to user db context
-
-      await migrateGuestDataToUser(tx, guestId, u.id);
+      // switches the transaction to the user context, everything below runs as this user
+      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
 
       await insertLoginLog(tx, {
         userId: u.id as any,

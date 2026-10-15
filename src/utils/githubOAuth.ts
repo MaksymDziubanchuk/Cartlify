@@ -42,6 +42,21 @@ const { GITHUB_STATE_SECRET, GITHUB_CLIENT_ID, GITHUB_REDIRECT_URI, GITHUB_CLIEN
 
 const GITHUB_SCOPE = 'read:user user:email';
 
+// read a github json answer: one that is not a json object is a server fault, not a refused login
+function parseGithubJson<T extends object>(text: string, reason: string): T {
+  let data: unknown;
+
+  try {
+    data = JSON.parse(text);
+  } catch (err) {
+    throw new InternalError({ reason }, err);
+  }
+
+  if (typeof data !== 'object' || data === null) throw new InternalError({ reason });
+
+  return data as T;
+}
+
 // build signed oauth state
 export function createGithubOAuthState(guestId: string) {
   const secret = GITHUB_STATE_SECRET;
@@ -161,17 +176,20 @@ export async function exchangeGithubCodeForTokens(
 
   const text = await res.text();
   if (!res.ok) {
-    throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', undefined, {
-      status: res.status,
-    });
+    throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', { status: res.status });
   }
 
   // parse token response union
-  const data = JSON.parse(text) as GithubTokenResponse | GithubTokenError;
+  const data = parseGithubJson<GithubTokenResponse | GithubTokenError>(
+    text,
+    'GITHUB_OAUTH_TOKEN_PARSE_FAILED',
+  );
 
-  // surface oauth error response
+  // github answers a refused code with 200 and an error field, its code tells why
   if ('error' in data) {
-    throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', undefined, {});
+    throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', {
+      providerError: data.error,
+    });
   }
 
   if (!data.access_token) throw new UnauthorizedError('GITHUB_OAUTH_NO_ACCESS_TOKEN');
@@ -193,12 +211,10 @@ export async function fetchGithubUser(accessToken: string): Promise<GithubUserRe
 
   const text = await res.text();
   if (!res.ok) {
-    throw new UnauthorizedError('GITHUB_OAUTH_FETCH_USER_FAILED', undefined, {
-      status: res.status,
-    });
+    throw new UnauthorizedError('GITHUB_OAUTH_FETCH_USER_FAILED', { status: res.status });
   }
 
-  return JSON.parse(text) as GithubUserResponse;
+  return parseGithubJson<GithubUserResponse>(text, 'GITHUB_OAUTH_USER_PARSE_FAILED');
 }
 
 // fetch github email list
@@ -215,12 +231,10 @@ export async function fetchGithubEmails(accessToken: string): Promise<GithubEmai
 
   const text = await res.text();
   if (!res.ok) {
-    throw new UnauthorizedError('GITHUB_OAUTH_FETCH_EMAILS_FAILED', undefined, {
-      status: res.status,
-    });
+    throw new UnauthorizedError('GITHUB_OAUTH_FETCH_EMAILS_FAILED', { status: res.status });
   }
 
-  const data = JSON.parse(text) as GithubEmailItem[];
+  const data = parseGithubJson<GithubEmailItem[]>(text, 'GITHUB_OAUTH_EMAILS_PARSE_FAILED');
   return Array.isArray(data) ? data : [];
 }
 

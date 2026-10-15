@@ -25,7 +25,7 @@ const refreshPayload = {
 const nowSec = () => Math.floor(Date.now() / 1000);
 
 // sign a token by hand to build payloads the app itself would never issue
-const signRaw = (payload: object, secret: string) => jsonwebtoken.sign(payload, secret);
+const signRaw = (payload: object | string, secret: string) => jsonwebtoken.sign(payload, secret);
 
 const envRecord = env as unknown as Record<string, unknown>;
 const ttlKeys = [
@@ -64,6 +64,12 @@ describe('getTtl', () => {
     envRecord.JWT_REFRESH_TTL_LONG = value;
 
     expect(thrownBy(() => getTtl(true, 'refresh'))).toBeInstanceOf(InternalError);
+  });
+
+  it('throws an internal error when the env lifetime is not set at all', () => {
+    envRecord.JWT_ACCESS_TTL_SHORT = undefined;
+
+    expect(thrownBy(() => getTtl(false, 'access'))).toBeInstanceOf(InternalError);
   });
 });
 
@@ -118,6 +124,8 @@ describe('access tokens', () => {
     ['the user id is missing', { role: 'USER', type: 'access' }],
     ['the user id is a string', { ...accessPayload, userId: '5' }],
     ['the role is missing', { userId: 5, type: 'access' }],
+    // jwt allows a bare string as the payload
+    ['the payload is a plain string', 'user-5'],
   ])('report ACCESS_TOKEN_PAYLOAD_INVALID when %s', (_case, payload) => {
     const token = signRaw(payload, env.JWT_ACCESS_SECRET);
     const err = thrownBy(() => verifyAccessToken(token));
@@ -162,6 +170,7 @@ describe('refresh tokens', () => {
     ['the jwt id is missing', { ...refreshPayload, jwtId: undefined }],
     ['remember me is not a boolean', { ...refreshPayload, rememberMe: 'yes' }],
     ['the user id is missing', { ...refreshPayload, userId: undefined }],
+    ['the payload is a plain string', 'user-5'],
   ])('report REFRESH_TOKEN_PAYLOAD_INVALID when %s', (_case, payload) => {
     const token = signRaw(payload, env.JWT_REFRESH_SECRET);
     const err = thrownBy(() => verifyRefreshToken(token));

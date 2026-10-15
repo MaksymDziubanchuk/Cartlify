@@ -105,7 +105,7 @@ export async function googleCallback({ code, state, ip, userAgent }: GoogleCallb
         providerSubMismatchMsg: 'GOOGLE_SUB_MISMATCH',
       });
 
-      await migrateGuestDataToUser(tx, guestId, u.id);
+      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role as Role });
 
       await insertLoginLog(tx, {
         userId: u.id as any,

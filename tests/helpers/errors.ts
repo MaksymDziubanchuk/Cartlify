@@ -19,3 +19,8 @@ export async function rejectedBy(fn: () => Promise<unknown>): Promise<unknown> {
 
   throw new Error('expected the promise to reject, it resolved');
 }
+
+// the http status of an app error, for checks like "a client error, 400 or 401"
+export function statusOf(err: unknown): number | undefined {
+  return (err as { statusCode?: number } | null)?.statusCode;
+}

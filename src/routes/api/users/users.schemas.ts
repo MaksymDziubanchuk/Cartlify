@@ -38,7 +38,6 @@ const userResponseExample = {
 
 const publicUserResponseExample = {
   id: 1,
-  email: 'user@example.com',
   createdAt: '2026-01-01T10:00:00.000Z',
   updatedAt: '2026-01-01T10:00:00.000Z',
   name: 'Example User',
@@ -48,7 +47,6 @@ const publicUserResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
-  locale: 'en',
 };
 
 const updateMeBodyExample = {
@@ -164,7 +162,9 @@ const patchMeSchema = {
 const getUserByIdSchema = {
   operationId: 'getUserById',
   summary: 'Get user by id',
-  description: 'Returns a public user profile by user id.',
+  description:
+    'Returns the public profile of any user by id: name, avatar and dates. ' +
+    'It has no email, role, phone or reviews; a user reads those for themselves in GET /api/users/me.',
 
   params: {
     $ref: 'usersGetByIdParamsSchema#',
@@ -262,4 +262,7 @@ const taggedUsersSchema = withOpenApiTag(
 );
 
 // Add access token security to all user routes
-export const usersSchema = withOpenApiSecurity(taggedUsersSchema, openApiSecurity.accessTokenCookie);
+export const usersSchema = withOpenApiSecurity(
+  taggedUsersSchema,
+  openApiSecurity.accessTokenCookie,
+);

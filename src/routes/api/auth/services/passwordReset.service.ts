@@ -115,6 +115,7 @@ export async function passwordReset({
   const cleanToken = token?.trim();
   if (!cleanToken) throw new BadRequestError('TOKEN_REQUIRED');
 
+  // spaces at the edges of a password are dropped, the same at registration and login
   const cleanNewPassword = newPassword?.trim();
   if (!cleanNewPassword) throw new BadRequestError('NEW_PASSWORD_REQUIRED');
   if (cleanNewPassword.length < 6) throw new BadRequestError('PASSWORD_TOO_SHORT');

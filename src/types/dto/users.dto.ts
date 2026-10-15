@@ -24,6 +24,8 @@ export interface GetUserByIdParamsDto {
 }
 
 export interface FindUserByIdDto {
+  actorId: UserId;
+  actorRole: Role;
   userId: UserId;
 }
 
@@ -51,9 +53,10 @@ export interface UserResponseDto {
   reviews?: UserReviewResponseDto[];
 }
 
+// public profile of any user: no email, role, verification, phone or reviews
 export type UserByIdResponseDto = Omit<
   UserResponseDto,
-  'isVerified' | 'reviews' | 'role' | 'phone' | 'locale'
+  'email' | 'isVerified' | 'reviews' | 'role' | 'phone' | 'locale'
 >;
 
 export interface UpdateMeBodyDto {

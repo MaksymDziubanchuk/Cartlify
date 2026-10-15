@@ -344,7 +344,11 @@ async function updateMe({
   }
 }
 
-async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDto> {
+async function findById({
+  actorId,
+  actorRole,
+  userId,
+}: FindUserByIdDto): Promise<UserByIdResponseDto> {
   // normalize user id from dto
   const id = typeof userId === 'string' ? Number(userId) : userId;
   // guard invalid id
@@ -352,11 +356,15 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
 
   try {
     return await prisma.$transaction(async (tx) => {
-      // read minimal profile via security definer and keep rls rules in db
+      // the db function serves only a signed-in actor, so it needs the actor context
+      await setUserContext(tx, { userId: actorId, role: actorRole });
+
+      // read minimal profile via security definer and keep rls rules in db;
+      // the function also returns the email, it is left out here: a public profile has no email,
+      // a user sees their own one in /users/me
       const rows = await tx.$queryRaw<
         Array<{
           id: number;
-          email: string;
           createdAt: Date;
           updatedAt: Date;
           name: string | null;
@@ -365,12 +373,11 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
       >`
         select
           id,
-          email,
           created_at as "createdAt",
           updated_at as "updatedAt",
           name,
           avatar_url as "avatarUrl"
-        from cartlify.users_get_profile_for_actor(${id}::int)
+        from cartlify.users_get_public_profile(${id}::int)
         limit 1
       `;
 
@@ -379,13 +386,9 @@ async function findById({ userId }: FindUserByIdDto): Promise<UserByIdResponseDt
       // hide rls-missed rows as not found
       if (!user) throw new NotFoundError('USER_NOT_FOUND');
 
-      // validate email format before returning it to client
-      assertEmail(user.email);
-
       // build final public response
       return {
         id: user.id,
-        email: user.email,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),

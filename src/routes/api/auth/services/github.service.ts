@@ -125,7 +125,7 @@ export async function githubCallback({ code, state, ip, userAgent }: GithubCallb
         providerSubMismatchMsg: 'GITHUB_SUB_MISMATCH',
       });
 
-      await migrateGuestDataToUser(tx, guestId, u.id);
+      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
 
       await insertLoginLog(tx, {
         userId: u.id as any,

@@ -17,6 +17,13 @@ function readEnvString(key: string): string | undefined {
   return value.length > 0 ? value : undefined;
 }
 
+// the shape of a url for logs: the scheme and the separators stay, every part becomes [hidden]
+function urlShape(raw: string): string {
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\//i.exec(raw)?.[0] ?? '';
+
+  return scheme + raw.slice(scheme.length).replace(/[^:@/]+/g, '[hidden]');
+}
+
 // parses cloudinary://<api_key>:<api_secret>@<cloud_name>
 function parseCloudinaryUrl(raw: string): CloudinaryCreds {
   let u: URL;
@@ -24,6 +31,11 @@ function parseCloudinaryUrl(raw: string): CloudinaryCreds {
   try {
     u = new URL(raw);
   } catch (err) {
+    // node puts the whole url, the secret included, into the error; only its shape is kept
+    if (typeof err === 'object' && err !== null && 'input' in err) {
+      (err as { input: unknown }).input = urlShape(raw);
+    }
+
     throw new AppError({
       statusCode: 500,
       errorCode: 'CONFIG_INVALID',

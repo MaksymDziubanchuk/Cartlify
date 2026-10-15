@@ -91,7 +91,9 @@ const refreshResponseExample = {
 const setRegisterSchema = {
   operationId: 'registerUser',
   summary: 'Register user',
-  description: 'Creates a new user account and sets authentication cookies.',
+  description:
+    'Creates a new user account and sets authentication cookies. ' +
+    'The password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols.',
 
   body: {
     $ref: 'authRegisterBodySchema#',
@@ -106,7 +108,10 @@ const setRegisterSchema = {
     },
 
     400: {
-      description: 'Invalid registration request.',
+      description:
+        'Invalid registration request. VALIDATION_ERROR with field password ' +
+        'when the password is shorter than 6 or longer than 64 characters or has non-ASCII characters; ' +
+        'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -200,7 +205,8 @@ const setGoogleStartSchema = {
 const setGoogleCallbackSchema = {
   operationId: 'handleGoogleOAuthCallback',
   summary: 'Handle Google OAuth callback',
-  description: 'Handles Google OAuth callback, creates or finds user and sets authentication cookies.',
+  description:
+    'Handles Google OAuth callback, creates or finds user and sets authentication cookies.',
 
   querystring: {
     $ref: 'authGoogleCallbackQuerySchema#',
@@ -280,7 +286,8 @@ const setGithubStartSchema = {
 const setGithubCallbackSchema = {
   operationId: 'handleGithubOAuthCallback',
   summary: 'Handle GitHub OAuth callback',
-  description: 'Handles GitHub OAuth callback, creates or finds user and sets authentication cookies.',
+  description:
+    'Handles GitHub OAuth callback, creates or finds user and sets authentication cookies.',
 
   querystring: {
     $ref: 'authGithubCallbackQuerySchema#',
@@ -360,7 +367,8 @@ const setLinkedInStartSchema = {
 const setLinkedInCallbackSchema = {
   operationId: 'handleLinkedInOAuthCallback',
   summary: 'Handle LinkedIn OAuth callback',
-  description: 'Handles LinkedIn OAuth callback, creates or finds user and sets authentication cookies.',
+  description:
+    'Handles LinkedIn OAuth callback, creates or finds user and sets authentication cookies.',
 
   querystring: {
     $ref: 'authLinkedInCallbackQuerySchema#',
@@ -508,7 +516,9 @@ const setPasswordForgotSchema = {
 const setPasswordResetSchema = {
   operationId: 'resetPassword',
   summary: 'Reset password',
-  description: 'Resets user password by password reset token.',
+  description:
+    'Resets user password by password reset token. ' +
+    'The new password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols.',
 
   querystring: {
     $ref: 'authPasswordResetQuerySchema#',
@@ -528,7 +538,10 @@ const setPasswordResetSchema = {
     },
 
     400: {
-      description: 'Invalid password reset request.',
+      description:
+        'Invalid password reset request. VALIDATION_ERROR with field newPassword ' +
+        'when the password is shorter than 6 or longer than 64 characters or has non-ASCII characters; ' +
+        'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces.',
       $ref: 'errorResponseSchema#',
     },
     401: {

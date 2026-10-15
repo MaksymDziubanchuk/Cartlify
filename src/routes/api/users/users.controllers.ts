@@ -98,9 +98,10 @@ const getUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, UserByIdRespon
   req,
   reply,
 ) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
   const userId = Number(req.params.userId);
 
-  const args = pickDefined<FindUserByIdDto>({ userId }, {});
+  const args = pickDefined<FindUserByIdDto>({ actorId, actorRole, userId }, {});
   const result = await usersServices.findById(args);
   return reply.code(200).send(result);
 };

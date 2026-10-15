@@ -113,7 +113,7 @@ export async function linkedInCallback({
       });
 
       // migrate guest data into the authenticated account
-      await migrateGuestDataToUser(tx, guestId, u.id);
+      await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
 
       // persist login audit record for security review
       await insertLoginLog(tx, {

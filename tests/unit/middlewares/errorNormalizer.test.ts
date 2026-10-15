@@ -1,8 +1,11 @@
+import { STATUS_CODES } from 'node:http';
 import fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import errorNormalizer from '@middlewares/errorNormalizer.js';
-import { BadRequestError, InternalError, NotFoundError } from '@utils/errors.js';
+import rateLimit from '@fastify/rate-limit';
+
+import { AppError, BadRequestError, InternalError, NotFoundError } from '@utils/errors.js';
 
 // a bare fastify instance with one route per kind of error, nothing else is loaded
 const app = fastify({ logger: false });
@@ -25,6 +28,16 @@ beforeAll(async () => {
   app.get('/http-error', async () => {
     throw Object.assign(new Error('payload too big'), { statusCode: 413 });
   });
+  // an error with a status but not an app error, the way plugins throw them
+  app.get<{ Params: { status: string } }>('/plugin-error/:status', async (req) => {
+    throw Object.assign(new Error('from a plugin'), { statusCode: Number(req.params.status) });
+  });
+  // an app error of our own whose message is not the phrase of its status
+  app.get('/custom-message', async () => {
+    throw new AppError({ statusCode: 409, errorCode: 'CART_LOCKED', message: 'cart is locked' });
+  });
+  app.post('/json-body', async () => ({ ok: true }));
+  app.post('/small-body', { bodyLimit: 16 }, async () => ({ ok: true }));
   app.get(
     '/validated',
     {
@@ -107,6 +120,116 @@ describe('errorNormalizer', () => {
     expect(res.json().code).toBe(413);
   });
 
+  // the swagger contract: message is the standard http phrase for the status code,
+  // errorCode of an error that is not ours comes from the status, the same as our own classes use
+  it.each([
+    [401, 'UNAUTHORIZED'],
+    [403, 'FORBIDDEN'],
+    [404, 'NOT_FOUND'],
+    [405, 'METHOD_NOT_ALLOWED'],
+    [409, 'CONFLICT'],
+    [413, 'PAYLOAD_TOO_LARGE'],
+    [415, 'UNSUPPORTED_MEDIA_TYPE'],
+    [422, 'UNPROCESSABLE_ENTITY'],
+    [429, 'RATE_LIMITED'],
+    [503, 'SERVICE_UNAVAILABLE'],
+  ])('gives a %i error from a plugin its phrase and the code %s', async (status, errorCode) => {
+    const res = await app.inject({ method: 'GET', url: `/plugin-error/${status}` });
+
+    expect(res.statusCode).toBe(status);
+    expect(res.json()).toMatchObject({ code: status, errorCode, message: STATUS_CODES[status] });
+  });
+
+  it('gives a client error status without a standard phrase the generic client answer', async () => {
+    const res = await app.inject({ method: 'GET', url: '/plugin-error/499' });
+
+    expect(res.statusCode).toBe(499);
+    expect(res.json()).toMatchObject({
+      code: 499,
+      errorCode: 'BAD_REQUEST',
+      message: 'Bad Request',
+    });
+  });
+
+  it('keeps any other server failure from a plugin an INTERNAL_ERROR', async () => {
+    const res = await app.inject({ method: 'GET', url: '/plugin-error/502' });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({
+      code: 502,
+      errorCode: 'INTERNAL_ERROR',
+      message: 'Bad Gateway',
+    });
+  });
+
+  it.each([
+    ['a success status', 200],
+    ['a redirect status', 302],
+    ['a status past 599', 600],
+  ])('treats an error carrying %s as a server failure', async (_case, status) => {
+    const res = await app.inject({ method: 'GET', url: `/plugin-error/${status}` });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toMatchObject({
+      code: 500,
+      errorCode: 'INTERNAL_ERROR',
+      message: 'Internal Server Error',
+    });
+  });
+
+  it('sends the phrase of the status even when our own error carries another message', async () => {
+    const res = await app.inject({ method: 'GET', url: '/custom-message' });
+
+    expect(res.json()).toMatchObject({ code: 409, errorCode: 'CART_LOCKED', message: 'Conflict' });
+  });
+
+  it('answers a body of an unsupported type with 415 UNSUPPORTED_MEDIA_TYPE', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/validated-body',
+      headers: { 'content-type': 'application/xml' },
+      payload: '<email>a@b.co</email>',
+    });
+
+    expect(res.statusCode).toBe(415);
+    expect(res.json()).toMatchObject({
+      code: 415,
+      errorCode: 'UNSUPPORTED_MEDIA_TYPE',
+      message: 'Unsupported Media Type',
+    });
+  });
+
+  it('answers a body over the limit with 413 PAYLOAD_TOO_LARGE', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/small-body',
+      payload: { text: 'longer than sixteen bytes' },
+    });
+
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toMatchObject({
+      code: 413,
+      errorCode: 'PAYLOAD_TOO_LARGE',
+      message: 'Payload Too Large',
+    });
+  });
+
+  it('answers a body that is not valid json with 400 BAD_REQUEST', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/json-body',
+      headers: { 'content-type': 'application/json' },
+      payload: '{"name": ',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      code: 400,
+      errorCode: 'BAD_REQUEST',
+      message: 'Bad Request',
+    });
+  });
+
   it('answers a schema error with VALIDATION_ERROR and the failed field', async () => {
     const res = await app.inject({ method: 'GET', url: '/validated' });
 
@@ -134,6 +257,35 @@ describe('errorNormalizer', () => {
     expect(res.json()).toMatchObject({
       errorCode: 'VALIDATION_ERROR',
       details: [{ in: 'body', field }],
+    });
+  });
+});
+
+describe('errorNormalizer with the rate limit plugin', () => {
+  // the same plugin the app uses, with a limit of one request so the second one is refused
+  const limited = fastify({ logger: false });
+
+  beforeAll(async () => {
+    errorNormalizer(limited);
+    await limited.register(rateLimit, { max: 1, timeWindow: '1 minute' });
+    limited.get('/limited', async () => ({ ok: true }));
+    await limited.ready();
+  });
+
+  afterAll(async () => {
+    await limited.close();
+  });
+
+  it('answers a request over the limit with 429 RATE_LIMITED in the common error shape', async () => {
+    await limited.inject({ method: 'GET', url: '/limited' });
+    const res = await limited.inject({ method: 'GET', url: '/limited' });
+
+    expect(res.statusCode).toBe(429);
+    expect(res.json()).toMatchObject({
+      code: 429,
+      errorCode: 'RATE_LIMITED',
+      message: 'Too Many Requests',
+      reqId: expect.any(String),
     });
   });
 });
@@ -171,7 +323,7 @@ describe('errorNormalizer logging', () => {
   });
 
   it('logs a client error as one info line without a stack', async () => {
-    await logged.inject({ method: 'GET', url: '/missing?token=secret-value' });
+    await logged.inject({ method: 'GET', url: '/missing?search=phone&limit=20' });
 
     const record = lastRecord();
 
@@ -181,15 +333,17 @@ describe('errorNormalizer logging', () => {
       statusCode: 404,
       errorCode: 'PRODUCT_NOT_FOUND',
       method: 'GET',
-      path: '/missing',
+      // the query shows which filters the request came with
+      url: '/missing?search=phone&limit=20',
     });
     expect(record.err).toBeUndefined();
     expect(JSON.stringify(record)).not.toContain('stack');
   });
 
-  it('keeps the query string out of the log, it may carry tokens', async () => {
-    await logged.inject({ method: 'GET', url: '/missing?token=secret-value' });
+  it('hides tokens in the query, keeps the other parameters', async () => {
+    await logged.inject({ method: 'GET', url: '/missing?token=secret-value&limit=20' });
 
+    expect(lastRecord().url).toBe('/missing?token=[hidden]&limit=20');
     expect(JSON.stringify(lastRecord())).not.toContain('secret-value');
   });
 

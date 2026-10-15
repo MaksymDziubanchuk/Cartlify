@@ -176,8 +176,21 @@ export const createOpenAiHttpError = (
         return createAiRateLimitError('openai', statusCode, body);
     }
 
+    // openai itself timed out: keep its status and its own words,
+    // createAiTimeoutError is for our own timeout, where the waited time is known
     if (statusCode === 408 || statusCode === 504) {
-        return createAiTimeoutError('openai', 0, body);
+        const timeoutMessage =
+            body?.error?.message?.trim() ||
+            `OpenAI API request timed out (HTTP ${statusCode}).`;
+
+        return createAiError(
+            'openai',
+            'AI_TIMEOUT',
+            timeoutMessage,
+            statusCode,
+            true,
+            body,
+        );
     }
 
     if (statusCode >= 500) {

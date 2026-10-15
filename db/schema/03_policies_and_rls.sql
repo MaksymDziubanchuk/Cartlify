@@ -547,11 +547,13 @@ DROP POLICY IF EXISTS favorites_select_owner ON cartlify.favorites;
 
 DROP POLICY IF EXISTS favorites_insert ON cartlify.favorites;
 
-DROP POLICY IF EXISTS favorites_update ON cartlify.favorites;
+DROP POLICY IF EXISTS favorites_update_owner ON cartlify.favorites;
 
 DROP POLICY IF EXISTS favorites_delete ON cartlify.favorites;
 
--- SELECT (owner or admin/root)
+DROP POLICY IF EXISTS favorites_delete_owner ON cartlify.favorites;
+
+-- SELECT (owner or admin/root, or guest owner)
 CREATE POLICY favorites_select ON cartlify.favorites FOR
 SELECT
   USING (
@@ -583,39 +585,29 @@ WITH
     )
   );
 
--- UPDATE (guest to user migration only)
-CREATE POLICY favorites_update ON cartlify.favorites
+-- UPDATE cartlify_owner for migrate_guest_data_to_user only:
+-- a guest row may only become a user row, nothing else about a favorite changes
+CREATE POLICY favorites_update_owner ON cartlify.favorites
 FOR UPDATE
-  USING (
-    cartlify.current_actor_role () = 'USER'
-    AND "userId" IS NULL
-    AND "guestId" = NULLIF(
-      current_setting('cartlify.migrating_guest_id', true),
-      ''
-    )::uuid
-  )
+  TO cartlify_owner USING ("userId" IS NULL)
 WITH
   CHECK (
-    "userId" = cartlify.current_actor_id ()
+    "userId" IS NOT NULL
     AND "guestId" IS NULL
   );
 
--- DELETE (owner, guest owner, or guest migration conflict cleanup)
+-- DELETE (owner or guest owner)
 CREATE POLICY favorites_delete ON cartlify.favorites FOR DELETE USING (
   cartlify.is_owner ("userId")
   OR (
     cartlify.current_actor_role () = 'GUEST'
     AND "guestId" = cartlify.current_guest_id ()
   )
-  OR (
-    cartlify.current_actor_role () = 'USER'
-    AND "userId" IS NULL
-    AND "guestId" = NULLIF(
-      current_setting('cartlify.migrating_guest_id', true),
-      ''
-    )::uuid
-  )
 );
+
+-- DELETE cartlify_owner for migrate_guest_data_to_user only:
+-- guest rows the user already has as their own favorites are dropped before the move
+CREATE POLICY favorites_delete_owner ON cartlify.favorites FOR DELETE TO cartlify_owner USING ("userId" IS NULL);
 
 ----------------------------------------
 -- ORDERS
@@ -635,10 +627,6 @@ DROP POLICY IF EXISTS orders_insert ON cartlify.orders;
 DROP POLICY IF EXISTS orders_update ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_update_admin_shipping_status ON cartlify.orders;
-
-DROP POLICY IF EXISTS orders_update_owner_waiting ON cartlify.orders;
-
-DROP POLICY IF EXISTS orders_update_root_waiting ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_update_owner ON cartlify.orders;
 
@@ -960,7 +948,11 @@ DROP POLICY IF EXISTS chat_threads_update ON cartlify.chat_threads;
 
 DROP POLICY IF EXISTS chat_threads_delete ON cartlify.chat_threads;
 
--- SELECT (owner or admin/root)
+DROP POLICY IF EXISTS chat_threads_select_owner ON cartlify.chat_threads;
+
+DROP POLICY IF EXISTS chat_threads_update_owner ON cartlify.chat_threads;
+
+-- SELECT (owner or admin/root, or guest owner)
 CREATE POLICY chat_threads_select ON cartlify.chat_threads FOR
 SELECT
   USING (
@@ -970,6 +962,11 @@ SELECT
       AND "guestId" = cartlify.current_guest_id ()
     )
   );
+
+-- SELECT cartlify_owner for migrate_guest_data_to_user only: guest threads, the ones it moves
+CREATE POLICY chat_threads_select_owner ON cartlify.chat_threads FOR
+SELECT
+  TO cartlify_owner USING ("userId" IS NULL);
 
 -- INSERT (owner only)
 CREATE POLICY chat_threads_insert ON cartlify.chat_threads FOR INSERT
@@ -987,7 +984,7 @@ WITH
     )
   );
 
--- UPDATE (owner, admin/root, guest owner, or guest to user migration)
+-- UPDATE (owner, admin/root, or guest owner)
 CREATE POLICY chat_threads_update ON cartlify.chat_threads
 FOR UPDATE
   USING (
@@ -995,14 +992,6 @@ FOR UPDATE
     OR (
       cartlify.current_actor_role () = 'GUEST'
       AND "guestId" = cartlify.current_guest_id ()
-    )
-    OR (
-      cartlify.current_actor_role () = 'USER'
-      AND "userId" IS NULL
-      AND "guestId" = NULLIF(
-        current_setting('cartlify.migrating_guest_id', true),
-        ''
-      )::uuid
     )
   )
 WITH
@@ -1012,11 +1001,17 @@ WITH
       cartlify.current_actor_role () = 'GUEST'
       AND "guestId" = cartlify.current_guest_id ()
     )
-    OR (
-      cartlify.current_actor_role () = 'USER'
-      AND "userId" = cartlify.current_actor_id ()
-      AND "guestId" IS NULL
-    )
+  );
+
+-- UPDATE cartlify_owner for migrate_guest_data_to_user only:
+-- a guest thread may only become a user thread
+CREATE POLICY chat_threads_update_owner ON cartlify.chat_threads
+FOR UPDATE
+  TO cartlify_owner USING ("userId" IS NULL)
+WITH
+  CHECK (
+    "userId" IS NOT NULL
+    AND "guestId" IS NULL
   );
 
 -- DELETE (deny for all)
