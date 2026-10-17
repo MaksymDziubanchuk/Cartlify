@@ -110,8 +110,8 @@ What is important to state honestly:
 
 - user registration
 - email verification flow
-- resend verification email
-- login / logout
+- resend verification email: a new link each time, earlier links stop working; the links are stored only as hashes
+- login / logout: logout ends the session of this browser, `allDevices` ends every session of the user
 - refresh token rotation: `POST /api/auth/refresh` answers 204 and sets both tokens as cookies, no token in the body
 - forgot password / reset password
 - OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
@@ -158,6 +158,7 @@ What is important to state honestly:
 - order by id endpoint
 - admin/root order status update endpoint
 - Redis-based timeout worker for order reservation expiry handling
+- the buyer gets an email when the order is paid (sent from the Stripe webhook; a failed mail never fails the webhook)
 
 ### Chat and AI assistant
 
@@ -260,6 +261,7 @@ Cartlify/
 │   │   └── chat/
 │   ├── schemas/                # shared AJV schemas and DTO schemas
 │   ├── services/               # cross-module services
+│   │   └── email/templates/    # mails as .html and .txt files with {{marks}}
 │   ├── types/                  # DTOs and shared TypeScript types
 │   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
 │   └── workers/                # background workers

@@ -2,6 +2,7 @@ import { prisma } from '@db/client.js';
 import { AppError, BadRequestError, InternalError } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
+import { hashToken } from '@helpers/tokenHash.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
@@ -23,16 +24,16 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
   await prisma.$transaction(async (tx) => {
     await setGuestNullContext(tx);
 
-    // call db resend function
+    // the database gets the hash and closes the earlier links, the mail carries the new link
     const rows = await tx.$queryRaw<{ user_id: number; token: string; expires_at: Date }[]>`
-      select * from cartlify.auth_resend_verify(${cleanEmail}, ${token}, ${expiresAt})
+      select * from cartlify.auth_resend_verify(${cleanEmail}, ${hashToken(token)}, ${expiresAt})
     `;
 
     // schedule email only when user exists
     if (rows.length) {
       sendPayload = {
         to: cleanEmail,
-        token: rows[0].token,
+        token,
         expiresAt: rows[0].expires_at,
       };
     }
@@ -60,9 +61,9 @@ export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageRes
     const ok = await prisma.$transaction(async (tx) => {
       await setGuestNullContext(tx);
 
-      // call db verify function
+      // the database keeps only the hash of the link
       const rows = await tx.$queryRaw<{ ok: boolean }[]>`
-      select cartlify.auth_verify_email(${cleanToken}::text) as ok
+      select cartlify.auth_verify_email(${hashToken(cleanToken)}::text) as ok
     `;
 
       return Boolean(rows[0]?.ok);

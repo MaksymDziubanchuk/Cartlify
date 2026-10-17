@@ -1,63 +1,19 @@
 import type { FastifyInstance } from 'fastify';
-import type { Prisma } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { prisma } from '@db/client.js';
-import { setAdminContext } from '@db/dbContext.service.js';
-import { hashPass } from '@helpers/safePass.js';
-
+import { signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { cookieHeader, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-
-const PASSWORD = 'password123';
+import { asAdmin } from '../../../helpers/db.js';
+import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
 
 let app: FastifyInstance;
 let csrf: Csrf;
+let user: TestUser;
 let userId: number;
-let email: string;
 
-const asAdmin = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>) =>
-  prisma.$transaction(async (tx) => {
-    await setAdminContext(tx);
-    return fn(tx);
-  });
-
-type SetCookie = { name: string; value: string; cleared: boolean };
-
-// the cookies a response sets; a cleared one comes back empty and already expired
-function setCookies(res: { headers: Record<string, unknown> }): Record<string, SetCookie> {
-  const lines = [res.headers['set-cookie']].flat().filter(Boolean).map(String);
-
-  return Object.fromEntries(
-    lines.map((line) => {
-      const [pair, ...attrs] = line.split(';').map((part) => part.trim());
-      const name = pair!.slice(0, pair!.indexOf('='));
-      const value = pair!.slice(pair!.indexOf('=') + 1);
-      const cleared =
-        value === '' || attrs.some((a) => /^max-age=0$/i.test(a) || /^expires=.*1970/i.test(a));
-
-      return [name, { name, value, cleared }];
-    }),
-  );
-}
-
-const cookieHeader = (cookies: Record<string, string>) =>
-  Object.entries(cookies)
-    .map(([name, value]) => `${name}=${value}`)
-    .join('; ');
-
-async function login() {
-  const res = await app.inject({
-    method: 'POST',
-    url: '/api/auth/login',
-    headers: withCsrf(csrf),
-    payload: { email, password: PASSWORD },
-  });
-  expect(res.statusCode).toBe(200);
-
-  const cookies = setCookies(res);
-  return { accessToken: cookies.accessToken!.value, refreshToken: cookies.refreshToken!.value };
-}
+const login = () => signIn(app, csrf, user);
 
 const refresh = (cookies: Record<string, string>) =>
   app.inject({
@@ -70,19 +26,13 @@ beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
 
-  email = `refresh-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
-  const passwordHash = await hashPass(PASSWORD);
-
-  ({ id: userId } = await asAdmin((tx) =>
-    tx.user.create({ data: { email, passwordHash, isVerified: true }, select: { id: true } }),
-  ));
+  user = await createUser();
+  userId = user.id;
 });
 
 afterAll(async () => {
-  // the login log is append-only and only root deletes users, so a user that has logged in
-  // stays (its email is unique to the run); its sessions are closed
   try {
-    await asAdmin((tx) => tx.userToken.deleteMany({ where: { userId } }));
+    await closeSessions([userId]);
   } finally {
     await stopApp();
   }

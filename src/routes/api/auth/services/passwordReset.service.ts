@@ -68,13 +68,8 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
         },
       });
 
-      // revoke all active refresh tokens for this user
-      const now = new Date();
-
-      await tx.userToken.updateMany({
-        where: { userId: u.id, type: 'REFRESH_TOKEN', usedAt: null },
-        data: { usedAt: now },
-      });
+      // the sessions stay: anyone can ask for a link for any email, they end only when
+      // the password is really reset (passwordReset below)
 
       // schedule email send
       sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt };

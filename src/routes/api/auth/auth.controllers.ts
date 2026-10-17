@@ -159,6 +159,14 @@ const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = asy
 // frontend page that finishes an oauth login, a placeholder until the frontend fixes its routes
 const OAUTH_CALLBACK_PAGE = '/auth/callback';
 
+// the codes a provider sends when the user declines: google and github use the standard one,
+// linkedin its own for a cancelled login and for refused access
+const OAUTH_DECLINED_ERRORS = new Set([
+  'access_denied',
+  'user_cancelled_login',
+  'user_cancelled_authorize',
+]);
+
 // the provider sends the browser to the api, and whatever happens it goes back to the frontend:
 // with the auth cookies on success, with ?error=<errorCode> otherwise
 async function finishOAuthLogin(
@@ -172,7 +180,7 @@ async function finishOAuthLogin(
     // the provider reports a refused or failed login in the query
     const providerError = (req.query as { error?: unknown }).error;
     if (typeof providerError === 'string') {
-      throw providerError === 'access_denied'
+      throw OAUTH_DECLINED_ERRORS.has(providerError)
         ? new UnauthorizedError('OAUTH_ACCESS_DENIED')
         : new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError });
     }
@@ -350,9 +358,11 @@ const postPasswordReset: ControllerRouter<
 };
 
 const postLogout: ControllerRouter<{}, LogoutBodyDto, {}, void> = async (req, reply) => {
-  const refreshToken = req.cookies?.refreshToken;
+  // the guard may have renewed the session in this request: the cookie then holds a spent token
+  const refreshToken = req.issuedRefreshToken ?? req.cookies?.refreshToken;
   const allDevices = req.body?.allDevices;
-  const args = pickDefined<LogoutDto>({}, { refreshToken, allDevices });
+  const { id, role } = req.user as User;
+  const args = pickDefined<LogoutDto>({ userId: Number(id), role }, { refreshToken, allDevices });
 
   // logout and clear cookies
   await authServices.logout(args);

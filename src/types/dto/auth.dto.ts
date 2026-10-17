@@ -169,6 +169,9 @@ export interface LogoutBodyDto {
 }
 
 export interface LogoutDto {
+  // the signed-in user who logs out, the only one whose sessions may end
+  userId: number;
+  role: Role;
   refreshToken?: string;
   allDevices?: boolean;
 }

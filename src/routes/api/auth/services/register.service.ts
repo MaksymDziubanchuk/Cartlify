@@ -3,6 +3,7 @@ import { getPgCode, prisma } from '@db/client.js';
 import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
 import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
+import { hashToken } from '@helpers/tokenHash.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
@@ -67,13 +68,14 @@ export async function register({
       // the insert above lets a guest create only a USER
       await migrateGuestDataToUser(tx, guestId, { id, role: 'USER' });
 
-      // store verify email token
+      // store the hash of the verify link, the link itself goes only to the mail:
+      // a copy of the database is not enough to verify someone else's email
       await tx.$executeRaw`
         insert into cartlify.user_tokens ("userId", type, token, "expiresAt")
         values (
           ${id},
           'VERIFY_EMAIL'::cartlify."UserTokenType",
-          ${token},
+          ${hashToken(token)},
           ${expiresAt}
         )
       `;

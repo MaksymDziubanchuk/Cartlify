@@ -49,34 +49,13 @@ export async function upsertOAuthUserByEmail(
     userNotFoundAfterConflictMsg,
   } = args;
 
-  // upsert oauth user by email
   await setAdminContext(tx);
 
-  const inserted = await tx.$queryRaw<OAuthUserRow[]>`
-    insert into cartlify.users (
-      email,
-      role,
-      "isVerified",
-      name,
-      "avatarUrl",
-      locale,
-      "authProvider",
-      "providerSub",
-      "passwordHash"
-    )
-    values (
-      ${email},
-      'USER'::cartlify."Role",
-      ${emailVerified},
-      ${name},
-      ${avatarUrl},
-      ${locale},
-      ${authProvider}::cartlify."AuthProvider",
-      ${providerSub},
-      null
-    )
-    on conflict (email) do nothing
-    returning
+  // the provider id is the account at the provider, its email can change there: a returning
+  // user is found by it and keeps the email we have (the row policies let only root change
+  // an email, taking the new address would need a system function of its own)
+  const known = await tx.$queryRaw<OAuthUserRow[]>`
+    select
       id,
       email,
       role,
@@ -89,10 +68,58 @@ export async function upsertOAuthUserByEmail(
       phone,
       "authProvider",
       "providerSub"
+    from cartlify.users
+    where "authProvider" = ${authProvider}::cartlify."AuthProvider"
+      and "providerSub" = ${providerSub}
+    limit 1
   `;
 
   // track current user row
-  let u = inserted[0];
+  let u = known[0];
+
+  // a provider account we have not seen: create the user, or find it by email below
+  if (!u) {
+    const inserted = await tx.$queryRaw<OAuthUserRow[]>`
+      insert into cartlify.users (
+        email,
+        role,
+        "isVerified",
+        name,
+        "avatarUrl",
+        locale,
+        "authProvider",
+        "providerSub",
+        "passwordHash"
+      )
+      values (
+        ${email},
+        'USER'::cartlify."Role",
+        ${emailVerified},
+        ${name},
+        ${avatarUrl},
+        ${locale},
+        ${authProvider}::cartlify."AuthProvider",
+        ${providerSub},
+        null
+      )
+      on conflict (email) do nothing
+      returning
+        id,
+        email,
+        role,
+        "isVerified",
+        "createdAt",
+        "updatedAt",
+        name,
+        "avatarUrl",
+        locale,
+        phone,
+        "authProvider",
+        "providerSub"
+    `;
+
+    u = inserted[0];
+  }
 
   if (!u) {
     const rows = await tx.$queryRaw<OAuthUserRow[]>`

@@ -24,12 +24,14 @@ import {
   unconfirmOrderFromStripeWebhook,
 } from './helpers/orderPaymentTx.helper.js';
 import { refundOrderPaymentFromStripeWebhook } from './helpers/orderPaymentRefund.helper.js';
+import { sendOrderPaidEmail } from './helpers/sendOrderPaidEmail.helper.js';
 
 import type Stripe from 'stripe';
 import type { HandleStripeWebhookDto, StripeWebhookResponseDto } from 'types/dto/payments.dto.js';
 
 type WebhookLogger = {
   warn: (obj: unknown, msg?: string) => void;
+  error: (obj: unknown, msg?: string) => void;
 };
 
 export async function handleStripeWebhook(
@@ -81,6 +83,10 @@ export async function handleStripeWebhook(
           if (isRedisReady()) {
             await cancelOrderReservationExpiry(orderId);
           }
+
+          // the payment is committed; the mail never fails the webhook, a failure is only logged.
+          // A repeated delivery answers ALREADY_PAID_SAME_PAYMENT, so the buyer gets one mail
+          await sendOrderPaidEmail(orderId, log);
 
           break;
         }

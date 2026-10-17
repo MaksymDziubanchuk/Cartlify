@@ -393,7 +393,9 @@ const setLinkedInCallbackSchema = {
 const setVerifyResendSchema = {
   operationId: 'resendVerificationEmail',
   summary: 'Resend verification email',
-  description: 'Sends a new email verification message to the provided email address.',
+  description:
+    'Sends a new email verification link to the provided email address; earlier links stop working. ' +
+    'The answer is the same for an unknown or already verified email, so it does not tell which emails have accounts.',
 
   body: {
     $ref: 'authResendVerifyBodySchema#',
@@ -434,7 +436,8 @@ const setVerifyResendSchema = {
 const authVerifyEmailSchema = {
   operationId: 'verifyUserEmail',
   summary: 'Verify email',
-  description: 'Verifies user email by verification token.',
+  description:
+    'Verifies user email by the token of the link from the mail. A link works once and only the newest one does.',
 
   querystring: {
     $ref: 'authVerifyEmailQuerySchema#',
@@ -467,7 +470,9 @@ const authVerifyEmailSchema = {
 const setPasswordForgotSchema = {
   operationId: 'requestPasswordReset',
   summary: 'Request password reset',
-  description: 'Creates a password reset request for the provided email address.',
+  description:
+    'Creates a password reset request for the provided email address and mails the link. ' +
+    'The sessions of the account stay: they end only when the password is actually reset.',
 
   body: {
     $ref: 'authPasswordForgotBodySchema#',
@@ -501,7 +506,7 @@ const setPasswordResetSchema = {
   operationId: 'resetPassword',
   summary: 'Reset password',
   description:
-    'Resets user password by password reset token. ' +
+    'Resets user password by password reset token and ends every session of the account. ' +
     'The new password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols.',
 
   querystring: {
@@ -547,7 +552,10 @@ const setPasswordResetSchema = {
 const setLogoutSchema = {
   operationId: 'logoutUser',
   summary: 'Logout user',
-  description: 'Revokes refresh token, clears authentication cookies and logs user out.',
+  description:
+    'Ends the session of this browser and clears the authentication cookies. ' +
+    'With allDevices every session of the signed-in user ends. ' +
+    'Works with an expired access cookie too: the refresh cookie identifies the session.',
   security: openApiSecurity.authCookies,
 
   body: {

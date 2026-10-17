@@ -1,0 +1,2 @@
+# mail templates go out as written: email clients are picky about markup
+src/services/email/templates/*.html

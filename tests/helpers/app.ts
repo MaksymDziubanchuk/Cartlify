@@ -22,3 +22,16 @@ export async function stopApp(): Promise<void> {
   await closeRedis();
   await prisma.$disconnect();
 }
+
+// a test that causes a server failure on purpose keeps the expected error line out of the output;
+// every request takes its logger from app.log when it starts, so the level holds for the requests inside
+export async function withoutErrorLog<T>(fn: () => Promise<T>): Promise<T> {
+  const level = app.log.level;
+  app.log.level = 'fatal';
+
+  try {
+    return await fn();
+  } finally {
+    app.log.level = level;
+  }
+}

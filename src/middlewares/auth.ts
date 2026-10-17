@@ -44,6 +44,7 @@ async function trySilentRefresh(
 
     // attach user to request
     req.user = { id: user.id, role: user.role };
+    req.issuedRefreshToken = newRefreshToken;
     return { ok: true };
   } catch (err) {
     // clear cookies on invalid refresh

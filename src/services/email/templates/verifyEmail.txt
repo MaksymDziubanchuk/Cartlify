@@ -1,0 +1,9 @@
+Verify your email for {{appName}}.
+
+{{#expiresInText}}This link is valid for {{expiresInText}}.
+
+{{/expiresInText}}Open this link:
+{{verifyUrl}}
+
+If you did not request this, ignore this email.
+Do not reply to this email.

@@ -16,12 +16,33 @@ import {
   revokeAllActiveRefreshTokens,
 } from './helpers/tokenRotation.helper.js';
 
+// end every session of the signed-in user, whatever refresh token the browser holds
+async function logoutEverywhere(userId: number, role: Role): Promise<MessageResponseDto> {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await setUserContext(tx, { userId, role });
+      await revokeAllActiveRefreshTokens(tx, { userId, at: new Date() });
+
+      return { message: 'ok' };
+    });
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    throw new InternalError({ reason: 'LOGOUT_SERVICE_UNEXPECTED' }, err);
+  }
+}
+
 // logout by refresh token
 // mark used or revoke all
 export async function logout({
+  userId,
+  role,
   refreshToken,
   allDevices = false,
 }: LogoutDto): Promise<MessageResponseDto> {
+  // every device: the sessions of the user end by the user id, no token is needed for that
+  if (allDevices) return logoutEverywhere(userId, role);
+
   const rt = refreshToken?.trim();
   if (!rt) return { message: 'ok' };
 
@@ -35,6 +56,10 @@ export async function logout({
     if (isAppError(err)) return { message: 'ok' };
     throw new InternalError({ reason: 'LOGOUT_VERIFY_UNEXPECTED' }, err);
   }
+
+  // a refresh token of someone else is not this user's session: it is left alone,
+  // the cookies of this browser are cleared all the same
+  if (payload.userId !== userId) return { message: 'ok' };
 
   const now = new Date();
   try {
@@ -55,12 +80,8 @@ export async function logout({
       const ok = verifyTokenHash(rt, tokenRow.token);
       if (!ok) return { message: 'ok' };
 
-      // revoke token(s) in db
-      if (allDevices) {
-        await revokeAllActiveRefreshTokens(tx, { userId: payload.userId, at: now });
-      } else {
-        await markRefreshTokenUsed(tx, { jwtId: tokenRow.id, at: now });
-      }
+      // end the session of this browser
+      await markRefreshTokenUsed(tx, { jwtId: tokenRow.id, at: now });
 
       return { message: 'ok' };
     });
