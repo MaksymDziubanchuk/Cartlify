@@ -7,10 +7,12 @@ import { setAdminContext } from '@db/dbContext.service.js';
 import { hashPass } from '@helpers/safePass.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 
 const PASSWORD = 'password123';
 
 let app: FastifyInstance;
+let csrf: Csrf;
 let userId: number;
 let email: string;
 
@@ -48,6 +50,7 @@ async function login() {
   const res = await app.inject({
     method: 'POST',
     url: '/api/auth/login',
+    headers: withCsrf(csrf),
     payload: { email, password: PASSWORD },
   });
   expect(res.statusCode).toBe(200);
@@ -60,11 +63,12 @@ const refresh = (cookies: Record<string, string>) =>
   app.inject({
     method: 'POST',
     url: '/api/auth/refresh',
-    headers: { cookie: cookieHeader(cookies) },
+    headers: withCsrf(csrf, cookieHeader(cookies)),
   });
 
 beforeAll(async () => {
   app = await startApp();
+  csrf = await getCsrf(app);
 
   email = `refresh-${Date.now()}-${Math.round(Math.random() * 1e6)}@example.com`;
   const passwordHash = await hashPass(PASSWORD);

@@ -125,8 +125,9 @@ What is important to state honestly:
 - Fastify route guards
 - database-level row-level security policies
 - per-transaction actor context passed into PostgreSQL
-- cookie-based auth flow with HttpOnly cookies; the frontend runs on its own subdomain of the same site (`shop.example.com` and `api.shop.example.com`), so cookies stay first-party with `SameSite=Lax`
+- cookie-based auth flow with HttpOnly cookies; the frontend and the API share one site (`shop.example.com` and `api.shop.example.com`), so the cookies are first-party and keep `SameSite=Lax`
 - CORS and the chat WebSocket handshake let in only `WEB_ORIGIN`; `/static` images may be shown on other origins
+- CSRF protection (double submit): `GET /api/auth/csrf` gives a token and keeps its secret in an httpOnly cookie, every `POST`, `PUT`, `PATCH` and `DELETE` sends the token in the `x-csrf-token` header or gets `403 CSRF_TOKEN_INVALID`; the Stripe webhook is exempt, it signs its own calls. Swagger UI adds the token by itself; in Postman or curl take a token first and keep the cookies between requests
 - centralized error normalization and request/response logging
 
 ### Catalog and product management
@@ -192,7 +193,8 @@ What is important to state honestly:
 - OpenAPI 3.0.3 specification generation
 - grouped route documentation by domain module
 - reusable response schemas for system endpoints
-- cookie-based security schemes for access token, refresh token, and guest id flows
+- cookie-based security schemes for access token, refresh token, and guest id flows, plus the `x-csrf-token` header on every route that changes data
+- Swagger UI calls the server it is served from and takes the CSRF token before such a request
 - documented system readiness responses for healthy and unavailable states
 - raw OpenAPI JSON endpoint for external inspection and tooling
 - Swagger documentation is deployed together with the running API
@@ -529,7 +531,7 @@ Current REST modules exposed by the application:
 
 Examples of implemented business endpoints:
 
-- auth: register, login, refresh, logout, verify, password reset, OAuth callbacks
+- auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
 - users: get/update current user, get user by id, root delete user
 - products: list, details, reviews, create/update/delete, upload images, bulk price update
 - categories: list, create, update, delete
@@ -574,7 +576,7 @@ The current documentation includes:
 - OpenAPI 3.0.3 specification
 - grouped REST modules through Swagger tags
 - reusable schemas for system and DTO responses
-- cookie-based auth schemes for access token, refresh token, and guest id
+- cookie-based auth schemes for access token, refresh token, and guest id, and the `x-csrf-token` header scheme
 - health, readiness, and project information endpoints
 - separate readiness responses for healthy and unavailable states
 

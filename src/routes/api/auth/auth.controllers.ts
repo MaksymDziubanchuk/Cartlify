@@ -34,6 +34,7 @@ import type {
   LogoutBodyDto,
   LogoutDto,
   RefreshDto,
+  CsrfTokenResponseDto,
 } from 'types/dto/auth.dto.js';
 
 import { authServices } from './auth.services.js';
@@ -53,6 +54,7 @@ import {
   setAccessTokenCookie,
   setRefreshTokenCookie,
   clearAuthCookies,
+  markAuthCookiesNoStore,
   shouldClearRefreshCookieOnRefreshError,
 } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 
@@ -393,6 +395,14 @@ const postRefresh: ControllerRouter<{}, {}, {}, void> = async (req, reply) => {
   return reply.code(204).send();
 };
 
+// the secret goes to an httpOnly cookie (made once, kept after), the token to the page;
+// csrf.plugin.ts checks the pair on every request that changes data
+const getCsrfToken: ControllerRouter<{}, {}, {}, CsrfTokenResponseDto> = async (_req, reply) => {
+  markAuthCookiesNoStore(reply);
+
+  return { csrfToken: reply.generateCsrf() };
+};
+
 export const authController = {
   postLogin,
   postRegister,
@@ -408,4 +418,5 @@ export const authController = {
   postPasswordReset,
   postLogout,
   postRefresh,
+  getCsrfToken,
 };

@@ -215,6 +215,17 @@ const authRefreshResponseSchema = {
   type: 'null',
 } as const;
 
+// the page keeps the token in memory and sends it in x-csrf-token, its secret stays in a cookie
+const authCsrfTokenResponseSchema = {
+  $id: 'authCsrfTokenResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    csrfToken: { type: 'string', minLength: 1 },
+  },
+  required: ['csrfToken'],
+} as const;
+
 export const authDtoSchemas = [
   authLoginBodySchema,
   authLoginResponseSchema,
@@ -231,4 +242,5 @@ export const authDtoSchemas = [
   authLogoutResponseSchema,
   authLogoutBodySchema,
   authRefreshResponseSchema,
+  authCsrfTokenResponseSchema,
 ];

@@ -5,6 +5,8 @@ import type { User } from './user.ts';
 declare module 'fastify' {
   interface FastifyContextConfig {
     rawBody?: boolean;
+    // false lets a route that changes data skip the csrf token check
+    csrf?: boolean;
   }
 
   interface FastifyRequest {

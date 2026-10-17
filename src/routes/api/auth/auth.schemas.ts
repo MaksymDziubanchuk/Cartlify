@@ -613,6 +613,39 @@ const setRefreshSchema = {
   },
 } satisfies FastifySchema;
 
+const csrfTokenResponseExample = {
+  csrfToken: 'csrf-token-example',
+};
+
+// Schema for the csrf token
+const setCsrfTokenSchema = {
+  operationId: 'getCsrfToken',
+  summary: 'Get CSRF token',
+  description:
+    'Gives the page a CSRF token and keeps its secret in an httpOnly cookie (csrf, __Host-csrf in production). ' +
+    'Every POST, PUT, PATCH and DELETE has to send the token in the x-csrf-token header, ' +
+    'otherwise it is refused with 403 CSRF_TOKEN_INVALID. The token stays valid as long as the cookie: ' +
+    'take it once when the page loads and again after a CSRF_TOKEN_INVALID answer. ' +
+    'Swagger UI takes it by itself before such a request.',
+
+  response: {
+    200: {
+      description: 'CSRF token for the x-csrf-token header; the secret cookie is set when missing.',
+      $ref: 'authCsrfTokenResponseSchema#',
+      examples: [csrfTokenResponseExample],
+    },
+
+    429: {
+      description: 'Too many requests.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while issuing the CSRF token.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group auth routes under the auth Swagger tag
 export const authSchema = withOpenApiTag(
   {
@@ -630,6 +663,7 @@ export const authSchema = withOpenApiTag(
     setPasswordResetSchema,
     setLogoutSchema,
     setRefreshSchema,
+    setCsrfTokenSchema,
   },
   'auth',
 );

@@ -32,6 +32,10 @@ beforeAll(async () => {
   app.get<{ Params: { status: string } }>('/plugin-error/:status', async (req) => {
     throw Object.assign(new Error('from a plugin'), { statusCode: Number(req.params.status) });
   });
+  // the errors @fastify/csrf-protection sends for a missing secret or a wrong token
+  app.get<{ Params: { code: string } }>('/csrf-error/:code', async (req) => {
+    throw Object.assign(new Error('csrf'), { statusCode: 403, code: req.params.code });
+  });
   // an app error of our own whose message is not the phrase of its status
   app.get('/custom-message', async () => {
     throw new AppError({ statusCode: 409, errorCode: 'CART_LOCKED', message: 'cart is locked' });
@@ -139,6 +143,21 @@ describe('errorNormalizer', () => {
     expect(res.statusCode).toBe(status);
     expect(res.json()).toMatchObject({ code: status, errorCode, message: STATUS_CODES[status] });
   });
+
+  // the frontend takes a new token on this code and repeats the request
+  it.each(['FST_CSRF_MISSING_SECRET', 'FST_CSRF_INVALID_TOKEN'])(
+    'answers %s from the csrf plugin with 403 CSRF_TOKEN_INVALID',
+    async (code) => {
+      const res = await app.inject({ method: 'GET', url: `/csrf-error/${code}` });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({
+        code: 403,
+        errorCode: 'CSRF_TOKEN_INVALID',
+        message: 'Forbidden',
+      });
+    },
+  );
 
   it('gives a client error status without a standard phrase the generic client answer', async () => {
     const res = await app.inject({ method: 'GET', url: '/plugin-error/499' });

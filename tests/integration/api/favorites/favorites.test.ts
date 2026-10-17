@@ -6,6 +6,7 @@ import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { getCsrf, withCsrf } from '../../../helpers/csrf.js';
 
 let app: FastifyInstance;
 let productId: number;
@@ -83,7 +84,7 @@ describe('GET /api/favorites', () => {
     const add = await app.inject({
       method: 'POST',
       url: `/api/favorites/${productId}`,
-      headers: { cookie },
+      headers: withCsrf(await getCsrf(app), cookie),
     });
     expect(add.statusCode).toBe(200);
 

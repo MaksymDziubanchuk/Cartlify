@@ -28,6 +28,7 @@ import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import openApiPlugin from './plugins/openapi.plugin.js';
+import csrfPlugin from './plugins/csrf.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 
 
@@ -78,6 +79,10 @@ app.register(helmet);
 
 // parse cookies
 app.register(fastifyCookie);
+
+// check the csrf token of requests that change data, needs the cookies parsed
+app.register(csrfPlugin);
+
 app.register(multipart, {
   // file upload limits
   limits: {
