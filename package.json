@@ -2,7 +2,8 @@
   "name": "cartlify",
   "type": "module",
   "version": "1.0.0",
-  "description": "Cartlify - E-commerce pet-project with Fastify, Prisma, PostgreSQL and Cloudinary.",
+  "private": true,
+  "description": "Cartlify - e-commerce backend on Fastify, Prisma and PostgreSQL with row-level security, Redis, Stripe and Cloudinary.",
   "main": "src/index.ts",
   "engines": {
     "node": "24.x"
@@ -35,7 +36,7 @@
     "cartlify"
   ],
   "author": "Maksym Dziubanchuk",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "dependencies": {
     "@fastify/cookie": "^11.1.3",
     "@fastify/cors": "^11.3.1",

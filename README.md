@@ -23,6 +23,7 @@ The repository currently contains a working REST API foundation, PostgreSQL hard
 - [API Documentation](#api-documentation)
 - [Realtime Chat / AI Bot](#realtime-chat--ai-bot)
 - [Production Notes](#production-notes)
+- [License](#license)
 
 ---
 
@@ -641,3 +642,11 @@ Planned production improvements:
 - Dockerized local/dev/prod workflow
 - AWS ECS/Fargate deployment target
 - broader monitoring, metrics, and operational reporting
+
+---
+
+## License
+
+Copyright (c) 2025-2026 Maksym Dziubanchuk. All rights reserved.
+
+The source code is public only to be viewed as part of the author's portfolio. It is not open source: using, copying, modifying, distributing or deploying it, in whole or in part, needs prior written permission from the author. See [LICENSE](LICENSE).
