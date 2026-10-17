@@ -53,7 +53,7 @@ describe('makePublicId', () => {
 
 describe('assertImageFile', () => {
   it.each(['image/jpeg', 'image/png', 'image/webp', ' IMAGE/PNG '])('accepts %s', (mimetype) => {
-    expect(() => assertImageFile({ mimetype, bytes: 1000 })).not.toThrow();
+    expect(() => assertImageFile({ mimetype })).not.toThrow();
   });
 
   it.each(['image/gif', 'image/svg+xml', 'application/pdf', '', null, undefined])(
@@ -67,27 +67,7 @@ describe('assertImageFile', () => {
     },
   );
 
-  it('accepts a file of exactly 5 MB and rejects one byte more', () => {
-    const limit = 5 * 1024 * 1024;
-
-    expect(() => assertImageFile({ mimetype: 'image/png', bytes: limit })).not.toThrow();
-    expect(
-      thrownBy(() => assertImageFile({ mimetype: 'image/png', bytes: limit + 1 })),
-    ).toMatchObject({
-      errorCode: 'IMAGE_TOO_LARGE',
-    });
-  });
-
-  it('reads the size from size when bytes is not given', () => {
-    expect(
-      thrownBy(() => assertImageFile({ mimetype: 'image/png', size: 6 * 1024 * 1024 })),
-    ).toMatchObject({ errorCode: 'IMAGE_TOO_LARGE' });
-  });
-
-  it('respects custom limits', () => {
-    expect(
-      thrownBy(() => assertImageFile({ mimetype: 'image/png', bytes: 11 }, { maxBytes: 10 })),
-    ).toMatchObject({ errorCode: 'IMAGE_TOO_LARGE' });
+  it('respects a custom list of types', () => {
     expect(() =>
       assertImageFile({ mimetype: 'image/gif' }, { allowedMimeTypes: ['image/gif'] }),
     ).not.toThrow();

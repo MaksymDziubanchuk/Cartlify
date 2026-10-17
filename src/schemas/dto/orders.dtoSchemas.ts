@@ -1,3 +1,5 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 const ordersOrderItemProductSchema = {
   $id: 'ordersOrderItemProductSchema',
   type: 'object',
@@ -80,7 +82,7 @@ const ordersUpdateStatusParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    orderId: idPathParam('the order'),
   },
   required: ['orderId'],
 } as const;
@@ -101,7 +103,7 @@ const ordersCurrentItemIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    itemId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    itemId: idPathParam('the order item'),
   },
   required: ['itemId'],
 } as const;
@@ -182,7 +184,7 @@ const ordersGetByIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    orderId: idPathParam('the order'),
   },
   required: ['orderId'],
 } as const;

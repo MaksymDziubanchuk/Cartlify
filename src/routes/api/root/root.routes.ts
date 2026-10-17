@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import validateId from '@middlewares/validateId.js';
 import { rootAdminsSchemas } from './root.schemas.js';
 import { rootAdminsController } from './root.controllers.js';
 
@@ -24,7 +25,7 @@ export default async function rootRouter(app: FastifyInstance) {
   app.delete(
     '/admins/:adminId',
     {
-      preHandler: [authGuard, requireRole(['ROOT'])],
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('adminId')],
       schema: rootAdminsSchemas.deleteRootAdminSchema,
     },
     rootAdminsController.deleteAdmin,

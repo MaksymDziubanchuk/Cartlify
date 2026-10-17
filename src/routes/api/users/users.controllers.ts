@@ -57,6 +57,10 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
             userId: id as UserId,
             avatar: { file: part.file, mimetype: part.mimetype, filename: part.filename },
           });
+          // the upload is awaited after the loop; if it fails sooner (a second avatar, a broken
+          // form) nobody listens yet, and a rejection without a listener stops the process.
+          // This marks the failure as seen, the await below still throws it
+          avatarUpload.catch(() => undefined);
         } else {
           // ignore unexpected file fields but drain their streams
           part.file.resume();

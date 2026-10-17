@@ -9,7 +9,6 @@ import type { AvatarUrls } from 'types/dto/users.dto.js';
 import type { ProductImagesUrls } from 'types/dto/products.dto.js';
 
 const DEFAULT_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const;
-const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 
 export type MakePublicIdOpts =
   | { kind: 'avatar'; userId: string | number }
@@ -18,19 +17,15 @@ export type MakePublicIdOpts =
 export type ImageFileMeta = {
   mimetype?: string | null;
   filename?: string | null;
-  size?: number | null;
-  bytes?: number | null;
 };
 
 export type AssertImageFileOpts = {
-  maxBytes?: number;
   allowedMimeTypes?: readonly string[];
 };
 
 export type UploadImageArgs = {
   file: Buffer | NodeJS.ReadableStream;
   mimetype: string;
-  bytes?: number;
   filename?: string;
   publicId?: string;
   tags?: string[];
@@ -208,20 +203,15 @@ export function makePublicId(opts: MakePublicIdOpts): string {
   return `products/${productId}/${imageKey}`;
 }
 
-// validate uploaded image metadata before calling cloudinary
-// enforce server-side limits even if client lies
+// check the type of an uploaded image before calling cloudinary, whatever the client says it is.
+// The size is not checked here: a file arrives as a stream, its size is known only after it is read,
+// so the multipart size limit (MAX_UPLOAD_SIZE_BYTES, answer 413) cuts a file that is too big
 export function assertImageFile(meta: ImageFileMeta, opts: AssertImageFileOpts = {}): void {
   const allowed = opts.allowedMimeTypes ?? DEFAULT_ALLOWED_MIME;
-  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const mimetype = (meta.mimetype ?? '').trim().toLowerCase();
   if (!mimetype || !allowed.includes(mimetype)) {
     throw new BadRequestError('IMAGE_TYPE_NOT_ALLOWED');
-  }
-
-  const bytes = meta.bytes ?? meta.size ?? null;
-  if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > maxBytes) {
-    throw new BadRequestError('IMAGE_TOO_LARGE');
   }
 }
 
@@ -275,10 +265,7 @@ async function uploadViaStream(
 
 // upload a new image and return stable identifiers for db storage
 export async function uploadImage(args: UploadImageArgs): Promise<UploadImageResult> {
-  assertImageFile({
-    mimetype: args.mimetype,
-    ...(args.bytes != null ? { bytes: args.bytes } : {}),
-  });
+  assertImageFile({ mimetype: args.mimetype });
 
   const options: UploadApiOptions = { resource_type: 'image' };
 
@@ -308,10 +295,7 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
 
 // overwrite an existing image by public_id and return the new versioned url
 export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadImageResult> {
-  assertImageFile({
-    mimetype: args.mimetype,
-    ...(args.bytes != null ? { bytes: args.bytes } : {}),
-  });
+  assertImageFile({ mimetype: args.mimetype });
 
   const options: UploadApiOptions = { resource_type: 'image' };
 

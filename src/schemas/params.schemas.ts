@@ -1,8 +1,10 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 export const userIdParamSchema = {
   $id: 'userIdParamSchema',
   type: 'object',
   properties: {
-    userId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    userId: idPathParam('the user'),
   },
   required: ['userId'],
   additionalProperties: false,
@@ -12,7 +14,7 @@ export const productIdParamSchema = {
   $id: 'productIdParamSchema',
   type: 'object',
   properties: {
-    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    productId: idPathParam('the product'),
   },
   required: ['productId'],
   additionalProperties: false,
@@ -22,7 +24,7 @@ export const reviewIdParamSchema = {
   $id: 'reviewIdParamSchema',
   type: 'object',
   properties: {
-    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    reviewId: idPathParam('the review'),
   },
   required: ['reviewId'],
   additionalProperties: false,
@@ -32,8 +34,8 @@ export const productReviewIdsParamSchema = {
   $id: 'productReviewIdsParamSchema',
   type: 'object',
   properties: {
-    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
-    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    productId: idPathParam('the product'),
+    reviewId: idPathParam('the review'),
   },
   required: ['productId', 'reviewId'],
   additionalProperties: false,
@@ -43,7 +45,7 @@ export const categoryIdParamSchema = {
   $id: 'categoryIdParamSchema',
   type: 'object',
   properties: {
-    categoryId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    categoryId: idPathParam('the category'),
   },
   required: ['categoryId'],
   additionalProperties: false,
@@ -53,7 +55,7 @@ export const orderIdParamSchema = {
   $id: 'orderIdParamSchema',
   type: 'object',
   properties: {
-    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    orderId: idPathParam('the order'),
   },
   required: ['orderId'],
   additionalProperties: false,
@@ -63,7 +65,7 @@ export const adminIdParamSchema = {
   $id: 'adminIdParamSchema',
   type: 'object',
   properties: {
-    adminId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    adminId: idPathParam('the admin'),
   },
   required: ['adminId'],
   additionalProperties: false,

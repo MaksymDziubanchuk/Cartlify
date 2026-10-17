@@ -1,3 +1,5 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 const favoritesGetQuerySchema = {
   $id: 'favoritesGetQuerySchema',
   type: 'object',
@@ -37,7 +39,7 @@ const favoritesAddParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    productId: idPathParam('the product'),
   },
   required: ['productId'],
 } as const;
@@ -58,7 +60,7 @@ const favoritesDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    productId: idPathParam('the product'),
   },
   required: ['productId'],
 } as const;

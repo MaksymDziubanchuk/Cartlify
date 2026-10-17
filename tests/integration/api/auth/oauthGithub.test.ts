@@ -153,6 +153,17 @@ describe('GET /api/auth/github/callback', () => {
     });
   });
 
+  // a profile name is at most 100 characters; a long name from the provider must not stop the login
+  it('cuts a name over 100 characters instead of refusing the login', async () => {
+    const gh = account({ name: 'N'.repeat(150) });
+
+    const res = await loginWith(gh);
+
+    expect(landing(res).error).toBeNull();
+    const me = await getMe(app, sessionCookie(cookieJar(res)));
+    expect(me.json().name).toBe('N'.repeat(100));
+  });
+
   it('signs a returning user into the same account', async () => {
     const gh = account();
     await loginWith(gh);

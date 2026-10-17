@@ -9,6 +9,7 @@ import {
 } from '@utils/errors.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import {
   makePublicId,
   overwriteImage,
@@ -204,23 +205,23 @@ async function updateMe({
     return undefined;
   };
 
-  const normalizePhone = (input: string): string => {
-    const cleaned = input.trim().replace(/[\s()-]/g, '');
-    if (!/^\+[1-9]\d{7,14}$/.test(cleaned)) throw new BadRequestError('PHONE_INVALID');
-    return cleaned;
-  };
-
   // build partial update payload for db
   const data: Record<string, unknown> = {};
 
+  // a json body is checked against the limit by its schema; a form is not, so the limit is
+  // checked here for both, on the text as it was sent
   const nameRaw = readStr(name);
   if (nameRaw !== undefined) {
+    if (textLength(nameRaw) > PROFILE_TEXT_MAX_LENGTH) throw new BadRequestError('NAME_TOO_LONG');
     const v = nameRaw.trim();
     data.name = v ? v : null;
   }
 
   const localeRaw = readStr(locale);
   if (localeRaw !== undefined) {
+    if (textLength(localeRaw) > PROFILE_TEXT_MAX_LENGTH) {
+      throw new BadRequestError('LOCALE_TOO_LONG');
+    }
     const v = localeRaw.trim();
     data.locale = v ? v : null;
   }
@@ -231,8 +232,10 @@ async function updateMe({
   } else {
     const phoneRaw = readStr(phone);
     if (phoneRaw !== undefined) {
-      const v = phoneRaw.trim();
-      data.phone = v ? normalizePhone(v) : null;
+      // the same rule as the schema of a json body: empty removes the phone, anything else is
+      // taken as sent or refused; a form does not get a number cleaned for it
+      if (phoneRaw !== '' && !isPhone(phoneRaw)) throw new BadRequestError('PHONE_INVALID');
+      data.phone = phoneRaw === '' ? null : phoneRaw;
     }
   }
 

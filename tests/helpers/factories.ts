@@ -1,5 +1,7 @@
 import type { AuthProvider, Role } from '@prisma/client';
 
+import { prisma } from '@db/client.js';
+import { setUserContext } from '@db/dbContext.service.js';
 import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashPass } from '@helpers/safePass.js';
 import { hashToken } from '@helpers/tokenHash.js';
@@ -13,11 +15,13 @@ export const uniqueTag = () => `${Date.now()}-${process.pid}-${++counter}`;
 
 export const uniqueEmail = (prefix: string) => `${prefix}-${uniqueTag()}@example.com`;
 
-export type TestUser = { id: number; email: string; password: string };
+export type TestUser = { id: number; email: string; password: string; role: Role };
 
 // a user the way the app keeps one; a local user gets a password, an oauth one gets a provider id.
 // A user that has logged in cannot be deleted (the login log is append-only and only root
-// deletes users), so these rows stay; their emails are unique to the run
+// deletes users), so these rows stay; their emails are unique to the run.
+// Only root creates an admin and nobody creates a root through rls, so a user with such a role
+// is made as a user and promoted the way the root route promotes one
 export async function createUser(
   opts: {
     email?: string;
@@ -27,11 +31,16 @@ export async function createUser(
     authProvider?: AuthProvider;
     providerSub?: string;
     name?: string;
+    locale?: string;
+    phone?: string;
+    avatarUrl?: string;
+    publicId?: string;
   } = {},
 ): Promise<TestUser> {
   const email = opts.email ?? uniqueEmail('user');
   const password = opts.password ?? 'password123';
   const authProvider = opts.authProvider ?? 'LOCAL';
+  const role = opts.role ?? 'USER';
   const passwordHash = authProvider === 'LOCAL' ? await hashPass(password) : null;
 
   const { id } = await asAdmin((tx) =>
@@ -40,16 +49,60 @@ export async function createUser(
         email,
         passwordHash,
         isVerified: opts.isVerified ?? true,
-        role: opts.role ?? 'USER',
+        role: 'USER',
         authProvider,
         providerSub: opts.providerSub ?? null,
         name: opts.name ?? null,
+        locale: opts.locale ?? null,
+        phone: opts.phone ?? null,
+        avatarUrl: opts.avatarUrl ?? null,
+        publicId: opts.publicId ?? null,
       },
       select: { id: true },
     }),
   );
 
-  return { id, email, password };
+  if (role !== 'USER') {
+    await prisma.$transaction(async (tx) => {
+      await setUserContext(tx, { userId: id, role: 'ROOT' });
+      await tx.user.update({ where: { id }, data: { role } });
+    });
+  }
+
+  return { id, email, password, role };
+}
+
+export type TestReview = { id: number };
+
+// a review the way a user writes one: under their own context, one per user and product.
+// updatedAt is set by a test that needs reviews in a known order
+export function createReview(
+  userId: number,
+  productId: number,
+  opts: { rating?: number | null; comment?: string | null; updatedAt?: Date } = {},
+): Promise<TestReview> {
+  return prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId, role: 'USER' });
+
+    return tx.review.create({
+      data: {
+        userId,
+        productId,
+        rating: opts.rating === undefined ? 5 : opts.rating,
+        comment: opts.comment ?? null,
+        ...(opts.updatedAt ? { updatedAt: opts.updatedAt } : {}),
+      },
+      select: { id: true },
+    });
+  });
+}
+
+// a vote of a user on a review; the database counts it into the review
+export function createReviewVote(userId: number, reviewId: number, action: 'UP' | 'DOWN') {
+  return prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId, role: 'USER' });
+    await tx.reviewVote.create({ data: { userId, reviewId, action } });
+  });
 }
 
 // closes every session of the users, the part of a user a test can clean up

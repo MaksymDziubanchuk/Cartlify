@@ -183,6 +183,10 @@ describe('POST /api/auth/register', () => {
     ['a password under 6 characters', { email: 'someone@example.com', password: '12345' }],
     ['a password over 64 characters', { email: 'someone@example.com', password: 'a'.repeat(65) }],
     ['a password with non-ascii letters', { email: 'someone@example.com', password: 'pässwörd' }],
+    [
+      'a name over 100 characters',
+      { email: 'someone@example.com', password: 'password123', name: 'N'.repeat(101) },
+    ],
   ])('refuses %s', async (_case, body) => {
     const res = await register(body);
 

@@ -27,6 +27,16 @@ const keepExamplesNextToRef = (node: unknown): unknown => {
 const isSchemaNode = (value: unknown): value is Record<string, unknown> =>
     typeof value === 'object' && value !== null && !Array.isArray(value);
 
+// A route that takes a multipart form besides its json body lists both media types, each with its
+// own schema (a file field cannot be part of the json one). For documentation only: validation
+// keeps the body schema of the route, a request with a form does not pass through it.
+const withFormBody = (body: unknown, formSchemaId: string): unknown => ({
+    content: {
+        'application/json': { schema: keepExamplesNextToRef(body) },
+        'multipart/form-data': { schema: { $ref: `${formSchemaId}#` } },
+    },
+});
+
 // Parameters are documented one by one, so a single example object is spread over its properties.
 // The referenced schema is inlined for documentation only.
 const spreadExampleOverParams = (
@@ -137,7 +147,13 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
                     ...(schema.headers
                         ? { headers: spreadExampleOverParams(schema.headers, getSchema) }
                         : {}),
-                    ...(schema.body ? { body: keepExamplesNextToRef(schema.body) } : {}),
+                    ...(schema.body
+                        ? {
+                              body: route.config?.formBodySchema
+                                  ? withFormBody(schema.body, route.config.formBodySchema)
+                                  : keepExamplesNextToRef(schema.body),
+                          }
+                        : {}),
                     ...(response
                         ? {
                               response: Object.fromEntries(

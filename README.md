@@ -108,7 +108,7 @@ What is important to state honestly:
 
 ### Authentication and user flows
 
-- user registration
+- user registration (the name is optional, up to 100 characters)
 - email verification flow
 - resend verification email: a new link each time, earlier links stop working; the links are stored only as hashes
 - login / logout: logout ends the session of this browser, `allDevices` ends every session of the user
@@ -117,7 +117,7 @@ What is important to state honestly:
 - OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
-- user profile read/update endpoints
+- user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
 - login logging
 
 ### Authorization and security
@@ -137,7 +137,7 @@ What is important to state honestly:
 - product listing with filtering / pagination helpers
 - product details endpoint
 - admin product CRUD
-- product image upload flow
+- product image upload flow (jpeg, png or webp, up to 5 MB per file)
 - product category reassignment
 - bulk price update endpoint for admin/root
 - product view/popularity-related fields in the data model

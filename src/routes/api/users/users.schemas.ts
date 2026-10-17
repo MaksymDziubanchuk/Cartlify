@@ -1,8 +1,12 @@
 import type { FastifySchema } from 'fastify';
 
+import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+
+// the biggest avatar file in megabytes, for the texts of the docs
+const MAX_AVATAR_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
 
 const userReviewExample = {
   id: 1,
@@ -60,7 +64,7 @@ const userIdParamsExample = {
 };
 
 const deleteUserResponseExample = {
-  message: 'User deleted successfully.',
+  message: 'user deleted',
 };
 
 // Schema for current authenticated user lookup
@@ -76,28 +80,13 @@ const getMeSchema = {
       examples: [userResponseExample],
     },
 
-    400: {
-      description: 'Invalid current user request.',
-      $ref: 'errorResponseSchema#',
-    },
     401: {
-      description: 'Authentication is required to read the current user profile.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to read this profile.',
-      $ref: 'errorResponseSchema#',
-    },
-    404: {
-      description: 'Current user was not found.',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'Current user state conflicts with this request.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Current user request failed validation.',
+      description: 'A guest has no profile: only a signed-in user reads it (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -111,7 +100,12 @@ const getMeSchema = {
 const patchMeSchema = {
   operationId: 'updateCurrentUser',
   summary: 'Update current user',
-  description: 'Updates the currently authenticated user profile.',
+  description:
+    'Updates the currently authenticated user profile. Takes a JSON body, or a multipart form ' +
+    'when the request carries an avatar file. The name and the locale are up to 100 characters; ' +
+    'the phone is an international number such as +380501234567, with no spaces, brackets or ' +
+    'dashes, in a JSON body and in a form alike; an empty value removes the name, the locale ' +
+    `or the phone. An avatar file is up to ${MAX_AVATAR_MB} MB.`,
 
   body: {
     $ref: 'usersUpdateMeBodySchema#',
@@ -132,23 +126,24 @@ const patchMeSchema = {
     },
 
     400: {
-      description: 'Invalid current user update request.',
+      description:
+        'Invalid current user update request: nothing to change, a name or locale over 100 ' +
+        'characters, a wrong phone or a wrong avatar file.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to update the current user profile.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to update this profile.',
+      description: 'A guest has no profile to update (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
-    409: {
-      description: 'Current user update conflicts with existing data.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Current user update payload failed validation.',
+    413: {
+      description:
+        `The avatar file is over ${MAX_AVATAR_MB} MB (PAYLOAD_TOO_LARGE). Nothing was changed: ` +
+        'the page tells the user to pick a smaller image and sends the form again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -179,15 +174,17 @@ const getUserByIdSchema = {
     },
 
     400: {
-      description: 'Invalid user id.',
+      description: 'Invalid user id: a whole number from 1 to 2147483647 is expected.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to read this user profile.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to read this user profile.',
+      description:
+        'A guest cannot read profiles: only a signed-in user, admin or root can (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     404: {
@@ -205,7 +202,12 @@ const getUserByIdSchema = {
 const deleteUserByIdSchema = {
   operationId: 'deleteUserById',
   summary: 'Delete user by id',
-  description: 'Deletes a user account by id. This operation is restricted to root users.',
+  description:
+    'Deletes a user account by id. Restricted to root. The row stays, emptied: the email is replaced ' +
+    'by a deleted one, the password, provider link, name, avatar, locale and phone are removed, and ' +
+    'the refresh tokens of the user are removed. Orders, reviews and logs keep pointing at the account. ' +
+    'An access token cannot be taken back: the user keeps access until their current access token ' +
+    'expires, and the session cannot be renewed after that.',
 
   params: {
     $ref: 'usersGetByIdParamsSchema#',
@@ -220,15 +222,17 @@ const deleteUserByIdSchema = {
     },
 
     400: {
-      description: 'Invalid user deletion request.',
+      description:
+        'Invalid user deletion request: the id must be a whole number from 1 to 2147483647.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to delete a user.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Only root users can delete users.',
+      description: 'Only root can delete users (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     404: {
@@ -236,11 +240,7 @@ const deleteUserByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'User cannot be deleted because of the current account state.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'User deletion request failed validation.',
+      description: 'A root cannot delete their own account (ROOT_CANNOT_DELETE_SELF).',
       $ref: 'errorResponseSchema#',
     },
     500: {

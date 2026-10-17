@@ -22,6 +22,8 @@ export default async function usersRouter(app: FastifyInstance) {
         if (req.isMultipart()) (req as any).body = {};
       },
       schema: usersSchema.patchMeSchema,
+      // the swagger lists the form with the avatar file next to the json body
+      config: { formBodySchema: 'usersUpdateMeFormSchema' },
     },
     usersController.patchMe,
   );

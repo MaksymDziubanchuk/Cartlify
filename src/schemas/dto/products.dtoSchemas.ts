@@ -1,3 +1,5 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 const getAllProductsQuerySchema = {
   $id: 'getAllProductsQuerySchema',
   type: 'object',
@@ -234,8 +236,8 @@ const deleteProductReviewParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
-    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    productId: idPathParam('the product'),
+    reviewId: idPathParam('the review'),
   },
   required: ['productId', 'reviewId'],
 } as const;
@@ -340,7 +342,7 @@ const productsUpdateCategoryParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    productId: idPathParam('the product'),
   },
   required: ['productId'],
 } as const;
