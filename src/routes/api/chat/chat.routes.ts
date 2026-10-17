@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import requireWebOrigin from '@middlewares/requireWebOrigin.js';
 import { chatsSchemas } from './chat.schemas.js';
 import { chatController } from './chat.controllers.js';
 import { chatWsController } from './ws/chatWs.controller.js';
@@ -46,7 +47,8 @@ export default async function chatRouter(app: FastifyInstance) {
     '/ws',
     {
       websocket: true,
-      preHandler: [authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
+      // the origin check goes first: nothing is issued to a foreign page
+      preHandler: [requireWebOrigin, authGuard, requireRole(['GUEST', 'USER', 'ADMIN', 'ROOT'])],
     },
     chatWsController.connectChatWs,
   );

@@ -1,3 +1,4 @@
+import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { ControllerRouter } from 'types/controller.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { User } from 'types/user.js';
@@ -33,7 +34,6 @@ import type {
   LogoutBodyDto,
   LogoutDto,
   RefreshDto,
-  RefreshResponseDto,
 } from 'types/dto/auth.dto.js';
 
 import { authServices } from './auth.services.js';
@@ -43,7 +43,9 @@ import {
   BadRequestError,
   InternalError,
   UnauthorizedError,
+  isAppError,
 } from '@utils/errors.js';
+import { webUrl } from '@helpers/webOrigin.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { getTtl, verifyRefreshToken } from '@utils/jwt.js';
 import {
@@ -51,6 +53,7 @@ import {
   setAccessTokenCookie,
   setRefreshTokenCookie,
   clearAuthCookies,
+  shouldClearRefreshCookieOnRefreshError,
 } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 
 const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDto> = async (
@@ -151,48 +154,67 @@ const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = asy
   return;
 };
 
-const getGoogleCallback: ControllerRouter<
-  {},
-  {},
-  GoogleCallbackQueryDto,
-  LoginResponseDto
-> = async (req, reply) => {
+// frontend page that finishes an oauth login, a placeholder until the frontend fixes its routes
+const OAUTH_CALLBACK_PAGE = '/auth/callback';
+
+// the provider sends the browser to the api, and whatever happens it goes back to the frontend:
+// with the auth cookies on success, with ?error=<errorCode> otherwise
+async function finishOAuthLogin(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  login: () => Promise<{ accessToken: string; refreshToken: string }>,
+): Promise<void> {
+  let error: string | undefined;
+
+  try {
+    // the provider reports a refused or failed login in the query
+    const providerError = (req.query as { error?: unknown }).error;
+    if (typeof providerError === 'string') {
+      throw providerError === 'access_denied'
+        ? new UnauthorizedError('OAUTH_ACCESS_DENIED')
+        : new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError });
+    }
+
+    const { accessToken, refreshToken } = await login();
+
+    // derive ttl from refresh
+    const { rememberMe } = verifyRefreshToken(refreshToken);
+
+    // set oauth auth cookies
+    clearGuestIdCookie(reply);
+    setAccessTokenCookie(reply, accessToken, getTtl(rememberMe, 'access') as number);
+    setRefreshTokenCookie(reply, refreshToken, getTtl(rememberMe, 'refresh') as number);
+  } catch (err) {
+    // the page gets the reason of a refused login; a server failure stays in the log
+    if (isAppError(err) && err.statusCode < 500) {
+      error = err.errorCode;
+      req.log.info({ errorCode: error }, 'oauth login rejected');
+    } else {
+      error = 'OAUTH_LOGIN_FAILED';
+      req.log.error({ err }, 'oauth login failed');
+    }
+  }
+
+  reply.code(302).redirect(webUrl(OAUTH_CALLBACK_PAGE, error ? { error } : {}));
+}
+
+const getGoogleCallback: ControllerRouter<{}, {}, GoogleCallbackQueryDto, void> = async (
+  req,
+  reply,
+) => {
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
 
-  const q = req.query;
+  await finishOAuthLogin(req, reply, async () => {
+    const { code, state } = req.query as GoogleCallbackSuccessQueryDto;
+    // the guest of this browser, it has to be the one who started the login
+    const { id: guestId, role } = req.user as User;
 
-  // handle oauth error callback
-  if ('error' in q && typeof q.error === 'string') {
-    const code = q.error;
+    // build google callback dto
+    const args = pickDefined<GoogleCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
 
-    if (code === 'access_denied') {
-      throw new UnauthorizedError('OAUTH_ACCESS_DENIED');
-    }
-
-    throw new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError: code });
-  }
-
-  const { code, state } = q as GoogleCallbackSuccessQueryDto;
-  // the guest of this browser, it has to be the one who started the login
-  const { id: guestId, role } = req.user as User;
-
-  // build google callback dto
-  const args = pickDefined<GoogleCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
-
-  const { result, accessToken, refreshToken } = await authServices.googleCallback(args);
-
-  // derive ttl from refresh
-  const { rememberMe } = verifyRefreshToken(refreshToken);
-  const refreshTtl = getTtl(rememberMe, 'refresh');
-  const accessTtl = getTtl(rememberMe, 'access');
-
-  // set oauth auth cookies
-  clearGuestIdCookie(reply);
-  setAccessTokenCookie(reply, accessToken, accessTtl as number);
-  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
-
-  return result;
+    return authServices.googleCallback(args);
+  });
 };
 
 const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = async (req, reply) => {
@@ -215,48 +237,23 @@ const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = asy
   return;
 };
 
-const getGithubCallback: ControllerRouter<
-  {},
-  {},
-  GithubCallbackQueryDto,
-  LoginResponseDto
-> = async (req, reply) => {
+const getGithubCallback: ControllerRouter<{}, {}, GithubCallbackQueryDto, void> = async (
+  req,
+  reply,
+) => {
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
 
-  const q = req.query;
+  await finishOAuthLogin(req, reply, async () => {
+    const { code, state } = req.query as GithubCallbackSuccessQueryDto;
+    // the guest of this browser, it has to be the one who started the login
+    const { id: guestId, role } = req.user as User;
 
-  // handle oauth error callback
-  if ('error' in q && typeof q.error === 'string') {
-    const code = q.error;
+    // build github callback dto
+    const args = pickDefined<GithubCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
 
-    if (code === 'access_denied') {
-      throw new UnauthorizedError('OAUTH_ACCESS_DENIED');
-    }
-
-    throw new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError: code });
-  }
-
-  const { code, state } = q as GithubCallbackSuccessQueryDto;
-  // the guest of this browser, it has to be the one who started the login
-  const { id: guestId, role } = req.user as User;
-
-  // build github callback dto
-  const args = pickDefined<GithubCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
-
-  const { result, accessToken, refreshToken } = await authServices.githubCallback(args);
-
-  // derive ttl from refresh
-  const { rememberMe } = verifyRefreshToken(refreshToken);
-  const refreshTtl = getTtl(rememberMe, 'refresh');
-  const accessTtl = getTtl(rememberMe, 'access');
-
-  // set oauth auth cookies
-  clearGuestIdCookie(reply);
-  setAccessTokenCookie(reply, accessToken, accessTtl as number);
-  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
-
-  return result;
+    return authServices.githubCallback(args);
+  });
 };
 
 const getLinkedInStart: ControllerRouter<{}, {}, {}, LinkedInStartResponseDto> = async (
@@ -282,48 +279,26 @@ const getLinkedInStart: ControllerRouter<{}, {}, {}, LinkedInStartResponseDto> =
   return;
 };
 
-const getLinkedInCallback: ControllerRouter<
-  {},
-  {},
-  LinkedInCallbackQueryDto,
-  LoginResponseDto
-> = async (req, reply) => {
+const getLinkedInCallback: ControllerRouter<{}, {}, LinkedInCallbackQueryDto, void> = async (
+  req,
+  reply,
+) => {
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
 
-  const q = req.query;
+  await finishOAuthLogin(req, reply, async () => {
+    const { code, state } = req.query as LinkedInCallbackSuccessQueryDto;
+    // the guest of this browser, it has to be the one who started the login
+    const { id: guestId, role } = req.user as User;
 
-  // handle oauth error callback
-  if ('error' in q && typeof q.error === 'string') {
-    const code = q.error;
+    // build linkedin callback dto
+    const args = pickDefined<LinkedInCallbackDto>(
+      { code, state, guestId, role },
+      { ip, userAgent },
+    );
 
-    if (code === 'access_denied') {
-      throw new UnauthorizedError('OAUTH_ACCESS_DENIED');
-    }
-
-    throw new BadRequestError('OAUTH_CALLBACK_ERROR', { providerError: code });
-  }
-
-  const { code, state } = q as LinkedInCallbackSuccessQueryDto;
-  // the guest of this browser, it has to be the one who started the login
-  const { id: guestId, role } = req.user as User;
-
-  // build linkedin callback dto
-  const args = pickDefined<LinkedInCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
-
-  const { result, accessToken, refreshToken } = await authServices.linkedInCallback(args);
-
-  // derive ttl from refresh
-  const { rememberMe } = verifyRefreshToken(refreshToken);
-  const refreshTtl = getTtl(rememberMe, 'refresh');
-  const accessTtl = getTtl(rememberMe, 'access');
-
-  // set oauth auth cookies
-  clearGuestIdCookie(reply);
-  setAccessTokenCookie(reply, accessToken, accessTtl as number);
-  setRefreshTokenCookie(reply, refreshToken, refreshTtl as number);
-
-  return result;
+    return authServices.linkedInCallback(args);
+  });
 };
 
 const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
@@ -384,7 +359,9 @@ const postLogout: ControllerRouter<{}, LogoutBodyDto, {}, void> = async (req, re
   return reply.code(204).send();
 };
 
-const postRefresh: ControllerRouter<{}, {}, {}, RefreshResponseDto> = async (req, reply) => {
+// the route runs without authGuard: with an expired access cookie the guard would rotate
+// the refresh token itself, and the rotation here would then present an already used one
+const postRefresh: ControllerRouter<{}, {}, {}, void> = async (req, reply) => {
   const refreshToken = req.cookies?.refreshToken;
   if (!refreshToken) throw new BadRequestError('REFRESH_TOKEN_REQUIRED');
 
@@ -395,18 +372,25 @@ const postRefresh: ControllerRouter<{}, {}, {}, RefreshResponseDto> = async (req
     {},
   );
 
-  // rotate tokens from refresh cookie
-  const {
-    result,
-    refreshToken: newRefreshToken,
-    refreshMaxAgeSec,
-  } = await authServices.refresh(args);
-  const { accessToken } = result;
+  try {
+    // rotate tokens from refresh cookie
+    const {
+      accessToken,
+      refreshToken: newRefreshToken,
+      refreshMaxAgeSec,
+      rememberMe,
+    } = await authServices.refresh(args);
 
-  // store new refresh cookie
-  setRefreshTokenCookie(reply, newRefreshToken, refreshMaxAgeSec);
+    // both tokens go to httpOnly cookies only, page scripts never see them
+    setAccessTokenCookie(reply, accessToken, getTtl(rememberMe, 'access') as number);
+    setRefreshTokenCookie(reply, newRefreshToken, refreshMaxAgeSec);
+  } catch (err) {
+    // an invalid, expired or reused refresh token will not work again: drop both cookies
+    if (shouldClearRefreshCookieOnRefreshError(err)) clearAuthCookies(reply);
+    throw err;
+  }
 
-  return { accessToken };
+  return reply.code(204).send();
 };
 
 export const authController = {

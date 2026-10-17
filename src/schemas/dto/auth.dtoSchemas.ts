@@ -69,7 +69,8 @@ const authGoogleCallbackQuerySchema = {
     error: { type: 'string' },
     error_description: { type: 'string' },
   },
-  required: ['code', 'state'],
+  // a provider sends either the code with the state, or an error when the login was refused
+  anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
 } as const;
 
 const authGithubCallbackQuerySchema = {
@@ -84,7 +85,8 @@ const authGithubCallbackQuerySchema = {
     error_description: { type: 'string' },
     error_uri: { type: 'string' },
   },
-  required: ['code', 'state'],
+  // a provider sends either the code with the state, or an error when the login was refused
+  anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
 } as const;
 
 const authLinkedInCallbackQuerySchema = {
@@ -99,7 +101,8 @@ const authLinkedInCallbackQuerySchema = {
     error_description: { type: 'string' },
     error_uri: { type: 'string' },
   },
-  required: ['code', 'state'],
+  // a provider sends either the code with the state, or an error when the login was refused
+  anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
 } as const;
 
 const authRegisterBodySchema = {
@@ -206,14 +209,10 @@ const authLogoutResponseSchema = {
   type: 'null',
 } as const;
 
+// both tokens travel in cookies only, the body stays empty
 const authRefreshResponseSchema = {
   $id: 'authRefreshResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    accessToken: { type: 'string' },
-  },
-  required: ['accessToken'],
+  type: 'null',
 } as const;
 
 export const authDtoSchemas = [

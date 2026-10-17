@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import env from '@config/env.js';
-import { AppError, InternalError } from '@utils/errors.js';
+import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
+import { webUrl } from '@helpers/webOrigin.js';
 
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildResetPasswordTemplate } from '@services/email/templates/resetPassword.template.js';
@@ -65,15 +65,7 @@ export async function sendResetPasswordEmail(
 }
 
 // frontend reset entrypoint
+// a mail from production must link to the live site, a localhost link opens nothing there
 function buildWebResetUrl(token: string): string {
-  const origin = (env.WEB_ORIGIN || '').trim();
-
-  // a mail from production must link to the live site, a localhost link opens nothing there
-  if (!origin && env.NODE_ENV === 'production') {
-    throw new InternalError({ reason: 'WEB_ORIGIN_REQUIRED' });
-  }
-
-  const url = new URL('/web/auth/reset', origin || 'http://localhost:3000');
-  url.searchParams.set('token', token);
-  return url.toString();
+  return webUrl('/web/auth/reset', { token });
 }

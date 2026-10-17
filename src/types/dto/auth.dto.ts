@@ -176,7 +176,3 @@ export interface LogoutDto {
 export interface RefreshDto {
   refreshToken: string;
 }
-
-export interface RefreshResponseDto {
-  accessToken: string;
-}

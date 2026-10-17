@@ -111,9 +111,9 @@ What is important to state honestly:
 - email verification flow
 - resend verification email
 - login / logout
-- refresh token rotation
+- refresh token rotation: `POST /api/auth/refresh` answers 204 and sets both tokens as cookies, no token in the body
 - forgot password / reset password
-- OAuth entry points and callbacks for Google, GitHub, and LinkedIn
+- OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
 - user profile read/update endpoints
@@ -125,7 +125,8 @@ What is important to state honestly:
 - Fastify route guards
 - database-level row-level security policies
 - per-transaction actor context passed into PostgreSQL
-- cookie-based auth flow with HttpOnly cookies
+- cookie-based auth flow with HttpOnly cookies; the frontend runs on its own subdomain of the same site (`shop.example.com` and `api.shop.example.com`), so cookies stay first-party with `SameSite=Lax`
+- CORS and the chat WebSocket handshake let in only `WEB_ORIGIN`; `/static` images may be shown on other origins
 - centralized error normalization and request/response logging
 
 ### Catalog and product management
@@ -284,7 +285,9 @@ A practical local example:
 NODE_ENV=development
 PORT=3000
 HOST=0.0.0.0
-WEB_ORIGIN=http://localhost:3000
+# frontend address: mail links, oauth redirects and the only site CORS and the chat websocket let in
+# (in production for example https://shop.example.com; locally the frontend dev server)
+WEB_ORIGIN=https://shop.example.com
 
 # PostgreSQL
 DATABASE_URL=postgresql://cartlify_app:your_password@localhost:5432/cartlify_dev

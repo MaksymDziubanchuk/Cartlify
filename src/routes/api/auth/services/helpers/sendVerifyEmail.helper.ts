@@ -1,11 +1,11 @@
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildVerifyEmailTemplate } from '@services/email/templates/verifyEmail.template.js';
-import { AppError, InternalError } from '@utils/errors.js';
+import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
+import { webUrl } from '@helpers/webOrigin.js';
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import env from '@config/env.js';
 
 export type SendVerifyEmailArgs = {
   to: string;
@@ -63,15 +63,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
 }
 
 // frontend verify entrypoint
+// a mail from production must link to the live site, a localhost link opens nothing there
 function buildWebLoginVerifyUrl(token: string): string {
-  const origin = (env.WEB_ORIGIN || '').trim();
-
-  // a mail from production must link to the live site, a localhost link opens nothing there
-  if (!origin && env.NODE_ENV === 'production') {
-    throw new InternalError({ reason: 'WEB_ORIGIN_REQUIRED' });
-  }
-
-  const url = new URL('/web/login', origin || 'http://localhost:3000');
-  url.searchParams.set('token', token);
-  return url.toString();
+  return webUrl('/web/login', { token });
 }

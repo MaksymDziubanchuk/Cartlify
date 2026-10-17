@@ -10,8 +10,8 @@ type StripeClient = (typeof import('@config/stripe.js'))['default'];
 
 // synthetic return pages, the module reads them at import
 const CONFIG = {
-  STRIPE_SUCCESS_URL: 'https://shop.cartlify.test/checkout/success?from=stripe',
-  STRIPE_CANCEL_URL: 'https://shop.cartlify.test/checkout/cancel',
+  STRIPE_SUCCESS_URL: 'https://shop.example.com/checkout/success?from=stripe',
+  STRIPE_CANCEL_URL: 'https://shop.example.com/checkout/cancel',
   STRIPE_CURRENCY: 'eur',
 };
 
@@ -113,25 +113,25 @@ describe('buildCheckoutSessionPayload', () => {
 
   it('keeps the query the success url already has', () => {
     expect(payload().success_url).toBe(
-      'https://shop.cartlify.test/checkout/success?from=stripe&session_id={CHECKOUT_SESSION_ID}',
+      'https://shop.example.com/checkout/success?from=stripe&session_id={CHECKOUT_SESSION_ID}',
     );
   });
 
   it.each([
     [
       'has no query',
-      'https://shop.cartlify.test/paid',
-      'https://shop.cartlify.test/paid?session_id={CHECKOUT_SESSION_ID}',
+      'https://shop.example.com/paid',
+      'https://shop.example.com/paid?session_id={CHECKOUT_SESSION_ID}',
     ],
     [
       'already has a session id',
-      'https://shop.cartlify.test/paid?session_id=old',
-      'https://shop.cartlify.test/paid?session_id={CHECKOUT_SESSION_ID}',
+      'https://shop.example.com/paid?session_id=old',
+      'https://shop.example.com/paid?session_id={CHECKOUT_SESSION_ID}',
     ],
     [
       'has a hash',
-      'https://shop.cartlify.test/app#/paid',
-      'https://shop.cartlify.test/app?session_id={CHECKOUT_SESSION_ID}#/paid',
+      'https://shop.example.com/app#/paid',
+      'https://shop.example.com/app?session_id={CHECKOUT_SESSION_ID}#/paid',
     ],
   ])('adds the template once and in the query when the success url %s', async (_case, url, out) => {
     const other = await importWithEnv<Helper>(

@@ -45,65 +45,78 @@ export async function refreshAccessTokenByRefreshToken({
   if (tokenRole === 'GUEST') throw new UnauthorizedError('REFRESH_GUEST_TOKEN_FORBIDDEN');
 
   // open tx and set db context
-  return prisma
-    .$transaction(async (tx) => {
-      await setUserContext(tx, { userId, role: tokenRole });
+  try {
+    const outcome = await prisma.$transaction(
+      async (tx): Promise<RefreshAccessResult | AppError> => {
+        await setUserContext(tx, { userId, role: tokenRole });
 
-      // load refresh token row
-      const tokenRow = await getRefreshTokenRow(tx, jwtId);
-      if (!tokenRow) throw new UnauthorizedError('REFRESH_TOKEN_ROW_NOT_FOUND');
+        // load refresh token row
+        const tokenRow = await getRefreshTokenRow(tx, jwtId);
+        if (!tokenRow) throw new UnauthorizedError('REFRESH_TOKEN_ROW_NOT_FOUND');
 
-      // basic token row checks
-      assertRefreshRowBasicsOrThrow(tokenRow, { userId });
+        // basic token row checks
+        assertRefreshRowBasicsOrThrow(tokenRow, { userId });
 
-      const now = new Date();
+        const now = new Date();
 
-      // block reuse and hash mismatch
-      await assertNotReusedAndHashOkOrThrow(tx, {
-        row: tokenRow,
-        refreshToken: rt,
-        now,
-        userId,
-        reuseMessage: 'REFRESH_TOKEN_REUSE_DETECTED',
-        hashMismatchMessage: 'REFRESH_TOKEN_HASH_MISMATCH',
-      });
+        try {
+          // block reuse and hash mismatch, closing every session of the user
+          await assertNotReusedAndHashOkOrThrow(tx, {
+            row: tokenRow,
+            refreshToken: rt,
+            now,
+            userId,
+            reuseMessage: 'REFRESH_TOKEN_REUSE_DETECTED',
+            hashMismatchMessage: 'REFRESH_TOKEN_HASH_MISMATCH',
+          });
 
-      // block expired token in db
-      await assertNotExpiredInDbOrThrow(tx, {
-        row: tokenRow,
-        now,
-        expiredMessage: 'refresh: token expired (db)',
-      });
+          // block expired token in db, marking it used
+          await assertNotExpiredInDbOrThrow(tx, {
+            row: tokenRow,
+            now,
+            expiredMessage: 'refresh: token expired (db)',
+          });
+        } catch (err) {
+          // these refusals have to keep what they wrote: thrown here, the error would roll back
+          // the closed sessions and a copied token would go on working; returned, the transaction
+          // commits and the error is thrown after it
+          if (err instanceof AppError) return err;
+          throw err;
+        }
 
-      // load user role from db
-      const dbUser = await tx.user.findUnique({
-        where: { id: userId },
-        select: { id: true, role: true },
-      });
+        // load user role from db
+        const dbUser = await tx.user.findUnique({
+          where: { id: userId },
+          select: { id: true, role: true },
+        });
 
-      if (!dbUser) throw new UnauthorizedError('REFRESH_USER_NOT_FOUND');
-      if (dbUser.role === 'GUEST') throw new UnauthorizedError('REFRESH_GUEST_USER_FORBIDDEN');
+        if (!dbUser) throw new UnauthorizedError('REFRESH_USER_NOT_FOUND');
+        if (dbUser.role === 'GUEST') throw new UnauthorizedError('REFRESH_GUEST_USER_FORBIDDEN');
 
-      // rotate tokens with fixed deadline
-      const rotated = await rotateFixedDeadlineTokens(tx, {
-        oldJwtId: tokenRow.id,
-        sessionExpiresAt: tokenRow.expiresAt,
-        now,
-        user: { id: dbUser.id, role: dbUser.role },
-        rememberMe,
-      });
+        // rotate tokens with fixed deadline
+        const rotated = await rotateFixedDeadlineTokens(tx, {
+          oldJwtId: tokenRow.id,
+          sessionExpiresAt: tokenRow.expiresAt,
+          now,
+          user: { id: dbUser.id, role: dbUser.role },
+          rememberMe,
+        });
 
-      return {
-        accessToken: rotated.accessToken,
-        refreshToken: rotated.refreshToken,
-        refreshMaxAgeSec: rotated.refreshMaxAgeSec,
-        user: { id: dbUser.id, role: dbUser.role },
-        rememberMe,
-      };
-    })
-    .catch((err) => {
-      if (err instanceof AppError) throw err;
+        return {
+          accessToken: rotated.accessToken,
+          refreshToken: rotated.refreshToken,
+          refreshMaxAgeSec: rotated.refreshMaxAgeSec,
+          user: { id: dbUser.id, role: dbUser.role },
+          rememberMe,
+        };
+      },
+    );
 
-      throw new InternalError(undefined, err);
-    });
+    if (outcome instanceof AppError) throw outcome;
+    return outcome;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+
+    throw new InternalError(undefined, err);
+  }
 }

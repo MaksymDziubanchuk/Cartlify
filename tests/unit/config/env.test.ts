@@ -73,7 +73,7 @@ describe('env', () => {
         BCRYPT_ROUNDS: '10',
         REDIS_ORDER_TIMEOUT_WORKER_MS: '5000',
         STRIPE_CURRENCY: 'usd',
-        WEB_ORIGIN: 'https://shop.cartlify.test',
+        WEB_ORIGIN: 'https://shop.example.com',
       }),
     ).toMatchObject({
       NODE_ENV: 'production',
@@ -83,7 +83,7 @@ describe('env', () => {
       BCRYPT_ROUNDS: 10,
       REDIS_ORDER_TIMEOUT_WORKER_MS: 5000,
       STRIPE_CURRENCY: 'usd',
-      WEB_ORIGIN: 'https://shop.cartlify.test',
+      WEB_ORIGIN: 'https://shop.example.com',
     });
   });
 

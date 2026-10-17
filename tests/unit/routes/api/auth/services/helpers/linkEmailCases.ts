@@ -28,7 +28,7 @@ const CONFIG = {
   EMAIL_FROM: 'shop@cartlify.test',
   EMAIL_FROM_NAME: 'Cartlify',
   EMAIL_REPLY_TO: 'help@cartlify.test',
-  WEB_ORIGIN: 'https://shop.cartlify.test',
+  WEB_ORIGIN: 'https://shop.example.com',
 };
 
 const NOW = Date.parse('2026-06-01T12:00:00.000Z');

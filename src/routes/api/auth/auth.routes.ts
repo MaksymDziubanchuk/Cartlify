@@ -109,7 +109,7 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/refresh',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      // no authGuard: the refresh token is the credential, the controller checks it once
       schema: authSchema.setRefreshSchema,
     },
     authController.postRefresh,

@@ -10,6 +10,7 @@ import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
 import path from 'path';
 import env from '@config/env.js';
+import { allowedWebOrigins } from '@helpers/webOrigin.js';
 import { registerRoutes } from '@routes/api/index.js';
 import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
@@ -71,7 +72,8 @@ export const app = fastify({
 app.register(requestResponseLogger);
 
 // add security headers
-app.register(cors, { origin: true, credentials: true });
+// only the frontend from WEB_ORIGIN may read answers and send cookies cross-origin
+app.register(cors, { origin: allowedWebOrigins, credentials: true });
 app.register(helmet);
 
 // parse cookies
@@ -89,7 +91,12 @@ app.register(multipart, {
 app.register(formbody, { bodyLimit: FORM_BODY_LIMIT_BYTES });
 
 // serve static assets
-app.register(staticPlugin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
+app.register(staticPlugin, {
+  root: path.join(process.cwd(), 'src', 'static'),
+  prefix: '/static/',
+  // helmet allows a resource only to pages of this origin, public images may show on the frontend
+  setHeaders: (reply) => reply.header('Cross-Origin-Resource-Policy', 'cross-origin'),
+});
 app.register(rateLimit, {
   // protect from abuse
   max: 100,
