@@ -37,6 +37,14 @@ function statusErrorCode(statusCode: number): string {
     : 'BAD_REQUEST';
 }
 
+// plugin errors whose own code tells the client more than the status does
+const PLUGIN_ERROR_CODES: Record<string, string> = {
+  // no csrf token, a wrong one or no secret cookie: the page takes a new token
+  // from GET /api/auth/csrf and repeats the request
+  FST_CSRF_MISSING_SECRET: 'CSRF_TOKEN_INVALID',
+  FST_CSRF_INVALID_TOKEN: 'CSRF_TOKEN_INVALID',
+};
+
 // an error status must be 4xx or 5xx; anything else on an error is a server fault,
 // the same rule fastify itself follows
 function errorStatus(error: FastifyError): number {
@@ -77,7 +85,7 @@ export default function errorNormalizer(app: FastifyInstance) {
         ? error.errorCode
         : isValidation
           ? 'VALIDATION_ERROR'
-          : statusErrorCode(statusCode),
+          : (PLUGIN_ERROR_CODES[error.code] ?? statusErrorCode(statusCode)),
       message: httpPhrase(statusCode),
       reqId: req.id,
       ...(isAppError(error) && error.expose && error.details !== undefined

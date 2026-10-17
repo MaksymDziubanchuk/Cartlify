@@ -67,7 +67,8 @@ function assertThreadId(value: unknown): string {
 
 // validate message content
 function assertContent(value: unknown): string {
-    if (typeof value !== 'string') {
+    // postgres text cannot hold a zero character, the insert would fail with a server error
+    if (typeof value !== 'string' || value.includes('\u0000')) {
         throw new ChatWsParseError('INVALID_MESSAGE_CONTENT');
     }
 

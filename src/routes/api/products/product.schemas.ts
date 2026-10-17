@@ -24,7 +24,6 @@ const productListItemExample = {
   reviewsCount: 18,
   createdAt: '2026-01-01T10:00:00.000Z',
   updatedAt: '2026-01-01T10:00:00.000Z',
-  deletedAt: null,
 };
 
 const productResponseExample = {
@@ -145,7 +144,12 @@ const messageResponseExample = {
 const getAllProductsRouterSchema = {
   operationId: 'getProducts',
   summary: 'Get products',
-  description: 'Returns a paginated product list with filtering, sorting and search support.',
+  description:
+    'Returns a paginated product list with filtering, sorting and search support. ' +
+    'Every role gets products that are not deleted. Admin and root get only deleted products ' +
+    'with `deleted: true`; for guests and users that flag is `DELETED_PRODUCTS_FORBIDDEN`. ' +
+    '`sort: deletedAt` works only together with `deleted: true`, otherwise it is ' +
+    '`SORT_DELETED_AT_REQUIRES_DELETED`.',
 
   querystring: {
     $ref: 'getAllProductsQuerySchema#',
@@ -160,7 +164,8 @@ const getAllProductsRouterSchema = {
     },
 
     400: {
-      description: 'Invalid products query parameters.',
+      description:
+        'Invalid products query parameters, including `SORT_DELETED_AT_REQUIRES_DELETED`, `CATEGORY_IDS_INVALID` and `CURSOR_INVALID`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -168,7 +173,8 @@ const getAllProductsRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The current actor is not allowed to read products.',
+      description:
+        'The current actor is not allowed to read products: `DELETED_PRODUCTS_FORBIDDEN` when a guest or a user asks for deleted products.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -182,7 +188,9 @@ const getAllProductsRouterSchema = {
 const getProductByIdRouterSchema = {
   operationId: 'getProductById',
   summary: 'Get product by id',
-  description: 'Returns product details by product id.',
+  description:
+    'Returns product details by product id. A deleted product is shown only to admin and root, ' +
+    'guests and users get 404 `PRODUCT_NOT_FOUND` for it.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -209,7 +217,7 @@ const getProductByIdRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found.',
+      description: 'Product was not found, or it is deleted and the actor is not admin or root.',
       $ref: 'errorResponseSchema#',
     },
     500: {

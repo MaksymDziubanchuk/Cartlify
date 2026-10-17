@@ -3,7 +3,19 @@ import { InternalError, isAppError } from '@utils/errors.js';
 import stripe from '@config/stripe.js';
 
 import type Stripe from 'stripe';
-import type { CheckoutSessionResponseDto } from 'types/dto/payments.dto.js';
+import type {
+  CheckoutSessionResponseDto,
+  StripeCheckoutPaymentStatus,
+  StripeCheckoutSessionStatus,
+} from 'types/dto/payments.dto.js';
+
+// the values the response schema allows
+const SESSION_STATUSES: readonly StripeCheckoutSessionStatus[] = ['open', 'complete', 'expired'];
+const PAYMENT_STATUSES: readonly StripeCheckoutPaymentStatus[] = [
+  'paid',
+  'unpaid',
+  'no_payment_required',
+];
 
 type BuildCheckoutSessionPayloadArgs = {
   orderId: number;
@@ -28,9 +40,13 @@ function buildCheckoutSessionPayload({
   userId,
   total,
 }: BuildCheckoutSessionPayloadArgs): Stripe.Checkout.SessionCreateParams {
-  // build success return url
+  // build success return url; stripe replaces only the literal {CHECKOUT_SESSION_ID} with the
+  // session id, while URLSearchParams encodes the braces, so they are put back after encoding
   const successUrl = new URL(env.STRIPE_SUCCESS_URL);
   successUrl.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
+  const successUrlText = successUrl
+    .toString()
+    .replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
 
   // build cancel return url
   const cancelUrl = new URL(env.STRIPE_CANCEL_URL);
@@ -38,7 +54,8 @@ function buildCheckoutSessionPayload({
 
   return {
     mode: 'payment',
-    payment_method_types: ['card'],
+    // stripe 23 renamed payment_method_types to allowed_payment_method_types
+    allowed_payment_method_types: ['card'],
     client_reference_id: String(orderId),
     // keep order owner in metadata: webhook needs it when the order row is already deleted
     metadata: {
@@ -58,7 +75,7 @@ function buildCheckoutSessionPayload({
         },
       },
     ],
-    success_url: successUrl.toString(),
+    success_url: successUrlText,
     cancel_url: cancelUrl.toString(),
   };
 }
@@ -170,6 +187,27 @@ function mapCreatedCheckoutSession(
     });
   }
 
+  // stripe types leave room for values stripe adds later, our api promises only the known ones
+  const status = session.status;
+  if (!SESSION_STATUSES.includes(status as StripeCheckoutSessionStatus)) {
+    throw new InternalError({
+      reason: 'PAYMENTS_CHECKOUT_SESSION_STATUS_UNKNOWN',
+      orderId,
+      sessionId: session.id,
+      status,
+    });
+  }
+
+  const paymentStatus = session.payment_status;
+  if (!PAYMENT_STATUSES.includes(paymentStatus as StripeCheckoutPaymentStatus)) {
+    throw new InternalError({
+      reason: 'PAYMENTS_CHECKOUT_SESSION_PAYMENT_STATUS_UNKNOWN',
+      orderId,
+      sessionId: session.id,
+      paymentStatus,
+    });
+  }
+
   // payment is possible until our reservation ends or stripe closes the session, whichever comes first
   // worker expires the stripe session at reservation end, so stripe own expiry alone would show a later time
   const stripeExpiresAtMs = session.expires_at * 1000;
@@ -181,9 +219,10 @@ function mapCreatedCheckoutSession(
     checkoutSession: {
       sessionId: session.id,
       url: session.url ?? null,
-      mode: session.mode,
-      status: session.status,
-      paymentStatus: session.payment_status,
+      // the mode is checked above
+      mode: 'payment',
+      status: status as StripeCheckoutSessionStatus,
+      paymentStatus: paymentStatus as StripeCheckoutPaymentStatus,
       expiresAt: new Date(expiresAtMs).toISOString(),
     },
   };

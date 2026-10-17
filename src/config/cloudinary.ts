@@ -1,5 +1,3 @@
-import { v2 as cloudinary } from 'cloudinary';
-
 import env from '@config/env.js';
 import { AppError } from '@utils/errors.js';
 
@@ -100,6 +98,20 @@ function getCloudinaryCreds(): CloudinaryCreds {
 
 // configure SDK once at module load
 const creds = getCloudinaryCreds();
+
+// the SDK reads CLOUDINARY_URL itself when it loads, and on a broken one throws a node error
+// with the whole url, the secret included. So the url is checked above first, and the SDK
+// loads without it in the environment; it gets the checked parts below instead
+const rawCloudinaryUrl = process.env.CLOUDINARY_URL;
+delete (process.env as Record<string, string | undefined>).CLOUDINARY_URL;
+
+let cloudinary: typeof import('cloudinary').v2;
+
+try {
+  ({ v2: cloudinary } = await import('cloudinary'));
+} finally {
+  if (rawCloudinaryUrl !== undefined) process.env.CLOUDINARY_URL = rawCloudinaryUrl;
+}
 
 cloudinary.config({
   cloud_name: creds.cloudName,

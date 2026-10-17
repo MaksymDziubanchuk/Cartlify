@@ -1,4 +1,4 @@
-import fastify, { type FastifyPluginAsync } from 'fastify';
+import fastify, { LogController, type FastifyPluginAsync } from 'fastify';
 import { afterEach, describe, expect, it } from '@jest/globals';
 
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
@@ -18,7 +18,7 @@ async function buildApp(plugin: FastifyPluginAsync) {
       level: 'info',
       stream: { write: (line: string) => lines.push(JSON.parse(line) as LogRecord) },
     },
-    disableRequestLogging: true,
+    logController: new LogController({ disableRequestLogging: true }),
   });
   apps.push(app);
 

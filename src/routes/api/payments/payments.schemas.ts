@@ -131,10 +131,17 @@ const postStripeWebhookSchema = {
   operationId: 'handleStripeWebhook',
   summary: 'Handle Stripe webhook',
   description:
-    'Handles Stripe checkout webhook events and updates linked order payment state. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log. An expired checkout releases the order reservation only after the payment grace window; an expired or failed checkout of an already deleted order is acknowledged with `skipped: ORDER_NOT_FOUND`.',
+    'Handles Stripe checkout webhook events and updates linked order payment state. When the order becomes paid, the buyer gets a mail with the order; a mail that fails is only logged and does not fail the webhook. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log. An expired checkout releases the order reservation only after the payment grace window; an expired or failed checkout of an already deleted order is acknowledged with `skipped: ORDER_NOT_FOUND`.',
 
+  // inline, not a $ref: fastify lowercases header names only in an inline headers schema,
+  // so `required` of a referenced one may not apply (FSTSEC002)
   headers: {
-    $ref: 'paymentsStripeWebhookHeadersSchema#',
+    type: 'object',
+    additionalProperties: true,
+    required: ['stripe-signature'],
+    properties: {
+      'stripe-signature': { type: 'string', minLength: 1 },
+    },
     examples: [stripeWebhookHeadersExample],
   },
 

@@ -114,8 +114,7 @@ export interface LinkedInCallbackErrorQueryDto {
 }
 
 export type LinkedInCallbackQueryDto =
-  | LinkedInCallbackSuccessQueryDto
-  | LinkedInCallbackErrorQueryDto;
+  LinkedInCallbackSuccessQueryDto | LinkedInCallbackErrorQueryDto;
 
 export interface LinkedInCallbackDto {
   code: string;
@@ -170,6 +169,9 @@ export interface LogoutBodyDto {
 }
 
 export interface LogoutDto {
+  // the signed-in user who logs out, the only one whose sessions may end
+  userId: number;
+  role: Role;
   refreshToken?: string;
   allDevices?: boolean;
 }
@@ -178,6 +180,6 @@ export interface RefreshDto {
   refreshToken: string;
 }
 
-export interface RefreshResponseDto {
-  accessToken: string;
+export interface CsrfTokenResponseDto {
+  csrfToken: string;
 }

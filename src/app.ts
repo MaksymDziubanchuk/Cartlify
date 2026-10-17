@@ -1,15 +1,16 @@
-import fastify from 'fastify';
+import fastify, { LogController } from 'fastify';
 import websocket from '@fastify/websocket';
 import { LoggerOptions, TransportSingleOptions } from 'pino';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import cookie from '@fastify/cookie';
+import { fastifyCookie } from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import staticPlugin from '@fastify/static';
 import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
 import path from 'path';
 import env from '@config/env.js';
+import { allowedWebOrigins } from '@helpers/webOrigin.js';
 import { registerRoutes } from '@routes/api/index.js';
 import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
@@ -27,6 +28,7 @@ import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import openApiPlugin from './plugins/openapi.plugin.js';
+import csrfPlugin from './plugins/csrf.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 
 
@@ -59,8 +61,9 @@ if (env.NODE_ENV === 'development') {
 export const app = fastify({
   logger: loggerOptions,
 
-  // disable fastify built-in request logs (incoming/completed)
-  disableRequestLogging: true,
+  // disable fastify built-in request logs (incoming/completed); fastify 5.12 moved the option
+  // into the log controller, the top-level one is deprecated
+  logController: new LogController({ disableRequestLogging: true }),
 
   // coerce query/body types
   ajv: { customOptions: { coerceTypes: true } },
@@ -70,11 +73,16 @@ export const app = fastify({
 app.register(requestResponseLogger);
 
 // add security headers
-app.register(cors, { origin: true, credentials: true });
+// only the frontend from WEB_ORIGIN may read answers and send cookies cross-origin
+app.register(cors, { origin: allowedWebOrigins, credentials: true });
 app.register(helmet);
 
 // parse cookies
-app.register(cookie);
+app.register(fastifyCookie);
+
+// check the csrf token of requests that change data, needs the cookies parsed
+app.register(csrfPlugin);
+
 app.register(multipart, {
   // file upload limits
   limits: {
@@ -88,7 +96,12 @@ app.register(multipart, {
 app.register(formbody, { bodyLimit: FORM_BODY_LIMIT_BYTES });
 
 // serve static assets
-app.register(staticPlugin, { root: path.join(process.cwd(), 'src', 'static'), prefix: '/static/' });
+app.register(staticPlugin, {
+  root: path.join(process.cwd(), 'src', 'static'),
+  prefix: '/static/',
+  // helmet allows a resource only to pages of this origin, public images may show on the frontend
+  setHeaders: (reply) => reply.header('Cross-Origin-Resource-Policy', 'cross-origin'),
+});
 app.register(rateLimit, {
   // protect from abuse
   max: 100,

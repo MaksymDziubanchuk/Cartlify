@@ -15,12 +15,13 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
       // set db session context for rls policies
       await setActorContext(tx, { actorId: dto.actorId, role: dto.actorRole });
 
-      // ensure product exists for 404
+      // ensure product exists for 404; a deleted product exists only for admin and root
       const exists = await tx.product.findUnique({
         where: { id: productId },
-        select: { id: true },
+        select: { id: true, deletedAt: true },
       });
-      if (!exists) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      const isAdmin = dto.actorRole === 'ADMIN' || dto.actorRole === 'ROOT';
+      if (!exists || (exists.deletedAt && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
       // increment views and return updated row
       const product = await tx.product.update({

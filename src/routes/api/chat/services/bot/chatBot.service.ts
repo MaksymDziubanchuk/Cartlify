@@ -1,8 +1,9 @@
 import { Prisma } from '@prisma/client';
 
+import env from '@config/env.js';
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
-import { aiClientService } from '@services/ai/aiClient.service.js';
+import { askAiForBotReply, askAiForBotText, type ChatBotLogger } from './chatBotAi.service.js';
 import {
     BadRequestError,
     ForbiddenError,
@@ -37,6 +38,7 @@ interface HandleChatBotTurnDto {
     threadId: string;
     userMessageId: number;
     userMessage: string;
+    log: ChatBotLogger;
 }
 
 interface HandleChatBotTurnResultDto {
@@ -69,6 +71,7 @@ interface GenerateLanguageMatchedBotTextDto {
     userMessage: string;
     fallbackText: string;
     responseMeaning: string;
+    log: ChatBotLogger;
 }
 
 // generates a fixed-purpose bot response in the language of the latest customer message
@@ -77,11 +80,12 @@ const generateLanguageMatchedBotText = async ({
     userMessage,
     fallbackText,
     responseMeaning,
+    log,
 }: GenerateLanguageMatchedBotTextDto): Promise<string> => {
-    try {
-        const latestCustomerMessage = userMessage.trim();
+    const latestCustomerMessage = userMessage.trim();
 
-        const result = await aiClientService.generateText({
+    const text = await askAiForBotText(
+        {
             instructions: [
                 'You are Cartlify assistant.',
                 'Your task is to rewrite the provided response meaning as a customer-facing chat message.',
@@ -117,12 +121,12 @@ const generateLanguageMatchedBotText = async ({
             options: {
                 maxOutputTokens: 120,
             },
-        });
+        },
+        log,
+        'fixed_text',
+    );
 
-        return result.text;
-    } catch {
-        return fallbackText;
-    }
+    return text ?? fallbackText;
 };
 
 const LOOP_ASSISTANCE_MESSAGES = [
@@ -133,6 +137,10 @@ const LOOP_ASSISTANCE_MESSAGES = [
 
 const PRODUCT_CONTEXT_LIMIT = 6;
 const HISTORY_LIMIT = 12;
+
+// the model decides by meaning: surer than a phrase about a human decision, less than a
+// direct request in words the code knows
+const MODEL_DECISION_CONFIDENCE = 0.85;
 
 const SEARCH_STOP_WORDS = new Set([
     'the',
@@ -151,14 +159,6 @@ const SEARCH_STOP_WORDS = new Set([
     'budget',
     'product',
     'products',
-    'товар',
-    'товари',
-    'покажи',
-    'знайди',
-    'потрібно',
-    'потрібен',
-    'хочу',
-    'можеш',
 ]);
 
 // normalizes numeric user ids used by user-owned chat threads
@@ -233,6 +233,9 @@ const extractSearchTerms = (message: string): string[] => {
         .slice(0, 6);
 };
 
+// a product the bot may recommend has free units: stock not taken by confirmed orders
+const IN_STOCK = { gt: prisma.product.fields.reservedStock };
+
 // builds product search conditions from extracted terms
 const buildProductSearchWhere = (
     terms: string[],
@@ -240,17 +243,13 @@ const buildProductSearchWhere = (
     if (terms.length === 0) {
         return {
             deletedAt: null,
-            stock: {
-                gt: 0,
-            },
+            stock: IN_STOCK,
         };
     }
 
     return {
         deletedAt: null,
-        stock: {
-            gt: 0,
-        },
+        stock: IN_STOCK,
         OR: terms.flatMap((term) => [
             {
                 name: {
@@ -328,9 +327,7 @@ const findProductsForBotContext = async (
     return db.product.findMany({
         where: {
             deletedAt: null,
-            stock: {
-                gt: 0,
-            },
+            stock: IN_STOCK,
         },
         include: {
             category: {
@@ -420,9 +417,11 @@ const loadChatBotContext = async ({
 // generates fallback text in the customer's latest language when AI answer fails
 const generateFallbackBotText = async (
     userMessage: string,
+    log: ChatBotLogger,
 ): Promise<string> => {
     return generateLanguageMatchedBotText({
         userMessage,
+        log,
         fallbackText: BOT_FALLBACK_MESSAGE,
         responseMeaning:
             'Tell the customer that the assistant cannot answer reliably right now. Ask them to try again later or ask for admin support.',
@@ -434,38 +433,53 @@ const generateAiBotText = async (
     context: LoadedChatBotContextDto,
     actorRole: ChatBotActorRole,
     userMessage: string,
-): Promise<string> => {
-    try {
-        // builds Cartlify-specific prompt outside the low-level OpenAI wrapper
-        const prompt = buildChatBotPrompt({
-            actorRole,
-            userMessage,
-            history: context.history,
-            productContext: context.productContext,
-        });
+    log: ChatBotLogger,
+): Promise<{ text: string; decision: ChatBotEscalationResultDto | null }> => {
+    // builds Cartlify-specific prompt outside the low-level OpenAI wrapper
+    const prompt = buildChatBotPrompt({
+        actorRole,
+        userMessage,
+        history: context.history,
+        productContext: context.productContext,
+        // the currency checkout charges in, so the bot names the same one
+        currency: env.STRIPE_CURRENCY,
+    });
 
-        // sends normalized request to the AI client
-        const result = await aiClientService.generateText({
-            instructions: prompt.instructions,
-            messages: prompt.messages,
-        });
+    // sends normalized request to the AI client, a broken answer is asked once more
+    const answer = await askAiForBotReply(
+        { instructions: prompt.instructions, messages: prompt.messages },
+        log,
+    );
 
-        return result.text;
-    } catch {
-        // keeps customer chat working even when AI provider fails
-
-        return generateFallbackBotText(userMessage);
+    // keeps customer chat working even when AI provider fails, there is no decision then
+    if (!answer) {
+        return { text: await generateFallbackBotText(userMessage, log), decision: null };
     }
+
+    // the model decided by meaning, in any language, whether a human admin is needed
+    return {
+        text: answer.reply,
+        decision: answer.escalate
+            ? {
+                  shouldEscalate: true,
+                  reason: answer.reason,
+                  confidence: MODEL_DECISION_CONFIDENCE,
+                  matchedPhrase: null,
+              }
+            : null,
+    };
 };
 
 // generates admin-related response in the customer's latest language
 const generateEscalationBotText = async (
     actorRole: ChatBotActorRole,
     userMessage: string,
+    log: ChatBotLogger,
 ): Promise<string> => {
     if (actorRole === 'GUEST') {
         return generateLanguageMatchedBotText({
             userMessage,
+            log,
             fallbackText: GUEST_ADMIN_REQUIRED_MESSAGE,
             responseMeaning:
                 'Tell the customer that to contact an admin, they need to log in or create an account first. After that, the chat can be transferred to an admin.',
@@ -474,6 +488,7 @@ const generateEscalationBotText = async (
 
     return generateLanguageMatchedBotText({
         userMessage,
+        log,
         fallbackText: USER_ADMIN_TRANSFER_MESSAGE,
         responseMeaning:
             'Tell the customer to describe their issue for the admin. Explain that an admin will be able to reply in this chat later. Also mention that the bot will stop replying in this thread now.',
@@ -483,9 +498,11 @@ const generateEscalationBotText = async (
 // generates loop-assistance response in the customer's latest language
 const generateLoopAssistanceBotText = async (
     userMessage: string,
+    log: ChatBotLogger,
 ): Promise<string> => {
     return generateLanguageMatchedBotText({
         userMessage,
+        log,
         fallbackText: LOOP_ASSISTANCE_MESSAGES[0],
         responseMeaning:
             'Tell the customer that the conversation may be repeating. Ask them to clarify what exactly they want to know, or ask whether they want admin support. Do not say that admin support is required.',
@@ -651,24 +668,32 @@ export const handleChatBotTurn = async (
         );
 
         // skips AI only for deterministic admin or loop responses
-        const aiText =
-            preAiEscalation.reason === 'LOOP_DETECTED'
-                ? await generateLoopAssistanceBotText(dto.userMessage)
-                : preAiEscalation.shouldEscalate
-                    ? await generateEscalationBotText(actorRole, dto.userMessage)
-                    : await generateAiBotText(context, actorRole, dto.userMessage);
+        let aiText: string;
+        let modelDecision: ChatBotEscalationResultDto | null = null;
 
-        // checks whether AI answer itself says that human/admin help is needed
+        if (preAiEscalation.reason === 'LOOP_DETECTED') {
+            aiText = await generateLoopAssistanceBotText(dto.userMessage, dto.log);
+        } else if (preAiEscalation.shouldEscalate) {
+            aiText = await generateEscalationBotText(actorRole, dto.userMessage, dto.log);
+        } else {
+            const answer = await generateAiBotText(context, actorRole, dto.userMessage, dto.log);
+
+            aiText = answer.text;
+            modelDecision = answer.decision;
+        }
+
+        // english phrases decide first, then the model by meaning, then the phrases of the answer
         const finalEscalation = preAiEscalation.shouldEscalate
             ? preAiEscalation
-            : evaluatePostAiEscalation(dto.userMessage, aiText, context.history);
+            : (modelDecision ??
+              evaluatePostAiEscalation(dto.userMessage, aiText, context.history));
 
         // keeps loop assistance text instead of forcing admin escalation text
         const finalBotText =
             finalEscalation.reason === 'LOOP_DETECTED'
                 ? aiText
                 : finalEscalation.shouldEscalate
-                    ? await generateEscalationBotText(actorRole, dto.userMessage)
+                    ? await generateEscalationBotText(actorRole, dto.userMessage, dto.log)
                     : aiText;
 
         // saves final bot message and updates thread metadata

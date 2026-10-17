@@ -5,15 +5,12 @@ export const openApiInfo = {
     version: '1.0.0',
 } as const;
 
-// OpenAPI server list for deployed and local environments
+// OpenAPI server list: the documentation calls the server it is served from; another server
+// would be another origin, its cookies and cors would not let Swagger UI requests through
 export const openApiServers = [
     {
-        url: 'https://cartlify.up.railway.app',
-        description: 'Railway deployment',
-    },
-    {
-        url: 'http://localhost:3000',
-        description: 'Local development server',
+        url: '/',
+        description: 'The server this documentation is served from',
     },
 ] as const;
 
@@ -54,6 +51,15 @@ export const openApiSecuritySchemes = {
         in: 'cookie',
         name: 'guestId',
         description: 'Guest session identifier stored in an HTTP-only cookie.',
+    },
+
+    csrfTokenHeader: {
+        type: 'apiKey',
+        in: 'header',
+        name: 'x-csrf-token',
+        description:
+            'CSRF token from GET /api/auth/csrf, required by every POST, PUT, PATCH and DELETE. ' +
+            'Swagger UI adds it by itself.',
     },
 } as const;
 

@@ -5,6 +5,7 @@ import { isAppError } from '@utils/errors.js';
 import { assertChatThreadAccessService } from '../services/assertChatThreadAccess.service.js';
 import { markChatThreadReadService } from '../services/markChatThreadRead.service.js';
 import { sendChatMessageService } from '../services/sendChatMessage.service.js';
+import type { ChatBotLogger } from '../services/bot/chatBotAi.service.js';
 import { chatWsBroadcaster } from './chatWs.broadcaster.js';
 import { chatWsConnectionManager } from './chatWs.connectionManager.js';
 import { ChatWsParseError } from './chatWs.errors.js';
@@ -13,6 +14,7 @@ import { parseChatWsEvent } from './chatWs.parser.js';
 interface HandleWsMessageDto {
     socketId: string;
     raw: RawData;
+    log: ChatBotLogger;
 }
 
 // handle thread join
@@ -51,6 +53,7 @@ async function handleMessageSend(
     socketId: string,
     threadId: string,
     content: string,
+    log: ChatBotLogger,
 ): Promise<void> {
     const context = chatWsConnectionManager.getContext(socketId);
 
@@ -77,6 +80,7 @@ async function handleMessageSend(
         actorRole: context.actorRole,
         threadId,
         content,
+        log,
     });
 
     // broadcast sender message
@@ -187,7 +191,7 @@ async function handleTyping(
 }
 
 // handle raw ws message
-async function handleMessage({ socketId, raw }: HandleWsMessageDto): Promise<void> {
+async function handleMessage({ socketId, raw, log }: HandleWsMessageDto): Promise<void> {
     try {
         // parse client event
         const event = parseChatWsEvent(raw);
@@ -203,6 +207,7 @@ async function handleMessage({ socketId, raw }: HandleWsMessageDto): Promise<voi
                     socketId,
                     event.payload.threadId,
                     event.payload.content,
+                    log,
                 );
                 return;
 
@@ -233,8 +238,10 @@ async function handleMessage({ socketId, raw }: HandleWsMessageDto): Promise<voi
             return;
         }
 
-        // handle app error
+        // handle app error; a server error is ours, so it goes to the log as well
         if (isAppError(err)) {
+            if (err.statusCode >= 500) log.error({ err, socketId }, 'chat ws message failed');
+
             chatWsBroadcaster.sendError(socketId, {
                 code: err.errorCode,
             });
@@ -243,6 +250,7 @@ async function handleMessage({ socketId, raw }: HandleWsMessageDto): Promise<voi
         }
 
         // handle unexpected error
+        log.error({ err, socketId }, 'chat ws message failed unexpectedly');
         chatWsBroadcaster.sendError(socketId, {
             code: 'CHAT_WS_UNEXPECTED',
         });

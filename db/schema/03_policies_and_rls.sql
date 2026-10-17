@@ -142,14 +142,11 @@ CREATE POLICY user_tokens_select ON cartlify.user_tokens FOR
 SELECT
   USING (cartlify.is_owner_or_admin ("userId"));
 
--- SELECT cartlify_owner
+-- SELECT cartlify_owner: the email verification links, open and used; a function that marks
+-- a link used has to see the row after the change as well, postgres checks it against SELECT
 CREATE POLICY user_tokens_select_owner ON cartlify.user_tokens FOR
 SELECT
-  TO cartlify_owner USING (
-    type = 'VERIFY_EMAIL'
-    AND "usedAt" IS NULL
-    AND "expiresAt" > now()
-  );
+  TO cartlify_owner USING (type = 'VERIFY_EMAIL');
 
 -- INSERT (cannot create for other user)
 CREATE POLICY user_tokens_insert ON cartlify.user_tokens FOR INSERT

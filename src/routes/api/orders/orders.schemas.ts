@@ -362,7 +362,7 @@ const getOrdersSchema = {
     },
 
     400: {
-      description: 'Invalid orders query parameters.',
+      description: 'Invalid orders query parameters, including `CURSOR_INVALID`.',
       $ref: 'errorResponseSchema#',
     },
     401: {

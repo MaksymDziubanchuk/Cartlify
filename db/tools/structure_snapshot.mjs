@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { PrismaPg } from '@prisma/adapter-pg';
 import prismaPkg from '@prisma/client';
 
 const { PrismaClient } = prismaPkg;
@@ -198,8 +199,31 @@ function hideUrlParts(text, url) {
   return parts.reduce((out, part) => out.split(part).join('***'), String(text));
 }
 
+// prisma 7 connects through the pg driver; the same translation of prisma url parameters
+// as src/db/client.ts (this script cannot import typescript from src): pg does not know
+// schema, connection_limit, pool_timeout, and reads sslmode=require as "verify the certificate"
+function buildAdapter(url) {
+  const u = new URL(url);
+  const sslmode = u.searchParams.get('sslmode');
+  const schema = u.searchParams.get('schema') ?? undefined;
+
+  for (const key of ['schema', 'connection_limit', 'pool_timeout']) u.searchParams.delete(key);
+  if (sslmode === 'require' || sslmode === 'prefer') u.searchParams.delete('sslmode');
+
+  return new PrismaPg(
+    {
+      connectionString: u.toString(),
+      connectionTimeoutMillis: 20_000,
+      ...(sslmode === 'require' || sslmode === 'prefer'
+        ? { ssl: { rejectUnauthorized: false } }
+        : {}),
+    },
+    schema ? { schema } : undefined,
+  );
+}
+
 async function takeSnapshot(url) {
-  const prisma = new PrismaClient({ datasourceUrl: url });
+  const prisma = new PrismaClient({ adapter: buildAdapter(url) });
 
   try {
     return await prisma.$transaction(

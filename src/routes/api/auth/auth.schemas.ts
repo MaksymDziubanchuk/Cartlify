@@ -83,10 +83,6 @@ const messageResponseExample = {
   message: 'Operation completed successfully.',
 };
 
-const refreshResponseExample = {
-  accessToken: 'jwt-access-token-example',
-};
-
 // Schema for user registration
 const setRegisterSchema = {
   operationId: 'registerUser',
@@ -206,8 +202,13 @@ const setGoogleCallbackSchema = {
   operationId: 'handleGoogleOAuthCallback',
   summary: 'Handle Google OAuth callback',
   description:
-    'Handles Google OAuth callback, creates or finds user and sets authentication cookies. ' +
-    'It has to reach the browser that started the login: its guestId cookie must match the guest in the state.',
+    'Handles the Google OAuth callback and sends the browser back to the frontend page ' +
+    'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
+    'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
+    'OAUTH_CALLBACK_ERROR (Google reported another error), ALREADY_AUTHENTICATED, ' +
+    'GOOGLE_EMAIL_NOT_VERIFIED, GOOGLE_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
+    'the callback has to reach the browser whose guestId cookie is in the state), other GOOGLE_OAUTH_* codes ' +
+    'for a broken or expired state or a failed token exchange, OAUTH_LOGIN_FAILED for a server failure.',
 
   querystring: {
     $ref: 'authGoogleCallbackQuerySchema#',
@@ -215,32 +216,15 @@ const setGoogleCallbackSchema = {
   },
 
   response: {
-    200: {
-      description: 'Google OAuth callback was handled successfully.',
-      $ref: 'authLoginResponseSchema#',
-      examples: [authLoginResponseExample],
+    302: {
+      description:
+        'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
+      type: 'null',
     },
 
     400: {
-      description: 'Invalid Google OAuth callback request.',
-      $ref: 'errorResponseSchema#',
-    },
-    401: {
-      description: 'Google OAuth callback could not authenticate the user.',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
       description:
-        'Google OAuth account is not allowed to authenticate (GOOGLE_EMAIL_NOT_VERIFIED), ' +
-        'or the login was started in another browser (GOOGLE_OAUTH_STATE_GUEST_MISMATCH).',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'The user is already signed in (ALREADY_AUTHENTICATED).',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Google OAuth callback query failed validation.',
+        'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -248,7 +232,8 @@ const setGoogleCallbackSchema = {
       $ref: 'errorResponseSchema#',
     },
     500: {
-      description: 'Unexpected server error while handling Google OAuth callback.',
+      description:
+        'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -294,8 +279,13 @@ const setGithubCallbackSchema = {
   operationId: 'handleGithubOAuthCallback',
   summary: 'Handle GitHub OAuth callback',
   description:
-    'Handles GitHub OAuth callback, creates or finds user and sets authentication cookies. ' +
-    'It has to reach the browser that started the login: its guestId cookie must match the guest in the state.',
+    'Handles the GitHub OAuth callback and sends the browser back to the frontend page ' +
+    'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
+    'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
+    'OAUTH_CALLBACK_ERROR (GitHub reported another error), ALREADY_AUTHENTICATED, ' +
+    'GITHUB_EMAIL_NOT_VERIFIED, GITHUB_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
+    'the callback has to reach the browser whose guestId cookie is in the state), other GITHUB_OAUTH_* codes ' +
+    'for a broken or expired state or a failed token exchange, OAUTH_LOGIN_FAILED for a server failure.',
 
   querystring: {
     $ref: 'authGithubCallbackQuerySchema#',
@@ -303,32 +293,15 @@ const setGithubCallbackSchema = {
   },
 
   response: {
-    200: {
-      description: 'GitHub OAuth callback was handled successfully.',
-      $ref: 'authLoginResponseSchema#',
-      examples: [authLoginResponseExample],
+    302: {
+      description:
+        'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
+      type: 'null',
     },
 
     400: {
-      description: 'Invalid GitHub OAuth callback request.',
-      $ref: 'errorResponseSchema#',
-    },
-    401: {
-      description: 'GitHub OAuth callback could not authenticate the user.',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
       description:
-        'GitHub OAuth account is not allowed to authenticate (GITHUB_EMAIL_NOT_VERIFIED), ' +
-        'or the login was started in another browser (GITHUB_OAUTH_STATE_GUEST_MISMATCH).',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'The user is already signed in (ALREADY_AUTHENTICATED).',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'GitHub OAuth callback query failed validation.',
+        'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -336,7 +309,8 @@ const setGithubCallbackSchema = {
       $ref: 'errorResponseSchema#',
     },
     500: {
-      description: 'Unexpected server error while handling GitHub OAuth callback.',
+      description:
+        'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -382,8 +356,13 @@ const setLinkedInCallbackSchema = {
   operationId: 'handleLinkedInOAuthCallback',
   summary: 'Handle LinkedIn OAuth callback',
   description:
-    'Handles LinkedIn OAuth callback, creates or finds user and sets authentication cookies. ' +
-    'It has to reach the browser that started the login: its guestId cookie must match the guest in the state.',
+    'Handles the LinkedIn OAuth callback and sends the browser back to the frontend page ' +
+    'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
+    'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
+    'OAUTH_CALLBACK_ERROR (LinkedIn reported another error), ALREADY_AUTHENTICATED, ' +
+    'LINKEDIN_EMAIL_NOT_VERIFIED, LINKEDIN_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
+    'the callback has to reach the browser whose guestId cookie is in the state), other LINKEDIN_OAUTH_* codes ' +
+    'for a broken or expired state or a failed token exchange, OAUTH_LOGIN_FAILED for a server failure.',
 
   querystring: {
     $ref: 'authLinkedInCallbackQuerySchema#',
@@ -391,36 +370,20 @@ const setLinkedInCallbackSchema = {
   },
 
   response: {
-    200: {
-      description: 'LinkedIn OAuth callback was handled successfully.',
-      $ref: 'authLoginResponseSchema#',
-      examples: [authLoginResponseExample],
+    302: {
+      description:
+        'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
+      type: 'null',
     },
 
     400: {
-      description: 'Invalid LinkedIn OAuth callback request.',
-      $ref: 'errorResponseSchema#',
-    },
-    401: {
-      description: 'LinkedIn OAuth callback could not authenticate the user.',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
       description:
-        'LinkedIn OAuth account is not allowed to authenticate (LINKEDIN_EMAIL_NOT_VERIFIED), ' +
-        'or the login was started in another browser (LINKEDIN_OAUTH_STATE_GUEST_MISMATCH).',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'The user is already signed in (ALREADY_AUTHENTICATED).',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'LinkedIn OAuth callback query failed validation.',
+        'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
       $ref: 'errorResponseSchema#',
     },
     500: {
-      description: 'Unexpected server error while handling LinkedIn OAuth callback.',
+      description:
+        'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -430,7 +393,9 @@ const setLinkedInCallbackSchema = {
 const setVerifyResendSchema = {
   operationId: 'resendVerificationEmail',
   summary: 'Resend verification email',
-  description: 'Sends a new email verification message to the provided email address.',
+  description:
+    'Sends a new email verification link to the provided email address; earlier links stop working. ' +
+    'The answer is the same for an unknown or already verified email, so it does not tell which emails have accounts.',
 
   body: {
     $ref: 'authResendVerifyBodySchema#',
@@ -471,7 +436,8 @@ const setVerifyResendSchema = {
 const authVerifyEmailSchema = {
   operationId: 'verifyUserEmail',
   summary: 'Verify email',
-  description: 'Verifies user email by verification token.',
+  description:
+    'Verifies user email by the token of the link from the mail. A link works once and only the newest one does.',
 
   querystring: {
     $ref: 'authVerifyEmailQuerySchema#',
@@ -504,7 +470,9 @@ const authVerifyEmailSchema = {
 const setPasswordForgotSchema = {
   operationId: 'requestPasswordReset',
   summary: 'Request password reset',
-  description: 'Creates a password reset request for the provided email address.',
+  description:
+    'Creates a password reset request for the provided email address and mails the link. ' +
+    'The sessions of the account stay: they end only when the password is actually reset.',
 
   body: {
     $ref: 'authPasswordForgotBodySchema#',
@@ -538,7 +506,7 @@ const setPasswordResetSchema = {
   operationId: 'resetPassword',
   summary: 'Reset password',
   description:
-    'Resets user password by password reset token. ' +
+    'Resets user password by password reset token and ends every session of the account. ' +
     'The new password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols.',
 
   querystring: {
@@ -584,7 +552,10 @@ const setPasswordResetSchema = {
 const setLogoutSchema = {
   operationId: 'logoutUser',
   summary: 'Logout user',
-  description: 'Revokes refresh token, clears authentication cookies and logs user out.',
+  description:
+    'Ends the session of this browser and clears the authentication cookies. ' +
+    'With allDevices every session of the signed-in user ends. ' +
+    'Works with an expired access cookie too: the refresh cookie identifies the session.',
   security: openApiSecurity.authCookies,
 
   body: {
@@ -617,26 +588,67 @@ const setLogoutSchema = {
 const setRefreshSchema = {
   operationId: 'refreshAuthTokens',
   summary: 'Refresh access token',
-  description: 'Rotates refresh token and returns a new access token.',
+  description:
+    'Rotates the refresh token and sets new accessToken and refreshToken cookies. ' +
+    'Both tokens travel in httpOnly cookies only, the response has no body. ' +
+    'Works with an expired access cookie: the refresh cookie alone is the credential.',
   security: openApiSecurity.refreshTokenCookie,
 
   response: {
-    200: {
-      description: 'Authentication tokens were refreshed successfully.',
+    204: {
+      description: 'Tokens were rotated, new accessToken and refreshToken cookies are set.',
       $ref: 'authRefreshResponseSchema#',
-      examples: [refreshResponseExample],
     },
 
     400: {
-      description: 'Invalid refresh token request.',
+      description: 'There is no refresh token cookie (REFRESH_TOKEN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Refresh token is missing, invalid or expired.',
+      description: 'Refresh token is invalid or expired; both auth cookies are cleared.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'Refresh token was already used (REFRESH_TOKEN_REUSE_DETECTED) or does not match ' +
+        'the stored one (REFRESH_TOKEN_HASH_MISMATCH); both auth cookies are cleared.',
       $ref: 'errorResponseSchema#',
     },
     500: {
       description: 'Unexpected server error while refreshing authentication tokens.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const csrfTokenResponseExample = {
+  csrfToken: 'csrf-token-example',
+};
+
+// Schema for the csrf token
+const setCsrfTokenSchema = {
+  operationId: 'getCsrfToken',
+  summary: 'Get CSRF token',
+  description:
+    'Gives the page a CSRF token and keeps its secret in an httpOnly cookie (csrf, __Host-csrf in production). ' +
+    'Every POST, PUT, PATCH and DELETE has to send the token in the x-csrf-token header, ' +
+    'otherwise it is refused with 403 CSRF_TOKEN_INVALID. The token stays valid as long as the cookie: ' +
+    'take it once when the page loads and again after a CSRF_TOKEN_INVALID answer. ' +
+    'Swagger UI takes it by itself before such a request.',
+
+  response: {
+    200: {
+      description: 'CSRF token for the x-csrf-token header; the secret cookie is set when missing.',
+      $ref: 'authCsrfTokenResponseSchema#',
+      examples: [csrfTokenResponseExample],
+    },
+
+    429: {
+      description: 'Too many requests.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while issuing the CSRF token.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -659,6 +671,7 @@ export const authSchema = withOpenApiTag(
     setPasswordResetSchema,
     setLogoutSchema,
     setRefreshSchema,
+    setCsrfTokenSchema,
   },
   'auth',
 );

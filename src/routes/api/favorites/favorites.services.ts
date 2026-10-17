@@ -82,6 +82,8 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
               description: true,
               price: true,
               stock: true,
+              // the card shows free units, stock minus the reserved ones
+              reservedStock: true,
               categoryId: true,
               views: true,
               popularity: true,
@@ -106,7 +108,7 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
 
       // map favorites into product cards
       const items = pageRows.map((r) => ({
-        product: mapProductListRowToResponse(r.product as any),
+        product: mapProductListRowToResponse(r.product),
         addedAt: r.createdAt,
       }));
 

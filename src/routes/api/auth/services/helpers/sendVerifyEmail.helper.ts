@@ -1,10 +1,11 @@
-import { sendEmail } from './sendEmail.helper.js';
+import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildVerifyEmailTemplate } from '@services/email/templates/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
+import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
+import { webUrl } from '@helpers/webOrigin.js';
 
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import env from '@config/env.js';
 
 export type SendVerifyEmailArgs = {
   to: string;
@@ -48,6 +49,9 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
       ],
     });
   } catch (err) {
+    // only a failure of the mail provider is a bad gateway, our own error stays a server error
+    if (!isEmailProviderFailure(err)) throw err;
+
     // avoid leaking provider details
     throw new AppError({
       statusCode: 502,
@@ -59,24 +63,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
 }
 
 // frontend verify entrypoint
+// a mail from production must link to the live site, a localhost link opens nothing there
 function buildWebLoginVerifyUrl(token: string): string {
-  const base = (env.WEB_ORIGIN || '').trim() || 'http://localhost:3000';
-  const url = new URL('/web/login', base);
-  url.searchParams.set('token', token);
-  return url.toString();
-}
-
-// human ttl message
-function formatExpiresIn(expiresAt: Date): string {
-  const ms = expiresAt.getTime() - Date.now();
-  if (ms <= 0) return '0 minutes';
-
-  const minutes = Math.ceil(ms / 60000);
-  if (minutes < 60) return `${minutes} minutes`;
-
-  const hours = Math.ceil(minutes / 60);
-  if (hours < 48) return `${hours} hours`;
-
-  const days = Math.ceil(hours / 24);
-  return `${days} days`;
+  return webUrl('/web/login', { token });
 }

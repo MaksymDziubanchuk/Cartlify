@@ -3,12 +3,12 @@ import { readFileSync } from 'node:fs';
 // tsconfig.json is plain json, path aliases are read from it so a new alias needs no change here
 const tsconfig = JSON.parse(readFileSync(new URL('./tsconfig.json', import.meta.url), 'utf8'));
 
-// '@config/*': ['config/*'] -> '^@config/(.*)\.js$': '<rootDir>/src/config/$1';
+// '@config/*': ['./src/config/*'] -> '^@config/(.*)\.js$': '<rootDir>/src/config/$1';
 // only imports with .js match, the npm scope @redis/* used inside the redis package has none
 const aliasMapper = Object.fromEntries(
   Object.entries(tsconfig.compilerOptions.paths).map(([alias, [target]]) => [
     `^${alias.replace('/*', '')}/(.*)\\.js$`,
-    `<rootDir>/src/${target.replace('/*', '')}/$1`,
+    `<rootDir>/${target.replace(/^\.\//, '').replace('/*', '')}/$1`,
   ]),
 );
 

@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { styleText } from 'node:util';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cacheDir = path.join(rootDir, 'node_modules', '.cache', 'cartlify-tests');
@@ -147,6 +148,15 @@ async function promptSelection(parts) {
       // stop at the first and last part instead of jumping around a scrolled list
       loop: false,
       required: true,
+      // plain check boxes instead of the default circles
+      theme: {
+        icon: {
+          checked: styleText('green', '[x]'),
+          unchecked: '[ ]',
+          disabledChecked: styleText('green', '[x]'),
+          disabledUnchecked: '[-]',
+        },
+      },
     });
 
     return parts.filter((part) => names.includes(part.name));

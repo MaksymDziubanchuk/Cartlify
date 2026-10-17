@@ -24,18 +24,14 @@ const MIN_LOOP_REPEATED_USER_MESSAGES = 2;
 const MAX_LOOP_HISTORY_MESSAGES = 8;
 
 // phrases that mean the customer directly asks for human/admin support
+// only explicit requests of several words: a single word like "admin" or "manager" also
+// comes in "admin panel" or "password manager", the model decides those by meaning
 const DIRECT_ADMIN_REQUEST_PHRASES = [
-    'admin',
-    'administrator',
-    'operator',
     'support agent',
     'human support',
     'real person',
     'live agent',
     'live chat',
-    'manager',
-    'specialist',
-    'representative',
     'connect me',
     'transfer me',
     'talk to a human',
@@ -44,28 +40,6 @@ const DIRECT_ADMIN_REQUEST_PHRASES = [
     'i need a human',
     'i want admin',
     'i need admin',
-    'адмін',
-    'админа',
-    'адміну',
-    'адміністратор',
-    'адміністратора',
-    'адміністратору',
-    'оператор',
-    'оператора',
-    'оператору',
-    'спеціаліст',
-    'спеціаліста',
-    'спеціалісту',
-    'людина',
-    'людину',
-    'жива людина',
-    'підключи адміна',
-    'переключи на адміна',
-    'з’єднай з адміном',
-    "з'єднай з адміном",
-    'хочу адміна',
-    'хочу спеціаліста',
-    'хочу оператора',
 ];
 
 // phrases that mean the bot admits it cannot solve the issue
@@ -83,16 +57,6 @@ const BOT_CANNOT_HELP_PHRASES = [
     'a human is needed',
     'please contact admin',
     'please contact support',
-    'не можу допомогти з цим',
-    'не можу вирішити це',
-    'я не можу це вирішити',
-    'потрібен адмін',
-    'потрібен адміністратор',
-    'потрібен спеціаліст',
-    'потрібна людина',
-    'потрібна допомога адміна',
-    'треба звернутись до адміна',
-    'треба звернутися до адміна',
 ];
 
 // phrases that usually require a human decision or account-specific support
@@ -109,16 +73,6 @@ const HUMAN_REQUIRED_PHRASES = [
     'delete account',
     'personal data',
     'complaint',
-    'скарга',
-    'повернення коштів',
-    'повернути кошти',
-    'скасувати замовлення',
-    'змінити замовлення',
-    'проблема з оплатою',
-    'оплата не пройшла',
-    'акаунт заблоковано',
-    'видалити акаунт',
-    'персональні дані',
 ];
 
 // normalizes text before phrase matching
@@ -126,7 +80,23 @@ const normalizeText = (value: string): string => {
     return value.toLowerCase().replace(/\s+/g, ' ').trim();
 };
 
-// finds the first phrase included in normalized text
+// escapes regex characters of a phrase
+const escapeRegExp = (value: string): string => {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+// a phrase starts at the start of a word, so "admin" does not match inside "badminton";
+// a phrase of several words also ends at the end of a word, so "transfer me" does not match
+// "transfer methods"; one word may go on with an ending: "refund" matches "refunds";
+// \b knows only latin letters, the lookarounds work for cyrillic too
+const buildPhraseRegExp = (phrase: string): RegExp => {
+    const normalizedPhrase = normalizeText(phrase);
+    const end = normalizedPhrase.includes(' ') ? '(?![\\p{L}\\p{N}])' : '';
+
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(normalizedPhrase)}${end}`, 'u');
+};
+
+// finds the first phrase found in normalized text
 const findMatchedPhrase = (
     text: string,
     phrases: string[],
@@ -134,7 +104,7 @@ const findMatchedPhrase = (
     const normalizedText = normalizeText(text);
 
     return (
-        phrases.find((phrase) => normalizedText.includes(normalizeText(phrase))) ??
+        phrases.find((phrase) => buildPhraseRegExp(phrase).test(normalizedText)) ??
         null
     );
 };

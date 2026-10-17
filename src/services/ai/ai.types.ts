@@ -15,6 +15,15 @@ export interface AiGenerateTextOptionsDto {
     model?: string;
     timeoutMs?: number;
     maxOutputTokens?: number;
+
+    // asks for json of this schema instead of plain text; the result text is then that json
+    jsonSchema?: AiJsonSchemaDto;
+}
+
+// a strict json schema for structured output: every property required, no extra ones
+export interface AiJsonSchemaDto {
+    name: string;
+    schema: Record<string, unknown>;
 }
 
 // normalized request for text generation

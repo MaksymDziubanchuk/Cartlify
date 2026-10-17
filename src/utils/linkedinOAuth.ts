@@ -34,7 +34,8 @@ export type LinkedInIdTokenPayload = {
 
   // common optional identity claims
   email?: string;
-  email_verified?: boolean;
+  // a boolean, a string "true" is accepted as well
+  email_verified?: boolean | string;
   name?: string;
   given_name?: string;
   family_name?: string;

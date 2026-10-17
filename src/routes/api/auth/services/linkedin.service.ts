@@ -92,8 +92,11 @@ export async function linkedInCallback({
   if (!email) throw new BadRequestError('LINKEDIN_EMAIL_MISSING');
   assertEmail(email);
 
-  // enforce verified email when present
-  if (idp.email_verified === false) {
+  // only an email linkedin vouches for counts, the same as with google: without the claim
+  // nobody has proven the address, and it could take over an unverified local account with it;
+  // the claim is taken as a boolean or as the string "true"
+  const emailVerified = idp.email_verified === true || idp.email_verified === 'true';
+  if (!emailVerified) {
     throw new ForbiddenError('LINKEDIN_EMAIL_NOT_VERIFIED');
   }
 

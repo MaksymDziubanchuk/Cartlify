@@ -204,9 +204,11 @@ $$;
 -- AUTH AND USER TOKENS
 ------------------------------------------------------------
 -- AUTH AND USER TOKENS === system functions === 
--- AUTH AND USER TOKENS create or reuse active email verification token
--- system function: runs as the owner, a guest cannot read users or tokens;
--- callable only by a guest, the resend form is used before the first login
+-- AUTH AND USER TOKENS issue a new email verification link
+-- system function: runs as the owner, a guest cannot read users or write tokens;
+-- callable only by a guest, a user asks for a new link before the first login.
+-- p_token is the hash of the new link, the database never keeps the link itself, so an earlier
+-- link cannot be mailed again: every call closes the open links and stores the new one
 CREATE OR REPLACE FUNCTION cartlify.auth_resend_verify (
   p_email text,
   p_token text,
@@ -218,9 +220,6 @@ SET
 DECLARE
   v_user_id int;
   v_is_verified boolean;
-
-  v_token text;
-  v_expires_at timestamptz;
 BEGIN
   IF cartlify.current_actor_role() IS DISTINCT FROM 'GUEST' THEN
     RAISE EXCEPTION 'VERIFY_RESEND_FORBIDDEN';
@@ -234,73 +233,38 @@ BEGIN
   IF p_token IS NULL OR p_token = '' THEN RETURN; END IF;
   IF p_expires_at IS NULL OR p_expires_at <= now() THEN RETURN; END IF;
 
-  BEGIN
+  -- find user
+  SELECT u.id, u."isVerified"
+    INTO v_user_id, v_is_verified
+  FROM cartlify.users u
+  WHERE u.email = p_email
+  LIMIT 1;
 
-    -- find user
-    SELECT u.id, u."isVerified"
-      INTO v_user_id, v_is_verified
-    FROM cartlify.users u
-    WHERE u.email = p_email
-    LIMIT 1;
-
-    IF v_user_id IS NULL OR v_is_verified IS TRUE THEN
-      RETURN;
-    END IF;
-
-    -- reuse existing active verify token if present
-    SELECT ut.token, ut."expiresAt"
-      INTO v_token, v_expires_at
-    FROM cartlify.user_tokens ut
-    WHERE ut."userId" = v_user_id
-      AND ut.type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
-      AND ut."usedAt" IS NULL
-      AND ut."expiresAt" > now()
-    ORDER BY ut."expiresAt" DESC
-    LIMIT 1;
-
-    IF v_token IS NULL THEN
-      INSERT INTO cartlify.user_tokens ("userId", type, token, "expiresAt", "usedAt")
-      VALUES (v_user_id, 'VERIFY_EMAIL'::cartlify."UserTokenType", p_token, p_expires_at, NULL);
-
-      v_token := p_token;
-      v_expires_at := p_expires_at;
-    END IF;
-
-    user_id := v_user_id;
-    token := v_token;
-    expires_at := v_expires_at;
-    RETURN NEXT;
+  IF v_user_id IS NULL OR v_is_verified IS TRUE THEN
     RETURN;
+  END IF;
 
-  EXCEPTION WHEN unique_violation THEN
-    -- race: if insert collided, try fetch active token and return it
-    SELECT ut.token, ut."expiresAt"
-      INTO v_token, v_expires_at
-    FROM cartlify.user_tokens ut
-    WHERE ut."userId" = v_user_id
-      AND ut.type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
-      AND ut."usedAt" IS NULL
-      AND ut."expiresAt" > now()
-    ORDER BY ut."expiresAt" DESC
-    LIMIT 1;
+  -- only the newest link works: the open ones are closed
+  UPDATE cartlify.user_tokens ut
+  SET "usedAt" = now()
+  WHERE ut."userId" = v_user_id
+    AND ut.type = 'VERIFY_EMAIL'::cartlify."UserTokenType"
+    AND ut."usedAt" IS NULL;
 
-    IF v_token IS NOT NULL THEN
-      user_id := v_user_id;
-      token := v_token;
-      expires_at := v_expires_at;
-      RETURN NEXT;
-    END IF;
-    RETURN;
+  INSERT INTO cartlify.user_tokens ("userId", type, token, "expiresAt", "usedAt")
+  VALUES (v_user_id, 'VERIFY_EMAIL'::cartlify."UserTokenType", p_token, p_expires_at, NULL);
 
-  WHEN OTHERS THEN
-    RAISE;
-  END;
+  user_id := v_user_id;
+  token := p_token;
+  expires_at := p_expires_at;
+  RETURN NEXT;
 END;
 $$;
 
 -- AUTH AND USER TOKENS consume email verification token and mark user as verified
 -- system function: runs as the owner, a guest cannot read tokens or verify a user;
--- callable only by a guest, the link from the email is opened before the first login
+-- callable only by a guest, the link from the email is opened before the first login;
+-- p_token is the hash of the link, the same value the registration and the resend store
 CREATE OR REPLACE FUNCTION cartlify.auth_verify_email (p_token text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,

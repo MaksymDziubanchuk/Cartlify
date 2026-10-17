@@ -1,0 +1,13 @@
+Payment received for your {{appName}} order #{{orderId}}.
+Paid on {{paidAt}}.
+
+{{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
+{{/items}}
+Total: {{total}}
+{{#shippingAddress}}Shipping to: {{shippingAddress}}
+{{/shippingAddress}}
+See your order:
+{{orderUrl}}
+
+This mailbox is not monitored.
+Questions about your order? Ask us in the chat on our site.

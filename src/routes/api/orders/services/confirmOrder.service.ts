@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { tx, isRetryableTxError } from '@db/client.js';
+import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertRedisReady } from '@redis/client.js';
 import {
@@ -128,7 +128,7 @@ export async function confirmOrder({
 
     // db function errors come as P2010
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2010') {
-      const msg = String((err.meta as any)?.message ?? err.message);
+      const msg = String(getPgMessage(err) ?? err.message);
 
       if (msg.includes('ORDER_NOT_FOUND')) throw new NotFoundError('ORDER_NOT_FOUND');
       if (msg.includes('ORDER_CONFIRM_FORBIDDEN'))

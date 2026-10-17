@@ -23,6 +23,7 @@ The repository currently contains a working REST API foundation, PostgreSQL hard
 - [API Documentation](#api-documentation)
 - [Realtime Chat / AI Bot](#realtime-chat--ai-bot)
 - [Production Notes](#production-notes)
+- [License](#license)
 
 ---
 
@@ -109,11 +110,11 @@ What is important to state honestly:
 
 - user registration
 - email verification flow
-- resend verification email
-- login / logout
-- refresh token rotation
+- resend verification email: a new link each time, earlier links stop working; the links are stored only as hashes
+- login / logout: logout ends the session of this browser, `allDevices` ends every session of the user
+- refresh token rotation: `POST /api/auth/refresh` answers 204 and sets both tokens as cookies, no token in the body
 - forgot password / reset password
-- OAuth entry points and callbacks for Google, GitHub, and LinkedIn
+- OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
 - user profile read/update endpoints
@@ -125,7 +126,9 @@ What is important to state honestly:
 - Fastify route guards
 - database-level row-level security policies
 - per-transaction actor context passed into PostgreSQL
-- cookie-based auth flow with HttpOnly cookies
+- cookie-based auth flow with HttpOnly cookies; the frontend and the API share one site (`shop.example.com` and `api.shop.example.com`), so the cookies are first-party and keep `SameSite=Lax`
+- CORS and the chat WebSocket handshake let in only `WEB_ORIGIN`; `/static` images may be shown on other origins
+- CSRF protection (double submit): `GET /api/auth/csrf` gives a token and keeps its secret in an httpOnly cookie, every `POST`, `PUT`, `PATCH` and `DELETE` sends the token in the `x-csrf-token` header or gets `403 CSRF_TOKEN_INVALID`; the Stripe webhook is exempt, it signs its own calls. Swagger UI adds the token by itself; in Postman or curl take a token first and keep the cookies between requests
 - centralized error normalization and request/response logging
 
 ### Catalog and product management
@@ -155,6 +158,7 @@ What is important to state honestly:
 - order by id endpoint
 - admin/root order status update endpoint
 - Redis-based timeout worker for order reservation expiry handling
+- the buyer gets an email when the order is paid (sent from the Stripe webhook; a failed mail never fails the webhook)
 
 ### Chat and AI assistant
 
@@ -191,7 +195,8 @@ What is important to state honestly:
 - OpenAPI 3.0.3 specification generation
 - grouped route documentation by domain module
 - reusable response schemas for system endpoints
-- cookie-based security schemes for access token, refresh token, and guest id flows
+- cookie-based security schemes for access token, refresh token, and guest id flows, plus the `x-csrf-token` header on every route that changes data
+- Swagger UI calls the server it is served from and takes the CSRF token before such a request
 - documented system readiness responses for healthy and unavailable states
 - raw OpenAPI JSON endpoint for external inspection and tooling
 - Swagger documentation is deployed together with the running API
@@ -256,6 +261,7 @@ Cartlify/
 │   │   └── chat/
 │   ├── schemas/                # shared AJV schemas and DTO schemas
 │   ├── services/               # cross-module services
+│   │   └── email/templates/    # mails as .html and .txt files with {{marks}}
 │   ├── types/                  # DTOs and shared TypeScript types
 │   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
 │   └── workers/                # background workers
@@ -284,7 +290,9 @@ A practical local example:
 NODE_ENV=development
 PORT=3000
 HOST=0.0.0.0
-WEB_ORIGIN=http://localhost:3000
+# frontend address: mail links, oauth redirects and the only site CORS and the chat websocket let in
+# (in production for example https://shop.example.com; locally the frontend dev server)
+WEB_ORIGIN=https://shop.example.com
 
 # PostgreSQL
 DATABASE_URL=postgresql://cartlify_app:your_password@localhost:5432/cartlify_dev
@@ -526,7 +534,7 @@ Current REST modules exposed by the application:
 
 Examples of implemented business endpoints:
 
-- auth: register, login, refresh, logout, verify, password reset, OAuth callbacks
+- auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
 - users: get/update current user, get user by id, root delete user
 - products: list, details, reviews, create/update/delete, upload images, bulk price update
 - categories: list, create, update, delete
@@ -571,7 +579,7 @@ The current documentation includes:
 - OpenAPI 3.0.3 specification
 - grouped REST modules through Swagger tags
 - reusable schemas for system and DTO responses
-- cookie-based auth schemes for access token, refresh token, and guest id
+- cookie-based auth schemes for access token, refresh token, and guest id, and the `x-csrf-token` header scheme
 - health, readiness, and project information endpoints
 - separate readiness responses for healthy and unavailable states
 
@@ -636,3 +644,11 @@ Planned production improvements:
 - Dockerized local/dev/prod workflow
 - AWS ECS/Fargate deployment target
 - broader monitoring, metrics, and operational reporting
+
+---
+
+## License
+
+Copyright (c) 2025-2026 Maksym Dziubanchuk. All rights reserved.
+
+The source code is public only to be viewed as part of the author's portfolio. It is not open source: using, copying, modifying, distributing or deploying it, in whole or in part, needs prior written permission from the author. See [LICENSE](LICENSE).

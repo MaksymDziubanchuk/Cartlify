@@ -55,7 +55,8 @@ export default async function paymentsRouter(app: FastifyInstance) {
   app.post(
     '/webhook',
     {
-      config: { rawBody: true },
+      // stripe calls it server to server and signs the body, there is no browser and no csrf token
+      config: { rawBody: true, csrf: false },
       schema: paymentsSchema.postStripeWebhookSchema,
     },
     paymentsController.postStripeWebhook,

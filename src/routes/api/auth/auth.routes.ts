@@ -82,6 +82,8 @@ export default async function authRouter(app: FastifyInstance) {
     authController.postVerifyResend,
   );
   app.get('/verify', { schema: authSchema.authVerifyEmailSchema }, authController.getVerifyEmail);
+  // open to everyone: a guest changes the cart too, so the token is needed before any login
+  app.get('/csrf', { schema: authSchema.setCsrfTokenSchema }, authController.getCsrfToken);
   app.post(
     '/password/forgot',
     {
@@ -109,7 +111,7 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/refresh',
     {
-      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      // no authGuard: the refresh token is the credential, the controller checks it once
       schema: authSchema.setRefreshSchema,
     },
     authController.postRefresh,

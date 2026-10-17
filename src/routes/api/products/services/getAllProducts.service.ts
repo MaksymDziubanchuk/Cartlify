@@ -26,9 +26,9 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
     if (deleted === true) where.deletedAt = { not: null };
     if (deleted === false) where.deletedAt = null;
 
-    // stock filter
-    if (inStock === true) where.stock = { gt: 0 };
-    if (inStock === false) where.stock = 0;
+    // stock filter by free units, the same number the list shows as stock
+    if (inStock === true) where.stock = { gt: prisma.product.fields.reservedStock };
+    if (inStock === false) where.stock = { lte: prisma.product.fields.reservedStock };
 
     // category filter
     if (categoryIds?.length) where.categoryId = { in: categoryIds };

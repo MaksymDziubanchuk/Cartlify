@@ -24,6 +24,8 @@ export interface BuildChatBotPromptDto {
     userMessage: string;
     history: ChatBotHistoryMessageDto[];
     productContext: ChatBotProductContextItemDto[];
+    // the shop currency, the one checkout charges in, e.g. "eur"
+    currency: string;
 }
 
 export interface BuildChatBotPromptResultDto {
@@ -35,13 +37,22 @@ const MAX_HISTORY_MESSAGES = 12;
 const MAX_PRODUCT_CONTEXT_ITEMS = 6;
 
 // builds the permanent behavior rules for the Cartlify assistant
-const buildSystemInstructions = (actorRole: ChatBotActorRole): string => {
+const buildSystemInstructions = (actorRole: ChatBotActorRole, currency: string): string => {
     return [
         'You are Cartlify assistant, a support and shopping helper inside the Cartlify e-commerce platform.',
-        'Answer only as a text assistant. Do not return JSON, markdown tables, tool calls, hidden metadata, or action objects.',
+        'Put your answer to the customer into the reply field of the response format. The reply is plain chat text: no markdown tables, tool calls, hidden metadata, or action objects.',
+        'Also decide by meaning, whatever the language, whether a human admin is needed, and fill escalate and reason:',
+        '- DIRECT_ADMIN_REQUEST: the customer asks to talk to an admin, an operator, a manager, a specialist, a support agent, or any real person.',
+        '- HUMAN_REQUIRED: the matter needs a human decision or access to the account or order: a refund, a chargeback, a failed or wrong payment, cancelling or changing an order, a blocked or locked account, deleting an account, personal data, a complaint.',
+        '- BOT_CANNOT_HELP: you cannot solve the issue with the information you have, and a follow-up question will not help.',
+        '- NONE: anything else, with escalate false. Ordinary questions about products, prices, stock, delivery or how to use the shop are NONE.',
+        'A word that only looks like such a request is not one: badminton, an admin panel or a manager as a product feature, a payment method question.',
+        'escalate is true exactly when reason is not NONE.',
         'Keep answers helpful, clear, and concise.',
         'You can explain platform features, help the customer understand how to use Cartlify, and consult about products when product context is provided.',
         'Do not invent products, prices, discounts, stock status, delivery terms, or policies that are not provided in the prompt.',
+        `All prices are in ${currency}; name this currency with a price, never another one.`,
+        'Payment is by card only, on a Stripe checkout page the customer opens after confirming the order. There are no other payment methods: no PayPal, no cash, no bank transfer.',
         'If product context is missing or insufficient, say that you do not have enough product data and ask a focused follow-up question.',
         'Do not claim that you are an admin, human operator, manager, or specialist.',
         'If the customer clearly asks for an admin, operator, specialist, manager, or human support, acknowledge the request.',
@@ -92,11 +103,12 @@ const buildHistoryMessages = (
 // formats one product for prompt context
 const formatProductContextItem = (
     product: ChatBotProductContextItemDto,
+    currency: string,
 ): string => {
     const parts = [
         `id: ${product.id}`,
         `name: ${product.name}`,
-        `price: ${product.price}`,
+        `price: ${product.price} ${currency}`,
         `category: ${product.categoryName ?? 'unknown'}`,
     ];
 
@@ -114,6 +126,7 @@ const formatProductContextItem = (
 // builds product context text for the model
 const buildProductContextMessage = (
     productContext: ChatBotProductContextItemDto[],
+    currency: string,
 ): AiMessageDto | null => {
     const products = productContext.slice(0, MAX_PRODUCT_CONTEXT_ITEMS);
 
@@ -125,7 +138,7 @@ const buildProductContextMessage = (
         role: 'developer',
         content: [
             'Available product context for this answer:',
-            ...products.map((product) => `- ${formatProductContextItem(product)}`),
+            ...products.map((product) => `- ${formatProductContextItem(product, currency)}`),
             'Use only this product context when recommending specific products.',
         ].join('\n'),
     };
@@ -149,10 +162,11 @@ const buildCurrentUserMessage = ({
 export const buildChatBotPrompt = (
     dto: BuildChatBotPromptDto,
 ): BuildChatBotPromptResultDto => {
-    const productContextMessage = buildProductContextMessage(dto.productContext);
+    const currency = dto.currency.trim().toUpperCase();
+    const productContextMessage = buildProductContextMessage(dto.productContext, currency);
 
     return {
-        instructions: buildSystemInstructions(dto.actorRole),
+        instructions: buildSystemInstructions(dto.actorRole, currency),
         messages: [
             ...(productContextMessage ? [productContextMessage] : []),
             ...buildHistoryMessages(dto.history),

@@ -1,0 +1,140 @@
+import type { AuthProvider, Role } from '@prisma/client';
+
+import { createPlaceholder } from '@helpers/placeholder.js';
+import { hashPass } from '@helpers/safePass.js';
+import { hashToken } from '@helpers/tokenHash.js';
+
+import { asAdmin } from './db.js';
+
+let counter = 0;
+
+// unique per run and per call, so tests never meet each other's rows
+export const uniqueTag = () => `${Date.now()}-${process.pid}-${++counter}`;
+
+export const uniqueEmail = (prefix: string) => `${prefix}-${uniqueTag()}@example.com`;
+
+export type TestUser = { id: number; email: string; password: string };
+
+// a user the way the app keeps one; a local user gets a password, an oauth one gets a provider id.
+// A user that has logged in cannot be deleted (the login log is append-only and only root
+// deletes users), so these rows stay; their emails are unique to the run
+export async function createUser(
+  opts: {
+    email?: string;
+    password?: string;
+    isVerified?: boolean;
+    role?: Role;
+    authProvider?: AuthProvider;
+    providerSub?: string;
+    name?: string;
+  } = {},
+): Promise<TestUser> {
+  const email = opts.email ?? uniqueEmail('user');
+  const password = opts.password ?? 'password123';
+  const authProvider = opts.authProvider ?? 'LOCAL';
+  const passwordHash = authProvider === 'LOCAL' ? await hashPass(password) : null;
+
+  const { id } = await asAdmin((tx) =>
+    tx.user.create({
+      data: {
+        email,
+        passwordHash,
+        isVerified: opts.isVerified ?? true,
+        role: opts.role ?? 'USER',
+        authProvider,
+        providerSub: opts.providerSub ?? null,
+        name: opts.name ?? null,
+      },
+      select: { id: true },
+    }),
+  );
+
+  return { id, email, password };
+}
+
+// closes every session of the users, the part of a user a test can clean up
+export const closeSessions = (userIds: number[]) =>
+  asAdmin((tx) => tx.userToken.deleteMany({ where: { userId: { in: userIds } } }));
+
+export type TestProduct = { id: number; categoryId: number };
+
+// a product in a category of its own; removeProducts deletes both, favorites go with them
+export async function createProduct(opts: { stock?: number; price?: number } = {}) {
+  const tag = uniqueTag();
+
+  return asAdmin(async (tx): Promise<TestProduct> => {
+    const category = await tx.category.create({
+      data: { name: `Test category ${tag}`, slug: `test-category-${tag}` },
+    });
+
+    // a product of the catalog always has a primary image, the order views show it
+    return tx.product.create({
+      data: {
+        name: `Test product ${tag}`,
+        price: opts.price ?? 10,
+        stock: opts.stock ?? 5,
+        categoryId: category.id,
+        images: {
+          create: {
+            url: 'https://res.cloudinary.com/demo/image/upload/v1/products/test/0.jpg',
+            position: 0,
+            isPrimary: true,
+          },
+        },
+      },
+      select: { id: true, categoryId: true },
+    });
+  });
+}
+
+export const removeProducts = (products: TestProduct[]) =>
+  asAdmin(async (tx) => {
+    await tx.product.deleteMany({ where: { id: { in: products.map((p) => p.id) } } });
+    await tx.category.deleteMany({ where: { id: { in: products.map((p) => p.categoryId) } } });
+  });
+
+// a password reset link the way /password/forgot stores one: the database keeps only its hash,
+// the raw token is what the mail would carry
+export async function createResetToken(
+  userId: number,
+  opts: { createdAt?: Date; expiresAt?: Date } = {},
+): Promise<string> {
+  const token = createPlaceholder();
+
+  await asAdmin((tx) =>
+    tx.userToken.create({
+      data: {
+        userId,
+        type: 'RESET_PASSWORD',
+        token: hashToken(token),
+        ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
+        expiresAt: opts.expiresAt ?? new Date(Date.now() + 3_600_000),
+      },
+    }),
+  );
+
+  return token;
+}
+
+// an email verification link the way the registration and the resend store one: only its hash
+// is in the database. stored: 'as-is' keeps the code itself, the way it was kept before
+export async function createVerifyToken(
+  userId: number,
+  opts: { createdAt?: Date; expiresAt?: Date; stored?: 'hash' | 'as-is' } = {},
+): Promise<string> {
+  const token = createPlaceholder();
+
+  await asAdmin((tx) =>
+    tx.userToken.create({
+      data: {
+        userId,
+        type: 'VERIFY_EMAIL',
+        token: opts.stored === 'as-is' ? token : hashToken(token),
+        ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
+        expiresAt: opts.expiresAt ?? new Date(Date.now() + 86_400_000),
+      },
+    }),
+  );
+
+  return token;
+}

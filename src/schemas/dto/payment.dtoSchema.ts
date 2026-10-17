@@ -59,16 +59,6 @@ const paymentsGetCheckoutSessionByIdParamsSchema = {
   },
 } as const;
 
-const paymentsStripeWebhookHeadersSchema = {
-  $id: 'paymentsStripeWebhookHeadersSchema',
-  type: 'object',
-  additionalProperties: true,
-  required: ['stripe-signature'],
-  properties: {
-    'stripe-signature': { type: 'string', minLength: 1 },
-  },
-} as const;
-
 const paymentsStripeWebhookResponseSchema = {
   $id: 'paymentsStripeWebhookResponseSchema',
   type: 'object',
@@ -86,6 +76,5 @@ export const paymentDtoSchemas = [
   paymentsCheckoutSessionPublicSchema,
   paymentsCheckoutSessionResponseSchema,
   paymentsGetCheckoutSessionByIdParamsSchema,
-  paymentsStripeWebhookHeadersSchema,
   paymentsStripeWebhookResponseSchema,
 ];

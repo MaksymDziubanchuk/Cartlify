@@ -55,6 +55,7 @@ const getAllProducts: ControllerRouter<
   ProductsResponseDto
 > = async (req, reply) => {
   const q = req.query;
+  const { role: actorRole } = req.user as User;
 
   const limitRaw = q.limit != null ? Number(q.limit) : 20;
   const limit = Number.isInteger(limitRaw) && limitRaw >= 1 && limitRaw <= 100 ? limitRaw : 20;
@@ -85,7 +86,7 @@ const getAllProducts: ControllerRouter<
       : undefined;
 
   const args = pickDefined<FindAllProductsDto>(
-    { limit, sort, order },
+    { actorRole, limit, sort, order },
     { cursor, search, categoryIds, minPrice, maxPrice, deleted, inStock },
   );
 
