@@ -1,6 +1,8 @@
 import pino from 'pino';
 import type { FastifyBaseLogger } from 'fastify';
 
+import { hideSecrets } from './hideSecrets.js';
+
 // what the app logs during the integration tests is kept here instead of the output. A test that
 // expects a log line takes it with takeLogs and checks it; a warning or an error that no test took
 // fails that test (tests/setup/integration.logs.ts), so an unexpected failure is never hidden
@@ -41,7 +43,7 @@ export function captureLogs(log: FastifyBaseLogger): void {
     try {
       entries.push(JSON.parse(line) as LogEntry);
     } catch {
-      process.stdout.write(line);
+      process.stdout.write(hideSecrets(line));
     }
     return true;
   };

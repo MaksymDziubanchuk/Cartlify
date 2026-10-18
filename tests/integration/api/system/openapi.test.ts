@@ -157,6 +157,50 @@ describe('the users routes', () => {
   });
 });
 
+describe('the product routes', () => {
+  // the create route takes only a form: its images are files, a json body never had them
+  it('lists only the form of POST /api/products/, with its image files', () => {
+    const content = operation('post', '/api/products/').requestBody!.content;
+
+    expect(Object.keys(content)).toEqual(['multipart/form-data']);
+    const form = propertiesOf(content['multipart/form-data']!.schema);
+    expect(Object.keys(form).sort()).toEqual([
+      'categoryId',
+      'description',
+      'images',
+      'name',
+      'price',
+      'stock',
+    ]);
+    expect(form.images).toMatchObject({
+      type: 'array',
+      items: { type: 'string', format: 'binary' },
+    });
+  });
+
+  it('lists the json body and the form of PATCH /api/products/{productId}, images only in the form', () => {
+    const content = operation('patch', '/api/products/{productId}').requestBody!.content;
+
+    expect(Object.keys(content).sort()).toEqual(['application/json', 'multipart/form-data']);
+    expect(propertiesOf(content['application/json']!.schema)).not.toHaveProperty('images');
+    expect(propertiesOf(content['multipart/form-data']!.schema).images).toMatchObject({
+      type: 'array',
+      items: { type: 'string', format: 'binary' },
+    });
+  });
+
+  it.each([
+    ['post', '/api/products/', ['201', '400', '401', '403', '413', '500']],
+    [
+      'patch',
+      '/api/products/{productId}',
+      ['200', '400', '401', '403', '404', '409', '413', '500'],
+    ],
+  ])('lists only the answers %s %s can give', (method, path, statuses) => {
+    expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
+  });
+});
+
 describe('Swagger UI', () => {
   it('takes a csrf token before a request that changes data', async () => {
     const res = await app.inject({

@@ -42,6 +42,7 @@ import type {
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
+import { discardUploads } from '@utils/cloudinary.util.js';
 import { BadRequestError } from '@utils/errors.js';
 import {
   reserveNextProductId,
@@ -160,81 +161,87 @@ const postProduct: ControllerRouter<
   // start image uploads as soon as we see file parts
   const imageUploads: Array<Promise<UploadedProductImage>> = [];
 
-  // parse multipart parts manually because file streams must be consumed during parsing
-  for await (const part of req.parts()) {
-    if (part.type === 'file') {
-      // accept only images field, drain everything else
-      if (part.fieldname !== 'images' && part.fieldname !== 'images[]') {
-        part.file.resume();
-        continue;
-      }
+  try {
+    // parse multipart parts manually because file streams must be consumed during parsing
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        // accept only images field, drain everything else
+        if (part.fieldname !== 'images' && part.fieldname !== 'images[]') {
+          part.file.resume();
+          continue;
+        }
 
-      // allocate id once, before the first upload starts
-      if (!productId) {
-        productId = await reserveNextProductId();
-      }
+        // allocate id once, before the first upload starts
+        if (!productId) {
+          productId = await reserveNextProductId();
+        }
 
-      // start consuming the stream immediately via cloudinary overwrite
-      const position = imageUploads.length;
-
-      imageUploads.push(
-        beginProductImageUpload({
+        // start consuming the stream immediately, the upload waits under an id of its own
+        const position = imageUploads.length;
+        const upload = beginProductImageUpload({
           productId,
           position,
           image: { file: part.file, mimetype: part.mimetype, filename: part.filename },
-        }),
-      );
+        });
+        // awaited after the loop; a failure before that must not stop the process
+        upload.catch(() => undefined);
+        imageUploads.push(upload);
 
-      continue;
+        continue;
+      }
+
+      // multipart field values are typed loosely, normalize to string
+      const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+
+      // map allowed fields only
+      if (part.fieldname === 'name') name = v;
+      else if (part.fieldname === 'description') description = v;
+      else if (part.fieldname === 'price') priceRaw = v;
+      else if (part.fieldname === 'stock') stockRaw = v;
+      else if (part.fieldname === 'categoryId') categoryIdRaw = v;
     }
 
-    // multipart field values are typed loosely, normalize to string
-    const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+    // enforce required images
+    if (!imageUploads.length || !productId) {
+      throw new BadRequestError('PRODUCT_IMAGES_REQUIRED');
+    }
 
-    // map allowed fields only
-    if (part.fieldname === 'name') name = v;
-    else if (part.fieldname === 'description') description = v;
-    else if (part.fieldname === 'price') priceRaw = v;
-    else if (part.fieldname === 'stock') stockRaw = v;
-    else if (part.fieldname === 'categoryId') categoryIdRaw = v;
+    // wait for all uploads to finish
+    const uploads = await Promise.all(imageUploads);
+
+    // required fields (and TS narrowing)
+    const productIdReq = productId;
+    const nameReq = name?.trim();
+    const priceReq = priceRaw?.trim();
+    const stockReq = stockRaw?.trim();
+    const categoryIdReq = categoryIdRaw?.trim();
+    const descriptionReq = description?.trim();
+    if (!productIdReq || !nameReq || !priceReq || !stockReq || !categoryIdReq || !uploads.length) {
+      throw new BadRequestError('BODY_NOT_FULL');
+    }
+
+    // build dto, service normalizes and validates values
+    const args = pickDefined<CreateProductDto>(
+      {
+        actorId,
+        actorRole,
+        productId: productIdReq,
+        name: nameReq,
+        price: Number(priceReq),
+        stock: Number(stockReq),
+        categoryId: Number(categoryIdReq) as CategoryId,
+        images: uploads,
+      },
+      { description: descriptionReq },
+    );
+
+    const result = await productServices.createProduct(args);
+    return reply.code(201).send(result);
+  } catch (err) {
+    // a refused product leaves no files: its uploads are deleted
+    await discardUploads(imageUploads, req.log);
+    throw err;
   }
-
-  // enforce required images
-  if (!imageUploads.length || !productId) {
-    throw new BadRequestError('PRODUCT_IMAGES_REQUIRED');
-  }
-
-  // wait for all uploads to finish
-  const uploads = await Promise.all(imageUploads);
-
-  // required fields (and TS narrowing)
-  const productIdReq = productId;
-  const nameReq = name?.trim();
-  const priceReq = priceRaw?.trim();
-  const stockReq = stockRaw?.trim();
-  const categoryIdReq = categoryIdRaw?.trim();
-  const descriptionReq = description?.trim();
-  if (!productIdReq || !nameReq || !priceReq || !stockReq || !categoryIdReq || !uploads.length) {
-    throw new BadRequestError('BODY_NOT_FULL');
-  }
-
-  // build dto, service normalizes and validates values
-  const args = pickDefined<CreateProductDto>(
-    {
-      actorId,
-      actorRole,
-      productId: productIdReq,
-      name: nameReq,
-      price: Number(priceReq),
-      stock: Number(stockReq),
-      categoryId: Number(categoryIdReq) as CategoryId,
-      images: uploads,
-    },
-    { description: descriptionReq },
-  );
-
-  const result = await productServices.createProduct(args);
-  return reply.code(201).send(result);
 };
 
 const postProductReview: ControllerRouter<
@@ -279,84 +286,89 @@ const updateProductById: ControllerRouter<
 
   let uploads: UploadedProductImage[] | undefined;
 
-  if (req.isMultipart()) {
-    // start image uploads as soon as we see file parts
-    const imageUploads: Array<Promise<UploadedProductImage>> = [];
+  // start image uploads as soon as we see file parts
+  const imageUploads: Array<Promise<UploadedProductImage>> = [];
 
-    // parse multipart parts manually
-    for await (const part of req.parts()) {
-      if (part.type === 'file') {
-        // accept only images field, drain everything else
-        if (part.fieldname !== 'images' && part.fieldname !== 'images[]') {
-          part.file.resume();
-          continue;
-        }
+  try {
+    if (req.isMultipart()) {
+      // parse multipart parts manually
+      for await (const part of req.parts()) {
+        if (part.type === 'file') {
+          // accept only images field, drain everything else
+          if (part.fieldname !== 'images' && part.fieldname !== 'images[]') {
+            part.file.resume();
+            continue;
+          }
 
-        // start consuming the stream immediately via cloudinary overwrite
-        const position = imageUploads.length;
-
-        imageUploads.push(
-          beginProductImageUpload({
+          // start consuming the stream immediately, the upload waits under an id of its own
+          const position = imageUploads.length;
+          const upload = beginProductImageUpload({
             productId,
             position,
             image: { file: part.file, mimetype: part.mimetype, filename: part.filename },
-          }),
-        );
+          });
+          // awaited after the loop; a failure before that must not stop the process
+          upload.catch(() => undefined);
+          imageUploads.push(upload);
 
-        continue;
+          continue;
+        }
+
+        // multipart field values are typed loosely, normalize to string
+        const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+        const t = v.trim();
+
+        // map allowed fields only
+        if (part.fieldname === 'name') name = v;
+        else if (part.fieldname === 'description') description = v;
+        else if (part.fieldname === 'price') price = t ? Number(t) : undefined;
+        else if (part.fieldname === 'stock') stock = t ? Number(t) : undefined;
+        else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
+        else if (part.fieldname === 'popularityOverride') {
+          if (!t || t === 'null') popularityOverride = null;
+          else popularityOverride = Number(t);
+        } else if (part.fieldname === 'popularityOverrideUntil') {
+          if (!t || t === 'null') popularityOverrideUntil = null;
+          else popularityOverrideUntil = t;
+        }
       }
 
-      // multipart field values are typed loosely, normalize to string
-      const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
-      const t = v.trim();
-
-      // map allowed fields only
-      if (part.fieldname === 'name') name = v;
-      else if (part.fieldname === 'description') description = v;
-      else if (part.fieldname === 'price') price = t ? Number(t) : undefined;
-      else if (part.fieldname === 'stock') stock = t ? Number(t) : undefined;
-      else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
-      else if (part.fieldname === 'popularityOverride') {
-        if (!t || t === 'null') popularityOverride = null;
-        else popularityOverride = Number(t);
-      } else if (part.fieldname === 'popularityOverrideUntil') {
-        if (!t || t === 'null') popularityOverrideUntil = null;
-        else popularityOverrideUntil = t;
-      }
+      // wait for uploads only when images were provided
+      if (imageUploads.length) uploads = await Promise.all(imageUploads);
+    } else {
+      // a json body changes the fields; images come only as files of a form
+      const b = req.body ?? {};
+      name = b.name;
+      description = b.description;
+      price = b.price;
+      stock = b.stock;
+      categoryId = b.categoryId;
+      popularityOverride = b.popularityOverride;
+      popularityOverrideUntil = b.popularityOverrideUntil;
     }
 
-    // wait for uploads only when images were provided
-    if (imageUploads.length) uploads = await Promise.all(imageUploads);
-  } else {
-    // allow json updates when client sends no files
-    const b = req.body ?? {};
-    name = b.name;
-    description = b.description;
-    price = b.price;
-    stock = b.stock;
-    categoryId = b.categoryId;
-    popularityOverride = b.popularityOverride;
-    popularityOverrideUntil = b.popularityOverrideUntil;
-    uploads = b.images;
+    // build service dto with only provided fields
+    const args = pickDefined<UpdateProductDto>(
+      { productId, actorId, actorRole, log: req.log },
+      {
+        name,
+        description,
+        price,
+        stock,
+        categoryId,
+        images: uploads,
+        popularityOverride,
+        popularityOverrideUntil,
+      },
+    );
+
+    const result = await productServices.updateProduct(args);
+    return reply.code(200).send(result);
+  } catch (err) {
+    // a refused update leaves the images of the product as they were: its uploads are deleted
+    await discardUploads(imageUploads, req.log);
+    throw err;
   }
-
-  // build service dto with only provided fields
-  const args = pickDefined<UpdateProductDto>(
-    { productId, actorId, actorRole },
-    {
-      name,
-      description,
-      price,
-      stock,
-      categoryId,
-      images: uploads,
-      popularityOverride,
-      popularityOverrideUntil,
-    },
-  );
-
-  const result = await productServices.updateProduct(args);
-  return reply.code(200).send(result);
 };
 
 const updateProductsBulkPrice: ControllerRouter<

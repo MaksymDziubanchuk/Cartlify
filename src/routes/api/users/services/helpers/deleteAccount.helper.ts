@@ -5,7 +5,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { requireSiteDomain } from '@helpers/siteDomain.js';
 import { isRedisReady } from '@redis/client.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
-import { deleteImage } from '@utils/cloudinary.util.js';
+import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
 import {
   cancelOrderReservationExpiry,
   deleteOrderPaymentSessionLink,
@@ -267,7 +267,8 @@ export async function deleteAccount(args: DeleteAccountArgs): Promise<void> {
       items: itemsOf(order),
     }));
 
-  if (erased.publicId) {
+  // only a file of this environment: a restored copy of prod points to the avatars of prod
+  if (isOwnFile(erased.publicId)) {
     try {
       await deleteImage(erased.publicId);
     } catch (err) {

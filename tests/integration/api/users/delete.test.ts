@@ -398,17 +398,35 @@ describe('what happens around the account', () => {
     destroy.mockClear();
     const tag = uniqueTag();
     const target = await newUser({
-      avatarUrl: `https://res.cloudinary.com/demo/image/upload/v1/users/${tag}/avatar.jpg`,
-      publicId: `users/${tag}/avatar`,
+      avatarUrl: `https://res.cloudinary.com/demo/image/upload/v1/test/users/${tag}/avatar.jpg`,
+      publicId: `test/users/${tag}/avatar`,
     });
 
     await deleteUser(target.id, rootCookie);
 
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(destroy).toHaveBeenCalledWith(
-      `users/${tag}/avatar`,
+      `test/users/${tag}/avatar`,
       expect.objectContaining({ invalidate: true }),
     );
+  });
+
+  // dev is restored from a copy of prod: its rows point to the avatars of prod and to the shared
+  // files from before the folders, which prod still shows
+  it.each(['prod', 'old'])('leaves an avatar file of %s alone', async (where) => {
+    const destroy = jest.mocked(cloudinary.uploader.destroy);
+    destroy.mockClear();
+    const tag = uniqueTag();
+    const publicId = where === 'prod' ? `prod/users/${tag}/avatar` : `users/${tag}/avatar`;
+    const target = await newUser({
+      avatarUrl: `https://res.cloudinary.com/demo/image/upload/v1/${publicId}.jpg`,
+      publicId,
+    });
+
+    const res = await deleteUser(target.id, rootCookie);
+
+    expect(res.statusCode).toBe(200);
+    expect(destroy).not.toHaveBeenCalled();
   });
 
   it('asks Cloudinary nothing for an account without an avatar', async () => {

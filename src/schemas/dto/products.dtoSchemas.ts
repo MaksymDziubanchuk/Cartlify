@@ -1,4 +1,16 @@
+import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { idPathParam } from '@schemas/idPathParam.js';
+
+const MAX_IMAGE_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
+
+// the image files of a product form, in their order: the first is the main image
+const productImagesFormField = {
+  type: 'array',
+  items: { type: 'string', format: 'binary' },
+  description:
+    'Product images in their order, the first is the main one: jpeg, png or webp files by their ' +
+    `content, each up to ${MAX_IMAGE_MB} MB.`,
+} as const;
 
 const getAllProductsQuerySchema = {
   $id: 'getAllProductsQuerySchema',
@@ -265,19 +277,21 @@ const deleteProductReviewParamsSchema = {
   required: ['productId', 'reviewId'],
 } as const;
 
-const createProductBodySchema = {
-  $id: 'createProductBodySchema',
+// documentation only: the form of POST /api/products. A form is not checked against a schema,
+// the controller and the service check its fields
+const productCreateFormSchema = {
+  $id: 'productCreateFormSchema',
   type: 'object',
+  additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
     price: { type: 'number', minimum: 0 },
-    stock: { type: 'integer', minimum: 0 },
+    stock: { type: 'integer', minimum: 0, description: 'Units in stock.' },
     categoryId: { type: 'integer', minimum: 1 },
-    images: { type: 'array', items: { type: 'object' } },
+    images: productImagesFormField,
   },
-  required: ['name', 'price', 'stock', 'categoryId'],
-  additionalProperties: false,
+  required: ['name', 'price', 'stock', 'categoryId', 'images'],
 } as const;
 
 const updateProductBodySchema = {
@@ -295,11 +309,39 @@ const updateProductBodySchema = {
 
     categoryId: { type: 'integer', minimum: 1 },
 
-    images: { type: 'array', items: { type: 'object' } },
-
     popularityOverride: { anyOf: [{ type: 'integer', minimum: 0 }, { type: 'null' }] },
 
     popularityOverrideUntil: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+  },
+} as const;
+
+// documentation only: the form of PATCH /api/products/:productId, the fields of the json body
+// and the images; empty or null clears a popularity override
+const productUpdateFormSchema = {
+  $id: 'productUpdateFormSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', minLength: 1 },
+    description: { type: 'string' },
+    price: { type: 'number', minimum: 0 },
+    stock: {
+      type: 'integer',
+      description: 'A delta: positive adds units, negative takes free units off.',
+    },
+    categoryId: { type: 'integer', minimum: 1 },
+    popularityOverride: {
+      type: 'string',
+      description: 'A whole number from 0; empty or null clears it.',
+    },
+    popularityOverrideUntil: {
+      type: 'string',
+      description: 'A date-time; empty or null clears it.',
+    },
+    images: {
+      ...productImagesFormField,
+      description: `${productImagesFormField.description} They replace all images of the product.`,
+    },
   },
 } as const;
 
@@ -387,8 +429,9 @@ const productsUpdateCategoryResponseSchema = {
 
 export const productDtoSchemas = [
   getAllProductsQuerySchema,
-  createProductBodySchema,
+  productCreateFormSchema,
   updateProductBodySchema,
+  productUpdateFormSchema,
   bulkUpdateProductsPriceBodySchema,
   bulkUpdateProductsPriceResponseSchema,
   createReviewBodySchema,

@@ -55,10 +55,13 @@ export default {
       displayName: 'integration',
       testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
       setupFiles: ['<rootDir>/tests/setup/integration.setup.ts'],
-      // the app logs go to the tests, an unexpected warning or error fails its test
-      setupFilesAfterEnv: ['<rootDir>/tests/setup/integration.logs.ts'],
-      // real database, redis and services answer slower than plain functions
-      testTimeout: 30_000,
+      // the app logs go to the tests, an unexpected warning or error fails its test;
+      // cloudinary calls stay in its test/ folder; a longer timeout for real services
+      setupFilesAfterEnv: [
+        '<rootDir>/tests/setup/integration.logs.ts',
+        '<rootDir>/tests/setup/integration.cloudinary.ts',
+        '<rootDir>/tests/setup/integration.timeout.ts',
+      ],
     },
   ],
 };

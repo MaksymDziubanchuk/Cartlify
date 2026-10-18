@@ -7,7 +7,7 @@ import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import {
-  persistProductImages,
+  placeProductImages,
   mapProductRowToResponse,
   readProductImageUrls,
   normalizeCreateProductInput,
@@ -55,58 +55,58 @@ export async function createProduct({
   ];
 
   try {
-    // create product row, persist images, and log admin action in one tx
-    const created = await prisma.$transaction(async (tx) => {
-      // set db session context for rls policies
-      await setUserContext(tx, { userId: actorId, role: actorRole });
+    // create product row, log admin action and place the images in one tx
+    const created = await prisma.$transaction(
+      async (tx) => {
+        // set db session context for rls policies
+        await setUserContext(tx, { userId: actorId, role: actorRole });
 
-      // create product row with reserved id from controller flow
-      const product = await tx.product.create({
-        data: {
-          id: productId,
-          name: nameNorm,
-          description: descriptionNorm ? descriptionNorm : null,
-          price: new Prisma.Decimal(priceRaw),
-          stock: stockNorm,
-          categoryId: categoryIdRaw,
-        },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          reservedStock: true,
-          categoryId: true,
-          views: true,
-          popularity: true,
-          avgRating: true,
-          reviewsCount: true,
-          deletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
+        // create product row with reserved id from controller flow
+        const product = await tx.product.create({
+          data: {
+            id: productId,
+            name: nameNorm,
+            description: descriptionNorm ? descriptionNorm : null,
+            price: new Prisma.Decimal(priceRaw),
+            stock: stockNorm,
+            categoryId: categoryIdRaw,
+          },
+          select: {
+            id: true,
+            name: true,
+            description: true,
+            price: true,
+            stock: true,
+            reservedStock: true,
+            categoryId: true,
+            views: true,
+            popularity: true,
+            avgRating: true,
+            reviewsCount: true,
+            deletedAt: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
 
-      // persist uploaded image pointers in db
-      await persistProductImages({
-        tx,
-        productId: product.id,
-        uploads: images,
-      });
+        // write admin audit log for product create
+        await writeAdminAuditLog(tx, {
+          actorId,
+          actorRole,
+          entityType: 'product',
+          entityId: product.id,
+          action: 'PRODUCT_CREATE',
+          changes: auditChanges,
+        });
 
-      // write admin audit log for product create
-      await writeAdminAuditLog(tx, {
-        actorId,
-        actorRole,
-        entityType: 'product',
-        entityId: product.id,
-        action: 'PRODUCT_CREATE',
-        changes: auditChanges,
-      });
+        // the uploads move to the paths of the product last, once every row is written
+        await placeProductImages({ tx, productId: product.id, uploads: images, moved: new Map() });
 
-      return product;
-    });
+        return product;
+        // the moves at cloudinary run inside the transaction
+      },
+      { timeout: 20_000 },
+    );
 
     // fetch all product images and map urls
     const imageRows = await readProductImageUrls(created.id);

@@ -1,4 +1,5 @@
 import { prisma } from '@db/client.js';
+import { makePublicId, moveImage, type UploadImageResult } from '@utils/cloudinary.util.js';
 import { InternalError } from '@utils/errors.js';
 
 import type { Prisma } from '@prisma/client';
@@ -23,6 +24,42 @@ export async function persistProductImages(args: {
       isPrimary: u.position === 0,
     })),
   });
+}
+
+// the uploads of a request wait under ids of their own until the product rows are written; then
+// each takes its place at <env>/products/<id>/<position from 1> and its row gets the url of the file
+// there. It runs last in the transaction, so a refused request never touches the files of the
+// product. A retried transaction finds the files it moved already in `moved`.
+// Gives the public ids the images have now
+export async function placeProductImages(args: {
+  tx: Prisma.TransactionClient;
+  productId: ProductId;
+  uploads: UploadedProductImage[];
+  moved: Map<string, UploadImageResult>;
+}): Promise<string[]> {
+  const { tx, productId } = args;
+  const placed = args.uploads.map((upload) => ({
+    upload,
+    publicId: makePublicId({ kind: 'product', productId, imageKey: upload.position + 1 }),
+  }));
+
+  await persistProductImages({
+    tx,
+    productId,
+    uploads: placed.map(({ upload, publicId }) => ({ ...upload, publicId })),
+  });
+
+  for (const { upload, publicId } of placed) {
+    const file = args.moved.get(upload.publicId) ?? (await moveImage(upload.publicId, publicId));
+    args.moved.set(upload.publicId, file);
+
+    await tx.productImage.updateMany({
+      where: { productId, position: upload.position },
+      data: { url: file.urlBase },
+    });
+  }
+
+  return placed.map(({ publicId }) => publicId);
 }
 
 export async function readProductImageUrls(

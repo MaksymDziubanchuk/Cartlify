@@ -37,6 +37,13 @@ const withFormBody = (body: unknown, formSchemaId: string): unknown => ({
     },
 });
 
+// a route that takes only a form has no json body schema, its form is all there is
+const formOnlyBody = (formSchemaId: string): unknown => ({
+    content: {
+        'multipart/form-data': { schema: { $ref: `${formSchemaId}#` } },
+    },
+});
+
 // Parameters are documented one by one, so a single example object is spread over its properties.
 // The referenced schema is inlined for documentation only.
 const spreadExampleOverParams = (
@@ -153,7 +160,9 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
                                   ? withFormBody(schema.body, route.config.formBodySchema)
                                   : keepExamplesNextToRef(schema.body),
                           }
-                        : {}),
+                        : route.config?.formBodySchema
+                          ? { body: formOnlyBody(route.config.formBodySchema) }
+                          : {}),
                     ...(response
                         ? {
                               response: Object.fromEntries(

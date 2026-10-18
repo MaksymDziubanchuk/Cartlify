@@ -45,10 +45,9 @@ export default async function productsRouter(app: FastifyInstance) {
     '/',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
-      preValidation: async (req) => {
-        if (req.isMultipart()) (req as any).body = {};
-      },
+      // a form only, with no json body to check: the controller reads and checks its parts
       schema: productSchemas.postProductRouterSchema,
+      config: { formBodySchema: 'productCreateFormSchema' },
     },
     productController.postProduct,
   );
@@ -66,10 +65,13 @@ export default async function productsRouter(app: FastifyInstance) {
     '/:productId',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      // a form leaves the body empty for the json schema, the controller reads its parts
       preValidation: async (req) => {
         if (req.isMultipart()) (req as any).body = {};
       },
       schema: productSchemas.updateProductByIdRouterSchema,
+      // the swagger lists the form with the images next to the json body
+      config: { formBodySchema: 'productUpdateFormSchema' },
     },
     productController.updateProductById,
   );

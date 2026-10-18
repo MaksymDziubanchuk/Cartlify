@@ -105,7 +105,9 @@ const patchMeSchema = {
     'when the request carries an avatar file. The name and the locale are up to 100 characters; ' +
     'the phone is an international number such as +380501234567, with no spaces, brackets or ' +
     'dashes, in a JSON body and in a form alike; an empty value removes the name, the locale ' +
-    `or the phone. An avatar file is up to ${MAX_AVATAR_MB} MB.`,
+    `or the phone. An avatar file is up to ${MAX_AVATAR_MB} MB, a jpeg, png or webp image by ` +
+    'its content; it replaces the avatar only when the profile is written, a refused request ' +
+    'changes nothing, the avatar included.',
 
   body: {
     $ref: 'usersUpdateMeBodySchema#',
@@ -127,8 +129,12 @@ const patchMeSchema = {
 
     400: {
       description:
-        'Invalid current user update request: nothing to change, a name or locale over 100 ' +
-        'characters, a wrong phone or a wrong avatar file.',
+        'Invalid current user update request: nothing to change (NO_FIELDS_TO_UPDATE), a name or ' +
+        'locale over 100 characters (VALIDATION_ERROR, NAME_TOO_LONG, LOCALE_TOO_LONG), a wrong ' +
+        'phone (PHONE_INVALID), two avatar files (AVATAR_MULTIPLE), an empty avatar ' +
+        '(AVATAR_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, ' +
+        'whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot ' +
+        'read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {

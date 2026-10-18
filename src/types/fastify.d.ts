@@ -8,7 +8,8 @@ declare module 'fastify' {
     // false lets a route that changes data skip the csrf token check
     csrf?: boolean;
     // documentation only: id of the schema of a multipart form the route takes besides its
-    // json body; the swagger lists both, validation keeps the json schema of the route
+    // json body; the swagger lists both, validation keeps the json schema of the route.
+    // A route without a json body schema takes only the form, the swagger lists only it
     formBodySchema?: string;
   }
 

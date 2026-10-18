@@ -1,6 +1,7 @@
 import type { CategoryId, IdParam, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
+import type { FastifyBaseLogger } from 'fastify';
 
 export type ProductImagePart = {
   file: NodeJS.ReadableStream;
@@ -8,6 +9,8 @@ export type ProductImagePart = {
   filename?: string;
 };
 
+// an uploaded image that waits under an id of its own until the product is written; then it moves
+// to <env>/products/<id>/<position from 1> (placeProductImages)
 export type UploadedProductImage = {
   publicId: string;
   urlBase: string;
@@ -204,7 +207,6 @@ export interface UpdateProductBodyDto {
   price?: number;
   stock?: number;
   categoryId?: CategoryId;
-  images?: UploadedProductImage[];
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
 }
@@ -213,6 +215,10 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
   productId: ProductId;
   actorId: UserId;
   actorRole: Role;
+  // the images of a form, they replace the ones the product has
+  images?: UploadedProductImage[];
+  // a file the product no longer has and that could not be removed goes here
+  log: FastifyBaseLogger;
 }
 
 export type UpdateProductResponseDto = FullProductResponseDto;
