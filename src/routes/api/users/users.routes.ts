@@ -22,8 +22,23 @@ export default async function usersRouter(app: FastifyInstance) {
         if (req.isMultipart()) (req as any).body = {};
       },
       schema: usersSchema.patchMeSchema,
+      // the swagger lists the form with the avatar file next to the json body
+      config: { formBodySchema: 'usersUpdateMeFormSchema' },
     },
     usersController.patchMe,
+  );
+  // only a user deletes their own account: an admin is demoted by root first, a root stays
+  app.delete(
+    '/me',
+    {
+      preHandler: [authGuard, requireRole(['USER'])],
+      // a delete may come without a body: an oauth account has nothing to send
+      preValidation: async (req) => {
+        if (req.body === undefined || req.body === null) (req as any).body = {};
+      },
+      schema: usersSchema.deleteMeSchema,
+    },
+    usersController.deleteMe,
   );
   app.get(
     '/:userId',

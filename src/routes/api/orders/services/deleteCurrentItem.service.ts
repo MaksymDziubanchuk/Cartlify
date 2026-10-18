@@ -8,14 +8,22 @@ import {
   isAppError,
   ResourceBusyError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
+import {
+  dropDeletedProductItems,
+  mapOrderRowToResponse,
+  orderResponseSelect,
+  orderTargetSql,
+} from './helpers/index.js';
 
 import type { CurrentDeleteItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
+// removes an item from the cart, or, with orderId, from an own unconfirmed order; an item of a
+// product deleted from the catalog is removed the same way
 export async function deleteCurrentItem({
   actorId,
   actorRole,
   itemId,
+  orderId: unconfirmedOrderId,
 }: CurrentDeleteItemDto): Promise<OrderResponseDto> {
   // enforce user-only cart writes
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
@@ -32,7 +40,8 @@ export async function deleteCurrentItem({
         // bound lock wait
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // lock item row and ensure it belongs to actor open order; keep orderId before delete
+        // lock item row and ensure it belongs to the actor cart, or to the given own unconfirmed
+        // order; keep orderId before delete
         const locked = await db.$queryRaw<{ order_id: number }[]>`
           SELECT oi."orderId" AS order_id
           FROM cartlify.order_items oi
@@ -40,7 +49,7 @@ export async function deleteCurrentItem({
           WHERE oi.id = ${itemIdRaw}
             AND o."userId" = ${actorIdRaw}
             AND o.confirmed = false
-            AND o.status = 'pending'
+            AND ${orderTargetSql(unconfirmedOrderId)}
           FOR UPDATE OF oi
         `;
         if (!locked.length) throw new NotFoundError('ORDER_ITEM_NOT_FOUND', { itemId: itemIdRaw });
@@ -53,51 +62,18 @@ export async function deleteCurrentItem({
           select: { id: true },
         });
 
-        // bring remaining items to current product prices
-        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        // bring remaining items to current product prices, an unconfirmed order also loses the
+        // items of deleted products; confirm refuses an order with outdated prices, so the order
+        // must show what will be confirmed
+        if (unconfirmedOrderId !== undefined) {
+          await dropDeletedProductItems(db, actorIdRaw, [orderId]);
+        }
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // fetch current order after delete
         const order = await db.order.findUnique({
           where: { id: orderId },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-
-                // include minimal product snapshot for order ui
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_DELETE' });

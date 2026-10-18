@@ -1,9 +1,11 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 const reviewsVoteParamsSchema = {
   $id: 'reviewsVoteParamsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    reviewId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    reviewId: idPathParam('the review'),
   },
   required: ['reviewId'],
 } as const;

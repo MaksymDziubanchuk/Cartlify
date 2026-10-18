@@ -134,11 +134,25 @@ export interface FindProductReviewsDto {
   actorRole: Role;
 }
 
+// the author of a review as the review shows it; a deleted account is named Guest
+export interface ReviewAuthorDto {
+  id: UserId;
+  name?: string;
+  avatarUrls?: {
+    url32: string;
+    url64: string;
+    url128: string;
+    url256: string;
+  };
+  deleted: boolean;
+}
+
 export interface ReviewResponseDto {
   id: ReviewId;
   productId: ProductId;
   rating?: number;
   userId: UserId;
+  user: ReviewAuthorDto;
   createdAt: Date;
   updatedAt: Date;
   comment?: string;

@@ -1,3 +1,20 @@
+import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
+import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
+
+// an id or a quantity in the body: a whole number from 1 to the largest int of the database.
+// A plain number type lets 1.5 through and the database cuts it to 1, another product or another
+// quantity than sent; a bigger number is an error of the database, not of the request
+const wholeNumberField = (description: string) =>
+  ({
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_ID,
+    description: `${description}: a whole number from 1 to ${MAX_ID}.`,
+  }) as const;
+
+// the longest shipping address and note, in characters
+const SHIPPING_TEXT_MAX_LENGTH = 500;
+
 const ordersOrderItemProductSchema = {
   $id: 'ordersOrderItemProductSchema',
   type: 'object',
@@ -58,8 +75,20 @@ const ordersOrderResponseSchema = {
     total: { type: 'number' },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
+    reservationExpiresAt: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Until when the stock is held for the payment, only while the order waits for it.',
+    },
     note: { type: 'string' },
-    shippingAddress: { type: 'string' },
+    shippingAddress: {
+      type: 'string',
+      description: 'Shipping address, an empty string while the order has none.',
+    },
+    recipientFirstName: { type: 'string' },
+    recipientLastName: { type: 'string' },
+    recipientPhone: { type: 'string' },
     confirmed: { type: 'boolean' },
   },
   required: [
@@ -80,7 +109,7 @@ const ordersUpdateStatusParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    orderId: idPathParam('the order'),
   },
   required: ['orderId'],
 } as const;
@@ -90,8 +119,8 @@ const ordersCurrentAddItemBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'number', minimum: 1 },
-    quantity: { type: 'number', minimum: 1 },
+    productId: wholeNumberField('Id of the product'),
+    quantity: wholeNumberField('Units to add'),
   },
   required: ['productId', 'quantity'],
 } as const;
@@ -101,7 +130,7 @@ const ordersCurrentItemIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    itemId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    itemId: idPathParam('the order item'),
   },
   required: ['itemId'],
 } as const;
@@ -111,19 +140,53 @@ const ordersCurrentUpdateItemBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    quantity: { type: 'number', minimum: 1 },
+    quantity: wholeNumberField('Units of the item'),
   },
   required: ['quantity'],
 } as const;
+
+const recipientNameField = (what: string) =>
+  ({
+    type: 'string',
+    minLength: 1,
+    maxLength: PROFILE_TEXT_MAX_LENGTH,
+    description:
+      `${what} of the recipient, up to ${PROFILE_TEXT_MAX_LENGTH} characters, with at least one ` +
+      'letter and no digits. Spaces around it are cut. Required when the order has none yet.',
+  }) as const;
 
 const ordersCurrentConfirmBodySchema = {
   $id: 'ordersCurrentConfirmBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'number', minimum: 1 },
-    // required for an order that has no shipping address yet
-    shippingAddress: { type: 'string', minLength: 1, maxLength: 500 },
+    orderId: wholeNumberField('Id of the order to confirm'),
+    shippingAddress: {
+      type: 'string',
+      minLength: 1,
+      maxLength: SHIPPING_TEXT_MAX_LENGTH,
+      description:
+        `Shipping address, up to ${SHIPPING_TEXT_MAX_LENGTH} characters. Spaces around it are ` +
+        'cut. Required when the order has none yet.',
+    },
+    recipientFirstName: recipientNameField('First name'),
+    recipientLastName: recipientNameField('Last name'),
+    recipientPhone: {
+      type: 'string',
+      maxLength: 16,
+      pattern: `^${PHONE_PATTERN}$`,
+      description:
+        'Phone of the recipient in the international format: a plus sign and 8 to 15 digits, ' +
+        'the first one not zero, for example +380501234567. No spaces, brackets or dashes. ' +
+        'Required when the order has none yet.',
+    },
+    note: {
+      type: 'string',
+      maxLength: SHIPPING_TEXT_MAX_LENGTH,
+      description:
+        `A note for the delivery, optional, up to ${SHIPPING_TEXT_MAX_LENGTH} characters. ` +
+        'Spaces around it are cut; an empty value removes the note.',
+    },
   },
   required: ['orderId'],
 } as const;
@@ -143,17 +206,18 @@ const ordersGetQuerySchema = {
         'one from another sort, is CURSOR_INVALID.',
     },
 
-    // filters
+    // filters; the cart (pending) is not in the list, GET /api/orders/current gives it
     status: {
       type: 'string',
-      enum: ['pending', 'waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
+      enum: ['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
     confirmed: { type: 'boolean' },
 
     // sorting
     sortBy: {
       type: 'string',
-      enum: ['updatedAt', 'total', 'shippingAddress'],
+      enum: ['createdAt', 'updatedAt', 'total', 'shippingAddress'],
+      description: 'createdAt by default, newest first.',
     },
     sortDir: {
       type: 'string',
@@ -182,7 +246,7 @@ const ordersGetByIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    orderId: idPathParam('the order'),
   },
   required: ['orderId'],
 } as const;
@@ -194,7 +258,9 @@ const ordersUpdateStatusBodySchema = {
   properties: {
     status: {
       type: 'string',
-      enum: ['shipped', 'delivered', 'cancelled'],
+      enum: ['shipped', 'delivered'],
+      description:
+        'A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel.',
     },
   },
   required: ['status'],
@@ -203,6 +269,39 @@ const ordersUpdateStatusBodySchema = {
 const ordersUpdateStatusResponseSchema = {
   $id: 'ordersUpdateStatusResponseSchema',
   allOf: [{ $ref: 'ordersOrderResponseSchema#' }],
+} as const;
+
+const ordersOrderItemParamsSchema = {
+  $id: 'ordersOrderItemParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: idPathParam('the order'),
+    itemId: idPathParam('the order item'),
+  },
+  required: ['orderId', 'itemId'],
+} as const;
+
+// the answer of an admin cancel: the order and how to reach its buyer; the order itself holds the
+// address, the recipient and the phone, also when the account is deleted
+const ordersCancelledResponseSchema = {
+  $id: 'ordersCancelledResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...ordersOrderResponseSchema.properties,
+    user: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        deleted: { type: 'boolean' },
+        email: { type: 'string', description: 'Only while the account is not deleted.' },
+      },
+      required: ['id', 'deleted'],
+    },
+  },
+  required: [...ordersOrderResponseSchema.required, 'user'],
 } as const;
 
 export const ordersDtoSchemas = [
@@ -220,4 +319,6 @@ export const ordersDtoSchemas = [
   ordersUpdateStatusBodySchema,
   ordersUpdateStatusResponseSchema,
   ordersListResponseSchema,
+  ordersOrderItemParamsSchema,
+  ordersCancelledResponseSchema,
 ];

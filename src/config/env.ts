@@ -9,6 +9,7 @@ declare global {
       HOST?: string;
 
       WEB_ORIGIN: string;
+      SITE_DOMAIN: string;
 
       DATABASE_URL: string;
 
@@ -103,6 +104,8 @@ export default {
   HOST: process.env.HOST ? process.env.HOST : '0.0.0.0',
   DATABASE_URL: process.env.DATABASE_URL || '',
   WEB_ORIGIN: process.env.WEB_ORIGIN || '',
+  // domain the site lives on, the address of a deleted account is built on it
+  SITE_DOMAIN: process.env.SITE_DOMAIN || '',
 
   // access token config
   JWT_ACCESS_SECRET: required('JWT_ACCESS_SECRET'),

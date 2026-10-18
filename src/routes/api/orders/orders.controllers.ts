@@ -19,6 +19,9 @@ import type {
   UpdateOrderStatusBodyDto,
   UpdateOrderStatusDto,
   OrderResponseDto,
+  OrderItemParamsDto,
+  CancelOrderDto,
+  CancelledOrderResponseDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
@@ -39,7 +42,10 @@ const postCurrentItems: ControllerRouter<{}, CurrentAddItemBodyDto, {}, OrderRes
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const { productId, quantity } = req.body;
 
-  const args = pickDefined<CurrentAddItemDto>({ actorId, actorRole, productId, quantity }, {});
+  const args = pickDefined<CurrentAddItemDto>(
+    { actorId, actorRole, productId, quantity },
+    { orderId: undefined },
+  );
 
   const result = await ordersServices.addCurrentItem(args);
   return reply.code(200).send(result);
@@ -55,7 +61,10 @@ const patchCurrentItems: ControllerRouter<
   const itemId = Number(req.params.itemId);
   const { quantity } = req.body;
 
-  const args = pickDefined<CurrentUpdateItemDto>({ actorId, actorRole, itemId, quantity }, {});
+  const args = pickDefined<CurrentUpdateItemDto>(
+    { actorId, actorRole, itemId, quantity },
+    { orderId: undefined },
+  );
 
   const result = await ordersServices.updateCurrentItem(args);
   return reply.code(200).send(result);
@@ -70,7 +79,10 @@ const deleteCurrentItems: ControllerRouter<
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const itemId = Number(req.params.itemId);
 
-  const args = pickDefined<CurrentDeleteItemDto>({ actorId, actorRole, itemId }, {});
+  const args = pickDefined<CurrentDeleteItemDto>(
+    { actorId, actorRole, itemId },
+    { orderId: undefined },
+  );
 
   const result = await ordersServices.deleteCurrentItem(args);
   return reply.code(200).send(result);
@@ -81,11 +93,12 @@ const postConfirm: ControllerRouter<{}, ConfirmCurrentOrderBodyDto, {}, OrderRes
   reply,
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { orderId, shippingAddress } = req.body;
+  const { orderId, shippingAddress, recipientFirstName, recipientLastName, recipientPhone, note } =
+    req.body;
 
   const args = pickDefined<ConfirmCurrentOrderDto>(
     { actorId, actorRole, orderId },
-    { shippingAddress },
+    { shippingAddress, recipientFirstName, recipientLastName, recipientPhone, note },
   );
 
   const result = await ordersServices.confirmOrder(args);
@@ -144,6 +157,88 @@ const putOrderStatus: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// items of an own order that lost its reservation (unconfirmed), the same as the cart items
+const postOrderItems: ControllerRouter<
+  GetOrderByIdParamsDto,
+  CurrentAddItemBodyDto,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const orderId = Number(req.params.orderId);
+  const { productId, quantity } = req.body;
+
+  const args = pickDefined<CurrentAddItemDto>(
+    { actorId, actorRole, productId, quantity },
+    { orderId },
+  );
+
+  const result = await ordersServices.addCurrentItem(args);
+  return reply.code(200).send(result);
+};
+
+const patchOrderItems: ControllerRouter<
+  OrderItemParamsDto,
+  CurrentUpdateItemBodyDto,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const orderId = Number(req.params.orderId);
+  const itemId = Number(req.params.itemId);
+  const { quantity } = req.body;
+
+  const args = pickDefined<CurrentUpdateItemDto>(
+    { actorId, actorRole, itemId, quantity },
+    { orderId },
+  );
+
+  const result = await ordersServices.updateCurrentItem(args);
+  return reply.code(200).send(result);
+};
+
+const deleteOrderItems: ControllerRouter<OrderItemParamsDto, {}, {}, OrderResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const orderId = Number(req.params.orderId);
+  const itemId = Number(req.params.itemId);
+
+  const args = pickDefined<CurrentDeleteItemDto>({ actorId, actorRole, itemId }, { orderId });
+
+  const result = await ordersServices.deleteCurrentItem(args);
+  return reply.code(200).send(result);
+};
+
+const postCancelPayment: ControllerRouter<GetOrderByIdParamsDto, {}, {}, OrderResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const orderId = Number(req.params.orderId);
+
+  const args = pickDefined<CancelOrderDto>({ actorId, actorRole, orderId }, {});
+
+  const result = await ordersServices.cancelOrderPayment(args, req.log);
+  return reply.code(200).send(result);
+};
+
+const postCancelOrder: ControllerRouter<
+  GetOrderByIdParamsDto,
+  {},
+  {},
+  CancelledOrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const orderId = Number(req.params.orderId);
+
+  const args = pickDefined<CancelOrderDto>({ actorId, actorRole, orderId }, {});
+
+  const result = await ordersServices.cancelPaidOrder(args, req.log);
+  return reply.code(200).send(result);
+};
+
 export const ordersController = {
   getCurrentOrder,
   postCurrentItems,
@@ -154,4 +249,10 @@ export const ordersController = {
   getOrders,
   getOrderById,
   putOrderStatus,
+
+  postOrderItems,
+  patchOrderItems,
+  deleteOrderItems,
+  postCancelPayment,
+  postCancelOrder,
 };

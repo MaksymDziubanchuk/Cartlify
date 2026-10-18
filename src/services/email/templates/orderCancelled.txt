@@ -1,0 +1,10 @@
+Your {{appName}} order #{{orderId}} is cancelled.
+The payment of {{total}} is refunded in full; your bank shows it within a few days.
+
+{{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
+{{/items}}
+See your order:
+{{orderUrl}}
+
+This mailbox is not monitored.
+Questions about your order? Ask us in the chat on our site.

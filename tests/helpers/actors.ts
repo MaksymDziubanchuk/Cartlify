@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 
+import { signAccessToken } from '@utils/jwt.js';
+
 import { cookieHeader, cookieJar } from './cookies.js';
 import { withCsrf, type Csrf } from './csrf.js';
 import type { TestUser } from './factories.js';
@@ -43,6 +45,14 @@ export async function signIn(
 }
 
 export const sessionCookie = (session: Partial<Session>) => cookieHeader(session);
+
+// the access cookie of a user without a login: the token the app itself signs for them. For tests
+// of a route that need a signed-in user, not the login; a real login costs a request of the 100 a
+// minute the rate limit lets one address make, and the time of a password check
+export const accessCookie = (user: Pick<TestUser, 'id' | 'role'>) =>
+  cookieHeader({
+    accessToken: signAccessToken({ userId: user.id, role: user.role, type: 'access' }, false),
+  });
 
 // a page for signed-in users: 200 with the profile when the cookies hold a session
 export const getMe = (app: FastifyInstance, cookie: string) =>

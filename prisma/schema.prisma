@@ -94,9 +94,10 @@ model User {
   authProvider AuthProvider @default(LOCAL)
   providerSub  String?
 
-  isVerified Boolean  @default(false)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @default(now()) @updatedAt
+  isVerified Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @default(now()) @updatedAt
+  deletedAt  DateTime?
 
   name      String?
   avatarUrl String?
@@ -316,8 +317,11 @@ model Order {
 
   paymentIntentId String? @unique
 
-  shippingAddress String?
-  note            String?
+  shippingAddress    String?
+  recipientFirstName String?
+  recipientLastName  String?
+  recipientPhone     String?
+  note               String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt

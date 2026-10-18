@@ -27,6 +27,9 @@ function loadOrder(orderId: number) {
         id: true,
         total: true,
         shippingAddress: true,
+        recipientFirstName: true,
+        recipientLastName: true,
+        recipientPhone: true,
         updatedAt: true,
         user: { select: { email: true, name: true } },
         items: {
@@ -70,6 +73,8 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       paidAt: order.updatedAt,
       ...(order.user.name ? { userName: order.user.name } : {}),
       shippingAddress: order.shippingAddress,
+      recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),
+      recipientPhone: order.recipientPhone,
       logoCid: 'cartlify-logo',
     });
 

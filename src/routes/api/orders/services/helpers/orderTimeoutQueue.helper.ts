@@ -196,7 +196,8 @@ export async function setOrderPaymentSessionLink(
   }
 }
 
-async function getOrderPaymentSessionLink(orderId: OrderId): Promise<string | null> {
+// the stripe checkout session of the order, null when none was linked
+export async function getOrderPaymentSessionLink(orderId: OrderId): Promise<string | null> {
   const redis = await getRedis();
 
   const paymentSessionId = await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId));
@@ -205,7 +206,7 @@ async function getOrderPaymentSessionLink(orderId: OrderId): Promise<string | nu
   return paymentSessionId;
 }
 
-async function deleteOrderPaymentSessionLink(orderId: OrderId): Promise<void> {
+export async function deleteOrderPaymentSessionLink(orderId: OrderId): Promise<void> {
   const redis = await getRedis();
   await redis.hDel(redisKeys.orderPaymentSessionMap, String(orderId));
 }

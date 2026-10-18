@@ -1,9 +1,14 @@
 import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
+import { buildImageUrls } from '@utils/cloudinary.util.js';
 import { normalizeFindProductByIdInput } from './index.js';
 
-import type { CreateReviewDto, ReviewResponseDto } from 'types/dto/products.dto.js';
+import type {
+  CreateReviewDto,
+  ReviewAuthorDto,
+  ReviewResponseDto,
+} from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
 
 export function normalizeCreateReviewInput(dto: CreateReviewDto) {
@@ -74,25 +79,53 @@ export function normalizeDeleteReviewInput(dto: {
   return { productId, reviewId, actorId, actorRole: dto.actorRole };
 }
 
-export function mapReviewRowToResponse(row: {
-  id: number;
-  productId: number;
-  rating: number | null;
-  comment: string | null;
-  userId: number;
-  createdAt: Date;
-  updatedAt: Date;
+// what a review reads about its author
+export const reviewAuthorSelect = {
+  id: true,
+  name: true,
+  avatarUrl: true,
+  deletedAt: true,
+} as const;
 
-  upVotes?: number;
-  downVotes?: number;
-  userVote?: 'up' | 'down' | null;
-}): ReviewResponseDto {
+export type ReviewAuthorRow = {
+  id: number;
+  name: string | null;
+  avatarUrl: string | null;
+  deletedAt: Date | null;
+};
+
+export function mapReviewAuthor(author: ReviewAuthorRow): ReviewAuthorDto {
+  return {
+    id: author.id as any,
+    ...(author.name ? { name: author.name } : {}),
+    ...(author.avatarUrl ? { avatarUrls: buildImageUrls(author.avatarUrl, 'avatar') } : {}),
+    deleted: author.deletedAt !== null,
+  };
+}
+
+export function mapReviewRowToResponse(
+  row: {
+    id: number;
+    productId: number;
+    rating: number | null;
+    comment: string | null;
+    userId: number;
+    createdAt: Date;
+    updatedAt: Date;
+
+    upVotes?: number;
+    downVotes?: number;
+    userVote?: 'up' | 'down' | null;
+  },
+  author: ReviewAuthorRow,
+): ReviewResponseDto {
   // map db row to api dto
   return {
     id: row.id as any,
     productId: row.productId as any,
     ...(row.rating != null ? { rating: row.rating } : {}),
     userId: row.userId as any,
+    user: mapReviewAuthor(author),
     ...(row.comment ? { comment: row.comment } : {}),
     upVotes: row.upVotes ?? 0,
     downVotes: row.downVotes ?? 0,

@@ -20,69 +20,47 @@ const dto = (patch: Partial<FindOrdersDto> = {}): FindOrdersDto =>
 
 const at = (day: number) => new Date(`2026-03-${String(day).padStart(2, '0')}T10:00:00.000Z`);
 
-// ties on every sort field, so the id has to break them
+const order = (
+  id: number,
+  userId: number,
+  status: string,
+  total: string,
+  shippingAddress: string | null,
+  createdDay: number,
+  updatedDay: number,
+) => ({
+  id,
+  userId,
+  status,
+  total: new Prisma.Decimal(total),
+  shippingAddress,
+  createdAt: at(createdDay),
+  updatedAt: at(updatedDay),
+});
+
+// ties on every sort field, so the id has to break them; the carts (pending) are never listed
 const orders = [
-  {
-    id: 1,
-    userId: 3,
-    total: new Prisma.Decimal('10.00'),
-    shippingAddress: 'Kyiv',
-    updatedAt: at(1),
-  },
-  { id: 2, userId: 3, total: new Prisma.Decimal('25.50'), shippingAddress: null, updatedAt: at(2) },
-  {
-    id: 3,
-    userId: 4,
-    total: new Prisma.Decimal('10.00'),
-    shippingAddress: 'Lviv',
-    updatedAt: at(2),
-  },
-  {
-    id: 4,
-    userId: 3,
-    total: new Prisma.Decimal('99.99'),
-    shippingAddress: 'Kyiv',
-    updatedAt: at(2),
-  },
-  {
-    id: 5,
-    userId: 4,
-    total: new Prisma.Decimal('25.50'),
-    shippingAddress: 'Odesa',
-    updatedAt: at(5),
-  },
-  { id: 6, userId: 3, total: new Prisma.Decimal('0.00'), shippingAddress: null, updatedAt: at(5) },
-  {
-    id: 7,
-    userId: 5,
-    total: new Prisma.Decimal('10.00'),
-    shippingAddress: 'Kyiv',
-    updatedAt: at(7),
-  },
-  {
-    id: 8,
-    userId: 5,
-    total: new Prisma.Decimal('99.99'),
-    shippingAddress: 'Lviv',
-    updatedAt: at(1),
-  },
-  {
-    id: 9,
-    userId: 3,
-    total: new Prisma.Decimal('25.50'),
-    shippingAddress: 'Odesa',
-    updatedAt: at(9),
-  },
+  order(1, 3, 'paid', '10.00', 'Kyiv', 1, 1),
+  order(2, 3, 'unconfirmed', '25.50', null, 1, 2),
+  order(3, 4, 'waiting', '10.00', 'Lviv', 2, 2),
+  order(4, 3, 'shipped', '99.99', 'Kyiv', 2, 2),
+  order(5, 4, 'delivered', '25.50', 'Odesa', 2, 5),
+  order(6, 3, 'unconfirmed', '0.00', null, 5, 5),
+  order(7, 5, 'cancelled', '10.00', 'Kyiv', 6, 7),
+  order(8, 5, 'paid', '99.99', 'Lviv', 1, 1),
+  order(9, 3, 'paid', '25.50', 'Odesa', 9, 9),
+  order(10, 3, 'pending', '25.50', 'Kyiv', 9, 9),
+  order(11, 4, 'pending', '0.00', null, 3, 3),
 ];
 
-const SORTS: OrdersSortBy[] = ['updatedAt', 'total', 'shippingAddress'];
+const SORTS: OrdersSortBy[] = ['createdAt', 'updatedAt', 'total', 'shippingAddress'];
 const DIRS: OrdersSortDir[] = ['asc', 'desc'];
 
 describe('normalizeFindOrdersInput', () => {
-  it('lists 20 orders, the last updated first, when the query sets nothing', () => {
+  it('lists 20 orders, the newest first, when the query sets nothing', () => {
     expect(normalizeFindOrdersInput(dto())).toMatchObject({
       limit: 20,
-      sortBy: 'updatedAt',
+      sortBy: 'createdAt',
       sortDir: 'desc',
       cursor: undefined,
       status: undefined,
@@ -101,7 +79,7 @@ describe('normalizeFindOrdersInput', () => {
     });
   });
 
-  it.each(['pending', 'waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'])(
+  it.each(['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'])(
     'accepts the %s status filter',
     (status) => {
       expect(normalizeFindOrdersInput(dto({ status } as Partial<FindOrdersDto>)).status).toBe(
@@ -110,8 +88,9 @@ describe('normalizeFindOrdersInput', () => {
     },
   );
 
-  it('rejects an unknown status', () => {
-    const input = dto({ status: 'lost' } as unknown as Partial<FindOrdersDto>);
+  // the cart is not an order, GET /api/orders/current gives it
+  it.each(['lost', 'pending'])('rejects the %s status', (status) => {
+    const input = dto({ status } as unknown as Partial<FindOrdersDto>);
 
     expect(thrownBy(() => normalizeFindOrdersInput(input))).toMatchObject({
       statusCode: 400,
@@ -133,16 +112,22 @@ describe('normalizeFindOrdersInput', () => {
   });
 });
 
+const NOT_A_CART = { status: { not: 'pending' } };
+
 describe('buildOrdersWhere', () => {
-  it('limits a user to their own orders', () => {
-    expect(buildOrdersWhere({ actorId: 3, actorRole: 'USER', sortBy: 'updatedAt' })).toEqual({
+  it('limits a user to their own orders, without the cart', () => {
+    expect(buildOrdersWhere({ actorId: 3, actorRole: 'USER', sortBy: 'createdAt' })).toEqual({
       userId: 3,
+      ...NOT_A_CART,
     });
   });
 
-  it.each(['ADMIN', 'ROOT'] as const)('lets %s see the orders of every user', (actorRole) => {
-    expect(buildOrdersWhere({ actorId: 1, actorRole, sortBy: 'updatedAt' })).toEqual({});
-  });
+  it.each(['ADMIN', 'ROOT'] as const)(
+    'lets %s see the orders of every user, without the carts',
+    (actorRole) => {
+      expect(buildOrdersWhere({ actorId: 1, actorRole, sortBy: 'createdAt' })).toEqual(NOT_A_CART);
+    },
+  );
 
   it('adds the status and confirmed filters', () => {
     expect(
@@ -159,12 +144,12 @@ describe('buildOrdersWhere', () => {
   it('keeps a confirmed: false filter', () => {
     expect(
       buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', confirmed: false, sortBy: 'total' }),
-    ).toEqual({ confirmed: false });
+    ).toEqual({ ...NOT_A_CART, confirmed: false });
   });
 
   it('leaves out orders without a shipping address when they are sorted by it', () => {
     expect(buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', sortBy: 'shippingAddress' })).toEqual(
-      { shippingAddress: { not: null } },
+      { ...NOT_A_CART, shippingAddress: { not: null } },
     );
   });
 });
@@ -185,7 +170,11 @@ describe('order list pagination', () => {
       });
 
       const expected = sortRows(
-        orders.filter((row) => sortBy !== 'shippingAddress' || row.shippingAddress !== null),
+        orders.filter(
+          (row) =>
+            row.status !== 'pending' &&
+            (sortBy !== 'shippingAddress' || row.shippingAddress !== null),
+        ),
         orderBy,
       ).map((row) => row.id);
 
@@ -217,6 +206,7 @@ describe('buildOrdersCursorWhere', () => {
   it.each([
     ['a date sort gets a word', 'updatedAt', 'yesterday'],
     ['a date sort gets null', 'updatedAt', null],
+    ['the creation date sort gets a word', 'createdAt', 'yesterday'],
     ['an amount sort gets a word', 'total', 'cheap'],
     ['an amount sort gets null', 'total', null],
     ['an amount sort gets a date from another sort', 'total', '2026-03-01T10:00:00.000Z'],
@@ -233,6 +223,7 @@ describe('makeNextOrdersCursor', () => {
   const last = orders[3]!;
 
   it.each([
+    ['createdAt', '2026-03-02T10:00:00.000Z'],
     ['updatedAt', '2026-03-02T10:00:00.000Z'],
     ['total', 99.99],
     ['shippingAddress', 'Kyiv'],

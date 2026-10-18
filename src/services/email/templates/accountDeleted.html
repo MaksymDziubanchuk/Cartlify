@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <title>{{appName}} — Your account is deleted</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f5f3ff;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;">
+      Your {{appName}} account is deleted.
+    </div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f5f3ff;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="border-collapse:collapse;max-width:600px;width:100%;">
+            <tr>
+              <td style="padding:0 0 12px 0;text-align:left;font-family:Arial,Helvetica,sans-serif;">
+                {{#logoCid}}<img src="cid:{{logoCid}}" alt="{{appName}}" width="160" style="display:block;max-width:160px;height:auto;border:0;outline:none;text-decoration:none;">{{/logoCid}}{{^logoCid}}<div style="font-size:18px;font-weight:800;letter-spacing:0.2px;color:#4c1d95;">{{appName}}</div>{{/logoCid}}
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#ffffff;border:1px solid #ddd6fe;border-radius:14px;padding:28px;font-family:Arial,Helvetica,sans-serif;">
+                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Your account is deleted</div>
+
+                <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 10px 0;">
+                  Hi{{#userName}} {{userName}}{{/userName}},<br>
+                  Your {{appName}} account is deleted. Your profile is removed and you can no longer sign in to it.
+                </div>
+
+                {{#hasDeliveries}}<div style="font-size:14px;font-weight:800;color:#2e1065;margin:18px 0 6px 0;">Orders that will still be delivered</div>
+                <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 8px 0;">
+                  These orders are paid. We deliver them to the address given in each order; you will get no more mails about them.
+                </div>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;color:#111827;">
+                  {{#deliveries}}<tr>
+                    <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">
+                      <b>Order #{{orderId}}</b> · {{statusText}}<br>
+                      <span style="font-size:12px;color:#6b7280;">{{itemsText}}</span>
+                    </td>
+                    <td align="right" style="padding:10px 0;border-bottom:1px solid #ede9fe;white-space:nowrap;vertical-align:top;">{{total}}</td>
+                  </tr>{{/deliveries}}
+                </table>{{/hasDeliveries}}
+
+                {{#hasCancelled}}<div style="font-size:14px;font-weight:800;color:#2e1065;margin:18px 0 6px 0;">Cancelled orders</div>
+                <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 8px 0;">
+                  These orders were waiting for payment and are cancelled.
+                </div>
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;color:#111827;">
+                  {{#cancelled}}<tr>
+                    <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">
+                      <b>Order #{{orderId}}</b><br>
+                      {{paymentText}}<br>
+                      <span style="font-size:12px;color:#6b7280;">{{itemsText}}</span>
+                    </td>
+                    <td align="right" style="padding:10px 0;border-bottom:1px solid #ede9fe;white-space:nowrap;vertical-align:top;">{{total}}</td>
+                  </tr>{{/cancelled}}
+                </table>{{/hasCancelled}}
+
+                <hr style="border:none;border-top:1px solid #ddd6fe;margin:18px 0;">
+
+                <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
+                  This mailbox is not monitored.<br>
+                  Questions? Ask us in the chat on our site.
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:14px 6px 0 6px;font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;line-height:1.4;">
+                © {{year}} {{appName}}
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>

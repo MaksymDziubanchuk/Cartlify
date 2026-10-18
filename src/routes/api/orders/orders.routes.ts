@@ -77,4 +77,50 @@ export default async function ordersRouter(app: FastifyInstance) {
     },
     ordersController.putOrderStatus,
   );
+
+  // items of an own order that lost its reservation (unconfirmed)
+  app.post(
+    '/:orderId/items',
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
+      schema: ordersSchema.postOrderItemsSchema,
+    },
+    ordersController.postOrderItems,
+  );
+
+  app.patch(
+    '/:orderId/items/:itemId',
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('orderId'), validateId('itemId')],
+      schema: ordersSchema.patchOrderItemsSchema,
+    },
+    ordersController.patchOrderItems,
+  );
+
+  app.delete(
+    '/:orderId/items/:itemId',
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('orderId'), validateId('itemId')],
+      schema: ordersSchema.deleteOrderItemsSchema,
+    },
+    ordersController.deleteOrderItems,
+  );
+
+  app.post(
+    '/:orderId/cancel-payment',
+    {
+      preHandler: [authGuard, requireRole(['USER']), validateId('orderId')],
+      schema: ordersSchema.postCancelPaymentSchema,
+    },
+    ordersController.postCancelPayment,
+  );
+
+  app.post(
+    '/:orderId/cancel',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.postCancelOrderSchema,
+    },
+    ordersController.postCancelOrder,
+  );
 }

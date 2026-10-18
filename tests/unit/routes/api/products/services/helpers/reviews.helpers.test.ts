@@ -124,20 +124,26 @@ describe('mapReviewRowToResponse', () => {
     updatedAt: new Date('2026-01-02T00:00:00Z'),
   };
 
+  // every review comes with its author
+  const author = { id: 8, name: 'Anna', avatarUrl: null, deletedAt: null };
+
   it('counts missing votes as zero', () => {
-    expect(mapReviewRowToResponse(row)).toMatchObject({ upVotes: 0, downVotes: 0 });
+    expect(mapReviewRowToResponse(row, author)).toMatchObject({ upVotes: 0, downVotes: 0 });
   });
 
   it('leaves out an empty rating and comment', () => {
-    const out = mapReviewRowToResponse({ ...row, rating: null, comment: null });
+    const out = mapReviewRowToResponse({ ...row, rating: null, comment: null }, author);
 
     expect(out).not.toHaveProperty('rating');
     expect(out).not.toHaveProperty('comment');
   });
 
   it('keeps the vote of the viewer, including no vote', () => {
-    expect(mapReviewRowToResponse({ ...row, userVote: 'down' }).userVote).toBe('down');
-    expect(mapReviewRowToResponse({ ...row, userVote: null })).toHaveProperty('userVote', null);
-    expect(mapReviewRowToResponse(row)).not.toHaveProperty('userVote');
+    expect(mapReviewRowToResponse({ ...row, userVote: 'down' }, author).userVote).toBe('down');
+    expect(mapReviewRowToResponse({ ...row, userVote: null }, author)).toHaveProperty(
+      'userVote',
+      null,
+    );
+    expect(mapReviewRowToResponse(row, author)).not.toHaveProperty('userVote');
   });
 });

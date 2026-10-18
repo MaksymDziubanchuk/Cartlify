@@ -1,31 +1,35 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
+import cloudinary from '@config/cloudinary.js';
 import {
   assertImageFile,
   buildImageUrls,
+  deleteImage,
   isCloudinaryUrl,
   makePublicId,
 } from '@utils/cloudinary.util.js';
 import { BadRequestError } from '@utils/errors.js';
 
-import { thrownBy } from '../../helpers/errors.js';
+import { rejectedBy, thrownBy } from '../../helpers/errors.js';
+import { importWithEnv } from '../../helpers/freshImport.js';
 
 const base = 'https://res.cloudinary.com/demo/image/upload/v1712345678/products/7/1.jpg';
 
+// the tests run with NODE_ENV=test, so their files go to the test folder
 describe('makePublicId', () => {
-  it('gives one avatar path per user', () => {
-    expect(makePublicId({ kind: 'avatar', userId: 42 })).toBe('users/42/avatar');
+  it('gives one avatar path per user, in the folder of the environment', () => {
+    expect(makePublicId({ kind: 'avatar', userId: 42 })).toBe('test/users/42/avatar');
   });
 
-  it('gives one path per product image', () => {
-    expect(makePublicId({ kind: 'product', productId: 7, imageKey: 2 })).toBe('products/7/2');
+  it('gives one path per product image, in the folder of the environment', () => {
+    expect(makePublicId({ kind: 'product', productId: 7, imageKey: 2 })).toBe('test/products/7/2');
   });
 
   it('never lets an id add path segments or unsafe characters', () => {
     const id = makePublicId({ kind: 'product', productId: '../7', imageKey: 'a/b c?#' });
 
-    expect(id.split('/')).toHaveLength(3);
-    expect(id.startsWith('products/')).toBe(true);
+    expect(id.split('/')).toHaveLength(4);
+    expect(id.startsWith('test/products/')).toBe(true);
     expect(id).not.toMatch(/\.\.\/|[?# ]/);
   });
 
@@ -51,9 +55,27 @@ describe('makePublicId', () => {
   });
 });
 
+// every environment numbers its users and products from 1: user 5 of dev and of prod must
+// never share a file of the same account
+describe('ENV_FOLDER', () => {
+  it.each([
+    ['production', 'prod'],
+    ['development', 'dev'],
+    ['test', 'test'],
+  ])('puts the files of %s into %s', async (nodeEnv, folder) => {
+    const util = await importWithEnv<typeof import('@utils/cloudinary.util.js')>(
+      '@utils/cloudinary.util.js',
+      { NODE_ENV: nodeEnv },
+    );
+
+    expect(util.ENV_FOLDER).toBe(folder);
+    expect(util.makePublicId({ kind: 'avatar', userId: 5 })).toBe(`${folder}/users/5/avatar`);
+  });
+});
+
 describe('assertImageFile', () => {
   it.each(['image/jpeg', 'image/png', 'image/webp', ' IMAGE/PNG '])('accepts %s', (mimetype) => {
-    expect(() => assertImageFile({ mimetype, bytes: 1000 })).not.toThrow();
+    expect(() => assertImageFile({ mimetype })).not.toThrow();
   });
 
   it.each(['image/gif', 'image/svg+xml', 'application/pdf', '', null, undefined])(
@@ -67,27 +89,7 @@ describe('assertImageFile', () => {
     },
   );
 
-  it('accepts a file of exactly 5 MB and rejects one byte more', () => {
-    const limit = 5 * 1024 * 1024;
-
-    expect(() => assertImageFile({ mimetype: 'image/png', bytes: limit })).not.toThrow();
-    expect(
-      thrownBy(() => assertImageFile({ mimetype: 'image/png', bytes: limit + 1 })),
-    ).toMatchObject({
-      errorCode: 'IMAGE_TOO_LARGE',
-    });
-  });
-
-  it('reads the size from size when bytes is not given', () => {
-    expect(
-      thrownBy(() => assertImageFile({ mimetype: 'image/png', size: 6 * 1024 * 1024 })),
-    ).toMatchObject({ errorCode: 'IMAGE_TOO_LARGE' });
-  });
-
-  it('respects custom limits', () => {
-    expect(
-      thrownBy(() => assertImageFile({ mimetype: 'image/png', bytes: 11 }, { maxBytes: 10 })),
-    ).toMatchObject({ errorCode: 'IMAGE_TOO_LARGE' });
+  it('respects a custom list of types', () => {
     expect(() =>
       assertImageFile({ mimetype: 'image/gif' }, { allowedMimeTypes: ['image/gif'] }),
     ).not.toThrow();
@@ -144,5 +146,42 @@ describe('buildImageUrls', () => {
     const other = 'https://example.com/a.png';
 
     expect(buildImageUrls(other, 'product').url400).toBe(other);
+  });
+});
+
+describe('deleteImage', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('removes the image by its public id and drops the cached copies', async () => {
+    const destroy = jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
+
+    await deleteImage('users/42/avatar');
+
+    expect(destroy).toHaveBeenCalledWith('users/42/avatar', {
+      resource_type: 'image',
+      invalidate: true,
+    });
+  });
+
+  it.each(['', '   '])('refuses a blank public id before asking cloudinary', async (publicId) => {
+    const destroy = jest.spyOn(cloudinary.uploader, 'destroy');
+
+    expect(await rejectedBy(() => deleteImage(publicId))).toMatchObject({
+      errorCode: 'PUBLIC_ID_REQUIRED',
+    });
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('wraps a cloudinary failure and keeps it as the cause', async () => {
+    const failure = new Error('cloudinary is down');
+    jest.spyOn(cloudinary.uploader, 'destroy').mockRejectedValue(failure);
+
+    expect(await rejectedBy(() => deleteImage('users/42/avatar'))).toMatchObject({
+      statusCode: 500,
+      details: { reason: 'CLOUDINARY_DELETE_UNEXPECTED' },
+      cause: failure,
+    });
   });
 });

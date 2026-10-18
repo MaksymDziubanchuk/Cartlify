@@ -8,6 +8,8 @@ isolateEnv({
   REDIS_URL: 'redis://127.0.0.1:63799',
   // the one site the cors and websocket origin checks let in, oauth logins return to it
   WEB_ORIGIN: 'https://shop.example.com',
+  // the domain of the site, a deleted account gets an address on it
+  SITE_DOMAIN: 'shop.example.com',
   // made-up oauth apps: the provider answers come from tests/helpers/oauth.ts
   GITHUB_CLIENT_ID: 'test-github-client',
   GITHUB_CLIENT_SECRET: 'test-github-secret',

@@ -1,6 +1,7 @@
 import type { Prisma, Role } from '@prisma/client';
 import { InternalError, ForbiddenError } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
+import { cutProfileText } from '@helpers/profileText.js';
 
 type Tx = Prisma.TransactionClient;
 
@@ -43,11 +44,13 @@ export async function upsertOAuthUserByEmail(
     authProvider,
     providerSub,
     emailVerified,
-    name,
     avatarUrl,
-    locale,
     userNotFoundAfterConflictMsg,
   } = args;
+
+  // a name or locale from the provider is cut to the profile limit, the login must go through
+  const name = cutProfileText(args.name);
+  const locale = cutProfileText(args.locale);
 
   await setAdminContext(tx);
 

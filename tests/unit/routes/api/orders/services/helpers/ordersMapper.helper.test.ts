@@ -1,7 +1,10 @@
 import { Prisma } from '@prisma/client';
 import { describe, expect, it } from '@jest/globals';
 
-import { mapOrderRowToResponse } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
+import {
+  mapOrderRowToResponse,
+  orderResponseSelect,
+} from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
 import { InternalError } from '@utils/errors.js';
 
 import { thrownBy } from '../../../../../../helpers/errors.js';
@@ -32,8 +35,12 @@ const row = (patch: Record<string, unknown> = {}) => ({
   userId: 3,
   status: 'pending',
   confirmed: false,
+  reservationExpiresAt: null,
   total: new Prisma.Decimal('19.98'),
   shippingAddress: null,
+  recipientFirstName: null,
+  recipientLastName: null,
+  recipientPhone: null,
   note: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
@@ -81,6 +88,46 @@ describe('mapOrderRowToResponse', () => {
 
   it('keeps a note when there is one', () => {
     expect(map({ note: 'leave at the door' }).note).toBe('leave at the door');
+  });
+
+  it('gives the recipient and the end of the reservation of a waiting order', () => {
+    const expiresAt = new Date('2026-01-01T00:15:00Z');
+
+    const out = map({
+      status: 'waiting',
+      confirmed: true,
+      reservationExpiresAt: expiresAt,
+      shippingAddress: 'Main st 1, Kyiv',
+      recipientFirstName: 'Anna',
+      recipientLastName: 'Koval',
+      recipientPhone: '+380501234567',
+    });
+
+    expect(out).toMatchObject({
+      reservationExpiresAt: expiresAt,
+      shippingAddress: 'Main st 1, Kyiv',
+      recipientFirstName: 'Anna',
+      recipientLastName: 'Koval',
+      recipientPhone: '+380501234567',
+    });
+  });
+
+  it('leaves out the recipient and the reservation end while the order has none', () => {
+    const out = map();
+
+    for (const field of [
+      'reservationExpiresAt',
+      'recipientFirstName',
+      'recipientLastName',
+      'recipientPhone',
+    ]) {
+      expect(out).not.toHaveProperty(field);
+    }
+  });
+
+  it('never reads or gives the payment id', () => {
+    expect(orderResponseSelect).not.toHaveProperty('paymentIntentId');
+    expect(map({ paymentIntentId: 'pi_secret' })).not.toHaveProperty('paymentIntentId');
   });
 
   it('maps an empty cart', () => {

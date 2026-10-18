@@ -1,3 +1,5 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 export const categoriesGetQuerySchema = {
   $id: 'categoriesGetQuerySchema',
   type: 'object',
@@ -64,7 +66,7 @@ const categoriesUpdateParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    categoryId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    categoryId: idPathParam('the category'),
   },
   required: ['categoryId'],
 } as const;
@@ -91,7 +93,7 @@ const categoriesDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    categoryId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    categoryId: idPathParam('the category'),
   },
   required: ['categoryId'],
 } as const;

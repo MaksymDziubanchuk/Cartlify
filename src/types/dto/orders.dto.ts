@@ -50,6 +50,11 @@ export interface OrderResponseDto {
   createdAt: Date;
   updatedAt: Date;
 
+  // left out while the order does not have them
+  reservationExpiresAt?: Date;
+  recipientFirstName?: string;
+  recipientLastName?: string;
+  recipientPhone?: string;
   note?: string;
 }
 
@@ -68,6 +73,8 @@ export interface CurrentAddItemBodyDto {
 export interface CurrentAddItemDto extends CurrentAddItemBodyDto {
   actorId: UserId;
   actorRole: Role;
+  // an own unconfirmed order instead of the cart (POST /:orderId/items)
+  orderId?: OrderId;
 }
 
 // PATCH /current/items/:itemId
@@ -83,6 +90,8 @@ export interface CurrentUpdateItemDto extends CurrentUpdateItemBodyDto {
   itemId: number;
   actorId: UserId;
   actorRole: Role;
+  // an own unconfirmed order instead of the cart (PATCH /:orderId/items/:itemId)
+  orderId?: OrderId;
 }
 
 // DELETE /current/items/:itemId
@@ -90,13 +99,43 @@ export interface CurrentDeleteItemDto {
   itemId: number;
   actorId: UserId;
   actorRole: Role;
+  // an own unconfirmed order instead of the cart (DELETE /:orderId/items/:itemId)
+  orderId?: OrderId;
+}
+
+// /:orderId/items/:itemId
+export interface OrderItemParamsDto {
+  orderId: IdParam;
+  itemId: IdParam;
+}
+
+// POST /:orderId/cancel-payment and POST /:orderId/cancel
+export interface CancelOrderDto {
+  actorId: UserId;
+  actorRole: Role;
+  orderId: OrderId;
+}
+
+// the answer of an admin cancel: the order with how to reach its buyer
+export interface CancelledOrderResponseDto extends OrderResponseDto {
+  user: {
+    id: UserId;
+    deleted: boolean;
+    // only while the account is not deleted
+    email?: string;
+  };
 }
 
 // POST /current/confirm
 export interface ConfirmCurrentOrderBodyDto {
   orderId: OrderId;
-  // required for an order that has no shipping address yet
+  // the address and the recipient are required for an order that does not have them yet
   shippingAddress?: string;
+  recipientFirstName?: string;
+  recipientLastName?: string;
+  recipientPhone?: string;
+  // optional; an empty one removes the note
+  note?: string;
 }
 
 export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
@@ -105,7 +144,7 @@ export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
 }
 
 // GET /
-export type OrdersSortBy = 'updatedAt' | 'total' | 'shippingAddress';
+export type OrdersSortBy = 'createdAt' | 'updatedAt' | 'total' | 'shippingAddress';
 export type OrdersSortDir = 'asc' | 'desc';
 
 export interface GetOrdersQueryDto {

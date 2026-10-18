@@ -1,8 +1,12 @@
 import type { FastifySchema } from 'fastify';
 
+import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+
+// the biggest avatar file in megabytes, for the texts of the docs
+const MAX_AVATAR_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
 
 const userReviewExample = {
   id: 1,
@@ -60,7 +64,7 @@ const userIdParamsExample = {
 };
 
 const deleteUserResponseExample = {
-  message: 'User deleted successfully.',
+  message: 'user deleted',
 };
 
 // Schema for current authenticated user lookup
@@ -76,28 +80,13 @@ const getMeSchema = {
       examples: [userResponseExample],
     },
 
-    400: {
-      description: 'Invalid current user request.',
-      $ref: 'errorResponseSchema#',
-    },
     401: {
-      description: 'Authentication is required to read the current user profile.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to read this profile.',
-      $ref: 'errorResponseSchema#',
-    },
-    404: {
-      description: 'Current user was not found.',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'Current user state conflicts with this request.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Current user request failed validation.',
+      description: 'A guest has no profile: only a signed-in user reads it (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -111,7 +100,12 @@ const getMeSchema = {
 const patchMeSchema = {
   operationId: 'updateCurrentUser',
   summary: 'Update current user',
-  description: 'Updates the currently authenticated user profile.',
+  description:
+    'Updates the currently authenticated user profile. Takes a JSON body, or a multipart form ' +
+    'when the request carries an avatar file. The name and the locale are up to 100 characters; ' +
+    'the phone is an international number such as +380501234567, with no spaces, brackets or ' +
+    'dashes, in a JSON body and in a form alike; an empty value removes the name, the locale ' +
+    `or the phone. An avatar file is up to ${MAX_AVATAR_MB} MB.`,
 
   body: {
     $ref: 'usersUpdateMeBodySchema#',
@@ -132,23 +126,29 @@ const patchMeSchema = {
     },
 
     400: {
-      description: 'Invalid current user update request.',
+      description:
+        'Invalid current user update request: nothing to change, a name or locale over 100 ' +
+        'characters, a wrong phone or a wrong avatar file.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to update the current user profile.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to update this profile.',
+      description: 'A guest has no profile to update (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
-    409: {
-      description: 'Current user update conflicts with existing data.',
+    404: {
+      description:
+        'The account is deleted (USER_NOT_FOUND): its access token works for a few minutes after the deletion, the profile can no longer change.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Current user update payload failed validation.',
+    413: {
+      description:
+        `The avatar file is over ${MAX_AVATAR_MB} MB (PAYLOAD_TOO_LARGE). Nothing was changed: ` +
+        'the page tells the user to pick a smaller image and sends the form again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -164,7 +164,8 @@ const getUserByIdSchema = {
   summary: 'Get user by id',
   description:
     'Returns the public profile of any user by id: name, avatar and dates. ' +
-    'It has no email, role, phone or reviews; a user reads those for themselves in GET /api/users/me.',
+    'It has no email, role, phone or reviews; a user reads those for themselves in GET /api/users/me. ' +
+    'A deleted account is USER_NOT_FOUND for a user; an admin or root reads it with `deletedAt`.',
 
   params: {
     $ref: 'usersGetByIdParamsSchema#',
@@ -179,19 +180,22 @@ const getUserByIdSchema = {
     },
 
     400: {
-      description: 'Invalid user id.',
+      description: 'Invalid user id: a whole number from 1 to 2147483647 is expected.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to read this user profile.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to read this user profile.',
+      description:
+        'A guest cannot read profiles: only a signed-in user, admin or root can (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'User was not found.',
+      description:
+        'User was not found (USER_NOT_FOUND), also a deleted account when the reader is not an admin or root.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -201,11 +205,26 @@ const getUserByIdSchema = {
   },
 } satisfies FastifySchema;
 
+// what a deletion does, the same for a root and for the user
+const ACCOUNT_DELETION =
+  'The row stays, emptied and marked with `deletedAt`: the email becomes ' +
+  'deleted+<id>+...@<domain of the site>, the name becomes Guest, the password, provider link, ' +
+  'avatar (also the file), locale and phone are removed, the role stays. The account can no ' +
+  'longer change its own row, and other users get USER_NOT_FOUND for its profile. ' +
+  'An order waiting for payment is cancelled, its stock goes back and its payment page is closed; ' +
+  'a payment that still comes for it is refunded in full. The cart goes. Paid and shipped orders, ' +
+  'favorites, reviews, login logs and chat messages stay; open chats are closed. Every refresh ' +
+  'token is removed: an access token cannot be taken back, it works until it expires and the ' +
+  'session cannot be renewed after that. The person gets a mail at the old address with the ' +
+  'orders still on their way and what happened to the cancelled ones; a mail that fails is only ' +
+  'logged. ACCOUNT_ORDERS_CHANGED (409): a payment or the end of a reservation changed a waiting ' +
+  'order at that moment, nothing was changed, repeat the request.';
+
 // Schema for privileged user deletion
 const deleteUserByIdSchema = {
   operationId: 'deleteUserById',
   summary: 'Delete user by id',
-  description: 'Deletes a user account by id. This operation is restricted to root users.',
+  description: `Deletes a user account by id. Restricted to root, no confirmation asked. ${ACCOUNT_DELETION}`,
 
   params: {
     $ref: 'usersGetByIdParamsSchema#',
@@ -220,15 +239,17 @@ const deleteUserByIdSchema = {
     },
 
     400: {
-      description: 'Invalid user deletion request.',
+      description:
+        'Invalid user deletion request: the id must be a whole number from 1 to 2147483647.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to delete a user.',
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Only root users can delete users.',
+      description: 'Only root can delete users (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     404: {
@@ -236,15 +257,77 @@ const deleteUserByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'User cannot be deleted because of the current account state.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'User deletion request failed validation.',
+      description:
+        'A root cannot delete their own account (ROOT_CANNOT_DELETE_SELF), or a waiting order ' +
+        'changed at that moment (ACCOUNT_ORDERS_CHANGED, repeat the request).',
       $ref: 'errorResponseSchema#',
     },
     500: {
-      description: 'Unexpected server error while deleting user.',
+      description:
+        'INTERNAL_ERROR: an unexpected server error while deleting user, for example a server ' +
+        'without SITE_DOMAIN to build the new address on (the reason is in the server log only).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for a user deleting their own account
+const deleteMeSchema = {
+  operationId: 'deleteCurrentUser',
+  summary: 'Delete current user',
+  description:
+    'Deletes the account of the signed-in user, only a user (an admin is demoted by root first). ' +
+    'A local account sends its password. An account of Google, GitHub or LinkedIn has none: ' +
+    'its last login must be at most 10 minutes old, otherwise RECENT_LOGIN_REQUIRED (403) asks ' +
+    'the page to log out, send the person through the provider again and repeat the request. ' +
+    'With an order waiting for payment, paid or shipped the first request answers ' +
+    'ACCOUNT_HAS_OPEN_ORDERS (409) with details.orders [{ orderId, status, total }] and changes ' +
+    'nothing; the page shows them and repeats with confirmOpenOrders: true. Send the body {} or ' +
+    'no body at all without a Content-Type header: a Content-Type: application/json with an empty ' +
+    'body is refused with 400 BAD_REQUEST before the route runs. On success the ' +
+    `answer clears the auth cookies of this browser. ${ACCOUNT_DELETION}`,
+
+  body: {
+    $ref: 'usersDeleteMeBodySchema#',
+    examples: [{ password: 'secret123', confirmOpenOrders: true }],
+  },
+
+  response: {
+    204: {
+      description: 'The account is deleted, the auth cookies are cleared.',
+      $ref: 'usersDeleteMeResponseSchema#',
+    },
+
+    400: {
+      description:
+        'The body does not match the schema (VALIDATION_ERROR), a local account sent no ' +
+        'password (PASSWORD_REQUIRED), or a Content-Type: application/json came with an empty ' +
+        'body (BAD_REQUEST).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'Only a user deletes their own account (INSUFFICIENT_ROLE), the password is wrong ' +
+        '(PASSWORD_INVALID), or the last login of an oauth account is older than 10 minutes ' +
+        '(RECENT_LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'The account has orders waiting for payment, paid or shipped (ACCOUNT_HAS_OPEN_ORDERS, ' +
+        'details.orders lists them; repeat with confirmOpenOrders: true), or a waiting order ' +
+        'changed at that moment (ACCOUNT_ORDERS_CHANGED, repeat the request).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description:
+        'INTERNAL_ERROR: an unexpected server error while deleting the account, for example a ' +
+        'server without SITE_DOMAIN to build the new address on (the reason is in the server log only).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -257,6 +340,7 @@ const taggedUsersSchema = withOpenApiTag(
     patchMeSchema,
     getUserByIdSchema,
     deleteUserByIdSchema,
+    deleteMeSchema,
   },
   'users',
 );

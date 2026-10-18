@@ -14,6 +14,10 @@ import { findById } from './services/findById.service.js';
 
 import { updateOrderStatus } from './services/updateOrderStatus.service.js';
 
+import { cancelOrderPayment } from './services/cancelOrderPayment.service.js';
+
+import { cancelPaidOrder } from './services/cancelPaidOrder.service.js';
+
 export const ordersServices = {
   getCurrent,
   addCurrentItem,
@@ -24,4 +28,7 @@ export const ordersServices = {
   findOrders,
   findById,
   updateOrderStatus,
+
+  cancelOrderPayment,
+  cancelPaidOrder,
 };

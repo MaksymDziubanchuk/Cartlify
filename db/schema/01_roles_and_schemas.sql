@@ -209,6 +209,8 @@ BEGIN
     'cartlify.migrate_guest_data_to_user(uuid, integer)',
     'cartlify.confirm_order(integer, interval)',
     'cartlify.unconfirm_order(integer)',
+    'cartlify.cancel_order_payment(integer)',
+    'cartlify.cancel_paid_order(integer)',
     'cartlify.pay_order(integer, text, numeric)',
     'cartlify.expire_order_reservation(integer)',
     -- functions that run with the app rights, under its rls

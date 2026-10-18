@@ -262,7 +262,31 @@ async function expireCheckoutSession({ sessionId }: ExpireCheckoutSessionArgs): 
   }
 }
 
+// the state of a checkout session at stripe: open (can still be paid), complete or expired, and
+// whether the money is taken; a session that could not be expired tells this way what happened.
+// A complete session of a delayed payment method is not paid yet, the bank may still refuse it
+async function readCheckoutSessionStatus(
+  sessionId: string,
+): Promise<{ status: 'open' | 'complete' | 'expired'; paid: boolean }> {
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    // stripe types leave room for values stripe adds later, only the known ones are answered
+    const status = (['open', 'complete', 'expired'] as const).find(
+      (known) => known === session.status,
+    );
+
+    if (status) return { status, paid: session.payment_status === 'paid' };
+
+    throw new InternalError({ reason: 'STRIPE_CHECKOUT_SESSION_STATUS_UNKNOWN', sessionId });
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    throw new InternalError({ reason: 'STRIPE_CHECKOUT_SESSION_READ_UNEXPECTED', sessionId }, err);
+  }
+}
+
 export {
+  readCheckoutSessionStatus,
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
   getOrderIdFromCheckoutSession,

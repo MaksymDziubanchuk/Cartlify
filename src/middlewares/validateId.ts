@@ -1,5 +1,6 @@
 import { FastifyRequest, preHandlerHookHandler } from 'fastify';
 import { BadRequestError } from '@utils/errors.js';
+import { MAX_ID } from '@schemas/idPathParam.js';
 
 // validate numeric id param
 export default function validateId(paramName: string): preHandlerHookHandler {
@@ -15,7 +16,9 @@ export default function validateId(paramName: string): preHandlerHookHandler {
 
     const num = Number(value);
 
-    if (!Number.isSafeInteger(num) || num <= 0) {
+    // an id above the int column of the database matches no row, and the database would
+    // answer it with an error instead of a miss
+    if (!Number.isSafeInteger(num) || num <= 0 || num > MAX_ID) {
       throw new BadRequestError('INVALID_ID_PARAM');
     }
   };

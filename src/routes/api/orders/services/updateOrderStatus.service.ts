@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import {
+  ConflictError,
   ForbiddenError,
   BadRequestError,
   InternalError,
@@ -9,9 +10,16 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
+import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
 
-import type { UpdateOrderStatusDto, OrderResponseDto } from 'types/dto/orders.dto.js';
+import type { UpdateOrderStatusDto, OrderResponseDto, OrderStatus } from 'types/dto/orders.dto.js';
+
+// the statuses an order may come from, the same rule the database policy holds:
+// a paid order is shipped, a paid or shipped one is delivered
+const ALLOWED_FROM: Record<string, OrderStatus[]> = {
+  shipped: ['paid'],
+  delivered: ['paid', 'shipped'],
+};
 
 export async function updateOrderStatus({
   actorId,
@@ -22,8 +30,8 @@ export async function updateOrderStatus({
   // enforce admin/root only
   if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
 
-  if (!['shipped', 'delivered', 'cancelled'].includes(status))
-    throw new BadRequestError('STATUS_INVALID');
+  // a cancel returns the money and the stock, it goes through POST /:orderId/cancel
+  if (!['shipped', 'delivered'].includes(status)) throw new BadRequestError('STATUS_INVALID');
 
   const orderIdRaw = Number(orderId);
 
@@ -36,7 +44,23 @@ export async function updateOrderStatus({
         // bound lock wait
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // rls enforces allowed transitions; if not allowed, update will behave like "not found"
+        // an admin sees every order: a missing one is not found, an order whose status does not
+        // allow the step is a conflict with the reason, never "not found"
+        const current = await db.order.findUnique({
+          where: { id: orderIdRaw },
+          select: { status: true },
+        });
+        if (!current) throw new NotFoundError('ORDER_NOT_FOUND', { orderId: orderIdRaw });
+
+        if (!ALLOWED_FROM[status]?.includes(current.status)) {
+          throw new ConflictError('ORDER_STATUS_TRANSITION_INVALID', {
+            status: current.status,
+            requested: status,
+          });
+        }
+
+        // rls holds the same rule: an order changed by another request meanwhile is hidden from
+        // the update, it was there a moment ago, so it is a conflict too
         try {
           await db.order.update({
             where: { id: orderIdRaw },
@@ -44,56 +68,20 @@ export async function updateOrderStatus({
             select: { id: true },
           });
         } catch (err) {
-          // p2025: record not found (also happens when rls USING filters the row out)
           if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
-            throw new NotFoundError('ORDER_NOT_FOUND', { orderId: orderIdRaw });
+            throw new ConflictError('ORDER_STATUS_CHANGED', { orderId: orderIdRaw });
           }
           throw err;
         }
 
         const order = await db.order.findUnique({
           where: { id: orderIdRaw },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_STATUS_UPDATE' });
 
-        return mapOrderRowToResponse(order as any);
+        return mapOrderRowToResponse(order);
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

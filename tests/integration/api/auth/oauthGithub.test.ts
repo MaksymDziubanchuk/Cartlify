@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { getMe, sessionCookie, signIn } from '../../../helpers/actors.js';
-import { startApp, stopApp, withoutErrorLog } from '../../../helpers/app.js';
+import { startApp, stopApp } from '../../../helpers/app.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -151,6 +152,17 @@ describe('GET /api/auth/github/callback', () => {
       isVerified: true,
       passwordHash: null,
     });
+  });
+
+  // a profile name is at most 100 characters; a long name from the provider must not stop the login
+  it('cuts a name over 100 characters instead of refusing the login', async () => {
+    const gh = account({ name: 'N'.repeat(150) });
+
+    const res = await loginWith(gh);
+
+    expect(landing(res).error).toBeNull();
+    const me = await getMe(app, sessionCookie(cookieJar(res)));
+    expect(me.json().name).toBe('N'.repeat(100));
   });
 
   it('signs a returning user into the same account', async () => {
@@ -339,11 +351,15 @@ describe('GET /api/auth/github/callback', () => {
     jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
     const { guestId, state } = await startLogin(app, 'github');
 
-    // the failure is on purpose, its error line stays out of the output
-    const res = await withoutErrorLog(() =>
-      callback(app, 'github', { code: 'test-code', state }, cookieHeader({ guestId })),
+    const res = await callback(
+      app,
+      'github',
+      { code: 'test-code', state },
+      cookieHeader({ guestId }),
     );
 
     expectRefused(res, 'OAUTH_LOGIN_FAILED');
+    // the failure itself goes to the log of the server
+    expect(takeLogs({ msg: 'oauth login failed' })).toHaveLength(1);
   });
 });

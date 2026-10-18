@@ -1,3 +1,5 @@
+import { idPathParam } from '@schemas/idPathParam.js';
+
 const rootAdminsGetQuerySchema = {
   $id: 'rootAdminsGetQuerySchema',
   type: 'object',
@@ -49,7 +51,7 @@ const rootAdminsDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    adminId: { type: 'string', pattern: '^[1-9][0-9]*$' },
+    adminId: idPathParam('the admin'),
   },
   required: ['adminId'],
 } as const;

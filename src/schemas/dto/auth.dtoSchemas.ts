@@ -1,3 +1,5 @@
+import { PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
+
 // a password that is stored: printable ascii only, one byte per character,
 // so 64 characters always fit the 72 bytes bcrypt reads
 const newPasswordSchema = {
@@ -112,7 +114,11 @@ const authRegisterBodySchema = {
   properties: {
     email: { type: 'string', format: 'email' },
     password: newPasswordSchema,
-    name: { type: 'string' },
+    name: {
+      type: 'string',
+      maxLength: PROFILE_TEXT_MAX_LENGTH,
+      description: `Display name, up to ${PROFILE_TEXT_MAX_LENGTH} characters. Spaces around it are cut.`,
+    },
   },
   required: ['email', 'password'],
 } as const;

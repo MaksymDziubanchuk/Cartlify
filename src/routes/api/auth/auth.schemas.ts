@@ -89,7 +89,8 @@ const setRegisterSchema = {
   summary: 'Register user',
   description:
     'Creates a new user account and sets authentication cookies. ' +
-    'The password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols.',
+    'The password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols. ' +
+    'The name is optional, up to 100 characters.',
 
   body: {
     $ref: 'authRegisterBodySchema#',

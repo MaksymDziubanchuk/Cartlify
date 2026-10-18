@@ -131,6 +131,17 @@ describe('GET /api/auth/google/callback', () => {
     });
   });
 
+  // a profile name is at most 100 characters; a long name from the provider must not stop the login
+  it('cuts a name over 100 characters instead of refusing the login', async () => {
+    const claims = account({ name: 'N'.repeat(150) });
+
+    const { res } = await loginWith(claims);
+
+    expect(landing(res).error).toBeNull();
+    const me = await getMe(app, sessionCookie(cookieJar(res)));
+    expect(me.json().name).toBe('N'.repeat(100));
+  });
+
   it('sends the code with our app secret and the redirect address to the token endpoint', async () => {
     const { calls } = await loginWith(account());
 

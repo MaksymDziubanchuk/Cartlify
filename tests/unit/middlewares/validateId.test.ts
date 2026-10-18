@@ -29,6 +29,10 @@ describe('validateId', () => {
     ['in exponent form', '1e3'],
     ['in hex form', '0x1A'],
     ['with spaces', ' 7 '],
+    // ids are int columns: a bigger number is no row, and the database would answer with an error
+    ['one above the int range', '2147483648'],
+    ['far above the int range', '9999999999'],
+    ['above the safe integers', '99999999999999999999'],
   ])('throws INVALID_ID_PARAM when the id is %s', async (_case, value) => {
     const err = await rejectedBy(() => check(value));
 
@@ -41,7 +45,7 @@ describe('validateId', () => {
     await expect(check(42)).resolves.toBeUndefined();
   });
 
-  it.each([0, -3, 1.5, Number.NaN])(
+  it.each([0, -3, 1.5, Number.NaN, 2_147_483_648])(
     'throws INVALID_ID_PARAM when a coerced id is %p',
     async (value) => {
       await expect(check(value)).rejects.toMatchObject({ errorCode: 'INVALID_ID_PARAM' });

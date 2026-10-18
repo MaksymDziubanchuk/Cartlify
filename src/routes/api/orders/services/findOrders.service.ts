@@ -3,7 +3,9 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 
 import {
+  freshenUnconfirmedOrders,
   mapOrderRowToResponse,
+  orderResponseSelect,
   normalizeFindOrdersInput,
   buildOrdersWhere,
   buildOrdersCursorWhere,
@@ -28,46 +30,15 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
       // set rls session context
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
+      // unconfirmed orders of the user show current prices and no deleted products, paid ones
+      // keep the prices they were paid with: a confirmed order never changes its items
+      if (actorRole === 'USER') await freshenUnconfirmedOrders(tx, Number(actorId));
+
       const rows = await tx.order.findMany({
         where,
         orderBy,
         take: limit + 1,
-        select: {
-          id: true,
-          userId: true,
-          status: true,
-          confirmed: true,
-          total: true,
-          shippingAddress: true,
-          note: true,
-          createdAt: true,
-          updatedAt: true,
-          items: {
-            select: {
-              id: true,
-              productId: true,
-              quantity: true,
-              unitPrice: true,
-              totalPrice: true,
-              product: {
-                select: {
-                  id: true,
-                  name: true,
-                  categoryId: true,
-                  stock: true,
-                  reservedStock: true,
-                  deletedAt: true,
-                  images: {
-                    select: { url: true, position: true, isPrimary: true },
-                    orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                    take: 1,
-                  },
-                },
-              },
-            },
-            orderBy: { id: 'asc' },
-          },
-        },
+        select: orderResponseSelect,
       });
 
       const total = await tx.order.count({ where: baseWhere });

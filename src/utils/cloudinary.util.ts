@@ -1,6 +1,7 @@
 import { Readable, PassThrough } from 'node:stream';
 
 import cloudinary from '@config/cloudinary.js';
+import env from '@config/env.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
@@ -9,7 +10,6 @@ import type { AvatarUrls } from 'types/dto/users.dto.js';
 import type { ProductImagesUrls } from 'types/dto/products.dto.js';
 
 const DEFAULT_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const;
-const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 
 export type MakePublicIdOpts =
   | { kind: 'avatar'; userId: string | number }
@@ -18,19 +18,15 @@ export type MakePublicIdOpts =
 export type ImageFileMeta = {
   mimetype?: string | null;
   filename?: string | null;
-  size?: number | null;
-  bytes?: number | null;
 };
 
 export type AssertImageFileOpts = {
-  maxBytes?: number;
   allowedMimeTypes?: readonly string[];
 };
 
 export type UploadImageArgs = {
   file: Buffer | NodeJS.ReadableStream;
   mimetype: string;
-  bytes?: number;
   filename?: string;
   publicId?: string;
   tags?: string[];
@@ -188,6 +184,12 @@ export async function requireNonEmptyStream(
   });
 }
 
+// the folder of the environment: every environment numbers its users and products from 1, so
+// without it user 5 of dev and user 5 of prod would write and delete the same file of a shared
+// account. Files uploaded before the folder existed keep their paths, the rows store them
+export const ENV_FOLDER =
+  env.NODE_ENV === 'production' ? 'prod' : env.NODE_ENV === 'test' ? 'test' : 'dev';
+
 // build deterministic public_id for overwrite and cleanup flows
 export function makePublicId(opts: MakePublicIdOpts): string {
   if (opts.kind === 'avatar') {
@@ -195,7 +197,7 @@ export function makePublicId(opts: MakePublicIdOpts): string {
     if (!userId) throw new BadRequestError('PUBLIC_ID_USER_REQUIRED');
 
     // one avatar per user
-    return `users/${userId}/avatar`;
+    return `${ENV_FOLDER}/users/${userId}/avatar`;
   }
 
   const productId = cleanSegment(opts.productId);
@@ -205,23 +207,18 @@ export function makePublicId(opts: MakePublicIdOpts): string {
   if (!imageKey) throw new BadRequestError('PUBLIC_ID_IMAGEKEY_REQUIRED');
 
   // multiple images per product
-  return `products/${productId}/${imageKey}`;
+  return `${ENV_FOLDER}/products/${productId}/${imageKey}`;
 }
 
-// validate uploaded image metadata before calling cloudinary
-// enforce server-side limits even if client lies
+// check the type of an uploaded image before calling cloudinary, whatever the client says it is.
+// The size is not checked here: a file arrives as a stream, its size is known only after it is read,
+// so the multipart size limit (MAX_UPLOAD_SIZE_BYTES, answer 413) cuts a file that is too big
 export function assertImageFile(meta: ImageFileMeta, opts: AssertImageFileOpts = {}): void {
   const allowed = opts.allowedMimeTypes ?? DEFAULT_ALLOWED_MIME;
-  const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
 
   const mimetype = (meta.mimetype ?? '').trim().toLowerCase();
   if (!mimetype || !allowed.includes(mimetype)) {
     throw new BadRequestError('IMAGE_TYPE_NOT_ALLOWED');
-  }
-
-  const bytes = meta.bytes ?? meta.size ?? null;
-  if (typeof bytes === 'number' && Number.isFinite(bytes) && bytes > maxBytes) {
-    throw new BadRequestError('IMAGE_TOO_LARGE');
   }
 }
 
@@ -275,10 +272,7 @@ async function uploadViaStream(
 
 // upload a new image and return stable identifiers for db storage
 export async function uploadImage(args: UploadImageArgs): Promise<UploadImageResult> {
-  assertImageFile({
-    mimetype: args.mimetype,
-    ...(args.bytes != null ? { bytes: args.bytes } : {}),
-  });
+  assertImageFile({ mimetype: args.mimetype });
 
   const options: UploadApiOptions = { resource_type: 'image' };
 
@@ -308,10 +302,7 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
 
 // overwrite an existing image by public_id and return the new versioned url
 export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadImageResult> {
-  assertImageFile({
-    mimetype: args.mimetype,
-    ...(args.bytes != null ? { bytes: args.bytes } : {}),
-  });
+  assertImageFile({ mimetype: args.mimetype });
 
   const options: UploadApiOptions = { resource_type: 'image' };
 
@@ -337,6 +328,18 @@ export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadIm
     if (isAppError(err)) throw err;
 
     throw new InternalError({ reason: 'CLOUDINARY_OVERWRITE_UNEXPECTED' }, err);
+  }
+}
+
+// remove an image by public_id, for example the avatar of a deleted account;
+// an image that is already gone is not an error, cloudinary answers "not found" for it
+export async function deleteImage(publicId: string): Promise<void> {
+  if (!publicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
+
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: 'image', invalidate: true });
+  } catch (err) {
+    throw new InternalError({ reason: 'CLOUDINARY_DELETE_UNEXPECTED' }, err);
   }
 }
 

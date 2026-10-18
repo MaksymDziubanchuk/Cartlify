@@ -19,6 +19,8 @@ export type OrderPaidTemplateArgs = {
   paidAt: Date;
   userName?: string;
   shippingAddress?: string | null;
+  recipientName?: string | null;
+  recipientPhone?: string | null;
   appName?: string;
   logoCid?: string;
 };
@@ -61,6 +63,9 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
     })),
     total: price(args.total),
     shippingAddress: args.shippingAddress?.trim() || '',
+    // the name and the phone in one line; an order confirmed before the recipient fields existed
+    // has neither, then the line is left out
+    recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),

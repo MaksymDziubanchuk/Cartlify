@@ -30,10 +30,8 @@ import errorNormalizer from '@middlewares/errorNormalizer.js';
 import openApiPlugin from './plugins/openapi.plugin.js';
 import csrfPlugin from './plugins/csrf.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
+import { FORM_BODY_LIMIT_BYTES, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 
-
-const MAX_UPLOAD_SIZE_BYTES = 10_000_000;
-const FORM_BODY_LIMIT_BYTES = 1_048_576;
 
 // allow pino transport type
 type LoggerOptionsWithTransport = LoggerOptions & {
