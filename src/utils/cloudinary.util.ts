@@ -1,6 +1,7 @@
 import { Readable, PassThrough } from 'node:stream';
 
 import cloudinary from '@config/cloudinary.js';
+import env from '@config/env.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
@@ -183,6 +184,12 @@ export async function requireNonEmptyStream(
   });
 }
 
+// the folder of the environment: every environment numbers its users and products from 1, so
+// without it user 5 of dev and user 5 of prod would write and delete the same file of a shared
+// account. Files uploaded before the folder existed keep their paths, the rows store them
+export const ENV_FOLDER =
+  env.NODE_ENV === 'production' ? 'prod' : env.NODE_ENV === 'test' ? 'test' : 'dev';
+
 // build deterministic public_id for overwrite and cleanup flows
 export function makePublicId(opts: MakePublicIdOpts): string {
   if (opts.kind === 'avatar') {
@@ -190,7 +197,7 @@ export function makePublicId(opts: MakePublicIdOpts): string {
     if (!userId) throw new BadRequestError('PUBLIC_ID_USER_REQUIRED');
 
     // one avatar per user
-    return `users/${userId}/avatar`;
+    return `${ENV_FOLDER}/users/${userId}/avatar`;
   }
 
   const productId = cleanSegment(opts.productId);
@@ -200,7 +207,7 @@ export function makePublicId(opts: MakePublicIdOpts): string {
   if (!imageKey) throw new BadRequestError('PUBLIC_ID_IMAGEKEY_REQUIRED');
 
   // multiple images per product
-  return `products/${productId}/${imageKey}`;
+  return `${ENV_FOLDER}/products/${productId}/${imageKey}`;
 }
 
 // check the type of an uploaded image before calling cloudinary, whatever the client says it is.
@@ -321,6 +328,18 @@ export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadIm
     if (isAppError(err)) throw err;
 
     throw new InternalError({ reason: 'CLOUDINARY_OVERWRITE_UNEXPECTED' }, err);
+  }
+}
+
+// remove an image by public_id, for example the avatar of a deleted account;
+// an image that is already gone is not an error, cloudinary answers "not found" for it
+export async function deleteImage(publicId: string): Promise<void> {
+  if (!publicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
+
+  try {
+    await cloudinary.uploader.destroy(publicId, { resource_type: 'image', invalidate: true });
+  } catch (err) {
+    throw new InternalError({ reason: 'CLOUDINARY_DELETE_UNEXPECTED' }, err);
   }
 }
 

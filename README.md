@@ -118,6 +118,7 @@ What is important to state honestly:
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
 - user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
+- account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
 - login logging
 
 ### Authorization and security
@@ -293,6 +294,8 @@ HOST=0.0.0.0
 # frontend address: mail links, oauth redirects and the only site CORS and the chat websocket let in
 # (in production for example https://shop.example.com; locally the frontend dev server)
 WEB_ORIGIN=https://shop.example.com
+# domain the site lives on, without https:// (required in production): a deleted account gets an address on it
+SITE_DOMAIN=shop.example.com
 
 # PostgreSQL
 DATABASE_URL=postgresql://cartlify_app:your_password@localhost:5432/cartlify_dev

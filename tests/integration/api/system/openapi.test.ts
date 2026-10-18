@@ -67,6 +67,7 @@ describe('GET /documentation/json', () => {
     ['post', '/api/auth/refresh'],
     ['delete', '/api/favorites/{productId}'],
     ['patch', '/api/users/me'],
+    ['delete', '/api/users/me'],
   ])('asks the csrf header of %s %s', (method, path) => {
     const security = operation(method, path).security ?? [];
 
@@ -131,6 +132,7 @@ describe('the users routes', () => {
     ['patch', '/api/users/me', ['200', '400', '401', '403', '413', '500']],
     ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '500']],
     ['delete', '/api/users/{userId}', ['200', '400', '401', '403', '404', '409', '500']],
+    ['delete', '/api/users/me', ['204', '400', '401', '403', '409', '500']],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
   });

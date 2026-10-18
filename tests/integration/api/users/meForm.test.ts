@@ -12,8 +12,8 @@ import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
 // PATCH /api/users/me sent as a multipart form, the way a page sends an avatar with the fields.
 // A form skips the request schema, so the service holds the rules for it. Uploads of an avatar
-// go to Cloudinary for real and the tests have no test folder there yet, so only the avatars the
-// app refuses before the upload are tried here
+// go to Cloudinary (into the test/ folder) and the test environment has only made-up Cloudinary
+// keys, so only the avatars the app refuses before the upload are tried here
 
 let app: FastifyInstance;
 let csrf: Csrf;

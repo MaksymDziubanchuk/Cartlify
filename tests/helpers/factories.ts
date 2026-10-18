@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AuthProvider, Role } from '@prisma/client';
 
 import { prisma } from '@db/client.js';
@@ -102,6 +103,56 @@ export function createReviewVote(userId: number, reviewId: number, action: 'UP' 
   return prisma.$transaction(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
     await tx.reviewVote.create({ data: { userId, reviewId, action } });
+  });
+}
+
+// a chat of the user with one message of theirs; an open admin chat waits for an admin.
+// A user has one open chat at a time
+export function createChatThread(
+  userId: number,
+  opts: { type?: 'bot' | 'admin'; status?: 'open' | 'closed' } = {},
+): Promise<{ id: string }> {
+  const type = opts.type ?? 'admin';
+  const status = opts.status ?? 'open';
+
+  return prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId, role: 'USER' });
+
+    const id = randomUUID();
+    await tx.chatThread.create({
+      data: {
+        id,
+        userId,
+        type,
+        status,
+        ...(type === 'admin' && status === 'open'
+          ? { adminRequestedAt: new Date(), adminUnreadSince: new Date() }
+          : {}),
+        unreadCount: 1,
+      },
+    });
+    await tx.chatMessage.create({
+      data: { threadId: id, senderId: userId, senderType: 'user', content: 'Where is my order?' },
+    });
+
+    return { id };
+  });
+}
+
+// a favorite of the user, added the way the user adds one
+export const createFavorite = (userId: number, productId: number) =>
+  prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId, role: 'USER' });
+    await tx.favorite.create({ data: { userId, productId } });
+  });
+
+// a line of the login log the way a login writes it, at the given time
+export function createLoginLog(user: { id: number; email: string }, createdAt: Date) {
+  return prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId: user.id, role: 'USER' });
+    await tx.loginLog.create({
+      data: { userId: user.id, email: user.email, role: 'USER', createdAt },
+    });
   });
 }
 

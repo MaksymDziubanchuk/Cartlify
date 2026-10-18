@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import jwt from 'jsonwebtoken';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
+import cloudinary from '@config/cloudinary.js';
 import env from '@config/env.js';
 
 import {
@@ -17,16 +18,32 @@ import { startApp, stopApp } from '../../../helpers/app.js';
 import { setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
-import { closeSessions, createUser, uniqueTag, type TestUser } from '../../../helpers/factories.js';
+import {
+  closeSessions,
+  createChatThread,
+  createFavorite,
+  createProduct,
+  createReview,
+  createUser,
+  uniqueTag,
+  type TestProduct,
+  type TestUser,
+} from '../../../helpers/factories.js';
+import { itWithMail, watchMail } from '../../../helpers/mail.js';
+import { placeOrder } from '../../../helpers/orders.js';
 
 // DELETE /api/users/:userId: only root, and it does not drop the row, it empties it: orders,
-// reviews and logs keep pointing at an account that no longer holds anything personal
+// reviews and logs keep pointing at an account that no longer holds anything personal.
+// The deletion is the one the user's own DELETE /api/users/me runs (deleteMe.test.ts); what it does
+// to the orders, chats and the rest of the account is tested here
 
 let app: FastifyInstance;
 let csrf: Csrf;
 let root: TestUser;
 let rootCookie: string;
 const userIds: number[] = [];
+// a paid order keeps its product, so these products stay; the test database goes after the run
+const products: TestProduct[] = [];
 
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
   const user = await createUser(opts);
@@ -41,6 +58,12 @@ const deleteUser = (id: number | string, cookie: string) =>
     headers: withCsrf(csrf, cookie),
   });
 
+const newProduct = async () => {
+  const product = await createProduct({ price: 10, stock: 5 });
+  products.push(product);
+  return product;
+};
+
 const rowOf = (id: number) => asAdmin((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
 
 const sessionOf = async (user: TestUser) => signIn(app, csrf, user);
@@ -53,9 +76,14 @@ beforeAll(async () => {
   root = await createUser({ role: 'ROOT', password: `root-${uniqueTag()}` });
   userIds.push(root.id);
   rootCookie = accessCookie(root);
+
+  // the avatar file lives at Cloudinary and the test environment has only made-up Cloudinary keys:
+  // the call that removes it is caught here and checked, it never leaves the test
+  jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
 });
 
 afterAll(async () => {
+  jest.restoreAllMocks();
   try {
     await closeSessions(userIds);
   } finally {
@@ -137,8 +165,11 @@ describe('what the deletion does', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ message: 'user deleted' });
     const row = await rowOf(target.id);
-    // the old address stays readable in the new one, but is not an address of the person any more
-    expect(row.email).toMatch(new RegExp(`^deleted\\+${target.id}\\+[a-z0-9_]+@deleted\\.com$`));
+    // the new address is on the domain of the site (SITE_DOMAIN): a mail that still goes to it
+    // never leaves for a domain of someone else
+    expect(row.email).toMatch(
+      new RegExp(`^deleted\\+${target.id}\\+[a-z0-9_]+@shop\\.example\\.com$`),
+    );
     expect(row.email).not.toBe(target.email);
     expect(row).toMatchObject({
       passwordHash: null,
@@ -223,7 +254,7 @@ describe('what the deletion does', () => {
     const res = await deleteUser(target.id, rootCookie);
 
     expect(res.statusCode).toBe(200);
-    expect((await rowOf(target.id)).email).toMatch(/@deleted\.com$/);
+    expect((await rowOf(target.id)).email).toMatch(/^deleted\+.*@shop\.example\.com$/);
   });
 
   it('leaves the other users alone', async () => {
@@ -254,4 +285,165 @@ describe('what the deletion does', () => {
     expect(res.json()).not.toHaveProperty('name');
     expect(res.json()).not.toHaveProperty('avatarUrls');
   });
+});
+
+describe('what happens around the account', () => {
+  const orderOf = (id: number) => asAdmin((tx) => tx.order.findUnique({ where: { id } }));
+  const productOf = (id: number) =>
+    asAdmin((tx) =>
+      tx.product.findUniqueOrThrow({ where: { id }, select: { stock: true, reservedStock: true } }),
+    );
+
+  it('cancels an order waiting for payment and gives its stock back', async () => {
+    const target = await newUser();
+    const product = await newProduct();
+    const orderId = await placeOrder(app, csrf, target, product, 'waiting', 2);
+    expect(await productOf(product.id)).toEqual({ stock: 5, reservedStock: 2 });
+
+    const res = await deleteUser(target.id, rootCookie);
+
+    expect(res.statusCode).toBe(200);
+    // the order is gone: a payment that still comes for it is refunded by the webhook
+    expect(await orderOf(orderId)).toBeNull();
+    expect(await productOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
+  });
+
+  it('removes the cart', async () => {
+    const target = await newUser();
+    const orderId = await placeOrder(app, csrf, target, await newProduct(), 'cart');
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(await orderOf(orderId)).toBeNull();
+  });
+
+  it('leaves paid and shipped orders to be delivered', async () => {
+    const target = await newUser();
+    const product = await newProduct();
+    const paidId = await placeOrder(app, csrf, target, product, 'paid');
+    const shippedId = await placeOrder(app, csrf, target, product, 'shipped');
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(await orderOf(paidId)).toMatchObject({
+      userId: target.id,
+      status: 'paid',
+      shippingAddress: 'Test street 1, Kyiv',
+    });
+    expect(await orderOf(shippedId)).toMatchObject({ userId: target.id, status: 'shipped' });
+    // the stock the payments took stays taken
+    expect(await productOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
+  });
+
+  // the popularity of a product counts them
+  it('keeps the favorites and the reviews of the account', async () => {
+    const target = await newUser();
+    const product = await newProduct();
+    await createFavorite(target.id, product.id);
+    const review = await createReview(target.id, product.id, { rating: 4, comment: 'Fine' });
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(
+      await asAdmin((tx) =>
+        tx.favorite.count({ where: { userId: target.id, productId: product.id } }),
+      ),
+    ).toBe(1);
+    expect(await asAdmin((tx) => tx.review.findUnique({ where: { id: review.id } }))).toMatchObject(
+      { userId: target.id, comment: 'Fine' },
+    );
+  });
+
+  // an open admin chat waits in the admin queue; nobody would answer it any more
+  it.each(['admin', 'bot'] as const)(
+    'closes an open %s chat of the account and keeps its messages',
+    async (type) => {
+      const target = await newUser();
+      const chat = await createChatThread(target.id, { type });
+
+      await deleteUser(target.id, rootCookie);
+
+      expect(
+        await asAdmin((tx) =>
+          tx.chatThread.findUniqueOrThrow({
+            where: { id: chat.id },
+            select: {
+              status: true,
+              adminRequestedAt: true,
+              adminUnreadSince: true,
+              unreadCount: true,
+            },
+          }),
+        ),
+      ).toEqual({
+        status: 'closed',
+        adminRequestedAt: null,
+        adminUnreadSince: null,
+        unreadCount: 0,
+      });
+      expect(await asAdmin((tx) => tx.chatMessage.count({ where: { threadId: chat.id } }))).toBe(1);
+    },
+  );
+
+  it('removes the avatar file of the account at Cloudinary', async () => {
+    const destroy = jest.mocked(cloudinary.uploader.destroy);
+    destroy.mockClear();
+    const tag = uniqueTag();
+    const target = await newUser({
+      avatarUrl: `https://res.cloudinary.com/demo/image/upload/v1/users/${tag}/avatar.jpg`,
+      publicId: `users/${tag}/avatar`,
+    });
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(destroy).toHaveBeenCalledWith(
+      `users/${tag}/avatar`,
+      expect.objectContaining({ invalidate: true }),
+    );
+  });
+
+  it('asks Cloudinary nothing for an account without an avatar', async () => {
+    const destroy = jest.mocked(cloudinary.uploader.destroy);
+    destroy.mockClear();
+    const target = await newUser();
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  // the test environment has no SendGrid key, so every mail of a deletion fails here:
+  // the account is deleted all the same, the failure only goes to the log
+  it('deletes the account even when the mail cannot be sent', async () => {
+    const target = await newUser();
+    await placeOrder(app, csrf, target, await newProduct(), 'paid');
+
+    const res = await deleteUser(target.id, rootCookie);
+
+    expect(res.statusCode).toBe(200);
+    expect((await rowOf(target.id)).email).toMatch(/^deleted\+/);
+  });
+
+  itWithMail(
+    'mails the old address with the orders still on their way and the cancelled ones',
+    async () => {
+      const mails = watchMail();
+      const target = await newUser({ name: 'Anna' });
+      const product = await newProduct();
+      const paidId = await placeOrder(app, csrf, target, product, 'paid');
+      const waitingId = await placeOrder(app, csrf, target, product, 'waiting');
+
+      await deleteUser(target.id, rootCookie);
+
+      expect(mails).toHaveLength(1);
+      expect(mails[0]).toMatchObject({ to: [target.email], sandbox: true });
+      expect(mails[0]!.subject).toBe('Cartlify — Your account is deleted');
+      expect(mails[0]!.text).toContain(`Order #${paidId}, €10.00: paid, it will be shipped`);
+      // no payment page was opened for it, so nothing is known for sure about a payment
+      expect(mails[0]!.text).toContain(
+        `Order #${waitingId}, €10.00: cancelled; if you paid for it, the payment is refunded`,
+      );
+    },
+  );
 });

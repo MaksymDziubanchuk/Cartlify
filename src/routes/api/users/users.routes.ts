@@ -27,6 +27,19 @@ export default async function usersRouter(app: FastifyInstance) {
     },
     usersController.patchMe,
   );
+  // only a user deletes their own account: an admin is demoted by root first, a root stays
+  app.delete(
+    '/me',
+    {
+      preHandler: [authGuard, requireRole(['USER'])],
+      // a delete may come without a body: an oauth account has nothing to send
+      preValidation: async (req) => {
+        if (req.body === undefined || req.body === null) (req as any).body = {};
+      },
+      schema: usersSchema.deleteMeSchema,
+    },
+    usersController.deleteMe,
+  );
   app.get(
     '/:userId',
     {

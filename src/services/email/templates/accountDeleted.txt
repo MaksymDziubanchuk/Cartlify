@@ -1,0 +1,15 @@
+{{#userName}}Hi {{userName}},
+
+{{/userName}}Your {{appName}} account is deleted. Your profile is removed and you can no longer sign in to it.
+{{#hasDeliveries}}
+These orders are paid and will still be delivered to the address given in each order:
+{{#deliveries}}- Order #{{orderId}}, {{total}}: {{statusText}}
+  {{itemsText}}
+{{/deliveries}}You will get no more mails about them.
+{{/hasDeliveries}}{{#hasCancelled}}
+These orders were waiting for payment and are cancelled:
+{{#cancelled}}- Order #{{orderId}}, {{total}}: {{paymentText}}
+  {{itemsText}}
+{{/cancelled}}{{/hasCancelled}}
+This mailbox is not monitored.
+Questions? Ask us in the chat on our site.

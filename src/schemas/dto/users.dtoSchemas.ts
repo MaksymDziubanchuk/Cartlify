@@ -165,6 +165,33 @@ const usersUpdateMeFormSchema = {
   },
 } as const;
 
+// the own account goes: a local one confirms with the password, the open orders with a flag
+const usersDeleteMeBodySchema = {
+  $id: 'usersDeleteMeBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    password: {
+      type: 'string',
+      maxLength: 256,
+      description:
+        'The password of a local account, required for it; an account of Google, GitHub or ' +
+        'LinkedIn has none and sends nothing here. Spaces at the start and the end are dropped.',
+    },
+    confirmOpenOrders: {
+      type: 'boolean',
+      description:
+        'true deletes the account although it has orders waiting for payment, paid or shipped, ' +
+        'after the user saw them in the ACCOUNT_HAS_OPEN_ORDERS answer.',
+    },
+  },
+} as const;
+
+const usersDeleteMeResponseSchema = {
+  $id: 'usersDeleteMeResponseSchema',
+  type: 'null',
+} as const;
+
 const usersUpdateMeResponseSchema = {
   $id: 'usersUpdateMeResponseSchema',
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
@@ -179,4 +206,6 @@ export const usersDtoSchemas = [
   usersUpdateMeBodySchema,
   usersUpdateMeFormSchema,
   usersUpdateMeResponseSchema,
+  usersDeleteMeBodySchema,
+  usersDeleteMeResponseSchema,
 ];

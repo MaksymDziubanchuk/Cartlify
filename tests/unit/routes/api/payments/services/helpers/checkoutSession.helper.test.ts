@@ -357,3 +357,53 @@ describe('expireCheckoutSession', () => {
     });
   });
 });
+
+describe('readCheckoutSessionStatus', () => {
+  it.each([
+    ['an open page', { status: 'open', payment_status: 'unpaid' }, { status: 'open', paid: false }],
+    [
+      'a paid page',
+      { status: 'complete', payment_status: 'paid' },
+      { status: 'complete', paid: true },
+    ],
+    // a bank debit completes the page before the bank says yes or no
+    [
+      'a complete page of a payment the bank has not confirmed',
+      { status: 'complete', payment_status: 'unpaid' },
+      { status: 'complete', paid: false },
+    ],
+    [
+      'an expired page',
+      { status: 'expired', payment_status: 'unpaid' },
+      { status: 'expired', paid: false },
+    ],
+  ] as const)('tells %s', async (_case, state, expected) => {
+    const retrieve = jest
+      .spyOn(stripe.checkout.sessions, 'retrieve')
+      .mockResolvedValue(session(state as Partial<Stripe.Checkout.Session>) as never);
+
+    expect(await helper.readCheckoutSessionStatus('cs_test_1')).toEqual(expected);
+    expect(retrieve).toHaveBeenCalledWith('cs_test_1');
+  });
+
+  it('refuses a state stripe added later', async () => {
+    jest
+      .spyOn(stripe.checkout.sessions, 'retrieve')
+      .mockResolvedValue(session({ status: 'reopened' as never }) as never);
+
+    expect(await rejectedBy(() => helper.readCheckoutSessionStatus('cs_test_1'))).toMatchObject({
+      details: { reason: 'STRIPE_CHECKOUT_SESSION_STATUS_UNKNOWN', sessionId: 'cs_test_1' },
+    });
+  });
+
+  it('wraps a stripe failure and keeps it as the cause', async () => {
+    const failure = new Error('stripe is down');
+    jest.spyOn(stripe.checkout.sessions, 'retrieve').mockRejectedValue(failure as never);
+
+    expect(await rejectedBy(() => helper.readCheckoutSessionStatus('cs_test_1'))).toMatchObject({
+      statusCode: 500,
+      details: { reason: 'STRIPE_CHECKOUT_SESSION_READ_UNEXPECTED', sessionId: 'cs_test_1' },
+      cause: failure,
+    });
+  });
+});

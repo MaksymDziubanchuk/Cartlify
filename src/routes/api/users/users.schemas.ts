@@ -198,16 +198,24 @@ const getUserByIdSchema = {
   },
 } satisfies FastifySchema;
 
+// what a deletion does, the same for a root and for the user
+const ACCOUNT_DELETION =
+  'The row stays, emptied: the email becomes deleted+<id>+...@<domain of the site>, the password, ' +
+  'provider link, name, avatar (also the file), locale and phone are removed, the role stays. ' +
+  'An order waiting for payment is cancelled, its stock goes back and its payment page is closed; ' +
+  'a payment that still comes for it is refunded in full. The cart goes. Paid and shipped orders, ' +
+  'favorites, reviews, login logs and chat messages stay; open chats are closed. Every refresh ' +
+  'token is removed: an access token cannot be taken back, it works until it expires and the ' +
+  'session cannot be renewed after that. The person gets a mail at the old address with the ' +
+  'orders still on their way and what happened to the cancelled ones; a mail that fails is only ' +
+  'logged. ACCOUNT_ORDERS_CHANGED (409): a payment or the end of a reservation changed a waiting ' +
+  'order at that moment, nothing was changed, repeat the request.';
+
 // Schema for privileged user deletion
 const deleteUserByIdSchema = {
   operationId: 'deleteUserById',
   summary: 'Delete user by id',
-  description:
-    'Deletes a user account by id. Restricted to root. The row stays, emptied: the email is replaced ' +
-    'by a deleted one, the password, provider link, name, avatar, locale and phone are removed, and ' +
-    'the refresh tokens of the user are removed. Orders, reviews and logs keep pointing at the account. ' +
-    'An access token cannot be taken back: the user keeps access until their current access token ' +
-    'expires, and the session cannot be renewed after that.',
+  description: `Deletes a user account by id. Restricted to root, no confirmation asked. ${ACCOUNT_DELETION}`,
 
   params: {
     $ref: 'usersGetByIdParamsSchema#',
@@ -240,11 +248,77 @@ const deleteUserByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'A root cannot delete their own account (ROOT_CANNOT_DELETE_SELF).',
+      description:
+        'A root cannot delete their own account (ROOT_CANNOT_DELETE_SELF), or a waiting order ' +
+        'changed at that moment (ACCOUNT_ORDERS_CHANGED, repeat the request).',
       $ref: 'errorResponseSchema#',
     },
     500: {
-      description: 'Unexpected server error while deleting user.',
+      description:
+        'INTERNAL_ERROR: an unexpected server error while deleting user, for example a server ' +
+        'without SITE_DOMAIN to build the new address on (the reason is in the server log only).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for a user deleting their own account
+const deleteMeSchema = {
+  operationId: 'deleteCurrentUser',
+  summary: 'Delete current user',
+  description:
+    'Deletes the account of the signed-in user, only a user (an admin is demoted by root first). ' +
+    'A local account sends its password. An account of Google, GitHub or LinkedIn has none: ' +
+    'its last login must be at most 10 minutes old, otherwise RECENT_LOGIN_REQUIRED (403) asks ' +
+    'the page to log out, send the person through the provider again and repeat the request. ' +
+    'With an order waiting for payment, paid or shipped the first request answers ' +
+    'ACCOUNT_HAS_OPEN_ORDERS (409) with details.orders [{ orderId, status, total }] and changes ' +
+    'nothing; the page shows them and repeats with confirmOpenOrders: true. Send the body {} or ' +
+    'no body at all without a Content-Type header: a Content-Type: application/json with an empty ' +
+    'body is refused with 400 BAD_REQUEST before the route runs. On success the ' +
+    `answer clears the auth cookies of this browser. ${ACCOUNT_DELETION}`,
+
+  body: {
+    $ref: 'usersDeleteMeBodySchema#',
+    examples: [{ password: 'secret123', confirmOpenOrders: true }],
+  },
+
+  response: {
+    204: {
+      description: 'The account is deleted, the auth cookies are cleared.',
+      $ref: 'usersDeleteMeResponseSchema#',
+    },
+
+    400: {
+      description:
+        'The body does not match the schema (VALIDATION_ERROR), a local account sent no ' +
+        'password (PASSWORD_REQUIRED), or a Content-Type: application/json came with an empty ' +
+        'body (BAD_REQUEST).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'Only a user deletes their own account (INSUFFICIENT_ROLE), the password is wrong ' +
+        '(PASSWORD_INVALID), or the last login of an oauth account is older than 10 minutes ' +
+        '(RECENT_LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'The account has orders waiting for payment, paid or shipped (ACCOUNT_HAS_OPEN_ORDERS, ' +
+        'details.orders lists them; repeat with confirmOpenOrders: true), or a waiting order ' +
+        'changed at that moment (ACCOUNT_ORDERS_CHANGED, repeat the request).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description:
+        'INTERNAL_ERROR: an unexpected server error while deleting the account, for example a ' +
+        'server without SITE_DOMAIN to build the new address on (the reason is in the server log only).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -257,6 +331,7 @@ const taggedUsersSchema = withOpenApiTag(
     patchMeSchema,
     getUserByIdSchema,
     deleteUserByIdSchema,
+    deleteMeSchema,
   },
   'users',
 );

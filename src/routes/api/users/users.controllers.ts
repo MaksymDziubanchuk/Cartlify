@@ -9,6 +9,8 @@ import type {
   UpdateMeDto,
   UserByIdResponseDto,
   DeleteUserByIdDto,
+  DeleteMeBodyDto,
+  DeleteMeDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { UploadImageResult } from '@utils/cloudinary.util.js';
@@ -16,6 +18,7 @@ import type { UploadImageResult } from '@utils/cloudinary.util.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import pickDefined from '@helpers/parameterNormalize.js';
+import { clearAuthCookies } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 import { usersServices } from './users.services.js';
 import { UserId } from 'types/ids.js';
 
@@ -117,9 +120,25 @@ const deleteUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, MessageResp
   const { id: actorId } = req.user as UserEntity;
   const userId = Number(req.params.userId);
 
-  const args = pickDefined<DeleteUserByIdDto>({ actorId, userId }, {});
+  const args = pickDefined<DeleteUserByIdDto>({ actorId, userId, log: req.log }, {});
   const result = await usersServices.deleteUserById(args);
   return reply.code(200).send(result);
+};
+
+// the account is gone with this answer: the cookies of this browser go with it, other devices
+// keep their access only until their access token runs out
+const deleteMe: ControllerRouter<{}, DeleteMeBodyDto, {}, void> = async (req, reply) => {
+  const { id } = req.user as UserEntity;
+  const { password, confirmOpenOrders } = req.body ?? {};
+
+  const args = pickDefined<DeleteMeDto>(
+    { userId: id, log: req.log },
+    { password, confirmOpenOrders },
+  );
+  await usersServices.deleteMe(args);
+
+  clearAuthCookies(reply);
+  return reply.code(204).send();
 };
 
 export const usersController = {
@@ -127,4 +146,5 @@ export const usersController = {
   patchMe,
   getUserById,
   deleteUserById,
+  deleteMe,
 };

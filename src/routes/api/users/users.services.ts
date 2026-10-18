@@ -5,11 +5,13 @@ import {
   BadRequestError,
   NotFoundError,
   ConflictError,
+  ForbiddenError,
   InternalError,
 } from '@utils/errors.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
+import { verifyPass } from '@helpers/safePass.js';
 import {
   makePublicId,
   overwriteImage,
@@ -27,9 +29,12 @@ import type {
   UserReviewResponseDto,
   UserByIdResponseDto,
   DeleteUserByIdDto,
+  DeleteMeDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { UserId } from 'types/ids.js';
+
+import { deleteAccount } from './services/helpers/deleteAccount.helper.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
   // normalize user id from dto
@@ -405,7 +410,11 @@ async function findById({
   }
 }
 
-async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<MessageResponseDto> {
+async function deleteUserById({
+  actorId,
+  userId,
+  log,
+}: DeleteUserByIdDto): Promise<MessageResponseDto> {
   // normalize ids
   const rootId = typeof actorId === 'string' ? Number(actorId) : actorId;
   const targetId = typeof userId === 'string' ? Number(userId) : userId;
@@ -416,56 +425,81 @@ async function deleteUserById({ actorId, userId }: DeleteUserByIdDto): Promise<M
   // avoid locking yourself out
   if (targetId === rootId) throw new ConflictError('ROOT_CANNOT_DELETE_SELF');
 
+  // a root deletes without asking about the orders: the admin tells the person
+  await deleteAccount({ userId: targetId, systemActorId: rootId, confirmOpenOrders: true, log });
+
+  return { message: 'user deleted' };
+}
+
+// a login this recent confirms an oauth account, that has no password to ask for
+const RECENT_LOGIN_MAX_AGE_MS = 10 * 60_000;
+
+// what confirms a deletion: the own row and the last login, both the user's to read
+async function loadDeletionConfirmation(id: number) {
   try {
-    await prisma.$transaction(async (tx) => {
-      // apply root db context for rls
-      await setUserContext(tx, { userId: rootId, role: 'ROOT' });
+    return await prisma.$transaction(async (tx) => {
+      await setUserContext(tx, { userId: id, role: 'USER' });
 
-      // ensure target exists
-      const target = await tx.user.findUnique({
-        where: { id: targetId },
-        select: { id: true, email: true },
-      });
-
-      if (!target) throw new NotFoundError('USER_NOT_FOUND');
-
-      // keep previous email "visible" but safe for email format and length
-      const prevTag = target.email
-        .toLowerCase()
-        .replace(/@/g, '_at_')
-        .replace(/[^a-z0-9_]+/g, '_')
-        .slice(0, 32);
-
-      const deletedEmail = `deleted+${targetId}+${prevTag}@deleted.com`;
-
-      // revoke all tokens for this user
-      await tx.userToken.deleteMany({ where: { userId: targetId } });
-
-      // anonymize pii and disable verification
-      await tx.user.update({
-        where: { id: targetId },
-        data: {
-          email: deletedEmail,
-          passwordHash: null,
-          authProvider: 'LOCAL',
-          providerSub: null,
-          isVerified: false,
-          name: null,
-          avatarUrl: null,
-          publicId: null,
-          locale: null,
-          phone: null,
-        },
-        select: { id: true },
-      });
+      return {
+        account: await tx.user.findUnique({
+          where: { id },
+          select: { authProvider: true, passwordHash: true },
+        }),
+        lastLogin: await tx.loginLog.findFirst({
+          where: { userId: id },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+      };
     });
-
-    return { message: 'user deleted' };
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    throw new InternalError({ reason: 'USERS_DELETE_BY_ID_UNEXPECTED' }, err);
+    throw new InternalError({ reason: 'USERS_DELETE_ME_UNEXPECTED' }, err);
   }
+}
+
+// a user deletes their own account: a local one confirms it with the password, an oauth one with
+// a login of the last 10 minutes. Admins and roots never get here, the route lets only users in
+async function deleteMe({ userId, password, confirmOpenOrders, log }: DeleteMeDto): Promise<void> {
+  const id = typeof userId === 'string' ? Number(userId) : userId;
+  if (!Number.isInteger(id)) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const { account, lastLogin } = await loadDeletionConfirmation(id);
+
+  if (!account) throw new NotFoundError('USER_NOT_FOUND');
+
+  if (account.authProvider === 'LOCAL') {
+    // spaces at the edges of a password are dropped, the same as at the login
+    const cleanPassword = password?.trim() ?? '';
+    if (!cleanPassword) throw new BadRequestError('PASSWORD_REQUIRED');
+    if (!account.passwordHash) {
+      throw new InternalError({ reason: 'LOCAL_ACCOUNT_PASSWORD_HASH_MISSING' });
+    }
+
+    // an older password kept its edge spaces in the hash, it is checked once more as typed
+    const ok =
+      (await verifyPass(cleanPassword, account.passwordHash)) ||
+      (cleanPassword !== password &&
+        password !== undefined &&
+        (await verifyPass(password, account.passwordHash)));
+
+    // 403, not 401: the session is fine, only the confirmation is wrong
+    if (!ok) throw new ForbiddenError('PASSWORD_INVALID');
+  } else {
+    const fresh =
+      lastLogin !== null && Date.now() - lastLogin.createdAt.getTime() <= RECENT_LOGIN_MAX_AGE_MS;
+
+    // the frontend logs out, sends the person through the provider again and repeats the request
+    if (!fresh) throw new ForbiddenError('RECENT_LOGIN_REQUIRED');
+  }
+
+  await deleteAccount({
+    userId: id,
+    systemActorId: id,
+    confirmOpenOrders: confirmOpenOrders === true,
+    log,
+  });
 }
 
 export const usersServices = {
@@ -474,4 +508,5 @@ export const usersServices = {
   updateMe,
   findById,
   deleteUserById,
+  deleteMe,
 };
