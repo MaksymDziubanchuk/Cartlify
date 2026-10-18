@@ -169,4 +169,4 @@ async function refundOrderPaymentFromStripeWebhook(
   return { refundId, logged };
 }
 
-export { refundOrderPaymentFromStripeWebhook };
+export { refundOrderPaymentFromStripeWebhook, refundStripePayment };

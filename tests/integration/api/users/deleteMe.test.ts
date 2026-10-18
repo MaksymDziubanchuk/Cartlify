@@ -22,6 +22,7 @@ import {
   uniqueTag,
   type TestProduct,
 } from '../../../helpers/factories.js';
+import { allowLogs } from '../../../helpers/logs.js';
 import { placeOrder } from '../../../helpers/orders.js';
 
 // DELETE /api/users/me: a user deletes their own account. A local account confirms with the
@@ -75,6 +76,10 @@ beforeAll(async () => {
 
   // the avatar file lives at Cloudinary and the test environment has only made-up Cloudinary keys
   jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
+
+  // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
+  // delete.test.ts checks that line
+  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -121,9 +126,10 @@ describe('a local account', () => {
     expect(await rowOf(user.id)).toMatchObject({
       email: expect.stringMatching(/^deleted\+\d+\+[a-z0-9_]+@shop\.example\.com$/),
       passwordHash: null,
-      name: null,
+      name: 'Guest',
       isVerified: false,
       role: 'USER',
+      deletedAt: expect.any(Date),
     });
     // the session cannot be renewed anywhere
     expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).not.toBe(204);

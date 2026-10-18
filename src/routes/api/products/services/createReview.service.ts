@@ -3,7 +3,11 @@ import { setUserContext } from '@db/dbContext.service.js';
 
 import { ConflictError, NotFoundError, isAppError, InternalError } from '@utils/errors.js';
 
-import { normalizeCreateReviewInput, mapReviewRowToResponse } from './helpers/index.js';
+import {
+  normalizeCreateReviewInput,
+  mapReviewRowToResponse,
+  reviewAuthorSelect,
+} from './helpers/index.js';
 
 import type { CreateReviewDto, CreateReviewResultDto } from 'types/dto/products.dto.js';
 
@@ -11,7 +15,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
   const { productId, userId, rating, comment, actorRole } = normalizeCreateReviewInput(dto);
 
   try {
-    const { row, created } = await prisma.$transaction(async (tx) => {
+    const { row, created, author } = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId, role: actorRole });
 
@@ -21,6 +25,13 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
         select: { id: true },
       });
       if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND');
+
+      // the author is the actor, rls lets them read their own account
+      const author = await tx.user.findUnique({
+        where: { id: userId },
+        select: reviewAuthorSelect,
+      });
+      if (!author) throw new InternalError({ reason: 'REVIEW_AUTHOR_NOT_FOUND' });
 
       // load existing review for update-or-create logic
       const existing = await tx.review.findUnique({
@@ -62,7 +73,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
           select,
         });
 
-        return { row, created: true };
+        return { row, created: true, author };
       }
 
       // an existing review only gets its missing part, a part that is set never changes
@@ -92,10 +103,10 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
         select,
       });
 
-      return { row, created: false };
+      return { row, created: false, author };
     });
 
-    return { review: mapReviewRowToResponse(row), created };
+    return { review: mapReviewRowToResponse(row, author), created };
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

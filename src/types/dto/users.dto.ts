@@ -58,7 +58,10 @@ export interface UserResponseDto {
 export type UserByIdResponseDto = Omit<
   UserResponseDto,
   'email' | 'isVerified' | 'reviews' | 'role' | 'phone' | 'locale'
->;
+> & {
+  // only an admin or root reads a deleted account, with the time it was deleted
+  deletedAt?: Date;
+};
 
 export interface UpdateMeBodyDto {
   name?: string;

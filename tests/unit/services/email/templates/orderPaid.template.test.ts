@@ -74,6 +74,18 @@ describe('buildOrderPaidTemplate', () => {
     expect(without.html).not.toMatch(/shipping to/i);
   });
 
+  it('names the recipient with the phone, and leaves the line out without them', () => {
+    const withRecipient = buildOrderPaidTemplate(
+      order({ recipientName: 'Anna Koval', recipientPhone: '+380501234567' }),
+    );
+    const without = buildOrderPaidTemplate(order({ recipientName: '', recipientPhone: null }));
+
+    expect(withRecipient.text).toContain('Recipient: Anna Koval, +380501234567');
+    expect(withRecipient.html).toContain('Anna Koval, +380501234567');
+    expect(without.text).not.toMatch(/recipient/i);
+    expect(without.html).not.toMatch(/recipient/i);
+  });
+
   it('greets the user by name, or without one', () => {
     expect(buildOrderPaidTemplate(order({ userName: 'Anna' })).html).toContain('Hi Anna,');
     expect(buildOrderPaidTemplate(order({ userName: ' ' })).html).toContain('Hi,');
@@ -85,12 +97,14 @@ describe('buildOrderPaidTemplate', () => {
       order({
         items: [{ name: '<script>x</script>', quantity: 1, unitPrice: 1, totalPrice: 1 }],
         shippingAddress: '<img src=x onerror=alert(1)>',
+        recipientName: '<i>Koval</i>',
         userName: '<b>Anna</b>',
       }),
     );
 
     expect(html).not.toContain('<script>x</script>');
     expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('<i>Koval</i>');
     expect(html).not.toContain('<b>Anna</b>');
     expect(html).toContain('&lt;script&gt;');
   });

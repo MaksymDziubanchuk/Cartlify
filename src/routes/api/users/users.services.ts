@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+
 import { prisma } from '@db/client.js';
 import {
   UnauthorizedError,
@@ -8,7 +10,7 @@ import {
   ForbiddenError,
   InternalError,
 } from '@utils/errors.js';
-import { setUserContext } from '@db/dbContext.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import { verifyPass } from '@helpers/safePass.js';
@@ -348,6 +350,12 @@ async function updateMe({
   } catch (err) {
     if (isAppError(err)) throw err;
 
+    // rls hides a deleted account from its owner for changes; its access token still works for
+    // a few minutes after the deletion
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
+      throw new NotFoundError('USER_NOT_FOUND');
+    }
+
     throw new InternalError({ reason: 'USERS_UPDATE_ME_UNEXPECTED' }, err);
   }
 }
@@ -394,6 +402,18 @@ async function findById({
       // hide rls-missed rows as not found
       if (!user) throw new NotFoundError('USER_NOT_FOUND');
 
+      // a user cannot read the deletion mark of another account under rls, the server reads it as
+      // the system; a deleted account is gone for everyone but an admin, as if it never was
+      const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
+      if (!isAdmin) await setAdminContext(tx);
+
+      const { deletedAt } = await tx.user.findUniqueOrThrow({
+        where: { id },
+        select: { deletedAt: true },
+      });
+
+      if (deletedAt && !isAdmin) throw new NotFoundError('USER_NOT_FOUND');
+
       // build final public response
       return {
         id: user.id,
@@ -401,6 +421,8 @@ async function findById({
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),
         ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
+        // only an admin gets here with a deleted account
+        ...(deletedAt ? { deletedAt } : {}),
       };
     });
   } catch (err) {

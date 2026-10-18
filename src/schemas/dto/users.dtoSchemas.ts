@@ -108,6 +108,13 @@ const usersGetByIdResponseSchema = {
       },
       required: ['url32', 'url64', 'url128', 'url256'],
     },
+    deletedAt: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'When the account was deleted. Only an admin or root reads a deleted account, ' +
+        'for anyone else it is USER_NOT_FOUND.',
+    },
   },
   required: ['id', 'createdAt', 'updatedAt'],
 } as const;

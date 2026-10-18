@@ -9,15 +9,23 @@ import {
   isAppError,
   ResourceBusyError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
+import {
+  dropDeletedProductItems,
+  isOrderNotEditable,
+  mapOrderRowToResponse,
+  orderResponseSelect,
+  orderTargetSql,
+} from './helpers/index.js';
 
 import type { CurrentUpdateItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
+// changes an item of the cart, or, with orderId, of an own unconfirmed order
 export async function updateCurrentItem({
   actorId,
   actorRole,
   itemId,
   quantity,
+  orderId,
 }: CurrentUpdateItemDto): Promise<OrderResponseDto> {
   // enforce user-only cart writes
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
@@ -34,7 +42,7 @@ export async function updateCurrentItem({
         // bound lock wait
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // lock item row and ensure it belongs to actor open order
+        // lock item row and ensure it belongs to the actor cart, or to the given own unconfirmed order
         const locked = await db.$queryRaw<{ id: number }[]>`
           SELECT oi.id
           FROM cartlify.order_items oi
@@ -42,7 +50,7 @@ export async function updateCurrentItem({
           WHERE oi.id = ${itemIdRaw}
             AND o."userId" = ${actorIdRaw}
             AND o.confirmed = false
-            AND o.status = 'pending'
+            AND ${orderTargetSql(orderId)}
           FOR UPDATE OF oi
         `;
         if (!locked.length) throw new NotFoundError('ORDER_ITEM_NOT_FOUND', { itemId: itemIdRaw });
@@ -78,51 +86,16 @@ export async function updateCurrentItem({
           select: { id: true },
         });
 
-        // bring the other items to current product prices too
-        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        // bring the other items to current product prices too, an unconfirmed order also loses
+        // the items of deleted products; confirm refuses an order with outdated prices, so the
+        // order must show what will be confirmed
+        if (orderId !== undefined) await dropDeletedProductItems(db, actorIdRaw, [item.orderId]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${item.orderId}::int)`;
 
         // totals are maintained by db triggers; fetch current order
         const order = await db.order.findUnique({
           where: { id: item.orderId },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-
-                // include minimal product snapshot for order ui
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
@@ -145,6 +118,10 @@ export async function updateCurrentItem({
     if (isRetryableTxError(err)) {
       throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
     }
+
+    // another request confirmed the cart while this one changed it
+    if (isOrderNotEditable(err)) throw new ConflictError('ORDER_NOT_EDITABLE');
+
     throw new InternalError({ reason: 'ORDERS_CURRENT_UPDATE_ITEM_UNEXPECTED' }, err);
   }
 }

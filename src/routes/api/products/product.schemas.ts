@@ -64,6 +64,7 @@ const reviewExample = {
   rating: 5,
   comment: 'Great product.',
   userId: 1,
+  user: { id: 1, name: 'Anna', deleted: false },
   upVotes: 3,
   downVotes: 0,
   userVote: 'up',
@@ -72,9 +73,13 @@ const reviewExample = {
 };
 
 const reviewsResponseExample = {
-  items: [reviewExample],
+  items: [
+    reviewExample,
+    // the account of the author was deleted
+    { ...reviewExample, id: 2, userId: 7, user: { id: 7, name: 'Guest', deleted: true } },
+  ],
   limit: 10,
-  total: 1,
+  total: 2,
   nextCursor: 'eyJpZCI6MX0',
 };
 

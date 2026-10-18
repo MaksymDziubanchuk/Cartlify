@@ -199,6 +199,93 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- ORDERS: recipient fields keep the form the server writes
+----------------------------------------
+-- names are trimmed, 1-100 characters, without digits; the server also needs a letter in them,
+-- the database does not check letters: what is a letter depends on the database locale
+-- the phone is a plus and 8-15 digits, the first is not zero, the same as the profile phone
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_recipient_first_name_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_recipient_first_name_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_recipient_first_name_chk
+    CHECK (
+      "recipientFirstName" IS NULL
+      OR (
+        char_length("recipientFirstName") BETWEEN 1 AND 100
+        AND "recipientFirstName" = btrim("recipientFirstName")
+        AND "recipientFirstName" !~ '[0-9]'
+      )
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_recipient_last_name_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_recipient_last_name_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_recipient_last_name_chk
+    CHECK (
+      "recipientLastName" IS NULL
+      OR (
+        char_length("recipientLastName") BETWEEN 1 AND 100
+        AND "recipientLastName" = btrim("recipientLastName")
+        AND "recipientLastName" !~ '[0-9]'
+      )
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_recipient_phone_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_recipient_phone_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_recipient_phone_chk
+    CHECK (
+      "recipientPhone" IS NULL
+      OR "recipientPhone" ~ '^\+[1-9][0-9]{7,14}$'
+    );
+END $$;
+
+----------------------------------------
+-- ORDERS: a confirmed order has the whole shipping data
+----------------------------------------
+-- the confirm trigger refuses a confirm without it; this rule holds it for any other write
+-- NOT VALID: rows confirmed before the recipient fields existed are not rechecked
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_confirmed_shipping_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_confirmed_shipping_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_confirmed_shipping_chk
+    CHECK (
+      confirmed = false
+      OR (
+        "shippingAddress" IS NOT NULL
+        AND btrim("shippingAddress") <> ''
+        AND "recipientFirstName" IS NOT NULL
+        AND "recipientLastName" IS NOT NULL
+        AND "recipientPhone" IS NOT NULL
+      )
+    ) NOT VALID;
+END $$;
+
+----------------------------------------
 -- USER_TOKENS: expires must be after created
 ----------------------------------------
 DO $$

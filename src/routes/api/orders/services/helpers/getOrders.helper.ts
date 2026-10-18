@@ -17,16 +17,16 @@ import type { Role } from 'types/user.js';
 export function normalizeFindOrdersInput(dto: FindOrdersDto) {
   const limit = assertLimit(dto.limit ?? 20);
 
-  const sortBy: OrdersSortBy = (dto.sortBy ?? 'updatedAt') as OrdersSortBy;
+  // newest first by default, whatever the status
+  const sortBy: OrdersSortBy = (dto.sortBy ?? 'createdAt') as OrdersSortBy;
   const sortDir: OrdersSortDir = dto.sortDir === 'asc' ? 'asc' : 'desc';
 
   const cursor =
     typeof dto.cursor === 'string' && dto.cursor.trim() ? dto.cursor.trim() : undefined;
+  // the cart is not an order, the list never has it
   if (dto.status)
     if (
-      !['pending', 'waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'].includes(
-        dto.status,
-      )
+      !['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'].includes(dto.status)
     )
       throw new BadRequestError('STATUS_INVALID');
 
@@ -56,7 +56,8 @@ export function buildOrdersWhere(args: {
   const where: any = {};
   if (args.actorRole === 'USER') where.userId = args.actorId;
 
-  if (args.status) where.status = args.status;
+  // the cart is not an order, the list never has it
+  where.status = args.status ? args.status : { not: 'pending' };
   if (args.confirmed !== undefined) where.confirmed = args.confirmed;
 
   if (args.sortBy === 'shippingAddress') where.shippingAddress = { not: null };
@@ -66,6 +67,7 @@ export function buildOrdersWhere(args: {
 
 // build stable orderBy
 export function buildOrdersOrderBy(sortBy: OrdersSortBy, sortDir: OrdersSortDir) {
+  if (sortBy === 'createdAt') return [{ createdAt: sortDir }, { id: sortDir }];
   if (sortBy === 'updatedAt') return [{ updatedAt: sortDir }, { id: sortDir }];
   if (sortBy === 'total') return [{ total: sortDir }, { id: sortDir }];
   return [{ shippingAddress: sortDir }, { id: sortDir }];
@@ -93,7 +95,14 @@ export function buildOrdersCursorWhere(args: {
     };
   }
 
-  // date sort
+  // date sorts
+  if (args.sortBy === 'createdAt') {
+    const val = cursorDate(v);
+    return {
+      OR: [{ createdAt: { [op]: val } }, { AND: [{ createdAt: val }, { id: { [op]: id } }] }],
+    };
+  }
+
   if (args.sortBy === 'updatedAt') {
     const val = cursorDate(v);
     return {
@@ -112,7 +121,8 @@ export function buildOrdersCursorWhere(args: {
 export function makeNextOrdersCursor(sortBy: OrdersSortBy, last: any): string {
   let v: string | number;
 
-  if (sortBy === 'updatedAt') v = new Date(last.updatedAt).toISOString();
+  if (sortBy === 'createdAt') v = new Date(last.createdAt).toISOString();
+  else if (sortBy === 'updatedAt') v = new Date(last.updatedAt).toISOString();
   else if (sortBy === 'shippingAddress') v = String(last.shippingAddress ?? '');
   else v = decimalToNumber(last.total);
 

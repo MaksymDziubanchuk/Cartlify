@@ -119,6 +119,7 @@ describe('renderTemplate', () => {
     items: [{ name: 'Lamp', quantity: '2', unitPrice: '€1.00', lineTotal: '€2.00' }],
     total: '€2.00',
     shippingAddress: 'Main st 1',
+    recipient: 'Anna Koval, +380501234567',
   };
 
   it.each([

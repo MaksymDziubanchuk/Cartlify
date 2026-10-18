@@ -191,6 +191,21 @@ export async function createProduct(opts: { stock?: number; price?: number } = {
   });
 }
 
+// what an admin does to a product of the catalog: a delete only marks it, orders keep their items
+export const deleteProductFromCatalog = (productId: number) =>
+  asAdmin((tx) => tx.product.update({ where: { id: productId }, data: { deletedAt: new Date() } }));
+
+export const setProductPrice = (productId: number, price: number) =>
+  asAdmin((tx) => tx.product.update({ where: { id: productId }, data: { price } }));
+
+export const stockOf = (productId: number) =>
+  asAdmin((tx) =>
+    tx.product.findUniqueOrThrow({
+      where: { id: productId },
+      select: { stock: true, reservedStock: true },
+    }),
+  );
+
 export const removeProducts = (products: TestProduct[]) =>
   asAdmin(async (tx) => {
     await tx.product.deleteMany({ where: { id: { in: products.map((p) => p.id) } } });

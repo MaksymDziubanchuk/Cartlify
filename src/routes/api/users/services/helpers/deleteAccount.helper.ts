@@ -29,6 +29,9 @@ import {
 
 export type { AccountDeletionLogger };
 
+// the name a deleted account keeps, the one reviews and chats show for it
+export const DELETED_USER_NAME = 'Guest';
+
 export type DeleteAccountArgs = {
   userId: number;
   // the id of the root context the transaction runs in: the root who deletes, or the user
@@ -147,7 +150,8 @@ async function eraseAccount(
       // every session ends
       await db.userToken.deleteMany({ where: { userId } });
 
-      // empty the row of everything personal
+      // empty the row of everything personal; the name Guest is what reviews and chats show
+      // for the account, deletedAt is what marks it deleted
       await db.user.update({
         where: { id: userId },
         data: {
@@ -156,7 +160,8 @@ async function eraseAccount(
           authProvider: 'LOCAL',
           providerSub: null,
           isVerified: false,
-          name: null,
+          deletedAt: new Date(),
+          name: DELETED_USER_NAME,
           avatarUrl: null,
           publicId: null,
           locale: null,

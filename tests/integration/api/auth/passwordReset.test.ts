@@ -2,7 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { logIn, refreshWith, signIn } from '../../../helpers/actors.js';
-import { startApp, stopApp, withoutErrorLog } from '../../../helpers/app.js';
+import { startApp, stopApp } from '../../../helpers/app.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
   closeSessions,
@@ -104,9 +105,12 @@ describe('POST /api/auth/password/forgot', () => {
     watchMail();
 
     // without a working SendGrid the mail fails with a server error, the sessions are the point here
-    await withoutErrorLog(() => forgot(user.email));
+    await forgot(user.email);
 
     expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).toBe(204);
+    expect(takeLogs({ msg: 'request failed', reason: 'SENDGRID_API_KEY_REQUIRED' })).toHaveLength(
+      1,
+    );
   });
 
   it('refuses an email that is not an email', async () => {

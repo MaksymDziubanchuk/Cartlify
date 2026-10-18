@@ -7,6 +7,14 @@ import type { TestProduct, TestUser } from './factories.js';
 
 export type OrderStage = 'cart' | 'waiting' | 'paid' | 'shipped';
 
+// what a confirmation needs besides the order id
+export const shippingData = {
+  shippingAddress: 'Test street 1, Kyiv',
+  recipientFirstName: 'Anna',
+  recipientLastName: 'Koval',
+  recipientPhone: '+380501234567',
+};
+
 // an order of the user taken as far as the stage, the way the app takes it there: the cart and the
 // confirmation go through the api, the payment through the database function the stripe webhook
 // calls (a made-up payment id), the shipping as an admin. Returns the order id
@@ -41,7 +49,7 @@ export async function placeOrder(
     method: 'POST',
     url: '/api/orders/current/confirm',
     headers,
-    payload: { orderId, shippingAddress: 'Test street 1, Kyiv' },
+    payload: { orderId, ...shippingData },
   });
   if (confirmed.statusCode !== 200) {
     throw new Error(`confirming the order answered ${confirmed.statusCode}`);
@@ -65,3 +73,24 @@ export async function placeOrder(
   await asAdmin((tx) => tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } }));
   return orderId;
 }
+
+// what the reservation timer does when the payment does not come in time: the order waiting for
+// its payment becomes unconfirmed, with its items and shipping data
+export const loseReservation = (orderId: number) =>
+  asAdmin((tx) => tx.$executeRaw`select cartlify.unconfirm_order(${orderId}::int)`);
+
+// an order of the user that lost its reservation
+export async function placeUnconfirmedOrder(
+  app: FastifyInstance,
+  csrf: Csrf,
+  user: TestUser,
+  product: TestProduct,
+  quantity = 1,
+): Promise<number> {
+  const orderId = await placeOrder(app, csrf, user, product, 'waiting', quantity);
+  await loseReservation(orderId);
+  return orderId;
+}
+
+export const orderRowOf = (orderId: number) =>
+  asAdmin((tx) => tx.order.findUniqueOrThrow({ where: { id: orderId }, include: { items: true } }));

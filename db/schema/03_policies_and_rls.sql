@@ -38,11 +38,16 @@ SELECT
 -- - owner can update self but role must stay same as actor role
 -- - owner cannot change email
 -- - owner cannot change isVerified, except unverified LOCAL account taken over by oauth provider
--- - root can update anyone (including role changes)
+-- - owner cannot change deletedAt, and a deleted account cannot be changed by its owner at all:
+--   its access token lives on for a few minutes, it must not fill the emptied row again
+-- - root can update anyone (including role changes and the deletion)
 CREATE POLICY users_update ON cartlify.users
 FOR UPDATE
   USING (
-    cartlify.is_owner (id)
+    (
+      cartlify.is_owner (id)
+      AND "deletedAt" IS NULL
+    )
     OR cartlify.is_root ()
   )
 WITH
@@ -50,6 +55,7 @@ WITH
     (
       cartlify.is_owner (id)
       AND role = cartlify.current_actor_role ()
+      AND "deletedAt" IS NULL
       AND EXISTS (
         SELECT
           1
@@ -627,6 +633,8 @@ DROP POLICY IF EXISTS orders_update_admin_shipping_status ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_update_owner ON cartlify.orders;
 
+DROP POLICY IF EXISTS orders_update_owner_cancel ON cartlify.orders;
+
 DROP POLICY IF EXISTS orders_delete ON cartlify.orders;
 
 -- SELECT (owner or admin/root)
@@ -769,6 +777,7 @@ WITH
   );
 
 -- UPDATE (admin/root) - allow only shipping status change
+-- a cancel is not a status change here: it goes through cartlify.cancel_paid_order with the stock return
 CREATE POLICY orders_update_admin_shipping_status ON cartlify.orders
 FOR UPDATE
   USING (
@@ -778,7 +787,32 @@ FOR UPDATE
 WITH
   CHECK (
     cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
-    AND status IN ('shipped', 'delivered', 'cancelled')
+    AND status IN ('shipped', 'delivered')
+    AND (
+      (to_jsonb(orders) - 'status' - 'updatedAt') = (
+        SELECT
+          (to_jsonb(o) - 'status' - 'updatedAt')
+        FROM
+          cartlify.orders o
+        WHERE
+          o.id = orders.id
+      )
+    )
+  );
+
+-- UPDATE cartlify_owner for cancel_paid_order only: a paid or shipped order of the admin context
+-- becomes cancelled and nothing else changes; the rows it reaches are the ones the admin policy
+-- above reaches already, so it opens no other order to the system functions
+CREATE POLICY orders_update_owner_cancel ON cartlify.orders
+FOR UPDATE
+  TO cartlify_owner USING (
+    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+    AND status IN ('paid', 'shipped')
+  )
+WITH
+  CHECK (
+    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+    AND status = 'cancelled'
     AND (
       (to_jsonb(orders) - 'status' - 'updatedAt') = (
         SELECT

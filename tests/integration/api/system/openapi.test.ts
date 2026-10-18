@@ -129,7 +129,7 @@ describe('the users routes', () => {
   // a status a route never sends has no place in its answers
   it.each([
     ['get', '/api/users/me', ['200', '401', '403', '500']],
-    ['patch', '/api/users/me', ['200', '400', '401', '403', '413', '500']],
+    ['patch', '/api/users/me', ['200', '400', '401', '403', '404', '413', '500']],
     ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '500']],
     ['delete', '/api/users/{userId}', ['200', '400', '401', '403', '404', '409', '500']],
     ['delete', '/api/users/me', ['204', '400', '401', '403', '409', '500']],

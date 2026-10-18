@@ -5,7 +5,8 @@ Paid on {{paidAt}}.
 {{/items}}
 Total: {{total}}
 {{#shippingAddress}}Shipping to: {{shippingAddress}}
-{{/shippingAddress}}
+{{/shippingAddress}}{{#recipient}}Recipient: {{recipient}}
+{{/recipient}}
 See your order:
 {{orderUrl}}
 

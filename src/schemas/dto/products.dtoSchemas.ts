@@ -203,6 +203,29 @@ const reviewResponseSchema = {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
     comment: { type: 'string' },
     userId: { anyOf: [{ type: 'string' }, { type: 'number' }] },
+    user: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The author. A deleted account stays as the author with deleted: true and the name Guest.',
+      properties: {
+        id: { type: 'integer' },
+        name: { type: 'string' },
+        avatarUrls: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            url32: { type: 'string' },
+            url64: { type: 'string' },
+            url128: { type: 'string' },
+            url256: { type: 'string' },
+          },
+          required: ['url32', 'url64', 'url128', 'url256'],
+        },
+        deleted: { type: 'boolean' },
+      },
+      required: ['id', 'deleted'],
+    },
 
     upVotes: { type: 'integer', minimum: 0 },
     downVotes: { type: 'integer', minimum: 0 },
@@ -211,7 +234,7 @@ const reviewResponseSchema = {
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
-  required: ['id', 'productId', 'userId', 'createdAt', 'updatedAt'],
+  required: ['id', 'productId', 'userId', 'user', 'createdAt', 'updatedAt'],
   additionalProperties: false,
 } as const;
 

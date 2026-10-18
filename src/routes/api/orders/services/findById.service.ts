@@ -2,7 +2,11 @@ import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError, NotFoundError, ResourceBusyError, isAppError } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
+import {
+  dropDeletedProductItems,
+  mapOrderRowToResponse,
+  orderResponseSelect,
+} from './helpers/index.js';
 
 import type { FindOrderByIdDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
@@ -21,52 +25,17 @@ export async function findById({
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
         // bring item prices of an own unconfirmed order to current product prices
-        // an order that lost its reservation is no longer the current cart, so this is where its prices get fresh
-        // rls lets the function touch only the owner's unconfirmed order, for any other order it changes nothing
+        // an order that lost its reservation is no longer the current cart, so this is where its prices get fresh,
+        // and where it loses the items of products deleted from the catalog
+        // rls lets the owner touch only own unconfirmed orders, for any other order nothing changes
         if (actorRole === 'USER') {
+          await dropDeletedProductItems(db, Number(actorId), [Number(orderId)]);
           await db.$executeRaw`select cartlify.refresh_order_prices(${Number(orderId)}::int)`;
         }
 
         const order = await db.order.findUnique({
           where: { id: Number(orderId) },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-
-                // include minimal product snapshot for order ui
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         // if rls denies access, it will look like "not found"

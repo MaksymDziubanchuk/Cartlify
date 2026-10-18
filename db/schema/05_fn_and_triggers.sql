@@ -348,7 +348,8 @@ END;
 $$;
 
 -- PRODUCTS add stock to product inventory
--- not used by the app yet, so it has no execute right (db/01); the role check stays for the day it is
+-- the app has no execute right (db/01): cancel_paid_order calls it as the owner to return the stock
+-- of a cancelled order; the role check stays for any other caller
 CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1074,6 +1075,176 @@ BEGIN
 END;
 $$;
 
+-- ORDERS AND ITEMS the owner cancels the payment of an order that waits for it
+-- system function: runs as the owner, reserved stock is closed for the app;
+-- callable only by the USER who owns the order. The server closes the stripe payment page before
+-- the call, so no payment can come for this reservation any more. The order becomes unconfirmed
+-- with its items and shipping data, the owner can change them and confirm it again
+CREATE OR REPLACE FUNCTION cartlify.cancel_order_payment (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor_id   integer;
+  v_confirmed  boolean;
+  v_status     text;
+
+  r record;
+BEGIN
+  v_actor_id := cartlify.current_actor_id();
+
+  -- only a real USER, and only for an own order
+  IF cartlify.current_actor_role() IS DISTINCT FROM 'USER' OR v_actor_id IS NULL THEN
+    RAISE EXCEPTION 'ORDER_CANCEL_PAYMENT_FORBIDDEN';
+  END IF;
+
+  -- read state without a lock: a paid order is not lockable for system updates of a user;
+  -- orders of other users stay hidden, as they are under rls
+  SELECT o.confirmed, o.status
+  INTO v_confirmed, v_status
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
+    AND o."userId" = v_actor_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_NOT_FOUND';
+  END IF;
+
+  -- the payment came first: there is nothing to cancel
+  IF v_status = 'paid' THEN
+    RAISE EXCEPTION 'ORDER_ALREADY_PAID';
+  END IF;
+
+  IF NOT v_confirmed OR v_status IS DISTINCT FROM 'waiting' THEN
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_WAITING';
+  END IF;
+
+  -- lock order row
+  PERFORM 1
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
+    AND o."userId" = v_actor_id
+    AND o.confirmed = true
+    AND o.status = 'waiting'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    -- the order changed while waiting for the lock: paid by a payment of this moment,
+    -- or unconfirmed by the reservation timer
+    SELECT o.status
+    INTO v_status
+    FROM cartlify.orders AS o
+    WHERE o.id = p_order_id;
+
+    IF v_status = 'paid' THEN
+      RAISE EXCEPTION 'ORDER_ALREADY_PAID';
+    END IF;
+
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_WAITING';
+  END IF;
+
+  -- lock all order items
+  PERFORM 1
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
+  END IF;
+
+  -- release reserved stock (deterministic lock order by productId)
+  FOR r IN
+    SELECT oi."productId" AS product_id,
+           SUM(oi.quantity)::integer AS qty
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    GROUP BY oi."productId"
+    ORDER BY oi."productId"
+  LOOP
+    PERFORM cartlify.release_product_stock(r.product_id, r.qty);
+  END LOOP;
+
+  UPDATE cartlify.orders AS o
+  SET
+    confirmed = false,
+    status = 'unconfirmed',
+    "reservationExpiresAt" = NULL
+  WHERE o.id = p_order_id;
+END;
+$$;
+
+-- ORDERS AND ITEMS admin cancels a paid or shipped order and returns its stock
+-- system function: runs as the owner, stock and the status of a paid order are closed for plain
+-- updates (db/03); callable only in the admin context. The server refunds the payment in the same
+-- transaction before the commit, so an order is cancelled only together with its refund.
+-- A delivered order is not cancelled
+CREATE OR REPLACE FUNCTION cartlify.cancel_paid_order (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_status text;
+
+  r record;
+BEGIN
+  IF NOT cartlify.is_admin() THEN
+    RAISE EXCEPTION 'ORDER_CANCEL_FORBIDDEN';
+  END IF;
+
+  -- read state without a lock: a delivered or cancelled order is not lockable for updates
+  SELECT o.status
+  INTO v_status
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_NOT_FOUND';
+  END IF;
+
+  IF v_status = 'delivered' THEN
+    RAISE EXCEPTION 'ORDER_ALREADY_DELIVERED';
+  END IF;
+
+  IF v_status = 'cancelled' THEN
+    RAISE EXCEPTION 'ORDER_ALREADY_CANCELLED';
+  END IF;
+
+  IF v_status NOT IN ('paid', 'shipped') THEN
+    RAISE EXCEPTION 'ORDER_NOT_PAID';
+  END IF;
+
+  -- lock order row
+  PERFORM 1
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
+    AND o.status IN ('paid', 'shipped')
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    -- the status changed while waiting for the lock
+    RAISE EXCEPTION 'ORDER_STATUS_CHANGED';
+  END IF;
+
+  -- items of a confirmed order cannot change (order items trigger), so they are read without
+  -- a lock; the stock goes back in a deterministic lock order by productId
+  FOR r IN
+    SELECT oi."productId" AS product_id,
+           SUM(oi.quantity)::integer AS qty
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+    GROUP BY oi."productId"
+    ORDER BY oi."productId"
+  LOOP
+    PERFORM cartlify.add_product_stock(r.product_id, r.qty);
+  END LOOP;
+
+  UPDATE cartlify.orders AS o
+  SET status = 'cancelled'
+  WHERE o.id = p_order_id;
+END;
+$$;
+
 -- ORDERS AND ITEMS pay order from a verified payment webhook
 CREATE OR REPLACE FUNCTION cartlify.pay_order (
   p_order_id integer,
@@ -1087,6 +1258,9 @@ DECLARE
   v_confirmed         boolean;
   v_status            text;
   v_shipping_address  text;
+  v_first_name        text;
+  v_last_name         text;
+  v_phone             text;
   v_recorded_payment  text;
   v_items_total       numeric;
 
@@ -1121,8 +1295,10 @@ BEGIN
   END IF;
 
   -- lock order row
-  SELECT o.confirmed, o.status, o."shippingAddress"
-  INTO v_confirmed, v_status, v_shipping_address
+  SELECT o.confirmed, o.status, o."shippingAddress",
+         o."recipientFirstName", o."recipientLastName", o."recipientPhone"
+  INTO v_confirmed, v_status, v_shipping_address,
+       v_first_name, v_last_name, v_phone
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id
   FOR UPDATE;
@@ -1179,7 +1355,11 @@ BEGIN
     END LOOP;
   ELSIF NOT v_confirmed AND v_status IN ('pending', 'unconfirmed') THEN
     -- emergency path: reservation is gone, sell only when every item is still available
-    IF v_shipping_address IS NULL OR btrim(v_shipping_address) = '' THEN
+    -- the order becomes confirmed, so it needs what the confirm trigger requires
+    IF v_shipping_address IS NULL OR btrim(v_shipping_address) = ''
+       OR v_first_name IS NULL OR btrim(v_first_name) = ''
+       OR v_last_name IS NULL OR btrim(v_last_name) = ''
+       OR v_phone IS NULL OR btrim(v_phone) = '' THEN
       RETURN 'ORDER_NOT_PAYABLE';
     END IF;
 
@@ -1335,12 +1515,12 @@ BEGIN
 
   -- rls hides orders the actor cannot change (foreign or confirmed): treat as forbidden
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'Order % is not available for item changes', NEW."orderId"
+    RAISE EXCEPTION 'ORDER_NOT_EDITABLE'
       USING ERRCODE = 'check_violation';
   END IF;
 
   IF v_confirmed THEN
-    RAISE EXCEPTION 'Order % is already confirmed; items cannot be changed', NEW."orderId"
+    RAISE EXCEPTION 'ORDER_ALREADY_CONFIRMED'
       USING ERRCODE = 'check_violation';
   END IF;
 
@@ -1410,9 +1590,12 @@ BEGIN
     IF NEW."userId" IS DISTINCT FROM OLD."userId"
        OR NEW."total" IS DISTINCT FROM OLD."total"
        OR NEW."shippingAddress" IS DISTINCT FROM OLD."shippingAddress"
+       OR NEW."recipientFirstName" IS DISTINCT FROM OLD."recipientFirstName"
+       OR NEW."recipientLastName" IS DISTINCT FROM OLD."recipientLastName"
+       OR NEW."recipientPhone" IS DISTINCT FROM OLD."recipientPhone"
        OR COALESCE(NEW."note", '') IS DISTINCT FROM COALESCE(OLD."note", '')
     THEN
-      RAISE EXCEPTION 'Confirmed order % can only change status or confirming', OLD.id
+      RAISE EXCEPTION 'ORDER_CONFIRMED_CHANGE_FORBIDDEN'
         USING ERRCODE = 'check_violation';
     END IF;
 
@@ -1422,7 +1605,25 @@ BEGIN
   IF NOT OLD."confirmed" AND NEW."confirmed" THEN
     IF NEW."shippingAddress" IS NULL
        OR btrim(NEW."shippingAddress") = '' THEN
-      RAISE EXCEPTION 'Cannot confirm order % without shipping address', OLD.id
+      RAISE EXCEPTION 'ORDER_SHIPPING_ADDRESS_REQUIRED'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NEW."recipientFirstName" IS NULL
+       OR btrim(NEW."recipientFirstName") = '' THEN
+      RAISE EXCEPTION 'ORDER_RECIPIENT_FIRST_NAME_REQUIRED'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NEW."recipientLastName" IS NULL
+       OR btrim(NEW."recipientLastName") = '' THEN
+      RAISE EXCEPTION 'ORDER_RECIPIENT_LAST_NAME_REQUIRED'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    IF NEW."recipientPhone" IS NULL
+       OR btrim(NEW."recipientPhone") = '' THEN
+      RAISE EXCEPTION 'ORDER_RECIPIENT_PHONE_REQUIRED'
         USING ERRCODE = 'check_violation';
     END IF;
 
@@ -1624,7 +1825,7 @@ CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
 BEGIN
 
   IF p_changes IS NOT NULL AND jsonb_typeof(p_changes) <> 'array' THEN
-    RAISE EXCEPTION 'log_admin_action: p_changes must be JSON array'
+    RAISE EXCEPTION 'ADMIN_AUDIT_CHANGES_NOT_ARRAY'
       USING HINT = 'expected an array of {field, old, new} objects';
   END IF;
 

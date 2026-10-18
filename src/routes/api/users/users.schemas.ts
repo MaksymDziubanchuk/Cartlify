@@ -140,6 +140,11 @@ const patchMeSchema = {
       description: 'A guest has no profile to update (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
+    404: {
+      description:
+        'The account is deleted (USER_NOT_FOUND): its access token works for a few minutes after the deletion, the profile can no longer change.',
+      $ref: 'errorResponseSchema#',
+    },
     413: {
       description:
         `The avatar file is over ${MAX_AVATAR_MB} MB (PAYLOAD_TOO_LARGE). Nothing was changed: ` +
@@ -159,7 +164,8 @@ const getUserByIdSchema = {
   summary: 'Get user by id',
   description:
     'Returns the public profile of any user by id: name, avatar and dates. ' +
-    'It has no email, role, phone or reviews; a user reads those for themselves in GET /api/users/me.',
+    'It has no email, role, phone or reviews; a user reads those for themselves in GET /api/users/me. ' +
+    'A deleted account is USER_NOT_FOUND for a user; an admin or root reads it with `deletedAt`.',
 
   params: {
     $ref: 'usersGetByIdParamsSchema#',
@@ -188,7 +194,8 @@ const getUserByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'User was not found.',
+      description:
+        'User was not found (USER_NOT_FOUND), also a deleted account when the reader is not an admin or root.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -200,8 +207,10 @@ const getUserByIdSchema = {
 
 // what a deletion does, the same for a root and for the user
 const ACCOUNT_DELETION =
-  'The row stays, emptied: the email becomes deleted+<id>+...@<domain of the site>, the password, ' +
-  'provider link, name, avatar (also the file), locale and phone are removed, the role stays. ' +
+  'The row stays, emptied and marked with `deletedAt`: the email becomes ' +
+  'deleted+<id>+...@<domain of the site>, the name becomes Guest, the password, provider link, ' +
+  'avatar (also the file), locale and phone are removed, the role stays. The account can no ' +
+  'longer change its own row, and other users get USER_NOT_FOUND for its profile. ' +
   'An order waiting for payment is cancelled, its stock goes back and its payment page is closed; ' +
   'a payment that still comes for it is refunded in full. The cart goes. Paid and shipped orders, ' +
   'favorites, reviews, login logs and chat messages stay; open chats are closed. Every refresh ' +

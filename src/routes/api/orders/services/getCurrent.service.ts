@@ -8,7 +8,7 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
+import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
 
 import type { GetCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
@@ -43,44 +43,7 @@ export async function getCurrent({
 
         const order = await db.order.findUnique({
           where: { id: current.id },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-
-                // include minimal product snapshot for order ui
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         if (!order) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');

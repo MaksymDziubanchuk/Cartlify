@@ -2,11 +2,15 @@ import { prisma } from '@db/client.js';
 import { ReviewVoteAction as ReviewVoteActionDb } from '@prisma/client';
 import { encodeCursor, decodeCursor } from '@helpers/codeCursor.js';
 
-import { setUserContext } from '@db/dbContext.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
-import { mapReviewRowToResponse, normalizeFindProductByIdInput } from './helpers/index.js';
+import {
+  mapReviewRowToResponse,
+  normalizeFindProductByIdInput,
+  reviewAuthorSelect,
+} from './helpers/index.js';
 
 import type { FindProductReviewsDto, ReviewsResponseDto } from 'types/dto/products.dto.js';
 
@@ -119,9 +123,25 @@ export async function findReviews({
           ? rows.map((r) => ({ ...r, userVote: userVoteByReviewId?.get(r.id) ?? null }))
           : rows;
 
-      // map db rows into api dto
+      // reviews are public, the accounts of their authors are not under rls: the server reads
+      // the name, the avatar and the deletion mark of the authors of this page as the system
+      await setAdminContext(tx);
+
+      const authors = await tx.user.findMany({
+        where: { id: { in: [...new Set(rows.map((r) => r.userId))] } },
+        select: reviewAuthorSelect,
+      });
+      const authorById = new Map(authors.map((author) => [author.id, author]));
+
+      // map db rows into api dto; a review always has its author, the account row is never removed
       return {
-        items: rowsWithUserVote.map(mapReviewRowToResponse),
+        items: rowsWithUserVote.map((r) => {
+          const author = authorById.get(r.userId);
+          if (!author)
+            throw new InternalError({ reason: 'REVIEW_AUTHOR_NOT_FOUND', reviewId: r.id });
+
+          return mapReviewRowToResponse(r, author);
+        }),
         limit,
         total,
         ...(nextCursor ? { nextCursor } : {}),

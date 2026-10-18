@@ -11,7 +11,13 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse, scheduleOrderReservationExpiry } from './helpers/index.js';
+import {
+  buildConfirmOrderData,
+  findUnavailableItems,
+  mapOrderRowToResponse,
+  orderResponseSelect,
+  scheduleOrderReservationExpiry,
+} from './helpers/index.js';
 
 import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
@@ -21,17 +27,13 @@ export async function confirmOrder({
   actorId,
   actorRole,
   orderId,
-  shippingAddress,
+  ...shipping
 }: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
-  // normalize shipping address, it is optional when the order already has one
-  const shippingAddressNorm =
-    typeof shippingAddress === 'string' ? shippingAddress.trim() : undefined;
-
-  if (shippingAddress !== undefined && !shippingAddressNorm) {
-    throw new BadRequestError('SHIPPING_ADDRESS_INVALID');
-  }
+  // check the shipping data before anything is written; a field that is not sent keeps
+  // what the order already has
+  const shippingData = buildConfirmOrderData(shipping);
 
   // refuse early so nothing is confirmed in db while redis is down
   assertRedisReady();
@@ -42,13 +44,34 @@ export async function confirmOrder({
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // store shipping address before confirm, db refuses to confirm an order without it
-        // rls lets the owner change only an own unconfirmed order; any other case is reported by confirm_order
-        if (shippingAddressNorm) {
+        // store shipping data before confirm, db refuses to confirm an order without the address
+        // and the recipient; rls lets the owner change only an own unconfirmed order, any other
+        // case is reported by confirm_order
+        if (Object.keys(shippingData).length) {
           await db.order.updateMany({
             where: { id: Number(orderId), confirmed: false },
-            data: { shippingAddress: shippingAddressNorm },
+            data: shippingData,
           });
+        }
+
+        // name every item the order cannot be confirmed with, a product deleted from the catalog or
+        // not enough free stock: the page shows them, the owner changes the order and confirms
+        // again. The database refuses such an order on its own, this only says which items.
+        // A confirmed order is left to confirm_order, its own reservation is in the stock numbers
+        const items = await db.orderItem.findMany({
+          where: { orderId: Number(orderId), order: { userId: actorId as any, confirmed: false } },
+          select: {
+            id: true,
+            productId: true,
+            quantity: true,
+            product: { select: { deletedAt: true, stock: true, reservedStock: true } },
+          },
+          orderBy: { id: 'asc' },
+        });
+
+        const unavailable = findUnavailableItems(items);
+        if (unavailable.length) {
+          throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', { items: unavailable });
         }
 
         // confirm in db
@@ -59,45 +82,7 @@ export async function confirmOrder({
 
         const order = await db.order.findUnique({
           where: { id: orderId },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            reservationExpiresAt: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-
-                // include minimal product snapshot for order ui
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
@@ -139,9 +124,15 @@ export async function confirmOrder({
         throw new ConflictError('ORDER_STATUS_NOT_ALLOWED');
       if (msg.includes('ORDER_ITEMS_REQUIRED')) throw new BadRequestError('ORDER_ITEMS_REQUIRED');
 
-      // order has no shipping address and the request did not bring one
-      if (msg.includes('without shipping address'))
+      // order has no shipping data and the request did not bring it
+      if (msg.includes('ORDER_SHIPPING_ADDRESS_REQUIRED'))
         throw new BadRequestError('SHIPPING_ADDRESS_REQUIRED');
+      if (msg.includes('ORDER_RECIPIENT_FIRST_NAME_REQUIRED'))
+        throw new BadRequestError('RECIPIENT_FIRST_NAME_REQUIRED');
+      if (msg.includes('ORDER_RECIPIENT_LAST_NAME_REQUIRED'))
+        throw new BadRequestError('RECIPIENT_LAST_NAME_REQUIRED');
+      if (msg.includes('ORDER_RECIPIENT_PHONE_REQUIRED'))
+        throw new BadRequestError('RECIPIENT_PHONE_REQUIRED');
 
       // some item price differs from current product price
       // nothing is reserved; client reloads the order to get fresh prices and confirms again

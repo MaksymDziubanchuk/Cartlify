@@ -9,15 +9,23 @@ import {
   isAppError,
   ResourceBusyError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse } from './helpers/index.js';
+import {
+  dropDeletedProductItems,
+  isOrderNotEditable,
+  mapOrderRowToResponse,
+  orderResponseSelect,
+} from './helpers/index.js';
 
 import type { CurrentAddItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
+// adds an item to the cart, or, with orderId, to an own order that lost its reservation
+// (unconfirmed): its items can change before it is confirmed again
 export async function addCurrentItem({
   actorId,
   actorRole,
   productId,
   quantity,
+  orderId: unconfirmedOrderId,
 }: CurrentAddItemDto): Promise<OrderResponseDto> {
   // enforce user-only cart writes
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
@@ -31,26 +39,44 @@ export async function addCurrentItem({
         // bound lock wait
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // load or create current open order
-        const existingOrder = await db.order.findFirst({
-          where: { userId: actorId as any, confirmed: false, status: 'pending' },
-          orderBy: { createdAt: 'desc' },
-          select: { id: true },
-        });
+        let orderId: number;
 
-        const orderId = existingOrder
-          ? existingOrder.id
-          : (
-              await db.order.create({
-                data: {
-                  userId: actorId as any,
-                  total: new Prisma.Decimal(0),
-                  confirmed: false,
-                  status: 'pending',
-                },
-                select: { id: true },
-              })
-            ).id;
+        if (unconfirmedOrderId !== undefined) {
+          // an own unconfirmed order, any other is not found
+          const order = await db.order.findFirst({
+            where: {
+              id: Number(unconfirmedOrderId),
+              userId: actorId as any,
+              confirmed: false,
+              status: 'unconfirmed',
+            },
+            select: { id: true },
+          });
+          if (!order) throw new NotFoundError('ORDER_NOT_FOUND', { orderId: unconfirmedOrderId });
+
+          orderId = order.id;
+        } else {
+          // load or create current open order
+          const existingOrder = await db.order.findFirst({
+            where: { userId: actorId as any, confirmed: false, status: 'pending' },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true },
+          });
+
+          orderId = existingOrder
+            ? existingOrder.id
+            : (
+                await db.order.create({
+                  data: {
+                    userId: actorId as any,
+                    total: new Prisma.Decimal(0),
+                    confirmed: false,
+                    status: 'pending',
+                  },
+                  select: { id: true },
+                })
+              ).id;
+        }
 
         // load product price and availability
         const product = await db.product.findFirst({
@@ -97,51 +123,18 @@ export async function addCurrentItem({
           });
         }
 
-        // bring the other items to current product prices too
-        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        // bring the other items to current product prices too, an unconfirmed order also loses
+        // the items of deleted products; confirm refuses an order with outdated prices, so the
+        // order must show what will be confirmed
+        if (unconfirmedOrderId !== undefined) {
+          await dropDeletedProductItems(db, Number(actorId), [orderId]);
+        }
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // totals are maintained by db triggers; fetch current order
         const order = await db.order.findUnique({
           where: { id: orderId },
-          select: {
-            id: true,
-            userId: true,
-            status: true,
-            confirmed: true,
-            total: true,
-            shippingAddress: true,
-            note: true,
-            createdAt: true,
-            updatedAt: true,
-            items: {
-              select: {
-                id: true,
-                productId: true,
-                quantity: true,
-                unitPrice: true,
-                totalPrice: true,
-
-                // include minimal product snapshot for order ui
-                product: {
-                  select: {
-                    id: true,
-                    name: true,
-                    categoryId: true,
-                    stock: true,
-                    reservedStock: true,
-                    deletedAt: true,
-                    images: {
-                      select: { url: true, position: true, isPrimary: true },
-                      orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-                      take: 1,
-                    },
-                  },
-                },
-              },
-              orderBy: { id: 'asc' },
-            },
-          },
+          select: orderResponseSelect,
         });
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
@@ -163,6 +156,10 @@ export async function addCurrentItem({
     if (isRetryableTxError(err)) {
       throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
     }
+
+    // another request confirmed the cart while this one changed it
+    if (isOrderNotEditable(err)) throw new ConflictError('ORDER_NOT_EDITABLE');
+
     throw new InternalError({ reason: 'ORDERS_CURRENT_ADD_ITEM_UNEXPECTED' }, err);
   }
 }

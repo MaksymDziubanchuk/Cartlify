@@ -118,7 +118,7 @@ What is important to state honestly:
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
 - user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
-- account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
+- account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
 - login logging
 
 ### Authorization and security
@@ -145,7 +145,7 @@ What is important to state honestly:
 
 ### Reviews and favorites
 
-- product reviews
+- product reviews, each with its author (`user: { id, name, avatarUrls, deleted }`); a deleted account stays the author, named Guest
 - review deletion rules for user/admin/root
 - review voting endpoint
 - favorites for guest/user flows
@@ -154,12 +154,17 @@ What is important to state honestly:
 
 - current order/cart retrieval
 - add/update/remove current order items
-- confirm current order
-- order history endpoint
+- confirm current order with the shipping data: the address and the recipient (first name, last name, phone) are required, a note is optional. Names are up to 100 characters with at least one letter and no digits, the phone is `+380501234567`-style like the profile phone. An order that lost its reservation keeps them for the next confirmation; a confirmed order keeps them as they were confirmed, the database refuses any change
+- the confirmation names every item it cannot take (`409 ORDER_ITEMS_UNAVAILABLE` with `details.items`: deleted from the catalog or out of stock)
+- the owner cancels the payment of an order waiting for it (`POST /api/orders/:orderId/cancel-payment`): the Stripe payment page is closed first, then the reservation goes and the order becomes `unconfirmed` with its items and shipping data; a payment that came first answers `409 ORDER_ALREADY_PAID`
+- an unconfirmed order (cancelled payment or expired reservation) is changed like the cart (`POST/PATCH/DELETE /api/orders/:orderId/items`), at current prices and without products deleted from the catalog, and confirmed again with only its id
+- order history endpoint: newest first by default, the cart is not listed; paid orders keep the prices they were paid with, unconfirmed ones show current prices
 - order by id endpoint
-- admin/root order status update endpoint
+- every order answer (cart, confirmation, history, details, admin status update) gives the same fields: the shipping data, the note and, while the order waits for the payment, `reservationExpiresAt`; the Stripe payment id stays internal
+- admin/root order status update endpoint (shipped, delivered)
+- admin/root cancel of a paid or shipped order (`POST /api/orders/:orderId/cancel`): full refund at Stripe in the same transaction, the stock comes back, the buyer gets a mail unless the account is deleted, the audit log keeps it; the answer gives how to reach the buyer, also a deleted one. A delivered order is not cancelled
 - Redis-based timeout worker for order reservation expiry handling
-- the buyer gets an email when the order is paid (sent from the Stripe webhook; a failed mail never fails the webhook)
+- the buyer gets an email when the order is paid, with the address and the recipient (sent from the Stripe webhook; a failed mail never fails the webhook)
 
 ### Chat and AI assistant
 
@@ -542,7 +547,7 @@ Examples of implemented business endpoints:
 - products: list, details, reviews, create/update/delete, upload images, bulk price update
 - categories: list, create, update, delete
 - favorites: get/add/remove
-- orders: current cart, item mutations, confirm, history, details, admin status update
+- orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund
 - reviews: vote on review
 - admin: stats, product popularity, admin chat queues
 - root: manage admins

@@ -29,6 +29,7 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { allowLogs, takeLogs } from '../../../helpers/logs.js';
 import { itWithMail, watchMail } from '../../../helpers/mail.js';
 import { placeOrder } from '../../../helpers/orders.js';
 
@@ -80,6 +81,10 @@ beforeAll(async () => {
   // the avatar file lives at Cloudinary and the test environment has only made-up Cloudinary keys:
   // the call that removes it is caught here and checked, it never leaves the test
   jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
+
+  // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
+  // 'deletes the account even when the mail cannot be sent' checks that line
+  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -171,16 +176,18 @@ describe('what the deletion does', () => {
       new RegExp(`^deleted\\+${target.id}\\+[a-z0-9_]+@shop\\.example\\.com$`),
     );
     expect(row.email).not.toBe(target.email);
+    // the name Guest is what reviews and chats show for the account, deletedAt marks it deleted
     expect(row).toMatchObject({
       passwordHash: null,
       authProvider: 'LOCAL',
       providerSub: null,
       isVerified: false,
-      name: null,
+      name: 'Guest',
       avatarUrl: null,
       publicId: null,
       locale: null,
       phone: null,
+      deletedAt: expect.any(Date),
     });
   });
 
@@ -268,6 +275,7 @@ describe('what the deletion does', () => {
     expect(login.statusCode).toBe(200);
   });
 
+  // the root still reads the account, the person is not in it any more
   it('leaves nothing of the person in the public profile of the account', async () => {
     const target = await newUser({
       name: 'Anna',
@@ -282,7 +290,7 @@ describe('what the deletion does', () => {
       headers: { cookie: rootCookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).not.toHaveProperty('name');
+    expect(res.json()).toMatchObject({ name: 'Guest', deletedAt: expect.any(String) });
     expect(res.json()).not.toHaveProperty('avatarUrls');
   });
 });
@@ -423,6 +431,10 @@ describe('what happens around the account', () => {
 
     expect(res.statusCode).toBe(200);
     expect((await rowOf(target.id)).email).toMatch(/^deleted\+/);
+    // the failed mail goes to the log with the id of the account, never with its address
+    const [logged] = takeLogs({ msg: 'account deleted mail was not sent' });
+    expect(logged).toMatchObject({ userId: target.id });
+    expect(JSON.stringify(logged)).not.toContain(target.email);
   });
 
   itWithMail(
