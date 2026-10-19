@@ -1,4 +1,6 @@
 import { prisma } from '@db/client.js';
+import env from '@config/env.js';
+import { MIN_CHECKOUT_TOTAL } from '@config/limits.js';
 import stripe from '@config/stripe.js';
 import { assertRedisReady } from '@redis/client.js';
 import { setOrderPaymentSessionLink } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
@@ -10,15 +12,19 @@ import {
   ForbiddenError,
   InternalError,
   NotFoundError,
+  ServiceUnavailableError,
   isAppError,
 } from '@utils/errors.js';
 
 import {
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
+  isStripeUnavailable,
   mapCreatedCheckoutSession,
 } from './helpers/checkoutSession.helper.js';
 
+import type Stripe from 'stripe';
+import type { UnavailableOrderItem } from '@routes/api/orders/services/helpers/confirmOrder.helper.js';
 import type {
   CreateCheckoutSessionDto,
   CheckoutSessionResponseDto,
@@ -51,7 +57,11 @@ export async function createCheckoutSession({
           reservationExpiresAt: true,
           total: true,
           items: {
+            orderBy: { id: 'asc' },
             select: {
+              id: true,
+              productId: true,
+              quantity: true,
               product: {
                 select: {
                   deletedAt: true,
@@ -96,11 +106,21 @@ export async function createCheckoutSession({
         throw new BadRequestError('ORDER_ITEMS_REQUIRED');
       }
 
-      // ensure all item products still exist
-      const hasInvalidProduct = order.items.some((item) => !item.product || item.product.deletedAt);
+      // an item removed from the catalog after the confirmation is named the way the confirmation
+      // names it: the buyer cancels the payment, changes the order and confirms it again. Its own
+      // reservation is in the stock numbers, so only a removed product is unavailable here
+      const removed: UnavailableOrderItem[] = order.items
+        .filter((item) => item.product.deletedAt)
+        .map((item) => ({
+          itemId: item.id,
+          productId: item.productId,
+          reason: 'deleted',
+          available: 0,
+          requested: item.quantity,
+        }));
 
-      if (hasInvalidProduct) {
-        throw new NotFoundError('PRODUCT_NOT_FOUND');
+      if (removed.length > 0) {
+        throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', { items: removed });
       }
 
       // validate order total
@@ -108,6 +128,14 @@ export async function createCheckoutSession({
 
       if (!Number.isFinite(totalRaw) || totalRaw <= 0) {
         throw new BadRequestError('ORDER_TOTAL_INVALID');
+      }
+
+      // stripe refuses a smaller payment, the page tells the buyer the smallest total
+      if (totalRaw < MIN_CHECKOUT_TOTAL) {
+        throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
+          minimum: MIN_CHECKOUT_TOTAL,
+          currency: env.STRIPE_CURRENCY,
+        });
       }
 
       return {
@@ -127,12 +155,23 @@ export async function createCheckoutSession({
 
     // create checkout session in stripe
     // repeated request for the same order and reservation gets the same session, not a second payment
-    const session = await stripe.checkout.sessions.create(checkoutSessionPayload, {
-      idempotencyKey: buildCheckoutIdempotencyKey(
-        orderSnapshot.orderId,
-        orderSnapshot.reservationExpiresAt,
-      ),
-    });
+    let session: Stripe.Checkout.Session;
+
+    try {
+      session = await stripe.checkout.sessions.create(checkoutSessionPayload, {
+        idempotencyKey: buildCheckoutIdempotencyKey(
+          orderSnapshot.orderId,
+          orderSnapshot.reservationExpiresAt,
+        ),
+      });
+    } catch (err) {
+      // nothing is opened, the page asks the buyer to try again a bit later
+      if (isStripeUnavailable(err)) {
+        throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, err);
+      }
+
+      throw err;
+    }
 
     // set sessionId & orderId connection to Redis for expiration
     // session is not expired when this fails: the retry gets the same session back and links it

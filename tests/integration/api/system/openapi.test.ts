@@ -201,6 +201,52 @@ describe('the product routes', () => {
   });
 });
 
+describe('the payments routes', () => {
+  it('asks the csrf header of POST /api/payments/checkout/sessions', () => {
+    const security = operation('post', '/api/payments/checkout/sessions').security ?? [];
+
+    expect(security.length).toBeGreaterThan(0);
+    for (const requirement of security) expect(requirement).toHaveProperty('csrfTokenHeader');
+  });
+
+  // 503: redis or Stripe out of reach; a body that fails its schema is a 400, never a 422
+  it.each([
+    [
+      'post',
+      '/api/payments/checkout/sessions',
+      ['201', '400', '401', '403', '404', '409', '500', '503'],
+    ],
+    [
+      'get',
+      '/api/payments/checkout/sessions/{sessionId}',
+      ['200', '400', '401', '403', '404', '500', '503'],
+    ],
+    ['post', '/api/payments/webhook', ['200', '400', '401', '500']],
+  ])('lists only the answers %s %s can give', (method, path, statuses) => {
+    expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
+  });
+});
+
+describe('every route', () => {
+  // a body that fails its schema is a 400 VALIDATION_ERROR everywhere; the one 422 the app gives
+  // is a category whose parent does not exist (CATEGORY_PARENT_NOT_FOUND)
+  it('lists 422 only for a category whose parent may be missing', () => {
+    const with422 = Object.entries(doc.paths).flatMap(([path, operations]) =>
+      Object.entries(operations)
+        .filter(([, op]) => op.responses?.['422'])
+        .map(([method]) => `${method} ${path}`),
+    );
+
+    expect(with422.sort()).toEqual(['patch /api/categories/{categoryId}', 'post /api/categories/']);
+  });
+
+  it('lists only the answers the confirmation of an order can give', () => {
+    expect(
+      Object.keys(operation('post', '/api/orders/current/confirm').responses ?? {}).sort(),
+    ).toEqual(['200', '400', '401', '403', '404', '409', '500', '503']);
+  });
+});
+
 describe('Swagger UI', () => {
   it('takes a csrf token before a request that changes data', async () => {
     const res = await app.inject({

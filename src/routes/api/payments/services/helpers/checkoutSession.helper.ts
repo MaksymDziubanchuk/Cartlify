@@ -1,6 +1,8 @@
 import env from '@config/env.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 import stripe from '@config/stripe.js';
+import { webUrl } from '@helpers/webOrigin.js';
+import { MAX_ID } from '@schemas/idPathParam.js';
 
 import type Stripe from 'stripe';
 import type {
@@ -27,6 +29,11 @@ type ExpireCheckoutSessionArgs = {
   sessionId: string;
 };
 
+// frontend pages the payment page returns the buyer to, placeholders until the frontend fixes its
+// routes; the address of the site is WEB_ORIGIN
+const CHECKOUT_SUCCESS_PAGE = '/checkout/success';
+const CHECKOUT_CANCEL_PAGE = '/checkout/cancel';
+
 // build stripe idempotency key for checkout session create
 // same order with the same reservation gets the same session back, so a double click does not open a second payment
 // a new confirmation has a new reservation time, so it gets a new session
@@ -42,15 +49,12 @@ function buildCheckoutSessionPayload({
 }: BuildCheckoutSessionPayloadArgs): Stripe.Checkout.SessionCreateParams {
   // build success return url; stripe replaces only the literal {CHECKOUT_SESSION_ID} with the
   // session id, while URLSearchParams encodes the braces, so they are put back after encoding
-  const successUrl = new URL(env.STRIPE_SUCCESS_URL);
-  successUrl.searchParams.set('session_id', '{CHECKOUT_SESSION_ID}');
-  const successUrlText = successUrl
-    .toString()
-    .replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
+  const successUrlText = webUrl(CHECKOUT_SUCCESS_PAGE, {
+    session_id: '{CHECKOUT_SESSION_ID}',
+  }).replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
 
   // build cancel return url
-  const cancelUrl = new URL(env.STRIPE_CANCEL_URL);
-  cancelUrl.searchParams.set('orderId', String(orderId));
+  const cancelUrlText = webUrl(CHECKOUT_CANCEL_PAGE, { orderId: String(orderId) });
 
   return {
     mode: 'payment',
@@ -76,8 +80,44 @@ function buildCheckoutSessionPayload({
       },
     ],
     success_url: successUrlText,
-    cancel_url: cancelUrl.toString(),
+    cancel_url: cancelUrlText,
   };
+}
+
+// stripe could not be reached or could not answer now (its own failure, too many requests): the
+// request may work later, unlike a refusal of what was asked
+const STRIPE_UNAVAILABLE_TYPES = new Set([
+  'StripeConnectionError',
+  'StripeAPIError',
+  'StripeRateLimitError',
+]);
+
+function isStripeUnavailable(err: unknown): boolean {
+  const type = (err as { type?: unknown } | null)?.type;
+  return typeof type === 'string' && STRIPE_UNAVAILABLE_TYPES.has(type);
+}
+
+// stripe has no such object: an id it never made, or one of another account or mode. For a
+// checkout session stripe answers 404 without a code, other objects come with resource_missing
+function isStripeResourceMissing(err: unknown): boolean {
+  const e = err as { type?: unknown; code?: unknown; statusCode?: unknown } | null;
+  return (
+    e?.type === 'StripeInvalidRequestError' &&
+    (e.statusCode === 404 || e.code === 'resource_missing')
+  );
+}
+
+// whether the page is one the app opened for an order: the same stripe account may hold pages of
+// other tools (a dev server, the stripe cli), the app leaves those and their money alone
+function isOrderCheckoutSession(session: Stripe.Checkout.Session): boolean {
+  const entityId = session.metadata?.entityId;
+
+  return (
+    session.metadata?.entityType === 'order' &&
+    typeof entityId === 'string' &&
+    /^[1-9][0-9]*$/.test(entityId) &&
+    Number(entityId) <= MAX_ID
+  );
 }
 
 // get order id from stripe checkout session metadata
@@ -286,6 +326,9 @@ async function readCheckoutSessionStatus(
 }
 
 export {
+  isOrderCheckoutSession,
+  isStripeResourceMissing,
+  isStripeUnavailable,
   readCheckoutSessionStatus,
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,

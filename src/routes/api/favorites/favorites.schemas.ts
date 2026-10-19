@@ -128,10 +128,6 @@ const postAddFavoriteSchema = {
       description: 'Product is already in favorites or cannot be added.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Add favorite request failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while adding favorite.',
       $ref: 'errorResponseSchema#',

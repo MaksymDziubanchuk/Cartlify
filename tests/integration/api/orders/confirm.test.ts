@@ -276,6 +276,62 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     expect(res.json()).toMatchObject({ errorCode: 'ORDER_ITEMS_REQUIRED' });
   });
 
+  // Stripe takes no smaller payment: the order is refused before its stock is held, the page tells
+  // the buyer the smallest total, before the payment page is asked for
+  it.each([
+    ['a total below the smallest payment', 0.3],
+    ['a free order', 0],
+  ])('refuses %s and holds no stock', async (_case, price) => {
+    const user = await newUser();
+    const product = await createProduct({ price, stock: 5 });
+    products.push(product);
+    const added = await addItem(user, product.id, 1);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_TOTAL_BELOW_MINIMUM',
+      details: { minimum: 0.5, currency: 'eur' },
+    });
+    expect(await orderOf(added.json().id)).toMatchObject({
+      status: 'pending',
+      confirmed: false,
+      reservationExpiresAt: null,
+      shippingAddress: null,
+    });
+    expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
+  });
+
+  it.each([
+    ['the smallest payment', 0.5, 1],
+    ['a total over it of cheap items', 0.3, 2],
+  ])('confirms %s', async (_case, price, quantity) => {
+    const user = await newUser();
+    const product = await createProduct({ price, stock: 5 });
+    products.push(product);
+    const added = await addItem(user, product.id, quantity);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'waiting', total: price * quantity });
+  });
+
+  // the confirmation takes the prices of the catalog: a price that fell below the smallest payment
+  // after the cart was read is refused for it, a reload would show the same
+  it('counts the prices of the catalog, not the ones the cart was read at', async () => {
+    const user = await newUser();
+    const product = await newProduct();
+    const added = await addItem(user, product.id, 1);
+    await setProductPrice(product.id, 0.3);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'ORDER_TOTAL_BELOW_MINIMUM' });
+  });
+
   it('names an item whose product was deleted from the catalog and keeps the cart', async () => {
     const user = await newUser();
     const product = await newProduct();

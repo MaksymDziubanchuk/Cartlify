@@ -1,4 +1,6 @@
 import { Prisma } from '@prisma/client';
+import env from '@config/env.js';
+import { MIN_CHECKOUT_TOTAL } from '@config/limits.js';
 import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertRedisReady } from '@redis/client.js';
@@ -64,7 +66,7 @@ export async function confirmOrder({
             id: true,
             productId: true,
             quantity: true,
-            product: { select: { deletedAt: true, stock: true, reservedStock: true } },
+            product: { select: { deletedAt: true, stock: true, reservedStock: true, price: true } },
           },
           orderBy: { id: 'asc' },
         });
@@ -72,6 +74,20 @@ export async function confirmOrder({
         const unavailable = findUnavailableItems(items);
         if (unavailable.length) {
           throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', { items: unavailable });
+        }
+
+        // stripe takes no smaller payment: refused before the stock is held, the page tells the
+        // buyer the smallest total. The total at the prices of the catalog, the ones confirm_order
+        // takes; an empty order is left to confirm_order (ORDER_ITEMS_REQUIRED)
+        const totalCents = items.reduce(
+          (sum, item) => sum + Math.round(Number(item.product.price) * 100) * item.quantity,
+          0,
+        );
+        if (items.length > 0 && totalCents < Math.round(MIN_CHECKOUT_TOTAL * 100)) {
+          throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
+            minimum: MIN_CHECKOUT_TOTAL,
+            currency: env.STRIPE_CURRENCY,
+          });
         }
 
         // confirm in db

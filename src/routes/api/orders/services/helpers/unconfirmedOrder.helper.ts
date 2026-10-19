@@ -9,9 +9,10 @@ export const orderTargetSql = (orderId?: number): Prisma.Sql =>
     ? Prisma.sql`o.status = 'pending'`
     : Prisma.sql`o.id = ${orderId} AND o.status = 'unconfirmed'`;
 
-// an unconfirmed order loses the items of products deleted from the catalog: they can never be
-// confirmed again. Runs under the user context, rls lets the owner change only own unconfirmed
-// orders; totals follow by the items trigger
+// an order that is not confirmed, the cart or an order that lost its reservation, loses the items
+// of products deleted from the catalog for good: they can never be confirmed. An order waiting for
+// its payment keeps them, the payment page names them. Runs under the user context, rls lets the
+// owner change only own orders that are not confirmed; totals follow by the items trigger
 export async function dropDeletedProductItems(
   db: Db,
   userId: number,
@@ -20,7 +21,7 @@ export async function dropDeletedProductItems(
   await db.orderItem.deleteMany({
     where: {
       ...(orderIds ? { orderId: { in: orderIds } } : {}),
-      order: { userId, confirmed: false, status: 'unconfirmed' },
+      order: { userId, confirmed: false, status: { in: ['pending', 'unconfirmed'] } },
       product: { deletedAt: { not: null } },
     },
   });

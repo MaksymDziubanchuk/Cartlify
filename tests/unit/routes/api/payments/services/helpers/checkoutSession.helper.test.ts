@@ -8,10 +8,9 @@ import { importWithEnv } from '../../../../../../helpers/freshImport.js';
 type Helper = typeof import('@routes/api/payments/services/helpers/checkoutSession.helper.js');
 type StripeClient = (typeof import('@config/stripe.js'))['default'];
 
-// synthetic return pages, the module reads them at import
+// the site the return pages are on, the module reads it at import
 const CONFIG = {
-  STRIPE_SUCCESS_URL: 'https://shop.example.com/checkout/success?from=stripe',
-  STRIPE_CANCEL_URL: 'https://shop.example.com/checkout/cancel',
+  WEB_ORIGIN: 'https://shop.example.com',
   STRIPE_CURRENCY: 'eur',
 };
 
@@ -111,44 +110,127 @@ describe('buildCheckoutSessionPayload', () => {
     expect(payload().success_url).toContain('session_id={CHECKOUT_SESSION_ID}');
   });
 
-  it('keeps the query the success url already has', () => {
+  it('returns the buyer to the success page of the site', () => {
     expect(payload().success_url).toBe(
-      'https://shop.example.com/checkout/success?from=stripe&session_id={CHECKOUT_SESSION_ID}',
+      'https://shop.example.com/checkout/success?session_id={CHECKOUT_SESSION_ID}',
     );
   });
 
-  it.each([
-    [
-      'has no query',
-      'https://shop.example.com/paid',
-      'https://shop.example.com/paid?session_id={CHECKOUT_SESSION_ID}',
-    ],
-    [
-      'already has a session id',
-      'https://shop.example.com/paid?session_id=old',
-      'https://shop.example.com/paid?session_id={CHECKOUT_SESSION_ID}',
-    ],
-    [
-      'has a hash',
-      'https://shop.example.com/app#/paid',
-      'https://shop.example.com/app?session_id={CHECKOUT_SESSION_ID}#/paid',
-    ],
-  ])('adds the template once and in the query when the success url %s', async (_case, url, out) => {
-    const other = await importWithEnv<Helper>(
-      '@routes/api/payments/services/helpers/checkoutSession.helper.js',
-      { ...CONFIG, STRIPE_SUCCESS_URL: url },
-    );
+  // WEB_ORIGIN is reduced to the origin, the way a browser sends it
+  it.each(['https://shop.example.com/', 'https://shop.example.com/some/page?x=1'])(
+    'builds the return pages on the origin of WEB_ORIGIN %s',
+    async (origin) => {
+      const other = await importWithEnv<Helper>(
+        '@routes/api/payments/services/helpers/checkoutSession.helper.js',
+        { ...CONFIG, WEB_ORIGIN: origin },
+      );
 
-    expect(other.buildCheckoutSessionPayload({ orderId: 1, userId: 1, total: 1 }).success_url).toBe(
-      out,
-    );
-  });
+      const out = other.buildCheckoutSessionPayload({ orderId: 1, userId: 1, total: 1 });
+      expect(out.success_url).toBe(
+        'https://shop.example.com/checkout/success?session_id={CHECKOUT_SESSION_ID}',
+      );
+      expect(out.cancel_url).toBe('https://shop.example.com/checkout/cancel?orderId=1');
+    },
+  );
 
   it('sends the customer back to the cancel page with the order id', () => {
     const url = new URL(payload().cancel_url!);
 
-    expect(url.origin + url.pathname).toBe(CONFIG.STRIPE_CANCEL_URL);
+    expect(url.origin + url.pathname).toBe('https://shop.example.com/checkout/cancel');
     expect(url.searchParams.get('orderId')).toBe('12');
+  });
+
+  // a production server without the address of its site has no page to return the buyer to
+  it('refuses with WEB_ORIGIN_REQUIRED in production without WEB_ORIGIN', async () => {
+    const other = await importWithEnv<Helper>(
+      '@routes/api/payments/services/helpers/checkoutSession.helper.js',
+      { ...CONFIG, NODE_ENV: 'production', WEB_ORIGIN: '' },
+    );
+
+    expect(
+      thrownBy(() => other.buildCheckoutSessionPayload({ orderId: 1, userId: 1, total: 1 })),
+    ).toMatchObject({ statusCode: 500, details: { reason: 'WEB_ORIGIN_REQUIRED' } });
+  });
+});
+
+describe('isOrderCheckoutSession', () => {
+  it('takes a page the app opened for an order', () => {
+    expect(helper.isOrderCheckoutSession(session())).toBe(true);
+  });
+
+  // pages of other tools in the same stripe account, the webhook leaves them and their money alone
+  it.each([
+    ['no metadata', null],
+    ['no entity type', { entityId: '12' }],
+    ['another entity type', { entityType: 'subscription', entityId: '12' }],
+    ['no order id', { entityType: 'order' }],
+    ['an order id that is no number', { entityType: 'order', entityId: 'abc' }],
+    ['the order id 0', { entityType: 'order', entityId: '0' }],
+    ['a fractional order id', { entityType: 'order', entityId: '1.5' }],
+    ['an order id over the largest id', { entityType: 'order', entityId: '2147483648' }],
+  ])('refuses a page with %s', (_case, metadata) => {
+    expect(
+      helper.isOrderCheckoutSession(session({ metadata: metadata as Stripe.Metadata | null })),
+    ).toBe(false);
+  });
+
+  it('takes the largest order id', () => {
+    const page = session({ metadata: { entityType: 'order', entityId: '2147483647' } });
+
+    expect(helper.isOrderCheckoutSession(page)).toBe(true);
+  });
+});
+
+describe('isStripeResourceMissing', () => {
+  // an id stripe never made, or one of another account or mode: for a checkout session stripe
+  // answers 404 without a code (checked against the test sandbox), other objects carry one
+  it.each([
+    ['a checkout session', { statusCode: 404 }],
+    ['another object', { statusCode: 404, code: 'resource_missing' }],
+  ])('takes the answer stripe gives to an unknown id of %s', (_case, fields) => {
+    const missing = Object.assign(new Error('No such checkout.session: cs_test_x'), {
+      type: 'StripeInvalidRequestError',
+      ...fields,
+    });
+
+    expect(helper.isStripeResourceMissing(missing)).toBe(true);
+  });
+
+  it.each([
+    [
+      'another refusal of the request',
+      { type: 'StripeInvalidRequestError', statusCode: 400, code: 'parameter_invalid' },
+    ],
+    ['stripe out of reach', { type: 'StripeConnectionError' }],
+    ['a 404 of another kind of error', { type: 'StripeAPIError', statusCode: 404 }],
+  ])('does not take %s', (_case, fields) => {
+    expect(helper.isStripeResourceMissing(Object.assign(new Error('x'), fields))).toBe(false);
+  });
+
+  it.each([null, undefined, 'error'])('does not take %p', (err) => {
+    expect(helper.isStripeResourceMissing(err)).toBe(false);
+  });
+});
+
+describe('isStripeUnavailable', () => {
+  // the request may work later: no connection, a failure of stripe itself, too many requests
+  it.each(['StripeConnectionError', 'StripeAPIError', 'StripeRateLimitError'])(
+    'takes %s as stripe out of reach',
+    (type) => {
+      expect(helper.isStripeUnavailable(Object.assign(new Error('x'), { type }))).toBe(true);
+    },
+  );
+
+  // a refusal of what was asked stays a refusal
+  it.each([['StripeInvalidRequestError'], ['StripeAuthenticationError'], ['StripeCardError']])(
+    'does not take %s as stripe out of reach',
+    (type) => {
+      expect(helper.isStripeUnavailable(Object.assign(new Error('x'), { type }))).toBe(false);
+    },
+  );
+
+  it.each([null, undefined, 'error', new Error('plain')])('does not take %p', (err) => {
+    expect(helper.isStripeUnavailable(err)).toBe(false);
   });
 });
 

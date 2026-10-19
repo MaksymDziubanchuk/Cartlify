@@ -10,10 +10,13 @@ export const CLOUDINARY_PLACEHOLDERS = {
   CLOUDINARY_API_SECRET: 'test-api-secret',
 };
 
+// a key of the right form that Stripe does not know: without a test key nothing reaches Stripe
+export const STRIPE_PLACEHOLDER_KEY = 'sk_test_placeholder';
+
 const REQUIRED_AT_IMPORT: Record<string, string> = {
   JWT_ACCESS_SECRET: 'test-access-secret',
   JWT_REFRESH_SECRET: 'test-refresh-secret',
-  STRIPE_SECRET_KEY: 'sk_test_placeholder',
+  STRIPE_SECRET_KEY: STRIPE_PLACEHOLDER_KEY,
   ...CLOUDINARY_PLACEHOLDERS,
 };
 

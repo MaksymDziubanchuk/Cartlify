@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import stripe from '@config/stripe.js';
 import { getRedis } from '@redis/client.js';
@@ -24,21 +24,32 @@ import {
   placeUnconfirmedOrder,
   shippingData,
 } from '../../../helpers/orders.js';
+import { openPaymentPage, redisStateOf } from '../../../helpers/payments.js';
+import {
+  closeOpenSessions,
+  describeWithStripe,
+  expireSession,
+  openBankPaymentPage,
+  outOfReachDuring,
+  payCheckoutSession,
+  readSession,
+  stripeRequestsDuring,
+  withStripeOutOfReach,
+} from '../../../helpers/stripe.js';
+
+type Response = Awaited<ReturnType<FastifyInstance['inject']>>;
 
 // POST /api/orders/:orderId/cancel-payment: the owner gives up paying an order that waits for its
 // payment. The payment page at Stripe is closed first, so no payment can come for it any more;
 // then the reservation goes and the order becomes unconfirmed with its items and shipping data.
-// The test environment has only a made-up Stripe key, so the answers of Stripe are given here;
-// with a test key these calls go to Stripe for real
+// The pages are real ones of the Stripe test sandbox, opened by the checkout route; Stripe out of
+// reach is a real failed connection
 
 let app: FastifyInstance;
 let csrf: Csrf;
 const userIds: number[] = [];
 // an order keeps its product, so these products stay; the test database goes after the run
 const products: TestProduct[] = [];
-
-const expireSession = jest.spyOn(stripe.checkout.sessions, 'expire');
-const retrieveSession = jest.spyOn(stripe.checkout.sessions, 'retrieve');
 
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
   const user = await createUser(opts);
@@ -59,30 +70,18 @@ const cancelPayment = (user: TestUser, orderId: number | string) =>
     headers: withCsrf(csrf, accessCookie(user)),
   });
 
-// the payment page the checkout route opened for the order, linked in redis
-const openPaymentPage = async (orderId: number) => {
-  const sessionId = `cs_test_${orderId}`;
-  await setOrderPaymentSessionLink(orderId, sessionId);
-  return sessionId;
-};
-
-const stripeError = () => Object.assign(new Error('stripe refused'), { type: 'StripeAPIError' });
-
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
 });
 
-// a call a test did not prepare an answer for never reaches Stripe
-beforeEach(() => {
-  const unexpected = new Error('a Stripe call the test did not expect');
-  expireSession.mockReset().mockRejectedValue(unexpected as never);
-  retrieveSession.mockReset().mockRejectedValue(unexpected as never);
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 afterAll(async () => {
-  jest.restoreAllMocks();
   try {
+    await closeOpenSessions();
     await closeSessions(userIds);
   } finally {
     await stopApp();
@@ -139,27 +138,23 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
     expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 1 });
   });
 
-  describe('with a payment page open at Stripe', () => {
+  describeWithStripe('with a payment page open at Stripe', () => {
     it('closes the payment page first and forgets it', async () => {
       const user = await newUser();
       const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
-      const sessionId = await openPaymentPage(orderId);
-      expireSession.mockResolvedValue({ id: sessionId, status: 'expired' } as never);
+      const sessionId = await openPaymentPage(app, csrf, user, orderId);
 
       const res = await cancelPayment(user, orderId);
 
       expect(res.statusCode).toBe(200);
-      expect(expireSession).toHaveBeenCalledWith(sessionId);
-      const redis = await getRedis();
-      expect(await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId))).toBeNull();
+      expect((await readSession(sessionId)).status).toBe('expired');
+      expect((await redisStateOf(orderId)).pageLink).toBeNull();
     });
 
     it('cancels when the page was closed already', async () => {
       const user = await newUser();
       const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
-      await openPaymentPage(orderId);
-      expireSession.mockRejectedValue(stripeError() as never);
-      retrieveSession.mockResolvedValue({ status: 'expired', payment_status: 'unpaid' } as never);
+      await expireSession(await openPaymentPage(app, csrf, user, orderId));
 
       const res = await cancelPayment(user, orderId);
 
@@ -172,9 +167,7 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       const user = await newUser();
       const product = await newProduct();
       const orderId = await placeOrder(app, csrf, user, product, 'waiting');
-      await openPaymentPage(orderId);
-      expireSession.mockRejectedValue(stripeError() as never);
-      retrieveSession.mockResolvedValue({ status: 'complete', payment_status: 'paid' } as never);
+      await payCheckoutSession(await openPaymentPage(app, csrf, user, orderId));
 
       const res = await cancelPayment(user, orderId);
 
@@ -184,12 +177,12 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 1 });
     });
 
+    // a bank debit completes the page before the money comes; the shop opens only card pages,
+    // so the test links such a page to the order itself
     it('refuses while the bank still decides on the payment', async () => {
       const user = await newUser();
       const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
-      await openPaymentPage(orderId);
-      expireSession.mockRejectedValue(stripeError() as never);
-      retrieveSession.mockResolvedValue({ status: 'complete', payment_status: 'unpaid' } as never);
+      await setOrderPaymentSessionLink(orderId, await openBankPaymentPage(1000));
 
       const res = await cancelPayment(user, orderId);
 
@@ -198,28 +191,31 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       expect((await orderRowOf(orderId)).status).toBe('waiting');
     });
 
-    // a page left open could still be paid after the cancel
+    // a page left open could still be paid after the cancel. The connection fails for real,
+    // for the close of the page only or for every call
     it.each([
       [
         'the page stays open',
-        () =>
-          retrieveSession.mockResolvedValue({ status: 'open', payment_status: 'unpaid' } as never),
+        (fn: () => Promise<Response>) => {
+          outOfReachDuring(stripe.checkout.sessions, 'expire');
+          return fn();
+        },
       ],
-      ['Stripe cannot be reached', () => retrieveSession.mockRejectedValue(stripeError() as never)],
-    ])('changes nothing when %s', async (_case, answer) => {
+      ['Stripe cannot be reached', (fn: () => Promise<Response>) => withStripeOutOfReach(fn)],
+    ])('changes nothing when %s', async (_case, during) => {
       const user = await newUser();
       const product = await newProduct();
       const orderId = await placeOrder(app, csrf, user, product, 'waiting');
-      await openPaymentPage(orderId);
-      expireSession.mockRejectedValue(stripeError() as never);
-      answer();
+      const sessionId = await openPaymentPage(app, csrf, user, orderId);
 
-      const res = await cancelPayment(user, orderId);
+      const res = await during(() => cancelPayment(user, orderId));
 
       expect(res.statusCode).toBe(503);
       expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_PROVIDER_UNAVAILABLE' });
       expect(await orderRowOf(orderId)).toMatchObject({ status: 'waiting', confirmed: true });
       expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 1 });
+      expect((await readSession(sessionId)).status).toBe('open');
+      expect((await redisStateOf(orderId)).pageLink).toBe(sessionId);
       // what Stripe answered stays in the log of the server
       expect(
         takeLogs({ msg: 'request failed', errorCode: 'PAYMENT_PROVIDER_UNAVAILABLE' }),
@@ -230,12 +226,15 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
   it('answers ORDER_ALREADY_PAID for a paid order and does not touch Stripe', async () => {
     const user = await newUser();
     const orderId = await placeOrder(app, csrf, user, await newProduct(), 'paid');
+    let res: Response | undefined;
 
-    const res = await cancelPayment(user, orderId);
+    const requests = await stripeRequestsDuring(async () => {
+      res = await cancelPayment(user, orderId);
+    });
 
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ errorCode: 'ORDER_ALREADY_PAID' });
-    expect(expireSession).not.toHaveBeenCalled();
+    expect(res!.statusCode).toBe(409);
+    expect(res!.json()).toMatchObject({ errorCode: 'ORDER_ALREADY_PAID' });
+    expect(requests).toEqual([]);
     expect((await orderRowOf(orderId)).status).toBe('paid');
   });
 

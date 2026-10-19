@@ -184,6 +184,38 @@ describe('GET /api/orders/:orderId', () => {
     expect((await orderRowOf(orderId)).items.map((item) => item.productId)).toEqual([kept.id]);
   });
 
+  it('drops the items of deleted products from the cart as well', async () => {
+    const user = await newUser();
+    const gone = await newProduct({ price: 10 });
+    const kept = await newProduct({ price: 4 });
+    await placeOrder(app, csrf, user, gone, 'cart');
+    const cartId = await placeOrder(app, csrf, user, kept, 'cart', 2);
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await getOrder(user, cartId);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      status: 'pending',
+      total: 8,
+      items: [{ productId: kept.id }],
+    });
+    expect(res.json().items).toHaveLength(1);
+  });
+
+  // the payment page names such an item (409 ORDER_ITEMS_UNAVAILABLE), the buyer decides
+  it('keeps the items of deleted products in an order waiting for its payment', async () => {
+    const user = await newUser();
+    const gone = await newProduct();
+    const orderId = await placeOrder(app, csrf, user, gone, 'waiting');
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await getOrder(user, orderId);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toEqual([expect.objectContaining({ productId: gone.id })]);
+  });
+
   // the page marks what there is not enough of before the order is confirmed again
   it('shows the free stock of each product of an unconfirmed order', async () => {
     const user = await newUser();

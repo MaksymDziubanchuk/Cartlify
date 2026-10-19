@@ -2,13 +2,23 @@ import { prisma } from '@db/client.js';
 import stripe from '@config/stripe.js';
 
 import { setUserContext } from '@db/dbContext.service.js';
-import { ForbiddenError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
+import {
+  ForbiddenError,
+  InternalError,
+  NotFoundError,
+  ServiceUnavailableError,
+  isAppError,
+} from '@utils/errors.js';
 
 import {
   getOrderIdFromCheckoutSession,
+  isOrderCheckoutSession,
+  isStripeResourceMissing,
+  isStripeUnavailable,
   mapCreatedCheckoutSession,
 } from './helpers/checkoutSession.helper.js';
 
+import type Stripe from 'stripe';
 import type {
   GetCheckoutSessionByIdDto,
   CheckoutSessionResponseDto,
@@ -24,7 +34,28 @@ export async function getCheckoutSessionById({
 
   try {
     // load checkout session from stripe
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    let session: Stripe.Checkout.Session;
+
+    try {
+      session = await stripe.checkout.sessions.retrieve(sessionId);
+    } catch (err) {
+      // the page asks the buyer to look again a bit later
+      if (isStripeUnavailable(err)) {
+        throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, err);
+      }
+
+      // the id came from the browser: one stripe never made is no session of an order
+      if (isStripeResourceMissing(err)) {
+        throw new NotFoundError('CHECKOUT_SESSION_NOT_FOUND', undefined, err);
+      }
+
+      throw err;
+    }
+
+    // a session of another tool in the same stripe account is no session of an order either
+    if (!isOrderCheckoutSession(session)) {
+      throw new NotFoundError('CHECKOUT_SESSION_NOT_FOUND');
+    }
 
     // get linked order id from session metadata
     const orderId = getOrderIdFromCheckoutSession(session);

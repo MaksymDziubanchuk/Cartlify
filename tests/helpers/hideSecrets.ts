@@ -1,10 +1,13 @@
 import { CLOUDINARY_PLACEHOLDERS } from '../setup/isolateEnv.js';
 
-// the real keys some integration tests hold (cloudinary, from the local .env or a ci secret)
-// must never reach the output, and github hides only a whole secret, not its parts: every text
-// a test prints goes through hideSecrets. The cloud name is in every image url the app gives
+// the real keys some integration tests hold (cloudinary and stripe, from the local .env or a ci
+// secret) must never reach the output, and github hides only a whole secret, not its parts: every
+// text a test prints goes through hideSecrets. The cloud name is in every image url the app gives
 
 const HIDDEN = '[hidden]';
+
+// a stripe key, whole or the way stripe quotes one in an error (sk_test_****abcd)
+const STRIPE_KEY = /\b(sk|rk|pk)_(test|live)_[A-Za-z0-9*]+/g;
 
 let secrets: string[] | undefined;
 
@@ -39,5 +42,7 @@ function cloudinarySecrets(): string[] {
 export function hideSecrets(text: string): string {
   secrets ??= cloudinarySecrets();
 
-  return secrets.reduce((out, secret) => out.replaceAll(secret, HIDDEN), text);
+  return secrets
+    .reduce((out, secret) => out.replaceAll(secret, HIDDEN), text)
+    .replace(STRIPE_KEY, HIDDEN);
 }

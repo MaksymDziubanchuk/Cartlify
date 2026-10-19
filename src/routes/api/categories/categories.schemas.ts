@@ -121,7 +121,7 @@ const postCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     422: {
-      description: 'Category creation payload failed validation.',
+      description: '`CATEGORY_PARENT_NOT_FOUND`: there is no category with this `parentId`.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -184,7 +184,7 @@ const patchCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     422: {
-      description: 'Category update payload failed validation.',
+      description: '`CATEGORY_PARENT_NOT_FOUND`: there is no category with this `parentId`.',
       $ref: 'errorResponseSchema#',
     },
     500: {

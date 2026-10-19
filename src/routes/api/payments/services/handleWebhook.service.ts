@@ -12,12 +12,16 @@ import {
   isAppError,
   ResourceBusyError,
 } from '@utils/errors.js';
-import { cancelOrderReservationExpiry } from '@routes/api/orders/services/helpers/index.js';
+import {
+  cancelOrderReservationExpiry,
+  deleteOrderPaymentSessionLink,
+} from '@routes/api/orders/services/helpers/index.js';
 import {
   getOrderIdFromCheckoutSession,
   getPaidAmountFromCheckoutSession,
   getPaymentIntentIdFromCheckoutSession,
   getUserIdFromCheckoutSession,
+  isOrderCheckoutSession,
 } from './helpers/checkoutSession.helper.js';
 import {
   payOrderFromStripeWebhook,
@@ -33,6 +37,21 @@ type WebhookLogger = {
   warn: (obj: unknown, msg?: string) => void;
   error: (obj: unknown, msg?: string) => void;
 };
+
+// a page of another tool in the same stripe account is acknowledged and left alone, its money too:
+// an error answer would make stripe deliver the event again for days and then turn the endpoint off
+function skipForeignPage(
+  event: Stripe.Event,
+  session: Stripe.Checkout.Session,
+  log: WebhookLogger,
+): StripeWebhookResponseDto {
+  log.warn(
+    { eventId: event.id, eventType: event.type, sessionId: session.id },
+    'stripe event of a page that is not an order was skipped',
+  );
+
+  return { received: true, skipped: 'NOT_AN_ORDER' };
+}
 
 export async function handleStripeWebhook(
   { stripeSignature, rawBody }: HandleStripeWebhookDto,
@@ -65,6 +84,8 @@ export async function handleStripeWebhook(
           throw new BadRequestError('STRIPE_EVENT_OBJECT_INVALID');
         }
 
+        if (!isOrderCheckoutSession(session)) return skipForeignPage(event, session, log);
+
         if (session.payment_status !== 'paid') {
           break;
         }
@@ -79,9 +100,11 @@ export async function handleStripeWebhook(
 
         // order is paid now, also when the payment came late and stock was taken without reservation
         if (payResult === 'PAID') {
-          // a leftover timeout job is harmless, so a redis outage must not fail a recorded payment
+          // a leftover timeout job is harmless, so a redis outage must not fail a recorded payment;
+          // nothing closes the page of a paid order any more, its link would stay for good
           if (isRedisReady()) {
             await cancelOrderReservationExpiry(orderId);
+            await deleteOrderPaymentSessionLink(orderId);
           }
 
           // the payment is committed; the mail never fails the webhook, a failure is only logged.
@@ -127,6 +150,8 @@ export async function handleStripeWebhook(
           throw new BadRequestError('STRIPE_EVENT_OBJECT_INVALID');
         }
 
+        if (!isOrderCheckoutSession(session)) return skipForeignPage(event, session, log);
+
         const orderId = getOrderIdFromCheckoutSession(session);
 
         // expired session can still have a last-moment payment on its way, so its reservation waits for the grace window
@@ -141,9 +166,11 @@ export async function handleStripeWebhook(
           return { received: true, skipped: 'ORDER_NOT_FOUND' };
         }
 
-        // a leftover timeout job is harmless, so a redis outage must not fail the webhook
+        // a leftover timeout job is harmless, so a redis outage must not fail the webhook;
+        // the page is closed and the order released, nothing needs the page link any more
         if (unconfirmResult.unconfirmedNow && isRedisReady()) {
           await cancelOrderReservationExpiry(orderId);
+          await deleteOrderPaymentSessionLink(orderId);
         }
 
         break;

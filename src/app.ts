@@ -32,7 +32,6 @@ import csrfPlugin from './plugins/csrf.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 import { FORM_BODY_LIMIT_BYTES, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 
-
 // allow pino transport type
 type LoggerOptionsWithTransport = LoggerOptions & {
   transport?: TransportSingleOptions;
@@ -108,7 +107,11 @@ app.register(rateLimit, {
     // allow health and static
     req.url?.startsWith('/health') ||
     req.url?.startsWith('/ready') ||
-    req.url?.startsWith('/static'),
+    req.url?.startsWith('/static') ||
+    // stripe delivers every event from a few addresses: a busy hour of sales would hit the limit
+    // and hold back payments already made; the signature keeps anybody else out. Only this path,
+    // not every path that starts like it
+    req.url?.split('?')[0] === '/api/payments/webhook',
 });
 
 // register shared schemas

@@ -154,8 +154,10 @@ What is important to state honestly:
 
 - current order/cart retrieval
 - add/update/remove current order items
+- the cart shows current prices and loses the items of products deleted from the catalog for good, on every read and change; an order waiting for its payment keeps them, its payment page names them (`409 ORDER_ITEMS_UNAVAILABLE`)
 - confirm current order with the shipping data: the address and the recipient (first name, last name, phone) are required, a note is optional. Names are up to 100 characters with at least one letter and no digits, the phone is `+380501234567`-style like the profile phone. An order that lost its reservation keeps them for the next confirmation; a confirmed order keeps them as they were confirmed, the database refuses any change
 - the confirmation names every item it cannot take (`409 ORDER_ITEMS_UNAVAILABLE` with `details.items`: deleted from the catalog or out of stock)
+- the confirmation refuses a total below 0.50, the smallest payment Stripe takes, before any stock is held (`400 ORDER_TOTAL_BELOW_MINIMUM` with `details: { minimum, currency }`)
 - the owner cancels the payment of an order waiting for it (`POST /api/orders/:orderId/cancel-payment`): the Stripe payment page is closed first, then the reservation goes and the order becomes `unconfirmed` with its items and shipping data; a payment that came first answers `409 ORDER_ALREADY_PAID`
 - an unconfirmed order (cancelled payment or expired reservation) is changed like the cart (`POST/PATCH/DELETE /api/orders/:orderId/items`), at current prices and without products deleted from the catalog, and confirmed again with only its id
 - order history endpoint: newest first by default, the cart is not listed; paid orders keep the prices they were paid with, unconfirmed ones show current prices
@@ -165,6 +167,13 @@ What is important to state honestly:
 - admin/root cancel of a paid or shipped order (`POST /api/orders/:orderId/cancel`): full refund at Stripe in the same transaction, the stock comes back, the buyer gets a mail unless the account is deleted, the audit log keeps it; the answer gives how to reach the buyer, also a deleted one. A delivered order is not cancelled
 - Redis-based timeout worker for order reservation expiry handling
 - the buyer gets an email when the order is paid, with the address and the recipient (sent from the Stripe webhook; a failed mail never fails the webhook)
+
+### Payments
+
+- `POST /api/payments/checkout/sessions` opens a Stripe payment page for an order waiting for its payment; a repeated request for the same confirmation gives the same page. The page returns the buyer to `WEB_ORIGIN/checkout/success?session_id=<id>` or `WEB_ORIGIN/checkout/cancel?orderId=<id>` (page paths agreed with the frontend, placeholders for now)
+- a total below 0.50 is refused with `400 ORDER_TOTAL_BELOW_MINIMUM` (Stripe takes no smaller payment; the confirmation refuses it already, this covers an order confirmed before), an item removed from the catalog with `409 ORDER_ITEMS_UNAVAILABLE` as in the confirmation; Stripe out of reach answers `503 PAYMENT_PROVIDER_UNAVAILABLE` and opens nothing
+- `GET /api/payments/checkout/sessions/:sessionId` tells the page the buyer comes back to how the payment stands; Stripe is asked directly, it knows about the payment before the webhook comes. An id that is not one of a Stripe checkout session is refused with `400 VALIDATION_ERROR` before Stripe, a session Stripe does not have or one not opened for an order answers `404 CHECKOUT_SESSION_NOT_FOUND`
+- `POST /api/payments/webhook` (Stripe signature, no CSRF token, outside the request rate limit) records the payment, returns a payment the order cannot take in full and releases the reservation of a closed page after the grace window; a page of another tool in the same Stripe account is acknowledged with `skipped: NOT_AN_ORDER` and its money is left alone
 
 ### Chat and AI assistant
 
@@ -288,7 +297,7 @@ Cartlify/
 
 ## Environment Variables
 
-The repository contains `.env.example` with every variable read by `src/config/env.ts` and `prisma/schema.prisma`.
+The repository contains `.env.example` with every variable read by `src/config/env.ts` and `prisma/schema.prisma`, plus `STRIPE_TEST_SECRET_KEY`, which only the tests read.
 
 A practical local example:
 
@@ -362,9 +371,11 @@ LINKEDIN_STATE_SECRET=
 # Stripe (STRIPE_SECRET_KEY must be set and start with sk_, otherwise the app does not start)
 STRIPE_SECRET_KEY=sk_test_replace_this_key
 STRIPE_WEBHOOK_SECRET=
-STRIPE_SUCCESS_URL=
-STRIPE_CANCEL_URL=
 STRIPE_CURRENCY=eur
+
+# tests only, the app never reads it: the secret key of a Stripe test sandbox (sk_test_)
+# the payment tests pay and refund with; never a live key, the tests stop on any other
+STRIPE_TEST_SECRET_KEY=
 ```
 
 ---
@@ -524,6 +535,12 @@ npm run test:integration
 # the Cloudinary upload tests are the one part that reads keys from .env (CLOUDINARY_*):
 # Cloudinary has no test mode, they upload into the test/ folder of the account and delete
 # what they uploaded; GitHub Actions takes the CLOUDINARY_URL secret, without it they are skipped
+
+# the payment tests use Stripe in test mode with STRIPE_TEST_SECRET_KEY from .env (never
+# STRIPE_SECRET_KEY): they open payment pages, pay them with a test card and deliver the events
+# to the webhook themselves, so the sandbox needs no webhook endpoint. Keep `stripe listen` off
+# during a run, it would forward their events to a dev server. GitHub Actions takes the
+# STRIPE_TEST_SECRET_KEY secret, without it they are skipped
 ```
 
 ---
