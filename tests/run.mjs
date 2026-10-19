@@ -6,10 +6,12 @@
 //   npm test -- unit api:orders       named parts, also the groups: all, unit, integration, api
 //   npm test -- --failed              rerun only the tests that failed in the last selection
 //   npm test -- api:orders --keep-db  leave the test database running after the tests
+//   npm test -- --workers=1           integration files one by one (up to 6 at a time by default)
 //   npm test -- unit -- -t "cursor"   everything after a second -- goes to jest unchanged
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { styleText } from 'node:util';
@@ -21,6 +23,12 @@ const resultFile = path.join(cacheDir, 'last-run.json');
 
 // flags the launcher handles itself, they never reach jest
 const LAUNCHER_FLAGS = ['--failed', '--keep-db'];
+const WORKERS_FLAG = /^--workers=(\d+)$/;
+
+// integration files share one database and redis; every test makes and checks only its own rows,
+// so a few files run at once, one per core and at most 6: more wait for the same database
+// (measured 18.10.2026: 4 files at a time 93 s, 6 at a time 81 s; one by one on github 360 s)
+const DEFAULT_WORKERS = Math.min(6, availableParallelism());
 
 // one part per test folder: unit, api:<module>, then every other integration folder
 function discoverParts() {
@@ -65,12 +73,19 @@ function parseArgs(argv) {
   const own = split === -1 ? argv : argv.slice(0, split);
   const passThrough = split === -1 ? [] : argv.slice(split + 1);
 
+  const workersFlag = own.map((arg) => WORKERS_FLAG.exec(arg)).find(Boolean);
+  const workers = workersFlag ? Number(workersFlag[1]) : DEFAULT_WORKERS;
+  if (!Number.isInteger(workers) || workers < 1) fail('--workers takes a whole number from 1');
+
   return {
     failedOnly: own.includes('--failed'),
     keepDb: own.includes('--keep-db'),
+    workers,
     // flags without values may also stay before the second --
     jestFlags: [
-      ...own.filter((arg) => arg.startsWith('-') && !LAUNCHER_FLAGS.includes(arg)),
+      ...own.filter(
+        (arg) => arg.startsWith('-') && !LAUNCHER_FLAGS.includes(arg) && !WORKERS_FLAG.test(arg),
+      ),
       ...passThrough,
     ],
     words: own.filter((arg) => !arg.startsWith('-')),
@@ -223,7 +238,7 @@ function removeTestDatabase() {
   }
 }
 
-function runJest(selected, { failedOnly, jestFlags }) {
+function runJest(selected, { failedOnly, jestFlags, workers }) {
   const needsDb = selected.some((part) => part.integration);
 
   rmSync(resultFile, { force: true });
@@ -237,8 +252,9 @@ function runJest(selected, { failedOnly, jestFlags }) {
     '--coverage',
     // empty folders are parts too, they must not fail the run
     '--passWithNoTests',
-    // integration tests share one database and redis, run them one by one
-    ...(needsDb ? ['--runInBand'] : []),
+    // integration files share one database and redis: a few at a time (unit tests alone take
+    // every core jest gives them)
+    ...(needsDb ? [workers === 1 ? '--runInBand' : `--maxWorkers=${workers}`] : []),
     ...(failedOnly ? ['--onlyFailures'] : []),
     '--json',
     `--outputFile=${resultFile}`,

@@ -13,6 +13,7 @@ import {
   removeUploads,
   storedImage,
   svgImage,
+  movesSince,
   uploadMark,
   uploadsSince,
   waitingUploadsSince,
@@ -31,10 +32,11 @@ import {
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
-// the images of POST /api/products and PATCH /api/products/:productId go to Cloudinary for real,
-// into test/products/<id>/<position from 1>. A new product gets its id before its first image
-// is read, from the products sequence: the test database serves only this run, so the id a form
-// takes is the one after the last product created. The PATCH tests start from a product of the
+// the images of POST /api/products and PATCH /api/products/:productId go to Cloudinary for real:
+// each waits at a waiting id until the product is written and then moves to
+// test/products/<id>/<position from 1>. A refused request moves nothing and leaves nothing
+// waiting, which is what the refusals check: the id a refused form took is not in the answer,
+// and other files make products at the same time. The PATCH tests start from a product of the
 // factory and give it its files through PATCH, so they do not depend on the create form
 
 let app: FastifyInstance;
@@ -111,13 +113,6 @@ async function productWithImages(images: Buffer[]): Promise<number> {
   if (res.statusCode !== 200) throw new Error(`the image upload answered ${res.statusCode}`);
 
   return product.id;
-}
-
-// the id the next product form takes: one after a product made now
-async function nextProductId(): Promise<number> {
-  const product = await createProduct();
-  products.push(product);
-  return product.id + 1;
 }
 
 // the files at the paths of a product, to compare before and after a request
@@ -250,8 +245,6 @@ describeWithCloudinary('product images (Cloudinary)', () => {
       ['a price that is not a number', { price: 'abc' }, 'PRODUCT_PRICE_INVALID'],
       ['a negative stock', { stock: '-1' }, 'PRODUCT_STOCK_INVALID'],
     ])('uploads nothing for a product with %s', async (_case, overrides, errorCode) => {
-      const productId = await nextProductId();
-      const before = await filesAt(productId, 1);
       const mark = uploadMark();
 
       const res = await createForm([...productFields(overrides), image(pngImage(30, 20))]);
@@ -259,12 +252,10 @@ describeWithCloudinary('product images (Cloudinary)', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ errorCode });
       expect(await waitingUploadsSince(mark)).toEqual([]);
-      expect(await filesAt(productId, 1)).toEqual(before);
+      expect(movesSince(mark)).toEqual([]);
     });
 
     it('uploads nothing when one image of the form is refused', async () => {
-      const productId = await nextProductId();
-      const before = await filesAt(productId, 2);
       const mark = uploadMark();
 
       const res = await createForm([
@@ -276,7 +267,7 @@ describeWithCloudinary('product images (Cloudinary)', () => {
       expect(res.statusCode).toBe(400);
       expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_TYPE_NOT_ALLOWED' });
       expect(await waitingUploadsSince(mark)).toEqual([]);
-      expect(await filesAt(productId, 2)).toEqual(before);
+      expect(movesSince(mark)).toEqual([]);
     });
 
     // the type a form names is the client's word; the file itself has to be a jpeg, png or webp
@@ -285,8 +276,6 @@ describeWithCloudinary('product images (Cloudinary)', () => {
       ['a gif that says it is a png', gifImage()],
       ['an svg that says it is a png', svgImage()],
     ])('refuses %s and uploads nothing', async (_case, data) => {
-      const productId = await nextProductId();
-      const before = await filesAt(productId, 1);
       const mark = uploadMark();
 
       const res = await createForm([...productFields(), image(data)]);
@@ -295,22 +284,18 @@ describeWithCloudinary('product images (Cloudinary)', () => {
       expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_TYPE_NOT_ALLOWED' });
       // the file is refused by its bytes, it never goes to Cloudinary
       expect(uploadsSince(mark)).toEqual([]);
-      expect(await filesAt(productId, 1)).toEqual(before);
     });
 
     it('refuses a user before anything is uploaded', async () => {
       const user = await createUser();
       userIds.push(user.id);
-      const productId = await nextProductId();
-      const before = await filesAt(productId, 1);
       const mark = uploadMark();
 
       const res = await createForm([...productFields(), image(pngImage(30, 20))], user);
 
       expect(res.statusCode).toBe(403);
-      expect(uploadsSince(mark)).toEqual([]);
       expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
-      expect(await filesAt(productId, 1)).toEqual(before);
+      expect(uploadsSince(mark)).toEqual([]);
     });
   });
 

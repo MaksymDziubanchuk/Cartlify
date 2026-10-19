@@ -19,6 +19,10 @@ const coverageFrom = ['src/**/*.ts', '!src/index.ts', '!src/types/**'];
 const shared = {
   testEnvironment: 'node',
 
+  // the transformed files are kept here between runs; the tests workflow caches this folder,
+  // a run with an empty one takes about 13 s longer
+  cacheDirectory: '<rootDir>/node_modules/.cache/jest',
+
   // run typescript as native esm, so top-level await in src/app.ts works
   extensionsToTreatAsEsm: ['.ts'],
   transform: {

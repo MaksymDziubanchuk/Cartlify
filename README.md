@@ -514,6 +514,9 @@ npm test -- unit api:orders
 # rerun only the tests that failed last time
 npm test -- --failed
 
+# integration files run at the same time, one per core and at most 6; one by one:
+npm test -- --workers=1
+
 # unit or integration tests only
 npm run test:unit
 npm run test:integration

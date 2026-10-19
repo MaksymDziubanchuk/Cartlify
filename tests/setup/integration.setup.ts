@@ -21,6 +21,9 @@ isolateEnv(
     WEB_ORIGIN: 'https://shop.example.com',
     // the domain of the site, a deleted account gets an address on it
     SITE_DOMAIN: 'shop.example.com',
+    // the lowest cost the app takes: every test user gets a password hash, a cost of 12 makes
+    // each one four times slower and checks nothing more
+    BCRYPT_ROUNDS: '10',
     // made-up oauth apps: the provider answers come from tests/helpers/oauth.ts
     GITHUB_CLIENT_ID: 'test-github-client',
     GITHUB_CLIENT_SECRET: 'test-github-secret',

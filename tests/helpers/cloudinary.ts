@@ -117,15 +117,24 @@ export async function storedImage(publicId: string): Promise<StoredImage | null>
   }
 }
 
-// how many uploads the app made so far, to tell the ones of a request apart
-export const uploadMark = () => uploadedPublicIds.size;
+export type UploadMark = { uploads: number; moves: number };
+
+// how many uploads and moves the app made so far, to tell the ones of a request apart
+export const uploadMark = (): UploadMark => ({
+  uploads: uploadedPublicIds.size,
+  moves: movedToPublicIds.size,
+});
 
 // the uploads the app made since the mark
-export const uploadsSince = (mark: number) => [...uploadedPublicIds].slice(mark);
+export const uploadsSince = (mark: UploadMark) => [...uploadedPublicIds].slice(mark.uploads);
+
+// the places the app moved an upload to since the mark: a refused request moves nothing, so no
+// file of an avatar or a product changed
+export const movesSince = (mark: UploadMark) => [...movedToPublicIds].slice(mark.moves);
 
 // the uploads the app made since the mark that still wait at their waiting id: a request leaves
 // none, it moves each upload to its place or deletes it
-export async function waitingUploadsSince(mark: number): Promise<string[]> {
+export async function waitingUploadsSince(mark: UploadMark): Promise<string[]> {
   const ids = uploadsSince(mark);
   const left = await Promise.all(ids.map(async (id) => ((await storedImage(id)) ? id : null)));
 
