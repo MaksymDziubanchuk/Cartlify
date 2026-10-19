@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import {
   buildOrderPaidTemplate,
   type OrderPaidTemplateArgs,
-} from '@services/email/templates/orderPaid.template.js';
+} from '@services/email/templates/orders/orderPaid.template.js';
 
 const orderUrl = 'https://shop.example.com/orders/42';
 

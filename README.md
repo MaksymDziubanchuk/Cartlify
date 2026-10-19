@@ -163,7 +163,7 @@ What is important to state honestly:
 - order history endpoint: newest first by default, the cart is not listed; paid orders keep the prices they were paid with, unconfirmed ones show current prices
 - order by id endpoint
 - every order answer (cart, confirmation, history, details, admin status update) gives the same fields: the shipping data, the note and, while the order waits for the payment, `reservationExpiresAt`; the Stripe payment id stays internal
-- admin/root order status update endpoint (shipped, delivered)
+- admin/root order status update endpoint (shipped, delivered); each step mails the buyer (the items, the total, the address and the recipient) unless the account is deleted, a failed mail never undoes the status
 - admin/root cancel of a paid or shipped order (`POST /api/orders/:orderId/cancel`): full refund at Stripe in the same transaction, the stock comes back, the buyer gets a mail unless the account is deleted, the audit log keeps it; the answer gives how to reach the buyer, also a deleted one. A delivered order is not cancelled
 - Redis-based timeout worker for order reservation expiry handling
 - the buyer gets an email when the order is paid, with the address and the recipient (sent from the Stripe webhook; a failed mail never fails the webhook)
@@ -276,7 +276,7 @@ Cartlify/
 │   │   └── chat/
 │   ├── schemas/                # shared AJV schemas and DTO schemas
 │   ├── services/               # cross-module services
-│   │   └── email/templates/    # mails as .html and .txt files with {{marks}}
+│   │   └── email/templates/    # mails as .html and .txt files with {{marks}}: auth/, orders/, users/
 │   ├── types/                  # DTOs and shared TypeScript types
 │   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
 │   └── workers/                # background workers

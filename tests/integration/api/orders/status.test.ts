@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -12,6 +12,8 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { allowLogs, takeLogs } from '../../../helpers/logs.js';
+import { itWithMail, watchMail, type SentMail } from '../../../helpers/mail.js';
 import {
   orderRowOf,
   placeOrder,
@@ -20,11 +22,13 @@ import {
 } from '../../../helpers/orders.js';
 
 // PATCH /api/orders/:orderId/status: an admin moves a paid order along its delivery, paid to
-// shipped to delivered. A cancel returns money and stock, it is a route of its own
+// shipped to delivered. A delivered order mails the buyer unless the account is deleted. A cancel
+// returns money and stock, it is a route of its own
 
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
+let root: TestUser;
 const userIds: number[] = [];
 // an order keeps its product, so these products stay; the test database goes after the run
 const products: TestProduct[] = [];
@@ -52,10 +56,35 @@ const setStatus = (actor: TestUser, orderId: number | string, status: string) =>
 const markDelivered = (orderId: number) =>
   asAdmin((tx) => tx.order.update({ where: { id: orderId }, data: { status: 'delivered' } }));
 
+// a failed mail is logged for every shipped and delivered order without a SendGrid key; without
+// the key no request reaches SendGrid either, so no line and no request mean no mail was tried
+const MAIL_FAILED = {
+  shipped: 'order shipped mail was not sent',
+  delivered: 'order delivered mail was not sent',
+} as const;
+
+const expectNoMailTried = (mails: SentMail[]) => {
+  expect(mails).toEqual([]);
+  expect(takeLogs({ msg: MAIL_FAILED.shipped })).toEqual([]);
+  expect(takeLogs({ msg: MAIL_FAILED.delivered })).toEqual([]);
+};
+
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
   admin = await newUser({ role: 'ADMIN' });
+  root = await newUser({ role: 'ROOT' });
+
+  // the test environment has no SendGrid key: every shipped and delivered order logs that its mail
+  // was not sent, and so does the deletion of an account; 'keeps ... when its mail cannot be sent'
+  // checks the lines
+  allowLogs({ msg: MAIL_FAILED.shipped, reason: 'SENDGRID_API_KEY_REQUIRED' });
+  allowLogs({ msg: MAIL_FAILED.delivered, reason: 'SENDGRID_API_KEY_REQUIRED' });
+  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 afterAll(async () => {
@@ -182,5 +211,116 @@ describe('PATCH /api/orders/:orderId/status', () => {
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
     expect((await orderRowOf(orderId)).status).toBe('paid');
+  });
+
+  describe('the mails of the delivery', () => {
+    // each step mails its own mail and never the other one; a paid order may be delivered straight
+    // away, it gets the delivered mail
+    it.each([
+      ['paid', 'shipped', 'delivered'],
+      ['paid', 'delivered', 'shipped'],
+      ['shipped', 'delivered', 'shipped'],
+    ] as const)(
+      'keeps a %s order %s when its mail cannot be sent',
+      async (stage, status, other) => {
+        const buyer = await newUser();
+        const orderId = await placeOrder(app, csrf, buyer, await newProduct(), stage);
+
+        const res = await setStatus(admin, orderId, status);
+
+        expect(res.statusCode).toBe(200);
+        expect((await orderRowOf(orderId)).status).toBe(status);
+        // the failed mail goes to the log with the id of the order, never with the address
+        const logged = takeLogs({ msg: MAIL_FAILED[status] });
+        expect(logged).toEqual([expect.objectContaining({ orderId })]);
+        expect(JSON.stringify(logged)).not.toContain(buyer.email);
+        expect(takeLogs({ msg: MAIL_FAILED[other] })).toEqual([]);
+      },
+    );
+
+    // a second request for the same step must not mail the buyer twice
+    it.each([
+      ['shipped', 'shipped'],
+      ['delivered', 'delivered'],
+    ] as const)('mails nobody when the order is %s already', async (_case, status) => {
+      const orderId = await placeOrder(app, csrf, await newUser(), await newProduct(), 'shipped');
+      if (status === 'delivered') await markDelivered(orderId);
+      const mails = watchMail();
+
+      const res = await setStatus(admin, orderId, status);
+
+      expect(res.statusCode).toBe(409);
+      expectNoMailTried(mails);
+    });
+
+    it.each(['shipped', 'delivered'] as const)(
+      'mails nobody when the step to %s is refused',
+      async (status) => {
+        const orderId = await placeOrder(app, csrf, await newUser(), await newProduct(), 'waiting');
+        const mails = watchMail();
+
+        const res = await setStatus(admin, orderId, status);
+
+        expect(res.statusCode).toBe(409);
+        expectNoMailTried(mails);
+      },
+    );
+
+    // the address of a deleted account is not the person's any more
+    it.each([
+      ['paid', 'shipped'],
+      ['shipped', 'delivered'],
+    ] as const)(
+      'moves a %s order of a deleted account to %s and mails nobody',
+      async (stage, status) => {
+        const buyer = await newUser();
+        const orderId = await placeOrder(app, csrf, buyer, await newProduct(), stage);
+        const deleted = await app.inject({
+          method: 'DELETE',
+          url: `/api/users/${buyer.id}`,
+          headers: withCsrf(csrf, accessCookie(root)),
+        });
+        expect(deleted.statusCode).toBe(200);
+        const mails = watchMail();
+
+        const res = await setStatus(admin, orderId, status);
+
+        expect(res.statusCode).toBe(200);
+        expect((await orderRowOf(orderId)).status).toBe(status);
+        expectNoMailTried(mails);
+      },
+    );
+
+    itWithMail('mails the buyer that the order is shipped, where and to whom', async () => {
+      const buyer = await newUser({ name: 'Anna' });
+      const orderId = await placeOrder(app, csrf, buyer, await newProduct(), 'paid');
+      const mails = watchMail();
+
+      await setStatus(admin, orderId, 'shipped');
+
+      expect(mails).toHaveLength(1);
+      expect(mails[0]).toMatchObject({ to: [buyer.email], sandbox: true });
+      expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is shipped`);
+      expect(mails[0]!.text).toContain(`Shipping to: ${shippingData.shippingAddress}`);
+      expect(mails[0]!.text).toContain('Recipient: Anna Koval, +380501234567');
+      expect(mails[0]!.text).toContain(`https://shop.example.com/orders/${orderId}`);
+      expect(mails[0]!.html).toContain('Hi Anna,');
+    });
+
+    itWithMail('mails the buyer that the order is delivered, where and to whom', async () => {
+      const buyer = await newUser({ name: 'Anna' });
+      const orderId = await placeOrder(app, csrf, buyer, await newProduct(), 'shipped');
+      const mails = watchMail();
+
+      await setStatus(admin, orderId, 'delivered');
+
+      expect(mails).toHaveLength(1);
+      expect(mails[0]).toMatchObject({ to: [buyer.email], sandbox: true });
+      expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is delivered`);
+      expect(mails[0]!.text).toContain(`Delivered to: ${shippingData.shippingAddress}`);
+      expect(mails[0]!.text).toContain('Recipient: Anna Koval, +380501234567');
+      expect(mails[0]!.text).toContain(`https://shop.example.com/orders/${orderId}`);
+      expect(mails[0]!.html).toContain('Hi Anna,');
+    });
   });
 });

@@ -1,0 +1,13 @@
+Your {{appName}} order #{{orderId}} is delivered.
+
+{{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
+{{/items}}
+Total: {{total}}
+{{#shippingAddress}}Delivered to: {{shippingAddress}}
+{{/shippingAddress}}{{#recipient}}Recipient: {{recipient}}
+{{/recipient}}
+See your order:
+{{orderUrl}}
+
+This mailbox is not monitored.
+The order did not reach you, or a question about it? Ask us in the chat on our site.

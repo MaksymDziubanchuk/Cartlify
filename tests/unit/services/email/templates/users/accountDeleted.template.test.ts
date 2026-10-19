@@ -3,7 +3,7 @@ import { describe, expect, it } from '@jest/globals';
 import {
   buildAccountDeletedTemplate,
   type AccountDeletedTemplateArgs,
-} from '@services/email/templates/accountDeleted.template.js';
+} from '@services/email/templates/users/accountDeleted.template.js';
 
 const mail = (overrides: Partial<AccountDeletedTemplateArgs> = {}) =>
   buildAccountDeletedTemplate({ deliveries: [], cancelled: [], currency: 'eur', ...overrides });

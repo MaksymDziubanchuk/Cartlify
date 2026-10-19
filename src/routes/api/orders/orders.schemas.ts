@@ -478,7 +478,8 @@ const patchOrderStatusSchema = {
   summary: 'Update order status',
   description:
     'Updates order status by order id: a paid order becomes shipped or delivered, a shipped one delivered. ' +
-    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel.',
+    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel. ' +
+    'A shipped or delivered order mails the buyer, unless the account is deleted; a mail that fails is only logged and never undoes the status.',
 
   params: {
     $ref: 'ordersUpdateStatusParamsSchema#',

@@ -6,7 +6,7 @@ import {
   buildAccountDeletedTemplate,
   type AccountDeletedCancelled,
   type AccountDeletedDelivery,
-} from '@services/email/templates/accountDeleted.template.js';
+} from '@services/email/templates/users/accountDeleted.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 export type AccountDeletionLogger = {

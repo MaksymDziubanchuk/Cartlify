@@ -5,7 +5,7 @@ import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import env from '@config/env.js';
 import { webUrl } from '@helpers/webOrigin.js';
-import { buildOrderCancelledTemplate } from '@services/email/templates/orderCancelled.template.js';
+import { buildOrderCancelledTemplate } from '@services/email/templates/orders/orderCancelled.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 export type OrderCancelLogger = {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import { buildResetPasswordTemplate } from '@services/email/templates/resetPassword.template.js';
+import { buildResetPasswordTemplate } from '@services/email/templates/auth/resetPassword.template.js';
 
 const resetUrl = 'https://shop.test/reset-password?token=abc123';
 

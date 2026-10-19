@@ -30,7 +30,7 @@ export function buildVerifyEmailTemplate(args: VerifyEmailTemplateArgs): {
 
   return {
     subject: `${appName} — Verify your email`,
-    text: renderTemplate('verifyEmail.txt', values),
-    html: renderTemplate('verifyEmail.html', values),
+    text: renderTemplate('auth/verifyEmail.txt', values),
+    html: renderTemplate('auth/verifyEmail.html', values),
   };
 }

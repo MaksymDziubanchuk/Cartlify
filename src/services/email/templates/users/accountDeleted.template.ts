@@ -85,7 +85,7 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
 
   return {
     subject: `${appName} — Your account is deleted`,
-    text: renderTemplate('accountDeleted.txt', values),
-    html: renderTemplate('accountDeleted.html', values),
+    text: renderTemplate('users/accountDeleted.txt', values),
+    html: renderTemplate('users/accountDeleted.html', values),
   };
 }

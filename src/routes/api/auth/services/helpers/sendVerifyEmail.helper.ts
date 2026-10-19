@@ -1,5 +1,5 @@
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
-import { buildVerifyEmailTemplate } from '@services/email/templates/verifyEmail.template.js';
+import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 import { webUrl } from '@helpers/webOrigin.js';

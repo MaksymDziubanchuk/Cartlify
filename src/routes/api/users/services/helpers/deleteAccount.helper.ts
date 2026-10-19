@@ -20,7 +20,7 @@ import type {
   AccountDeletedDelivery,
   AccountDeletedItem,
   CancelledOrderPayment,
-} from '@services/email/templates/accountDeleted.template.js';
+} from '@services/email/templates/users/accountDeleted.template.js';
 
 import {
   sendAccountDeletedEmail,
