@@ -16,8 +16,10 @@ import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileTe
 import { verifyPass } from '@helpers/safePass.js';
 import {
   makePublicId,
-  overwriteImage,
-  requireNonEmptyStream,
+  makeUploadPublicId,
+  moveImage,
+  requireImageStream,
+  uploadImage,
   UploadImageResult,
   buildImageUrls,
 } from '@utils/cloudinary.util.js';
@@ -165,18 +167,36 @@ async function beginAvatarUpload(args: {
     throw new BadRequestError('AVATAR_EMPTY');
   }
 
-  const publicId = makePublicId({ kind: 'avatar', userId: args.userId });
+  // an empty file and one that is not a jpeg, png or webp by its bytes never reach cloudinary
+  const safeStream = await requireImageStream(args.avatar.file, {
+    mimetype: args.avatar.mimetype,
+    emptyCode: 'AVATAR_STREAM_ERROR',
+  });
 
-  const safeStream = await requireNonEmptyStream(args.avatar.file, 'AVATAR_STREAM_ERROR');
-
-  return overwriteImage({
-    publicId,
+  // the avatar waits under an id of its own: updateMe moves it to the avatar of the account once
+  // the profile is written, a refused request deletes it (the controller)
+  return uploadImage({
+    publicId: makeUploadPublicId(),
     file: safeStream,
     mimetype: args.avatar.mimetype,
     ...(args.avatar.filename ? { filename: args.avatar.filename } : {}),
     tags: ['avatar', `user:${args.userId}`],
   });
 }
+
+// the profile fields an update answers with
+const profileSelect = {
+  id: true,
+  email: true,
+  role: true,
+  isVerified: true,
+  createdAt: true,
+  updatedAt: true,
+  name: true,
+  avatarUrl: true,
+  locale: true,
+  phone: true,
+} satisfies Prisma.UserSelect;
 
 async function updateMe({
   userId,
@@ -246,9 +266,10 @@ async function updateMe({
     }
   }
 
-  // apply uploaded avatar identifiers (cloudinary upload is done elsewhere)
-  if (avatarUploaded) {
-    data.publicId = avatarUploaded.publicId;
+  // the uploaded avatar still waits under its own id; the row gets the place it moves to
+  const avatarPublicId = avatarUploaded ? makePublicId({ kind: 'avatar', userId: id }) : null;
+  if (avatarUploaded && avatarPublicId) {
+    data.publicId = avatarPublicId;
     data.avatarUrl = avatarUploaded.urlBase;
   }
 
@@ -256,97 +277,97 @@ async function updateMe({
   if (!Object.keys(data).length) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
   try {
-    return await prisma.$transaction(async (tx) => {
-      // set db session context for rls policies
-      await setUserContext(tx, { userId: id, role });
+    return await prisma.$transaction(
+      async (tx) => {
+        // set db session context for rls policies
+        await setUserContext(tx, { userId: id, role });
 
-      // update profile fields under rls
-      const user = await tx.user.update({
-        where: { id },
-        data,
-        select: {
-          id: true,
-          email: true,
-          role: true,
-          isVerified: true,
-          createdAt: true,
-          updatedAt: true,
-          name: true,
-          avatarUrl: true,
-          locale: true,
-          phone: true,
-        },
-      });
+        // update profile fields under rls
+        let user = await tx.user.update({ where: { id }, data, select: profileSelect });
 
-      // validate email format before returning it to client
-      assertEmail(user.email);
+        // the row is written, so the request is taken: only now the upload replaces the avatar
+        // file of the account; a refused request never touched it
+        if (avatarUploaded && avatarPublicId) {
+          const placed = await moveImage(avatarUploaded.publicId, avatarPublicId);
+          user = await tx.user.update({
+            where: { id },
+            data: { avatarUrl: placed.urlBase },
+            select: profileSelect,
+          });
+        }
 
-      // fetch only user reviews that contain a real comment, plus vote aggregate and user's own vote
-      const rows = await tx.review.findMany({
-        where: {
-          userId: id,
-          AND: [{ comment: { not: null } }, { NOT: { comment: '' } }],
-        },
-        select: {
-          id: true,
-          productId: true,
-          rating: true,
-          userId: true,
-          createdAt: true,
-          comment: true,
-          upVotes: true,
-          downVotes: true,
-          updatedAt: true,
-          votes: {
-            where: { userId: id },
-            select: { action: true },
-            take: 1,
+        // validate email format before returning it to client
+        assertEmail(user.email);
+
+        // fetch only user reviews that contain a real comment, plus vote aggregate and user's own vote
+        const rows = await tx.review.findMany({
+          where: {
+            userId: id,
+            AND: [{ comment: { not: null } }, { NOT: { comment: '' } }],
           },
-        },
-        orderBy: { updatedAt: 'desc' },
-      });
+          select: {
+            id: true,
+            productId: true,
+            rating: true,
+            userId: true,
+            createdAt: true,
+            comment: true,
+            upVotes: true,
+            downVotes: true,
+            updatedAt: true,
+            votes: {
+              where: { userId: id },
+              select: { action: true },
+              take: 1,
+            },
+          },
+          orderBy: { updatedAt: 'desc' },
+        });
 
-      const reviews = rows
-        .map((r) => {
-          const comment = (r.comment ?? '').trim();
-          if (!comment) return null;
+        const reviews = rows
+          .map((r) => {
+            const comment = (r.comment ?? '').trim();
+            if (!comment) return null;
 
-          // rating is required in the response; the api never creates a review with text and without rating
-          if (r.rating == null) return null;
+            // rating is required in the response; the api never creates a review with text and without rating
+            if (r.rating == null) return null;
 
-          const action = r.votes[0]?.action;
-          const userVote = action === 'UP' ? 'up' : action === 'DOWN' ? 'down' : null;
+            const action = r.votes[0]?.action;
+            const userVote = action === 'UP' ? 'up' : action === 'DOWN' ? 'down' : null;
 
-          return {
-            id: r.id as any,
-            productId: r.productId as any,
-            rating: r.rating,
-            userId: r.userId as any,
-            createdAt: r.createdAt,
-            comment,
-            upVotes: r.upVotes,
-            downVotes: r.downVotes,
-            userVote,
-            updatedAt: r.updatedAt,
-          };
-        })
-        .filter((x): x is UserReviewResponseDto => x !== null);
+            return {
+              id: r.id as any,
+              productId: r.productId as any,
+              rating: r.rating,
+              userId: r.userId as any,
+              createdAt: r.createdAt,
+              comment,
+              upVotes: r.upVotes,
+              downVotes: r.downVotes,
+              userVote,
+              updatedAt: r.updatedAt,
+            };
+          })
+          .filter((x): x is UserReviewResponseDto => x !== null);
 
-      // build final user response, including derived avatar urls and optional fields
-      return {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        isVerified: user.isVerified,
-        createdAt: user.createdAt,
-        updatedAt: user.updatedAt,
-        ...(user.name ? { name: user.name } : {}),
-        ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
-        ...(user.locale ? { locale: user.locale } : {}),
-        ...(user.phone ? { phone: user.phone } : {}),
-        reviews,
-      };
-    });
+        // build final user response, including derived avatar urls and optional fields
+        return {
+          id: user.id,
+          email: user.email,
+          role: user.role,
+          isVerified: user.isVerified,
+          createdAt: user.createdAt,
+          updatedAt: user.updatedAt,
+          ...(user.name ? { name: user.name } : {}),
+          ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
+          ...(user.locale ? { locale: user.locale } : {}),
+          ...(user.phone ? { phone: user.phone } : {}),
+          reviews,
+        };
+        // the move at cloudinary runs inside the transaction
+      },
+      { timeout: 20_000 },
+    );
   } catch (err) {
     if (isAppError(err)) throw err;
 

@@ -167,7 +167,7 @@ const usersUpdateMeFormSchema = {
     avatar: {
       type: 'string',
       format: 'binary',
-      description: `Avatar image: a jpeg, png or webp file, up to ${MAX_UPLOAD_SIZE_BYTES / 1_000_000} MB. One file only.`,
+      description: `Avatar image: a jpeg, png or webp file by its content, up to ${MAX_UPLOAD_SIZE_BYTES / 1_000_000} MB. One file only.`,
     },
   },
 } as const;

@@ -1,15 +1,28 @@
+import { randomUUID } from 'node:crypto';
 import { Readable, PassThrough } from 'node:stream';
 
 import cloudinary from '@config/cloudinary.js';
 import env from '@config/env.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
+import type { FastifyBaseLogger } from 'fastify';
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
 
 import type { AvatarUrls } from 'types/dto/users.dto.js';
 import type { ProductImagesUrls } from 'types/dto/products.dto.js';
 
 const DEFAULT_ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp'] as const;
+
+// the same three formats for cloudinary, which refuses anything else itself
+const ALLOWED_FORMATS = ['jpg', 'png', 'webp'];
+
+// the start of a file that tells its type: webp needs the most, 12 bytes
+const IMAGE_HEAD_BYTES = 12;
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+// a file that does not send its start in this time holds the request no longer
+const IMAGE_HEAD_TIMEOUT_MS = 8000;
 
 export type MakePublicIdOpts =
   | { kind: 'avatar'; userId: string | number }
@@ -31,10 +44,6 @@ export type UploadImageArgs = {
   publicId?: string;
   tags?: string[];
   invalidate?: boolean;
-};
-
-export type OverwriteImageArgs = Omit<UploadImageArgs, 'publicId'> & {
-  publicId: string;
 };
 
 export type UploadImageResult = {
@@ -59,128 +68,114 @@ function cleanSegment(input: string | number): string {
     .replace(/[^a-zA-Z0-9._-]/g, '');
 }
 
-export async function requireNonEmptyStream(
-  stream: NodeJS.ReadableStream,
-  code: string,
-): Promise<NodeJS.ReadableStream> {
-  // fastify-multipart gives a one-shot readable stream for file parts
-  // this helper ensures the stream is not empty and returns a new readable that
-  // starts with the first chunk we "peeked" and then continues streaming the rest
-  const s: any = stream;
+export type ImageStreamOpts = {
+  // the type the form names for the file
+  mimetype: string;
+  // the error code for an empty or broken file
+  emptyCode: string;
+};
 
-  // reject immediately if input is not a readable stream instance
-  if (!stream || typeof (stream as any).on !== 'function') {
-    throw new BadRequestError(code);
+// the type of an image by its first bytes, null for anything else: the type a form names is only
+// the word of the client, these bytes are the file itself
+export function detectImageType(head: Buffer): (typeof DEFAULT_ALLOWED_MIME)[number] | null {
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (head.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return 'image/png';
+  if (
+    head.length >= IMAGE_HEAD_BYTES &&
+    head.toString('ascii', 0, 4) === 'RIFF' &&
+    head.toString('ascii', 8, 12) === 'WEBP'
+  ) {
+    return 'image/webp';
   }
 
-  // reject immediately if the stream is already finished or destroyed
-  // in this case there is no way to read bytes and we must not call external upload
-  if (s.destroyed || s.readableEnded) {
-    throw new BadRequestError(code);
+  return null;
+}
+
+// reads the start of an uploaded file and gives back a stream that begins with it again.
+// An empty file, a type outside the list the form names, and a file that is not a jpeg, png or
+// webp by its own bytes are refused before anything goes to cloudinary; a refused file is
+// drained, so the parser goes on to the rest of the form (and to the size limit of the file)
+export async function requireImageStream(
+  stream: NodeJS.ReadableStream,
+  opts: ImageStreamOpts,
+): Promise<NodeJS.ReadableStream> {
+  const s = stream as NodeJS.ReadableStream & { destroyed?: boolean; readableEnded?: boolean };
+
+  // a stream that is gone or finished has no bytes to read
+  if (!stream || typeof stream.on !== 'function' || s.destroyed || s.readableEnded) {
+    throw new BadRequestError(opts.emptyCode);
   }
 
   return new Promise((resolve, reject) => {
-    // tracks whether we observed at least one data chunk
-    // "empty file" means: end/close happens before the first data chunk
-    let seen = false;
-
-    // ensures we resolve/reject the promise only once
+    const chunks: Buffer[] = [];
+    let size = 0;
     let settled = false;
 
-    // PassThrough becomes the new stream we return to callers
-    // we write the first chunk into it and then pipe the original stream into it
-    const out = new PassThrough();
-
-    // finalize helper: cleanup listeners and settle exactly once
-    const done = (fn: () => void) => {
+    const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
-      cleanup();
+      clearTimeout(timer);
+      stream.off('data', onData);
+      stream.off('end', onEnd);
+      stream.off('close', onEnd);
+      stream.off('error', onError);
       fn();
     };
 
-    // propagate stream errors
-    const onErr = (e: unknown) => {
-      done(() => reject(e));
+    const refuse = (errorCode: string, ended: boolean) => {
+      if (!ended) stream.resume();
+      reject(new BadRequestError(errorCode));
     };
 
-    // if the stream ends before any data chunk was received -> treat as empty file
-    // if we already saw data -> just finish the passthrough and resolve it
-    const onEnd = () => {
-      done(() => {
-        out.end();
-        if (!seen) reject(new BadRequestError(code));
-        else resolve(out);
+    // called with the start of the file, or with all of it when it ends sooner
+    const decide = (ended: boolean) =>
+      settle(() => {
+        if (!size) return refuse(opts.emptyCode, ended);
+
+        const head = Buffer.concat(chunks);
+        try {
+          assertImageFile({ mimetype: opts.mimetype });
+        } catch {
+          return refuse('IMAGE_TYPE_NOT_ALLOWED', ended);
+        }
+        if (!detectImageType(head)) return refuse('IMAGE_TYPE_NOT_ALLOWED', ended);
+
+        const out = new PassThrough();
+        out.write(head);
+        if (ended) {
+          out.end();
+        } else {
+          // a file cut by the size limit fails its upload instead of leaving it waiting
+          stream.once('error', (err) => out.destroy(err));
+          stream.pipe(out);
+        }
+        resolve(out);
       });
+
+    // the listener runs as the chunk comes, so the pipe above is set before the next one
+    const onData = (chunk: Buffer | string) => {
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+      chunks.push(buf);
+      size += buf.length;
+      if (size >= IMAGE_HEAD_BYTES) decide(false);
     };
 
-    // some implementations emit 'close' instead of (or before) 'end'
-    // we handle it the same way to avoid hanging requests
-    const onClose = () => {
-      done(() => {
-        out.end();
-        if (!seen) reject(new BadRequestError(code));
-        else resolve(out);
-      });
-    };
+    // some streams close without an end
+    const onEnd = () => decide(true);
 
-    // first data chunk is the "proof" that the file is not empty
-    // we immediately:
-    // 1) pause source stream to avoid race while wiring pipes
-    // 2) write the first chunk into out
-    // 3) pipe the rest of source stream into out
-    // 4) resume reading
-    // 5) resolve with out so caller can pass it to cloudinary as a live stream
-    const onData = (chunk: any) => {
-      seen = true;
+    const onError = (err: unknown) => settle(() => reject(err));
 
-      // optional introspection, not used but kept for debugging
-      // const _len =
-      //   typeof chunk === 'string'
-      //     ? Buffer.byteLength(chunk)
-      //     : Buffer.isBuffer(chunk)
-      //       ? chunk.length
-      //       : chunk?.length;
+    const timer = setTimeout(
+      () => settle(() => refuse(opts.emptyCode, false)),
+      IMAGE_HEAD_TIMEOUT_MS,
+    );
 
-      // prevent extra reads while connecting the pipe
-      (stream as any).pause?.();
-
-      // preserve the first bytes we already pulled from the source stream
-      out.write(chunk);
-
-      // forward the remaining bytes
-      stream.pipe(out);
-
-      // resume streaming
-      (stream as any).resume?.();
-
-      // resolve immediately: at this point the returned stream will continue producing bytes
-      done(() => resolve(out));
-    };
-
-    // remove listeners and cancel timeout
-    const cleanup = () => {
-      clearTimeout(t);
-      stream.off('error', onErr);
-      stream.off('end', onEnd);
-      stream.off('close', onClose);
-      stream.off('data', onData);
-    };
-
-    // guard against "no events ever happen" situations (broken clients, aborted uploads)
-    // this prevents the request from hanging indefinitely
-    const t = setTimeout(() => {
-      done(() => reject(new BadRequestError(code)));
-    }, 8000);
-
-    // listen once because we only care about the first chunk and terminal events
-    stream.once('error', onErr);
+    stream.on('data', onData);
     stream.once('end', onEnd);
-    stream.once('close', onClose);
-    stream.once('data', onData);
-
-    // kick off reading in case the stream is in paused mode
-    (stream as any).resume?.();
+    stream.once('close', onEnd);
+    stream.once('error', onError);
   });
 }
 
@@ -208,6 +203,18 @@ export function makePublicId(opts: MakePublicIdOpts): string {
 
   // multiple images per product
   return `${ENV_FOLDER}/products/${productId}/${imageKey}`;
+}
+
+// where an upload waits until the request that brought it is written: a refused request deletes
+// it (discardUploads), a written one moves it to its place at makePublicId (moveImage)
+export function makeUploadPublicId(): string {
+  return `${ENV_FOLDER}/uploads/${randomUUID()}`;
+}
+
+// a file of this environment. A file of another environment, or one uploaded before the folders
+// existed, can belong to another database too (dev is restored from a copy of prod): never delete it
+export function isOwnFile(publicId: string | null | undefined): publicId is string {
+  return typeof publicId === 'string' && publicId.startsWith(`${ENV_FOLDER}/`);
 }
 
 // check the type of an uploaded image before calling cloudinary, whatever the client says it is.
@@ -270,11 +277,26 @@ async function uploadViaStream(
   });
 }
 
+// cloudinary refuses a file it cannot read as an image, or of a format it was not let keep:
+// that is the file of the client, not a failure of the server
+function refusedImage(err: unknown): BadRequestError | null {
+  const e = err as { http_code?: unknown; message?: unknown } | null;
+  if (e?.http_code !== 400 || typeof e.message !== 'string') return null;
+
+  if (/format .* not allowed/i.test(e.message)) {
+    return new BadRequestError('IMAGE_TYPE_NOT_ALLOWED', undefined, err);
+  }
+  if (/invalid image file/i.test(e.message)) {
+    return new BadRequestError('IMAGE_INVALID', undefined, err);
+  }
+  return null;
+}
+
 // upload a new image and return stable identifiers for db storage
 export async function uploadImage(args: UploadImageArgs): Promise<UploadImageResult> {
   assertImageFile({ mimetype: args.mimetype });
 
-  const options: UploadApiOptions = { resource_type: 'image' };
+  const options: UploadApiOptions = { resource_type: 'image', allowed_formats: ALLOWED_FORMATS };
 
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
@@ -296,38 +318,31 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
     // avoid leaking sdk errors to clients
     if (isAppError(err)) throw err;
 
+    const refused = refusedImage(err);
+    if (refused) throw refused;
+
     throw new InternalError({ reason: 'CLOUDINARY_UPLOAD_UNEXPECTED' }, err);
   }
 }
 
-// overwrite an existing image by public_id and return the new versioned url
-export async function overwriteImage(args: OverwriteImageArgs): Promise<UploadImageResult> {
-  assertImageFile({ mimetype: args.mimetype });
-
-  const options: UploadApiOptions = { resource_type: 'image' };
-
-  if (!args.publicId.trim()) {
-    throw new BadRequestError('PUBLIC_ID_REQUIRED');
-  }
-
-  options.public_id = args.publicId;
-  options.overwrite = true;
-
-  if (args.tags?.length) options.tags = args.tags;
-  if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
+// puts an uploaded image at its place: a file already there is replaced and its cached copies are
+// dropped. The answer has the url of the image at the new place
+export async function moveImage(
+  fromPublicId: string,
+  toPublicId: string,
+): Promise<UploadImageResult> {
+  if (!fromPublicId.trim() || !toPublicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
 
   try {
-    const stream = toReadable(args.file);
-    const res = await uploadViaStream(stream, options);
+    const res = await cloudinary.uploader.rename(fromPublicId, toPublicId, {
+      resource_type: 'image',
+      overwrite: true,
+      invalidate: true,
+    });
 
-    return {
-      publicId: res.public_id,
-      urlBase: res.secure_url,
-    };
+    return { publicId: res.public_id, urlBase: res.secure_url };
   } catch (err) {
-    if (isAppError(err)) throw err;
-
-    throw new InternalError({ reason: 'CLOUDINARY_OVERWRITE_UNEXPECTED' }, err);
+    throw new InternalError({ reason: 'CLOUDINARY_MOVE_UNEXPECTED' }, err);
   }
 }
 
@@ -341,6 +356,31 @@ export async function deleteImage(publicId: string): Promise<void> {
   } catch (err) {
     throw new InternalError({ reason: 'CLOUDINARY_DELETE_UNEXPECTED' }, err);
   }
+}
+
+// deletes the waiting uploads of a request that was refused, once each has finished; it never
+// throws, a file it cannot delete goes to the log. An upload that was moved to its place is gone
+// from the waiting id already, cloudinary answers "not found" for it
+export async function discardUploads(
+  uploads: ReadonlyArray<Promise<{ publicId: string }>>,
+  log: Pick<FastifyBaseLogger, 'warn'>,
+): Promise<void> {
+  const results = await Promise.allSettled(uploads);
+
+  await Promise.all(
+    results.map(async (result) => {
+      if (result.status !== 'fulfilled') return;
+
+      try {
+        await deleteImage(result.value.publicId);
+      } catch (err) {
+        log.warn(
+          { err, publicId: result.value.publicId },
+          'upload of a refused request was not deleted',
+        );
+      }
+    }),
+  );
 }
 
 // insert transforms right after /upload/

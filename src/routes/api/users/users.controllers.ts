@@ -13,8 +13,7 @@ import type {
   DeleteMeDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
-import type { UploadImageResult } from '@utils/cloudinary.util.js';
-
+import { discardUploads, type UploadImageResult } from '@utils/cloudinary.util.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import pickDefined from '@helpers/parameterNormalize.js';
@@ -42,63 +41,70 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
   // start avatar upload as soon as we see the file part to avoid hanging multipart parsing
   let avatarUpload: Promise<UploadImageResult> | null = null;
 
-  if (req.isMultipart()) {
-    // parse multipart parts manually because file streams must be consumed during parsing
-    for await (const part of req.parts()) {
-      if (part.type === 'file') {
-        if (part.fieldname === 'avatar') {
-          // prevent sending multiple avatar files in one request
-          if (avatarUpload) {
-            // always drain extra streams to avoid request hanging
+  try {
+    if (req.isMultipart()) {
+      // parse multipart parts manually because file streams must be consumed during parsing
+      for await (const part of req.parts()) {
+        if (part.type === 'file') {
+          if (part.fieldname === 'avatar') {
+            // prevent sending multiple avatar files in one request
+            if (avatarUpload) {
+              // always drain extra streams to avoid request hanging
+              part.file.resume();
+              throw new BadRequestError('AVATAR_MULTIPLE');
+            }
+
+            // delegate cloudinary upload to a dedicated service
+            // this call must start consuming the stream immediately
+            avatarUpload = usersServices.beginAvatarUpload({
+              userId: id as UserId,
+              avatar: { file: part.file, mimetype: part.mimetype, filename: part.filename },
+            });
+            // the upload is awaited after the loop; if it fails sooner (a second avatar, a broken
+            // form) nobody listens yet, and a rejection without a listener stops the process.
+            // This marks the failure as seen, the await below still throws it
+            avatarUpload.catch(() => undefined);
+          } else {
+            // ignore unexpected file fields but drain their streams
             part.file.resume();
-            throw new BadRequestError('AVATAR_MULTIPLE');
           }
-
-          // delegate cloudinary upload to a dedicated service
-          // this call must start consuming the stream immediately
-          avatarUpload = usersServices.beginAvatarUpload({
-            userId: id as UserId,
-            avatar: { file: part.file, mimetype: part.mimetype, filename: part.filename },
-          });
-          // the upload is awaited after the loop; if it fails sooner (a second avatar, a broken
-          // form) nobody listens yet, and a rejection without a listener stops the process.
-          // This marks the failure as seen, the await below still throws it
-          avatarUpload.catch(() => undefined);
-        } else {
-          // ignore unexpected file fields but drain their streams
-          part.file.resume();
+          continue;
         }
-        continue;
+
+        // multipart field values are typed loosely, normalize to string
+        const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+
+        // map allowed fields only
+        if (part.fieldname === 'name') name = v;
+        else if (part.fieldname === 'locale') locale = v;
+        else if (part.fieldname === 'phone') phone = v;
       }
-
-      // multipart field values are typed loosely, normalize to string
-      const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
-
-      // map allowed fields only
-      if (part.fieldname === 'name') name = v;
-      else if (part.fieldname === 'locale') locale = v;
-      else if (part.fieldname === 'phone') phone = v;
+    } else {
+      // allow json updates when client sends no files
+      const b = req.body ?? {};
+      name = b.name;
+      locale = b.locale;
+      phone = b.phone;
     }
-  } else {
-    // allow json updates when client sends no files
-    const b = req.body ?? {};
-    name = b.name;
-    locale = b.locale;
-    phone = b.phone;
+
+    // wait for avatar upload if it was requested, otherwise keep it null
+    const uploaded = avatarUpload ? await avatarUpload : null;
+
+    // build service dto with only provided fields
+    const args = pickDefined<UpdateMeDto>(
+      { userId: id, userRole: role },
+      { name, locale, phone, avatarUploaded: uploaded },
+    );
+
+    // persist changes and return the updated user dto
+    const result = await usersServices.updateMe(args);
+    return reply.code(200).send(result);
+  } catch (err) {
+    // a refused request changes nothing: the avatar it uploaded is deleted, the one of the account
+    // stays (updateMe moves an upload to its place only after the profile is written)
+    if (avatarUpload) await discardUploads([avatarUpload], req.log);
+    throw err;
   }
-
-  // wait for avatar upload if it was requested, otherwise keep it null
-  const uploaded = avatarUpload ? await avatarUpload : null;
-
-  // build service dto with only provided fields
-  const args = pickDefined<UpdateMeDto>(
-    { userId: id, userRole: role },
-    { name, locale, phone, avatarUploaded: uploaded },
-  );
-
-  // persist changes and return the updated user dto
-  const result = await usersServices.updateMe(args);
-  return reply.code(200).send(result);
 };
 
 const getUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, UserByIdResponseDto> = async (

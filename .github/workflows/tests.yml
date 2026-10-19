@@ -33,6 +33,22 @@ jobs:
     timeout-minutes: 20
 
     steps:
+      # the cloudinary tests upload to the real account (its test/ folder); the repo is public and
+      # so are its logs, github hides only the whole secret: its parts are masked before anything
+      # runs. Without the secret the cloudinary tests are skipped
+      - name: Mask Cloudinary key parts
+        env:
+          CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
+        run: |
+          if [ -n "$CLOUDINARY_URL" ]; then
+            rest="${CLOUDINARY_URL#*://}"
+            key="${rest%%:*}"; rest="${rest#*:}"
+            secret="${rest%%@*}"; cloud="${rest#*@}"; cloud="${cloud%%[/?#]*}"
+            for part in "$key" "$secret" "$cloud"; do
+              if [ -n "$part" ]; then echo "::add-mask::$part"; fi
+            done
+          fi
+
       - name: Checkout repo
         uses: actions/checkout@v7
 
@@ -46,10 +62,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # the files jest transformed in an earlier run (jest.config.js, cacheDirectory); npm ci
+      # empties node_modules, so it comes back after the install. A file that changed is
+      # transformed again, jest checks the content of each one
+      - name: Restore the jest cache
+        uses: actions/cache@v6
+        with:
+          path: node_modules/.cache/jest
+          key: jest-${{ runner.os }}-${{ hashFiles('package-lock.json', 'jest.config.js', 'tsconfig*.json') }}-${{ github.sha }}
+          restore-keys: |
+            jest-${{ runner.os }}-${{ hashFiles('package-lock.json', 'jest.config.js', 'tsconfig*.json') }}-
+
       # no terminal here, so the launcher runs every part unless parts are given
       - name: Run tests
         env:
           PARTS: ${{ inputs.parts }}
+          CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
         run: npm test -- $PARTS
 
       - name: Upload coverage report

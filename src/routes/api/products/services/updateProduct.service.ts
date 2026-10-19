@@ -3,6 +3,7 @@ import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
+import { deleteImage, isOwnFile, type UploadImageResult } from '@utils/cloudinary.util.js';
 
 import {
   BadRequestError,
@@ -14,7 +15,7 @@ import {
 } from '@utils/errors.js';
 
 import {
-  persistProductImages,
+  placeProductImages,
   mapProductRowToResponse,
   writeProductPriceChangeLog,
   computeFixedDelta,
@@ -37,6 +38,7 @@ export async function updateProduct({
   images,
   popularityOverride,
   popularityOverrideUntil,
+  log,
 }: UpdateProductDto): Promise<UpdateProductResponseDto> {
   // validate actor context for rls and admin-only update
   assertAdminActor(actorId, actorRole);
@@ -77,8 +79,11 @@ export async function updateProduct({
 
   if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
+  // a retried transaction must not move the same upload twice
+  const moved = new Map<string, UploadImageResult>();
+
   try {
-    const updated = await tx(
+    const { after: updated, staleFiles } = await tx(
       async (db) => {
         // set db session context for rls policies
         await setUserContext(db, { userId: actorId, role: actorRole });
@@ -107,12 +112,6 @@ export async function updateProduct({
           },
         });
         if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
-
-        // replace image pointers only when new images provided
-        if (hasImages) {
-          await db.productImage.deleteMany({ where: { productId: productIdRaw } });
-          await persistProductImages({ tx: db, productId: productIdRaw, uploads: images! });
-        }
 
         // use stock as delta (negative value takes units off)
         const newStock = stockRaw !== undefined ? before.stock + stockRaw : undefined;
@@ -217,15 +216,50 @@ export async function updateProduct({
           });
         }
 
-        return after;
+        // the new images replace the old ones last, once every other row is written: the uploads
+        // move to the paths of the product only for a request that is taken
+        let staleFiles: string[] = [];
+        if (hasImages) {
+          const old = await db.productImage.findMany({
+            where: { productId: productIdRaw },
+            select: { publicId: true },
+          });
+          await db.productImage.deleteMany({ where: { productId: productIdRaw } });
+          const kept = await placeProductImages({
+            tx: db,
+            productId: productIdRaw,
+            uploads: images!,
+            moved,
+          });
+
+          // a file the product no longer has; only the files of this environment are its own
+          staleFiles = old
+            .map((row) => row.publicId)
+            .filter((publicId) => isOwnFile(publicId) && !kept.includes(publicId)) as string[];
+        }
+
+        return { after, staleFiles };
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
         maxRetries: 3,
         isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
         maxWait: 1500,
-        timeout: 10_000,
+        // the moves at cloudinary run inside the transaction
+        timeout: 20_000,
       },
+    );
+
+    // the product is written: the files nothing points to any more go; a file that stays only
+    // takes space, so a failure goes to the log
+    await Promise.all(
+      staleFiles.map(async (publicId) => {
+        try {
+          await deleteImage(publicId);
+        } catch (err) {
+          log.warn({ err, productId: productIdRaw, publicId }, 'old product image was not removed');
+        }
+      }),
     );
 
     // fetch images and map urls

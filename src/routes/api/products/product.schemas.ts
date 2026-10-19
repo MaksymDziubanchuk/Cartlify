@@ -1,8 +1,11 @@
 import type { FastifySchema } from 'fastify';
 
+import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurityFor } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+
+const MAX_IMAGE_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
 
 const productImageUrlsExample = {
   url200: 'https://example.com/products/headphones-200.webp',
@@ -81,20 +84,6 @@ const reviewsResponseExample = {
   limit: 10,
   total: 2,
   nextCursor: 'eyJpZCI6MX0',
-};
-
-const createProductBodyExample = {
-  name: 'Wireless headphones',
-  description: 'Bluetooth headphones with noise cancellation.',
-  price: 49.99,
-  stock: 15,
-  categoryId: 1,
-  images: [
-    {
-      filename: 'headphones.webp',
-      mimetype: 'image/webp',
-    },
-  ],
 };
 
 const createReviewBodyExample = {
@@ -282,12 +271,11 @@ const getProductReviewsRouterSchema = {
 const postProductRouterSchema = {
   operationId: 'createProduct',
   summary: 'Create product',
-  description: 'Creates a new product. This operation is restricted to privileged users.',
-
-  body: {
-    $ref: 'createProductBodySchema#',
-    examples: [createProductBodyExample],
-  },
+  description:
+    'Creates a new product from a multipart form: its fields and one or more image files in ' +
+    '`images`, the first is the main image. This operation is restricted to privileged users. ' +
+    'The images are checked by their content; they become the images of the product only when ' +
+    'the product is written, a refused request leaves no files.',
 
   response: {
     201: {
@@ -297,7 +285,11 @@ const postProductRouterSchema = {
     },
 
     400: {
-      description: 'Invalid product creation request.',
+      description:
+        'Invalid product form: not a form (MULTIPART_REQUIRED), no images ' +
+        '(PRODUCT_IMAGES_REQUIRED), a missing field (BODY_NOT_FULL), a wrong name, price, stock ' +
+        'or category id (PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, PRODUCT_STOCK_INVALID, ' +
+        'CATEGORY_ID_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -308,12 +300,8 @@ const postProductRouterSchema = {
       description: 'The authenticated user is not allowed to create products.',
       $ref: 'errorResponseSchema#',
     },
-    409: {
-      description: 'Product creation conflicts with existing data.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Product creation payload failed validation.',
+    413: {
+      description: `An image is over ${MAX_IMAGE_MB} MB (PAYLOAD_TOO_LARGE). Nothing was created.`,
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -394,7 +382,12 @@ const updateProductByIdRouterSchema = {
   operationId: 'updateProductById',
   summary: 'Update product by id',
   description:
-    'Updates product details by product id. This operation is restricted to privileged users. Field stock is a delta: a positive value adds units, a negative value takes off only free units that are not reserved by confirmed orders.',
+    'Updates product details by product id. This operation is restricted to privileged users. ' +
+    'Field stock is a delta: a positive value adds units, a negative value takes off only free ' +
+    'units that are not reserved by confirmed orders. Takes a JSON body, or a multipart form when ' +
+    'it carries images: the images of a form replace all images of the product in their order, ' +
+    'the first is the main one, and the files the product no longer has are deleted. A JSON body ' +
+    'has no images. A refused request leaves the images as they were.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -423,7 +416,11 @@ const updateProductByIdRouterSchema = {
     },
 
     400: {
-      description: 'Invalid product update request.',
+      description:
+        'Invalid product update request: nothing to change (NO_FIELDS_TO_UPDATE), a wrong field ' +
+        '(VALIDATION_ERROR for a JSON body, PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, ' +
+        'PRODUCT_STOCK_INVALID, CATEGORY_ID_INVALID, POPULARITY_OVERRIDE_INVALID, ' +
+        'POPULARITY_OVERRIDE_UNTIL_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -443,8 +440,8 @@ const updateProductByIdRouterSchema = {
         'Product update conflicts with existing data, or stock decrease exceeds free units.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Product update payload failed validation.',
+    413: {
+      description: `An image is over ${MAX_IMAGE_MB} MB (PAYLOAD_TOO_LARGE). Nothing was changed.`,
       $ref: 'errorResponseSchema#',
     },
     500: {

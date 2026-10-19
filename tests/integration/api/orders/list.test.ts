@@ -135,10 +135,11 @@ describe('GET /api/orders', () => {
     const second = await placeOrder(app, csrf, await newUser(), product, 'paid');
     const cartId = await placeOrder(app, csrf, await newUser(), product, 'cart');
 
-    const res = await list(await newUser({ role: 'ADMIN' }), '?limit=20');
+    const res = await list(await newUser({ role: 'ADMIN' }), '?limit=100');
 
     expect(res.statusCode).toBe(200);
-    expect(idsOf(res).slice(0, 2)).toEqual([second, first]);
+    // other test files make orders at the same time, only the ones of this test are compared
+    expect(idsOf(res).filter((id) => id === first || id === second)).toEqual([second, first]);
     expect(idsOf(res)).not.toContain(cartId);
     expect(res.json().items.every((order: ListedOrder) => order.status !== 'pending')).toBe(true);
   });

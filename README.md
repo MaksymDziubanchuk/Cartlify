@@ -117,7 +117,7 @@ What is important to state honestly:
 - OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
-- user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
+- user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp by its content, whatever type the form names, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`; it replaces the avatar only once the profile is written, a refused request changes nothing), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
 - account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
 - login logging
 
@@ -138,7 +138,7 @@ What is important to state honestly:
 - product listing with filtering / pagination helpers
 - product details endpoint
 - admin product CRUD
-- product image upload flow (jpeg, png or webp, up to 5 MB per file)
+- product image upload flow: images come only as files of a form (creating a product takes only a form, an update takes JSON or a form), jpeg, png or webp by their content, up to 5 MB per file; an upload waits at a temporary id and takes the place of the product images only once the product is written, a refused request leaves no files and the images as they were; the files a product no longer has after an update are deleted
 - product category reassignment
 - bulk price update endpoint for admin/root
 - product view/popularity-related fields in the data model
@@ -328,7 +328,8 @@ OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=12000
 OPENAI_MAX_OUTPUT_TOKENS=450
 
-# Cloudinary (required only if you test upload flows)
+# Cloudinary (required: the app does not start without CLOUDINARY_URL or the three keys;
+# the upload tests use them too, see Run Commands)
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
@@ -513,9 +514,16 @@ npm test -- unit api:orders
 # rerun only the tests that failed last time
 npm test -- --failed
 
+# integration files run at the same time, one per core and at most 6; one by one:
+npm test -- --workers=1
+
 # unit or integration tests only
 npm run test:unit
 npm run test:integration
+
+# the Cloudinary upload tests are the one part that reads keys from .env (CLOUDINARY_*):
+# Cloudinary has no test mode, they upload into the test/ folder of the account and delete
+# what they uploaded; GitHub Actions takes the CLOUDINARY_URL secret, without it they are skipped
 ```
 
 ---

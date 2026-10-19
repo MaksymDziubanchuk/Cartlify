@@ -19,6 +19,10 @@ const coverageFrom = ['src/**/*.ts', '!src/index.ts', '!src/types/**'];
 const shared = {
   testEnvironment: 'node',
 
+  // the transformed files are kept here between runs; the tests workflow caches this folder,
+  // a run with an empty one takes about 13 s longer
+  cacheDirectory: '<rootDir>/node_modules/.cache/jest',
+
   // run typescript as native esm, so top-level await in src/app.ts works
   extensionsToTreatAsEsm: ['.ts'],
   transform: {
@@ -55,10 +59,13 @@ export default {
       displayName: 'integration',
       testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
       setupFiles: ['<rootDir>/tests/setup/integration.setup.ts'],
-      // the app logs go to the tests, an unexpected warning or error fails its test
-      setupFilesAfterEnv: ['<rootDir>/tests/setup/integration.logs.ts'],
-      // real database, redis and services answer slower than plain functions
-      testTimeout: 30_000,
+      // the app logs go to the tests, an unexpected warning or error fails its test;
+      // cloudinary calls stay in its test/ folder; a longer timeout for real services
+      setupFilesAfterEnv: [
+        '<rootDir>/tests/setup/integration.logs.ts',
+        '<rootDir>/tests/setup/integration.cloudinary.ts',
+        '<rootDir>/tests/setup/integration.timeout.ts',
+      ],
     },
   ],
 };
