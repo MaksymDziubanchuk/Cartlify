@@ -1,6 +1,11 @@
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 import { idPathParam } from '@schemas/idPathParam.js';
+import {
+  PROFILE_LISTS,
+  PROFILE_PERIOD_DEFAULT_DAYS,
+  PROFILE_PERIOD_MAX_DAYS,
+} from '@routes/api/users/services/helpers/adminProfile.helper.js';
 
 const usersGetByIdParamsSchema = {
   $id: 'usersGetByIdParamsSchema',
@@ -10,6 +15,130 @@ const usersGetByIdParamsSchema = {
     userId: idPathParam('the user'),
   },
   required: ['userId'],
+} as const;
+
+const profileListName = `(${PROFILE_LISTS.join('|')})`;
+
+// the checkboxes of the admin page and the period of the lists; a user's are ignored
+const usersGetByIdQuerySchema = {
+  $id: 'usersGetByIdQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    include: {
+      type: 'string',
+      pattern: `^${profileListName}(,${profileListName})*$`,
+      description:
+        `For an admin or root: the lists to give, comma separated: ${PROFILE_LISTS.join(', ')}. ` +
+        'Without it the profile has no list. Ignored for a user.',
+    },
+    from: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        `For an admin or root: the start of the period of the lists, ${PROFILE_PERIOD_DEFAULT_DAYS} ` +
+        `days before to unless given. At most ${PROFILE_PERIOD_MAX_DAYS} days to to. Ignored for a user.`,
+    },
+    to: {
+      type: 'string',
+      format: 'date-time',
+      description: 'For an admin or root: the end of the period of the lists, now unless given.',
+    },
+  },
+} as const;
+
+const dateTime = { type: 'string', format: 'date-time' } as const;
+const nullableString = { anyOf: [{ type: 'string' }, { type: 'null' }] } as const;
+
+// the lists of the profile an admin reads, each one of the period, newest first
+const usersAdminProfileListsSchema = {
+  orders: {
+    type: 'array',
+    description: 'Orders of the user created in the period, the cart included.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        status: {
+          type: 'string',
+          enum: ['pending', 'unconfirmed', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
+        },
+        total: { type: 'number' },
+        createdAt: dateTime,
+        updatedAt: dateTime,
+      },
+      required: ['id', 'status', 'total', 'createdAt', 'updatedAt'],
+    },
+  },
+  reviews: {
+    type: 'array',
+    description: 'Reviews the user wrote in the period.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        productId: { type: 'number' },
+        rating: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+        comment: nullableString,
+        upVotes: { type: 'number' },
+        downVotes: { type: 'number' },
+        createdAt: dateTime,
+        updatedAt: dateTime,
+      },
+      required: [
+        'id',
+        'productId',
+        'rating',
+        'comment',
+        'upVotes',
+        'downVotes',
+        'createdAt',
+        'updatedAt',
+      ],
+    },
+  },
+  favorites: {
+    type: 'array',
+    description: 'Products the user added to favorites in the period.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { id: { type: 'number' }, productId: { type: 'number' }, createdAt: dateTime },
+      required: ['id', 'productId', 'createdAt'],
+    },
+  },
+  votes: {
+    type: 'array',
+    description: 'Votes of the user for reviews of other users, given in the period.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        reviewId: { type: 'number' },
+        action: { type: 'string', enum: ['up', 'down'] },
+        createdAt: dateTime,
+      },
+      required: ['id', 'reviewId', 'action', 'createdAt'],
+    },
+  },
+  loginLogs: {
+    type: 'array',
+    description: 'Logins of the user in the period.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        createdAt: dateTime,
+        ipAddress: nullableString,
+        userAgent: nullableString,
+      },
+      required: ['id', 'createdAt', 'ipAddress', 'userAgent'],
+    },
+  },
 } as const;
 
 const usersUserReviewResponseSchema = {
@@ -27,9 +156,9 @@ const usersUserReviewResponseSchema = {
 
     upVotes: { type: 'number' },
     downVotes: { type: 'number' },
-    userVote: {
-      anyOf: [{ type: 'string', enum: ['up', 'down'] }, { type: 'null' }],
-    },
+    // null in the enum too: swagger shows the field as nullable, and openapi 3.0 lets null
+    // through a nullable enum only when the enum names it
+    userVote: { type: 'string', enum: ['up', 'down', null], nullable: true },
     updatedAt: { type: 'string', format: 'date-time' },
   },
   required: [
@@ -86,7 +215,8 @@ const usersGetMeResponseSchema = {
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
-// public profile of any user: no email, the user sees their own one in usersGetMeResponseSchema
+// the profile of any user. A user gets id, the dates, the name and the avatar, no email (the own
+// one is in usersGetMeResponseSchema); an admin or root gets the fields marked so as well
 const usersGetByIdResponseSchema = {
   $id: 'usersGetByIdResponseSchema',
   type: 'object',
@@ -115,6 +245,31 @@ const usersGetByIdResponseSchema = {
         'When the account was deleted. Only an admin or root reads a deleted account, ' +
         'for anyone else it is USER_NOT_FOUND.',
     },
+
+    email: { type: 'string', format: 'email', description: 'Admin or root only.' },
+    role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'], description: 'Admin or root only.' },
+    authProvider: {
+      type: 'string',
+      enum: ['LOCAL', 'GOOGLE', 'GITHUB', 'LINKEDIN'],
+      description: 'Admin or root only: how the account logs in.',
+    },
+    isVerified: { type: 'boolean', description: 'Admin or root only.' },
+    locale: { type: 'string', description: 'Admin or root only, when set.' },
+    phone: { type: 'string', description: 'Admin or root only, when set.' },
+    openChatThreadId: {
+      anyOf: [{ type: 'string', format: 'uuid' }, { type: 'null' }],
+      description:
+        'Admin or root only: the open chat of the user with an admin, ' +
+        'GET /api/chat/admin/threads/{threadId} opens it; null when there is none.',
+    },
+    period: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'Admin or root only: the period the lists cover.',
+      properties: { from: dateTime, to: dateTime },
+      required: ['from', 'to'],
+    },
+    ...usersAdminProfileListsSchema,
   },
   required: ['id', 'createdAt', 'updatedAt'],
 } as const;
@@ -206,6 +361,7 @@ const usersUpdateMeResponseSchema = {
 
 export const usersDtoSchemas = [
   usersGetByIdParamsSchema,
+  usersGetByIdQuerySchema,
   usersUserResponseSchema,
   usersUserReviewResponseSchema,
   usersGetMeResponseSchema,

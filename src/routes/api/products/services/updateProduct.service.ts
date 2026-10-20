@@ -208,7 +208,6 @@ export async function updateProduct({
         if (price !== undefined && before.price.toString() !== after.price.toString()) {
           await writeProductPriceChangeLog(db, {
             productId: after.id,
-            actorId,
             beforePrice: before.price,
             afterPrice: after.price,
             mode: 'fixed',

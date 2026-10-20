@@ -241,7 +241,9 @@ const reviewResponseSchema = {
 
     upVotes: { type: 'integer', minimum: 0 },
     downVotes: { type: 'integer', minimum: 0 },
-    userVote: { anyOf: [{ type: 'string', enum: ['up', 'down'] }, { type: 'null' }] },
+    // null in the enum too: swagger shows the field as nullable, and openapi 3.0 lets null
+    // through a nullable enum only when the enum names it
+    userVote: { type: 'string', enum: ['up', 'down', null], nullable: true },
 
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },

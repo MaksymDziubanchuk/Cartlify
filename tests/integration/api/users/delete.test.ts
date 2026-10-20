@@ -22,6 +22,7 @@ import {
   closeSessions,
   createChatThread,
   createFavorite,
+  createLoginLog,
   createProduct,
   createReview,
   createUser,
@@ -189,6 +190,25 @@ describe('what the deletion does', () => {
       phone: null,
       deletedAt: expect.any(Date),
     });
+  });
+
+  // the log of logins stays, its lines take the email the account has now
+  it('gives the logins of the account its new email, the rest of the log stays', async () => {
+    const target = await newUser();
+    const times = [new Date(Date.now() - 2 * 86_400_000), new Date(Date.now() - 3_600_000)];
+    for (const at of times) await createLoginLog(target, at);
+
+    await deleteUser(target.id, rootCookie);
+
+    const { email } = await rowOf(target.id);
+    const logins = await asAdmin((tx) =>
+      tx.loginLog.findMany({
+        where: { userId: target.id },
+        orderBy: { createdAt: 'asc' },
+        select: { email: true, createdAt: true },
+      }),
+    );
+    expect(logins).toEqual(times.map((createdAt) => ({ email, createdAt })));
   });
 
   it('cuts an oauth account from its provider', async () => {

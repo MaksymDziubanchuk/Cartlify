@@ -107,13 +107,13 @@ export function createReviewVote(userId: number, reviewId: number, action: 'UP' 
 }
 
 // a chat of the user with one message of theirs; an open admin chat waits for an admin.
-// A user has one open chat at a time
+// A user has one open chat at a time. A closed chat is made the way one gets closed: it is open
+// while the user writes, then it closes (a closed chat takes no new message)
 export function createChatThread(
   userId: number,
   opts: { type?: 'bot' | 'admin'; status?: 'open' | 'closed' } = {},
 ): Promise<{ id: string }> {
   const type = opts.type ?? 'admin';
-  const status = opts.status ?? 'open';
 
   return prisma.$transaction(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
@@ -124,16 +124,21 @@ export function createChatThread(
         id,
         userId,
         type,
-        status,
-        ...(type === 'admin' && status === 'open'
-          ? { adminRequestedAt: new Date(), adminUnreadSince: new Date() }
-          : {}),
+        status: 'open',
+        ...(type === 'admin' ? { adminRequestedAt: new Date(), adminUnreadSince: new Date() } : {}),
         unreadCount: 1,
       },
     });
     await tx.chatMessage.create({
       data: { threadId: id, senderId: userId, senderType: 'user', content: 'Where is my order?' },
     });
+
+    if (opts.status === 'closed') {
+      await tx.chatThread.update({
+        where: { id },
+        data: { status: 'closed', unreadCount: 0, adminRequestedAt: null, adminUnreadSince: null },
+      });
+    }
 
     return { id };
   });

@@ -12,6 +12,7 @@ type Schema = {
 };
 type Operation = {
   security?: Record<string, string[]>[];
+  parameters?: { in: string; name: string; required?: boolean }[];
   requestBody?: { content: Record<string, { schema: Schema; example?: unknown }> };
   responses?: Record<string, { content?: Record<string, { example?: unknown }> }>;
 };
@@ -148,6 +149,16 @@ describe('the users routes', () => {
     expect(propertiesOf(form.schema).avatar).toMatchObject({
       description: expect.stringContaining(`${MAX_UPLOAD_SIZE_BYTES / 1_000_000} MB`),
     });
+  });
+
+  // the checkboxes and the period of the admin page
+  it('lists the optional query of GET /api/users/{userId}: include, from and to', () => {
+    const query = (operation('get', '/api/users/{userId}').parameters ?? []).filter(
+      (parameter) => parameter.in === 'query',
+    );
+
+    expect(query.map((parameter) => parameter.name).sort()).toEqual(['from', 'include', 'to']);
+    expect(query.filter((parameter) => parameter.required)).toEqual([]);
   });
 
   it('shows the answer DELETE /api/users/{userId} really gives as its example', () => {

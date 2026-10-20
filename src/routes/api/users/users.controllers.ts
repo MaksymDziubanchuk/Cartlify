@@ -2,6 +2,7 @@ import type { ControllerRouter } from 'types/controller.js';
 import type { UserEntity } from 'types/user.js';
 import type {
   GetUserByIdParamsDto,
+  GetUserByIdQueryDto,
   UserResponseDto,
   FindUserByIdDto,
   FindMeByIdDto,
@@ -107,14 +108,17 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
   }
 };
 
-const getUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, UserByIdResponseDto> = async (
-  req,
-  reply,
-) => {
+const getUserById: ControllerRouter<
+  GetUserByIdParamsDto,
+  {},
+  GetUserByIdQueryDto,
+  UserByIdResponseDto
+> = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const userId = Number(req.params.userId);
+  const { include, from, to } = req.query;
 
-  const args = pickDefined<FindUserByIdDto>({ actorId, actorRole, userId }, {});
+  const args = pickDefined<FindUserByIdDto>({ actorId, actorRole, userId }, { include, from, to });
   const result = await usersServices.findById(args);
   return reply.code(200).send(result);
 };

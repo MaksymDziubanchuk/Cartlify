@@ -357,7 +357,7 @@ const postProductReviewRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found.',
+      description: 'Product was not found or is removed from the catalog (PRODUCT_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     409: {

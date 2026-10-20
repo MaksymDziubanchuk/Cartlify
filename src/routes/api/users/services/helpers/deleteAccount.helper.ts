@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import { getPgMessage, tx } from '@db/client.js';
-import { setUserContext } from '@db/dbContext.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { requireSiteDomain } from '@helpers/siteDomain.js';
 import { isRedisReady } from '@redis/client.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
@@ -124,7 +124,9 @@ async function eraseAccount(
       }
 
       // a waiting order gives its reserved stock back and returns to the cart; the system function
-      // takes the admin role, root is one. A payment that got in first stops it, see below
+      // serves only the system context (admin without an id), not a signed-in root. A payment
+      // that got in first stops it, see below
+      if (open.some((order) => order.status === 'waiting')) await setAdminContext(db);
       for (const order of open) {
         if (order.status === 'waiting') {
           await db.$executeRaw`select cartlify.unconfirm_order(${order.id}::int)`;
@@ -166,6 +168,9 @@ async function eraseAccount(
         },
         select: { id: true },
       });
+
+      // the logins of the account take the email it has now; the rest of the log stays as it is
+      await db.$executeRaw`select cartlify.anonymize_login_logs(${userId}::int)`;
 
       return { email: user.email, name: user.name, publicId: user.publicId, open };
     },

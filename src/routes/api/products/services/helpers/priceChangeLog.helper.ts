@@ -1,7 +1,7 @@
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
-import type { UserId, ProductId } from 'types/ids.js';
+import type { ProductId } from 'types/ids.js';
 
 type DbClient = Prisma.TransactionClient | PrismaClient;
 
@@ -12,11 +12,12 @@ export function computeFixedDelta(beforePrice: unknown, afterPrice: unknown): nu
   return newPriceNum - oldPriceNum;
 }
 
+// the line names the admin of the transaction context: the database function takes the actor
+// from it and refuses a context without an id, so a line in the name of someone else is no option
 export async function writeProductPriceChangeLog(
   tx: DbClient,
   args: {
     productId: ProductId;
-    actorId: UserId;
     beforePrice: unknown;
     afterPrice: unknown;
     mode: 'fixed' | 'percent';
@@ -33,7 +34,6 @@ export async function writeProductPriceChangeLog(
   await tx.$executeRaw`
     select cartlify.log_product_price_change(
       ${args.productId}::int,
-      ${args.actorId}::int,
       ${oldPriceNum}::numeric,
       ${newPriceNum}::numeric,
       ${args.mode}::cartlify."PriceChangeMode",

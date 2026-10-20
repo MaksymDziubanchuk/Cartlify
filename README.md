@@ -117,6 +117,7 @@ What is important to state honestly:
 - OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity after login/OAuth
+- the profile of a user by id (`GET /api/users/:userId`) depends on who reads it, in the database function and in the API alike: a user gets the name, the avatar and the dates, no email; an admin or root gets the whole profile but the password, the provider id and the avatar file id, the open chat of the user with an admin, and the lists the `include` checkboxes name (`orders`, `reviews`, `favorites`, `votes`, `loginLogs`) of a period: the last 30 days unless `from`/`to` come, any dates, at most 60 days long (`400 PROFILE_PERIOD_TOO_LONG`, `400 PROFILE_PERIOD_INVALID`)
 - user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp by its content, whatever type the form names, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`; it replaces the avatar only once the profile is written, a refused request changes nothing), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
 - account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
 - login logging
@@ -147,7 +148,8 @@ What is important to state honestly:
 
 - product reviews, each with its author (`user: { id, name, avatarUrls, deleted }`); a deleted account stays the author, named Guest
 - review deletion rules for user/admin/root
-- review voting endpoint
+- a product removed from the catalog takes no new review (`404 PRODUCT_NOT_FOUND`)
+- review voting endpoint: a vote is for the review of another user, the author gets `403 REVIEW_OWN_VOTE_FORBIDDEN`
 - favorites for guest/user flows
 
 ### Orders

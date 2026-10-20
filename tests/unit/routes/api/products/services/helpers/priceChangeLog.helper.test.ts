@@ -33,7 +33,8 @@ describe('computeFixedDelta', () => {
 });
 
 describe('writeProductPriceChangeLog', () => {
-  const change = { productId: 4, actorId: 1, mode: 'fixed' as const, value: 2.5 };
+  // no actor: the database function takes it from the context of the transaction
+  const change = { productId: 4, mode: 'fixed' as const, value: 2.5 };
 
   it('writes nothing when the price stayed the same', async () => {
     const { tx, $executeRaw } = fakeTx();
@@ -58,6 +59,6 @@ describe('writeProductPriceChangeLog', () => {
 
     const [strings, ...values] = $executeRaw.mock.calls[0]!;
     expect(strings.join('?')).toContain('cartlify.log_product_price_change(');
-    expect(values).toEqual([4, 1, 10, 12.5, 'fixed', 2.5]);
+    expect(values).toEqual([4, 10, 12.5, 'fixed', 2.5]);
   });
 });

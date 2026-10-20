@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import type { AuthProvider } from '@prisma/client';
 
 import { prisma } from '@db/client.js';
 import {
@@ -10,7 +11,7 @@ import {
   ForbiddenError,
   InternalError,
 } from '@utils/errors.js';
-import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
+import { setUserContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import { verifyPass } from '@helpers/safePass.js';
@@ -32,12 +33,19 @@ import type {
   UserResponseDto,
   UserReviewResponseDto,
   UserByIdResponseDto,
+  PublicUserProfileDto,
   DeleteUserByIdDto,
   DeleteMeDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { UserId } from 'types/ids.js';
+import type { Role } from 'types/user.js';
 
+import {
+  loadProfileLists,
+  parseProfileLists,
+  resolveProfilePeriod,
+} from './services/helpers/adminProfile.helper.js';
 import { deleteAccount } from './services/helpers/deleteAccount.helper.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
@@ -381,69 +389,105 @@ async function updateMe({
   }
 }
 
+// a row of cartlify.users_get_public_profile; the fields after avatarUrl are null for a user
+type ProfileRow = {
+  id: number;
+  createdAt: Date;
+  updatedAt: Date;
+  name: string | null;
+  avatarUrl: string | null;
+  email: string | null;
+  role: Role | null;
+  authProvider: AuthProvider | null;
+  isVerified: boolean | null;
+  locale: string | null;
+  phone: string | null;
+  deletedAt: Date | null;
+};
+
 async function findById({
   actorId,
   actorRole,
   userId,
+  include,
+  from,
+  to,
 }: FindUserByIdDto): Promise<UserByIdResponseDto> {
   // normalize user id from dto
   const id = typeof userId === 'string' ? Number(userId) : userId;
   // guard invalid id
   if (!Number.isInteger(id)) throw new BadRequestError('USER_ID_INVALID');
 
+  // the checkboxes and the period are for an admin or root, the ones of a user are ignored
+  const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
+  const period = isAdmin ? resolveProfilePeriod({ from, to }) : null;
+  const lists = isAdmin ? parseProfileLists(include) : [];
+
   try {
     return await prisma.$transaction(async (tx) => {
       // the db function serves only a signed-in actor, so it needs the actor context
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
-      // read minimal profile via security definer and keep rls rules in db;
-      // the function also returns the email, it is left out here: a public profile has no email,
-      // a user sees their own one in /users/me
-      const rows = await tx.$queryRaw<
-        Array<{
-          id: number;
-          createdAt: Date;
-          updatedAt: Date;
-          name: string | null;
-          avatarUrl: string | null;
-        }>
-      >`
+      // the db function decides by the role what the profile holds: a user gets the name, the
+      // avatar and the dates, an admin or root the whole profile; a deleted account is no row for
+      // a user, as if it never was
+      const rows = await tx.$queryRaw<ProfileRow[]>`
         select
           id,
           created_at as "createdAt",
           updated_at as "updatedAt",
           name,
-          avatar_url as "avatarUrl"
+          avatar_url as "avatarUrl",
+          email,
+          role,
+          auth_provider as "authProvider",
+          is_verified as "isVerified",
+          locale,
+          phone,
+          deleted_at as "deletedAt"
         from cartlify.users_get_public_profile(${id}::int)
         limit 1
       `;
 
       const user = rows[0] ?? null;
-
-      // hide rls-missed rows as not found
       if (!user) throw new NotFoundError('USER_NOT_FOUND');
 
-      // a user cannot read the deletion mark of another account under rls, the server reads it as
-      // the system; a deleted account is gone for everyone but an admin, as if it never was
-      const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
-      if (!isAdmin) await setAdminContext(tx);
-
-      const { deletedAt } = await tx.user.findUniqueOrThrow({
-        where: { id },
-        select: { deletedAt: true },
-      });
-
-      if (deletedAt && !isAdmin) throw new NotFoundError('USER_NOT_FOUND');
-
-      // build final public response
-      return {
-        id: user.id,
+      const profile: PublicUserProfileDto = {
+        id: user.id as UserId,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),
         ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
-        // only an admin gets here with a deleted account
-        ...(deletedAt ? { deletedAt } : {}),
+      };
+
+      if (!period) return profile;
+
+      // the database gives an admin these fields always
+      const { email, role, authProvider, isVerified } = user;
+      if (email === null || role === null || authProvider === null || isVerified === null) {
+        throw new InternalError({ reason: 'USER_ADMIN_PROFILE_INCOMPLETE' });
+      }
+      assertEmail(email);
+
+      // the open chat of the user with an admin: the admin goes from the profile into it
+      const chat = await tx.chatThread.findFirst({
+        where: { userId: id, type: 'admin', status: 'open' },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true },
+      });
+
+      return {
+        ...profile,
+        email,
+        role,
+        authProvider,
+        isVerified,
+        ...(user.locale ? { locale: user.locale } : {}),
+        ...(user.phone ? { phone: user.phone } : {}),
+        ...(user.deletedAt ? { deletedAt: user.deletedAt } : {}),
+        openChatThreadId: chat?.id ?? null,
+        period,
+        ...(await loadProfileLists(tx, id, lists, period)),
       };
     });
   } catch (err) {
