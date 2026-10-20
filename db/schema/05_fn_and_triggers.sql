@@ -1597,11 +1597,15 @@ CREATE TRIGGER trg_order_items_after_mod
 AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
--- ORDERS AND ITEMS guard order updates and recalc total before confirmation
+-- ORDERS AND ITEMS guard order updates, recalc total before confirmation, stamp the time of the change
 CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_total cartlify.orders.total%TYPE;
 BEGIN
+  -- prisma stamps updatedAt only in its own queries, db functions (pay, confirm, cancel, expire)
+  -- change the order too; the column holds utc time without a zone, as prisma writes it
+  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+
   IF OLD."confirmed" THEN
     IF NEW."userId" IS DISTINCT FROM OLD."userId"
        OR NEW."total" IS DISTINCT FROM OLD."total"
