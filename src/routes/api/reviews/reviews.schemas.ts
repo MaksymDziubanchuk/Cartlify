@@ -25,7 +25,9 @@ const voteReviewResponseExample = {
 const postVoteReviewSchema = {
   operationId: 'voteReview',
   summary: 'Vote review',
-  description: 'Adds, changes or removes the authenticated user vote for a product review.',
+  description:
+    'Adds, changes or removes the authenticated user vote for a product review of another user. ' +
+    'The author of a review cannot vote for it, only take back a vote left before.',
 
   params: {
     $ref: 'reviewsVoteParamsSchema#',
@@ -53,7 +55,9 @@ const postVoteReviewSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Only authenticated users with the USER role can vote for reviews.',
+      description:
+        'Only authenticated users with the USER role can vote for reviews; ' +
+        'REVIEW_OWN_VOTE_FORBIDDEN for a vote on an own review.',
       $ref: 'errorResponseSchema#',
     },
     404: {

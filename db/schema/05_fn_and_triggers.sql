@@ -108,6 +108,16 @@ BEGIN
 END;
 $$;
 
+-- CONTEXT HELPERS check whether the server acts as the system: the admin role without a user id,
+-- the way setAdminContext sets it (the payment webhook, the reservation worker, the password
+-- reset); a signed-in admin always comes with an id
+CREATE OR REPLACE FUNCTION cartlify.is_system () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+BEGIN
+  RETURN cartlify.current_actor_role() IS NOT DISTINCT FROM 'ADMIN'
+    AND cartlify.current_actor_id() IS NULL;
+END;
+$$;
+
 -- CONTEXT HELPERS check whether current actor owns the target row
 CREATE OR REPLACE FUNCTION cartlify.is_owner (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
@@ -161,20 +171,47 @@ BEGIN
 END;
 $$;
 
--- AUTH AND USERS fetch public user profile fields by user id
+-- temporary: the result of users_get_public_profile changed (20.10.2026, the fields of an admin),
+-- create or replace cannot change a result, so the old version goes first; it takes the rights
+-- with it until db/01 runs again. Remove once dev and prod match the structure snapshot
+DO $$
+BEGIN
+  IF to_regprocedure('cartlify.users_get_public_profile(integer)') IS NOT NULL
+     AND position('deleted_at' IN pg_get_function_result(
+       to_regprocedure('cartlify.users_get_public_profile(integer)'))) = 0
+  THEN
+    DROP FUNCTION cartlify.users_get_public_profile (integer);
+  END IF;
+END
+$$;
+
+-- AUTH AND USERS fetch the profile of a user by user id
 -- system function: runs as the owner, rls shows a user only their own row;
--- callable only by a signed-in user, admin or root, never by a guest
+-- callable only by a signed-in user, admin or root, never by a guest.
+-- A user gets the name, the avatar and the dates, the other fields are null, the own email too
+-- (a user reads it in /users/me). An admin or root gets the whole profile. The password hash, the
+-- provider id and the id of the avatar file are no field of it. A deleted account is no row for
+-- anybody but an admin or root
 CREATE OR REPLACE FUNCTION cartlify.users_get_public_profile (p_user_id int) RETURNS TABLE (
   id int,
-  email text,
   created_at timestamptz,
   updated_at timestamptz,
   name text,
-  avatar_url text
+  avatar_url text,
+  -- admin or root only
+  email text,
+  role cartlify."Role",
+  auth_provider cartlify."AuthProvider",
+  is_verified boolean,
+  locale text,
+  phone text,
+  deleted_at timestamptz
 ) LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
+DECLARE
+  v_admin boolean;
 BEGIN
   IF cartlify.current_actor_role() IS NULL
      OR cartlify.current_actor_role() NOT IN ('USER', 'ADMIN', 'ROOT')
@@ -183,18 +220,27 @@ BEGIN
     RAISE EXCEPTION 'USER_PROFILE_READ_FORBIDDEN';
   END IF;
 
-  -- fetch only allowed fields; prisma keeps dates as utc in columns without a time zone,
-  -- the result type wants timestamptz, so they are read as utc
+  v_admin := cartlify.is_admin();
+
+  -- prisma keeps dates as utc in columns without a time zone, the result type wants
+  -- timestamptz, so they are read as utc
   RETURN QUERY
   SELECT
     u.id,
-    u.email,
     u."createdAt" AT TIME ZONE 'UTC',
     u."updatedAt" AT TIME ZONE 'UTC',
     u.name,
-    u."avatarUrl"
+    u."avatarUrl",
+    CASE WHEN v_admin THEN u.email END,
+    CASE WHEN v_admin THEN u.role END,
+    CASE WHEN v_admin THEN u."authProvider" END,
+    CASE WHEN v_admin THEN u."isVerified" END,
+    CASE WHEN v_admin THEN u.locale END,
+    CASE WHEN v_admin THEN u.phone END,
+    CASE WHEN v_admin THEN u."deletedAt" AT TIME ZONE 'UTC' END
   FROM cartlify.users u
   WHERE u.id = p_user_id
+    AND (v_admin OR u."deletedAt" IS NULL)
   LIMIT 1;
 
 END;
@@ -317,6 +363,26 @@ BEGIN
   END;
 END;
 $$;
+
+-- AUTH AND USERS === triggers ===
+-- AUTH AND USERS keep the email in small letters without spaces around: the login and the
+-- password reset look an account up in that form, and the unique email then holds one account
+-- per address. An email that stays as it is is not touched, older rows keep theirs
+CREATE OR REPLACE FUNCTION cartlify.users_before_write_email () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF TG_OP = 'INSERT' OR NEW.email IS DISTINCT FROM OLD.email THEN
+    NEW.email := lower(btrim(NEW.email));
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_users_before_write_email ON cartlify.users;
+
+CREATE TRIGGER trg_users_before_write_email
+BEFORE INSERT OR UPDATE OF email ON cartlify.users FOR EACH ROW
+EXECUTE FUNCTION cartlify.users_before_write_email ();
 
 ------------------------------------------------------------
 -- PRODUCTS
@@ -1019,8 +1085,8 @@ DECLARE
 
   r record;
 BEGIN
-  -- only system-side callers with admin context
-  IF NOT cartlify.is_admin() THEN
+  -- only the system: the admin context without a user id, a signed-in admin is refused
+  IF NOT cartlify.is_system() THEN
     RAISE EXCEPTION 'ORDER_UNCONFIRM_FORBIDDEN';
   END IF;
 
@@ -1273,8 +1339,9 @@ DECLARE
 
   r record;
 BEGIN
-  -- only system-side callers with admin context
-  IF NOT cartlify.is_admin() THEN
+  -- only the system (the payment webhook): the admin context without a user id, a signed-in
+  -- admin is refused, a payment comes only from a provider
+  IF NOT cartlify.is_system() THEN
     RAISE EXCEPTION 'ORDER_PAY_FORBIDDEN';
   END IF;
 
@@ -1420,7 +1487,8 @@ $$;
 -- ORDERS AND ITEMS === system actions ===
 -- ORDERS AND ITEMS expire order reservation and release reserved stock
 -- system function: runs as the owner, it changes orders and stock of any user;
--- callable only in the admin context, the order timeout worker sets it before the call
+-- callable only by the system (the admin context without a user id), the order timeout worker
+-- sets it before the call
 CREATE OR REPLACE FUNCTION cartlify.expire_order_reservation (p_order_id integer) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1432,7 +1500,8 @@ DECLARE
 
   r record;
 BEGIN
-  IF NOT cartlify.is_admin() THEN
+  -- only the system (the reservation worker): the admin context without a user id
+  IF NOT cartlify.is_system() THEN
     RAISE EXCEPTION 'ORDER_EXPIRE_FORBIDDEN';
   END IF;
 
@@ -1521,6 +1590,7 @@ CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigge
 DECLARE
   v_confirmed boolean;
   v_price cartlify.products.price%TYPE;
+  v_deleted_at cartlify.products."deletedAt"%TYPE;
 BEGIN
 
   SELECT o."confirmed"
@@ -1541,12 +1611,19 @@ BEGIN
   END IF;
 
   -- unit price always comes from the product, never from the caller
-  SELECT p."price"
-  INTO v_price
+  SELECT p."price", p."deletedAt"
+  INTO v_price, v_deleted_at
   FROM cartlify.products AS p
   WHERE p.id = NEW."productId";
 
   IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  -- a product removed from the catalog goes into no order; an item that holds one since before
+  -- the removal keeps it, the app drops such items when it reads the order
+  IF v_deleted_at IS NOT NULL
+     AND (TG_OP = 'INSERT' OR NEW."productId" IS DISTINCT FROM OLD."productId") THEN
     RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
   END IF;
 
@@ -1597,11 +1674,15 @@ CREATE TRIGGER trg_order_items_after_mod
 AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
--- ORDERS AND ITEMS guard order updates and recalc total before confirmation
+-- ORDERS AND ITEMS guard order updates, recalc total before confirmation, stamp the time of the change
 CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_total cartlify.orders.total%TYPE;
 BEGIN
+  -- prisma stamps updatedAt only in its own queries, db functions (pay, confirm, cancel, expire)
+  -- change the order too; the column holds utc time without a zone, as prisma writes it
+  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+
   IF OLD."confirmed" THEN
     IF NEW."userId" IS DISTINCT FROM OLD."userId"
        OR NEW."total" IS DISTINCT FROM OLD."total"
@@ -1732,6 +1813,36 @@ CREATE TRIGGER trg_reviews_lock_rating_and_keys
 BEFORE UPDATE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_lock_rating_and_keys ();
 
+-- REVIEWS AND VOTES a product removed from the catalog gets no new review and goes into no
+-- favorites; what it had before the removal stays (the app hides it). The same rule as the items
+-- of an order (order_items_before_ins_upd)
+CREATE OR REPLACE FUNCTION cartlify.refuse_removed_product () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM cartlify.products AS p
+    WHERE p.id = NEW."productId"
+      AND p."deletedAt" IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_reviews_refuse_removed_product ON cartlify.reviews;
+
+CREATE TRIGGER trg_reviews_refuse_removed_product
+BEFORE INSERT ON cartlify.reviews FOR EACH ROW
+EXECUTE FUNCTION cartlify.refuse_removed_product ();
+
+DROP TRIGGER IF EXISTS trg_favorites_refuse_removed_product ON cartlify.favorites;
+
+CREATE TRIGGER trg_favorites_refuse_removed_product
+BEFORE INSERT ON cartlify.favorites FOR EACH ROW
+EXECUTE FUNCTION cartlify.refuse_removed_product ();
+
 -- REVIEWS AND VOTES sync review vote counters after vote changes
 -- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
 -- a trigger function cannot be called directly, only the trigger fires it
@@ -1789,16 +1900,35 @@ EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 -- PRICE CHANGE LOGS
 ------------------------------------------------------------
 -- PRICE CHANGE LOGS === system functions ===
+-- PRICE CHANGE LOGS the version that took the actor as a parameter: anyone could be named in a line;
+-- a temporary line, it goes once dev and prod match the reference
+DROP FUNCTION IF EXISTS cartlify.log_product_price_change (integer, integer, numeric, numeric, cartlify."PriceChangeMode", numeric);
+
 -- PRICE CHANGE LOGS insert product price change log entry
+-- system function: runs as the owner, the app writes no line straight into the table (db/03);
+-- the actor of a line is the admin of the context, a signed-in admin with an id is required
 CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_product_id integer,
-  p_actor_id integer,
   p_old_price numeric,
   p_new_price numeric,
   p_mode cartlify."PriceChangeMode",
   p_value numeric
-) RETURNS void LANGUAGE plpgsql AS $$
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor_id integer;
 BEGIN
+  IF NOT cartlify.is_admin() THEN
+    RAISE EXCEPTION 'PRICE_LOG_FORBIDDEN';
+  END IF;
+
+  v_actor_id := cartlify.current_actor_id();
+
+  IF v_actor_id IS NULL THEN
+    RAISE EXCEPTION 'PRICE_LOG_ACTOR_REQUIRED';
+  END IF;
 
   IF p_old_price IS NOT DISTINCT FROM p_new_price THEN
     RETURN;
@@ -1815,13 +1945,55 @@ BEGIN
   )
   VALUES (
     p_product_id,
-    p_actor_id,
+    v_actor_id,
     p_old_price,
     p_new_price,
     p_mode,
     p_value,
     now()
   );
+END;
+$$;
+
+------------------------------------------------------------
+-- LOGS
+------------------------------------------------------------
+-- LOGS === system functions ===
+-- LOGS the logins of a deleted account take the email the account has now (deleted+<id>+...,
+-- the one its row of users keeps); the rest of a line stays.
+-- system function: runs as the owner, the row policies deny every other change of a log line
+-- (the data scripts of a superuser still clear the tables); callable by root, who deletes an
+-- account (db/03 lets only root change an email), or by the system; only for a deleted account
+CREATE OR REPLACE FUNCTION cartlify.anonymize_login_logs (p_user_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_email text;
+  v_count integer;
+BEGIN
+  IF NOT cartlify.is_root() AND NOT cartlify.is_system() THEN
+    RAISE EXCEPTION 'LOGIN_LOGS_ANONYMIZE_FORBIDDEN';
+  END IF;
+
+  SELECT u.email
+  INTO v_email
+  FROM cartlify.users AS u
+  WHERE u.id = p_user_id
+    AND u."deletedAt" IS NOT NULL;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'USER_NOT_DELETED';
+  END IF;
+
+  UPDATE cartlify.login_logs AS l
+  SET email = v_email
+  WHERE l."userId" = p_user_id
+    AND l.email IS DISTINCT FROM v_email;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+
+  RETURN v_count;
 END;
 $$;
 

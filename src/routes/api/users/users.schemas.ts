@@ -17,7 +17,8 @@ const userReviewExample = {
   comment: 'Great product.',
   upVotes: 3,
   downVotes: 0,
-  userVote: 'up',
+  // the author does not vote for an own review
+  userVote: null,
   updatedAt: '2026-01-01T10:00:00.000Z',
 };
 
@@ -59,8 +60,44 @@ const updateMeBodyExample = {
   phone: '+10000000000',
 };
 
+// what an admin or root reads: the whole profile, the open chat with an admin, the checked lists
+const adminUserResponseExample = {
+  ...publicUserResponseExample,
+  email: 'user@example.com',
+  role: 'USER',
+  authProvider: 'LOCAL',
+  isVerified: true,
+  locale: 'en',
+  phone: '+10000000000',
+  openChatThreadId: '6f1c2a3e-8a0b-4c5d-9e7f-1a2b3c4d5e6f',
+  period: { from: '2025-12-02T10:00:00.000Z', to: '2026-01-01T10:00:00.000Z' },
+  orders: [
+    {
+      id: 12,
+      status: 'paid',
+      total: 25.5,
+      createdAt: '2025-12-20T10:00:00.000Z',
+      updatedAt: '2025-12-20T10:05:00.000Z',
+    },
+  ],
+  loginLogs: [
+    {
+      id: 40,
+      createdAt: '2025-12-31T09:00:00.000Z',
+      ipAddress: '192.0.2.10',
+      userAgent: 'Mozilla/5.0',
+    },
+  ],
+};
+
 const userIdParamsExample = {
   userId: '1',
+};
+
+const adminUserQueryExample = {
+  include: 'orders,loginLogs',
+  from: '2025-12-02T10:00:00.000Z',
+  to: '2026-01-01T10:00:00.000Z',
 };
 
 const deleteUserResponseExample = {
@@ -169,8 +206,13 @@ const getUserByIdSchema = {
   operationId: 'getUserById',
   summary: 'Get user by id',
   description:
-    'Returns the public profile of any user by id: name, avatar and dates. ' +
-    'It has no email, role, phone or reviews; a user reads those for themselves in GET /api/users/me. ' +
+    'Returns the profile of any user by id. A user gets the public profile: name, avatar and dates, ' +
+    'no email, role, phone or reviews (a user reads those for themselves in GET /api/users/me); ' +
+    '`include`, `from` and `to` are ignored for a user. ' +
+    'An admin or root gets the whole profile but the password, the provider id and the id of the ' +
+    'avatar file, the open chat of the user with an admin (`openChatThreadId`), the period of the ' +
+    'lists and the lists `include` names, of that period, newest first. ' +
+    'The period is the last 30 days unless `from` or `to` comes, and at most 60 days long. ' +
     'A deleted account is USER_NOT_FOUND for a user; an admin or root reads it with `deletedAt`.',
 
   params: {
@@ -178,15 +220,25 @@ const getUserByIdSchema = {
     examples: [userIdParamsExample],
   },
 
+  querystring: {
+    $ref: 'usersGetByIdQuerySchema#',
+    examples: [adminUserQueryExample],
+  },
+
   response: {
     200: {
-      description: 'Public user profile was returned successfully.',
+      description:
+        'The profile was returned: the public one for a user, the whole one for an admin.',
       $ref: 'usersGetByIdResponseSchema#',
-      examples: [publicUserResponseExample],
+      examples: [publicUserResponseExample, adminUserResponseExample],
     },
 
     400: {
-      description: 'Invalid user id: a whole number from 1 to 2147483647 is expected.',
+      description:
+        'Invalid request: the user id is not a whole number from 1 to 2147483647, `include` names ' +
+        'an unknown list or a date is not a date (VALIDATION_ERROR); for an admin or root the ' +
+        'period ends before it starts (PROFILE_PERIOD_INVALID) or is longer than 60 days ' +
+        '(PROFILE_PERIOD_TOO_LONG, `details.maxDays`).',
       $ref: 'errorResponseSchema#',
     },
     401: {

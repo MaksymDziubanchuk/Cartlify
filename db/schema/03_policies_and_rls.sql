@@ -35,7 +35,8 @@ SELECT
   TO cartlify_owner USING (true);
 
 -- UPDATE:
--- - owner can update self but role must stay same as actor role
+-- - owner can update self but role must stay same as actor role, and never changes the own role:
+--   root took a role away, the access token of the account still holds the old one some minutes
 -- - owner cannot change email
 -- - owner cannot change isVerified, except unverified LOCAL account taken over by oauth provider
 -- - owner cannot change deletedAt, and a deleted account cannot be changed by its owner at all:
@@ -64,6 +65,7 @@ WITH
         WHERE
           u.id = users.id
           AND u.email = users.email
+          AND u.role = users.role
           AND (
             u."isVerified" = users."isVerified"
             OR (
@@ -154,10 +156,18 @@ CREATE POLICY user_tokens_select_owner ON cartlify.user_tokens FOR
 SELECT
   TO cartlify_owner USING (type = 'VERIFY_EMAIL');
 
--- INSERT (cannot create for other user)
+-- INSERT (cannot create for other user): a user writes the own sessions and, at the registration,
+-- the own verification link; a password reset link comes only from the system (the admin context
+-- without a user id), one of the user's own would reset the password without knowing it
 CREATE POLICY user_tokens_insert ON cartlify.user_tokens FOR INSERT
 WITH
-  CHECK (cartlify.is_owner_or_admin ("userId"));
+  CHECK (
+    cartlify.is_system ()
+    OR (
+      cartlify.is_owner ("userId")
+      AND type IN ('REFRESH_TOKEN', 'VERIFY_EMAIL')
+    )
+  );
 
 -- INSERT cartlify_owner
 CREATE POLICY user_tokens_insert_owner ON cartlify.user_tokens FOR INSERT TO cartlify_owner
@@ -168,12 +178,37 @@ WITH
     AND "expiresAt" > now()
   );
 
--- UPDATE (cannot move token to other user)
+-- UPDATE (cannot move token to other user): a token keeps its user and its kind, a closed token
+-- stays closed (logout, rotation and reset end a session for good); a session gets its hash and
+-- deadline once it is made, every other link keeps them and is only closed
 CREATE POLICY user_tokens_update ON cartlify.user_tokens
 FOR UPDATE
   USING (cartlify.is_owner_or_admin ("userId"))
 WITH
-  CHECK (cartlify.is_owner_or_admin ("userId"));
+  CHECK (
+    cartlify.is_owner_or_admin ("userId")
+    AND EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.user_tokens AS t
+      WHERE
+        t.id = user_tokens.id
+        AND t."userId" = user_tokens."userId"
+        AND t.type = user_tokens.type
+        AND (
+          t."usedAt" IS NULL
+          OR user_tokens."usedAt" IS NOT NULL
+        )
+        AND (
+          user_tokens.type = 'REFRESH_TOKEN'
+          OR (
+            t.token = user_tokens.token
+            AND t."expiresAt" = user_tokens."expiresAt"
+          )
+        )
+    )
+  );
 
 -- UPDATE cartlify_owner
 CREATE POLICY user_tokens_update_owner ON cartlify.user_tokens
@@ -207,6 +242,8 @@ DROP POLICY IF EXISTS login_logs_insert ON cartlify.login_logs;
 
 DROP POLICY IF EXISTS login_logs_update_deny ON cartlify.login_logs;
 
+DROP POLICY IF EXISTS login_logs_update_owner ON cartlify.login_logs;
+
 DROP POLICY IF EXISTS login_logs_delete_deny ON cartlify.login_logs;
 
 -- SELECT (owner or admin/root)
@@ -225,6 +262,43 @@ FOR UPDATE
   USING (false)
 WITH
   CHECK (false);
+
+-- UPDATE cartlify_owner for anonymize_login_logs only: a line of a deleted account takes the email
+-- the account has now, nothing else of it changes
+CREATE POLICY login_logs_update_owner ON cartlify.login_logs
+FOR UPDATE
+  TO cartlify_owner USING (
+    EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.users AS u
+      WHERE
+        u.id = login_logs."userId"
+        AND u."deletedAt" IS NOT NULL
+    )
+  )
+WITH
+  CHECK (
+    EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.users AS u
+      WHERE
+        u.id = login_logs."userId"
+        AND u."deletedAt" IS NOT NULL
+        AND u.email = login_logs.email
+    )
+    AND (to_jsonb(login_logs) - 'email') = (
+      SELECT
+        to_jsonb(l) - 'email'
+      FROM
+        cartlify.login_logs AS l
+      WHERE
+        l.id = login_logs.id
+    )
+  );
 
 -- DELETE (deny for all)
 CREATE POLICY login_logs_delete_deny ON cartlify.login_logs FOR DELETE USING (false);
@@ -292,17 +366,43 @@ CREATE POLICY products_select ON cartlify.products FOR
 SELECT
   USING (true);
 
--- INSERT (admin/root)
+-- INSERT (admin/root): a new product starts with no reserve, rating, reviews, popularity or views,
+-- the database counts them from what happens to it
 CREATE POLICY products_insert ON cartlify.products FOR INSERT
 WITH
-  CHECK (cartlify.is_admin ());
+  CHECK (
+    cartlify.is_admin ()
+    AND "reservedStock" = 0
+    AND "avgRating" = 0
+    AND "reviewsCount" = 0
+    AND popularity = 0
+    AND views = 0
+  );
 
--- UPDATE (admin/root) - full update
+-- UPDATE (admin/root) - every field but the ones the database counts: the reserve (what the
+-- waiting orders hold), the rating and the count of reviews (the reviews), the popularity (what
+-- people do; an admin sets popularityOverride instead). A visit of an admin adds one view like any
+-- other. The steps of the database change these through products_update_owner
 CREATE POLICY products_update_admin ON cartlify.products
 FOR UPDATE
   USING (cartlify.is_admin ())
 WITH
-  CHECK (cartlify.is_admin ());
+  CHECK (
+    cartlify.is_admin ()
+    AND EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.products AS p
+      WHERE
+        p.id = products.id
+        AND p."reservedStock" = products."reservedStock"
+        AND p."avgRating" = products."avgRating"
+        AND p."reviewsCount" = products."reviewsCount"
+        AND p.popularity = products.popularity
+        AND products.views IN (p.views, p.views + 1)
+    )
+  );
 
 -- UPDATE (GUEST/USER)
 -- allows changing: views, updatedAt
@@ -480,6 +580,16 @@ WITH
         AND btrim("comment") <> ''
       )
     )
+    -- the author adds the missing rating or comment and nothing else: the votes are counted
+    -- from review_votes (reviews_update_owner_votes)
+    AND (to_jsonb(reviews) - 'rating' - 'comment' - 'updatedAt') = (
+      SELECT
+        to_jsonb(r) - 'rating' - 'comment' - 'updatedAt'
+      FROM
+        cartlify.reviews AS r
+      WHERE
+        r.id = reviews.id
+    )
   );
 
 -- UPDATE vote counters by system functions
@@ -506,31 +616,53 @@ ALTER TABLE cartlify.review_votes FORCE ROW LEVEL SECURITY;
 -- reset policies (safe rerun)
 DROP POLICY IF EXISTS review_votes_select ON cartlify.review_votes;
 
+DROP POLICY IF EXISTS review_votes_select_owner ON cartlify.review_votes;
+
 DROP POLICY IF EXISTS review_votes_insert ON cartlify.review_votes;
 
 DROP POLICY IF EXISTS review_votes_update ON cartlify.review_votes;
 
 DROP POLICY IF EXISTS review_votes_delete ON cartlify.review_votes;
 
--- SELECT (public)
+-- SELECT (the voter, admin/root): who voted how belongs to the voter, everybody else reads
+-- the counts the review keeps (upVotes, downVotes)
 CREATE POLICY review_votes_select ON cartlify.review_votes FOR
 SELECT
-  USING (true);
+  USING (cartlify.is_owner_or_admin ("userId"));
 
--- INSERT (user only, own vote)
+-- SELECT cartlify_owner for system functions: the counts of a review take every vote
+CREATE POLICY review_votes_select_owner ON cartlify.review_votes FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- INSERT (user only, own vote, on the review of another user)
 CREATE POLICY review_votes_insert ON cartlify.review_votes FOR INSERT
 WITH
   CHECK (
     cartlify.current_actor_role () = 'USER'
     AND cartlify.is_owner ("userId")
+    AND NOT EXISTS (
+      SELECT 1
+      FROM cartlify.reviews AS r
+      WHERE r.id = review_votes."reviewId"
+        AND r."userId" = review_votes."userId"
+    )
   );
 
--- UPDATE (vote owner only)  -- switch UP <-> DOWN
+-- UPDATE (vote owner only)  -- switch UP <-> DOWN, never onto an own review
 CREATE POLICY review_votes_update ON cartlify.review_votes
 FOR UPDATE
   USING (cartlify.is_owner ("userId"))
 WITH
-  CHECK (cartlify.is_owner ("userId"));
+  CHECK (
+    cartlify.is_owner ("userId")
+    AND NOT EXISTS (
+      SELECT 1
+      FROM cartlify.reviews AS r
+      WHERE r.id = review_votes."reviewId"
+        AND r."userId" = review_votes."userId"
+    )
+  );
 
 -- DELETE (owner only)
 CREATE POLICY review_votes_delete ON cartlify.review_votes FOR DELETE USING (cartlify.is_owner ("userId"));
@@ -661,6 +793,8 @@ WITH
   );
 
 -- UPDATE (owner only, order stays unconfirmed; confirmation goes through cartlify.confirm_order)
+-- a plain update of the owner writes the shipping data and the note; the status, the total and
+-- the dates change only through the steps of the database (functions and triggers)
 CREATE POLICY orders_update ON cartlify.orders
 FOR UPDATE
   USING (
@@ -675,6 +809,18 @@ WITH
     AND confirmed = false
     AND status IN ('pending', 'unconfirmed')
     AND "reservationExpiresAt" IS NULL
+    AND (
+      (
+        to_jsonb(orders) - 'shippingAddress' - 'recipientFirstName' - 'recipientLastName' - 'recipientPhone' - 'note' - 'updatedAt'
+      ) = (
+        SELECT
+          to_jsonb(o) - 'shippingAddress' - 'recipientFirstName' - 'recipientLastName' - 'recipientPhone' - 'note' - 'updatedAt'
+        FROM
+          cartlify.orders AS o
+        WHERE
+          o.id = orders.id
+      )
+    )
   );
 
 -- UPDATE cartlify_owner
@@ -1004,23 +1150,33 @@ CREATE POLICY chat_threads_select_owner ON cartlify.chat_threads FOR
 SELECT
   TO cartlify_owner USING ("userId" IS NULL);
 
--- INSERT (owner only)
+-- INSERT (owner only); a chat that asks for an admin at once asks now: the admin queue goes by
+-- adminRequestedAt, an earlier time would put it before the ones that waited longer (a minute is
+-- left for the clock of the server)
 CREATE POLICY chat_threads_insert ON cartlify.chat_threads FOR INSERT
 WITH
   CHECK (
     (
-      cartlify.current_actor_role () IN ('USER', 'ADMIN', 'ROOT')
-      AND cartlify.is_owner ("userId")
-      AND "guestId" IS NULL
+      (
+        cartlify.current_actor_role () IN ('USER', 'ADMIN', 'ROOT')
+        AND cartlify.is_owner ("userId")
+        AND "guestId" IS NULL
+      )
+      OR (
+        cartlify.current_actor_role () = 'GUEST'
+        AND "guestId" = cartlify.current_guest_id ()
+        AND "userId" IS NULL
+      )
     )
-    OR (
-      cartlify.current_actor_role () = 'GUEST'
-      AND "guestId" = cartlify.current_guest_id ()
-      AND "userId" IS NULL
+    AND (
+      "adminRequestedAt" IS NULL
+      OR "adminRequestedAt" >= (now() AT TIME ZONE 'UTC') - interval '1 minute'
     )
   );
 
--- UPDATE (owner, admin/root, or guest owner)
+-- UPDATE (owner, admin/root, or guest owner). A chat keeps its user or guest (the guest chat of a
+-- login moves through chat_threads_update_owner), a closed chat is history and stays closed, and a
+-- request for an admin is made now, never earlier (the queue goes by adminRequestedAt)
 CREATE POLICY chat_threads_update ON cartlify.chat_threads
 FOR UPDATE
   USING (
@@ -1032,10 +1188,31 @@ FOR UPDATE
   )
 WITH
   CHECK (
-    cartlify.is_owner_or_admin ("userId")
-    OR (
-      cartlify.current_actor_role () = 'GUEST'
-      AND "guestId" = cartlify.current_guest_id ()
+    (
+      cartlify.is_owner_or_admin ("userId")
+      OR (
+        cartlify.current_actor_role () = 'GUEST'
+        AND "guestId" = cartlify.current_guest_id ()
+      )
+    )
+    AND EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.chat_threads AS t
+      WHERE
+        t.id = chat_threads.id
+        AND t."userId" IS NOT DISTINCT FROM chat_threads."userId"
+        AND t."guestId" IS NOT DISTINCT FROM chat_threads."guestId"
+        AND (
+          t.status <> 'closed'
+          OR chat_threads.status = 'closed'
+        )
+        AND (
+          chat_threads."adminRequestedAt" IS NULL
+          OR chat_threads."adminRequestedAt" IS NOT DISTINCT FROM t."adminRequestedAt"
+          OR chat_threads."adminRequestedAt" >= (now() AT TIME ZONE 'UTC') - interval '1 minute'
+        )
     )
   );
 
@@ -1106,6 +1283,8 @@ WITH
         cartlify.chat_threads t
       WHERE
         t.id = chat_messages."threadId"
+        -- a closed chat is history and takes no new message
+        AND t.status = 'open'
         AND (
           (
             cartlify.current_actor_role () = 'USER'
@@ -1248,6 +1427,8 @@ DROP POLICY IF EXISTS ppcl_select ON cartlify.product_price_change_logs;
 
 DROP POLICY IF EXISTS ppcl_insert ON cartlify.product_price_change_logs;
 
+DROP POLICY IF EXISTS ppcl_insert_owner ON cartlify.product_price_change_logs;
+
 DROP POLICY IF EXISTS ppcl_update_deny ON cartlify.product_price_change_logs;
 
 DROP POLICY IF EXISTS ppcl_delete_deny ON cartlify.product_price_change_logs;
@@ -1257,10 +1438,19 @@ CREATE POLICY ppcl_select ON cartlify.product_price_change_logs FOR
 SELECT
   USING (cartlify.is_admin ());
 
--- INSERT (admin/root)
+-- INSERT (deny for all): a line comes only from cartlify.log_product_price_change, which names
+-- the admin of the context as the one who changed the price
 CREATE POLICY ppcl_insert ON cartlify.product_price_change_logs FOR INSERT
 WITH
-  CHECK (cartlify.is_admin ());
+  CHECK (false);
+
+-- INSERT cartlify_owner for log_product_price_change: the line of a signed-in admin, in their name
+CREATE POLICY ppcl_insert_owner ON cartlify.product_price_change_logs FOR INSERT TO cartlify_owner
+WITH
+  CHECK (
+    cartlify.is_admin ()
+    AND "actorId" = cartlify.current_actor_id ()
+  );
 
 -- UPDATE (deny for all)
 CREATE POLICY ppcl_update_deny ON cartlify.product_price_change_logs
@@ -1294,10 +1484,19 @@ CREATE POLICY aal_select ON cartlify.admin_audit_log FOR
 SELECT
   USING (cartlify.is_admin ());
 
--- INSERT (admin/root)
+-- INSERT (admin/root): a line names who did it. A signed-in admin writes in their own name and
+-- with their own role; the system (the admin context without an id) writes what nobody signed in
+-- did, such as the refund of a late payment, in the name of the one it concerns
 CREATE POLICY aal_insert ON cartlify.admin_audit_log FOR INSERT
 WITH
-  CHECK (cartlify.is_admin ());
+  CHECK (
+    cartlify.is_system ()
+    OR (
+      cartlify.is_admin ()
+      AND "actorId" = cartlify.current_actor_id ()
+      AND "actorRole" = cartlify.current_actor_role ()
+    )
+  );
 
 -- UPDATE (deny for all)
 CREATE POLICY aal_update_deny ON cartlify.admin_audit_log

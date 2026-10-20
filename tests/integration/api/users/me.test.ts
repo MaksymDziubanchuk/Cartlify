@@ -195,17 +195,6 @@ describe('GET /api/users/me', () => {
 
       expect(reviews[0]).toMatchObject({ upVotes: 1, downVotes: 1, userVote: null });
     });
-
-    it('shows the vote of the user as up or down', async () => {
-      const user = await newUser();
-      const product = await newProduct();
-      const review = await createReview(user.id, product.id, { rating: 5, comment: 'Nice' });
-      await createReviewVote(user.id, review.id, 'DOWN');
-
-      const { reviews } = (await getMe(app, accessCookie(user))).json();
-
-      expect(reviews[0]).toMatchObject({ downVotes: 1, userVote: 'down' });
-    });
   });
 });
 

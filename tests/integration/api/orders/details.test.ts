@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createProduct,
@@ -48,6 +49,9 @@ const getOrder = (user: TestUser, orderId: number | string) =>
     url: `/api/orders/${orderId}`,
     headers: { cookie: accessCookie(user) },
   });
+
+const updatedAtOf = async (user: TestUser, orderId: number) =>
+  Date.parse((await getOrder(user, orderId)).json().updatedAt);
 
 // an order of several products that lost its reservation
 async function unconfirmedOrderOf(user: TestUser, items: [number, number][]): Promise<number> {
@@ -240,6 +244,46 @@ describe('GET /api/orders/:orderId', () => {
 
     expect(res.statusCode).toBe(200);
     expect((await orderRowOf(orderId)).items[0]!.unitPrice.toNumber()).toBe(10);
+  });
+
+  // the payment and the cancel are database functions, not prisma queries: updatedAt shows the
+  // time of every change of the order, not only of the changes the app makes through prisma
+  it('moves updatedAt when a database function pays or cancels the order', async () => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct({ price: 10 }), 'waiting');
+    const confirmedAt = await updatedAtOf(user, orderId);
+
+    const paid = await asAdmin(
+      (tx) => tx.$queryRaw<{ result: string }[]>`
+        select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_test_${orderId}`}, ${10}::numeric) as result
+      `,
+    );
+    const paidAt = await updatedAtOf(user, orderId);
+    await asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
+    const res = await getOrder(user, orderId);
+
+    expect(paid[0]?.result).toBe('PAID');
+    expect(paidAt).toBeGreaterThan(confirmedAt);
+    expect(res.json().status).toBe('cancelled');
+    expect(Date.parse(res.json().updatedAt)).toBeGreaterThan(paidAt);
+  });
+
+  it('moves updatedAt when the order loses its reservation', async () => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
+    const confirmedAt = await updatedAtOf(user, orderId);
+
+    await loseReservation(orderId);
+
+    expect(await updatedAtOf(user, orderId)).toBeGreaterThan(confirmedAt);
+  });
+
+  it('keeps updatedAt when the order is only read', async () => {
+    const user = await newUser();
+    const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct());
+    const readAt = await updatedAtOf(user, orderId);
+
+    expect(await updatedAtOf(user, orderId)).toBe(readAt);
   });
 
   it('refuses a guest', async () => {

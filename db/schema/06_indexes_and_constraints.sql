@@ -420,6 +420,16 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- PRODUCT_IMAGES: one primary image per product
+----------------------------------------
+-- the cart, the orders and the lists show the primary image of a product; an image update deletes
+-- the old images before it writes the new ones. Rows written before this rule are not cleaned:
+-- if a product has two primary images already, the index stops this script until one goes by hand
+CREATE UNIQUE INDEX IF NOT EXISTS product_images_one_primary_idx ON cartlify.product_images ("productId")
+WHERE
+  "isPrimary";
+
+----------------------------------------
 -- CHAT_THREADS: one open thread per actor
 ----------------------------------------
 CREATE UNIQUE INDEX IF NOT EXISTS chat_threads_one_open_user_idx ON cartlify.chat_threads ("userId")

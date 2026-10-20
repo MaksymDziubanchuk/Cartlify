@@ -77,7 +77,6 @@ export async function updateProductsBulkPrice(
         // write price change log for audit trail
         await writeProductPriceChangeLog(tx, {
           productId: row.id as any,
-          actorId: dto.actorId,
           beforePrice: row.price,
           afterPrice: afterDec,
           mode,

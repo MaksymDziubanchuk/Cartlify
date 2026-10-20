@@ -19,9 +19,9 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
       // set db session context for rls policies
       await setUserContext(tx, { userId, role: actorRole });
 
-      // ensure product exists for 404
-      const product = await tx.product.findUnique({
-        where: { id: productId },
+      // ensure product is in the catalog for 404: the database refuses a review of a removed one
+      const product = await tx.product.findFirst({
+        where: { id: productId, deletedAt: null },
         select: { id: true },
       });
       if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND');

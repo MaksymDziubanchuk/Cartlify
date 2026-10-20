@@ -2,7 +2,13 @@ import { ReviewVoteAction as ReviewVoteActionDb } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
+import {
+  BadRequestError,
+  ForbiddenError,
+  InternalError,
+  NotFoundError,
+  isAppError,
+} from '@utils/errors.js';
 import type { VoteReviewDto, VoteReviewResponseDto } from 'types/dto/reviews.dto.js';
 
 async function createVoteReview({
@@ -23,9 +29,14 @@ async function createVoteReview({
       // load review for 404 and response fields
       const review = await tx.review.findUnique({
         where: { id: reviewId },
-        select: { id: true, productId: true, updatedAt: true },
+        select: { id: true, productId: true, userId: true, updatedAt: true },
       });
       if (!review) throw new NotFoundError('REVIEW_NOT_FOUND');
+
+      // votes are for the reviews of others; taking a vote back stays possible
+      if (review.userId === userId && action !== 'remove') {
+        throw new ForbiddenError('REVIEW_OWN_VOTE_FORBIDDEN');
+      }
 
       // load current user vote if any
       const beforeVote = await tx.reviewVote.findUnique({
@@ -57,20 +68,12 @@ async function createVoteReview({
         }
       }
 
-      // compute counts from votes table for stable response
-      const grouped = await tx.reviewVote.groupBy({
-        by: ['action'],
-        where: { reviewId },
-        _count: { _all: true },
+      // the counts the database keeps in the review after this vote: a voter sees only an own
+      // vote, the other votes are not readable to count them here
+      const { upVotes, downVotes } = await tx.review.findUniqueOrThrow({
+        where: { id: reviewId },
+        select: { upVotes: true, downVotes: true },
       });
-
-      let upVotes = 0;
-      let downVotes = 0;
-
-      for (const g of grouped) {
-        if (g.action === ReviewVoteActionDb.UP) upVotes = g._count._all;
-        if (g.action === ReviewVoteActionDb.DOWN) downVotes = g._count._all;
-      }
 
       // resolve current user vote for response
       const afterVote = await tx.reviewVote.findUnique({

@@ -90,14 +90,28 @@ GRANT
 SELECT
   ON ALL TABLES IN SCHEMA cartlify TO cartlify_readonly;
 
+-- the app takes ids with usage (nextval); update would let it move a sequence with setval,
+-- and a sequence moved back makes every insert of its table fail on a taken id
 GRANT USAGE,
 SELECT
-,
-UPDATE ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_app;
+  ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_app;
 
-GRANT USAGE,
+-- readonly only reads a sequence; usage would let it take ids with nextval
+GRANT
 SELECT
   ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_readonly;
+
+-- temporary: takes back what earlier versions of this file gave, remove once dev and prod
+-- match the structure snapshot
+REVOKE
+UPDATE ON ALL SEQUENCES IN SCHEMA cartlify
+FROM
+  cartlify_app;
+
+REVOKE USAGE,
+UPDATE ON ALL SEQUENCES IN SCHEMA cartlify
+FROM
+  cartlify_readonly;
 
 ------------------------------------------------------------
 -- 4a. prisma migration history: owner only
@@ -133,13 +147,25 @@ SELECT
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
 GRANT USAGE,
 SELECT
-,
-UPDATE ON SEQUENCES TO cartlify_app;
+  ON SEQUENCES TO cartlify_app;
 
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-GRANT USAGE,
+GRANT
 SELECT
   ON SEQUENCES TO cartlify_readonly;
+
+-- temporary, as the revokes above: the default rights earlier versions of this file gave
+ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
+REVOKE
+UPDATE ON SEQUENCES
+FROM
+  cartlify_app;
+
+ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
+REVOKE USAGE,
+UPDATE ON SEQUENCES
+FROM
+  cartlify_readonly;
 
 ------------------------------------------------------------
 -- 5a. FUNCTION EXECUTE RIGHTS
@@ -197,6 +223,7 @@ BEGIN
     'cartlify.current_actor_role()',
     'cartlify.is_admin()',
     'cartlify.is_root()',
+    'cartlify.is_system()',
     'cartlify.is_owner(integer)',
     'cartlify.is_owner_or_admin(integer)',
     -- product search
@@ -213,10 +240,11 @@ BEGIN
     'cartlify.cancel_paid_order(integer)',
     'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
     'cartlify.expire_order_reservation(integer)',
+    'cartlify.anonymize_login_logs(integer)',
+    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric)',
     -- functions that run with the app rights, under its rls
     'cartlify.refresh_order_prices(integer)',
-    'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)',
-    'cartlify.log_product_price_change(integer, integer, numeric, numeric, cartlify."PriceChangeMode", numeric)'
+    'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)'
   ]
   LOOP
     IF to_regprocedure(v_fn) IS NOT NULL THEN

@@ -29,9 +29,9 @@ const reviewsVoteResponseSchema = {
     productId: { type: 'number' },
     upVotes: { type: 'number' },
     downVotes: { type: 'number' },
-    userVote: {
-      anyOf: [{ type: 'string', enum: ['up', 'down'] }, { type: 'null' }],
-    },
+    // null in the enum too: swagger shows the field as nullable, and openapi 3.0 lets null
+    // through a nullable enum only when the enum names it
+    userVote: { type: 'string', enum: ['up', 'down', null], nullable: true },
     updatedAt: { type: 'string', format: 'date-time' },
   },
   required: ['id', 'productId', 'upVotes', 'downVotes', 'userVote', 'updatedAt'],
