@@ -1246,9 +1246,15 @@ END;
 $$;
 
 -- ORDERS AND ITEMS pay order from a verified payment webhook
+-- the version before the payment provider (order, payment intent, amount); a temporary line,
+-- it goes once dev and prod match the reference
+DROP FUNCTION IF EXISTS cartlify.pay_order (integer, text, numeric);
+
+-- the same payment is the same provider with the same payment id: a repeated delivery
 CREATE OR REPLACE FUNCTION cartlify.pay_order (
   p_order_id integer,
-  p_payment_intent_id text,
+  p_payment_provider cartlify."PaymentProvider",
+  p_payment_id text,
   p_paid_amount numeric
 ) RETURNS text LANGUAGE plpgsql SECURITY DEFINER
 SET
@@ -1261,6 +1267,7 @@ DECLARE
   v_first_name        text;
   v_last_name         text;
   v_phone             text;
+  v_recorded_provider cartlify."PaymentProvider";
   v_recorded_payment  text;
   v_items_total       numeric;
 
@@ -1271,13 +1278,17 @@ BEGIN
     RAISE EXCEPTION 'ORDER_PAY_FORBIDDEN';
   END IF;
 
-  IF p_payment_intent_id IS NULL OR btrim(p_payment_intent_id) = '' THEN
+  IF p_payment_provider IS NULL THEN
+    RAISE EXCEPTION 'ORDER_PAYMENT_PROVIDER_REQUIRED';
+  END IF;
+
+  IF p_payment_id IS NULL OR btrim(p_payment_id) = '' THEN
     RAISE EXCEPTION 'ORDER_PAYMENT_ID_REQUIRED';
   END IF;
 
   -- read state without a lock: paid orders are not lockable for system updates
-  SELECT o.status, o."paymentIntentId"
-  INTO v_status, v_recorded_payment
+  SELECT o.status, o."paymentProvider", o."paymentId"
+  INTO v_status, v_recorded_provider, v_recorded_payment
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id;
 
@@ -1285,9 +1296,12 @@ BEGIN
     RETURN 'ORDER_NOT_FOUND';
   END IF;
 
-  -- already paid: same payment is a repeated delivery, another one is a second charge
-  IF v_status = 'paid' THEN
-    IF v_recorded_payment IS NOT DISTINCT FROM p_payment_intent_id THEN
+  -- already paid: same payment is a repeated delivery, another one is a second charge. The
+  -- recorded payment decides, not the status: a paid order that was shipped, delivered or
+  -- cancelled since keeps its payment, and a provider delivers an event again days later as well
+  IF v_recorded_payment IS NOT NULL THEN
+    IF v_recorded_provider IS NOT DISTINCT FROM p_payment_provider
+       AND v_recorded_payment = p_payment_id THEN
       RETURN 'ALREADY_PAID_SAME_PAYMENT';
     END IF;
 
@@ -1305,13 +1319,14 @@ BEGIN
 
   IF NOT FOUND THEN
     -- order changed while waiting for the lock and is no longer open for system updates
-    SELECT o.status, o."paymentIntentId"
-    INTO v_status, v_recorded_payment
+    SELECT o.status, o."paymentProvider", o."paymentId"
+    INTO v_status, v_recorded_provider, v_recorded_payment
     FROM cartlify.orders AS o
     WHERE o.id = p_order_id;
 
-    IF v_status = 'paid' THEN
-      IF v_recorded_payment IS NOT DISTINCT FROM p_payment_intent_id THEN
+    IF v_recorded_payment IS NOT NULL THEN
+      IF v_recorded_provider IS NOT DISTINCT FROM p_payment_provider
+         AND v_recorded_payment = p_payment_id THEN
         RETURN 'ALREADY_PAID_SAME_PAYMENT';
       END IF;
 
@@ -1388,13 +1403,14 @@ BEGIN
     RETURN 'ORDER_NOT_PAYABLE';
   END IF;
 
-  -- mark order as paid together with the payment that paid it
+  -- mark order as paid together with the payment that paid it and who took it
   UPDATE cartlify.orders AS o
   SET
     confirmed = true,
     status = 'paid',
     "reservationExpiresAt" = NULL,
-    "paymentIntentId" = p_payment_intent_id
+    "paymentProvider" = p_payment_provider,
+    "paymentId" = p_payment_id
   WHERE o.id = p_order_id;
 
   RETURN 'PAID';

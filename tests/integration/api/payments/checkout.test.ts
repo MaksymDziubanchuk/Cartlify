@@ -31,9 +31,10 @@ import {
   withStripeOutOfReach,
 } from '../../../helpers/stripe.js';
 
-// POST /api/payments/checkout/sessions: the buyer of an order waiting for its payment gets a Stripe
-// payment page for it. The page is opened at Stripe for real (the test sandbox); the refusals before
-// Stripe run without the key too. The payment itself and its webhook are in webhook*.test.ts
+// POST /api/payments/checkout/sessions: the buyer of an order waiting for its payment gets a payment
+// page for it at the provider the request names; there is no main provider. The server pays with
+// Stripe for now: its page is opened for real (the test sandbox); the refusals before Stripe run
+// without the key too. The payment itself and its webhook are in webhook*.test.ts
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -92,7 +93,7 @@ describe('POST /api/payments/checkout/sessions', () => {
         method: 'POST',
         url: CHECKOUT_URL,
         headers: withCsrf(csrf),
-        payload: { orderId: 1 },
+        payload: { orderId: 1, provider: 'stripe' },
       });
 
       expect(res.statusCode).toBe(403);
@@ -106,7 +107,7 @@ describe('POST /api/payments/checkout/sessions', () => {
         method: 'POST',
         url: CHECKOUT_URL,
         headers: { cookie: accessCookie(user) },
-        payload: { orderId },
+        payload: { orderId, provider: 'stripe' },
       });
 
       expect(res.statusCode).toBe(403);
@@ -133,6 +134,33 @@ describe('POST /api/payments/checkout/sessions', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
     });
+
+    // there is no main provider: the buyer always names the one to pay with
+    it('answers VALIDATION_ERROR without the provider and opens no page', async () => {
+      const { user, orderId } = await waitingOrder();
+
+      const res = await app.inject({
+        method: 'POST',
+        url: CHECKOUT_URL,
+        headers: withCsrf(csrf, accessCookie(user)),
+        payload: { orderId },
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+      expect((await redisStateOf(orderId)).pageLink).toBeNull();
+    });
+
+    // the database knows liqpay already, this server takes no payments through it yet
+    it.each(['liqpay', 'paypal', 'Stripe', '', 1])(
+      'answers VALIDATION_ERROR for the provider %p',
+      async (provider) => {
+        const res = await checkout(app, csrf, await newUser(), 1, provider);
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+      },
+    );
 
     // the largest id Postgres keeps is 2147483647: a bigger one is no order, not a server failure
     it.each([0, -1, 1.5, 'abc', 2_147_483_648])(
@@ -307,6 +335,7 @@ describe('POST /api/payments/checkout/sessions', () => {
       rememberSession(page.sessionId);
       const order = await orderStateOf(orderId);
       expect(page).toEqual({
+        provider: 'stripe',
         sessionId: expect.stringMatching(/^cs_test_/),
         url: expect.stringMatching(/^https:\/\/checkout\.stripe\.com\//),
         mode: 'payment',
@@ -345,7 +374,7 @@ describe('POST /api/payments/checkout/sessions', () => {
       const res = await checkout(app, csrf, user, orderId);
 
       const sessionId = rememberSession(res.json().checkoutSession.sessionId);
-      expect((await redisStateOf(orderId)).pageLink).toBe(sessionId);
+      expect((await redisStateOf(orderId)).pageLink).toBe(`stripe:${sessionId}`);
     });
 
     // a double click must not open a second page the buyer could pay as well

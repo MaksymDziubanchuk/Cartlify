@@ -103,7 +103,8 @@ describe('PATCH /api/orders/:orderId/status', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ id: orderId, status: 'shipped', ...shippingData });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
     expect((await orderRowOf(orderId)).status).toBe('shipped');
   });
 

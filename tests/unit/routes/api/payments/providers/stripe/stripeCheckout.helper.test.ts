@@ -5,7 +5,7 @@ import type Stripe from 'stripe';
 import { rejectedBy, thrownBy } from '../../../../../../helpers/errors.js';
 import { importWithEnv } from '../../../../../../helpers/freshImport.js';
 
-type Helper = typeof import('@routes/api/payments/services/helpers/checkoutSession.helper.js');
+type Helper = typeof import('@routes/api/payments/providers/stripe/stripeCheckout.helper.js');
 type StripeClient = (typeof import('@config/stripe.js'))['default'];
 
 // the site the return pages are on, the module reads it at import
@@ -19,7 +19,7 @@ let stripe: StripeClient;
 
 beforeAll(async () => {
   helper = await importWithEnv<Helper>(
-    '@routes/api/payments/services/helpers/checkoutSession.helper.js',
+    '@routes/api/payments/providers/stripe/stripeCheckout.helper.js',
     CONFIG,
   );
   // the same module registry, so this is the client the helper uses
@@ -121,7 +121,7 @@ describe('buildCheckoutSessionPayload', () => {
     'builds the return pages on the origin of WEB_ORIGIN %s',
     async (origin) => {
       const other = await importWithEnv<Helper>(
-        '@routes/api/payments/services/helpers/checkoutSession.helper.js',
+        '@routes/api/payments/providers/stripe/stripeCheckout.helper.js',
         { ...CONFIG, WEB_ORIGIN: origin },
       );
 
@@ -143,7 +143,7 @@ describe('buildCheckoutSessionPayload', () => {
   // a production server without the address of its site has no page to return the buyer to
   it('refuses with WEB_ORIGIN_REQUIRED in production without WEB_ORIGIN', async () => {
     const other = await importWithEnv<Helper>(
-      '@routes/api/payments/services/helpers/checkoutSession.helper.js',
+      '@routes/api/payments/providers/stripe/stripeCheckout.helper.js',
       { ...CONFIG, NODE_ENV: 'production', WEB_ORIGIN: '' },
     );
 
@@ -335,6 +335,7 @@ describe('mapCreatedCheckoutSession', () => {
   it('gives the session the client opens', () => {
     expect(helper.mapCreatedCheckoutSession(session(), 12, null)).toEqual({
       checkoutSession: {
+        provider: 'stripe',
         sessionId: 'cs_test_1',
         url: 'https://checkout.stripe.test/c/pay/cs_test_1',
         mode: 'payment',

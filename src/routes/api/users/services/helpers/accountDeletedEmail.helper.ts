@@ -1,13 +1,13 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import env from '@config/env.js';
 import {
   buildAccountDeletedTemplate,
   type AccountDeletedCancelled,
   type AccountDeletedDelivery,
 } from '@services/email/templates/users/accountDeleted.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
+import { shopCurrency } from '@routes/api/payments/providers/index.js';
 
 export type AccountDeletionLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -34,7 +34,8 @@ export async function sendAccountDeletedEmail(
     const { subject, text, html } = buildAccountDeletedTemplate({
       deliveries: args.deliveries,
       cancelled: args.cancelled,
-      currency: env.STRIPE_CURRENCY,
+      // the orders of the mail are paid or waited for in the money of the shop
+      currency: shopCurrency(),
       userName: args.userName,
       logoCid: 'cartlify-logo',
     });

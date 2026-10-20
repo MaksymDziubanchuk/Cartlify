@@ -64,7 +64,7 @@ export async function placeOrder(
     });
 
     return tx.$queryRaw<{ result: string }[]>`
-      select cartlify.pay_order(${orderId}::int, ${`pi_test_${orderId}`}, ${total}::numeric) as result
+      select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_test_${orderId}`}, ${total}::numeric) as result
     `;
   });
   if (paid[0]?.result !== 'PAID') throw new Error(`paying the order answered ${paid[0]?.result}`);

@@ -1,9 +1,8 @@
 import { Prisma } from '@prisma/client';
-import env from '@config/env.js';
-import { MIN_CHECKOUT_TOTAL } from '@config/limits.js';
 import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertRedisReady } from '@redis/client.js';
+import { lowestMinimumTotal, shopCurrency } from '@routes/api/payments/providers/index.js';
 import {
   BadRequestError,
   ConflictError,
@@ -76,17 +75,20 @@ export async function confirmOrder({
           throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', { items: unavailable });
         }
 
-        // stripe takes no smaller payment: refused before the stock is held, the page tells the
-        // buyer the smallest total. The total at the prices of the catalog, the ones confirm_order
-        // takes; an empty order is left to confirm_order (ORDER_ITEMS_REQUIRED)
+        // no payment provider takes a smaller payment: refused before the stock is held, the page
+        // tells the buyer the smallest total. The buyer picks the provider after this, so only a
+        // total below the minimum of every one of them is refused here; the payment page checks the
+        // one picked. The total at the prices of the catalog, the ones confirm_order takes; an
+        // empty order is left to confirm_order (ORDER_ITEMS_REQUIRED)
+        const minimum = lowestMinimumTotal();
         const totalCents = items.reduce(
           (sum, item) => sum + Math.round(Number(item.product.price) * 100) * item.quantity,
           0,
         );
-        if (items.length > 0 && totalCents < Math.round(MIN_CHECKOUT_TOTAL * 100)) {
+        if (items.length > 0 && totalCents < Math.round(minimum * 100)) {
           throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
-            minimum: MIN_CHECKOUT_TOTAL,
-            currency: env.STRIPE_CURRENCY,
+            minimum,
+            currency: shopCurrency(),
           });
         }
 

@@ -7,7 +7,7 @@ import { startApp, stopApp } from '../../../helpers/app.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { craftEvent, deliver, signatureOf, WEBHOOK_URL } from '../../../helpers/stripe.js';
 
-// POST /api/payments/webhook, what any event goes through: the Stripe signature, the body, the
+// POST /api/payments/stripe/webhook, what any event goes through: the Stripe signature, the body, the
 // events the app does not handle. Nothing here needs Stripe itself, an event is signed with the
 // test webhook secret the way Stripe signs it. Payments, refunds and closed pages are in
 // webhookPaid, webhookRefund and webhookExpired
@@ -42,7 +42,7 @@ afterAll(async () => {
   await stopApp();
 });
 
-describe('POST /api/payments/webhook', () => {
+describe('POST /api/payments/stripe/webhook', () => {
   it('acknowledges an event it does not handle', async () => {
     const res = await deliver(app, ignoredEvent());
 
@@ -219,6 +219,21 @@ describe('POST /api/payments/webhook', () => {
     const res = await deliver(app, ignoredEvent(), { remoteAddress });
 
     expect(res.statusCode).toBe(200);
+  });
+
+  // stripe is one of the payment providers: its events come under its name, the path of a main
+  // provider is gone, so a webhook endpoint left on it fails loudly at stripe
+  it('answers 404 to an event on the old path', async () => {
+    const payload = JSON.stringify(ignoredEvent());
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/payments/webhook',
+      headers: { 'content-type': 'application/json', 'stripe-signature': signatureOf(payload) },
+      payload,
+    });
+
+    expect(res.statusCode).toBe(404);
   });
 
   // only the webhook is let through: the other routes keep the limit

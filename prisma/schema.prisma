@@ -42,6 +42,11 @@ enum OrderStatus {
   cancelled
 }
 
+enum PaymentProvider {
+  stripe
+  liqpay
+}
+
 enum PriceChangeMode {
   percent
   fixed
@@ -315,7 +320,10 @@ model Order {
 
   total Decimal @db.Decimal(10, 2)
 
-  paymentIntentId String? @unique
+  // who took the money and the id of the payment there (a Stripe PaymentIntent, a LiqPay order
+  // id); pay_order sets both together
+  paymentProvider PaymentProvider?
+  paymentId       String?          @unique
 
   shippingAddress    String?
   recipientFirstName String?

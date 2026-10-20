@@ -483,8 +483,12 @@ describe('the order answers after the confirmation', () => {
     expect(res.json()).toMatchObject({ id: orderId, status: 'paid', ...shippingData });
     // a paid order holds no stock for the payment any more
     expect(res.json()).not.toHaveProperty('reservationExpiresAt');
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
-    expect((await orderOf(orderId)).paymentIntentId).toBe(`pi_test_${orderId}`);
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
+    expect(await orderOf(orderId)).toMatchObject({
+      paymentProvider: 'stripe',
+      paymentId: `pi_test_${orderId}`,
+    });
   });
 
   it('GET /api/orders lists the orders with the recipient', async () => {
@@ -521,7 +525,8 @@ describe('the order answers after the confirmation', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'shipped', ...shippingData });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
     // the test environment has no SendGrid key, the shipped mail only logs its failure
     // (status.test.ts checks the mails)
     expect(takeLogs({ msg: 'order shipped mail was not sent' })).toHaveLength(1);

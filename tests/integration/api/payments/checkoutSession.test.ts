@@ -13,7 +13,7 @@ import {
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { placeOrder } from '../../../helpers/orders.js';
-import { CHECKOUT_URL, openPaymentPage, orderStateOf } from '../../../helpers/payments.js';
+import { STRIPE_SESSION_URL, openPaymentPage, orderStateOf } from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
   describeWithStripe,
@@ -24,7 +24,7 @@ import {
   withStripeOutOfReach,
 } from '../../../helpers/stripe.js';
 
-// GET /api/payments/checkout/sessions/:sessionId: the page the buyer comes back to after Stripe
+// GET /api/payments/stripe/checkout/sessions/:sessionId: the page the buyer comes back to after Stripe
 // asks how the payment page of the order stands. The pages are real ones of the test sandbox
 
 let app: FastifyInstance;
@@ -42,7 +42,7 @@ const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
 const getPage = (user: TestUser | null, sessionId: string) =>
   app.inject({
     method: 'GET',
-    url: `${CHECKOUT_URL}/${encodeURIComponent(sessionId)}`,
+    url: `${STRIPE_SESSION_URL}/${encodeURIComponent(sessionId)}`,
     headers: user ? { cookie: accessCookie(user) } : {},
   });
 
@@ -74,7 +74,7 @@ afterAll(async () => {
   }
 });
 
-describe('GET /api/payments/checkout/sessions/:sessionId', () => {
+describe('GET /api/payments/stripe/checkout/sessions/:sessionId', () => {
   describe('refuses before Stripe', () => {
     // a request without a session is a guest, the way every route of a buyer answers one
     it('answers INSUFFICIENT_ROLE to a guest', async () => {
@@ -82,6 +82,17 @@ describe('GET /api/payments/checkout/sessions/:sessionId', () => {
 
       expect(res.statusCode).toBe(403);
       expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
+    });
+
+    // the session of stripe is read on its own route, the path of a main provider is gone
+    it('answers 404 on the old path', async () => {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/payments/checkout/sessions/${unknownSessionId()}`,
+        headers: { cookie: accessCookie(await newUser()) },
+      });
+
+      expect(res.statusCode).toBe(404);
     });
 
     it.each(['ADMIN', 'ROOT'] as const)('answers INSUFFICIENT_ROLE to %s', async (role) => {
@@ -132,6 +143,7 @@ describe('GET /api/payments/checkout/sessions/:sessionId', () => {
       const order = await orderStateOf(orderId);
       expect(res.json()).toEqual({
         checkoutSession: {
+          provider: 'stripe',
           sessionId,
           url: expect.stringMatching(/^https:\/\/checkout\.stripe\.com\//),
           mode: 'payment',

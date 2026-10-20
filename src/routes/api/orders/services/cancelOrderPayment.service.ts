@@ -12,14 +12,11 @@ import {
   ServiceUnavailableError,
   isAppError,
 } from '@utils/errors.js';
-import {
-  expireCheckoutSession,
-  readCheckoutSessionStatus,
-} from '@routes/api/payments/services/helpers/checkoutSession.helper.js';
+import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
 import {
   cancelOrderReservationExpiry,
-  deleteOrderPaymentSessionLink,
-  getOrderPaymentSessionLink,
+  deleteOrderPaymentPageLink,
+  getOrderPaymentPageLink,
   mapOrderRowToResponse,
   orderResponseSelect,
 } from './helpers/index.js';
@@ -35,37 +32,26 @@ const txOptions = {
   timeout: 10_000,
 };
 
-// the payment page of the order is closed first: once stripe says it is closed, no payment can
-// come for it. A page stripe already took the money on cannot be closed, the order is paid then
+// the payment page of the order is closed first, by the provider that opened it: once it says the
+// page is closed, no payment can come for it. A page that took the money cannot be closed, the
+// order is paid then
 async function closePaymentPage(orderId: number): Promise<void> {
   // no page was opened for the order: nothing can be paid
-  const sessionId = await getOrderPaymentSessionLink(orderId);
-  if (!sessionId) return;
+  const page = await getOrderPaymentPageLink(orderId);
+  if (!page) return;
 
-  try {
-    await expireCheckoutSession({ sessionId });
-    return;
-  } catch (expireErr) {
-    let status: 'open' | 'complete' | 'expired';
-    let paid: boolean;
+  // the provider could not be asked: throws PAYMENT_PROVIDER_UNAVAILABLE
+  const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
 
-    try {
-      ({ status, paid } = await readCheckoutSessionStatus(sessionId));
-    } catch (readErr) {
-      throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, readErr);
-    }
+  // the money is taken, the payment event marks the order paid
+  if (closed.state === 'paid') throw new ConflictError('ORDER_ALREADY_PAID');
 
-    // closed already, by stripe or by the reservation timer
-    if (status === 'expired') return;
+  // a delayed payment method is still deciding, the order cannot be cancelled meanwhile
+  if (closed.state === 'in_progress') throw new ConflictError('ORDER_PAYMENT_IN_PROGRESS');
 
-    // the money is taken, the webhook marks the order paid
-    if (status === 'complete' && paid) throw new ConflictError('ORDER_ALREADY_PAID');
-
-    // a delayed payment method is still deciding, the order cannot be cancelled meanwhile
-    if (status === 'complete') throw new ConflictError('ORDER_PAYMENT_IN_PROGRESS');
-
-    // the page is open and stripe did not close it: cancelling now would let a payment through
-    throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, expireErr);
+  // the page is open and the provider did not close it: cancelling now would let a payment through
+  if (closed.state === 'open') {
+    throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, closed.cause);
   }
 }
 
@@ -119,7 +105,7 @@ export async function cancelOrderPayment(
     // the timer touches only a waiting order
     try {
       await cancelOrderReservationExpiry(id);
-      await deleteOrderPaymentSessionLink(id);
+      await deleteOrderPaymentPageLink(id);
     } catch (err) {
       log.warn({ err, orderId: id }, 'reservation timers of a cancelled payment were not removed');
     }

@@ -108,7 +108,11 @@ describe('csrf check', () => {
 
   // stripe calls the webhook server to server and signs it, there is no token to send
   it('leaves the stripe webhook to its own signature check', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/payments/webhook', payload: {} });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/payments/stripe/webhook',
+      payload: {},
+    });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).not.toMatchObject({ errorCode: 'CSRF_TOKEN_INVALID' });

@@ -1,10 +1,18 @@
 import { MAX_ID } from '@schemas/idPathParam.js';
+import { PAYMENT_PROVIDER_NAMES } from '@routes/api/payments/providers/names.js';
+
+// none of the providers is the main one, the buyer always names the one to pay with
+const paymentProviderField = {
+  type: 'string',
+  enum: PAYMENT_PROVIDER_NAMES,
+  description: `The payment provider: ${PAYMENT_PROVIDER_NAMES.map((name) => `\`${name}\``).join(', ')}.`,
+} as const;
 
 const paymentsCreateCheckoutSessionBodySchema = {
   $id: 'paymentsCreateCheckoutSessionBodySchema',
   type: 'object',
   additionalProperties: false,
-  required: ['orderId'],
+  required: ['orderId', 'provider'],
   properties: {
     // a bigger id than the largest int of the database is no order, not a database error
     orderId: {
@@ -13,6 +21,7 @@ const paymentsCreateCheckoutSessionBodySchema = {
       maximum: MAX_ID,
       description: `Id of the order: a whole number from 1 to ${MAX_ID}.`,
     },
+    provider: paymentProviderField,
   },
 } as const;
 
@@ -20,9 +29,14 @@ const paymentsCheckoutSessionPublicSchema = {
   $id: 'paymentsCheckoutSessionPublicSchema',
   type: 'object',
   additionalProperties: false,
-  required: ['sessionId', 'url', 'mode', 'status', 'paymentStatus', 'expiresAt'],
+  required: ['provider', 'sessionId', 'url', 'mode', 'status', 'paymentStatus', 'expiresAt'],
   properties: {
-    sessionId: { type: 'string', minLength: 1 },
+    provider: paymentProviderField,
+    sessionId: {
+      type: 'string',
+      minLength: 1,
+      description: 'Id of the payment page at the provider.',
+    },
     url: {
       anyOf: [{ type: 'string', format: 'uri' }, { type: 'null' }],
     },
@@ -42,7 +56,7 @@ const paymentsCheckoutSessionPublicSchema = {
       type: 'string',
       format: 'date-time',
       description:
-        'Time after which this checkout can no longer be paid: order reservation end or Stripe session expiry, whichever comes first.',
+        'Time after which this checkout can no longer be paid: order reservation end or the expiry of the page at the provider, whichever comes first.',
     },
   },
 } as const;

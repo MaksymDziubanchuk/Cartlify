@@ -146,7 +146,8 @@ describe('POST /api/orders/:orderId/cancel', () => {
         ...shippingData,
         user: { id: buyer.id, deleted: false, email: buyer.email },
       });
-      expect(res.json()).not.toHaveProperty('paymentIntentId');
+      expect(res.json()).not.toHaveProperty('paymentId');
+      expect(res.json()).not.toHaveProperty('paymentProvider');
     });
 
     it('keeps the cancel and the refund in the audit log', async () => {
@@ -164,7 +165,11 @@ describe('POST /api/orders/:orderId/cancel', () => {
           { field: 'status', old: 'paid', new: 'cancelled' },
           expect.objectContaining({
             field: 'refund',
-            new: expect.objectContaining({ paymentIntentId: paymentId, refundId: refund!.id }),
+            new: expect.objectContaining({
+              provider: 'stripe',
+              paymentId,
+              refundId: refund!.id,
+            }),
           }),
         ]),
       );

@@ -2,10 +2,17 @@ import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { expireCheckoutSession } from '@routes/api/payments/services/helpers/checkoutSession.helper.js';
-import { ServiceUnavailableError, isAppError } from '@utils/errors.js';
+import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
+import {
+  formatPaymentPageLink,
+  parsePaymentPageLink,
+  type OrderPaymentPage,
+} from '@routes/api/payments/providers/pageLink.js';
+import { InternalError, ServiceUnavailableError, isAppError } from '@utils/errors.js';
 
 import type { OrderId } from 'types/ids.js';
+
+export type { OrderPaymentPage };
 
 type WorkerLogger = {
   error: (obj: unknown, msg?: string) => void;
@@ -183,40 +190,52 @@ export async function processMissedOrderReservationExpiries(
   return processed;
 }
 
-export async function setOrderPaymentSessionLink(
+export async function setOrderPaymentPageLink(
   orderId: OrderId,
-  paymentSessionId: string,
+  page: OrderPaymentPage,
 ): Promise<void> {
   try {
     const redis = await getRedis();
 
-    await redis.hSet(redisKeys.orderPaymentSessionMap, String(orderId), String(paymentSessionId));
+    await redis.hSet(
+      redisKeys.orderPaymentSessionMap,
+      String(orderId),
+      formatPaymentPageLink(page),
+    );
   } catch (err: unknown) {
     throw toRedisUnavailableError(err);
   }
 }
 
-// the stripe checkout session of the order, null when none was linked
-export async function getOrderPaymentSessionLink(orderId: OrderId): Promise<string | null> {
+// the payment page of the order, null when none was linked
+export async function getOrderPaymentPageLink(orderId: OrderId): Promise<OrderPaymentPage | null> {
   const redis = await getRedis();
 
-  const paymentSessionId = await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId));
-
-  if (!paymentSessionId) return null;
-  return paymentSessionId;
+  return parsePaymentPageLink(await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId)));
 }
 
-export async function deleteOrderPaymentSessionLink(orderId: OrderId): Promise<void> {
+export async function deleteOrderPaymentPageLink(orderId: OrderId): Promise<void> {
   const redis = await getRedis();
   await redis.hDel(redisKeys.orderPaymentSessionMap, String(orderId));
 }
 
+// the reservation is over: the page closes, so no payment comes for it any more. A page the
+// provider did not close (paid meanwhile, a payment on its way) keeps its link, the payment event
+// takes it away
 async function handleReservationExpiredBase(
   orderId: OrderId,
-  paymentSessionId: string,
+  page: OrderPaymentPage,
 ): Promise<void> {
-  await expireCheckoutSession({ sessionId: paymentSessionId });
-  await deleteOrderPaymentSessionLink(orderId);
+  const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
+
+  if (closed.state !== 'closed') {
+    throw new InternalError(
+      { reason: 'PAYMENT_PAGE_NOT_CLOSED', provider: page.provider, state: closed.state },
+      closed.state === 'open' ? closed.cause : undefined,
+    );
+  }
+
+  await deleteOrderPaymentPageLink(orderId);
 }
 
 export async function processClaimedOrderReservationBase(
@@ -231,11 +250,11 @@ export async function processClaimedOrderReservationBase(
   for (const orderId of orderIds) {
     try {
       // run the base-phase handler for jobs scheduled at reservation expiry time
-      const paymentSessionId = await getOrderPaymentSessionLink(orderId);
+      const page = await getOrderPaymentPageLink(orderId);
 
-      if (!paymentSessionId) throw new Error();
+      if (!page) throw new Error();
 
-      await handleReservationExpiredBase(orderId, paymentSessionId);
+      await handleReservationExpiredBase(orderId, page);
       processed += 1;
     } catch (err: unknown) {
       // log per-order failures and continue processing the remaining jobs

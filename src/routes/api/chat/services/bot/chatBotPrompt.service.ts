@@ -26,6 +26,8 @@ export interface BuildChatBotPromptDto {
     productContext: ChatBotProductContextItemDto[];
     // the shop currency, the one checkout charges in, e.g. "eur"
     currency: string;
+    // how the payment providers the customer may pay with are named, e.g. ["Stripe"]
+    paymentProviders: string[];
 }
 
 export interface BuildChatBotPromptResultDto {
@@ -36,8 +38,18 @@ export interface BuildChatBotPromptResultDto {
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_PRODUCT_CONTEXT_ITEMS = 6;
 
+// where the customer pays: one provider is named as it is, several as a choice
+const describePaymentPage = (paymentProviders: string[]): string =>
+    paymentProviders.length === 1
+        ? `on a ${paymentProviders[0]} payment page the customer opens after confirming the order`
+        : `on a payment page of ${paymentProviders.join(' or ')}, the one the customer picks after confirming the order`;
+
 // builds the permanent behavior rules for the Cartlify assistant
-const buildSystemInstructions = (actorRole: ChatBotActorRole, currency: string): string => {
+const buildSystemInstructions = (
+    actorRole: ChatBotActorRole,
+    currency: string,
+    paymentProviders: string[],
+): string => {
     return [
         'You are Cartlify assistant, a support and shopping helper inside the Cartlify e-commerce platform.',
         'Put your answer to the customer into the reply field of the response format. The reply is plain chat text: no markdown tables, tool calls, hidden metadata, or action objects.',
@@ -52,7 +64,7 @@ const buildSystemInstructions = (actorRole: ChatBotActorRole, currency: string):
         'You can explain platform features, help the customer understand how to use Cartlify, and consult about products when product context is provided.',
         'Do not invent products, prices, discounts, stock status, delivery terms, or policies that are not provided in the prompt.',
         `All prices are in ${currency}; name this currency with a price, never another one.`,
-        'Payment is by card only, on a Stripe checkout page the customer opens after confirming the order. There are no other payment methods: no PayPal, no cash, no bank transfer.',
+        `Payment is by card only, ${describePaymentPage(paymentProviders)}. There are no other payment methods: no PayPal, no cash, no bank transfer.`,
         'If product context is missing or insufficient, say that you do not have enough product data and ask a focused follow-up question.',
         'Do not claim that you are an admin, human operator, manager, or specialist.',
         'If the customer clearly asks for an admin, operator, specialist, manager, or human support, acknowledge the request.',
@@ -166,7 +178,7 @@ export const buildChatBotPrompt = (
     const productContextMessage = buildProductContextMessage(dto.productContext, currency);
 
     return {
-        instructions: buildSystemInstructions(dto.actorRole, currency),
+        instructions: buildSystemInstructions(dto.actorRole, currency, dto.paymentProviders),
         messages: [
             ...(productContextMessage ? [productContextMessage] : []),
             ...buildHistoryMessages(dto.history),

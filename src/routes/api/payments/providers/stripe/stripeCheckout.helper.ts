@@ -6,14 +6,14 @@ import { MAX_ID } from '@schemas/idPathParam.js';
 
 import type Stripe from 'stripe';
 import type {
+  CheckoutPaymentStatus,
   CheckoutSessionResponseDto,
-  StripeCheckoutPaymentStatus,
-  StripeCheckoutSessionStatus,
+  CheckoutSessionStatus,
 } from 'types/dto/payments.dto.js';
 
 // the values the response schema allows
-const SESSION_STATUSES: readonly StripeCheckoutSessionStatus[] = ['open', 'complete', 'expired'];
-const PAYMENT_STATUSES: readonly StripeCheckoutPaymentStatus[] = [
+const SESSION_STATUSES: readonly CheckoutSessionStatus[] = ['open', 'complete', 'expired'];
+const PAYMENT_STATUSES: readonly CheckoutPaymentStatus[] = [
   'paid',
   'unpaid',
   'no_payment_required',
@@ -229,7 +229,7 @@ function mapCreatedCheckoutSession(
 
   // stripe types leave room for values stripe adds later, our api promises only the known ones
   const status = session.status;
-  if (!SESSION_STATUSES.includes(status as StripeCheckoutSessionStatus)) {
+  if (!SESSION_STATUSES.includes(status as CheckoutSessionStatus)) {
     throw new InternalError({
       reason: 'PAYMENTS_CHECKOUT_SESSION_STATUS_UNKNOWN',
       orderId,
@@ -239,7 +239,7 @@ function mapCreatedCheckoutSession(
   }
 
   const paymentStatus = session.payment_status;
-  if (!PAYMENT_STATUSES.includes(paymentStatus as StripeCheckoutPaymentStatus)) {
+  if (!PAYMENT_STATUSES.includes(paymentStatus as CheckoutPaymentStatus)) {
     throw new InternalError({
       reason: 'PAYMENTS_CHECKOUT_SESSION_PAYMENT_STATUS_UNKNOWN',
       orderId,
@@ -257,12 +257,13 @@ function mapCreatedCheckoutSession(
 
   return {
     checkoutSession: {
+      provider: 'stripe',
       sessionId: session.id,
       url: session.url ?? null,
       // the mode is checked above
       mode: 'payment',
-      status: status as StripeCheckoutSessionStatus,
-      paymentStatus: paymentStatus as StripeCheckoutPaymentStatus,
+      status: status as CheckoutSessionStatus,
+      paymentStatus: paymentStatus as CheckoutPaymentStatus,
       expiresAt: new Date(expiresAtMs).toISOString(),
     },
   };

@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 import stripe from '@config/stripe.js';
 import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
-import { setOrderPaymentSessionLink } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
+import { setOrderPaymentPageLink } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -138,6 +138,28 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
     expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 1 });
   });
 
+  // a link written before links named their provider, or of a provider the server has not, leads
+  // to no page the server could close: the cancel goes on and asks no provider
+  it.each([
+    ['the old form without a provider', 'cs_test_old_link'],
+    ['a provider this server has not', 'liqpay:dev-1-1700000000000'],
+  ])('cancels past a page link of %s and asks no provider', async (_case, link) => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
+    const redis = await getRedis();
+    await redis.hSet(redisKeys.orderPaymentSessionMap, String(orderId), link);
+
+    let res: Response | undefined;
+    const requests = await stripeRequestsDuring(async () => {
+      res = await cancelPayment(user, orderId);
+    });
+
+    expect(res!.statusCode).toBe(200);
+    expect(res!.json()).toMatchObject({ status: 'unconfirmed' });
+    expect(requests).toEqual([]);
+    expect((await redisStateOf(orderId)).pageLink).toBeNull();
+  });
+
   describeWithStripe('with a payment page open at Stripe', () => {
     it('closes the payment page first and forgets it', async () => {
       const user = await newUser();
@@ -182,7 +204,10 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
     it('refuses while the bank still decides on the payment', async () => {
       const user = await newUser();
       const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
-      await setOrderPaymentSessionLink(orderId, await openBankPaymentPage(1000));
+      await setOrderPaymentPageLink(orderId, {
+        provider: 'stripe',
+        pageId: await openBankPaymentPage(1000),
+      });
 
       const res = await cancelPayment(user, orderId);
 
@@ -215,7 +240,7 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       expect(await orderRowOf(orderId)).toMatchObject({ status: 'waiting', confirmed: true });
       expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 1 });
       expect((await readSession(sessionId)).status).toBe('open');
-      expect((await redisStateOf(orderId)).pageLink).toBe(sessionId);
+      expect((await redisStateOf(orderId)).pageLink).toBe(`stripe:${sessionId}`);
       // what Stripe answered stays in the log of the server
       expect(
         takeLogs({ msg: 'request failed', errorCode: 'PAYMENT_PROVIDER_UNAVAILABLE' }),

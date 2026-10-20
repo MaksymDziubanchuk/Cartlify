@@ -15,13 +15,23 @@ import { payByCard, payCheckoutSession, rememberSession, stripeEvent } from './s
 
 export const CHECKOUT_URL = '/api/payments/checkout/sessions';
 
-// the payment page of an order, the way the frontend asks for one
-export const checkout = (app: FastifyInstance, csrf: Csrf, user: TestUser, orderId: unknown) =>
+// the page the buyer comes back to from a stripe payment page asks this one
+export const STRIPE_SESSION_URL = '/api/payments/stripe/checkout/sessions';
+
+// the payment page of an order, the way the frontend asks for one; the request always names the
+// provider, the tests pay with stripe unless they say otherwise
+export const checkout = (
+  app: FastifyInstance,
+  csrf: Csrf,
+  user: TestUser,
+  orderId: unknown,
+  provider: unknown = 'stripe',
+) =>
   app.inject({
     method: 'POST',
     url: CHECKOUT_URL,
     headers: withCsrf(csrf, accessCookie(user)),
-    payload: { orderId },
+    payload: { orderId, provider },
   });
 
 // a payment page the app opened for the order; returns its id
@@ -58,7 +68,7 @@ export async function placePaidOrder(
 
   const paid = await asAdmin(
     (tx) => tx.$queryRaw<{ result: string }[]>`
-      select cartlify.pay_order(${orderId}::int, ${paymentId}, ${total}::numeric) as result
+      select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${paymentId}, ${total}::numeric) as result
     `,
   );
   if (paid[0]?.result !== 'PAID') throw new Error(`paying the order answered ${paid[0]?.result}`);
@@ -120,7 +130,8 @@ export const orderStateOf = (orderId: number) =>
       select: {
         status: true,
         confirmed: true,
-        paymentIntentId: true,
+        paymentProvider: true,
+        paymentId: true,
         reservationExpiresAt: true,
         total: true,
       },

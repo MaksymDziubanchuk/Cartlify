@@ -31,7 +31,7 @@ import {
   stripeEvent,
 } from '../../../helpers/stripe.js';
 
-// POST /api/payments/webhook with checkout.session.expired and async_payment_failed: the payment
+// POST /api/payments/stripe/webhook with checkout.session.expired and async_payment_failed: the payment
 // page is closed (the order timeout worker closes it when the reservation ends), the test delivers
 // the event Stripe recorded. A payment made at the last moment can still be on its way, so the
 // reservation goes only after the grace window; the clock of the app is moved past it
@@ -70,7 +70,7 @@ const payByAnotherPage = (orderId: number) =>
       select: { total: true },
     });
     await tx.$queryRaw`
-      select cartlify.pay_order(${orderId}::int, ${`pi_test_other_${orderId}`}, ${total}::numeric)
+      select cartlify.pay_order(${orderId}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_test_other_${orderId}`}, ${total}::numeric)
     `;
   });
 
@@ -92,7 +92,7 @@ afterAll(async () => {
   }
 });
 
-describeWithStripe('POST /api/payments/webhook: checkout.session.expired', () => {
+describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.expired', () => {
   it('keeps the reservation within the grace window, a payment may still be on its way', async () => {
     const { product, orderId, sessionId } = await orderWithPage();
     const event = await closePage(sessionId);
@@ -151,7 +151,8 @@ describeWithStripe('POST /api/payments/webhook: checkout.session.expired', () =>
     expect(res.statusCode).toBe(200);
     expect(await orderStateOf(orderId)).toMatchObject({
       status: 'paid',
-      paymentIntentId: `pi_test_other_${orderId}`,
+      paymentProvider: 'stripe',
+      paymentId: `pi_test_other_${orderId}`,
     });
     expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
   });
@@ -183,24 +184,27 @@ describeWithStripe('POST /api/payments/webhook: checkout.session.expired', () =>
   });
 });
 
-describeWithStripe('POST /api/payments/webhook: checkout.session.async_payment_failed', () => {
-  // a failed bank payment is final, no money comes after it: the stock goes back at once.
-  // The shop pays only by card, the event is the page itself
-  it('releases the reservation at once', async () => {
-    const { product, orderId, sessionId } = await orderWithPage();
+describeWithStripe(
+  'POST /api/payments/stripe/webhook: checkout.session.async_payment_failed',
+  () => {
+    // a failed bank payment is final, no money comes after it: the stock goes back at once.
+    // The shop pays only by card, the event is the page itself
+    it('releases the reservation at once', async () => {
+      const { product, orderId, sessionId } = await orderWithPage();
 
-    const res = await deliver(
-      app,
-      craftEvent('checkout.session.async_payment_failed', await readSession(sessionId)),
-    );
+      const res = await deliver(
+        app,
+        craftEvent('checkout.session.async_payment_failed', await readSession(sessionId)),
+      );
 
-    expect(res.statusCode).toBe(200);
-    expect(await orderStateOf(orderId)).toMatchObject({
-      status: 'unconfirmed',
-      confirmed: false,
-      reservationExpiresAt: null,
+      expect(res.statusCode).toBe(200);
+      expect(await orderStateOf(orderId)).toMatchObject({
+        status: 'unconfirmed',
+        confirmed: false,
+        reservationExpiresAt: null,
+      });
+      expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
+      expect((await redisStateOf(orderId)).graceTimer).toBeNull();
     });
-    expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
-    expect((await redisStateOf(orderId)).graceTimer).toBeNull();
-  });
-});
+  },
+);

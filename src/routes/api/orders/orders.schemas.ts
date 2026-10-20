@@ -350,7 +350,7 @@ const postCurrentConfirmSchema = {
         '`SHIPPING_ADDRESS_INVALID`, `RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: an address of spaces, a name without a letter or with a digit. ' +
         '`SHIPPING_ADDRESS_REQUIRED`, `RECIPIENT_FIRST_NAME_REQUIRED`, `RECIPIENT_LAST_NAME_REQUIRED`, `RECIPIENT_PHONE_REQUIRED`: the order has no such field and the request did not bring it. ' +
         '`ORDER_ITEMS_REQUIRED`: the order is empty. ' +
-        '`ORDER_TOTAL_BELOW_MINIMUM`: the total at the prices of the catalog is below the smallest payment Stripe takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`.',
+        '`ORDER_TOTAL_BELOW_MINIMUM`: the total at the prices of the catalog is below the smallest payment any payment provider takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -658,7 +658,7 @@ const postCancelPaymentSchema = {
   summary: 'Cancel the payment of an order',
   description:
     'The owner cancels the payment of an own order that waits for it (`waiting`), for example after coming back from the payment page without paying. ' +
-    'The payment page at Stripe is closed first, so no payment can come for it any more; then the reservation is released and the order becomes `unconfirmed` with its items and shipping data. ' +
+    'The payment page is closed first at its payment provider, so no payment can come for it any more; then the reservation is released and the order becomes `unconfirmed` with its items and shipping data. ' +
     'The owner can change its items (POST/PATCH/DELETE /api/orders/{orderId}/items) and confirm it again with POST /api/orders/current/confirm.',
 
   params: {
@@ -700,7 +700,7 @@ const postCancelPaymentSchema = {
     },
     503: {
       description:
-        '`REDIS_UNAVAILABLE`, or `PAYMENT_PROVIDER_UNAVAILABLE`: Stripe did not close the payment page, nothing was changed, try again.',
+        '`REDIS_UNAVAILABLE`, or `PAYMENT_PROVIDER_UNAVAILABLE`: the payment provider did not close the payment page, nothing was changed, try again.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -711,9 +711,9 @@ const postCancelOrderSchema = {
   operationId: 'cancelOrder',
   summary: 'Cancel a paid order',
   description:
-    'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full at Stripe, ' +
+    'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full by the payment provider that took it, ' +
     'the stock of its items comes back and the buyer gets a mail, unless the account is deleted. The order is cancelled only together with its refund: ' +
-    'when Stripe refuses the refund nothing changes. A delivered order is not cancelled. ' +
+    'when the provider refuses the refund nothing changes. A delivered order is not cancelled. ' +
     'The answer gives how to reach the buyer: the order holds the address, the recipient and the phone, `user` tells whether the account is deleted and its email while it is not.',
 
   params: {
@@ -751,7 +751,7 @@ const postCancelOrderSchema = {
     },
     500: {
       description:
-        'INTERNAL_ERROR: the refund at Stripe failed or another server error; nothing was changed (the reason is in the server log only).',
+        'INTERNAL_ERROR: the refund at the payment provider failed or another server error; nothing was changed (the reason is in the server log only).',
       $ref: 'errorResponseSchema#',
     },
   },

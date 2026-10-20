@@ -10,7 +10,7 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { refundStripePayment } from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
+import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
 import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
 import {
   sendOrderCancelledEmail,
@@ -20,10 +20,10 @@ import {
 import type { CancelOrderDto, CancelledOrderResponseDto } from 'types/dto/orders.dto.js';
 
 // an admin cancels a paid or shipped order, for example one that cannot be delivered: the payment
-// is refunded in full, the stock comes back, the buyer gets a mail. The refund runs inside the
-// transaction before its commit, so an order is cancelled only together with its refund; a refund
-// that went through while the commit failed is not repeated on the next try, stripe answers the
-// same refund for the same payment. The answer names the buyer, also a deleted one, so the admin
+// is refunded in full by the provider that took it, the stock comes back, the buyer gets a mail.
+// The refund runs inside the transaction before its commit, so an order is cancelled only together
+// with its refund; a refund that went through while the commit failed is not repeated on the next
+// try, the provider gives no money twice for the same payment. The answer names the buyer, also a deleted one, so the admin
 // can reach them: the recipient and the phone of the order stay on it
 export async function cancelPaidOrder(
   { actorId, actorRole, orderId }: CancelOrderDto,
@@ -49,17 +49,23 @@ export async function cancelPaidOrder(
         const payment = await db.order.findUnique({
           where: { id },
           select: {
-            paymentIntentId: true,
+            paymentProvider: true,
+            paymentId: true,
             user: { select: { id: true, email: true, deletedAt: true } },
           },
         });
         if (!payment) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CANCEL' });
 
-        // a paid order always holds its payment; without it nothing can be refunded
-        const { paymentIntentId, user } = payment;
-        if (!paymentIntentId) throw new ConflictError('ORDER_PAYMENT_ID_MISSING', { orderId: id });
+        // a paid order always holds its payment and who took it; without them nothing can be refunded
+        const { paymentProvider: provider, paymentId, user } = payment;
+        if (!provider || !paymentId) {
+          throw new ConflictError('ORDER_PAYMENT_ID_MISSING', { orderId: id });
+        }
 
-        const { refundId } = await refundStripePayment({ orderId: id, paymentIntentId });
+        const { refundId } = await getPaymentProvider(provider).refundPayment({
+          orderId: id,
+          paymentId,
+        });
 
         await writeAdminAuditLog(db, {
           actorId,
@@ -72,7 +78,7 @@ export async function cancelPaidOrder(
             {
               field: 'refund',
               old: null,
-              new: { initiator: 'admin', paymentIntentId, refundId },
+              new: { initiator: 'admin', provider, paymentId, refundId },
             },
           ],
         });
@@ -88,7 +94,7 @@ export async function cancelPaidOrder(
         };
       },
       {
-        // the refund call to stripe runs inside, the transaction gets the time for it
+        // the refund call to the provider runs inside, the transaction gets the time for it
         maxRetries: 3,
         isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
         maxWait: 1500,

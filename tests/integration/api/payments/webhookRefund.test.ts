@@ -34,7 +34,7 @@ import {
   withStripeOutOfReach,
 } from '../../../helpers/stripe.js';
 
-// POST /api/payments/webhook with a payment the order cannot take: the stock is gone, another
+// POST /api/payments/stripe/webhook with a payment the order cannot take: the stock is gone, another
 // payment paid it, the items changed, the order is gone. The money goes back in full at Stripe
 // for real and the refund is recorded in the admin audit log for the buyer, once per payment.
 // The buyer paid a page of the test sandbox with a test card, the test delivers the event
@@ -79,7 +79,7 @@ const confirmAgain = (user: TestUser, orderId: number) =>
 // the record of the refund, as the admin audit log keeps it for the buyer
 const refundRecord = (
   user: TestUser,
-  change: { reason: string; paymentIntentId: string; refundId: unknown },
+  change: { reason: string; paymentId: string; refundId: unknown },
 ) =>
   expect.objectContaining({
     actorId: user.id,
@@ -88,7 +88,13 @@ const refundRecord = (
       {
         field: 'refund',
         old: null,
-        new: { initiator: 'system', amount: '51.00', currency: 'eur', ...change },
+        new: {
+          initiator: 'system',
+          amount: '51.00',
+          currency: 'eur',
+          provider: 'stripe',
+          ...change,
+        },
       },
     ],
   });
@@ -111,7 +117,7 @@ afterAll(async () => {
   }
 });
 
-describeWithStripe('POST /api/payments/webhook: a payment the order cannot take', () => {
+describeWithStripe('POST /api/payments/stripe/webhook: a payment the order cannot take', () => {
   it('returns a late payment in full when the stock is gone', async () => {
     const { user, product, orderId, paymentId, event } = await paymentAfterTheStockIsGone();
 
@@ -124,13 +130,14 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
     expect(await orderStateOf(orderId)).toMatchObject({
       status: 'unconfirmed',
       confirmed: false,
-      paymentIntentId: null,
+      paymentProvider: null,
+      paymentId: null,
     });
     expect(await stockOf(product.id)).toEqual({ stock: 1, reservedStock: 0 });
     expect(await refundAuditOf(orderId)).toEqual([
       refundRecord(user, {
         reason: 'OUT_OF_STOCK',
-        paymentIntentId: paymentId,
+        paymentId,
         refundId: refunds[0]!.id,
       }),
     ]);
@@ -139,7 +146,7 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
   // the buyer paid the page of an earlier confirmation as well, in another tab
   it.each([
     ['paid', 'ALREADY_PAID_OTHER_PAYMENT'],
-    ['delivered', 'ORDER_NOT_PAYABLE'],
+    ['delivered', 'ALREADY_PAID_OTHER_PAYMENT'],
   ] as const)('returns a second payment of an order %s by another page', async (stage, reason) => {
     const { user, orderId, sessionId: firstPage } = await orderWithPage();
     await loseReservation(orderId);
@@ -161,12 +168,13 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
     expect(await refundsOf(second.paymentId)).toEqual([]);
     expect(await orderStateOf(orderId)).toMatchObject({
       status: stage,
-      paymentIntentId: second.paymentId,
+      paymentProvider: 'stripe',
+      paymentId: second.paymentId,
     });
     expect(await refundAuditOf(orderId)).toEqual([
       refundRecord(user, {
         reason,
-        paymentIntentId: first.paymentId,
+        paymentId: first.paymentId,
         refundId: expect.any(String),
       }),
     ]);
@@ -191,14 +199,15 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
     expect(await refundsOf(paymentId)).toEqual([expect.objectContaining({ amount: 5100 })]);
     expect(await orderStateOf(orderId)).toMatchObject({
       status: 'unconfirmed',
-      paymentIntentId: null,
+      paymentProvider: null,
+      paymentId: null,
     });
     const { items } = await orderRowOf(orderId);
     expect(items.reduce((sum, item) => sum + item.quantity, 0)).toBe(3);
     expect(await refundAuditOf(orderId)).toEqual([
       refundRecord(user, {
         reason: 'AMOUNT_MISMATCH',
-        paymentIntentId: paymentId,
+        paymentId,
         refundId: expect.any(String),
       }),
     ]);
@@ -218,7 +227,7 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
     expect(await refundAuditOf(orderId)).toEqual([
       refundRecord(user, {
         reason: 'ORDER_NOT_FOUND',
-        paymentIntentId: paymentId,
+        paymentId,
         refundId: expect.any(String),
       }),
     ]);
@@ -245,7 +254,7 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
     expect(res.statusCode).toBe(200);
     expect(await refundsOf(paymentId)).toHaveLength(1);
     expect(await refundAuditOf(orderId)).toEqual([
-      refundRecord(user, { reason: 'OUT_OF_STOCK', paymentIntentId: paymentId, refundId: null }),
+      refundRecord(user, { reason: 'OUT_OF_STOCK', paymentId, refundId: null }),
     ]);
   });
 
@@ -281,7 +290,7 @@ describeWithStripe('POST /api/payments/webhook: a payment the order cannot take'
     expect(res.statusCode).toBe(200);
     expect(await refundsOf(paymentId)).toEqual([expect.objectContaining({ amount: 5100 })]);
     expect(takeLogs({ msg: 'stripe refund has no audit record: order owner is unknown' })).toEqual([
-      expect.objectContaining({ orderId: 2_000_000_000, paymentIntentId: paymentId }),
+      expect.objectContaining({ orderId: 2_000_000_000, provider: 'stripe', paymentId }),
     ]);
   });
 

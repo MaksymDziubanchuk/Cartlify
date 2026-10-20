@@ -21,7 +21,7 @@ export const hasStripe = (process.env.STRIPE_SECRET_KEY ?? '') !== STRIPE_PLACEH
 // without the key (a ci run without the secret) these tests are skipped
 export const describeWithStripe = hasStripe ? describe : describe.skip;
 
-export const WEBHOOK_URL = '/api/payments/webhook';
+export const WEBHOOK_URL = '/api/payments/stripe/webhook';
 
 const testStripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? STRIPE_PLACEHOLDER_KEY, {
   maxNetworkRetries: 2,

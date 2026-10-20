@@ -16,7 +16,7 @@ import {
   isStripeResourceMissing,
   isStripeUnavailable,
   mapCreatedCheckoutSession,
-} from './helpers/checkoutSession.helper.js';
+} from '../stripeCheckout.helper.js';
 
 import type Stripe from 'stripe';
 import type {
@@ -24,7 +24,7 @@ import type {
   CheckoutSessionResponseDto,
 } from 'types/dto/payments.dto.js';
 
-export async function getCheckoutSessionById({
+export async function getStripeCheckoutSession({
   actorId,
   actorRole,
   sessionId,

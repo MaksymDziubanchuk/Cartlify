@@ -35,6 +35,7 @@ const build = (patch: Partial<BuildChatBotPromptDto> = {}) =>
     history: [],
     productContext: [],
     currency: 'eur',
+    paymentProviders: ['Stripe'],
     ...patch,
   });
 
@@ -78,11 +79,21 @@ describe('buildChatBotPrompt', () => {
   });
 
   // the model promised paypal when it was not told how the shop takes payments
-  it('tells the model that payment is by card on stripe checkout only', () => {
+  it('tells the model that payment is by card on the page of the one provider only', () => {
     const { instructions } = build();
 
-    expect(instructions).toContain('Payment is by card only, on a Stripe checkout page');
+    expect(instructions).toContain(
+      'Payment is by card only, on a Stripe payment page the customer opens after confirming the order.',
+    );
     expect(instructions).toContain('no PayPal');
+  });
+
+  it('names every payment provider as a choice of the customer', () => {
+    const { instructions } = build({ paymentProviders: ['Stripe', 'LiqPay'] });
+
+    expect(instructions).toContain(
+      'on a payment page of Stripe or LiqPay, the one the customer picks after confirming the order.',
+    );
   });
 
   it('ends with the current message, its sender role and trimmed text', () => {

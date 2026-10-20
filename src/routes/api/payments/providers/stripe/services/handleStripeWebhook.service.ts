@@ -14,21 +14,22 @@ import {
 } from '@utils/errors.js';
 import {
   cancelOrderReservationExpiry,
-  deleteOrderPaymentSessionLink,
+  deleteOrderPaymentPageLink,
 } from '@routes/api/orders/services/helpers/index.js';
+import {
+  payOrder,
+  unconfirmOrderFromWebhook,
+} from '@routes/api/payments/services/helpers/orderPaymentTx.helper.js';
+import { refundLatePayment } from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
+import { sendOrderPaidEmail } from '@routes/api/payments/services/helpers/sendOrderPaidEmail.helper.js';
+
 import {
   getOrderIdFromCheckoutSession,
   getPaidAmountFromCheckoutSession,
   getPaymentIntentIdFromCheckoutSession,
   getUserIdFromCheckoutSession,
   isOrderCheckoutSession,
-} from './helpers/checkoutSession.helper.js';
-import {
-  payOrderFromStripeWebhook,
-  unconfirmOrderFromStripeWebhook,
-} from './helpers/orderPaymentTx.helper.js';
-import { refundOrderPaymentFromStripeWebhook } from './helpers/orderPaymentRefund.helper.js';
-import { sendOrderPaidEmail } from './helpers/sendOrderPaidEmail.helper.js';
+} from '../stripeCheckout.helper.js';
 
 import type Stripe from 'stripe';
 import type { HandleStripeWebhookDto, StripeWebhookResponseDto } from 'types/dto/payments.dto.js';
@@ -91,12 +92,13 @@ export async function handleStripeWebhook(
         }
 
         const orderId = getOrderIdFromCheckoutSession(session);
-        const paymentIntentId = getPaymentIntentIdFromCheckoutSession(session);
+        // the payment id of a stripe order is its PaymentIntent
+        const paymentId = getPaymentIntentIdFromCheckoutSession(session);
         const paidAmount = getPaidAmountFromCheckoutSession(session);
 
         // db decides what this payment means for the order
         // a technical failure throws here, so stripe gets an error and delivers the event again
-        const payResult = await payOrderFromStripeWebhook({ orderId, paymentIntentId, paidAmount });
+        const payResult = await payOrder({ provider: 'stripe', paymentId, orderId, paidAmount });
 
         // order is paid now, also when the payment came late and stock was taken without reservation
         if (payResult === 'PAID') {
@@ -104,7 +106,7 @@ export async function handleStripeWebhook(
           // nothing closes the page of a paid order any more, its link would stay for good
           if (isRedisReady()) {
             await cancelOrderReservationExpiry(orderId);
-            await deleteOrderPaymentSessionLink(orderId);
+            await deleteOrderPaymentPageLink(orderId);
           }
 
           // the payment is committed; the mail never fails the webhook, a failure is only logged.
@@ -121,10 +123,11 @@ export async function handleStripeWebhook(
 
         // every other answer means the order cannot take this money, so it goes back in full:
         // paid by another payment, cannot be paid, amount differs from order items, out of stock, order is gone
-        const refundResult = await refundOrderPaymentFromStripeWebhook({
+        const refundResult = await refundLatePayment({
+          provider: 'stripe',
+          paymentId,
           orderId,
           fallbackUserId: getUserIdFromCheckoutSession(session),
-          paymentIntentId,
           reason: payResult,
           amount: paidAmount,
           currency: session.currency,
@@ -133,7 +136,13 @@ export async function handleStripeWebhook(
         // audit log needs an existing user as actor, leave a trace when there is nobody to attribute
         if (!refundResult.logged) {
           log.warn(
-            { orderId, paymentIntentId, refundId: refundResult.refundId, reason: payResult },
+            {
+              orderId,
+              provider: 'stripe',
+              paymentId,
+              refundId: refundResult.refundId,
+              reason: payResult,
+            },
             'stripe refund has no audit record: order owner is unknown',
           );
         }
@@ -156,7 +165,7 @@ export async function handleStripeWebhook(
 
         // expired session can still have a last-moment payment on its way, so its reservation waits for the grace window
         // failed async payment is final, nothing can arrive after it, so its reservation is released at once
-        const unconfirmResult = await unconfirmOrderFromStripeWebhook({
+        const unconfirmResult = await unconfirmOrderFromWebhook({
           orderId,
           waitForPaymentGrace: event.type === 'checkout.session.expired',
         });
@@ -170,7 +179,7 @@ export async function handleStripeWebhook(
         // the page is closed and the order released, nothing needs the page link any more
         if (unconfirmResult.unconfirmedNow && isRedisReady()) {
           await cancelOrderReservationExpiry(orderId);
-          await deleteOrderPaymentSessionLink(orderId);
+          await deleteOrderPaymentPageLink(orderId);
         }
 
         break;

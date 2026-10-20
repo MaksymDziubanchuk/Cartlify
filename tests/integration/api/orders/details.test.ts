@@ -104,7 +104,8 @@ describe('GET /api/orders/:orderId', () => {
       reservationExpiresAt: expect.any(String),
       items: [{ productId: product.id, quantity: 2, unitPrice: 10, totalPrice: 20 }],
     });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
   });
 
   it('hides the order of another user as not found', async () => {
@@ -123,7 +124,8 @@ describe('GET /api/orders/:orderId', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ id: orderId, status: 'paid', ...shippingData });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
   });
 
   it('answers 404 for an order that does not exist', async () => {

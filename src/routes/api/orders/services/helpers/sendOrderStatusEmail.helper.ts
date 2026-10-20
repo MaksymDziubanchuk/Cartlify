@@ -3,11 +3,11 @@ import path from 'node:path';
 
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import env from '@config/env.js';
 import { webUrl } from '@helpers/webOrigin.js';
 import { buildOrderShippedTemplate } from '@services/email/templates/orders/orderShipped.template.js';
 import { buildOrderDeliveredTemplate } from '@services/email/templates/orders/orderDelivered.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
+import { currencyOf } from '@routes/api/payments/providers/index.js';
 
 export type OrderStatusMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -35,6 +35,7 @@ function loadOrder(orderId: number) {
       select: {
         id: true,
         total: true,
+        paymentProvider: true,
         shippingAddress: true,
         recipientFirstName: true,
         recipientLastName: true,
@@ -75,7 +76,8 @@ export async function sendOrderStatusEmail(
         totalPrice: item.totalPrice.toString(),
       })),
       total: order.total.toString(),
-      currency: env.STRIPE_CURRENCY,
+      // the money of the provider that took it
+      currency: currencyOf(order.paymentProvider),
       ...(order.user.name ? { userName: order.user.name } : {}),
       shippingAddress: order.shippingAddress,
       recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),

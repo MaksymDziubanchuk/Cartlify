@@ -12,6 +12,7 @@ import path from 'path';
 import env from '@config/env.js';
 import { allowedWebOrigins } from '@helpers/webOrigin.js';
 import { registerRoutes } from '@routes/api/index.js';
+import { PAYMENT_CALLBACK_PATHS } from '@routes/api/payments/providers/index.js';
 import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
 import { adminDtoSchemas } from '@schemas/dto/admin.dtoSchemas.js';
@@ -108,10 +109,10 @@ app.register(rateLimit, {
     req.url?.startsWith('/health') ||
     req.url?.startsWith('/ready') ||
     req.url?.startsWith('/static') ||
-    // stripe delivers every event from a few addresses: a busy hour of sales would hit the limit
-    // and hold back payments already made; the signature keeps anybody else out. Only this path,
-    // not every path that starts like it
-    req.url?.split('?')[0] === '/api/payments/webhook',
+    // a payment provider delivers every event from a few addresses: a busy hour of sales would hit
+    // the limit and hold back payments already made; the signature keeps anybody else out. Only the
+    // exact paths of the providers, not every path that starts like one
+    PAYMENT_CALLBACK_PATHS.has(req.url?.split('?')[0] ?? ''),
 });
 
 // register shared schemas
