@@ -30,7 +30,7 @@ export function buildResetPasswordTemplate(args: ResetPasswordTemplateArgs): {
 
   return {
     subject: `${appName} — Reset your password`,
-    text: renderTemplate('resetPassword.txt', values),
-    html: renderTemplate('resetPassword.html', values),
+    text: renderTemplate('auth/resetPassword.txt', values),
+    html: renderTemplate('auth/resetPassword.html', values),
   };
 }

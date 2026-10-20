@@ -8,7 +8,11 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
+import {
+  dropDeletedProductItems,
+  mapOrderRowToResponse,
+  orderResponseSelect,
+} from './helpers/index.js';
 
 import type { GetCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
@@ -37,8 +41,10 @@ export async function getCurrent({
 
         if (!current) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');
 
-        // bring item prices to current product prices, totals are maintained by db triggers
-        // confirm refuses an order with outdated prices, so the cart must show what will be confirmed
+        // drop the items of products deleted from the catalog and bring the rest to current
+        // product prices, totals are maintained by db triggers; confirm refuses an order with
+        // outdated prices, so the cart must show what will be confirmed
+        await dropDeletedProductItems(db, Number(actorId), [current.id]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${current.id}::int)`;
 
         const order = await db.order.findUnique({

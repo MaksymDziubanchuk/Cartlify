@@ -47,6 +47,12 @@ export default {
   coverageDirectory: 'tests/coverage',
   coverageReporters: ['text-summary', 'lcov'],
 
+  // how long a worker may take to exit after the run: jest gives 500 ms and then kills it with a
+  // warning about leaking tests. On Windows a worker that ran integration files often needs more
+  // with nothing left open (--detectOpenHandles finds nothing); a real leak still holds it past
+  // this time and gets the warning
+  workerGracefulExitTimeout: 5_000,
+
   projects: [
     {
       ...shared,

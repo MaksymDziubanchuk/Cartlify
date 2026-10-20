@@ -73,11 +73,14 @@ jobs:
           restore-keys: |
             jest-${{ runner.os }}-${{ hashFiles('package-lock.json', 'jest.config.js', 'tsconfig*.json') }}-
 
-      # no terminal here, so the launcher runs every part unless parts are given
+      # no terminal here, so the launcher runs every part unless parts are given. The payment tests
+      # take the key of the Stripe test sandbox, one value that github masks whole; without the
+      # secret they are skipped
       - name: Run tests
         env:
           PARTS: ${{ inputs.parts }}
           CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
+          STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
         run: npm test -- $PARTS
 
       - name: Upload coverage report

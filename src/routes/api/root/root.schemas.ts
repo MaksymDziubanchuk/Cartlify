@@ -119,10 +119,6 @@ const postRootAdminSchema = {
       description: 'User is already admin, root, or cannot be promoted.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Admin promotion payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while promoting admin.',
       $ref: 'errorResponseSchema#',
@@ -167,10 +163,6 @@ const deleteRootAdminSchema = {
     },
     409: {
       description: 'Target user is not admin, is root, or cannot be demoted.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Admin deletion request failed validation.',
       $ref: 'errorResponseSchema#',
     },
     500: {

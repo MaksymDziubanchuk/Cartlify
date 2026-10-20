@@ -128,7 +128,7 @@ const getCurrentOrderSchema = {
   operationId: 'getCurrentOrder',
   summary: 'Get current order',
   description:
-    'Returns the current authenticated user order or cart state. Item prices are brought to current product prices before the order is returned.',
+    'Returns the current authenticated user order or cart state. Item prices are brought to current product prices before the order is returned, and the items of products deleted from the catalog are removed from the cart for good: the page shows only what can be confirmed.',
 
   response: {
     200: {
@@ -164,7 +164,8 @@ const getCurrentOrderSchema = {
 const postCurrentItemsSchema = {
   operationId: 'addCurrentOrderItem',
   summary: 'Add item to current order',
-  description: 'Adds a product item to the current authenticated user order.',
+  description:
+    'Adds a product item to the current authenticated user order. The answer is the cart at current prices, without the items of products deleted from the catalog: they are removed from it for good.',
 
   body: {
     $ref: 'ordersCurrentAddItemBodySchema#',
@@ -198,10 +199,6 @@ const postCurrentItemsSchema = {
       description: 'Order state or product stock does not allow adding this item.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Add item payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while adding order item.',
       $ref: 'errorResponseSchema#',
@@ -213,7 +210,8 @@ const postCurrentItemsSchema = {
 const patchCurrentItemsSchema = {
   operationId: 'updateCurrentOrderItem',
   summary: 'Update current order item',
-  description: 'Updates quantity for an item in the current authenticated user order.',
+  description:
+    'Updates quantity for an item in the current authenticated user order. The answer is the cart at current prices, without the items of products deleted from the catalog: they are removed from it for good.',
 
   params: {
     $ref: 'ordersCurrentItemIdParamsSchema#',
@@ -264,10 +262,6 @@ const patchCurrentItemsSchema = {
       description: 'Order state or product stock does not allow updating this item.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Update item payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while updating order item.',
       $ref: 'errorResponseSchema#',
@@ -279,7 +273,8 @@ const patchCurrentItemsSchema = {
 const deleteCurrentItemsSchema = {
   operationId: 'deleteCurrentOrderItem',
   summary: 'Delete current order item',
-  description: 'Removes an item from the current authenticated user order.',
+  description:
+    'Removes an item from the current authenticated user order. The answer is the cart at current prices, without the items of products deleted from the catalog: they are removed from it for good.',
 
   params: {
     $ref: 'ordersCurrentItemIdParamsSchema#',
@@ -354,7 +349,8 @@ const postCurrentConfirmSchema = {
         'Invalid confirm order request. `VALIDATION_ERROR`: a field breaks the request schema (length, phone format). ' +
         '`SHIPPING_ADDRESS_INVALID`, `RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: an address of spaces, a name without a letter or with a digit. ' +
         '`SHIPPING_ADDRESS_REQUIRED`, `RECIPIENT_FIRST_NAME_REQUIRED`, `RECIPIENT_LAST_NAME_REQUIRED`, `RECIPIENT_PHONE_REQUIRED`: the order has no such field and the request did not bring it. ' +
-        '`ORDER_ITEMS_REQUIRED`: the order is empty.',
+        '`ORDER_ITEMS_REQUIRED`: the order is empty. ' +
+        '`ORDER_TOTAL_BELOW_MINIMUM`: the total at the prices of the catalog is below the smallest payment any payment provider takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -375,10 +371,6 @@ const postCurrentConfirmSchema = {
         '`ORDER_ITEMS_UNAVAILABLE`: some items cannot be confirmed, `details.items` names each: ' +
         '`{ itemId, productId, reason: deleted | out_of_stock, available, requested }`; the owner removes or changes them and confirms again. ' +
         '`ORDER_PRICES_CHANGED`: reload the order and confirm again. `ORDER_ALREADY_CONFIRMED`: the order waits for its payment already.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Confirm order payload failed validation.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -437,8 +429,8 @@ const getOrderByIdSchema = {
   operationId: 'getOrderById',
   summary: 'Get order by id',
   description:
-    'Returns one order by id if it is visible to the authenticated user. For the owner of an unconfirmed order, item prices are brought to current product prices before the order is returned; ' +
-    'an order that lost its reservation (`unconfirmed`) also loses the items of products deleted from the catalog. ' +
+    'Returns one order by id if it is visible to the authenticated user. For the owner of an order that is not confirmed (the cart or an order that lost its reservation, `unconfirmed`), item prices are brought to current product prices before the order is returned, ' +
+    'and the order loses the items of products deleted from the catalog; an order waiting for its payment keeps them, its payment page names them. ' +
     'Each item shows `product.availableStock`, so the page can mark the items there is not enough of before the order is confirmed again.',
 
   params: {
@@ -486,7 +478,8 @@ const patchOrderStatusSchema = {
   summary: 'Update order status',
   description:
     'Updates order status by order id: a paid order becomes shipped or delivered, a shipped one delivered. ' +
-    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel.',
+    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel. ' +
+    'A shipped or delivered order mails the buyer, unless the account is deleted; a mail that fails is only logged and never undoes the status.',
 
   params: {
     $ref: 'ordersUpdateStatusParamsSchema#',
@@ -525,10 +518,6 @@ const patchOrderStatusSchema = {
       description:
         '`ORDER_STATUS_TRANSITION_INVALID`: the order is there, its status does not allow the step, `details: { status, requested }` ' +
         '(shipped only from paid, delivered from paid or shipped). `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Order status update payload failed validation.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -669,7 +658,7 @@ const postCancelPaymentSchema = {
   summary: 'Cancel the payment of an order',
   description:
     'The owner cancels the payment of an own order that waits for it (`waiting`), for example after coming back from the payment page without paying. ' +
-    'The payment page at Stripe is closed first, so no payment can come for it any more; then the reservation is released and the order becomes `unconfirmed` with its items and shipping data. ' +
+    'The payment page is closed first at its payment provider, so no payment can come for it any more; then the reservation is released and the order becomes `unconfirmed` with its items and shipping data. ' +
     'The owner can change its items (POST/PATCH/DELETE /api/orders/{orderId}/items) and confirm it again with POST /api/orders/current/confirm.',
 
   params: {
@@ -711,7 +700,7 @@ const postCancelPaymentSchema = {
     },
     503: {
       description:
-        '`REDIS_UNAVAILABLE`, or `PAYMENT_PROVIDER_UNAVAILABLE`: Stripe did not close the payment page, nothing was changed, try again.',
+        '`REDIS_UNAVAILABLE`, or `PAYMENT_PROVIDER_UNAVAILABLE`: the payment provider did not close the payment page, nothing was changed, try again.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -722,9 +711,9 @@ const postCancelOrderSchema = {
   operationId: 'cancelOrder',
   summary: 'Cancel a paid order',
   description:
-    'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full at Stripe, ' +
+    'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full by the payment provider that took it, ' +
     'the stock of its items comes back and the buyer gets a mail, unless the account is deleted. The order is cancelled only together with its refund: ' +
-    'when Stripe refuses the refund nothing changes. A delivered order is not cancelled. ' +
+    'when the provider refuses the refund nothing changes. A delivered order is not cancelled. ' +
     'The answer gives how to reach the buyer: the order holds the address, the recipient and the phone, `user` tells whether the account is deleted and its email while it is not.',
 
   params: {
@@ -762,7 +751,7 @@ const postCancelOrderSchema = {
     },
     500: {
       description:
-        'INTERNAL_ERROR: the refund at Stripe failed or another server error; nothing was changed (the reason is in the server log only).',
+        'INTERNAL_ERROR: the refund at the payment provider failed or another server error; nothing was changed (the reason is in the server log only).',
       $ref: 'errorResponseSchema#',
     },
   },

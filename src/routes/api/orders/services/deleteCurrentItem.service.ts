@@ -62,12 +62,10 @@ export async function deleteCurrentItem({
           select: { id: true },
         });
 
-        // bring remaining items to current product prices, an unconfirmed order also loses the
-        // items of deleted products; confirm refuses an order with outdated prices, so the order
-        // must show what will be confirmed
-        if (unconfirmedOrderId !== undefined) {
-          await dropDeletedProductItems(db, actorIdRaw, [orderId]);
-        }
+        // bring remaining items to current product prices, the order also loses the items of
+        // products deleted from the catalog; confirm refuses an order with outdated prices, so the
+        // order must show what will be confirmed
+        await dropDeletedProductItems(db, actorIdRaw, [orderId]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // fetch current order after delete

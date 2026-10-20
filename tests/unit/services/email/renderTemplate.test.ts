@@ -123,12 +123,18 @@ describe('renderTemplate', () => {
   };
 
   it.each([
-    'verifyEmail.html',
-    'verifyEmail.txt',
-    'resetPassword.html',
-    'resetPassword.txt',
-    'orderPaid.html',
-    'orderPaid.txt',
+    'auth/verifyEmail.html',
+    'auth/verifyEmail.txt',
+    'auth/resetPassword.html',
+    'auth/resetPassword.txt',
+    'orders/orderPaid.html',
+    'orders/orderPaid.txt',
+    'orders/orderShipped.html',
+    'orders/orderShipped.txt',
+    'orders/orderDelivered.html',
+    'orders/orderDelivered.txt',
+    'orders/orderCancelled.html',
+    'orders/orderCancelled.txt',
   ])('renders %s without leaving a mark behind', (file) => {
     const out = renderTemplate(file, values);
 
@@ -137,6 +143,6 @@ describe('renderTemplate', () => {
   });
 
   it('keeps windows line endings of the checkout out of the mail', () => {
-    expect(renderTemplate('verifyEmail.txt', values)).not.toContain('\r');
+    expect(renderTemplate('auth/verifyEmail.txt', values)).not.toContain('\r');
   });
 });

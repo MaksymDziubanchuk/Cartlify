@@ -67,7 +67,8 @@ function render(
   );
 }
 
-// a template file of src/services/email/templates: .html values are escaped, .txt ones are not
+// a template file of src/services/email/templates with its folder (auth/, orders/, users/), for
+// example orders/orderPaid.html: .html values are escaped, .txt ones are not
 export function renderTemplate(file: string, values: TemplateValues): string {
   let source = cache.get(file);
 

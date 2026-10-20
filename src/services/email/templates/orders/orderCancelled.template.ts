@@ -1,32 +1,28 @@
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
-export type OrderPaidItem = {
+export type OrderCancelledItem = {
   name: string;
   quantity: number;
   // prices come as numbers or as prisma decimals turned into strings
-  unitPrice: number | string;
   totalPrice: number | string;
 };
 
-export type OrderPaidTemplateArgs = {
+export type OrderCancelledTemplateArgs = {
   orderId: number;
   // the order page of the frontend
   orderUrl: string;
-  items: OrderPaidItem[];
+  items: OrderCancelledItem[];
+  // the refunded amount, the whole payment
   total: number | string;
   // the currency checkout charges in, for example "eur"
   currency: string;
-  paidAt: Date;
   userName?: string;
-  shippingAddress?: string | null;
-  recipientName?: string | null;
-  recipientPhone?: string | null;
   appName?: string;
   logoCid?: string;
 };
 
-// the mail itself is orderPaid.html and orderPaid.txt next to this file
-export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
+// the mail itself is orderCancelled.html and orderCancelled.txt next to this file
+export function buildOrderCancelledTemplate(args: OrderCancelledTemplateArgs): {
   subject: string;
   text: string;
   html: string;
@@ -43,37 +39,24 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
   });
   const price = (value: number | string) => money.format(Number(value));
 
-  // the time zone of the buyer is unknown, the time is given in utc and says so
-  const paidAt = `${new Intl.DateTimeFormat('en-GB', {
-    dateStyle: 'long',
-    timeStyle: 'short',
-    timeZone: 'UTC',
-  }).format(args.paidAt)} UTC`;
-
   const values = {
     appName,
     orderId: String(args.orderId),
     orderUrl,
-    paidAt,
     items: args.items.map((item) => ({
       name: item.name.trim(),
       quantity: String(item.quantity),
-      unitPrice: price(item.unitPrice),
       lineTotal: price(item.totalPrice),
     })),
     total: price(args.total),
-    shippingAddress: args.shippingAddress?.trim() || '',
-    // the name and the phone in one line; an order confirmed before the recipient fields existed
-    // has neither, then the line is left out
-    recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
   };
 
   return {
-    subject: `${appName} — Order #${args.orderId} is paid`,
-    text: renderTemplate('orderPaid.txt', values),
-    html: renderTemplate('orderPaid.html', values),
+    subject: `${appName} — Order #${args.orderId} is cancelled`,
+    text: renderTemplate('orders/orderCancelled.txt', values),
+    html: renderTemplate('orders/orderCancelled.html', values),
   };
 }

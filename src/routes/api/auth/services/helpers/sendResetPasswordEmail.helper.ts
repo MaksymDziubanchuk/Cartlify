@@ -6,7 +6,7 @@ import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 import { webUrl } from '@helpers/webOrigin.js';
 
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
-import { buildResetPasswordTemplate } from '@services/email/templates/resetPassword.template.js';
+import { buildResetPasswordTemplate } from '@services/email/templates/auth/resetPassword.template.js';
 
 export type SendResetPasswordEmailArgs = {
   to: string;

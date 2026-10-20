@@ -84,7 +84,7 @@ export interface UpdateMeDto {
 export interface DeleteUserByIdDto {
   actorId: UserId;
   userId: UserId;
-  // the steps after the database (stripe, the avatar file, the mail) only log their failures
+  // the steps after the database (the payment page, the avatar file, the mail) only log their failures
   log: AccountDeletionLogger;
 }
 

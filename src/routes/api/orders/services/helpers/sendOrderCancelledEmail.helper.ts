@@ -3,10 +3,10 @@ import path from 'node:path';
 
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import env from '@config/env.js';
 import { webUrl } from '@helpers/webOrigin.js';
-import { buildOrderCancelledTemplate } from '@services/email/templates/orderCancelled.template.js';
+import { buildOrderCancelledTemplate } from '@services/email/templates/orders/orderCancelled.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
+import { currencyOf } from '@routes/api/payments/providers/index.js';
 
 export type OrderCancelLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -26,6 +26,7 @@ function loadOrder(orderId: number) {
       select: {
         id: true,
         total: true,
+        paymentProvider: true,
         user: { select: { email: true, name: true, deletedAt: true } },
         items: {
           orderBy: { id: 'asc' },
@@ -61,7 +62,8 @@ export async function sendOrderCancelledEmail(
         totalPrice: item.totalPrice.toString(),
       })),
       total: order.total.toString(),
-      currency: env.STRIPE_CURRENCY,
+      // the money of the provider that took it
+      currency: currencyOf(order.paymentProvider),
       ...(order.user.name ? { userName: order.user.name } : {}),
       logoCid: 'cartlify-logo',
     });

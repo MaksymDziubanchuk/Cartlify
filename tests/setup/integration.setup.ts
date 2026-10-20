@@ -1,4 +1,4 @@
-import { isolateEnv } from './isolateEnv.js';
+import { isolateEnv, STRIPE_PLACEHOLDER_KEY } from './isolateEnv.js';
 import { assertTestServices } from '../helpers/guard.js';
 
 // cloudinary has no test mode: the uploads go to the real account, into its test/ folder
@@ -10,6 +10,11 @@ const CLOUDINARY_KEYS = [
   'CLOUDINARY_API_KEY',
   'CLOUDINARY_API_SECRET',
 ];
+
+// stripe has a test mode: the payment tests take the key of a test sandbox from
+// STRIPE_TEST_SECRET_KEY (.env locally, the secret of the same name in ci), never
+// STRIPE_SECRET_KEY, which one day holds the live key; without it they are skipped
+const STRIPE_TEST_KEY = 'STRIPE_TEST_SECRET_KEY';
 
 // docker test stack from docker-compose.test.yml, built by npm run db:test:up
 isolateEnv(
@@ -37,9 +42,16 @@ isolateEnv(
     LINKEDIN_CLIENT_SECRET: 'test-linkedin-secret',
     LINKEDIN_REDIRECT_URI: 'https://api.example.com/api/auth/linkedin/callback',
     LINKEDIN_STATE_SECRET: 'test-linkedin-state-secret',
+    // the tests sign the webhook events with this secret the way stripe signs them; the sandbox
+    // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
+    STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
+    STRIPE_CURRENCY: 'eur',
   },
-  { fromLocalEnv: CLOUDINARY_KEYS },
+  { fromLocalEnv: [...CLOUDINARY_KEYS, STRIPE_TEST_KEY] },
 );
+
+// set here and not left to the environment: a STRIPE_SECRET_KEY of the shell may be a live key
+process.env.STRIPE_SECRET_KEY = process.env[STRIPE_TEST_KEY]?.trim() || STRIPE_PLACEHOLDER_KEY;
 
 // stop before any test file imports the app
 assertTestServices();

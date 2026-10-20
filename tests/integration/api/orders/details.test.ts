@@ -104,7 +104,8 @@ describe('GET /api/orders/:orderId', () => {
       reservationExpiresAt: expect.any(String),
       items: [{ productId: product.id, quantity: 2, unitPrice: 10, totalPrice: 20 }],
     });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
   });
 
   it('hides the order of another user as not found', async () => {
@@ -123,7 +124,8 @@ describe('GET /api/orders/:orderId', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ id: orderId, status: 'paid', ...shippingData });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
   });
 
   it('answers 404 for an order that does not exist', async () => {
@@ -182,6 +184,38 @@ describe('GET /api/orders/:orderId', () => {
     expect(res.json()).toMatchObject({ total: 8, items: [{ productId: kept.id, quantity: 2 }] });
     expect(res.json().items).toHaveLength(1);
     expect((await orderRowOf(orderId)).items.map((item) => item.productId)).toEqual([kept.id]);
+  });
+
+  it('drops the items of deleted products from the cart as well', async () => {
+    const user = await newUser();
+    const gone = await newProduct({ price: 10 });
+    const kept = await newProduct({ price: 4 });
+    await placeOrder(app, csrf, user, gone, 'cart');
+    const cartId = await placeOrder(app, csrf, user, kept, 'cart', 2);
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await getOrder(user, cartId);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      status: 'pending',
+      total: 8,
+      items: [{ productId: kept.id }],
+    });
+    expect(res.json().items).toHaveLength(1);
+  });
+
+  // the payment page names such an item (409 ORDER_ITEMS_UNAVAILABLE), the buyer decides
+  it('keeps the items of deleted products in an order waiting for its payment', async () => {
+    const user = await newUser();
+    const gone = await newProduct();
+    const orderId = await placeOrder(app, csrf, user, gone, 'waiting');
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await getOrder(user, orderId);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toEqual([expect.objectContaining({ productId: gone.id })]);
   });
 
   // the page marks what there is not enough of before the order is confirmed again

@@ -35,4 +35,12 @@ export function assertTestServices(): void {
       `Test guard: REDIS_URL must point to 127.0.0.1:${TEST_REDIS_PORT}, it points to another server`,
     );
   }
+
+  // the payment tests pay, refund and close payment pages for real: only in a test sandbox
+  if (!/^(sk|rk)_test_/.test(process.env.STRIPE_SECRET_KEY ?? '')) {
+    throw new Error(
+      'Test guard: the Stripe key of the tests must be a test key (sk_test_), ' +
+        'STRIPE_TEST_SECRET_KEY holds another one',
+    );
+  }
 }

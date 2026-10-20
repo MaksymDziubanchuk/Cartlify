@@ -1,7 +1,10 @@
 import { prisma } from '@db/client.js';
-import stripe from '@config/stripe.js';
 import { assertRedisReady } from '@redis/client.js';
-import { setOrderPaymentSessionLink } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
+import {
+  deleteOrderPaymentPageLink,
+  getOrderPaymentPageLink,
+  setOrderPaymentPageLink,
+} from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
 
 import { setUserContext } from '@db/dbContext.service.js';
 import {
@@ -10,30 +13,50 @@ import {
   ForbiddenError,
   InternalError,
   NotFoundError,
+  ServiceUnavailableError,
   isAppError,
 } from '@utils/errors.js';
 
-import {
-  buildCheckoutIdempotencyKey,
-  buildCheckoutSessionPayload,
-  mapCreatedCheckoutSession,
-} from './helpers/checkoutSession.helper.js';
+import { getPaymentProvider } from '../providers/index.js';
 
+import type { UnavailableOrderItem } from '@routes/api/orders/services/helpers/confirmOrder.helper.js';
+import type { PaymentProviderName } from '../providers/types.js';
 import type {
   CreateCheckoutSessionDto,
   CheckoutSessionResponseDto,
 } from 'types/dto/payments.dto.js';
 
+// the buyer picked another provider than the one whose page is open for the order: that page is
+// closed first, so the order cannot be paid twice; one that took the money keeps the order as it is
+async function closePageOfOtherProvider(orderId: number, provider: PaymentProviderName) {
+  const page = await getOrderPaymentPageLink(orderId);
+  if (!page || page.provider === provider) return;
+
+  const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
+
+  if (closed.state === 'paid') throw new ConflictError('ORDER_ALREADY_PAID');
+  if (closed.state === 'in_progress') throw new ConflictError('ORDER_PAYMENT_IN_PROGRESS');
+  if (closed.state === 'open') {
+    throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, closed.cause);
+  }
+
+  await deleteOrderPaymentPageLink(orderId);
+}
+
+// the payment page of a confirmed order at the provider the buyer picked
 export async function createCheckoutSession({
   actorId,
   actorRole,
   orderId,
+  provider,
 }: CreateCheckoutSessionDto): Promise<CheckoutSessionResponseDto> {
   // enforce user-only checkout create
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
-  // refuse early so no stripe session is created while redis is down
+  // refuse early so no payment page is opened while redis is down
   assertRedisReady();
+
+  const paymentProvider = getPaymentProvider(provider);
 
   try {
     const orderSnapshot = await prisma.$transaction(async (db) => {
@@ -51,7 +74,11 @@ export async function createCheckoutSession({
           reservationExpiresAt: true,
           total: true,
           items: {
+            orderBy: { id: 'asc' },
             select: {
+              id: true,
+              productId: true,
+              quantity: true,
               product: {
                 select: {
                   deletedAt: true,
@@ -96,11 +123,21 @@ export async function createCheckoutSession({
         throw new BadRequestError('ORDER_ITEMS_REQUIRED');
       }
 
-      // ensure all item products still exist
-      const hasInvalidProduct = order.items.some((item) => !item.product || item.product.deletedAt);
+      // an item removed from the catalog after the confirmation is named the way the confirmation
+      // names it: the buyer cancels the payment, changes the order and confirms it again. Its own
+      // reservation is in the stock numbers, so only a removed product is unavailable here
+      const removed: UnavailableOrderItem[] = order.items
+        .filter((item) => item.product.deletedAt)
+        .map((item) => ({
+          itemId: item.id,
+          productId: item.productId,
+          reason: 'deleted',
+          available: 0,
+          requested: item.quantity,
+        }));
 
-      if (hasInvalidProduct) {
-        throw new NotFoundError('PRODUCT_NOT_FOUND');
+      if (removed.length > 0) {
+        throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', { items: removed });
       }
 
       // validate order total
@@ -108,6 +145,14 @@ export async function createCheckoutSession({
 
       if (!Number.isFinite(totalRaw) || totalRaw <= 0) {
         throw new BadRequestError('ORDER_TOTAL_INVALID');
+      }
+
+      // the provider refuses a smaller payment, the page tells the buyer the smallest total
+      if (totalRaw < paymentProvider.minimumTotal) {
+        throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
+          minimum: paymentProvider.minimumTotal,
+          currency: paymentProvider.currency,
+        });
       }
 
       return {
@@ -118,32 +163,16 @@ export async function createCheckoutSession({
       };
     });
 
-    // build checkout payload for stripe
-    const checkoutSessionPayload = buildCheckoutSessionPayload({
-      orderId: orderSnapshot.orderId,
-      userId: orderSnapshot.userId,
-      total: orderSnapshot.total,
-    });
+    await closePageOfOtherProvider(orderSnapshot.orderId, provider);
 
-    // create checkout session in stripe
-    // repeated request for the same order and reservation gets the same session, not a second payment
-    const session = await stripe.checkout.sessions.create(checkoutSessionPayload, {
-      idempotencyKey: buildCheckoutIdempotencyKey(
-        orderSnapshot.orderId,
-        orderSnapshot.reservationExpiresAt,
-      ),
-    });
+    // the same order with the same reservation gets the same page, not a second payment
+    const { pageId, checkoutSession } = await paymentProvider.openPaymentPage(orderSnapshot);
 
-    // set sessionId & orderId connection to Redis for expiration
-    // session is not expired when this fails: the retry gets the same session back and links it
-    await setOrderPaymentSessionLink(orderSnapshot.orderId, session.id);
+    // the link from the order to its page, for closing it at the reservation end or on a cancel;
+    // the page is not closed when this fails: the retry gets the same page back and links it
+    await setOrderPaymentPageLink(orderSnapshot.orderId, { provider, pageId });
 
-    // map stripe session into api dto
-    return mapCreatedCheckoutSession(
-      session,
-      orderSnapshot.orderId,
-      orderSnapshot.reservationExpiresAt,
-    );
+    return { checkoutSession };
   } catch (err) {
     // preserve known app errors
     if (isAppError(err)) throw err;

@@ -153,7 +153,7 @@ const putOrderStatus: ControllerRouter<
 
   const args = pickDefined<UpdateOrderStatusDto>({ actorId, actorRole, orderId, status }, {});
 
-  const result = await ordersServices.updateOrderStatus(args);
+  const result = await ordersServices.updateOrderStatus(args, req.log);
   return reply.code(200).send(result);
 };
 

@@ -656,7 +656,8 @@ WITH
     AND confirmed = false
     AND status = 'pending'
     AND "reservationExpiresAt" IS NULL
-    AND "paymentIntentId" IS NULL
+    AND "paymentId" IS NULL
+    AND "paymentProvider" IS NULL
   );
 
 -- UPDATE (owner only, order stays unconfirmed; confirmation goes through cartlify.confirm_order)
@@ -669,7 +670,8 @@ FOR UPDATE
 WITH
   CHECK (
     cartlify.is_owner ("userId")
-    AND "paymentIntentId" IS NULL
+    AND "paymentId" IS NULL
+    AND "paymentProvider" IS NULL
     AND confirmed = false
     AND status IN ('pending', 'unconfirmed')
     AND "reservationExpiresAt" IS NULL
@@ -739,7 +741,8 @@ WITH
       confirmed = true
       AND status = 'waiting'
       AND "reservationExpiresAt" IS NOT NULL
-      AND "paymentIntentId" IS NULL
+      AND "paymentId" IS NULL
+      AND "paymentProvider" IS NULL
       AND "total" >= 0
       AND cartlify.is_owner ("userId")
       AND (
@@ -755,18 +758,20 @@ WITH
         )
       )
     )
+    -- pay_order: the payment and who took it are set together, nothing else but the state changes
     OR (
       confirmed = true
       AND status = 'paid'
       AND "reservationExpiresAt" IS NULL
-      AND "paymentIntentId" IS NOT NULL
+      AND "paymentId" IS NOT NULL
+      AND "paymentProvider" IS NOT NULL
       AND "total" >= 0
       AND (
         (
-          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentIntentId' - 'total' - 'updatedAt'
+          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'total' - 'updatedAt'
         ) = (
           SELECT
-            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentIntentId' - 'total' - 'updatedAt'
+            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'total' - 'updatedAt'
           FROM
             cartlify.orders AS o
           WHERE

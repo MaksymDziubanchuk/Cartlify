@@ -8,19 +8,16 @@ import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/
 import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
 import {
   cancelOrderReservationExpiry,
-  deleteOrderPaymentSessionLink,
-  getOrderPaymentSessionLink,
+  deleteOrderPaymentPageLink,
+  getOrderPaymentPageLink,
 } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
-import {
-  expireCheckoutSession,
-  readCheckoutSessionStatus,
-} from '@routes/api/payments/services/helpers/checkoutSession.helper.js';
+import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
 import type {
   AccountDeletedCancelled,
   AccountDeletedDelivery,
   AccountDeletedItem,
   CancelledOrderPayment,
-} from '@services/email/templates/accountDeleted.template.js';
+} from '@services/email/templates/users/accountDeleted.template.js';
 
 import {
   sendAccountDeletedEmail,
@@ -180,8 +177,9 @@ async function eraseAccount(
   );
 }
 
-// the payment page of a cancelled order is closed at stripe, and stripe tells what happened to
-// the money. Nothing here can undo the deletion: a failure is logged and the payment is unknown
+// the payment page of a cancelled order is closed by the provider that opened it, and its answer
+// tells what happened to the money. Nothing here can undo the deletion: a failure is logged and
+// the payment is unknown
 export async function closeCheckoutOf(
   orderId: number,
   log: AccountDeletionLogger,
@@ -194,26 +192,30 @@ export async function closeCheckoutOf(
     await cancelOrderReservationExpiry(orderId);
 
     // no page was opened for the order, or redis lost the link: nothing can be said for sure
-    const sessionId = await getOrderPaymentSessionLink(orderId);
-    if (!sessionId) return 'unknown';
+    const page = await getOrderPaymentPageLink(orderId);
+    if (!page) return 'unknown';
 
-    try {
-      await expireCheckoutSession({ sessionId });
-      await deleteOrderPaymentSessionLink(orderId);
+    const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
+
+    if (closed.state === 'closed') {
+      await deleteOrderPaymentPageLink(orderId);
       return 'not_taken';
-    } catch (err) {
-      // a page that is already paid cannot be closed: the order is gone, so the webhook refunds it
-      const { status, paid } = await readCheckoutSessionStatus(sessionId);
-
-      if (status === 'expired') {
-        await deleteOrderPaymentSessionLink(orderId);
-        return 'not_taken';
-      }
-      if (status === 'complete' && paid) return 'refunding';
-
-      log.warn({ err, orderId, status }, 'payment page of a cancelled order was not closed');
-      return 'unknown';
     }
+
+    // a page that is already paid cannot be closed: the order is gone, so the payment event refunds it
+    if (closed.state === 'paid') return 'refunding';
+
+    // a payment still on its way, or a page the provider did not close
+    log.warn(
+      {
+        err: closed.state === 'open' ? closed.cause : undefined,
+        orderId,
+        provider: page.provider,
+        state: closed.state,
+      },
+      'payment page of a cancelled order was not closed',
+    );
+    return 'unknown';
   } catch (err) {
     log.error({ err, orderId }, 'payment page of a cancelled order was not closed');
     return 'unknown';

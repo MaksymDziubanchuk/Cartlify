@@ -16,7 +16,7 @@ export const CSRF_COOKIE = isProd ? '__Host-csrf' : 'csrf';
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
 // one rule for the check and for the docs: a request that changes data needs the token,
-// unless its route opts out with config.csrf: false (the stripe webhook signs its own calls)
+// unless its route opts out with config.csrf: false (a payment provider signs its own calls)
 export function requiresCsrfToken(method: string, config?: { csrf?: boolean }): boolean {
   return UNSAFE_METHODS.has(method.toUpperCase()) && config?.csrf !== false;
 }

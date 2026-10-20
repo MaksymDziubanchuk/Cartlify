@@ -96,7 +96,7 @@ describe('GET /documentation/json', () => {
   it.each([
     ['get', '/api/favorites'],
     ['get', '/api/auth/csrf'],
-    ['post', '/api/payments/webhook'],
+    ['post', '/api/payments/stripe/webhook'],
   ])('asks no csrf header of %s %s', (method, path) => {
     const security = operation(method, path).security ?? [];
 
@@ -198,6 +198,94 @@ describe('the product routes', () => {
     ],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
+  });
+});
+
+// a schema with its references followed
+type Resolved = Schema & { required?: string[] };
+const resolve = (schema: Schema): Resolved =>
+  schema.$ref ? resolve(doc.components.schemas[schema.$ref.split('/').pop()!]!) : schema;
+
+// the required properties of a schema, references and allOf followed
+const requiredOf = (schema: Schema): string[] => {
+  const resolved = resolve(schema);
+  return [...(resolved.required ?? []), ...(resolved.allOf ?? []).flatMap(requiredOf)];
+};
+
+describe('the payments routes', () => {
+  // there is no main provider: the body names one of the providers of the server
+  it('asks the order and the provider in the body of POST /api/payments/checkout/sessions', () => {
+    const body = resolve(
+      operation('post', '/api/payments/checkout/sessions').requestBody!.content['application/json']!
+        .schema,
+    );
+
+    expect(requiredOf(body).sort()).toEqual(['orderId', 'provider']);
+    expect(propertiesOf(body).provider).toMatchObject({ type: 'string', enum: ['stripe'] });
+  });
+
+  it('names the provider of the page in the answer', () => {
+    const answer = operation('post', '/api/payments/checkout/sessions').responses?.['201'] as {
+      content: Record<string, { schema: Schema }>;
+    };
+    const page = resolve(
+      propertiesOf(resolve(answer.content['application/json']!.schema)).checkoutSession as Schema,
+    );
+
+    expect(requiredOf(page)).toContain('provider');
+    expect(propertiesOf(page).provider).toMatchObject({ enum: ['stripe'] });
+  });
+
+  // stripe is one provider: its routes are under its name, the paths of a main provider are gone
+  it('keeps the routes of stripe under its name only', () => {
+    expect(doc.paths).not.toHaveProperty(['/api/payments/webhook']);
+    expect(doc.paths).not.toHaveProperty(['/api/payments/checkout/sessions/{sessionId}']);
+    expect(doc.paths).toHaveProperty(['/api/payments/stripe/webhook']);
+    expect(doc.paths).toHaveProperty(['/api/payments/stripe/checkout/sessions/{sessionId}']);
+  });
+
+  it('asks the csrf header of POST /api/payments/checkout/sessions', () => {
+    const security = operation('post', '/api/payments/checkout/sessions').security ?? [];
+
+    expect(security.length).toBeGreaterThan(0);
+    for (const requirement of security) expect(requirement).toHaveProperty('csrfTokenHeader');
+  });
+
+  // 503: redis or Stripe out of reach; a body that fails its schema is a 400, never a 422
+  it.each([
+    [
+      'post',
+      '/api/payments/checkout/sessions',
+      ['201', '400', '401', '403', '404', '409', '500', '503'],
+    ],
+    [
+      'get',
+      '/api/payments/stripe/checkout/sessions/{sessionId}',
+      ['200', '400', '401', '403', '404', '500', '503'],
+    ],
+    ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '500']],
+  ])('lists only the answers %s %s can give', (method, path, statuses) => {
+    expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
+  });
+});
+
+describe('every route', () => {
+  // a body that fails its schema is a 400 VALIDATION_ERROR everywhere; the one 422 the app gives
+  // is a category whose parent does not exist (CATEGORY_PARENT_NOT_FOUND)
+  it('lists 422 only for a category whose parent may be missing', () => {
+    const with422 = Object.entries(doc.paths).flatMap(([path, operations]) =>
+      Object.entries(operations)
+        .filter(([, op]) => op.responses?.['422'])
+        .map(([method]) => `${method} ${path}`),
+    );
+
+    expect(with422.sort()).toEqual(['patch /api/categories/{categoryId}', 'post /api/categories/']);
+  });
+
+  it('lists only the answers the confirmation of an order can give', () => {
+    expect(
+      Object.keys(operation('post', '/api/orders/current/confirm').responses ?? {}).sort(),
+    ).toEqual(['200', '400', '401', '403', '404', '409', '500', '503']);
   });
 });
 

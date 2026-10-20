@@ -64,10 +64,6 @@ const postVoteReviewSchema = {
       description: 'Review vote conflicts with the current review state.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Review vote payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while voting for review.',
       $ref: 'errorResponseSchema#',

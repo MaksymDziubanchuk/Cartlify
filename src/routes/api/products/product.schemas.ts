@@ -366,10 +366,6 @@ const postProductReviewRouterSchema = {
         'REVIEW_COMMENT_UPDATE_FORBIDDEN or REVIEW_ALREADY_EXISTS when nothing new is sent.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Review payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while creating product review.',
       $ref: 'errorResponseSchema#',
@@ -487,10 +483,6 @@ const patchProductsBulkPriceRouterSchema = {
     },
     409: {
       description: 'Bulk price update conflicts with product state.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Bulk price update payload failed validation.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -637,10 +629,6 @@ const patchProductCategorySchema = {
     },
     409: {
       description: 'Product category update conflicts with current product state.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Product category update payload failed validation.',
       $ref: 'errorResponseSchema#',
     },
     500: {

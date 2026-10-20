@@ -11,9 +11,9 @@ export type AccountDeletedDelivery = {
   items: AccountDeletedItem[];
 };
 
-// what stripe said about the payment page of an order the deletion cancelled:
+// what the payment provider said about the payment page of an order the deletion cancelled:
 // not_taken - the page is closed and no money was taken; refunding - the money came and goes back;
-// unknown - there was no page to ask about, or stripe did not answer
+// unknown - there was no page to ask about, or the provider did not answer
 export type CancelledOrderPayment = 'not_taken' | 'refunding' | 'unknown';
 
 export type AccountDeletedCancelled = {
@@ -85,7 +85,7 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
 
   return {
     subject: `${appName} — Your account is deleted`,
-    text: renderTemplate('accountDeleted.txt', values),
-    html: renderTemplate('accountDeleted.html', values),
+    text: renderTemplate('users/accountDeleted.txt', values),
+    html: renderTemplate('users/accountDeleted.html', values),
   };
 }

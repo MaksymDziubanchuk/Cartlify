@@ -177,25 +177,44 @@ BEGIN
         status IN ('pending', 'unconfirmed')
         AND confirmed = false
         AND "reservationExpiresAt" IS NULL
-        AND "paymentIntentId" IS NULL
+        AND "paymentId" IS NULL
       )
       OR (
         status = 'waiting'
         AND confirmed = true
         AND "reservationExpiresAt" IS NOT NULL
-        AND "paymentIntentId" IS NULL
+        AND "paymentId" IS NULL
       )
       OR (
         status = 'paid'
         AND confirmed = true
         AND "reservationExpiresAt" IS NULL
-        AND "paymentIntentId" IS NOT NULL
+        AND "paymentId" IS NOT NULL
       )
       OR (
         status IN ('shipped', 'delivered', 'cancelled')
         AND confirmed = true
       )
     ) NOT VALID;
+END $$;
+
+----------------------------------------
+-- ORDERS: a payment always names who took it
+----------------------------------------
+-- the payment id and the provider are both empty or both set; pay_order sets them together,
+-- the migration that brought the provider marked the payments recorded before it as stripe
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_payment_provider_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_payment_provider_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_payment_provider_chk
+    CHECK (("paymentId" IS NULL) = ("paymentProvider" IS NULL));
 END $$;
 
 ----------------------------------------

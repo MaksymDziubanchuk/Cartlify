@@ -227,7 +227,9 @@ describe('GET /api/orders', () => {
 
     const res = await list(user);
 
-    expect(res.json().items[0]).not.toHaveProperty('paymentIntentId');
+    expect(res.json().items[0]).not.toHaveProperty('paymentId');
+
+    expect(res.json().items[0]).not.toHaveProperty('paymentProvider');
   });
 
   it('refuses a guest', async () => {

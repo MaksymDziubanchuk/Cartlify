@@ -126,8 +126,11 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('never reads or gives the payment id', () => {
-    expect(orderResponseSelect).not.toHaveProperty('paymentIntentId');
-    expect(map({ paymentIntentId: 'pi_secret' })).not.toHaveProperty('paymentIntentId');
+    expect(orderResponseSelect).not.toHaveProperty('paymentId');
+    expect(orderResponseSelect).not.toHaveProperty('paymentProvider');
+    const mapped = map({ paymentProvider: 'stripe', paymentId: 'pi_secret' });
+    expect(mapped).not.toHaveProperty('paymentId');
+    expect(mapped).not.toHaveProperty('paymentProvider');
   });
 
   it('maps an empty cart', () => {

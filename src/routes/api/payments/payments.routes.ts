@@ -1,39 +1,14 @@
-import { FastifyInstance, FastifyRequest } from 'fastify';
+import { FastifyInstance } from 'fastify';
+
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+
 import { paymentsController } from './payments.controllers.js';
 import { paymentsSchema } from './payments.schemas.js';
-
-import { BadRequestError } from '@utils/errors.js';
-
-function parsePaymentsJsonBody(req: FastifyRequest, body: string | Buffer<ArrayBufferLike>) {
-  const rawBody = Buffer.isBuffer(body) ? body : Buffer.from(body);
-  req.rawBody = rawBody;
-
-  if (body.length === 0) return {};
-
-  try {
-    return JSON.parse(body.toString('utf8'));
-  } catch (err) {
-    throw new BadRequestError('REQUEST_BODY_INVALID_JSON', { cause: err });
-  }
-}
+import { stripeRouter } from './providers/stripe/index.js';
 
 export default async function paymentsRouter(app: FastifyInstance) {
-  app.removeContentTypeParser('application/json');
-
-  app.addContentTypeParser(
-    /^application\/json(?:\s*;.*)?$/i,
-    { parseAs: 'buffer' },
-    (req, body, done) => {
-      try {
-        done(null, parsePaymentsJsonBody(req, body));
-      } catch (err) {
-        done(err as Error);
-      }
-    },
-  );
-
+  // the payment page of an order, with the provider the buyer picked
   app.post(
     '/checkout/sessions',
     {
@@ -43,22 +18,6 @@ export default async function paymentsRouter(app: FastifyInstance) {
     paymentsController.postCheckoutSession,
   );
 
-  app.get(
-    '/checkout/sessions/:sessionId',
-    {
-      preHandler: [authGuard, requireRole(['USER'])],
-      schema: paymentsSchema.getCheckoutSessionByIdSchema,
-    },
-    paymentsController.getCheckoutSessionById,
-  );
-
-  app.post(
-    '/webhook',
-    {
-      // stripe calls it server to server and signs the body, there is no browser and no csrf token
-      config: { rawBody: true, csrf: false },
-      schema: paymentsSchema.postStripeWebhookSchema,
-    },
-    paymentsController.postStripeWebhook,
-  );
+  // each provider keeps its own routes (its events, its return page) under its name
+  app.register(stripeRouter, { prefix: '/stripe' });
 }

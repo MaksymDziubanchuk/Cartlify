@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import { buildVerifyEmailTemplate } from '@services/email/templates/verifyEmail.template.js';
+import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 
 const verifyUrl = 'https://shop.test/login?verify=abc123';
 

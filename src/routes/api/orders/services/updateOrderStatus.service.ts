@@ -11,32 +11,39 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
+import {
+  sendOrderStatusEmail,
+  type OrderStatusMailLogger,
+  type ShippingStatus,
+} from './helpers/sendOrderStatusEmail.helper.js';
 
 import type { UpdateOrderStatusDto, OrderResponseDto, OrderStatus } from 'types/dto/orders.dto.js';
 
 // the statuses an order may come from, the same rule the database policy holds:
 // a paid order is shipped, a paid or shipped one is delivered
-const ALLOWED_FROM: Record<string, OrderStatus[]> = {
+const ALLOWED_FROM: Record<ShippingStatus, OrderStatus[]> = {
   shipped: ['paid'],
   delivered: ['paid', 'shipped'],
 };
 
-export async function updateOrderStatus({
-  actorId,
-  actorRole,
-  orderId,
-  status,
-}: UpdateOrderStatusDto): Promise<OrderResponseDto> {
+const isShippingStatus = (status: OrderStatus): status is ShippingStatus =>
+  Object.hasOwn(ALLOWED_FROM, status);
+
+// a shipped or delivered order mails the buyer after the commit, unless the account is deleted
+export async function updateOrderStatus(
+  { actorId, actorRole, orderId, status }: UpdateOrderStatusDto,
+  log: OrderStatusMailLogger,
+): Promise<OrderResponseDto> {
   // enforce admin/root only
   if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
 
   // a cancel returns the money and the stock, it goes through POST /:orderId/cancel
-  if (!['shipped', 'delivered'].includes(status)) throw new BadRequestError('STATUS_INVALID');
+  if (!isShippingStatus(status)) throw new BadRequestError('STATUS_INVALID');
 
   const orderIdRaw = Number(orderId);
 
   try {
-    return await tx(
+    const result = await tx(
       async (db) => {
         // set rls session context
         await setUserContext(db, { userId: actorId, role: actorRole });
@@ -52,7 +59,7 @@ export async function updateOrderStatus({
         });
         if (!current) throw new NotFoundError('ORDER_NOT_FOUND', { orderId: orderIdRaw });
 
-        if (!ALLOWED_FROM[status]?.includes(current.status)) {
+        if (!ALLOWED_FROM[status].includes(current.status)) {
           throw new ConflictError('ORDER_STATUS_TRANSITION_INVALID', {
             status: current.status,
             requested: status,
@@ -91,6 +98,11 @@ export async function updateOrderStatus({
         timeout: 10_000,
       },
     );
+
+    // the status is committed; the mail never undoes it, a failure is only logged
+    await sendOrderStatusEmail(orderIdRaw, status, log);
+
+    return result;
   } catch (err) {
     if (isAppError(err)) throw err;
 

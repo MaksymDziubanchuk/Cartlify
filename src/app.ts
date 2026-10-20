@@ -12,6 +12,7 @@ import path from 'path';
 import env from '@config/env.js';
 import { allowedWebOrigins } from '@helpers/webOrigin.js';
 import { registerRoutes } from '@routes/api/index.js';
+import { PAYMENT_CALLBACK_PATHS } from '@routes/api/payments/providers/index.js';
 import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
 import { adminDtoSchemas } from '@schemas/dto/admin.dtoSchemas.js';
@@ -31,7 +32,6 @@ import openApiPlugin from './plugins/openapi.plugin.js';
 import csrfPlugin from './plugins/csrf.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 import { FORM_BODY_LIMIT_BYTES, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
-
 
 // allow pino transport type
 type LoggerOptionsWithTransport = LoggerOptions & {
@@ -108,7 +108,11 @@ app.register(rateLimit, {
     // allow health and static
     req.url?.startsWith('/health') ||
     req.url?.startsWith('/ready') ||
-    req.url?.startsWith('/static'),
+    req.url?.startsWith('/static') ||
+    // a payment provider delivers every event from a few addresses: a busy hour of sales would hit
+    // the limit and hold back payments already made; the signature keeps anybody else out. Only the
+    // exact paths of the providers, not every path that starts like one
+    PAYMENT_CALLBACK_PATHS.has(req.url?.split('?')[0] ?? ''),
 });
 
 // register shared schemas

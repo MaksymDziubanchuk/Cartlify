@@ -1,8 +1,8 @@
 import { Prisma } from '@prisma/client';
 
-import env from '@config/env.js';
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
+import { paymentProviders, shopCurrency } from '@routes/api/payments/providers/index.js';
 import { askAiForBotReply, askAiForBotText, type ChatBotLogger } from './chatBotAi.service.js';
 import {
     BadRequestError,
@@ -442,7 +442,8 @@ const generateAiBotText = async (
         history: context.history,
         productContext: context.productContext,
         // the currency checkout charges in, so the bot names the same one
-        currency: env.STRIPE_CURRENCY,
+        currency: shopCurrency(),
+        paymentProviders: paymentProviders.map((provider) => provider.label),
     });
 
     // sends normalized request to the AI client, a broken answer is asked once more

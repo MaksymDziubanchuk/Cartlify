@@ -63,8 +63,6 @@ declare global {
 
       STRIPE_SECRET_KEY: string;
       STRIPE_WEBHOOK_SECRET: string;
-      STRIPE_SUCCESS_URL: string;
-      STRIPE_CANCEL_URL: string;
       STRIPE_CURRENCY: string;
     }
   }
@@ -173,7 +171,5 @@ export default {
   // stripe
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
   STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || '',
-  STRIPE_SUCCESS_URL: process.env.STRIPE_SUCCESS_URL || '',
-  STRIPE_CANCEL_URL: process.env.STRIPE_CANCEL_URL || '',
   STRIPE_CURRENCY: process.env.STRIPE_CURRENCY || 'eur',
 };

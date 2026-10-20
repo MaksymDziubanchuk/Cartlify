@@ -3,10 +3,11 @@ import path from 'node:path';
 
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import env from '@config/env.js';
 import { webUrl } from '@helpers/webOrigin.js';
-import { buildOrderPaidTemplate } from '@services/email/templates/orderPaid.template.js';
+import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPaid.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
+
+import { currencyOf } from '../../providers/index.js';
 
 export type OrderMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -16,7 +17,7 @@ export type OrderMailLogger = {
 // frontend page of an order, a placeholder until the frontend fixes its routes
 const orderPage = (orderId: number) => `/orders/${orderId}`;
 
-// the order with what the mail shows; the stripe webhook runs as the system, so admin context
+// the order with what the mail shows; the payment event runs as the system, so admin context
 function loadOrder(orderId: number) {
   return prisma.$transaction(async (tx) => {
     await setAdminContext(tx);
@@ -26,6 +27,7 @@ function loadOrder(orderId: number) {
       select: {
         id: true,
         total: true,
+        paymentProvider: true,
         shippingAddress: true,
         recipientFirstName: true,
         recipientLastName: true,
@@ -47,7 +49,7 @@ function loadOrder(orderId: number) {
 }
 
 // mails the buyer that the order is paid. The payment is recorded before this runs, so a mail
-// that fails is only logged: the webhook still answers stripe with success, or stripe would
+// that fails is only logged: the webhook still answers the provider with success, or it would
 // deliver the event again. The log keeps the order id, not the address of the buyer
 export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger): Promise<void> {
   try {
@@ -68,7 +70,8 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
         totalPrice: item.totalPrice.toString(),
       })),
       total: order.total.toString(),
-      currency: env.STRIPE_CURRENCY,
+      // the money of the provider that took it
+      currency: currencyOf(order.paymentProvider),
       // the payment is the last change of the order at this moment
       paidAt: order.updatedAt,
       ...(order.user.name ? { userName: order.user.name } : {}),

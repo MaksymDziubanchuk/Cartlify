@@ -24,10 +24,11 @@ export async function findById({
         // bound lock wait
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // bring item prices of an own unconfirmed order to current product prices
-        // an order that lost its reservation is no longer the current cart, so this is where its prices get fresh,
-        // and where it loses the items of products deleted from the catalog
-        // rls lets the owner touch only own unconfirmed orders, for any other order nothing changes
+        // bring item prices of an own order that is not confirmed (the cart or an order that lost
+        // its reservation) to current product prices, and drop the items of products deleted from
+        // the catalog; an order that lost its reservation is no longer the current cart, so this is
+        // where it gets fresh. Rls lets the owner touch only own orders that are not confirmed, for
+        // any other order nothing changes
         if (actorRole === 'USER') {
           await dropDeletedProductItems(db, Number(actorId), [Number(orderId)]);
           await db.$executeRaw`select cartlify.refresh_order_prices(${Number(orderId)}::int)`;

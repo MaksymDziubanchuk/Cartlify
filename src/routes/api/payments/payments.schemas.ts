@@ -6,14 +6,12 @@ import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
 const checkoutSessionBodyExample = {
   orderId: 1,
-};
-
-const checkoutSessionParamsExample = {
-  sessionId: 'cs_test_123456789',
+  provider: 'stripe',
 };
 
 const checkoutSessionResponseExample = {
   checkoutSession: {
+    provider: 'stripe',
     sessionId: 'cs_test_123456789',
     url: 'https://checkout.stripe.com/c/pay/cs_test_123456789',
     mode: 'payment',
@@ -23,20 +21,12 @@ const checkoutSessionResponseExample = {
   },
 };
 
-const stripeWebhookHeadersExample = {
-  'stripe-signature': 't=1700000000,v1=example_signature',
-};
-
-const stripeWebhookResponseExample = {
-  received: true,
-};
-
 // Schema for user checkout session creation
 const postCheckoutSessionSchema = {
   operationId: 'createCheckoutSession',
   summary: 'Create checkout session',
   description:
-    'Creates a Stripe checkout session for a confirmed user order. A repeated request for the same order and reservation returns the same session. `expiresAt` is the time after which the checkout can no longer be paid.',
+    'Opens the payment page of a confirmed user order at the payment provider the buyer picked (`provider`, there is no default one). A repeated request for the same order, reservation and provider returns the same page; a page of another provider opened for the order before is closed first. `expiresAt` is the time after which the checkout can no longer be paid. A Stripe page returns the buyer to `WEB_ORIGIN/checkout/success?session_id=<id>` or `WEB_ORIGIN/checkout/cancel?orderId=<id>`.',
 
   body: {
     $ref: 'paymentsCreateCheckoutSessionBodySchema#',
@@ -51,27 +41,26 @@ const postCheckoutSessionSchema = {
     },
 
     400: {
-      description: 'Invalid checkout session request.',
+      description:
+        '`VALIDATION_ERROR`: the order id is not a whole number from 1 to 2147483647, or `provider` is missing or not one this server pays with. `ORDER_TOTAL_INVALID`: the order total is zero. `ORDER_TOTAL_BELOW_MINIMUM`: the provider takes no smaller payment, `details` has the smallest total (`minimum`) and its `currency`; the confirmation refuses a total no provider takes already, this answers a total only another provider takes or an order confirmed before the rule.',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to create a checkout session.',
+      description: '`LOGIN_REQUIRED`: the session cookies are no longer valid.',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to create this checkout session.',
+      description:
+        '`INSUFFICIENT_ROLE`: only a signed-in buyer pays, not a guest, an admin or root.',
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Order required for checkout was not found.',
+      description: '`ORDER_NOT_FOUND`: there is no such order of this user.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order state does not allow checkout session creation.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Checkout session payload failed validation.',
+      description:
+        'The order cannot be paid now: `ORDER_NOT_CONFIRMED` (a cart or an order that lost its reservation, confirm it first), `ORDER_ALREADY_PAID` (also when the page of another provider took the money meanwhile), `ORDER_PAYMENT_IN_PROGRESS` (a payment on the page of another provider is still on its way), `ORDER_STATUS_NOT_WAITING`, `ORDER_RESERVATION_EXPIRED`, `ORDER_ITEMS_UNAVAILABLE` (an item was removed from the catalog: `details.items` names it as the confirmation does; cancel the payment, change the order and confirm it again).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -79,89 +68,8 @@ const postCheckoutSessionSchema = {
       $ref: 'errorResponseSchema#',
     },
     503: {
-      description: 'Checkout is temporarily unavailable because Redis is down.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-// Schema for user checkout session lookup
-const getCheckoutSessionByIdSchema = {
-  operationId: 'getCheckoutSessionById',
-  summary: 'Get checkout session by id',
-  description: 'Returns a Stripe checkout session by session id for the authenticated user.',
-
-  params: {
-    $ref: 'paymentsGetCheckoutSessionByIdParamsSchema#',
-    examples: [checkoutSessionParamsExample],
-  },
-
-  response: {
-    200: {
-      description: 'Checkout session was returned successfully.',
-      $ref: 'paymentsCheckoutSessionResponseSchema#',
-      examples: [checkoutSessionResponseExample],
-    },
-
-    400: {
-      description: 'Invalid checkout session id.',
-      $ref: 'errorResponseSchema#',
-    },
-    401: {
-      description: 'Authentication is required to read a checkout session.',
-      $ref: 'errorResponseSchema#',
-    },
-    403: {
-      description: 'The authenticated user is not allowed to access this checkout session.',
-      $ref: 'errorResponseSchema#',
-    },
-    404: {
-      description: 'Checkout session or linked order was not found.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description: 'Unexpected server error while loading checkout session.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-// Schema for Stripe webhook delivery
-const postStripeWebhookSchema = {
-  operationId: 'handleStripeWebhook',
-  summary: 'Handle Stripe webhook',
-  description:
-    'Handles Stripe checkout webhook events and updates linked order payment state. When the order becomes paid, the buyer gets a mail with the order; a mail that fails is only logged and does not fail the webhook. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log. An expired checkout releases the order reservation only after the payment grace window; an expired or failed checkout of an already deleted order is acknowledged with `skipped: ORDER_NOT_FOUND`.',
-
-  // inline, not a $ref: fastify lowercases header names only in an inline headers schema,
-  // so `required` of a referenced one may not apply (FSTSEC002)
-  headers: {
-    type: 'object',
-    additionalProperties: true,
-    required: ['stripe-signature'],
-    properties: {
-      'stripe-signature': { type: 'string', minLength: 1 },
-    },
-    examples: [stripeWebhookHeadersExample],
-  },
-
-  response: {
-    200: {
-      description: 'Stripe webhook was received successfully.',
-      $ref: 'paymentsStripeWebhookResponseSchema#',
-      examples: [stripeWebhookResponseExample],
-    },
-
-    400: {
-      description: 'Invalid Stripe webhook payload or missing signature.',
-      $ref: 'errorResponseSchema#',
-    },
-    401: {
-      description: 'Stripe webhook signature is invalid.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description: 'Unexpected server error while handling Stripe webhook.',
+      description:
+        '`REDIS_UNAVAILABLE` or `PAYMENT_PROVIDER_UNAVAILABLE` (the provider cannot be reached): no page was opened, try again a bit later.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -171,15 +79,13 @@ const postStripeWebhookSchema = {
 const taggedPaymentsSchema = withOpenApiTag(
   {
     postCheckoutSessionSchema,
-    getCheckoutSessionByIdSchema,
-    postStripeWebhookSchema,
   },
   'payments',
 );
 
-// Add access token security only to user checkout routes
+// Add access token security to the user checkout route
 export const paymentsSchema = withOpenApiSecurityFor(
   taggedPaymentsSchema,
   openApiSecurity.accessTokenCookie,
-  ['postCheckoutSessionSchema', 'getCheckoutSessionByIdSchema'],
+  ['postCheckoutSessionSchema'],
 );

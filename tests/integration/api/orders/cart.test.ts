@@ -134,6 +134,64 @@ describe('GET /api/orders/current', () => {
     expect(res.json()).toMatchObject({ total: 21, items: [{ unitPrice: 7, totalPrice: 21 }] });
   });
 
+  // a product removed from the catalog can never be bought: the cart loses it for good, the way
+  // an unconfirmed order does, and shows only what can be confirmed
+  it('drops the items of products deleted from the catalog for good', async () => {
+    const user = await newUser();
+    const gone = await newProduct({ price: 10 });
+    const kept = await newProduct({ price: 4 });
+    await addItem(user, { productId: gone.id, quantity: 1 });
+    const added = await addItem(user, { productId: kept.id, quantity: 2 });
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await getCart(user);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 8, items: [{ productId: kept.id, quantity: 2 }] });
+    expect(res.json().items).toHaveLength(1);
+    expect((await orderRowOf(added.json().id)).items.map((item) => item.productId)).toEqual([
+      kept.id,
+    ]);
+  });
+
+  it('keeps an empty cart when its only product was deleted from the catalog', async () => {
+    const user = await newUser();
+    const gone = await newProduct();
+    await addItem(user, { productId: gone.id, quantity: 1 });
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await getCart(user);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'pending', total: 0, items: [] });
+  });
+
+  it('leaves the cart of another user to its own reads', async () => {
+    const reader = await newUser();
+    const other = await newUser();
+    const gone = await newProduct();
+    await addItem(reader, { productId: gone.id, quantity: 1 });
+    const theirs = await addItem(other, { productId: gone.id, quantity: 1 });
+    await deleteProductFromCatalog(gone.id);
+
+    await getCart(reader);
+
+    expect((await orderRowOf(theirs.json().id)).items).toHaveLength(1);
+  });
+
+  // the payment page names such an item (409 ORDER_ITEMS_UNAVAILABLE), the buyer decides
+  it('leaves an order waiting for its payment as it is', async () => {
+    const user = await newUser();
+    const gone = await newProduct();
+    const waitingId = await placeOrder(app, csrf, user, gone, 'waiting');
+    await addItem(user, { productId: (await newProduct()).id, quantity: 1 });
+    await deleteProductFromCatalog(gone.id);
+
+    await getCart(user);
+
+    expect((await orderRowOf(waitingId)).items).toHaveLength(1);
+  });
+
   // an order that lost its reservation is no longer filled, it is changed by its own id
   it('does not take an unconfirmed order for the cart', async () => {
     const user = await newUser();
@@ -190,6 +248,21 @@ describe('POST /api/orders/current/items', () => {
     expect(res.json().id).toBe(first.json().id);
     expect(res.json()).toMatchObject({ total: 18 });
     expect(res.json().items).toHaveLength(2);
+  });
+
+  it('answers with the cart without the items of products deleted from the catalog', async () => {
+    const user = await newUser();
+    const gone = await newProduct({ price: 10 });
+    const kept = await newProduct({ price: 4 });
+    const first = await addItem(user, { productId: gone.id, quantity: 1 });
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await addItem(user, { productId: kept.id, quantity: 2 });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 8, items: [{ productId: kept.id }] });
+    expect(res.json().items).toHaveLength(1);
+    expect((await orderRowOf(first.json().id)).items).toHaveLength(1);
   });
 
   it('refuses a product deleted from the catalog', async () => {
@@ -360,6 +433,21 @@ describe('PATCH /api/orders/current/items/:itemId', () => {
     expect((await orderRowOf(orderId)).items[0]!.quantity).toBe(1);
   });
 
+  it('answers with the cart without the items of products deleted from the catalog', async () => {
+    const user = await newUser();
+    const gone = await newProduct({ price: 10 });
+    const kept = await newProduct({ price: 4 });
+    await addItem(user, { productId: gone.id, quantity: 1 });
+    const added = await addItem(user, { productId: kept.id, quantity: 1 });
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await changeItem(user, itemOf(added.json(), kept.id).id, { quantity: 3 });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 12, items: [{ productId: kept.id, quantity: 3 }] });
+    expect(res.json().items).toHaveLength(1);
+  });
+
   it('refuses a change of an item whose product was deleted from the catalog', async () => {
     const user = await newUser();
     const product = await newProduct();
@@ -420,6 +508,23 @@ describe('DELETE /api/orders/current/items/:itemId', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'pending', total: 0, items: [] });
+  });
+
+  it('answers with the cart without the items of products deleted from the catalog', async () => {
+    const user = await newUser();
+    const gone = await newProduct({ price: 10 });
+    const lamp = await newProduct({ price: 4 });
+    const mug = await newProduct({ price: 3 });
+    await addItem(user, { productId: gone.id, quantity: 1 });
+    await addItem(user, { productId: lamp.id, quantity: 1 });
+    const added = await addItem(user, { productId: mug.id, quantity: 1 });
+    await deleteProductFromCatalog(gone.id);
+
+    const res = await removeItem(user, itemOf(added.json(), mug.id).id);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 4, items: [{ productId: lamp.id }] });
+    expect(res.json().items).toHaveLength(1);
   });
 
   it('removes an item whose product was deleted from the catalog', async () => {

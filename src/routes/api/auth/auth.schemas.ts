@@ -115,10 +115,6 @@ const setRegisterSchema = {
       description: 'User with this email already exists.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Registration payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while registering user.',
       $ref: 'errorResponseSchema#',
@@ -152,10 +148,6 @@ const setLoginSchema = {
       description: 'Login credentials are invalid or the account cannot be authenticated.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Login payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while logging in.',
       $ref: 'errorResponseSchema#',
@@ -181,10 +173,6 @@ const setGoogleStartSchema = {
     },
     401: {
       description: 'Google OAuth start request is not authorized.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Google OAuth start request failed validation.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -260,10 +248,6 @@ const setGithubStartSchema = {
       description: 'GitHub OAuth start request is not authorized.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'GitHub OAuth start request failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     429: {
       description: 'Too many GitHub OAuth start requests.',
       $ref: 'errorResponseSchema#',
@@ -335,10 +319,6 @@ const setLinkedInStartSchema = {
     },
     401: {
       description: 'LinkedIn OAuth start request is not authorized.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'LinkedIn OAuth start request failed validation.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -422,10 +402,6 @@ const setVerifyResendSchema = {
       description: 'Email is already verified or verification cannot be resent.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Resend verification payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while resending verification email.',
       $ref: 'errorResponseSchema#',
@@ -491,10 +467,6 @@ const setPasswordForgotSchema = {
       description: 'Invalid password reset request.',
       $ref: 'errorResponseSchema#',
     },
-    422: {
-      description: 'Password reset request payload failed validation.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while requesting password reset.',
       $ref: 'errorResponseSchema#',
@@ -536,10 +508,6 @@ const setPasswordResetSchema = {
     },
     401: {
       description: 'Password reset token is invalid or expired.',
-      $ref: 'errorResponseSchema#',
-    },
-    422: {
-      description: 'Password reset payload failed validation.',
       $ref: 'errorResponseSchema#',
     },
     500: {

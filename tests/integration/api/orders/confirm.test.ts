@@ -15,6 +15,7 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { loseReservation, placeOrder, shippingData } from '../../../helpers/orders.js';
 
 // the shipping data of an order: the address and the recipient come with the confirmation and
@@ -276,6 +277,62 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     expect(res.json()).toMatchObject({ errorCode: 'ORDER_ITEMS_REQUIRED' });
   });
 
+  // Stripe takes no smaller payment: the order is refused before its stock is held, the page tells
+  // the buyer the smallest total, before the payment page is asked for
+  it.each([
+    ['a total below the smallest payment', 0.3],
+    ['a free order', 0],
+  ])('refuses %s and holds no stock', async (_case, price) => {
+    const user = await newUser();
+    const product = await createProduct({ price, stock: 5 });
+    products.push(product);
+    const added = await addItem(user, product.id, 1);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_TOTAL_BELOW_MINIMUM',
+      details: { minimum: 0.5, currency: 'eur' },
+    });
+    expect(await orderOf(added.json().id)).toMatchObject({
+      status: 'pending',
+      confirmed: false,
+      reservationExpiresAt: null,
+      shippingAddress: null,
+    });
+    expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
+  });
+
+  it.each([
+    ['the smallest payment', 0.5, 1],
+    ['a total over it of cheap items', 0.3, 2],
+  ])('confirms %s', async (_case, price, quantity) => {
+    const user = await newUser();
+    const product = await createProduct({ price, stock: 5 });
+    products.push(product);
+    const added = await addItem(user, product.id, quantity);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'waiting', total: price * quantity });
+  });
+
+  // the confirmation takes the prices of the catalog: a price that fell below the smallest payment
+  // after the cart was read is refused for it, a reload would show the same
+  it('counts the prices of the catalog, not the ones the cart was read at', async () => {
+    const user = await newUser();
+    const product = await newProduct();
+    const added = await addItem(user, product.id, 1);
+    await setProductPrice(product.id, 0.3);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'ORDER_TOTAL_BELOW_MINIMUM' });
+  });
+
   it('names an item whose product was deleted from the catalog and keeps the cart', async () => {
     const user = await newUser();
     const product = await newProduct();
@@ -426,8 +483,12 @@ describe('the order answers after the confirmation', () => {
     expect(res.json()).toMatchObject({ id: orderId, status: 'paid', ...shippingData });
     // a paid order holds no stock for the payment any more
     expect(res.json()).not.toHaveProperty('reservationExpiresAt');
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
-    expect((await orderOf(orderId)).paymentIntentId).toBe(`pi_test_${orderId}`);
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
+    expect(await orderOf(orderId)).toMatchObject({
+      paymentProvider: 'stripe',
+      paymentId: `pi_test_${orderId}`,
+    });
   });
 
   it('GET /api/orders lists the orders with the recipient', async () => {
@@ -464,6 +525,10 @@ describe('the order answers after the confirmation', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ status: 'shipped', ...shippingData });
-    expect(res.json()).not.toHaveProperty('paymentIntentId');
+    expect(res.json()).not.toHaveProperty('paymentId');
+    expect(res.json()).not.toHaveProperty('paymentProvider');
+    // the test environment has no SendGrid key, the shipped mail only logs its failure
+    // (status.test.ts checks the mails)
+    expect(takeLogs({ msg: 'order shipped mail was not sent' })).toHaveLength(1);
   });
 });
