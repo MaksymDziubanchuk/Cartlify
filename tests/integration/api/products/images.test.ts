@@ -5,8 +5,8 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import {
   bodyOf,
+  brokenPng,
   deliveryUrl,
-  describeWithCloudinary,
   gifImage,
   imageField,
   pngImage,
@@ -32,8 +32,8 @@ import {
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
-// the images of POST /api/products and PATCH /api/products/:productId go to Cloudinary for real:
-// each waits at a waiting id until the product is written and then moves to
+// the images of POST /api/products and PATCH /api/products/:productId go to Cloudinary (its mock,
+// or the real account with service:cloudinary, tests/helpers/cloudinary.ts): each waits at a waiting id until the product is written and then moves to
 // test/products/<id>/<position from 1>. A refused request moves nothing and leaves nothing
 // waiting, which is what the refusals check: the id a refused form took is not in the answer,
 // and other files make products at the same time. The PATCH tests start from a product of the
@@ -125,7 +125,7 @@ const urlPattern = (transforms: string, path: string) =>
     `^${deliveryUrl(transforms).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}v\\d+/${path}\\.png$`,
   );
 
-describeWithCloudinary('product images (Cloudinary)', () => {
+describe('product images (Cloudinary)', () => {
   beforeAll(async () => {
     app = await startApp();
     csrf = await getCsrf(app);
@@ -284,6 +284,23 @@ describeWithCloudinary('product images (Cloudinary)', () => {
       expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_TYPE_NOT_ALLOWED' });
       // the file is refused by its bytes, it never goes to Cloudinary
       expect(uploadsSince(mark)).toEqual([]);
+    });
+
+    it('refuses a png that Cloudinary cannot read and keeps no file', async () => {
+      const mark = uploadMark();
+
+      const res = await createForm([
+        ...productFields(),
+        image(pngImage(30, 20)),
+        image(brokenPng()),
+      ]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_INVALID' });
+      // both went to Cloudinary: the one it took is deleted, the other it kept nothing of
+      expect(uploadsSince(mark)).toHaveLength(2);
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toEqual([]);
     });
 
     it('refuses a user before anything is uploaded', async () => {

@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       parts:
-        description: 'test parts and real services, for example: unit api:auth service:sendgrid (empty runs all parts, services from their mocks)'
+        description: 'test parts and real services, for example: unit api:users service:sendgrid service:cloudinary (empty runs all parts, services from their mocks)'
         required: false
         type: string
         default: ''
@@ -33,9 +33,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # the cloudinary tests upload to the real account (its test/ folder); the repo is public and
-      # so are its logs, github hides only the whole secret: its parts are masked before anything
-      # runs. Without the secret the cloudinary tests are skipped
+      # with service:cloudinary in parts the cloudinary tests upload to the real account (its test/
+      # folder); the repo is public and so are its logs, github hides only the whole secret: its
+      # parts are masked before anything runs. Without the secret service:cloudinary stops the run
       - name: Mask Cloudinary key parts
         env:
           CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
@@ -74,7 +74,8 @@ jobs:
             jest-${{ runner.os }}-${{ hashFiles('package-lock.json', 'jest.config.js', 'tsconfig*.json') }}-
 
       # no terminal here, so the launcher runs every part unless parts are given, and the services
-      # of tests/run.mjs (sendgrid) answer from their mocks unless parts name them (service:sendgrid).
+      # of tests/run.mjs (sendgrid, cloudinary) answer from their mocks unless parts name them
+      # (service:sendgrid, service:cloudinary).
       # The payment tests take the key of the Stripe test sandbox, one value that github masks
       # whole; without the secret they are skipped. Real SendGrid takes its test key and the
       # addresses of the authenticated domain, each a secret github masks whole; every mail goes in

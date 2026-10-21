@@ -542,13 +542,14 @@ npm test -- --workers=1
 # SendGrid checks it and delivers nothing. GitHub Actions takes the secrets of the same names
 npm test -- api:auth service:sendgrid
 
+# real Cloudinary takes CLOUDINARY_* from .env: Cloudinary has no test mode, the upload tests
+# upload into the test/ folder of the account and delete what they uploaded. GitHub Actions
+# takes the CLOUDINARY_URL secret
+npm test -- api:users api:products service:cloudinary
+
 # unit or integration tests only
 npm run test:unit
 npm run test:integration
-
-# the Cloudinary upload tests are the one part that reads keys from .env (CLOUDINARY_*):
-# Cloudinary has no test mode, they upload into the test/ folder of the account and delete
-# what they uploaded; GitHub Actions takes the CLOUDINARY_URL secret, without it they are skipped
 
 # the payment tests use Stripe in test mode with STRIPE_TEST_SECRET_KEY from .env (never
 # STRIPE_SECRET_KEY): they open payment pages, pay them with a test card and deliver the events

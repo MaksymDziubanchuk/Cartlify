@@ -1,16 +1,19 @@
-import { isolateEnv, STRIPE_PLACEHOLDER_KEY } from './isolateEnv.js';
+import { CLOUDINARY_PLACEHOLDERS, isolateEnv, STRIPE_PLACEHOLDER_KEY } from './isolateEnv.js';
 import { assertTestServices } from '../helpers/guard.js';
 import { isRealService } from '../helpers/services.js';
 
-// cloudinary has no test mode: the uploads go to the real account, into its test/ folder
-// (tests/setup/integration.cloudinary.ts holds them there). Locally the keys come from .env,
-// in ci from the CLOUDINARY_URL secret; without them the upload tests are skipped
+// cloudinary: a mock unless the run takes it for real (service:cloudinary). Cloudinary has no test
+// mode, for real the uploads go to the account, into its test/ folder (tests/helpers/cloudinary.ts
+// holds them there), with the keys from .env locally and the CLOUDINARY_URL secret in ci. The mock
+// takes no key: the made-up ones, and no CLOUDINARY_URL of the shell
+const realCloudinary = isRealService('cloudinary');
 const CLOUDINARY_KEYS = [
   'CLOUDINARY_URL',
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_API_KEY',
   'CLOUDINARY_API_SECRET',
 ];
+const MOCK_CLOUDINARY = { CLOUDINARY_URL: '', ...CLOUDINARY_PLACEHOLDERS };
 
 // stripe has a test mode: the payment tests take the key of a test sandbox from
 // STRIPE_TEST_SECRET_KEY (.env locally, the secret of the same name in ci), never
@@ -63,10 +66,11 @@ isolateEnv(
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
     ...(realSendGrid ? {} : MOCK_SENDGRID),
+    ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },
   {
     fromLocalEnv: [
-      ...CLOUDINARY_KEYS,
+      ...(realCloudinary ? CLOUDINARY_KEYS : []),
       STRIPE_TEST_KEY,
       ...(realSendGrid ? [SENDGRID_TEST_KEY, ...MAIL_ADDRESS_KEYS] : []),
     ],
@@ -87,6 +91,20 @@ if (realSendGrid) {
     );
   }
   process.env.SENDGRID_API_KEY = process.env[SENDGRID_TEST_KEY]!.trim();
+}
+
+// the real account needs its url, or all three of its parts; the placeholders isolateEnv puts in
+// for the import do not count
+if (realCloudinary) {
+  const hasUrl = Boolean(process.env.CLOUDINARY_URL?.trim());
+  const missing = Object.entries(CLOUDINARY_PLACEHOLDERS)
+    .filter(([key, placeholder]) => [undefined, '', placeholder].includes(process.env[key]?.trim()))
+    .map(([key]) => key);
+  if (!hasUrl && missing.length) {
+    throw new Error(
+      `service:cloudinary takes CLOUDINARY_URL, or ${missing.join(', ')}, from .env or the environment`,
+    );
+  }
 }
 
 // stop before any test file imports the app

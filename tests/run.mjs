@@ -34,7 +34,10 @@ const DEFAULT_WORKERS = Math.min(6, availableParallelism());
 // external services the tests answer from a mock unless the run names them (a checkbox under
 // Services, service:<name> in the arguments); jest gets the named ones in TEST_REAL_SERVICES.
 // real: false means the real mode is not set up yet, the mock answers all the same
-const SERVICES = [{ name: 'sendgrid', real: true }];
+const SERVICES = [
+  { name: 'sendgrid', real: true },
+  { name: 'cloudinary', real: true },
+];
 const SERVICE_PREFIX = 'service:';
 
 // one part per test folder: unit, api:<module>, then every other integration folder

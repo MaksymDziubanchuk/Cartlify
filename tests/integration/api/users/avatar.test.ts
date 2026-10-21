@@ -5,8 +5,8 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import {
   bodyOf,
+  brokenPng,
   deliveryUrl,
-  describeWithCloudinary,
   gifImage,
   imageField,
   pngImage,
@@ -24,7 +24,8 @@ import { hideSecrets } from '../../../helpers/hideSecrets.js';
 import { watchMail } from '../../../helpers/mail.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
-// the avatar of PATCH /api/users/me goes to Cloudinary for real: it waits at a waiting id until the
+// the avatar of PATCH /api/users/me goes to Cloudinary (its mock, or the real account with
+// service:cloudinary, tests/helpers/cloudinary.ts): it waits at a waiting id until the
 // profile is written and then moves to test/users/<id>/avatar; a refused request deletes it.
 // What the app refuses before any upload (an empty file, a declared type that is not an image,
 // a file over the size limit) is in meForm.test.ts
@@ -93,7 +94,7 @@ const urlPattern = (transforms: string, path: string) =>
 
 const versionOf = (url: string) => /\/v(\d+)\//.exec(url)?.[1];
 
-describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => {
+describe('PATCH /api/users/me with an avatar (Cloudinary)', () => {
   beforeAll(async () => {
     app = await startApp();
     csrf = await getCsrf(app);
@@ -248,6 +249,25 @@ describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => 
         width: 40,
         height: 30,
         format: 'png',
+      });
+    });
+
+    it('refuses a png that Cloudinary cannot read and keeps the avatar the account has', async () => {
+      const user = await newUser();
+      const before = await giveAvatar(user, pngImage(40, 30));
+      const mark = uploadMark();
+
+      const res = await patchForm(user, [avatar(brokenPng())]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_INVALID' });
+      // its first bytes are a png, so it went to Cloudinary, and Cloudinary kept nothing
+      expect(uploadsSince(mark)).toHaveLength(1);
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(await storedImage(avatarPath(user))).toMatchObject({
+        version: before.stored.version,
+        width: 40,
+        height: 30,
       });
     });
   });
