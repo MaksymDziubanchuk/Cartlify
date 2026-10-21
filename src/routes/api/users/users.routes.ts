@@ -7,6 +7,14 @@ import { usersController } from './users.controllers.js';
 
 export default async function usersRouter(app: FastifyInstance) {
   app.get(
+    '/',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: usersSchema.getUsersSchema,
+    },
+    usersController.getUsers,
+  );
+  app.get(
     '/me',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER'])],

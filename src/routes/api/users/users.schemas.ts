@@ -104,6 +104,102 @@ const deleteUserResponseExample = {
   message: 'user deleted',
 };
 
+// the users who confirmed no email yet, the ones longest away first
+const usersListQueryExample = {
+  isVerified: 'false',
+  role: 'USER',
+  sortBy: 'lastLoginAt',
+  sortOrder: 'asc',
+  limit: '20',
+};
+
+const usersListResponseExample = {
+  items: [
+    {
+      id: 7,
+      email: 'anna@example.com',
+      name: 'Anna',
+      role: 'USER',
+      authProvider: 'LOCAL',
+      isVerified: false,
+      locale: 'uk',
+      avatarUrls: null,
+      createdAt: '2025-11-02T10:00:00.000Z',
+      updatedAt: '2025-11-02T10:00:00.000Z',
+      lastLoginAt: '2025-11-03T08:30:00.000Z',
+      deletedAt: null,
+    },
+    {
+      id: 9,
+      email: 'bohdan@example.com',
+      name: null,
+      role: 'USER',
+      authProvider: 'LOCAL',
+      isVerified: false,
+      locale: null,
+      avatarUrls: null,
+      createdAt: '2025-12-01T10:00:00.000Z',
+      updatedAt: '2025-12-01T10:00:00.000Z',
+      lastLoginAt: null,
+      deletedAt: null,
+    },
+  ],
+  limit: 20,
+  nextCursor: null,
+  total: 2,
+};
+
+// Schema for the admin table of users
+const getUsersSchema = {
+  operationId: 'getUsers',
+  summary: 'List users',
+  description:
+    'Admin or root only: the accounts of every role, root accounts too, a page at a time. ' +
+    'Every field of a row is there, null when the account has none; `lastLoginAt` is the last ' +
+    'login, null for an account that never logged in, `total` counts the accounts of the filters ' +
+    'on all pages. The filters go together: a part of the email (`email`), roles, providers, ' +
+    'the email confirmation and the deleted accounts (left out unless `deleted=true`, which lists ' +
+    'only them). The order is the sign-up (`sortBy=createdAt`, unless given) or the last login ' +
+    '(`sortBy=lastLoginAt`), the newest first unless `sortOrder=asc`; equal values go by id, ' +
+    'accounts that never logged in come last in either order. The whole profile of one account ' +
+    'is GET /api/users/{userId}.',
+
+  querystring: {
+    $ref: 'usersListQuerySchema#',
+    examples: [usersListQueryExample],
+  },
+
+  response: {
+    200: {
+      description: 'A page of the accounts the filters find.',
+      $ref: 'usersListResponseSchema#',
+      examples: [usersListResponseExample],
+    },
+
+    400: {
+      description:
+        'Invalid query: a limit outside 1-100, an unknown role, provider or order, an email check ' +
+        'that is not true or false (VALIDATION_ERROR); a cursor the list did not give, or one of ' +
+        'another order (CURSOR_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'Only an admin or root reads the list of users, a guest or a user cannot (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while loading users.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for current authenticated user lookup
 const getMeSchema = {
   operationId: 'getCurrentUser',
@@ -394,6 +490,7 @@ const deleteMeSchema = {
 // Group user routes under the users Swagger tag
 const taggedUsersSchema = withOpenApiTag(
   {
+    getUsersSchema,
     getMeSchema,
     patchMeSchema,
     getUserByIdSchema,

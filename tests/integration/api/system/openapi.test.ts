@@ -129,6 +129,7 @@ describe('the users routes', () => {
 
   // a status a route never sends has no place in its answers
   it.each([
+    ['get', '/api/users/', ['200', '400', '401', '403', '500']],
     ['get', '/api/users/me', ['200', '401', '403', '500']],
     ['patch', '/api/users/me', ['200', '400', '401', '403', '404', '413', '500']],
     ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '500']],
@@ -158,6 +159,26 @@ describe('the users routes', () => {
     );
 
     expect(query.map((parameter) => parameter.name).sort()).toEqual(['from', 'include', 'to']);
+    expect(query.filter((parameter) => parameter.required)).toEqual([]);
+  });
+
+  // the filters, the search and the order of the admin table of users
+  it('lists the optional query of GET /api/users/', () => {
+    const query = (operation('get', '/api/users/').parameters ?? []).filter(
+      (parameter) => parameter.in === 'query',
+    );
+
+    expect(query.map((parameter) => parameter.name).sort()).toEqual([
+      'authProvider',
+      'cursor',
+      'deleted',
+      'email',
+      'isVerified',
+      'limit',
+      'role',
+      'sortBy',
+      'sortOrder',
+    ]);
     expect(query.filter((parameter) => parameter.required)).toEqual([]);
   });
 

@@ -307,6 +307,7 @@ index | users | users_authProvider_idx | valid=true | ready=true | CREATE INDEX 
 index | users | users_authProvider_providerSub_key | valid=true | ready=true | CREATE UNIQUE INDEX "users_authProvider_providerSub_key" ON cartlify.users USING btree ("authProvider", "providerSub")
 index | users | users_createdAt_idx | valid=true | ready=true | CREATE INDEX "users_createdAt_idx" ON cartlify.users USING btree ("createdAt")
 index | users | users_email_key | valid=true | ready=true | CREATE UNIQUE INDEX users_email_key ON cartlify.users USING btree (email)
+index | users | users_email_trgm_idx | valid=true | ready=true | CREATE INDEX users_email_trgm_idx ON cartlify.users USING gin (email gin_trgm_ops)
 index | users | users_isVerified_createdAt_idx | valid=true | ready=true | CREATE INDEX "users_isVerified_createdAt_idx" ON cartlify.users USING btree ("isVerified", "createdAt")
 index | users | users_pkey | valid=true | ready=true | CREATE UNIQUE INDEX users_pkey ON cartlify.users USING btree (id)
 sequence | admin_audit_log_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner

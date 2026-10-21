@@ -390,6 +390,8 @@ describe('uploadImage', () => {
   // a file cloudinary cannot read is the file of the client: 400, not 500
   it.each([
     ['Invalid image file', 'IMAGE_INVALID'],
+    // the answer of cloudinary to a webp it cannot read
+    ['Invalid webp file', 'IMAGE_INVALID'],
     ['Image file format gif not allowed', 'IMAGE_TYPE_NOT_ALLOWED'],
   ])('answers 400 when cloudinary says %p', async (message, errorCode) => {
     const failure = { http_code: 400, message };

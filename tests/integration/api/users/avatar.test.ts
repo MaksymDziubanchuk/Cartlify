@@ -7,7 +7,9 @@ import {
   bodyOf,
   brokenPng,
   deliveryUrl,
+  fixtureImage,
   gifImage,
+  IMAGE_FIXTURES,
   imageField,
   pngImage,
   removeUploads,
@@ -270,6 +272,62 @@ describe('PATCH /api/users/me with an avatar (Cloudinary)', () => {
         height: 30,
       });
     });
+  });
+
+  // every form of jpeg and webp header there is a real file of, made by Cloudinary
+  describe('a jpeg or a webp avatar', () => {
+    it.each(IMAGE_FIXTURES.map((fixture) => [fixture.file, fixture] as const))(
+      'keeps a %s avatar in its format and size',
+      async (_file, fixture) => {
+        const user = await newUser();
+
+        const res = await patchForm(user, [
+          avatar(fixtureImage(fixture.file), {
+            contentType: fixture.contentType,
+            filename: fixture.file,
+          }),
+        ]);
+
+        expect(res.statusCode).toBe(200);
+        expect(bodyOf(res).avatarUrls.url64).toMatch(
+          new RegExp(`/${avatarPath(user)}\\.${fixture.format}$`),
+        );
+        expect(await storedImage(avatarPath(user))).toMatchObject({
+          format: fixture.format,
+          width: fixture.width,
+          height: fixture.height,
+        });
+      },
+    );
+
+    // the first bytes are a jpeg or a webp, so the app takes it; Cloudinary cannot read the rest
+    const share = (part: number) => (length: number) => Math.floor(length * part);
+    it.each([
+      ['a jpeg cut in its image data', 'jpeg-baseline.jpg', share(0.7), 'image/jpeg'],
+      ['a jpeg cut in its headers', 'jpeg-baseline.jpg', () => 60, 'image/jpeg'],
+      ['a lossy webp cut short', 'webp-lossy.webp', share(0.7), 'image/webp'],
+      ['a lossless webp cut short', 'webp-lossless.webp', share(0.7), 'image/webp'],
+      ['an extended webp cut short', 'webp-extended.webp', share(0.7), 'image/webp'],
+    ] as const)(
+      'refuses %s and keeps the avatar the account has',
+      async (_case, file, kept, contentType) => {
+        const user = await newUser();
+        const before = await giveAvatar(user, pngImage(40, 30));
+        const data = fixtureImage(file);
+
+        const res = await patchForm(user, [
+          avatar(data.subarray(0, kept(data.length)), { contentType, filename: file }),
+        ]);
+
+        expect(res.statusCode).toBe(400);
+        expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_INVALID' });
+        expect(await storedImage(avatarPath(user))).toMatchObject({
+          version: before.stored.version,
+          width: 40,
+          height: 30,
+        });
+      },
+    );
   });
 
   describe('a deleted account', () => {

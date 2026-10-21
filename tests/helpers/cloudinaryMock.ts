@@ -87,7 +87,9 @@ function readPng(data: Buffer): Size | null {
 }
 
 // a jpeg by its segments up to the image data and its end marker; the image data itself is not
-// decoded
+// decoded. One known difference: Cloudinary takes a jpeg that lacks only its end marker, the mock
+// refuses it, since without a decoder it cannot tell such a file from one cut in its image data,
+// which Cloudinary refuses (checked 21.10.2026)
 function readJpeg(data: Buffer): Size | null {
   let at = 2;
   let size: Size | null = null;
@@ -162,7 +164,8 @@ function takeFile(data: Buffer, options: UploadApiOptions): Size & { format: str
   }
 
   const size = READERS[format]?.(data);
-  if (!size) throw uploadError(400, 'Invalid image file');
+  // a webp that cannot be read has an answer of its own
+  if (!size) throw uploadError(400, format === 'webp' ? 'Invalid webp file' : 'Invalid image file');
   return { ...size, format };
 }
 

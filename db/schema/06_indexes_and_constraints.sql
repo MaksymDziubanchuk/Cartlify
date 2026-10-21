@@ -486,3 +486,10 @@ CREATE INDEX IF NOT EXISTS chat_messages_thread_created_idx ON cartlify.chat_mes
 CREATE INDEX IF NOT EXISTS chat_messages_unread_by_thread_sender_idx ON cartlify.chat_messages ("threadId", "senderType")
 WHERE
   "isRead" = false;
+
+----------------------------------------
+-- USERS: admin search by a part of the email
+----------------------------------------
+-- emails are stored in lower case (trg_users_before_write_email); the list of users looks for a
+-- part of an address with ILIKE, a trigram index serves it from 3 characters on
+CREATE INDEX IF NOT EXISTS users_email_trgm_idx ON cartlify.users USING gin (email cartlify.gin_trgm_ops);

@@ -278,7 +278,8 @@ async function uploadViaStream(
 }
 
 // cloudinary refuses a file it cannot read as an image, or of a format it was not let keep:
-// that is the file of the client, not a failure of the server
+// that is the file of the client, not a failure of the server. A webp it cannot read has an
+// answer of its own, "Invalid webp file" (checked 21.10.2026)
 function refusedImage(err: unknown): BadRequestError | null {
   const e = err as { http_code?: unknown; message?: unknown } | null;
   if (e?.http_code !== 400 || typeof e.message !== 'string') return null;
@@ -286,7 +287,7 @@ function refusedImage(err: unknown): BadRequestError | null {
   if (/format .* not allowed/i.test(e.message)) {
     return new BadRequestError('IMAGE_TYPE_NOT_ALLOWED', undefined, err);
   }
-  if (/invalid image file/i.test(e.message)) {
+  if (/invalid (image|webp) file/i.test(e.message)) {
     return new BadRequestError('IMAGE_INVALID', undefined, err);
   }
   return null;

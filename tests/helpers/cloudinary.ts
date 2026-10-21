@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 
 import cloudinary from '@config/cloudinary.js';
@@ -200,6 +202,22 @@ export function pngImage(width: number, height: number, rgb = [200, 60, 40]): Bu
     pngChunk('IEND', Buffer.alloc(0)),
   ]);
 }
+
+// real jpeg and webp files Cloudinary made from a png of the tests (21.10.2026), one for every form
+// of header: a baseline and a progressive jpeg, a lossy (VP8), a lossless (VP8L) and an extended
+// (VP8X) webp; the format and the size are the ones Cloudinary read in them
+export const IMAGE_FIXTURES = [
+  { file: 'jpeg-baseline.jpg', contentType: 'image/jpeg', format: 'jpg', width: 24, height: 16 },
+  { file: 'jpeg-progressive.jpg', contentType: 'image/jpeg', format: 'jpg', width: 24, height: 16 },
+  { file: 'webp-lossy.webp', contentType: 'image/webp', format: 'webp', width: 24, height: 16 },
+  { file: 'webp-lossless.webp', contentType: 'image/webp', format: 'webp', width: 24, height: 16 },
+  { file: 'webp-extended.webp', contentType: 'image/webp', format: 'webp', width: 20, height: 12 },
+] as const;
+
+export type ImageFixture = (typeof IMAGE_FIXTURES)[number];
+
+export const fixtureImage = (file: ImageFixture['file']) =>
+  readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'images', file));
 
 // the start of a png and then no image: the app takes it by its first bytes, Cloudinary cannot
 // read it

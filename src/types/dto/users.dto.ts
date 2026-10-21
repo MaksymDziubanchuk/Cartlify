@@ -46,6 +46,50 @@ export interface FindMeByIdDto {
   userId: UserId;
 }
 
+export type UsersListSortBy = 'createdAt' | 'lastLoginAt';
+export type UsersListSortOrder = 'desc' | 'asc';
+
+// the filters, the email search and the order of the admin table of users
+export interface GetUsersQueryDto {
+  limit?: number;
+  cursor?: string;
+  email?: string;
+  role?: string;
+  authProvider?: string;
+  isVerified?: boolean;
+  deleted?: boolean;
+  sortBy?: UsersListSortBy;
+  sortOrder?: UsersListSortOrder;
+}
+
+export interface FindUsersDto extends GetUsersQueryDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// a row of the admin table: every field is there, null when the account has none
+export interface UsersListItemDto {
+  id: UserId;
+  email: Email;
+  name: string | null;
+  role: Exclude<Role, 'GUEST'>;
+  authProvider: AuthProvider;
+  isVerified: boolean;
+  locale: string | null;
+  avatarUrls: AvatarUrls | null;
+  createdAt: Date;
+  updatedAt: Date;
+  lastLoginAt: Date | null;
+  deletedAt: Date | null;
+}
+
+export interface UsersListResponseDto {
+  items: UsersListItemDto[];
+  limit: number;
+  nextCursor: string | null;
+  total: number;
+}
+
 export type UserReviewResponseDto = Omit<ReviewResponseDto, 'comment' | 'rating'> & {
   comment: string;
   rating: number;

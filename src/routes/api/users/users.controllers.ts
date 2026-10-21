@@ -12,6 +12,9 @@ import type {
   DeleteUserByIdDto,
   DeleteMeBodyDto,
   DeleteMeDto,
+  FindUsersDto,
+  GetUsersQueryDto,
+  UsersListResponseDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { discardUploads, type UploadImageResult } from '@utils/cloudinary.util.js';
@@ -21,6 +24,22 @@ import pickDefined from '@helpers/parameterNormalize.js';
 import { clearAuthCookies } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 import { usersServices } from './users.services.js';
 import { UserId } from 'types/ids.js';
+
+const getUsers: ControllerRouter<{}, {}, GetUsersQueryDto, UsersListResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { limit, cursor, email, role, authProvider, isVerified, deleted, sortBy, sortOrder } =
+    req.query;
+
+  const args = pickDefined<FindUsersDto>(
+    { actorId, actorRole },
+    { limit, cursor, email, role, authProvider, isVerified, deleted, sortBy, sortOrder },
+  );
+  const result = await usersServices.findUsers(args);
+  return reply.code(200).send(result);
+};
 
 const getMe: ControllerRouter<{}, {}, {}, UserResponseDto> = async (req, reply) => {
   const { id } = req.user as UserEntity;
@@ -152,6 +171,7 @@ const deleteMe: ControllerRouter<{}, DeleteMeBodyDto, {}, void> = async (req, re
 };
 
 export const usersController = {
+  getUsers,
   getMe,
   patchMe,
   getUserById,

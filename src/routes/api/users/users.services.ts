@@ -47,6 +47,7 @@ import {
   resolveProfilePeriod,
 } from './services/helpers/adminProfile.helper.js';
 import { deleteAccount } from './services/helpers/deleteAccount.helper.js';
+import { findUsers } from './services/findUsers.service.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
   // normalize user id from dto
@@ -590,6 +591,7 @@ async function deleteMe({ userId, password, confirmOpenOrders, log }: DeleteMeDt
 }
 
 export const usersServices = {
+  findUsers,
   findMe,
   beginAvatarUpload,
   updateMe,

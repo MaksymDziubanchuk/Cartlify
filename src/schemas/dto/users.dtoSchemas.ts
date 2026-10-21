@@ -6,6 +6,13 @@ import {
   PROFILE_PERIOD_DEFAULT_DAYS,
   PROFILE_PERIOD_MAX_DAYS,
 } from '@routes/api/users/services/helpers/adminProfile.helper.js';
+import {
+  USERS_LIST_DEFAULT_LIMIT,
+  USERS_LIST_PROVIDERS,
+  USERS_LIST_ROLES,
+  USERS_LIST_SORT_FIELDS,
+  USERS_LIST_SORT_ORDERS,
+} from '@routes/api/users/services/helpers/usersList.helper.js';
 
 const usersGetByIdParamsSchema = {
   $id: 'usersGetByIdParamsSchema',
@@ -274,6 +281,144 @@ const usersGetByIdResponseSchema = {
   required: ['id', 'createdAt', 'updatedAt'],
 } as const;
 
+// one name of the list or several through commas
+const namesPattern = (names: readonly string[]) => {
+  const one = `(${names.join('|')})`;
+  return `^${one}(,${one})*$`;
+};
+
+// the filters, the email search and the order of the admin table of users
+const usersListQuerySchema = {
+  $id: 'usersListQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: `Rows on a page, ${USERS_LIST_DEFAULT_LIMIT} unless given.`,
+    },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description:
+        'nextCursor of the page before. It holds the order it was given for: with another sortBy ' +
+        'or sortOrder it is CURSOR_INVALID.',
+    },
+    email: {
+      type: 'string',
+      maxLength: 254,
+      description:
+        'A part of the email, in any case; spaces around it are cut, _ and % are the characters ' +
+        'themselves. A deleted account has the address deleted+<id>+...@<domain of the site>.',
+    },
+    role: {
+      type: 'string',
+      pattern: namesPattern(USERS_LIST_ROLES),
+      description: `Roles, one or several through commas: ${USERS_LIST_ROLES.join(', ')}. All unless given.`,
+    },
+    authProvider: {
+      type: 'string',
+      pattern: namesPattern(USERS_LIST_PROVIDERS),
+      description: `How the account logs in, one or several through commas: ${USERS_LIST_PROVIDERS.join(', ')}. All unless given.`,
+    },
+    isVerified: {
+      type: 'boolean',
+      description: 'true: only the accounts with a confirmed email, false: only the others.',
+    },
+    deleted: {
+      type: 'boolean',
+      description:
+        'true lists only deleted accounts. Without it, or with false, the accounts that are not deleted.',
+    },
+    sortBy: {
+      type: 'string',
+      enum: USERS_LIST_SORT_FIELDS,
+      description:
+        'createdAt (the sign-up, unless given) or lastLoginAt. Equal values go by id; accounts that ' +
+        'never logged in come last in either order.',
+    },
+    sortOrder: {
+      type: 'string',
+      enum: USERS_LIST_SORT_ORDERS,
+      description: 'desc (the newest first, unless given) or asc.',
+    },
+  },
+} as const;
+
+const avatarUrlsObject = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    url32: { type: 'string' },
+    url64: { type: 'string' },
+    url128: { type: 'string' },
+    url256: { type: 'string' },
+  },
+  required: ['url32', 'url64', 'url128', 'url256'],
+} as const;
+
+const nullableDateTime = { anyOf: [dateTime, { type: 'null' }] } as const;
+
+// a row of the admin table: every field is there, null when the account has none
+const usersListItemSchema = {
+  $id: 'usersListItemSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'number' },
+    email: { type: 'string', format: 'email' },
+    name: nullableString,
+    role: { type: 'string', enum: USERS_LIST_ROLES },
+    authProvider: { type: 'string', enum: USERS_LIST_PROVIDERS },
+    isVerified: { type: 'boolean' },
+    locale: nullableString,
+    avatarUrls: { anyOf: [avatarUrlsObject, { type: 'null' }] },
+    createdAt: dateTime,
+    updatedAt: dateTime,
+    lastLoginAt: {
+      ...nullableDateTime,
+      description: 'The last login, null for an account that never logged in.',
+    },
+    deletedAt: {
+      ...nullableDateTime,
+      description: 'When the account was deleted, null for a live one.',
+    },
+  },
+  required: [
+    'id',
+    'email',
+    'name',
+    'role',
+    'authProvider',
+    'isVerified',
+    'locale',
+    'avatarUrls',
+    'createdAt',
+    'updatedAt',
+    'lastLoginAt',
+    'deletedAt',
+  ],
+} as const;
+
+const usersListResponseSchema = {
+  $id: 'usersListResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: { type: 'array', items: { $ref: 'usersListItemSchema#' } },
+    limit: { type: 'number' },
+    nextCursor: {
+      anyOf: [{ type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' }, { type: 'null' }],
+      description: 'The cursor of the next page, null on the last one.',
+    },
+    total: { type: 'number', description: 'How many accounts the filters find, on all pages.' },
+  },
+  required: ['items', 'limit', 'nextCursor', 'total'],
+} as const;
+
 // the fields of the update, shared by the json body and the form
 const profileNameField = {
   type: 'string',
@@ -360,6 +505,9 @@ const usersUpdateMeResponseSchema = {
 } as const;
 
 export const usersDtoSchemas = [
+  usersListQuerySchema,
+  usersListItemSchema,
+  usersListResponseSchema,
   usersGetByIdParamsSchema,
   usersGetByIdQuerySchema,
   usersUserResponseSchema,
