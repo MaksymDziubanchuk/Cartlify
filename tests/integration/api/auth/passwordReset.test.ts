@@ -3,7 +3,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import { logIn, refreshWith, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { takeLogs } from '../../../helpers/logs.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
   closeSessions,
@@ -11,10 +10,10 @@ import {
   createUser,
   uniqueEmail,
 } from '../../../helpers/factories.js';
-import { itWithMail, linkToken, watchMail } from '../../../helpers/mail.js';
+import { linkToken, watchMail } from '../../../helpers/mail.js';
 
-// the mail itself goes to SendGrid in sandbox mode, that test waits for a working account;
-// the reset tests take a link made the way /password/forgot stores one (createResetToken)
+// the mail goes to the SendGrid mock (tests/helpers/mail.ts); the reset tests take a link made
+// the way /password/forgot stores one (createResetToken)
 
 const GENERIC_FORGOT = 'If account exists, reset email will be sent';
 
@@ -62,7 +61,7 @@ afterAll(async () => {
 });
 
 describe('POST /api/auth/password/forgot', () => {
-  itWithMail('mails a reset link to the owner of a local account (SendGrid sandbox)', async () => {
+  it('mails a reset link to the owner of a local account', async () => {
     const user = await newUser();
     const mails = watchMail();
 
@@ -71,7 +70,7 @@ describe('POST /api/auth/password/forgot', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ message: GENERIC_FORGOT });
     expect(mails).toHaveLength(1);
-    expect(mails[0]).toMatchObject({ to: [user.email], sandbox: true });
+    expect(mails[0]).toMatchObject({ to: [user.email], accepted: true });
     expect(mails[0]!.subject).toContain('Reset your password');
     expect(linkToken(mails[0]!, '/web/auth/reset')).toEqual(expect.any(String));
   });
@@ -102,15 +101,12 @@ describe('POST /api/auth/password/forgot', () => {
   it('leaves the sessions of the account alone', async () => {
     const user = await newUser();
     const session = await signIn(app, csrf, user);
-    watchMail();
+    const mails = watchMail();
 
-    // without a working SendGrid the mail fails with a server error, the sessions are the point here
     await forgot(user.email);
 
+    expect(mails).toHaveLength(1);
     expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).toBe(204);
-    expect(takeLogs({ msg: 'request failed', reason: 'SENDGRID_API_KEY_REQUIRED' })).toHaveLength(
-      1,
-    );
   });
 
   it('refuses an email that is not an email', async () => {

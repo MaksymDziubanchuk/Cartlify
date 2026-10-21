@@ -30,8 +30,8 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
-import { itWithMail, watchMail } from '../../../helpers/mail.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { refuseMail, watchMail } from '../../../helpers/mail.js';
 import { placeOrder } from '../../../helpers/orders.js';
 
 // DELETE /api/users/:userId: only root, and it does not drop the row, it empties it: orders,
@@ -82,10 +82,6 @@ beforeAll(async () => {
   // the avatar file lives at Cloudinary and the test environment has only made-up Cloudinary keys:
   // the call that removes it is caught here and checked, it never leaves the test
   jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
-
-  // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
-  // 'deletes the account even when the mail cannot be sent' checks that line
-  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -459,11 +455,12 @@ describe('what happens around the account', () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  // the test environment has no SendGrid key, so every mail of a deletion fails here:
-  // the account is deleted all the same, the failure only goes to the log
+  // SendGrid refuses the mail of the deletion: the account is deleted all the same, the failure
+  // only goes to the log
   it('deletes the account even when the mail cannot be sent', async () => {
     const target = await newUser();
     await placeOrder(app, csrf, target, await newProduct(), 'paid');
+    refuseMail();
 
     const res = await deleteUser(target.id, rootCookie);
 
@@ -475,25 +472,22 @@ describe('what happens around the account', () => {
     expect(JSON.stringify(logged)).not.toContain(target.email);
   });
 
-  itWithMail(
-    'mails the old address with the orders still on their way and the cancelled ones',
-    async () => {
-      const mails = watchMail();
-      const target = await newUser({ name: 'Anna' });
-      const product = await newProduct();
-      const paidId = await placeOrder(app, csrf, target, product, 'paid');
-      const waitingId = await placeOrder(app, csrf, target, product, 'waiting');
+  it('mails the old address with the orders still on their way and the cancelled ones', async () => {
+    const mails = watchMail();
+    const target = await newUser({ name: 'Anna' });
+    const product = await newProduct();
+    const paidId = await placeOrder(app, csrf, target, product, 'paid');
+    const waitingId = await placeOrder(app, csrf, target, product, 'waiting');
 
-      await deleteUser(target.id, rootCookie);
+    await deleteUser(target.id, rootCookie);
 
-      expect(mails).toHaveLength(1);
-      expect(mails[0]).toMatchObject({ to: [target.email], sandbox: true });
-      expect(mails[0]!.subject).toBe('Cartlify — Your account is deleted');
-      expect(mails[0]!.text).toContain(`Order #${paidId}, €10.00: paid, it will be shipped`);
-      // no payment page was opened for it, so nothing is known for sure about a payment
-      expect(mails[0]!.text).toContain(
-        `Order #${waitingId}, €10.00: cancelled; if you paid for it, the payment is refunded`,
-      );
-    },
-  );
+    expect(mails).toHaveLength(1);
+    expect(mails[0]).toMatchObject({ to: [target.email], accepted: true });
+    expect(mails[0]!.subject).toBe('Cartlify — Your account is deleted');
+    expect(mails[0]!.text).toContain(`Order #${paidId}, €10.00: paid, it will be shipped`);
+    // no payment page was opened for it, so nothing is known for sure about a payment
+    expect(mails[0]!.text).toContain(
+      `Order #${waitingId}, €10.00: cancelled; if you paid for it, the payment is refunded`,
+    );
+  });
 });

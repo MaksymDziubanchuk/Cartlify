@@ -21,7 +21,7 @@ import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createUser, uniqueTag, type TestUser } from '../../../helpers/factories.js';
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
+import { watchMail } from '../../../helpers/mail.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
 // the avatar of PATCH /api/users/me goes to Cloudinary for real: it waits at a waiting id until the
@@ -101,10 +101,6 @@ describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => 
     const root = await createUser({ role: 'ROOT', password: `root-${uniqueTag()}` });
     userIds.push(root.id);
     rootCookie = accessCookie(root);
-
-    // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
-    // 'removes the avatar at Cloudinary when the account is deleted' checks that line
-    allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
   });
 
   // deletes every file the tests uploaded, a request to Cloudinary each: more time than a test
@@ -260,15 +256,14 @@ describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => 
     it('removes the avatar at Cloudinary when the account is deleted', async () => {
       const user = await newUser();
       await giveAvatar(user, pngImage(40, 30));
+      const mails = watchMail();
 
       const res = await deleteAsRoot(user);
 
       expect(res.statusCode).toBe(200);
       expect(await storedImage(avatarPath(user))).toBeNull();
       // the deletion went on to its last step, the mail, after the avatar
-      expect(
-        takeLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' }),
-      ).toHaveLength(1);
+      expect(mails.map((mail) => mail.subject)).toEqual(['Cartlify — Your account is deleted']);
     });
 
     // its access token still works for a few minutes after the deletion

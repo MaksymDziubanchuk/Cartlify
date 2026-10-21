@@ -536,6 +536,12 @@ npm test -- --failed
 # integration files run at the same time, one per core and at most 6; one by one:
 npm test -- --workers=1
 
+# external services answer from mocks unless the run names them (the Services checkboxes,
+# or service:<name>). Real SendGrid takes SENDGRID_API_TEST_KEY and EMAIL_FROM, EMAIL_FROM_NAME,
+# EMAIL_REPLY_TO from .env (never SENDGRID_API_KEY); the tests send every mail in sandbox mode,
+# SendGrid checks it and delivers nothing. GitHub Actions takes the secrets of the same names
+npm test -- api:auth service:sendgrid
+
 # unit or integration tests only
 npm run test:unit
 npm run test:integration

@@ -66,10 +66,12 @@ export default {
       testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
       setupFiles: ['<rootDir>/tests/setup/integration.setup.ts'],
       // the app logs go to the tests, an unexpected warning or error fails its test;
-      // cloudinary calls stay in its test/ folder; a longer timeout for real services
+      // cloudinary calls stay in its test/ folder; sendgrid answers from a mock; a longer timeout
+      // for real services
       setupFilesAfterEnv: [
         '<rootDir>/tests/setup/integration.logs.ts',
         '<rootDir>/tests/setup/integration.cloudinary.ts',
+        '<rootDir>/tests/setup/integration.mail.ts',
         '<rootDir>/tests/setup/integration.timeout.ts',
       ],
     },

@@ -13,8 +13,8 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
-import { itWithMail, watchMail } from '../../../helpers/mail.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { refuseMail, watchMail } from '../../../helpers/mail.js';
 import {
   orderRowOf,
   placeOrder,
@@ -93,11 +93,6 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await newUser({ role: 'ADMIN' });
   root = await newUser({ role: 'ROOT' });
-
-  // the test environment has no SendGrid key: every cancel logs that its mail was not sent, and so
-  // does the deletion of an account; 'keeps the cancel when its mail cannot be sent' checks the line
-  allowLogs({ msg: 'order cancelled mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
-  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -208,6 +203,7 @@ describe('POST /api/orders/:orderId/cancel', () => {
     it('keeps the cancel when its mail cannot be sent', async () => {
       const buyer = await newUser();
       const { orderId } = await paidOrder(buyer);
+      refuseMail();
 
       const res = await cancel(admin, orderId);
 
@@ -289,23 +285,20 @@ describe('POST /api/orders/:orderId/cancel', () => {
       expect(await refundsOf(paymentId)).toHaveLength(1);
     });
 
-    itWithMail(
-      'mails the buyer that the order is cancelled and the money is coming back',
-      async () => {
-        const mails = watchMail();
-        const buyer = await newUser({ name: 'Anna' });
-        const { orderId } = await paidOrder(buyer);
+    it('mails the buyer that the order is cancelled and the money is coming back', async () => {
+      const mails = watchMail();
+      const buyer = await newUser({ name: 'Anna' });
+      const { orderId } = await paidOrder(buyer);
 
-        await cancel(admin, orderId);
+      await cancel(admin, orderId);
 
-        expect(mails).toHaveLength(1);
-        expect(mails[0]).toMatchObject({ to: [buyer.email], sandbox: true });
-        expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is cancelled`);
-        expect(mails[0]!.text).toContain('The payment of €10.00 is refunded in full');
-      },
-    );
+      expect(mails).toHaveLength(1);
+      expect(mails[0]).toMatchObject({ to: [buyer.email], accepted: true });
+      expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is cancelled`);
+      expect(mails[0]!.text).toContain('The payment of €10.00 is refunded in full');
+    });
 
-    itWithMail('mails nobody when the account of the buyer is deleted', async () => {
+    it('mails nobody when the account of the buyer is deleted', async () => {
       const mails = watchMail();
       const buyer = await newUser();
       const { orderId } = await paidOrder(buyer);

@@ -17,10 +17,10 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { itWithMail, watchMail } from '../../../helpers/mail.js';
+import { watchMail } from '../../../helpers/mail.js';
 
 // the mail the stripe webhook sends once an order is paid; the order is a real cart of a user,
-// the mail goes to SendGrid in sandbox mode and waits for a working account
+// the mail goes to the SendGrid mock (tests/helpers/mail.ts)
 
 let app: FastifyInstance;
 let user: TestUser;
@@ -69,13 +69,13 @@ afterAll(async () => {
 });
 
 describe('sendOrderPaidEmail', () => {
-  itWithMail('mails the buyer the order with its items, total and link', async () => {
+  it('mails the buyer the order with its items, total and link', async () => {
     const mails = watchMail();
 
     await sendOrderPaidEmail(orderId, log());
 
     expect(mails).toHaveLength(1);
-    expect(mails[0]).toMatchObject({ to: [user.email], sandbox: true });
+    expect(mails[0]).toMatchObject({ to: [user.email], accepted: true });
     expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is paid`);
     expect(mails[0]!.text).toContain('x 2 = €51.00');
     expect(mails[0]!.text).toContain('Total: €51.00');

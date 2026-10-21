@@ -13,7 +13,7 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { loseReservation, orderRowOf, placeOrder } from '../../../helpers/orders.js';
 import {
   deleteOrderAsOwner,
@@ -102,10 +102,6 @@ const refundRecord = (
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
-
-  // the test environment has no SendGrid key: a paid order logs that its mail was not sent,
-  // webhookPaid.test.ts checks the line
-  allowLogs({ msg: 'order paid mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {

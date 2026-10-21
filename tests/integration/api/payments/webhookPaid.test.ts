@@ -13,7 +13,7 @@ import {
   stockOf,
   type TestProduct,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
+import { watchMail } from '../../../helpers/mail.js';
 import { loseReservation, placeOrder } from '../../../helpers/orders.js';
 import {
   openPaymentPage,
@@ -67,10 +67,6 @@ const moveOrderTo = (orderId: number, stage: 'shipped' | 'delivered' | 'cancelle
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
-
-  // the test environment has no SendGrid key: every paid order logs that its mail was not sent;
-  // 'mails the buyer once' checks the line
-  allowLogs({ msg: 'order paid mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -119,14 +115,12 @@ describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.complete
   it('mails the buyer once, also when Stripe delivers the event again', async () => {
     const { orderId, sessionId } = await orderWithPage();
     const { event } = await payPage(sessionId);
+    const mails = watchMail();
 
     await deliver(app, event);
     await deliver(app, event);
 
-    // the mail is tried and fails without a SendGrid key; the order stays paid
-    const tried = takeLogs({ msg: 'order paid mail was not sent' });
-    expect(tried).toHaveLength(1);
-    expect(tried[0]).toMatchObject({ orderId });
+    expect(mails.map((mail) => mail.subject)).toEqual([`Cartlify — Order #${orderId} is paid`]);
   });
 
   it('changes nothing when Stripe delivers the event again', async () => {
