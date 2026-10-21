@@ -37,7 +37,7 @@ export function normalizeCreateCategoryInput(args: {
   const nameNorm = typeof nameRaw === 'string' ? nameRaw.trim() : '';
   if (!nameNorm.length) throw new BadRequestError('CATEGORY_NAME_INVALID');
 
-  // normalize optional slug
+  // normalize required slug
   const slugRaw = toStringSafe(args.slug);
   const slugTrim = typeof slugRaw === 'string' ? slugRaw.trim() : '';
   if (!slugTrim.length) throw new BadRequestError('CATEGORY_SLUG_INVALID');

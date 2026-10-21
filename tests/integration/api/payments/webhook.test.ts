@@ -239,7 +239,10 @@ describe('POST /api/payments/stripe/webhook', () => {
   // only the webhook is let through: the other routes keep the limit
   it('keeps the request limit of the other routes', async () => {
     const remoteAddress = '203.0.113.8';
-    for (let i = 0; i < 100; i++) {
+    // the limit of the tests (RATE_LIMIT_MAX of tests/setup/integration.setup.ts)
+    const limit = Number(process.env.RATE_LIMIT_MAX);
+    expect(limit).toBeGreaterThan(0);
+    for (let i = 0; i < limit; i++) {
       await app.inject({ method: 'GET', url: '/api/auth/csrf', remoteAddress });
     }
 

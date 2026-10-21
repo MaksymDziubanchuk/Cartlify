@@ -101,8 +101,8 @@ app.register(staticPlugin, {
   setHeaders: (reply) => reply.header('Cross-Origin-Resource-Policy', 'cross-origin'),
 });
 app.register(rateLimit, {
-  // protect from abuse
-  max: 100,
+  // protect from abuse: the requests a minute one address may make
+  max: env.RATE_LIMIT_MAX,
   timeWindow: '1 minute',
   allowList: (req) =>
     // allow health and static

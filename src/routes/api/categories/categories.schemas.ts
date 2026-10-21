@@ -90,7 +90,10 @@ const getCategoriesSchema = {
 const postCategorySchema = {
   operationId: 'createCategory',
   summary: 'Create category',
-  description: 'Creates a new product category. This operation is restricted to privileged users.',
+  description:
+    'Creates a new product category. This operation is restricted to privileged users. ' +
+    'The name and the slug are required; the category takes no children, they come to it one ' +
+    'PATCH each.',
 
   body: {
     $ref: 'categoriesCreateBodySchema#',
@@ -105,7 +108,10 @@ const postCategorySchema = {
     },
 
     400: {
-      description: 'Invalid category creation request.',
+      description:
+        'Invalid category creation request: no name or slug (VALIDATION_ERROR), an empty name ' +
+        '(CATEGORY_NAME_INVALID), a slug of no latin letter or digit (CATEGORY_SLUG_INVALID), a ' +
+        'parentId that is not a whole number from 1 to 2147483647 (VALIDATION_ERROR).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -136,7 +142,10 @@ const patchCategorySchema = {
   operationId: 'updateCategory',
   summary: 'Update category',
   description:
-    'Updates category data by category id. This operation is restricted to privileged users.',
+    'Updates category data by category id. This operation is restricted to privileged users. ' +
+    'A new parentId moves the category with its whole branch, null moves it to the top; the tree ' +
+    'goes from the top down, so a category never goes inside its own branch (409 ' +
+    'CATEGORY_PARENT_CYCLE), and the children of a new parent category come to it one PATCH each.',
 
   params: {
     $ref: 'categoriesUpdateParamsSchema#',
@@ -180,7 +189,9 @@ const patchCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Category update conflicts with an existing category.',
+      description:
+        'The slug is taken (CATEGORY_SLUG_TAKEN), or the new parent is inside the branch of the ' +
+        'category, under one of its subcategories (CATEGORY_PARENT_CYCLE).',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -199,7 +210,9 @@ const deleteCategorySchema = {
   operationId: 'deleteCategory',
   summary: 'Delete category',
   description:
-    'Deletes a category by category id. This operation is restricted to privileged users.',
+    'Deletes a category by category id. This operation is restricted to privileged users. ' +
+    'Its direct children go to its parent, or to the top for a top category, with their ' +
+    'branches; each move goes to the journal of the admins. A category with products stays.',
 
   params: {
     $ref: 'categoriesDeleteParamsSchema#',
@@ -227,6 +240,10 @@ const deleteCategorySchema = {
     },
     404: {
       description: 'Category was not found.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The category has products (CATEGORY_HAS_PRODUCTS), it stays.',
       $ref: 'errorResponseSchema#',
     },
     500: {

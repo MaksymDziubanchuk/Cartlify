@@ -23,13 +23,36 @@ export async function deleteCategoryById(dto: {
       // load category for 404
       const before = await tx.category.findUnique({
         where: { id: categoryId },
-        select: { id: true },
+        select: { id: true, parentId: true },
       });
       if (!before) throw new NotFoundError('CATEGORY_NOT_FOUND');
 
       // deny delete when category has products
       const productsCount = await tx.product.count({ where: { categoryId } });
       if (productsCount > 0) throw new ConflictError('CATEGORY_HAS_PRODUCTS');
+
+      // the direct children go to the parent of the category, or to the top, with their branches
+      const children = await tx.category.findMany({
+        where: { parentId: categoryId },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      });
+      if (children.length) {
+        await tx.category.updateMany({
+          where: { parentId: categoryId },
+          data: { parentId: before.parentId },
+        });
+        for (const child of children) {
+          await writeAdminAuditLog(tx, {
+            actorId,
+            actorRole,
+            entityType: 'category',
+            entityId: child.id,
+            action: 'CATEGORY_UPDATE',
+            changes: [{ field: 'parentId', old: categoryId, new: before.parentId }],
+          });
+        }
+      }
 
       // hard delete category row
       await tx.category.delete({ where: { id: categoryId } });

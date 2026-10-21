@@ -139,7 +139,7 @@ What is important to state honestly:
 
 ### Catalog and product management
 
-- category listing and admin CRUD
+- category listing and admin CRUD; the tree goes from the top down: a move takes the whole branch of a category, `parentId: null` moves it to the top, and a category never goes inside its own branch (`409 CATEGORY_PARENT_CYCLE`, refused by the database too, also for two moves at the same time); a new parent category gets its children one PATCH each; deleting a category gives its direct children to its parent
 - product listing with filtering / pagination helpers
 - product details endpoint
 - admin product CRUD
@@ -340,6 +340,8 @@ RESET_TTL_MS=3600000
 BCRYPT_ROUNDS=12
 # the avatar removals by a moderator the rules allow an account (5 unless given)
 AVATAR_REMOVALS_LIMIT=5
+# the requests a minute one address may make (100 unless given)
+RATE_LIMIT_MAX=100
 
 # Redis
 REDIS_URL=redis://localhost:6379

@@ -29,6 +29,8 @@ declare global {
 
       AVATAR_REMOVALS_LIMIT?: string;
 
+      RATE_LIMIT_MAX?: string;
+
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -131,6 +133,9 @@ export default {
   // the avatar removals by a moderator the rules allow an account; past them the page tells the
   // admin to ask root about the account
   AVATAR_REMOVALS_LIMIT: positiveInt('AVATAR_REMOVALS_LIMIT', 5),
+
+  // the requests a minute one address may make (@fastify/rate-limit)
+  RATE_LIMIT_MAX: positiveInt('RATE_LIMIT_MAX', 100),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',

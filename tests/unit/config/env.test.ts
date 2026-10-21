@@ -22,6 +22,7 @@ const UNSET = Object.fromEntries(
     'RESET_TTL_MS',
     'BCRYPT_ROUNDS',
     'AVATAR_REMOVALS_LIMIT',
+    'RATE_LIMIT_MAX',
     'OPENAI_MODEL',
     'OPENAI_TIMEOUT_MS',
     'OPENAI_MAX_OUTPUT_TOKENS',
@@ -55,6 +56,7 @@ describe('env', () => {
       RESET_TTL_MS: 3600000,
       BCRYPT_ROUNDS: 12,
       AVATAR_REMOVALS_LIMIT: 5,
+      RATE_LIMIT_MAX: 100,
       OPENAI_MODEL: 'gpt-4.1-mini',
       OPENAI_TIMEOUT_MS: 12000,
       OPENAI_MAX_OUTPUT_TOKENS: 450,
@@ -74,6 +76,7 @@ describe('env', () => {
         RESET_TTL_MS: '900000',
         BCRYPT_ROUNDS: '10',
         AVATAR_REMOVALS_LIMIT: '3',
+        RATE_LIMIT_MAX: '300',
         REDIS_ORDER_TIMEOUT_WORKER_MS: '5000',
         STRIPE_CURRENCY: 'usd',
         WEB_ORIGIN: 'https://shop.example.com',
@@ -85,6 +88,7 @@ describe('env', () => {
       RESET_TTL_MS: 900000,
       BCRYPT_ROUNDS: 10,
       AVATAR_REMOVALS_LIMIT: 3,
+      RATE_LIMIT_MAX: 300,
       REDIS_ORDER_TIMEOUT_WORKER_MS: 5000,
       STRIPE_CURRENCY: 'usd',
       WEB_ORIGIN: 'https://shop.example.com',
@@ -103,6 +107,8 @@ describe('env', () => {
     ['REDIS_ORDER_TIMEOUT_WORKER_MS', '0'],
     ['AVATAR_REMOVALS_LIMIT', 'five'],
     ['AVATAR_REMOVALS_LIMIT', '0'],
+    ['RATE_LIMIT_MAX', 'many'],
+    ['RATE_LIMIT_MAX', '0'],
   ])('stops the start when %s is %p, not a positive whole number', async (key, value) => {
     const err = await rejectedBy(() => loadEnv({ [key]: value }));
 

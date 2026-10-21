@@ -1,4 +1,12 @@
-import { idPathParam } from '@schemas/idPathParam.js';
+import { idPathParam, MAX_ID } from '@schemas/idPathParam.js';
+
+// the id of a parent category, a whole number in the range of the ids of postgres
+const parentIdField = {
+  type: 'integer',
+  minimum: 1,
+  maximum: MAX_ID,
+  description: `The parent category, a whole number from 1 to ${MAX_ID}.`,
+} as const;
 
 export const categoriesGetQuerySchema = {
   $id: 'categoriesGetQuerySchema',
@@ -9,7 +17,7 @@ export const categoriesGetQuerySchema = {
     cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
 
     search: { type: 'string' },
-    parentId: { type: 'number', minimum: 1 },
+    parentId: { ...parentIdField, description: 'Only the direct children of this category.' },
   },
 } as const;
 
@@ -49,11 +57,17 @@ const categoriesCreateBodySchema = {
   additionalProperties: false,
   properties: {
     name: { type: 'string' },
-    slug: { type: 'string' },
+    slug: {
+      type: 'string',
+      description:
+        'The part of the address of the category page, for example phones. The server keeps small ' +
+        'latin letters and digits, any other sign becomes a dash, so a slug of other letters only ' +
+        'is refused (CATEGORY_SLUG_INVALID). Unique (CATEGORY_SLUG_TAKEN).',
+    },
     description: { type: 'string' },
-    parentId: { type: 'number' },
+    parentId: parentIdField,
   },
-  required: ['name'],
+  required: ['name', 'slug'],
 } as const;
 
 const categoriesCreateResponseSchema = {
@@ -79,7 +93,15 @@ const categoriesUpdateBodySchema = {
     name: { type: 'string' },
     slug: { type: 'string' },
     description: { type: 'string' },
-    parentId: { type: 'number' },
+    parentId: {
+      type: ['integer', 'null'],
+      minimum: 1,
+      maximum: MAX_ID,
+      description:
+        `The new parent category, a whole number from 1 to ${MAX_ID}; null moves the category to the ` +
+        'top. The category moves with its whole branch, never inside its own branch ' +
+        '(CATEGORY_PARENT_CYCLE).',
+    },
   },
 } as const;
 

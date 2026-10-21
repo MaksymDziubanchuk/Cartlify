@@ -434,6 +434,55 @@ BEFORE INSERT OR UPDATE OF email ON cartlify.users FOR EACH ROW
 EXECUTE FUNCTION cartlify.users_before_write_email ();
 
 ------------------------------------------------------------
+-- CATEGORIES
+------------------------------------------------------------
+-- CATEGORIES === triggers ===
+-- CATEGORIES the tree goes one way, from the top down: a category never goes inside its own
+-- branch (under itself or under one of its subcategories), that would make a loop with no top.
+-- The changes of the tree wait for each other (a lock for the transaction), so two moves at the
+-- same time cannot make a loop that neither of them makes alone. The walk up stops at a row it
+-- has seen, so a loop written before this rule cannot hold it forever
+CREATE OR REPLACE FUNCTION cartlify.categories_before_parent_change () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW."parentId" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- a new row is not in the table yet, the walk up would not find it
+  IF NEW."parentId" = NEW.id THEN
+    RAISE EXCEPTION 'CATEGORY_PARENT_CYCLE';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.categories.tree'));
+
+  IF EXISTS (
+    WITH RECURSIVE up AS (
+      SELECT c.id, c."parentId"
+      FROM cartlify.categories AS c
+      WHERE c.id = NEW."parentId"
+      UNION
+      SELECT c.id, c."parentId"
+      FROM cartlify.categories AS c
+      JOIN up ON c.id = up."parentId"
+    )
+    SELECT 1
+    FROM up
+    WHERE up.id = NEW.id
+  ) THEN
+    RAISE EXCEPTION 'CATEGORY_PARENT_CYCLE';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_categories_before_parent_change ON cartlify.categories;
+
+CREATE TRIGGER trg_categories_before_parent_change
+BEFORE INSERT OR UPDATE OF "parentId" ON cartlify.categories FOR EACH ROW
+EXECUTE FUNCTION cartlify.categories_before_parent_change ();
+
+------------------------------------------------------------
 -- PRODUCTS
 ------------------------------------------------------------
 -- PRODUCTS === system functions === 

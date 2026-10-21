@@ -67,6 +67,9 @@ isolateEnv(
     STRIPE_CURRENCY: 'eur',
     // a short limit of avatar removals: a test passes it in three removals
     AVATAR_REMOVALS_LIMIT: '2',
+    // every request of the tests comes from 127.0.0.1; each test file has an app and a count of its
+    // own, a file of many requests would hit the 100 a minute of the app
+    RATE_LIMIT_MAX: '1000',
     ...(realSendGrid ? {} : MOCK_SENDGRID),
     ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },
