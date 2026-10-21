@@ -18,7 +18,7 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 
 // local login flow
 // guest -> user context switch
@@ -133,7 +133,7 @@ export async function login({
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),
-        ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
+        ...avatarOf(user),
         ...(user.locale ? { locale: user.locale } : {}),
         ...(user.phone ? { phone: user.phone } : {}),
       };

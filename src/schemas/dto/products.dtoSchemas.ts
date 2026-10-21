@@ -1,3 +1,4 @@
+import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { idPathParam } from '@schemas/idPathParam.js';
 
@@ -223,20 +224,11 @@ const reviewResponseSchema = {
       properties: {
         id: { type: 'integer' },
         name: { type: 'string' },
-        avatarUrls: {
-          type: 'object',
-          additionalProperties: false,
-          properties: {
-            url32: { type: 'string' },
-            url64: { type: 'string' },
-            url128: { type: 'string' },
-            url256: { type: 'string' },
-          },
-          required: ['url32', 'url64', 'url128', 'url256'],
-        },
+        avatarUrls: avatarUrlsField,
+        avatarIsDefault: avatarIsDefaultField,
         deleted: { type: 'boolean' },
       },
-      required: ['id', 'deleted'],
+      required: ['id', 'avatarUrls', 'avatarIsDefault', 'deleted'],
     },
 
     upVotes: { type: 'integer', minimum: 0 },

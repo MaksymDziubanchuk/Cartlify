@@ -17,6 +17,7 @@ const authRegisterResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
 };
 
@@ -34,6 +35,7 @@ const authLoginResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
   phone: '+10000000000',
 };

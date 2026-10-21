@@ -106,16 +106,15 @@ describe('GET /documentation/json', () => {
 });
 
 describe('the users routes', () => {
-  // an avatar is a file, it travels in a form and not in json
+  // an avatar is a file, it travels in a form; json has only the empty avatar that removes one
   it('lists the json body and the form of PATCH /api/users/me, the file only in the form', () => {
     const content = operation('patch', '/api/users/me').requestBody!.content;
 
     expect(Object.keys(content).sort()).toEqual(['application/json', 'multipart/form-data']);
-    expect(Object.keys(propertiesOf(content['application/json']!.schema)).sort()).toEqual([
-      'locale',
-      'name',
-      'phone',
-    ]);
+    const json = propertiesOf(content['application/json']!.schema);
+    expect(Object.keys(json).sort()).toEqual(['avatar', 'locale', 'name', 'phone']);
+    expect(json.avatar).toMatchObject({ type: 'string', maxLength: 0 });
+    expect(json.avatar).not.toHaveProperty('format');
     const form = propertiesOf(content['multipart/form-data']!.schema);
     expect(Object.keys(form).sort()).toEqual(['avatar', 'locale', 'name', 'phone']);
     expect(form.avatar).toMatchObject({ type: 'string', format: 'binary' });
@@ -134,6 +133,7 @@ describe('the users routes', () => {
     ['patch', '/api/users/me', ['200', '400', '401', '403', '404', '413', '500']],
     ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '500']],
     ['delete', '/api/users/{userId}', ['200', '400', '401', '403', '404', '409', '500']],
+    ['delete', '/api/users/{userId}/avatar', ['200', '400', '401', '403', '404', '500']],
     ['delete', '/api/users/me', ['204', '400', '401', '403', '409', '500']],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);

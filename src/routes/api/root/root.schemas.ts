@@ -18,6 +18,7 @@ const rootAdminExample = {
     url128: 'https://example.com/avatars/admin-128.webp',
     url256: 'https://example.com/avatars/admin-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
   phone: '+10000000000',
 };

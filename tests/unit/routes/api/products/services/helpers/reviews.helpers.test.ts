@@ -125,7 +125,24 @@ describe('mapReviewRowToResponse', () => {
   };
 
   // every review comes with its author
-  const author = { id: 8, name: 'Anna', avatarUrl: null, deletedAt: null };
+  const author = {
+    id: 8,
+    name: 'Anna',
+    email: 'anna@example.com',
+    avatarUrl: null,
+    deletedAt: null,
+  };
+
+  // an author without a picture gets the drawn letter, the way every account does
+  it('gives the author with the drawn letter of the name', () => {
+    expect(mapReviewRowToResponse(row, author).user).toMatchObject({
+      id: 8,
+      name: 'Anna',
+      avatarIsDefault: true,
+      deleted: false,
+      avatarUrls: { url32: expect.stringContaining('/l_text:Roboto_16_bold:A,co_white/') },
+    });
+  });
 
   it('counts missing votes as zero', () => {
     expect(mapReviewRowToResponse(row, author)).toMatchObject({ upVotes: 0, downVotes: 0 });

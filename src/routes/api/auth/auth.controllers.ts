@@ -221,7 +221,10 @@ const getGoogleCallback: ControllerRouter<{}, {}, GoogleCallbackQueryDto, void> 
     const { id: guestId, role } = req.user as User;
 
     // build google callback dto
-    const args = pickDefined<GoogleCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
+    const args = pickDefined<GoogleCallbackDto>(
+      { code, state, guestId, role, log: req.log },
+      { ip, userAgent },
+    );
 
     return authServices.googleCallback(args);
   });
@@ -260,7 +263,10 @@ const getGithubCallback: ControllerRouter<{}, {}, GithubCallbackQueryDto, void> 
     const { id: guestId, role } = req.user as User;
 
     // build github callback dto
-    const args = pickDefined<GithubCallbackDto>({ code, state, guestId, role }, { ip, userAgent });
+    const args = pickDefined<GithubCallbackDto>(
+      { code, state, guestId, role, log: req.log },
+      { ip, userAgent },
+    );
 
     return authServices.githubCallback(args);
   });
@@ -303,7 +309,7 @@ const getLinkedInCallback: ControllerRouter<{}, {}, LinkedInCallbackQueryDto, vo
 
     // build linkedin callback dto
     const args = pickDefined<LinkedInCallbackDto>(
-      { code, state, guestId, role },
+      { code, state, guestId, role, log: req.log },
       { ip, userAgent },
     );
 

@@ -1,3 +1,4 @@
+import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 
 // a password that is stored: printable ascii only, one byte per character,
@@ -43,21 +44,21 @@ const authLoginResponseSchema = {
     updatedAt: { type: 'string', format: 'date-time' },
 
     name: { type: 'string' },
-    avatarUrls: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        url32: { type: 'string' },
-        url64: { type: 'string' },
-        url128: { type: 'string' },
-        url256: { type: 'string' },
-      },
-      required: ['url32', 'url64', 'url128', 'url256'],
-    },
+    avatarUrls: avatarUrlsField,
+    avatarIsDefault: avatarIsDefaultField,
     locale: { type: 'string' },
     phone: { type: 'string' },
   },
-  required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
+  required: [
+    'id',
+    'email',
+    'role',
+    'isVerified',
+    'createdAt',
+    'updatedAt',
+    'avatarUrls',
+    'avatarIsDefault',
+  ],
 } as const;
 
 const authGoogleCallbackQuerySchema = {
@@ -135,20 +136,20 @@ const authRegisterResponseSchema = {
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
     name: { type: 'string' },
-    avatarUrls: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        url32: { type: 'string' },
-        url64: { type: 'string' },
-        url128: { type: 'string' },
-        url256: { type: 'string' },
-      },
-      required: ['url32', 'url64', 'url128', 'url256'],
-    },
+    avatarUrls: avatarUrlsField,
+    avatarIsDefault: avatarIsDefaultField,
     locale: { type: 'string' },
   },
-  required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
+  required: [
+    'id',
+    'email',
+    'role',
+    'isVerified',
+    'createdAt',
+    'updatedAt',
+    'avatarUrls',
+    'avatarIsDefault',
+  ],
 } as const;
 
 const authResendVerifyBodySchema = {

@@ -27,6 +27,8 @@ declare global {
 
       BCRYPT_ROUNDS: string;
 
+      AVATAR_REMOVALS_LIMIT?: string;
+
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -125,6 +127,10 @@ export default {
 
   // bcrypt cost factor
   BCRYPT_ROUNDS: process.env.BCRYPT_ROUNDS ? Number(process.env.BCRYPT_ROUNDS) : 12,
+
+  // the avatar removals by a moderator the rules allow an account; past them the page tells the
+  // admin to ask root about the account
+  AVATAR_REMOVALS_LIMIT: positiveInt('AVATAR_REMOVALS_LIMIT', 5),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',

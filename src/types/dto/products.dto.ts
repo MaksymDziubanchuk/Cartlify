@@ -141,12 +141,14 @@ export interface FindProductReviewsDto {
 export interface ReviewAuthorDto {
   id: UserId;
   name?: string;
-  avatarUrls?: {
+  // the own picture, or the drawn letter of an author without one; G on grey for a deleted one
+  avatarUrls: {
     url32: string;
     url64: string;
     url128: string;
     url256: string;
   };
+  avatarIsDefault: boolean;
   deleted: boolean;
 }
 

@@ -119,6 +119,9 @@ What is important to state honestly:
 - guest chat continuity after login/OAuth
 - the list of users for an admin or root (`GET /api/users`), root accounts included: every field of an account and its last login (`lastLoginAt`), an empty one is null; filters that go together — a part of the email in any case (`_` and `%` are plain characters), roles and providers (several through commas), the email confirmation, the deleted accounts (only with `deleted=true`); the order is the sign-up or the last login (`sortBy`, `sortOrder`), equal values go by id, accounts that never logged in come last; pages by cursor with the total of the filters
 - the profile of a user by id (`GET /api/users/:userId`) depends on who reads it, in the database function and in the API alike: a user gets the name, the avatar and the dates, no email; an admin or root gets the whole profile but the password, the provider id and the avatar file id, the open chat of the user with an admin, and the lists the `include` checkboxes name (`orders`, `reviews`, `favorites`, `votes`, `loginLogs`) of a period: the last 30 days unless `from`/`to` come, any dates, at most 60 days long (`400 PROFILE_PERIOD_TOO_LONG`, `400 PROFILE_PERIOD_INVALID`)
+- avatars: every answer that names an account gives `avatarUrls` in four sizes and `avatarIsDefault`: the own picture of the account, or, without one, the first letter of the name (of the email when there is no name) on a color of the account, the way a Google account shows it; a deleted account is G on grey. Cloudinary draws the letter at the url on a plain picture, nothing is stored per account; the server puts that picture into the Cloudinary folder of its environment when it starts, so a new Cloudinary account needs no step by hand
+- the picture of a Google, GitHub or LinkedIn account becomes the avatar of a new account: on the login that creates the account the server downloads it from the provider (https on the hosts of the provider only, no redirects, 256 px, jpeg, png or webp by its content, up to 5 MB) and keeps it at Cloudinary as the avatar; it waits at most 4 seconds, and whatever goes wrong the login goes on with the drawn letter. A later login, or a login that links an account we have, takes no picture, so a removed avatar never comes back
+- avatar removal: the owner removes the own avatar with an empty `avatar` in `PATCH /api/users/me` (JSON or a form field); a moderator removes the avatar of another account with `DELETE /api/users/:userId/avatar` — an admin from a user account, root from any account, through the database function `cartlify.remove_user_avatar`. The file goes from Cloudinary after the change. A removal by a moderator goes to the admin journal and mails the person which removal it is; the answer and the profile an admin reads give `avatarRemovals` and `avatarRemovalsLimit` (`AVATAR_REMOVALS_LIMIT`, 5 unless set), and past the limit the admin takes the account to root, who alone deletes accounts
 - user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp by its content, whatever type the form names, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`; it replaces the avatar only once the profile is written, a refused request changes nothing), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
 - account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
 - login logging
@@ -335,6 +338,8 @@ JWT_REFRESH_TTL_LONG=2592000
 GUEST_ID_TTL=157680000
 RESET_TTL_MS=3600000
 BCRYPT_ROUNDS=12
+# the avatar removals by a moderator the rules allow an account (5 unless given)
+AVATAR_REMOVALS_LIMIT=5
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -584,7 +589,7 @@ Current REST modules exposed by the application:
 Examples of implemented business endpoints:
 
 - auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
-- users: admin list of users, get/update current user, get user by id, root delete user
+- users: admin list of users, get/update current user (an empty avatar removes it), get user by id, moderator removal of an avatar, root delete user
 - products: list, details, reviews, create/update/delete, upload images, bulk price update
 - categories: list, create, update, delete
 - favorites: get/add/remove

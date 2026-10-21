@@ -14,8 +14,10 @@ import {
   createReview,
   createReviewVote,
   createUser,
+  uniqueTag,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { placeOrder } from '../../../helpers/orders.js';
 
 // the profile of any user: GET /api/users/:userId. A signed-in user sees the name, the avatar
@@ -100,12 +102,14 @@ describe('GET /api/users/:userId', () => {
       updatedAt: row.updatedAt.toISOString(),
       name: 'Anna',
       avatarUrls: { url32: sized(32), url64: sized(64), url128: sized(128), url256: sized(256) },
+      avatarIsDefault: false,
     });
   });
 
-  it('leaves out the name and the avatar a user has not set', async () => {
+  // the email stays hidden from another user, only its first letter is on the picture
+  it('leaves out the name a user has not set and draws the first letter of the email', async () => {
     const viewer = await newUser();
-    const target = await newUser();
+    const target = await newUser({ email: `kate-${uniqueTag()}@example.com` });
 
     const res = await profileOf(target.id, accessCookie(viewer));
 
@@ -113,7 +117,10 @@ describe('GET /api/users/:userId', () => {
       id: target.id,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      avatarUrls: expect.any(Object),
+      avatarIsDefault: true,
     });
+    expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'K' });
   });
 
   it('lets a user read their own public profile', async () => {
@@ -139,7 +146,14 @@ describe('GET /api/users/:userId', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(Object.keys(res.json()).sort()).toEqual(['createdAt', 'id', 'name', 'updatedAt']);
+    expect(Object.keys(res.json()).sort()).toEqual([
+      'avatarIsDefault',
+      'avatarUrls',
+      'createdAt',
+      'id',
+      'name',
+      'updatedAt',
+    ]);
   });
 
   it('shows the profile of an admin the same way as any other', async () => {
@@ -220,6 +234,7 @@ describe('GET /api/users/:userId for an admin', () => {
         updatedAt: row.updatedAt.toISOString(),
         name: 'Anna',
         avatarUrls: expect.objectContaining({ url32: expect.any(String) }),
+        avatarIsDefault: false,
         email: target.email,
         role: 'USER',
         authProvider: 'LOCAL',
@@ -227,12 +242,14 @@ describe('GET /api/users/:userId for an admin', () => {
         locale: 'uk',
         phone: '+380501234567',
         openChatThreadId: null,
+        avatarRemovals: 0,
+        avatarRemovalsLimit: 2,
         period: { from: expect.any(String), to: expect.any(String) },
       });
     },
   );
 
-  it('leaves out the name, the avatar, the locale and the phone a user has not set', async () => {
+  it('leaves out the name, the locale and the phone a user has not set and draws the avatar', async () => {
     const target = await newUser({
       authProvider: 'GITHUB',
       providerSub: 'gh-1',
@@ -245,11 +262,15 @@ describe('GET /api/users/:userId for an admin', () => {
       id: target.id,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      avatarUrls: expect.any(Object),
+      avatarIsDefault: true,
       email: target.email,
       role: 'USER',
       authProvider: 'GITHUB',
       isVerified: false,
       openChatThreadId: null,
+      avatarRemovals: 0,
+      avatarRemovalsLimit: 2,
       period: expect.any(Object),
     });
   });

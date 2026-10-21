@@ -1,8 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
+import { DELETED_AVATAR_COLOR } from '@utils/avatar.util.js';
+
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
@@ -197,6 +200,7 @@ describe('GET /api/users', () => {
               url128: sized(128),
               url256: sized(256),
             },
+            avatarIsDefault: false,
             createdAt: row.createdAt.toISOString(),
             updatedAt: row.updatedAt.toISOString(),
             lastLoginAt: lastLogin.toISOString(),
@@ -220,11 +224,13 @@ describe('GET /api/users', () => {
           id: user.id,
           name: null,
           locale: null,
-          avatarUrls: null,
+          avatarIsDefault: true,
           lastLoginAt: null,
           deletedAt: null,
         }),
       ]);
+      // without a picture and a name the avatar is the first letter of the email
+      expect(drawnAvatarOf(res.json().items[0].avatarUrls)).toMatchObject({ letter: 'L' });
     });
   });
 
@@ -290,10 +296,15 @@ describe('GET /api/users', () => {
         expect.objectContaining({
           id: gone.id,
           name: 'Guest',
+          avatarIsDefault: true,
           deletedAt: expect.any(String),
           lastLoginAt: expect.any(String),
         }),
       ]);
+      expect(drawnAvatarOf(deleted.json().items[0].avatarUrls)).toEqual({
+        letter: 'G',
+        color: DELETED_AVATAR_COLOR,
+      });
     });
   });
 

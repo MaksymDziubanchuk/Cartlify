@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { accessCookie } from '../../../helpers/actors.js';
+import { AVATAR_BASE_PUBLIC_ID, ensureAvatarBase } from '@utils/avatar.util.js';
+
+import { accessCookie, getMe } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import {
   bodyOf,
@@ -328,6 +330,67 @@ describe('PATCH /api/users/me with an avatar (Cloudinary)', () => {
         });
       },
     );
+  });
+
+  // the letters go on a plain picture of the folder of the environment; the server puts it there
+  // when it starts, if it is not there yet
+  describe('the drawn avatar', () => {
+    it('puts the plain picture the letters go on into the folder once', async () => {
+      await ensureAvatarBase(app.log);
+      const mark = uploadMark();
+
+      await ensureAvatarBase(app.log);
+
+      expect(uploadsSince(mark)).toEqual([]);
+      expect(await storedImage(AVATAR_BASE_PUBLIC_ID)).toMatchObject({ format: 'png' });
+    });
+
+    it('serves the drawn avatar at the urls it gives', async () => {
+      await ensureAvatarBase(app.log);
+      const user = await newUser();
+
+      const me = await getMe(app, accessCookie(user));
+      expect(me.json().avatarIsDefault).toBe(true);
+      const image = await fetch(me.json().avatarUrls.url64);
+
+      expect(image.status).toBe(200);
+      expect(image.headers.get('content-type')).toMatch(/^image\//);
+    });
+  });
+
+  // the file goes from Cloudinary after the row is written; the other cases of the removal are in
+  // me.test.ts, meForm.test.ts and avatarModeration.test.ts
+  describe('a removed avatar', () => {
+    it('removes the own avatar and its file through PATCH with an empty avatar', async () => {
+      const user = await newUser();
+      await giveAvatar(user, pngImage(40, 30));
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/users/me',
+        headers: withCsrf(csrf, accessCookie(user)),
+        payload: { avatar: '' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(bodyOf(res)).toMatchObject({ avatarIsDefault: true });
+      expect(await storedImage(avatarPath(user))).toBeNull();
+    });
+
+    it('lets a moderator remove the avatar and its file', async () => {
+      const user = await newUser();
+      await giveAvatar(user, pngImage(40, 30));
+
+      const res = await app.inject({
+        method: 'DELETE',
+        url: `/api/users/${user.id}/avatar`,
+        headers: withCsrf(csrf, rootCookie),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(bodyOf(res)).toMatchObject({ removed: true, avatarRemovals: 1 });
+      expect(await storedImage(avatarPath(user))).toBeNull();
+    });
   });
 
   describe('a deleted account', () => {

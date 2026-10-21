@@ -7,6 +7,7 @@ import type { MultipartFile } from '@fastify/multipart';
 import type { UploadImageResult } from '@utils/cloudinary.util.js';
 import type { AccountDeletionLogger } from '@routes/api/users/services/helpers/accountDeletedEmail.helper.js';
 import type { ProfileList } from '@routes/api/users/services/helpers/adminProfile.helper.js';
+import type { AvatarLogger } from '@routes/api/users/services/helpers/avatarRemovals.helper.js';
 import type { AuthProvider, OrderStatus } from '@prisma/client';
 
 export type AvatarUrls = {
@@ -76,7 +77,8 @@ export interface UsersListItemDto {
   authProvider: AuthProvider;
   isVerified: boolean;
   locale: string | null;
-  avatarUrls: AvatarUrls | null;
+  avatarUrls: AvatarUrls;
+  avatarIsDefault: boolean;
   createdAt: Date;
   updatedAt: Date;
   lastLoginAt: Date | null;
@@ -104,7 +106,9 @@ export interface UserResponseDto {
   updatedAt: Date;
 
   name?: string;
-  avatarUrls?: AvatarUrls;
+  // the own picture, or the drawn letter of an account without one
+  avatarUrls: AvatarUrls;
+  avatarIsDefault: boolean;
   locale?: string;
   phone?: string;
   reviews?: UserReviewResponseDto[];
@@ -171,6 +175,9 @@ export type AdminUserProfileDto = PublicUserProfileDto &
     // only for a deleted account
     deletedAt?: Date;
     openChatThreadId: string | null;
+    // the removals of the avatar by a moderator and the limit the rules set for them
+    avatarRemovals: number;
+    avatarRemovalsLimit: number;
     period: { from: Date; to: Date };
   } & Partial<Pick<AdminProfileListsDto, ProfileList>>;
 
@@ -180,7 +187,8 @@ export interface UpdateMeBodyDto {
   name?: string;
   locale?: string;
   phone?: string;
-  avatar?: MultipartFile;
+  // a file in a form; in json only the empty value, which removes the avatar
+  avatar?: MultipartFile | string;
 }
 
 export interface UpdateMeDto {
@@ -192,6 +200,25 @@ export interface UpdateMeDto {
   phone?: string;
 
   avatarUploaded?: UploadImageResult | null;
+  // an empty avatar came: the avatar goes, its file after the commit
+  removeAvatar?: boolean;
+  log?: AvatarLogger;
+}
+
+// a moderator takes the avatar of another account away
+export interface RemoveUserAvatarDto {
+  actorId: UserId;
+  actorRole: Role;
+  userId: UserId;
+  log: AvatarLogger;
+}
+
+export interface RemoveUserAvatarResponseDto {
+  // false when the account had no avatar
+  removed: boolean;
+  // the removals by a moderator the account has, this one counted
+  avatarRemovals: number;
+  avatarRemovalsLimit: number;
 }
 
 export interface DeleteUserByIdDto {

@@ -15,6 +15,8 @@ import type {
   FindUsersDto,
   GetUsersQueryDto,
   UsersListResponseDto,
+  RemoveUserAvatarDto,
+  RemoveUserAvatarResponseDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { discardUploads, type UploadImageResult } from '@utils/cloudinary.util.js';
@@ -60,6 +62,8 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
 
   // start avatar upload as soon as we see the file part to avoid hanging multipart parsing
   let avatarUpload: Promise<UploadImageResult> | null = null;
+  // an empty avatar field removes the avatar, the way an empty value removes any field
+  let removeAvatar = false;
 
   try {
     if (req.isMultipart()) {
@@ -67,8 +71,8 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
       for await (const part of req.parts()) {
         if (part.type === 'file') {
           if (part.fieldname === 'avatar') {
-            // prevent sending multiple avatar files in one request
-            if (avatarUpload) {
+            // prevent sending multiple avatar files in one request, or a file and a removal
+            if (avatarUpload || removeAvatar) {
               // always drain extra streams to avoid request hanging
               part.file.resume();
               throw new BadRequestError('AVATAR_MULTIPLE');
@@ -94,6 +98,14 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
         // multipart field values are typed loosely, normalize to string
         const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
 
+        // an avatar of text can only be the empty value that removes it; a picture is a file
+        if (part.fieldname === 'avatar') {
+          if (v !== '') throw new BadRequestError('AVATAR_NOT_A_FILE');
+          if (avatarUpload || removeAvatar) throw new BadRequestError('AVATAR_MULTIPLE');
+          removeAvatar = true;
+          continue;
+        }
+
         // map allowed fields only
         if (part.fieldname === 'name') name = v;
         else if (part.fieldname === 'locale') locale = v;
@@ -105,6 +117,8 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
       name = b.name;
       locale = b.locale;
       phone = b.phone;
+      // the schema lets only the empty value through: json cannot carry a picture
+      removeAvatar = b.avatar === '';
     }
 
     // wait for avatar upload if it was requested, otherwise keep it null
@@ -113,7 +127,7 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
     // build service dto with only provided fields
     const args = pickDefined<UpdateMeDto>(
       { userId: id, userRole: role },
-      { name, locale, phone, avatarUploaded: uploaded },
+      { name, locale, phone, avatarUploaded: uploaded, removeAvatar, log: req.log },
     );
 
     // persist changes and return the updated user dto
@@ -154,6 +168,22 @@ const deleteUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, MessageResp
   return reply.code(200).send(result);
 };
 
+// a moderator takes the avatar of another account away; the answer counts the removals of the
+// account against the limit the rules set
+const deleteUserAvatar: ControllerRouter<
+  GetUserByIdParamsDto,
+  {},
+  {},
+  RemoveUserAvatarResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const userId = Number(req.params.userId);
+
+  const args = pickDefined<RemoveUserAvatarDto>({ actorId, actorRole, userId, log: req.log }, {});
+  const result = await usersServices.removeUserAvatar(args);
+  return reply.code(200).send(result);
+};
+
 // the account is gone with this answer: the cookies of this browser go with it, other devices
 // keep their access only until their access token runs out
 const deleteMe: ControllerRouter<{}, DeleteMeBodyDto, {}, void> = async (req, reply) => {
@@ -176,5 +206,6 @@ export const usersController = {
   patchMe,
   getUserById,
   deleteUserById,
+  deleteUserAvatar,
   deleteMe,
 };

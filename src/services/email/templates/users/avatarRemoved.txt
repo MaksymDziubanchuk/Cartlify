@@ -1,0 +1,10 @@
+{{#userName}}Hi {{userName}},
+
+{{/userName}}A moderator removed your profile picture: it does not follow the rules of {{appName}}. Your profile now shows the first letter of your name instead, and you can put up another picture at any time.
+
+{{#beforeLimit}}This is removal {{removals}} of the {{limit}} the rules allow. After them your account can be deleted.
+{{/beforeLimit}}{{#atLimit}}This is the last removal the rules allow, {{limit}} of {{limit}}. The next one can lead to the deletion of your account.
+{{/atLimit}}{{#pastLimit}}This is removal {{removals}}, past the {{limit}} the rules allow. Your account can now be deleted.
+{{/pastLimit}}
+This mailbox is not monitored.
+Questions? Ask us in the chat on our site.

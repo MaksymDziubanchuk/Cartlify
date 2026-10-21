@@ -19,7 +19,7 @@ import {
 } from '@utils/linkedinOAuth.js';
 import { verifyOidcIdToken } from '@utils/oidcIdTokenVerify.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 
 import type {
   LinkedInStartDto,
@@ -33,6 +33,11 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
+import {
+  copyProviderAvatar,
+  type OAuthAvatarRole,
+  type OAuthLoginOutcome,
+} from './helpers/providerAvatar.helper.js';
 
 export async function linkedInStart({
   guestId,
@@ -55,6 +60,7 @@ export async function linkedInCallback({
   role,
   ip,
   userAgent,
+  log,
 }: LinkedInCallbackDto): Promise<{
   result: LoginResponseDto;
   refreshToken: string;
@@ -105,8 +111,10 @@ export async function linkedInCallback({
     typeof idp.picture === 'string' && idp.picture.trim() ? idp.picture.trim() : null;
 
   const locale = null;
+  let login: OAuthLoginOutcome;
+
   try {
-    return await prisma.$transaction(async (tx) => {
+    login = await prisma.$transaction(async (tx) => {
       // create or link oauth user by verified email
       const u = await upsertOAuthUserByEmail(tx, {
         email,
@@ -114,7 +122,6 @@ export async function linkedInCallback({
         providerSub: sub,
         emailVerified: true,
         name,
-        avatarUrl,
         locale,
         userNotFoundAfterConflictMsg: 'USER_NOT_FOUND_AFTER_CONFLICT',
         providerSubMismatchMsg: 'LINKEDIN_SUB_MISMATCH',
@@ -151,16 +158,40 @@ export async function linkedInCallback({
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
+        ...avatarOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
 
-      return { result, accessToken, refreshToken };
+      return { result, accessToken, refreshToken, created: u.created, role: u.role, userId: u.id };
     });
   } catch (err) {
     if (err instanceof AppError) throw err;
 
     throw new InternalError({ reason: 'LINKEDIN_SERVICE_UNEXPECTED' }, err);
   }
+
+  // a new account takes the picture of the provider; the login goes on whatever comes of it
+  if (login.created && avatarUrl) {
+    const copied = await copyProviderAvatar({
+      userId: login.userId,
+      role: login.role as OAuthAvatarRole,
+      provider: 'LINKEDIN',
+      pictureUrl: avatarUrl,
+      log,
+    });
+    if (copied) {
+      login.result = {
+        ...login.result,
+        ...avatarOf({
+          ...login.result,
+          id: login.userId,
+          name: login.result.name ?? null,
+          avatarUrl: copied,
+        }),
+      };
+    }
+  }
+
+  return { result: login.result, accessToken: login.accessToken, refreshToken: login.refreshToken };
 }

@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import { logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -71,7 +72,14 @@ describe('POST /api/auth/register', () => {
     });
 
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toMatchObject({ email, role: 'USER', isVerified: false, name: 'Ann' });
+    expect(res.json()).toMatchObject({
+      email,
+      role: 'USER',
+      isVerified: false,
+      name: 'Ann',
+      avatarIsDefault: true,
+    });
+    expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'A' });
     expect(JSON.stringify(res.json())).not.toMatch(/password/i);
     // registration does not sign in: the email has to be verified first
     expect(setCookies(res).accessToken).toBeUndefined();

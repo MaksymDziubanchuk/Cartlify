@@ -28,6 +28,7 @@ const APP_FUNCTIONS = [
   'cartlify.auth_resend_verify(text, text, timestamp with time zone)',
   'cartlify.auth_verify_email(text)',
   'cartlify.users_get_public_profile(integer)',
+  'cartlify.remove_user_avatar(integer)',
   'cartlify.migrate_guest_data_to_user(uuid, integer)',
   'cartlify.confirm_order(integer, interval)',
   'cartlify.unconfirm_order(integer)',

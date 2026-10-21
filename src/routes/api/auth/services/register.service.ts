@@ -11,7 +11,7 @@ import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
 import { setGuestContext } from '@db/dbContext.service.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 
 import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
 
@@ -107,7 +107,7 @@ export async function register({
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
+        ...avatarOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };

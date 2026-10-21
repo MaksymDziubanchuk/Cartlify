@@ -36,6 +36,7 @@ const userResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
   phone: '+10000000000',
   reviews: [userReviewExample],
@@ -52,6 +53,7 @@ const publicUserResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
 };
 
 const updateMeBodyExample = {
@@ -113,6 +115,13 @@ const usersListQueryExample = {
   limit: '20',
 };
 
+// the letter an account without a picture gets, the way Cloudinary draws it at the url
+const drawnAvatarUrl = (size: number) =>
+  'https://res.cloudinary.com/demo/image/upload/' +
+  `c_scale,w_${size},h_${size}/e_colorize:100,co_rgb:EF6C00` +
+  `/l_text:Roboto_${size / 2}_bold:B,co_white/fl_layer_apply,g_center` +
+  '/f_auto,q_auto/v1/prod/common/avatar-base.png';
+
 const usersListResponseExample = {
   items: [
     {
@@ -123,7 +132,8 @@ const usersListResponseExample = {
       authProvider: 'LOCAL',
       isVerified: false,
       locale: 'uk',
-      avatarUrls: null,
+      avatarUrls: userResponseExample.avatarUrls,
+      avatarIsDefault: false,
       createdAt: '2025-11-02T10:00:00.000Z',
       updatedAt: '2025-11-02T10:00:00.000Z',
       lastLoginAt: '2025-11-03T08:30:00.000Z',
@@ -137,7 +147,13 @@ const usersListResponseExample = {
       authProvider: 'LOCAL',
       isVerified: false,
       locale: null,
-      avatarUrls: null,
+      avatarUrls: {
+        url32: drawnAvatarUrl(32),
+        url64: drawnAvatarUrl(64),
+        url128: drawnAvatarUrl(128),
+        url256: drawnAvatarUrl(256),
+      },
+      avatarIsDefault: true,
       createdAt: '2025-12-01T10:00:00.000Z',
       updatedAt: '2025-12-01T10:00:00.000Z',
       lastLoginAt: null,
@@ -374,6 +390,67 @@ const ACCOUNT_DELETION =
   'logged. ACCOUNT_ORDERS_CHANGED (409): a payment or the end of a reservation changed a waiting ' +
   'order at that moment, nothing was changed, repeat the request.';
 
+const avatarRemovalResponseExample = {
+  removed: true,
+  avatarRemovals: 3,
+  avatarRemovalsLimit: 5,
+};
+
+// Schema for the removal of the avatar of another account by a moderator
+const deleteUserAvatarSchema = {
+  operationId: 'deleteUserAvatar',
+  summary: 'Remove the avatar of a user (moderation)',
+  description:
+    'Admin or root only: takes the avatar of another account away, for a picture that breaks ' +
+    'the rules. An admin takes it from a user account, root from any account; the own avatar goes ' +
+    'through PATCH /api/users/me with an empty avatar. The profile shows the drawn letter again, ' +
+    'the file of this environment goes from Cloudinary after the change, the removal goes to the ' +
+    'journal of the admins, and the person gets a mail with the number of the removal and the ' +
+    'limit the rules allow. `avatarRemovals` counts the removals by a moderator of the account, ' +
+    'this one included; past `avatarRemovalsLimit` the page tells the admin to take the account ' +
+    'to root, who alone deletes accounts (DELETE /api/users/{userId}). An account without an ' +
+    'avatar answers `removed: false` and nothing is counted or mailed. A failed file deletion or ' +
+    'mail is only logged.',
+
+  params: {
+    $ref: 'usersGetByIdParamsSchema#',
+    examples: [userIdParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The avatar is removed, or the account had none.',
+      $ref: 'usersAvatarRemovalResponseSchema#',
+      examples: [avatarRemovalResponseExample],
+    },
+
+    400: {
+      description:
+        'The user id is not a whole number from 1 to 2147483647 (VALIDATION_ERROR, USER_ID_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'A guest or a user (INSUFFICIENT_ROLE); an admin and the avatar of an admin or root ' +
+        '(USER_AVATAR_REMOVE_FORBIDDEN); no csrf token (CSRF_TOKEN_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'There is no user with this id (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while removing the avatar.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for privileged user deletion
 const deleteUserByIdSchema = {
   operationId: 'deleteUserById',
@@ -495,6 +572,7 @@ const taggedUsersSchema = withOpenApiTag(
     patchMeSchema,
     getUserByIdSchema,
     deleteUserByIdSchema,
+    deleteUserAvatarSchema,
     deleteMeSchema,
   },
   'users',

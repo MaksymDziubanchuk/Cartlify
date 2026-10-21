@@ -5,7 +5,7 @@ import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import type { FindAdminsDto, GetAdminsResponseDto } from 'types/dto/root.dto.js';
@@ -121,11 +121,7 @@ export async function findAdmins(dto: FindAdminsDto): Promise<GetAdminsResponseD
           createdAt: u.createdAt,
           updatedAt: u.updatedAt,
           ...(u.name ? { name: u.name } : {}),
-          ...(u.avatarUrl
-            ? {
-                avatarUrls: buildImageUrls(u.avatarUrl, 'avatar'),
-              }
-            : {}),
+          ...avatarOf(u),
           ...(u.locale ? { locale: u.locale } : {}),
           ...(u.phone ? { phone: u.phone } : {}),
         };

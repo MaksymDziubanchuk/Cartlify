@@ -1,7 +1,7 @@
 import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 import { normalizeFindProductByIdInput } from './index.js';
 
 import type {
@@ -83,6 +83,7 @@ export function normalizeDeleteReviewInput(dto: {
 export const reviewAuthorSelect = {
   id: true,
   name: true,
+  email: true,
   avatarUrl: true,
   deletedAt: true,
 } as const;
@@ -90,6 +91,7 @@ export const reviewAuthorSelect = {
 export type ReviewAuthorRow = {
   id: number;
   name: string | null;
+  email: string;
   avatarUrl: string | null;
   deletedAt: Date | null;
 };
@@ -98,7 +100,7 @@ export function mapReviewAuthor(author: ReviewAuthorRow): ReviewAuthorDto {
   return {
     id: author.id as any,
     ...(author.name ? { name: author.name } : {}),
-    ...(author.avatarUrl ? { avatarUrls: buildImageUrls(author.avatarUrl, 'avatar') } : {}),
+    ...avatarOf({ ...author, deleted: author.deletedAt !== null }),
     deleted: author.deletedAt !== null,
   };
 }

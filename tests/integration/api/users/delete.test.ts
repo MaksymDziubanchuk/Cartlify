@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import cloudinary from '@config/cloudinary.js';
 import env from '@config/env.js';
+import { DELETED_AVATAR_COLOR } from '@utils/avatar.util.js';
 
 import {
   accessCookie,
@@ -15,6 +16,7 @@ import {
   type Session,
 } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -306,8 +308,16 @@ describe('what the deletion does', () => {
       headers: { cookie: rootCookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ name: 'Guest', deletedAt: expect.any(String) });
-    expect(res.json()).not.toHaveProperty('avatarUrls');
+    expect(res.json()).toMatchObject({
+      name: 'Guest',
+      deletedAt: expect.any(String),
+      avatarIsDefault: true,
+    });
+    // the picture is gone, the avatar is G on grey
+    expect(drawnAvatarOf(res.json().avatarUrls)).toEqual({
+      letter: 'G',
+      color: DELETED_AVATAR_COLOR,
+    });
   });
 });
 

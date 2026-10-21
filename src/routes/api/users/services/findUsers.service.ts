@@ -1,7 +1,7 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 
 import type { Email } from 'types/common.js';
@@ -24,7 +24,7 @@ const toItem = (row: UsersListRow): UsersListItemDto => ({
   authProvider: row.authProvider,
   isVerified: row.isVerified,
   locale: row.locale,
-  avatarUrls: row.avatarUrl ? buildImageUrls(row.avatarUrl, 'avatar') : null,
+  ...avatarOf({ ...row, deleted: row.deletedAt !== null }),
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
   lastLoginAt: row.lastLoginAt,

@@ -28,8 +28,7 @@ export async function findReviews({
   const limit =
     limitRaw != null && Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
 
-  const cursor =
-    typeof cursorIn === 'string' && cursorIn.trim() ? cursorIn.trim() : undefined;
+  const cursor = typeof cursorIn === 'string' && cursorIn.trim() ? cursorIn.trim() : undefined;
   const c = cursor ? decodeCursor(cursor) : undefined;
 
   // bind cursor to this product to prevent cross-product reuse
@@ -124,7 +123,9 @@ export async function findReviews({
           : rows;
 
       // reviews are public, the accounts of their authors are not under rls: the server reads
-      // the name, the avatar and the deletion mark of the authors of this page as the system
+      // the name, the avatar and the deletion mark of the authors of this page as the system, and
+      // the email, whose first letter only leaves the server, on the avatar of an author without a
+      // name
       await setAdminContext(tx);
 
       const authors = await tx.user.findMany({

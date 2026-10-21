@@ -1,3 +1,4 @@
+import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 import { idPathParam } from '@schemas/idPathParam.js';
@@ -195,17 +196,8 @@ const usersUserResponseSchema = {
     updatedAt: { type: 'string', format: 'date-time' },
 
     name: { type: 'string' },
-    avatarUrls: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        url32: { type: 'string' },
-        url64: { type: 'string' },
-        url128: { type: 'string' },
-        url256: { type: 'string' },
-      },
-      required: ['url32', 'url64', 'url128', 'url256'],
-    },
+    avatarUrls: avatarUrlsField,
+    avatarIsDefault: avatarIsDefaultField,
     locale: { type: 'string' },
     phone: { type: 'string' },
 
@@ -214,7 +206,16 @@ const usersUserResponseSchema = {
       items: { $ref: 'usersUserReviewResponseSchema#' },
     },
   },
-  required: ['id', 'email', 'role', 'isVerified', 'createdAt', 'updatedAt'],
+  required: [
+    'id',
+    'email',
+    'role',
+    'isVerified',
+    'createdAt',
+    'updatedAt',
+    'avatarUrls',
+    'avatarIsDefault',
+  ],
 } as const;
 
 const usersGetMeResponseSchema = {
@@ -234,17 +235,8 @@ const usersGetByIdResponseSchema = {
     updatedAt: { type: 'string', format: 'date-time' },
 
     name: { type: 'string' },
-    avatarUrls: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        url32: { type: 'string' },
-        url64: { type: 'string' },
-        url128: { type: 'string' },
-        url256: { type: 'string' },
-      },
-      required: ['url32', 'url64', 'url128', 'url256'],
-    },
+    avatarUrls: avatarUrlsField,
+    avatarIsDefault: avatarIsDefaultField,
     deletedAt: {
       type: 'string',
       format: 'date-time',
@@ -269,6 +261,16 @@ const usersGetByIdResponseSchema = {
         'Admin or root only: the open chat of the user with an admin, ' +
         'GET /api/chat/admin/threads/{threadId} opens it; null when there is none.',
     },
+    avatarRemovals: {
+      type: 'number',
+      description:
+        'Admin or root only: how many times a moderator removed the avatar of the account. ' +
+        'Past avatarRemovalsLimit the page tells the admin to take the account to root.',
+    },
+    avatarRemovalsLimit: {
+      type: 'number',
+      description: 'Admin or root only: the removals the rules allow (AVATAR_REMOVALS_LIMIT).',
+    },
     period: {
       type: 'object',
       additionalProperties: false,
@@ -278,7 +280,7 @@ const usersGetByIdResponseSchema = {
     },
     ...usersAdminProfileListsSchema,
   },
-  required: ['id', 'createdAt', 'updatedAt'],
+  required: ['id', 'createdAt', 'updatedAt', 'avatarUrls', 'avatarIsDefault'],
 } as const;
 
 // one name of the list or several through commas
@@ -348,18 +350,6 @@ const usersListQuerySchema = {
   },
 } as const;
 
-const avatarUrlsObject = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    url32: { type: 'string' },
-    url64: { type: 'string' },
-    url128: { type: 'string' },
-    url256: { type: 'string' },
-  },
-  required: ['url32', 'url64', 'url128', 'url256'],
-} as const;
-
 const nullableDateTime = { anyOf: [dateTime, { type: 'null' }] } as const;
 
 // a row of the admin table: every field is there, null when the account has none
@@ -375,7 +365,8 @@ const usersListItemSchema = {
     authProvider: { type: 'string', enum: USERS_LIST_PROVIDERS },
     isVerified: { type: 'boolean' },
     locale: nullableString,
-    avatarUrls: { anyOf: [avatarUrlsObject, { type: 'null' }] },
+    avatarUrls: avatarUrlsField,
+    avatarIsDefault: avatarIsDefaultField,
     createdAt: dateTime,
     updatedAt: dateTime,
     lastLoginAt: {
@@ -396,6 +387,7 @@ const usersListItemSchema = {
     'isVerified',
     'locale',
     'avatarUrls',
+    'avatarIsDefault',
     'createdAt',
     'updatedAt',
     'lastLoginAt',
@@ -417,6 +409,27 @@ const usersListResponseSchema = {
     total: { type: 'number', description: 'How many accounts the filters find, on all pages.' },
   },
   required: ['items', 'limit', 'nextCursor', 'total'],
+} as const;
+
+// the answer of a removal by a moderator: the count of the removals of the account and its limit
+const usersAvatarRemovalResponseSchema = {
+  $id: 'usersAvatarRemovalResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    removed: { type: 'boolean', description: 'false when the account had no avatar.' },
+    avatarRemovals: {
+      type: 'number',
+      description: 'The removals by a moderator the account has, this one counted.',
+    },
+    avatarRemovalsLimit: {
+      type: 'number',
+      description:
+        'The removals the rules allow (AVATAR_REMOVALS_LIMIT); past it the page tells the admin ' +
+        'to take the account to root.',
+    },
+  },
+  required: ['removed', 'avatarRemovals', 'avatarRemovalsLimit'],
 } as const;
 
 // the fields of the update, shared by the json body and the form
@@ -451,6 +464,13 @@ const usersUpdateMeBodySchema = {
     name: profileNameField,
     locale: profileLocaleField,
     phone: profilePhoneField,
+    avatar: {
+      type: 'string',
+      maxLength: 0,
+      description:
+        'Only the empty value: it removes the avatar, the profile shows the drawn letter again. ' +
+        'A new picture goes as a file in the form.',
+    },
   },
 } as const;
 
@@ -467,7 +487,7 @@ const usersUpdateMeFormSchema = {
     avatar: {
       type: 'string',
       format: 'binary',
-      description: `Avatar image: a jpeg, png or webp file by its content, up to ${MAX_UPLOAD_SIZE_BYTES / 1_000_000} MB. One file only.`,
+      description: `Avatar image: a jpeg, png or webp file by its content, up to ${MAX_UPLOAD_SIZE_BYTES / 1_000_000} MB. One file only. An empty text field avatar instead of a file removes the avatar (AVATAR_NOT_A_FILE for text that is not empty).`,
     },
   },
 } as const;
@@ -505,6 +525,7 @@ const usersUpdateMeResponseSchema = {
 } as const;
 
 export const usersDtoSchemas = [
+  usersAvatarRemovalResponseSchema,
   usersListQuerySchema,
   usersListItemSchema,
   usersListResponseSchema,

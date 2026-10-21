@@ -18,6 +18,8 @@ DROP POLICY IF EXISTS users_update ON cartlify.users;
 
 DROP POLICY IF EXISTS users_update_owner ON cartlify.users;
 
+DROP POLICY IF EXISTS users_update_owner_avatar ON cartlify.users;
+
 DROP POLICY IF EXISTS users_insert ON cartlify.users;
 
 DROP POLICY IF EXISTS users_select_owner ON cartlify.users;
@@ -91,6 +93,27 @@ WITH
       (to_jsonb(users) - 'isVerified' - 'updatedAt') = (
         SELECT
           to_jsonb(u) - 'isVerified' - 'updatedAt'
+        FROM
+          cartlify.users u
+        WHERE
+          u.id = users.id
+      )
+    )
+  );
+
+-- UPDATE cartlify_owner for remove_user_avatar only: the avatar of an account goes, nothing else
+-- of the row changes but the time of the change
+CREATE POLICY users_update_owner_avatar ON cartlify.users
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (
+    "avatarUrl" IS NULL
+    AND "publicId" IS NULL
+    AND (
+      (to_jsonb(users) - 'avatarUrl' - 'publicId' - 'updatedAt') = (
+        SELECT
+          to_jsonb(u) - 'avatarUrl' - 'publicId' - 'updatedAt'
         FROM
           cartlify.users u
         WHERE

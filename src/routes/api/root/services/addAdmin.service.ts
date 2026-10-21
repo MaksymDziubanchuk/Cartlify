@@ -3,7 +3,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 
 import {
   BadRequestError,
@@ -102,7 +102,7 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
         createdAt: updated.createdAt,
         updatedAt: updated.updatedAt,
         ...(updated.name ? { name: updated.name } : {}),
-        ...(updated.avatarUrl ? { avatarUrls: buildImageUrls(updated.avatarUrl, 'avatar') } : {}),
+        ...avatarOf(updated),
         ...(updated.locale ? { locale: updated.locale } : {}),
         ...(updated.phone ? { phone: updated.phone } : {}),
       };

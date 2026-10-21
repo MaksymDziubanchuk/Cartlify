@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
+
+import cloudinary from '@config/cloudinary.js';
 
 import { accessCookie, getMe } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -12,8 +14,11 @@ import {
   createReviewVote,
   createUser,
   removeProducts,
+  uniqueTag,
   type TestProduct,
 } from '../../../helpers/factories.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
+import { takeLogs } from '../../../helpers/logs.js';
 
 // the profile a signed-in user reads and edits for themselves: GET /api/users/me and PATCH with
 // a json body. The form with an avatar is in meForm.test.ts
@@ -76,6 +81,8 @@ describe('GET /api/users/me', () => {
       isVerified: true,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
+      avatarUrls: expect.any(Object),
+      avatarIsDefault: true,
       reviews: [],
     });
   });
@@ -99,9 +106,10 @@ describe('GET /api/users/me', () => {
       url128: sized(128),
       url256: sized(256),
     });
+    expect(res.json().avatarIsDefault).toBe(false);
   });
 
-  it('leaves out the fields the user has not filled in', async () => {
+  it('leaves out the fields the user has not filled in and draws the letter of the name', async () => {
     const user = await newUser({ name: 'Anna' });
 
     const body = (await getMe(app, accessCookie(user))).json();
@@ -109,7 +117,26 @@ describe('GET /api/users/me', () => {
     expect(body).toHaveProperty('name', 'Anna');
     expect(body).not.toHaveProperty('locale');
     expect(body).not.toHaveProperty('phone');
-    expect(body).not.toHaveProperty('avatarUrls');
+    expect(body.avatarIsDefault).toBe(true);
+    expect(drawnAvatarOf(body.avatarUrls)).toMatchObject({ letter: 'A' });
+  });
+
+  // the letter comes from the name as soon as there is one
+  it('draws the first letter of the email until the user names themselves', async () => {
+    const user = await newUser({ email: `kate-${uniqueTag()}@example.com` });
+
+    const before = (await getMe(app, accessCookie(user))).json();
+    const renamed = await app.inject({
+      method: 'PATCH',
+      url: '/api/users/me',
+      headers: withCsrf(csrf, accessCookie(user)),
+      payload: { name: 'Olena' },
+    });
+
+    expect(drawnAvatarOf(before.avatarUrls)).toMatchObject({ letter: 'K' });
+    expect(renamed.statusCode).toBe(200);
+    expect(drawnAvatarOf(renamed.json().avatarUrls)).toMatchObject({ letter: 'O' });
+    expect(renamed.json().avatarIsDefault).toBe(true);
   });
 
   it('gives the dates of the account as they are stored', async () => {
@@ -426,5 +453,96 @@ describe('PATCH /api/users/me with json', () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
+  });
+});
+
+// an empty avatar removes the picture: the profile shows the drawn letter, the file of the folder of
+// this environment goes from Cloudinary after the commit. The real file is in avatar.test.ts
+describe('PATCH /api/users/me with an empty avatar', () => {
+  const ownAvatar = (tag: string) => ({
+    avatarUrl: `https://res.cloudinary.com/demo/image/upload/v1/test/users/${tag}/avatar.png`,
+    publicId: `test/users/${tag}/avatar`,
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('removes the picture and the file and answers the profile with the letter', async () => {
+    const tag = uniqueTag();
+    const user = await newUser({ name: 'Anna', ...ownAvatar(tag) });
+    const destroy = jest.spyOn(cloudinary.uploader, 'destroy');
+
+    const res = await patch(accessCookie(user), { avatar: '' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ name: 'Anna', avatarIsDefault: true });
+    expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'A' });
+    expect(await rowOf(user.id)).toMatchObject({ avatarUrl: null, publicId: null });
+    expect(destroy).toHaveBeenCalledWith(
+      ownAvatar(tag).publicId,
+      expect.objectContaining({ invalidate: true }),
+    );
+  });
+
+  it('changes the other fields and removes the picture in one request', async () => {
+    const user = await newUser({ name: 'Anna', ...ownAvatar(uniqueTag()) });
+
+    const res = await patch(accessCookie(user), { name: 'Olena', avatar: '' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ name: 'Olena', avatarIsDefault: true });
+    expect(await rowOf(user.id)).toMatchObject({ name: 'Olena', avatarUrl: null });
+  });
+
+  it('answers the profile and deletes nothing for an account without a picture', async () => {
+    const user = await newUser({ name: 'Anna' });
+    const destroy = jest.spyOn(cloudinary.uploader, 'destroy');
+
+    const res = await patch(accessCookie(user), { avatar: '' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ avatarIsDefault: true });
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  // a json body cannot carry a file: an avatar in it can only be the empty value that removes one
+  it('refuses an avatar in json that is not empty', async () => {
+    const user = await newUser({ ...ownAvatar(uniqueTag()) });
+
+    const res = await patch(accessCookie(user), { avatar: 'https://images.example.com/me.png' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    expect((await rowOf(user.id)).avatarUrl).not.toBeNull();
+  });
+
+  // dev is restored from a copy of prod: its rows can point to the files of prod
+  it('takes the picture from the row but keeps a file of another environment', async () => {
+    const user = await newUser({
+      avatarUrl: 'https://res.cloudinary.com/demo/image/upload/v1/prod/users/1/avatar.png',
+      publicId: 'prod/users/1/avatar',
+    });
+    const destroy = jest.spyOn(cloudinary.uploader, 'destroy');
+
+    const res = await patch(accessCookie(user), { avatar: '' });
+
+    expect(res.statusCode).toBe(200);
+    expect(await rowOf(user.id)).toMatchObject({ avatarUrl: null, publicId: null });
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it('removes the picture even when Cloudinary does not delete the file, and logs it', async () => {
+    const tag = uniqueTag();
+    const user = await newUser({ ...ownAvatar(tag) });
+    jest.spyOn(cloudinary.uploader, 'destroy').mockRejectedValue(new Error('cloudinary is down'));
+
+    const res = await patch(accessCookie(user), { avatar: '' });
+
+    expect(res.statusCode).toBe(200);
+    expect(await rowOf(user.id)).toMatchObject({ avatarUrl: null, publicId: null });
+    expect(takeLogs({ msg: 'avatar file was not deleted' })[0]).toMatchObject({
+      publicId: ownAvatar(tag).publicId,
+    });
   });
 });

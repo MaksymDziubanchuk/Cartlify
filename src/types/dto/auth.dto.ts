@@ -1,3 +1,4 @@
+import type { ProviderAvatarLogger } from '@routes/api/auth/services/helpers/providerAvatar.helper.js';
 import type { Email } from 'types/common.js';
 import type { UserId } from 'types/ids.js';
 import type { UserResponseDto } from './users.dto.js';
@@ -53,6 +54,8 @@ export interface GoogleCallbackDto {
   role: Role;
   ip?: string;
   userAgent?: string;
+  // the copy of the picture of a new account logs what it could not take
+  log: ProviderAvatarLogger;
 }
 
 export interface GithubStartDto {
@@ -88,6 +91,8 @@ export interface GithubCallbackDto {
   role: Role;
   ip?: string;
   userAgent?: string;
+  // the copy of the picture of a new account logs what it could not take
+  log: ProviderAvatarLogger;
 }
 
 export interface LinkedInStartDto {
@@ -124,6 +129,8 @@ export interface LinkedInCallbackDto {
   role: Role;
   ip?: string;
   userAgent?: string;
+  // the copy of the picture of a new account logs what it could not take
+  log: ProviderAvatarLogger;
 }
 
 export interface RegisterBodyDto {

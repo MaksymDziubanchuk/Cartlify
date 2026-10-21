@@ -246,6 +246,55 @@ BEGIN
 END;
 $$;
 
+-- AUTH AND USERS take the avatar of another account away (moderation)
+-- system function: runs as the owner, db/03 lets only root change the row of another account;
+-- callable by a signed-in admin or root, with an id, never by the system. An admin takes the
+-- avatar of a USER account only, root of any account; the own avatar goes through PATCH
+-- /api/users/me. Only the avatar fields of the row change. The result is the id of the file the
+-- account had, the server deletes it after the commit; null when the account had no avatar
+CREATE OR REPLACE FUNCTION cartlify.remove_user_avatar (p_user_id integer) RETURNS text LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_role cartlify."Role";
+  v_avatar_url text;
+  v_public_id text;
+BEGIN
+  IF NOT cartlify.is_admin() OR cartlify.current_actor_id() IS NULL THEN
+    RAISE EXCEPTION 'USER_AVATAR_REMOVE_FORBIDDEN';
+  END IF;
+
+  SELECT u.role, u."avatarUrl", u."publicId"
+  INTO v_role, v_avatar_url, v_public_id
+  FROM cartlify.users AS u
+  WHERE u.id = p_user_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'USER_NOT_FOUND';
+  END IF;
+
+  IF v_role <> 'USER' AND NOT cartlify.is_root() THEN
+    RAISE EXCEPTION 'USER_AVATAR_REMOVE_FORBIDDEN';
+  END IF;
+
+  IF v_avatar_url IS NULL AND v_public_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  -- prisma keeps dates as utc in columns without a time zone
+  UPDATE cartlify.users AS u
+  SET
+    "avatarUrl" = NULL,
+    "publicId" = NULL,
+    "updatedAt" = now() AT TIME ZONE 'UTC'
+  WHERE u.id = p_user_id;
+
+  RETURN v_public_id;
+END;
+$$;
+
 ------------------------------------------------------------
 -- AUTH AND USER TOKENS
 ------------------------------------------------------------

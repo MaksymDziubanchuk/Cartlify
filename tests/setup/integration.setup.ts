@@ -65,6 +65,8 @@ isolateEnv(
     // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
+    // a short limit of avatar removals: a test passes it in three removals
+    AVATAR_REMOVALS_LIMIT: '2',
     ...(realSendGrid ? {} : MOCK_SENDGRID),
     ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },

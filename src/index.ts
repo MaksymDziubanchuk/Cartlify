@@ -2,6 +2,7 @@ import { app } from './app.js';
 import env from '@config/env.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
+import { ensureAvatarBase } from '@utils/avatar.util.js';
 
 // pick protocol for log url
 const protocol = env.NODE_ENV === 'production' ? 'https' : 'http';
@@ -31,6 +32,10 @@ async function bootstrap() {
   // worker skips redis jobs while redis is down, the db sweep runs either way
   startOrderTimeoutWorker(app.log);
   app.log.info('order timeout worker started');
+
+  // the plain picture the drawn avatars go on; the start does not wait for cloudinary, a failure
+  // goes to the log and the next start tries again
+  void ensureAvatarBase(app.log);
 
   // start http server
   await app.listen({ port: env.PORT, host: env.HOST });

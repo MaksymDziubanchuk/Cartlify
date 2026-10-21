@@ -28,25 +28,19 @@ export interface UpsertOAuthUserArgs {
   providerSub: string;
   emailVerified: boolean;
   name: string | null;
-  avatarUrl: string | null;
   locale: string | null;
 
   userNotFoundAfterConflictMsg: string;
   providerSubMismatchMsg: string;
 }
 
+// created: this login made the account, the one that may take the picture of the provider
+// (providerAvatar.helper.ts); the picture is never written here, nor on a later login
 export async function upsertOAuthUserByEmail(
   tx: Tx,
   args: UpsertOAuthUserArgs,
-): Promise<OAuthUserRow> {
-  const {
-    email,
-    authProvider,
-    providerSub,
-    emailVerified,
-    avatarUrl,
-    userNotFoundAfterConflictMsg,
-  } = args;
+): Promise<OAuthUserRow & { created: boolean }> {
+  const { email, authProvider, providerSub, emailVerified, userNotFoundAfterConflictMsg } = args;
 
   // a name or locale from the provider is cut to the profile limit, the login must go through
   const name = cutProfileText(args.name);
@@ -88,7 +82,6 @@ export async function upsertOAuthUserByEmail(
         role,
         "isVerified",
         name,
-        "avatarUrl",
         locale,
         "authProvider",
         "providerSub",
@@ -99,7 +92,6 @@ export async function upsertOAuthUserByEmail(
         'USER'::cartlify."Role",
         ${emailVerified},
         ${name},
-        ${avatarUrl},
         ${locale},
         ${authProvider}::cartlify."AuthProvider",
         ${providerSub},
@@ -123,6 +115,8 @@ export async function upsertOAuthUserByEmail(
 
     u = inserted[0];
   }
+
+  const created = !known[0] && u !== undefined;
 
   if (!u) {
     const rows = await tx.$queryRaw<OAuthUserRow[]>`
@@ -221,7 +215,6 @@ export async function upsertOAuthUserByEmail(
     set
       "providerSub" = coalesce("providerSub", ${providerSub}),
       name          = coalesce(name, ${name}),
-      "avatarUrl"   = coalesce("avatarUrl", ${avatarUrl}),
       locale        = coalesce(locale, ${locale}),
       "updatedAt"   = now()
     where id = ${u.id}::int
@@ -243,5 +236,5 @@ export async function upsertOAuthUserByEmail(
   // refresh returned fields
   u = updated[0] ?? u;
 
-  return u;
+  return { ...u, created };
 }

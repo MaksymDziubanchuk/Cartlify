@@ -44,6 +44,8 @@ export type UploadImageArgs = {
   publicId?: string;
   tags?: string[];
   invalidate?: boolean;
+  // how long the upload may take, in ms; without it the sdk waits as long as it waits
+  timeout?: number;
 };
 
 export type UploadImageResult = {
@@ -301,6 +303,7 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
 
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
+  if (args.timeout) options.timeout = args.timeout;
 
   if (args.publicId) {
     // allow deterministic ids for overwrite and cleanup

@@ -56,6 +56,15 @@ export default async function usersRouter(app: FastifyInstance) {
     },
     usersController.getUserById,
   );
+  // a moderator takes the avatar of another account away; the database decides who may
+  app.delete(
+    '/:userId/avatar',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('userId')],
+      schema: usersSchema.deleteUserAvatarSchema,
+    },
+    usersController.deleteUserAvatar,
+  );
   app.delete(
     '/:userId',
     {
