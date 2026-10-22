@@ -23,6 +23,7 @@ const UNSET = Object.fromEntries(
     'BCRYPT_ROUNDS',
     'AVATAR_REMOVALS_LIMIT',
     'RATE_LIMIT_MAX',
+    'SHOP_TIME_ZONE',
     'OPENAI_MODEL',
     'OPENAI_TIMEOUT_MS',
     'OPENAI_MAX_OUTPUT_TOKENS',
@@ -57,6 +58,7 @@ describe('env', () => {
       BCRYPT_ROUNDS: 12,
       AVATAR_REMOVALS_LIMIT: 5,
       RATE_LIMIT_MAX: 100,
+      SHOP_TIME_ZONE: 'Europe/Madrid',
       OPENAI_MODEL: 'gpt-4.1-mini',
       OPENAI_TIMEOUT_MS: 12000,
       OPENAI_MAX_OUTPUT_TOKENS: 450,
@@ -77,6 +79,7 @@ describe('env', () => {
         BCRYPT_ROUNDS: '10',
         AVATAR_REMOVALS_LIMIT: '3',
         RATE_LIMIT_MAX: '300',
+        SHOP_TIME_ZONE: ' Europe/Kyiv ',
         REDIS_ORDER_TIMEOUT_WORKER_MS: '5000',
         STRIPE_CURRENCY: 'usd',
         WEB_ORIGIN: 'https://shop.example.com',
@@ -89,6 +92,7 @@ describe('env', () => {
       BCRYPT_ROUNDS: 10,
       AVATAR_REMOVALS_LIMIT: 3,
       RATE_LIMIT_MAX: 300,
+      SHOP_TIME_ZONE: 'Europe/Kyiv',
       REDIS_ORDER_TIMEOUT_WORKER_MS: 5000,
       STRIPE_CURRENCY: 'usd',
       WEB_ORIGIN: 'https://shop.example.com',
@@ -116,6 +120,18 @@ describe('env', () => {
     // the start error lands in the hosting logs, the value stays out of it
     expect((err as Error).message).not.toContain(value);
   });
+
+  // the days and months of the reports are the days of the shop; a zone the database would not
+  // know, or an offset that reads the other way round in it, must stop the start
+  it.each(['Mars/Olympus', 'Europe/Nowhere', '+03:00', 'UTC+3'])(
+    'stops the start when SHOP_TIME_ZONE is %p, not a time zone of the iana list',
+    async (value) => {
+      const err = await rejectedBy(() => loadEnv({ SHOP_TIME_ZONE: value }));
+
+      expect((err as Error).message).toContain('SHOP_TIME_ZONE');
+      expect((err as Error).message).not.toContain(value);
+    },
+  );
 
   it('reads a number with spaces around it', async () => {
     expect(

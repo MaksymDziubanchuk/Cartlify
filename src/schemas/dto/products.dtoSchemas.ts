@@ -1,6 +1,6 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
-import { idPathParam } from '@schemas/idPathParam.js';
+import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
 
 const MAX_IMAGE_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
 
@@ -79,7 +79,8 @@ const getAllProductsQuerySchema = {
       type: 'boolean',
       description:
         'Free units, the stock the list shows: true lists products with some free, false ' +
-        'products with none. Units reserved by confirmed orders are not free.',
+        'products with none. Units reserved by confirmed orders and units of batches that are ' +
+        'over are not free.',
     },
 
     // sorting
@@ -97,6 +98,7 @@ const getAllProductsQuerySchema = {
         'stock',
         'totalStock',
         'reservedStock',
+        'expiredStock',
         'popularityOverride',
         'popularityOverrideUntil',
         'saleEndsAt',
@@ -108,7 +110,8 @@ const getAllProductsQuerySchema = {
         '(the default), avgRating, name and saleEndsAt: the products on sale first by the end of ' +
         'their sale in the order asked for, then every other one by popularity, the most popular ' +
         'first; any other sort is SORT_FORBIDDEN. An admin sorts by any field; price is the usual ' +
-        'price, salePrice the sale price, stock the free units, totalStock the whole stock. A ' +
+        'price, salePrice the sale price, stock the free units, totalStock the whole stock, ' +
+        'expiredStock the units of batches that are over. A ' +
         'field only some products have comes with its flag: deletedAt with deleted, saleEndsAt ' +
         'and salePrice with onSale, popularityOverride and popularityOverrideUntil with ' +
         'popularityOverridden, otherwise SORT_DELETED_AT_REQUIRES_DELETED, ' +
@@ -156,7 +159,9 @@ const productFields = {
   },
   stock: {
     type: 'integer',
-    description: 'Free units: the stock that confirmed orders do not hold.',
+    description:
+      'Free units: the stock that confirmed orders do not hold, less the units of batches ' +
+      'whose last good day is behind the day of the shop.',
   },
   category: {
     type: 'object',
@@ -183,6 +188,10 @@ const productFields = {
   reservedStock: {
     type: 'integer',
     description: `${ADMIN_ONLY} The units confirmed orders hold.`,
+  },
+  expiredStock: {
+    type: 'integer',
+    description: `${ADMIN_ONLY} The units of batches whose last good day is over: not sold, so not in stock; written off by the admin.`,
   },
   popularityOverride: {
     anyOf: [{ type: 'integer' }, { type: 'null' }],
@@ -337,11 +346,10 @@ const productCreateFormSchema = {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
     price: { type: 'number', minimum: 0 },
-    stock: { type: 'integer', minimum: 0, description: 'Units in stock.' },
     categoryId: { type: 'integer', minimum: 1 },
     images: productImagesFormField,
   },
-  required: ['name', 'price', 'stock', 'categoryId', 'images'],
+  required: ['name', 'price', 'categoryId', 'images'],
 } as const;
 
 const saleEndsAtField = {
@@ -393,8 +401,12 @@ const updateProductBodySchema = {
 
     price: { type: 'number', minimum: 0 },
 
-    // stock is a delta: positive adds units, negative takes free units off
-    stock: { type: 'integer' },
+    // kept in the schema so that a stock sent is refused, not dropped without a word
+    stock: {
+      description:
+        'Not accepted (PRODUCT_STOCK_NOT_ALLOWED): the stock changes only with a delivery or a ' +
+        'write-off, POST /api/products/stock/deliveries and /write-offs.',
+    },
 
     categoryId: { type: 'integer', minimum: 1 },
 
@@ -437,10 +449,6 @@ const productUpdateFormSchema = {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
     price: { type: 'number', minimum: 0 },
-    stock: {
-      type: 'integer',
-      description: 'A delta: positive adds units, negative takes free units off.',
-    },
     categoryId: { type: 'integer', minimum: 1 },
     popularityOverride: {
       type: 'string',
@@ -576,6 +584,218 @@ const productsUpdateCategoryResponseSchema = {
   allOf: [{ $ref: 'productResponseSchema#' }],
 } as const;
 
+// STOCK: a delivery takes in a batch of each item, a write-off takes free units out
+const stockIdField = (description: string) =>
+  ({
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_ID,
+    description: `${description}: a whole number from 1 to ${MAX_ID}.`,
+  }) as const;
+
+const stockQuantityField = {
+  type: 'integer',
+  minimum: 1,
+  maximum: 1_000_000,
+  description: 'Units, a whole number from 1.',
+} as const;
+
+const STOCK_SOURCES = ['supplier', 'surplus', 'customer_return'] as const;
+
+const stockDeliveryBodySchema = {
+  $id: 'stockDeliveryBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    source: {
+      type: 'string',
+      enum: STOCK_SOURCES,
+      description:
+        'Where the goods come from: a delivery of a supplier, a surplus an inventory found, ' +
+        'goods a buyer brought back.',
+    },
+    supplier: { type: 'string', maxLength: 200, description: 'The supplier, for the admin log.' },
+    document: { type: 'string', maxLength: 100, description: 'The number of the invoice.' },
+    note: { type: 'string', maxLength: 500 },
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          productId: stockIdField('Id of the product'),
+          quantity: stockQuantityField,
+          unitCost: {
+            type: 'number',
+            minimum: 0,
+            maximum: 99_999_999.99,
+            description:
+              'The cost of a unit in the currency of the shop, to the cent (finer is ' +
+              'BATCH_UNIT_COST_INVALID); 0 for a gift or a sample.',
+          },
+          expiresAt: {
+            type: 'string',
+            format: 'date',
+            description:
+              'The last day the goods are good for, yyyy-mm-dd, today or later by utc ' +
+              '(BATCH_EXPIRES_AT_INVALID). A sale takes the batch that ends first.',
+          },
+          supplierBatchNumber: {
+            type: 'string',
+            maxLength: 100,
+            description: 'The number the supplier gave the batch.',
+          },
+        },
+        required: ['productId', 'quantity', 'unitCost'],
+      },
+    },
+  },
+  required: ['source', 'items'],
+} as const;
+
+const stockProductSummarySchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'integer' },
+    stock: {
+      type: 'integer',
+      description:
+        'Free units: the stock the waiting orders do not hold, without the units that are over.',
+    },
+    totalStock: { type: 'integer', description: 'The whole stock.' },
+    reservedStock: { type: 'integer', description: 'The units the waiting orders hold.' },
+    expiredStock: {
+      type: 'integer',
+      description: 'The units of batches whose last good day is over.',
+    },
+  },
+  required: ['id', 'stock', 'totalStock', 'reservedStock', 'expiredStock'],
+} as const;
+
+const stockDeliveryResponseSchema = {
+  $id: 'stockDeliveryResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    deliveryId: {
+      type: 'string',
+      format: 'uuid',
+      description: 'The delivery: its batches and the lines of the admin log carry it.',
+    },
+    batches: {
+      type: 'array',
+      description: 'A batch for each item, in the order of the items.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer', description: 'The number of the batch in the shop.' },
+          productId: { type: 'integer' },
+          source: { type: 'string', enum: STOCK_SOURCES },
+          supplierBatchNumber: { type: ['string', 'null'] },
+          unitCost: { type: 'number' },
+          quantity: { type: 'integer' },
+          remaining: { type: 'integer' },
+          expiresAt: { type: ['string', 'null'], format: 'date' },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+        required: [
+          'id',
+          'productId',
+          'source',
+          'supplierBatchNumber',
+          'unitCost',
+          'quantity',
+          'remaining',
+          'expiresAt',
+          'createdAt',
+        ],
+      },
+    },
+    products: { type: 'array', items: stockProductSummarySchema },
+  },
+  required: ['deliveryId', 'batches', 'products'],
+} as const;
+
+const stockWriteOffBodySchema = {
+  $id: 'stockWriteOffBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    reason: {
+      type: 'string',
+      enum: ['damaged', 'defective', 'expired', 'shortage', 'returned_to_supplier', 'other'],
+      description:
+        'shortage: what an inventory did not find; returned_to_supplier: goods sent back; ' +
+        'other needs a note (WRITE_OFF_NOTE_REQUIRED).',
+    },
+    note: { type: 'string', maxLength: 500 },
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          productId: stockIdField('Id of the product'),
+          quantity: stockQuantityField,
+          batchId: stockIdField(
+            'The batch of the product to take the units from; without one they come in the ' +
+              'order of a sale, the batch that ends first, then the oldest',
+          ),
+        },
+        required: ['productId', 'quantity'],
+      },
+    },
+  },
+  required: ['reason', 'items'],
+} as const;
+
+const stockWriteOffResponseSchema = {
+  $id: 'stockWriteOffResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    writeOffId: {
+      type: 'string',
+      format: 'uuid',
+      description: 'The write-off: the lines of the admin log carry it.',
+    },
+    items: {
+      type: 'array',
+      description: 'What each item took, in the order of the items.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          productId: { type: 'integer' },
+          quantity: { type: 'integer' },
+          batches: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                batchId: { type: 'integer' },
+                quantity: { type: 'integer' },
+                unitCost: { type: 'number' },
+              },
+              required: ['batchId', 'quantity', 'unitCost'],
+            },
+          },
+        },
+        required: ['productId', 'quantity', 'batches'],
+      },
+    },
+    products: { type: 'array', items: stockProductSummarySchema },
+  },
+  required: ['writeOffId', 'items', 'products'],
+} as const;
+
 export const productDtoSchemas = [
   getAllProductsQuerySchema,
   productCreateFormSchema,
@@ -595,4 +815,8 @@ export const productDtoSchemas = [
   productsUpdateCategoryParamsSchema,
   productsUpdateCategoryBodySchema,
   productsUpdateCategoryResponseSchema,
+  stockDeliveryBodySchema,
+  stockDeliveryResponseSchema,
+  stockWriteOffBodySchema,
+  stockWriteOffResponseSchema,
 ];

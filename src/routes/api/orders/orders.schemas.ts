@@ -59,6 +59,7 @@ const shippedOrderExample = {
   ...recipientExample,
   status: 'shipped',
   confirmed: true,
+  paidAt: '2026-01-01T10:05:00.000Z',
 };
 
 const ordersListQueryExample = {
@@ -85,6 +86,7 @@ const unconfirmedOrderExample = {
 const cancelledOrderExample = {
   ...shippedOrderExample,
   status: 'cancelled',
+  cancelledAt: '2026-01-02T09:30:00.000Z',
   user: { id: 1, deleted: false, email: 'anna@example.com' },
 };
 
@@ -391,7 +393,8 @@ const getOrdersSchema = {
   description:
     'Returns orders visible to the authenticated user, admin or root role, newest first by default (`sortBy=createdAt`). ' +
     'The cart (`pending`) is not an order and is not listed, GET /api/orders/current gives it. ' +
-    'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of products deleted from the catalog are removed from it.',
+    'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of products deleted from the catalog are removed from it. ' +
+    '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment.',
 
   querystring: {
     $ref: 'ordersGetQuerySchema#',
@@ -406,7 +409,8 @@ const getOrdersSchema = {
     },
 
     400: {
-      description: 'Invalid orders query parameters, including `CURSOR_INVALID`.',
+      description:
+        'Invalid orders query parameters, including `CURSOR_INVALID` and a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`).',
       $ref: 'errorResponseSchema#',
     },
     401: {

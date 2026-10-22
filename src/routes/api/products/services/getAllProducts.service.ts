@@ -1,4 +1,6 @@
 import { prisma } from '@db/client.js';
+import { setShopDayContext } from '@db/dbContext.service.js';
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 
 import {
   mapProductListRowToResponse,
@@ -14,34 +16,43 @@ import type { FindAllProductsDto, ProductsResponseDto } from 'types/dto/products
 
 // the catalog list of a buyer or of an admin. The price a product sells at and its sale depend on
 // the time (cartlify.product_current_price), so one raw query finds the ids of the page and the
-// values of their sort; Prisma reads the rows of those ids
+// values of their sort; Prisma reads the rows of those ids. The free units leave out the units of
+// batches that are over by the day of the shop, which the transaction carries
 export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponseDto> {
   const q = normalizeFindAllProductsInput(dto);
 
   try {
-    const keyRows = await prisma.$queryRaw<ProductKeyRow[]>(buildProductIdsQuery(q));
+    return await prisma.$transaction(async (tx) => {
+      await setShopDayContext(tx);
 
-    // detect next page
-    const hasNext = keyRows.length > q.limit;
-    const pageRows = hasNext ? keyRows.slice(0, q.limit) : keyRows;
+      const keyRows = await tx.$queryRaw<ProductKeyRow[]>(buildProductIdsQuery(q));
 
-    // empty page
-    if (!pageRows.length) return { items: [], limit: q.limit };
+      // detect next page
+      const hasNext = keyRows.length > q.limit;
+      const pageRows = hasNext ? keyRows.slice(0, q.limit) : keyRows;
 
-    // preserve raw sql order after findMany by ids
-    const position = new Map(pageRows.map((row, index) => [row.id, index]));
+      // empty page
+      if (!pageRows.length) return { items: [], limit: q.limit };
 
-    const rows = await prisma.product.findMany({
-      where: { id: { in: pageRows.map((row) => row.id) } },
-      select: productListSelect,
+      // preserve raw sql order after findMany by ids
+      const ids = pageRows.map((row) => row.id);
+      const position = new Map(ids.map((id, index) => [id, index]));
+
+      const rows = await tx.product.findMany({
+        where: { id: { in: ids } },
+        select: productListSelect,
+      });
+      rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
+      const expired = await expiredUnitsOf(tx, ids);
+
+      return {
+        items: rows.map((row) =>
+          mapProductListRowToResponse({ ...row, expiredStock: expired.get(row.id) ?? 0 }, q.view),
+        ),
+        limit: q.limit,
+        ...(hasNext ? { nextCursor: makeNextCursor(q, pageRows[pageRows.length - 1]!) } : {}),
+      };
     });
-    rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
-
-    return {
-      items: rows.map((row) => mapProductListRowToResponse(row, q.view)),
-      limit: q.limit,
-      ...(hasNext ? { nextCursor: makeNextCursor(q, pageRows[pageRows.length - 1]!) } : {}),
-    };
   } catch (err) {
     if (isAppError(err)) throw err;
 

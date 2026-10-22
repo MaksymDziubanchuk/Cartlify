@@ -39,13 +39,13 @@ export function buildSaleAuditChanges(args: {
   ];
 }
 
-// the sale is no field here: a line of its own describes it (buildSaleAuditChanges, db/05)
+// the sale and the stock are no fields here: lines of their own describe them (buildSaleAuditChanges;
+// STOCK_DELIVERY and STOCK_WRITE_OFF, written by the database, db/05)
 export function buildProductUpdateAuditChanges(
   before: {
     name: string;
     description: string | null;
     price: { toString(): string };
-    stock: number;
     categoryId: number;
     popularityOverride: number | null;
     popularityOverrideUntil: Date | null;
@@ -56,7 +56,6 @@ export function buildProductUpdateAuditChanges(
       name: string;
       description: string | null;
       price: { toString(): string };
-      stock: number;
       categoryId: number;
       popularityOverride: number | null;
       popularityOverrideUntil: Date | null;
@@ -66,7 +65,6 @@ export function buildProductUpdateAuditChanges(
       name?: unknown;
       description?: unknown;
       price?: unknown;
-      stock?: unknown;
       categoryId?: unknown;
       popularityOverride?: unknown;
       popularityOverrideUntil?: unknown;
@@ -95,10 +93,6 @@ export function buildProductUpdateAuditChanges(
       old: before.price.toString(),
       new: args.after.price.toString(),
     });
-  }
-
-  if (args.input.stock !== undefined && before.stock !== args.after.stock) {
-    changes.push({ field: 'stock', old: before.stock, new: args.after.stock });
   }
 
   if (

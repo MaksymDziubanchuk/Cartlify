@@ -33,6 +33,12 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
   const status = dto.status;
   const confirmed = typeof dto.confirmed === 'boolean' ? dto.confirmed : undefined;
 
+  // the period takes its start and stops before its end: an end at its start holds nothing
+  const { paidFrom, paidTo } = dto;
+  if (paidFrom && paidTo && paidFrom.getTime() >= paidTo.getTime()) {
+    throw new BadRequestError('PAID_PERIOD_INVALID');
+  }
+
   return {
     actorId: dto.actorId,
     actorRole: dto.actorRole,
@@ -40,6 +46,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     cursor,
     status,
     confirmed,
+    paidFrom,
+    paidTo,
     sortBy,
     sortDir,
   };
@@ -51,6 +59,8 @@ export function buildOrdersWhere(args: {
   actorRole: Role;
   status?: string | undefined;
   confirmed?: boolean | undefined;
+  paidFrom?: Date | undefined;
+  paidTo?: Date | undefined;
   sortBy: OrdersSortBy;
 }) {
   const where: any = {};
@@ -62,6 +72,14 @@ export function buildOrdersWhere(args: {
 
   if (args.sortBy === 'shippingAddress') where.shippingAddress = { not: null };
 
+  // an order that is not paid has no time of payment: no place in its sort or in its period
+  const paidAt = {
+    ...(args.sortBy === 'paidAt' ? { not: null } : {}),
+    ...(args.paidFrom ? { gte: args.paidFrom } : {}),
+    ...(args.paidTo ? { lt: args.paidTo } : {}),
+  };
+  if (Object.keys(paidAt).length) where.paidAt = paidAt;
+
   return where;
 }
 
@@ -69,6 +87,7 @@ export function buildOrdersWhere(args: {
 export function buildOrdersOrderBy(sortBy: OrdersSortBy, sortDir: OrdersSortDir) {
   if (sortBy === 'createdAt') return [{ createdAt: sortDir }, { id: sortDir }];
   if (sortBy === 'updatedAt') return [{ updatedAt: sortDir }, { id: sortDir }];
+  if (sortBy === 'paidAt') return [{ paidAt: sortDir }, { id: sortDir }];
   if (sortBy === 'total') return [{ total: sortDir }, { id: sortDir }];
   return [{ shippingAddress: sortDir }, { id: sortDir }];
 }
@@ -110,6 +129,13 @@ export function buildOrdersCursorWhere(args: {
     };
   }
 
+  if (args.sortBy === 'paidAt') {
+    const val = cursorDate(v);
+    return {
+      OR: [{ paidAt: { [op]: val } }, { AND: [{ paidAt: val }, { id: { [op]: id } }] }],
+    };
+  }
+
   // numeric sort (total)
   const num = cursorNumber(v);
   return {
@@ -123,6 +149,7 @@ export function makeNextOrdersCursor(sortBy: OrdersSortBy, last: any): string {
 
   if (sortBy === 'createdAt') v = new Date(last.createdAt).toISOString();
   else if (sortBy === 'updatedAt') v = new Date(last.updatedAt).toISOString();
+  else if (sortBy === 'paidAt') v = new Date(last.paidAt).toISOString();
   else if (sortBy === 'shippingAddress') v = String(last.shippingAddress ?? '');
   else v = decimalToNumber(last.total);
 

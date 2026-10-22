@@ -10,6 +10,7 @@ import {
   createProduct,
   createUser,
   stockOf,
+  writeOffStock,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
@@ -56,14 +57,12 @@ async function orderWithPage() {
   return { user, product, orderId, sessionId };
 }
 
-const setStock = (productId: number, stock: number) =>
-  asAdmin((tx) => tx.product.update({ where: { id: productId }, data: { stock } }));
-
-// the reservation timer took the stock back and somebody bought it, then the buyer paid the page
+// the reservation timer took the stock back and the stock went, one unit left; then the buyer
+// paid the page
 async function paymentAfterTheStockIsGone() {
   const order = await orderWithPage();
   await loseReservation(order.orderId);
-  await setStock(order.product.id, 1);
+  await writeOffStock(order.product.id, 4);
   const paid = await payPage(order.sessionId);
   return { ...order, ...paid };
 }

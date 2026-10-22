@@ -167,21 +167,100 @@ export const closeSessions = (userIds: number[]) =>
 
 export type TestProduct = { id: number; categoryId: number };
 
-// a product in a category of its own; removeProducts deletes both, favorites go with them
-export async function createProduct(opts: { stock?: number; price?: number } = {}) {
+// the admin who takes in and writes off the stock of the products the tests make: the database
+// keeps every such step in the admin log in the name of a signed-in admin. One per test file,
+// made the first time a product needs stock
+let stockKeeper: Promise<TestUser> | undefined;
+const stockKeeperOf = () => (stockKeeper ??= createUser({ role: 'ADMIN' }));
+
+export type BatchOpts = {
+  quantity: number;
+  unitCost?: number | string;
+  // the last good day, yyyy-mm-dd
+  expiresAt?: string | null;
+  source?: 'supplier' | 'surplus' | 'customer_return';
+  supplierBatchNumber?: string | null;
+  deliveryId?: string;
+};
+
+// a batch of the product taken in the way the delivery route takes one in; returns its id
+export async function receiveBatch(productId: number, opts: BatchOpts): Promise<number> {
+  const keeper = await stockKeeperOf();
+
+  return prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId: keeper.id, role: 'ADMIN' });
+    const [row] = await tx.$queryRaw<{ id: number }[]>`
+      select cartlify.receive_product_batch(
+        ${opts.deliveryId ?? randomUUID()}::uuid,
+        ${productId}::int,
+        ${opts.source ?? 'supplier'}::cartlify."StockSource",
+        ${opts.quantity}::int,
+        ${String(opts.unitCost ?? 1)}::numeric,
+        ${opts.expiresAt ?? null}::date,
+        ${opts.supplierBatchNumber ?? null}::text,
+        null, null, null
+      ) as id
+    `;
+    return row!.id;
+  });
+}
+
+// units of the product written off the way the write-off route writes them off: from the batch
+// named, or from the batches in the order a sale takes them
+export async function writeOffStock(
+  productId: number,
+  quantity: number,
+  opts: { batchId?: number; reason?: string } = {},
+): Promise<void> {
+  const keeper = await stockKeeperOf();
+
+  await prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId: keeper.id, role: 'ADMIN' });
+    await tx.$queryRaw`
+      select cartlify.write_off_product_stock(
+        ${randomUUID()}::uuid, ${productId}::int, ${opts.batchId ?? null}::int, ${quantity}::int,
+        ${opts.reason ?? 'damaged'}::text, null
+      )
+    `;
+  });
+}
+
+// a category of its own, under a parent when one is named
+export const createCategory = (opts: { parentId?: number; name?: string } = {}) => {
   const tag = uniqueTag();
 
-  return asAdmin(async (tx): Promise<TestProduct> => {
-    const category = await tx.category.create({
-      data: { name: `Test category ${tag}`, slug: `test-category-${tag}` },
-    });
+  return asAdmin((tx) =>
+    tx.category.create({
+      data: {
+        name: opts.name ?? `Test category ${tag}`,
+        slug: `test-category-${tag}`,
+        ...(opts.parentId ? { parentId: opts.parentId } : {}),
+      },
+      select: { id: true, name: true },
+    }),
+  );
+};
 
-    // a product of the catalog always has a primary image, the order views show it
+// a product in a category of its own, or in the category named, its stock in one batch of a
+// supplier at a cost of 1; removeProducts deletes both, the batches and favorites go with them
+export async function createProduct(
+  opts: { stock?: number; price?: number; categoryId?: number; name?: string } = {},
+) {
+  const tag = uniqueTag();
+
+  const product = await asAdmin(async (tx): Promise<TestProduct> => {
+    const category = opts.categoryId
+      ? { id: opts.categoryId }
+      : await tx.category.create({
+          data: { name: `Test category ${tag}`, slug: `test-category-${tag}` },
+        });
+
+    // a product of the catalog always has a primary image, the order views show it; a new product
+    // has no stock, it comes with a batch
     return tx.product.create({
       data: {
-        name: `Test product ${tag}`,
+        name: opts.name ?? `Test product ${tag}`,
         price: opts.price ?? 10,
-        stock: opts.stock ?? 5,
         categoryId: category.id,
         images: {
           create: {
@@ -194,6 +273,11 @@ export async function createProduct(opts: { stock?: number; price?: number } = {
       select: { id: true, categoryId: true },
     });
   });
+
+  const stock = opts.stock ?? 5;
+  if (stock > 0) await receiveBatch(product.id, { quantity: stock });
+
+  return product;
 }
 
 // what an admin does to a product of the catalog: a delete only marks it, orders keep their items

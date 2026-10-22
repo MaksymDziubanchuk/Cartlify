@@ -1,5 +1,7 @@
 import type { Prisma } from '@prisma/client';
 
+import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
+
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { InternalError } from '@utils/errors.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
@@ -20,6 +22,8 @@ export const orderResponseSelect = {
   recipientLastName: true,
   recipientPhone: true,
   note: true,
+  paidAt: true,
+  cancelledAt: true,
   createdAt: true,
   updatedAt: true,
   items: {
@@ -53,7 +57,18 @@ export const orderResponseSelect = {
 
 export type OrderResponseRow = Prisma.OrderGetPayload<{ select: typeof orderResponseSelect }>;
 
-export function mapOrderRowToResponse(row: OrderResponseRow): OrderResponseDto {
+// the units of batches that are over of the products of the orders, by the day of the shop the
+// transaction carries: the free units of an item leave them out
+export const expiredOfOrders = (db: Prisma.TransactionClient, rows: OrderResponseRow[]) =>
+  expiredUnitsOf(
+    db,
+    rows.flatMap((row) => row.items.map((item) => item.productId)),
+  );
+
+export function mapOrderRowToResponse(
+  row: OrderResponseRow,
+  expired: Map<number, number>,
+): OrderResponseDto {
   return {
     id: row.id as any,
     userId: row.userId as any,
@@ -65,7 +80,12 @@ export function mapOrderRowToResponse(row: OrderResponseRow): OrderResponseDto {
       const primaryUrl = it.product.images?.[0]?.url;
       if (!primaryUrl) throw new InternalError({ reason: 'PRODUCT_PRIMARY_IMAGE_NOT_FOUND' });
 
-      const availableStock = Math.max(0, it.product.stock - it.product.reservedStock);
+      // the free units: the stock less what the waiting orders hold and what is over
+      const availableStock = freeUnits(
+        it.product.stock,
+        it.product.reservedStock,
+        expired.get(it.productId) ?? 0,
+      );
 
       return {
         // order item id, cart item routes take it as itemId
@@ -92,5 +112,7 @@ export function mapOrderRowToResponse(row: OrderResponseRow): OrderResponseDto {
     ...(row.recipientLastName ? { recipientLastName: row.recipientLastName } : {}),
     ...(row.recipientPhone ? { recipientPhone: row.recipientPhone } : {}),
     ...(row.note ? { note: row.note } : {}),
+    ...(row.paidAt ? { paidAt: row.paidAt } : {}),
+    ...(row.cancelledAt ? { cancelledAt: row.cancelledAt } : {}),
   };
 }

@@ -1,3 +1,4 @@
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
@@ -86,10 +87,17 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
       const hasNext = rows.length > limit;
       const pageRows = hasNext ? rows.slice(0, limit) : rows;
 
-      // map favorites into product cards
+      // map favorites into product cards; the free units leave out the units that are over
+      const expired = await expiredUnitsOf(
+        tx,
+        pageRows.map((r) => r.product.id),
+      );
       const items = pageRows.map((r) => ({
         // a favorite is a product of a buyer list
-        product: mapProductListRowToResponse(r.product, 'buyer'),
+        product: mapProductListRowToResponse(
+          { ...r.product, expiredStock: expired.get(r.product.id) ?? 0 },
+          'buyer',
+        ),
         addedAt: r.createdAt,
       }));
 

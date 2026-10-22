@@ -17,6 +17,7 @@ const product = {
   saleEndsAt: null as Date | null,
   stock: 10,
   reservedStock: 3,
+  expiredStock: 0,
   category: { id: 2, name: 'Lamps', slug: 'lamps' },
   views: 40,
   popularity: 7,
@@ -63,6 +64,19 @@ describe('mapProductRowToResponse', () => {
 
   it('shows only the units that are not reserved by orders', () => {
     expect(map().stock).toBe(7);
+  });
+
+  // the units of batches whose last good day is over are not sold
+  it('leaves the units that are over out of the free units, and shows them to an admin', () => {
+    expect(map({ expiredStock: 4 }).stock).toBe(3);
+    expect(map({ expiredStock: 4 }, 'admin')).toMatchObject({
+      stock: 3,
+      totalStock: 10,
+      reservedStock: 3,
+      expiredStock: 4,
+    });
+    expect(map({ expiredStock: 9 }).stock).toBe(0);
+    expect(map({ expiredStock: 4 })).not.toHaveProperty('expiredStock');
   });
 
   it('never shows a negative stock, even if reservations exceed it', () => {

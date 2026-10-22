@@ -28,6 +28,7 @@ const order = (
   shippingAddress: string | null,
   createdDay: number,
   updatedDay: number,
+  paidDay: number | null,
 ) => ({
   id,
   userId,
@@ -36,24 +37,26 @@ const order = (
   shippingAddress,
   createdAt: at(createdDay),
   updatedAt: at(updatedDay),
+  paidAt: paidDay === null ? null : at(paidDay),
 });
 
-// ties on every sort field, so the id has to break them; the carts (pending) are never listed
+// ties on every sort field, so the id has to break them; the carts (pending) are never listed,
+// the orders that are not paid have no time of payment
 const orders = [
-  order(1, 3, 'paid', '10.00', 'Kyiv', 1, 1),
-  order(2, 3, 'unconfirmed', '25.50', null, 1, 2),
-  order(3, 4, 'waiting', '10.00', 'Lviv', 2, 2),
-  order(4, 3, 'shipped', '99.99', 'Kyiv', 2, 2),
-  order(5, 4, 'delivered', '25.50', 'Odesa', 2, 5),
-  order(6, 3, 'unconfirmed', '0.00', null, 5, 5),
-  order(7, 5, 'cancelled', '10.00', 'Kyiv', 6, 7),
-  order(8, 5, 'paid', '99.99', 'Lviv', 1, 1),
-  order(9, 3, 'paid', '25.50', 'Odesa', 9, 9),
-  order(10, 3, 'pending', '25.50', 'Kyiv', 9, 9),
-  order(11, 4, 'pending', '0.00', null, 3, 3),
+  order(1, 3, 'paid', '10.00', 'Kyiv', 1, 1, 1),
+  order(2, 3, 'unconfirmed', '25.50', null, 1, 2, null),
+  order(3, 4, 'waiting', '10.00', 'Lviv', 2, 2, null),
+  order(4, 3, 'shipped', '99.99', 'Kyiv', 2, 2, 2),
+  order(5, 4, 'delivered', '25.50', 'Odesa', 2, 5, 2),
+  order(6, 3, 'unconfirmed', '0.00', null, 5, 5, null),
+  order(7, 5, 'cancelled', '10.00', 'Kyiv', 6, 7, 6),
+  order(8, 5, 'paid', '99.99', 'Lviv', 1, 1, 1),
+  order(9, 3, 'paid', '25.50', 'Odesa', 9, 9, 9),
+  order(10, 3, 'pending', '25.50', 'Kyiv', 9, 9, null),
+  order(11, 4, 'pending', '0.00', null, 3, 3, null),
 ];
 
-const SORTS: OrdersSortBy[] = ['createdAt', 'updatedAt', 'total', 'shippingAddress'];
+const SORTS: OrdersSortBy[] = ['createdAt', 'updatedAt', 'total', 'shippingAddress', 'paidAt'];
 const DIRS: OrdersSortDir[] = ['asc', 'desc'];
 
 describe('normalizeFindOrdersInput', () => {
@@ -110,6 +113,32 @@ describe('normalizeFindOrdersInput', () => {
     expect(normalizeFindOrdersInput(dto({ cursor: '  abc  ' })).cursor).toBe('abc');
     expect(normalizeFindOrdersInput(dto({ cursor: '   ' })).cursor).toBeUndefined();
   });
+
+  it('keeps the period of the payment, either end alone too', () => {
+    expect(normalizeFindOrdersInput(dto({ paidFrom: at(1), paidTo: at(5) }))).toMatchObject({
+      paidFrom: at(1),
+      paidTo: at(5),
+    });
+    expect(normalizeFindOrdersInput(dto({ paidFrom: at(1) }))).toMatchObject({
+      paidFrom: at(1),
+      paidTo: undefined,
+    });
+    expect(normalizeFindOrdersInput(dto({ paidTo: at(5) }))).toMatchObject({
+      paidFrom: undefined,
+      paidTo: at(5),
+    });
+  });
+
+  // the period takes its start and stops before its end, so an end at its start holds nothing
+  it.each([
+    ['ends before it starts', at(5), at(1)],
+    ['ends where it starts', at(5), at(5)],
+  ])('rejects a period of the payment that %s', (_case, paidFrom, paidTo) => {
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ paidFrom, paidTo })))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'PAID_PERIOD_INVALID',
+    });
+  });
 });
 
 const NOT_A_CART = { status: { not: 'pending' } };
@@ -152,6 +181,45 @@ describe('buildOrdersWhere', () => {
       { ...NOT_A_CART, shippingAddress: { not: null } },
     );
   });
+
+  it('leaves out the orders that are not paid when they are sorted by the time of payment', () => {
+    expect(buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', sortBy: 'paidAt' })).toEqual({
+      ...NOT_A_CART,
+      paidAt: { not: null },
+    });
+  });
+
+  it('keeps the orders paid from the start of the period and before its end', () => {
+    expect(
+      buildOrdersWhere({
+        actorId: 3,
+        actorRole: 'USER',
+        sortBy: 'createdAt',
+        paidFrom: at(1),
+        paidTo: at(5),
+      }),
+    ).toEqual({ userId: 3, ...NOT_A_CART, paidAt: { gte: at(1), lt: at(5) } });
+  });
+
+  it('lists the orders paid in the period by the time of payment', () => {
+    const where = buildOrdersWhere({
+      actorId: 1,
+      actorRole: 'ADMIN',
+      sortBy: 'paidAt',
+      paidFrom: at(2),
+      paidTo: at(9),
+    });
+    const visited = walkPages({
+      rows: orders,
+      where,
+      orderBy: buildOrdersOrderBy('paidAt', 'asc'),
+      limit: 2,
+      cursorWhere: (cursor) => buildOrdersCursorWhere({ sortBy: 'paidAt', sortDir: 'asc', cursor }),
+      nextCursor: (last) => makeNextOrdersCursor('paidAt', last),
+    });
+
+    expect(visited).toEqual([4, 5, 7]);
+  });
 });
 
 describe('order list pagination', () => {
@@ -173,7 +241,8 @@ describe('order list pagination', () => {
         orders.filter(
           (row) =>
             row.status !== 'pending' &&
-            (sortBy !== 'shippingAddress' || row.shippingAddress !== null),
+            (sortBy !== 'shippingAddress' || row.shippingAddress !== null) &&
+            (sortBy !== 'paidAt' || row.paidAt !== null),
         ),
         orderBy,
       ).map((row) => row.id);
@@ -207,6 +276,8 @@ describe('buildOrdersCursorWhere', () => {
     ['a date sort gets a word', 'updatedAt', 'yesterday'],
     ['a date sort gets null', 'updatedAt', null],
     ['the creation date sort gets a word', 'createdAt', 'yesterday'],
+    ['the payment date sort gets a word', 'paidAt', 'yesterday'],
+    ['the payment date sort gets null', 'paidAt', null],
     ['an amount sort gets a word', 'total', 'cheap'],
     ['an amount sort gets null', 'total', null],
     ['an amount sort gets a date from another sort', 'total', '2026-03-01T10:00:00.000Z'],
@@ -225,6 +296,7 @@ describe('makeNextOrdersCursor', () => {
   it.each([
     ['createdAt', '2026-03-02T10:00:00.000Z'],
     ['updatedAt', '2026-03-02T10:00:00.000Z'],
+    ['paidAt', '2026-03-02T10:00:00.000Z'],
     ['total', 99.99],
     ['shippingAddress', 'Kyiv'],
   ] as const)('puts the %s of the last row next to its id', (sortBy, v) => {

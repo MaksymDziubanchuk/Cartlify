@@ -15,7 +15,6 @@ const before: Product = {
   name: 'Mug',
   description: 'White',
   price: new Prisma.Decimal('9.99'),
-  stock: 10,
   categoryId: 1,
   popularityOverride: 5,
   popularityOverrideUntil: new Date('2026-07-01T00:00:00.000Z'),
@@ -31,13 +30,13 @@ describe('buildProductUpdateAuditChanges', () => {
   });
 
   it('records only the fields the request sent', () => {
-    expect(diff({ name: 'Cup', stock: 12 }, { name: 'Cup' })).toEqual([
+    expect(diff({ name: 'Cup', categoryId: 4 }, { name: 'Cup' })).toEqual([
       { field: 'name', old: 'Mug', new: 'Cup' },
     ]);
   });
 
   it('records nothing for a field sent with the value it already had', () => {
-    expect(diff({}, { name: 'Mug', price: 9.99, categoryId: 1, stock: 0 })).toEqual([]);
+    expect(diff({}, { name: 'Mug', price: 9.99, categoryId: 1 })).toEqual([]);
   });
 
   it('records every changed field in a fixed order', () => {
@@ -47,7 +46,6 @@ describe('buildProductUpdateAuditChanges', () => {
         description: '',
         categoryId: 2,
         price: new Prisma.Decimal('12.50'),
-        stock: 15,
         popularityOverride: null,
         popularityOverrideUntil: null,
       },
@@ -56,7 +54,6 @@ describe('buildProductUpdateAuditChanges', () => {
         description: '',
         categoryId: 2,
         price: 12.5,
-        stock: 5,
         popularityOverride: null,
         popularityOverrideUntil: null,
       },
@@ -67,7 +64,6 @@ describe('buildProductUpdateAuditChanges', () => {
       { field: 'description', old: 'White', new: '' },
       { field: 'categoryId', old: 1, new: 2 },
       { field: 'price', old: '9.99', new: '12.5' },
-      { field: 'stock', old: 10, new: 15 },
       { field: 'popularityOverride', old: 5, new: null },
       { field: 'popularityOverrideUntil', old: '2026-07-01T00:00:00.000Z', new: null },
     ]);

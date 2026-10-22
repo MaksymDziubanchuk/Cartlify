@@ -1,6 +1,12 @@
 import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError } from '@utils/errors.js';
+import { buildAccountingReport } from './services/accountingReport.service.js';
+import { reportCategories, reportCategoriesCsv } from './services/accountingCategories.service.js';
+import { reportProducts, reportProductsCsv } from './services/accountingProducts.service.js';
+import { reportTimeline, reportTimelineCsv } from './services/accountingTimeline.service.js';
+import { listStockBatches } from './services/stockBatches.service.js';
+import { listStockMovements } from './services/stockMovements.service.js';
 import type {
   AdminStatsDto,
   AdminStatsOrdersByStatusDto,
@@ -267,4 +273,13 @@ async function showAllStats({
 
 export const adminServices = {
   showAllStats,
+  buildAccountingReport,
+  reportProducts,
+  reportProductsCsv,
+  reportCategories,
+  reportCategoriesCsv,
+  reportTimeline,
+  reportTimelineCsv,
+  listStockBatches,
+  listStockMovements,
 };

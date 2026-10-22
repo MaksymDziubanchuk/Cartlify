@@ -5,6 +5,7 @@ import { InternalError, NotFoundError, ResourceBusyError, isAppError } from '@ut
 import {
   dropDeletedProductItems,
   mapOrderRowToResponse,
+  expiredOfOrders,
   orderResponseSelect,
 } from './helpers/index.js';
 
@@ -42,7 +43,7 @@ export async function findById({
         // if rls denies access, it will look like "not found"
         if (!order) throw new NotFoundError('ORDER_NOT_FOUND', { orderId });
 
-        return mapOrderRowToResponse(order);
+        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

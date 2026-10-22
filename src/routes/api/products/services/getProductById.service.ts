@@ -1,3 +1,4 @@
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 
@@ -54,7 +55,13 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
       // reject invalid db state (product has no images)
       if (!imageRows.length) throw new InternalError({ reason: 'PRODUCT_IMAGES_NOT_FOUND' });
 
-      return { product, images: imageRows };
+      // the free units leave out the units of batches that are over
+      const expired = await expiredUnitsOf(tx, [productId]);
+
+      return {
+        product: { ...product, expiredStock: expired.get(productId) ?? 0 },
+        images: imageRows,
+      };
     });
 
     // map db row into api dto

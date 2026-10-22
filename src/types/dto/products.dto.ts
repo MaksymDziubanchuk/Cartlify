@@ -41,6 +41,7 @@ export type ProductsSortField =
   | 'stock'
   | 'totalStock'
   | 'reservedStock'
+  | 'expiredStock'
   | 'popularityOverride'
   | 'popularityOverrideUntil'
   | 'saleEndsAt'
@@ -128,6 +129,8 @@ export interface ProductResponseDto {
   updatedAt?: string;
   totalStock?: number;
   reservedStock?: number;
+  // the units of batches that are over: not sold, the admin writes them off
+  expiredStock?: number;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
   deletedAt?: string | null;
@@ -214,7 +217,6 @@ export interface CreateProductBodyDto {
   name: string;
   description?: string;
   price: number;
-  stock: number;
   categoryId: CategoryId;
   images: MultipartFile[];
 }
@@ -226,7 +228,8 @@ export interface CreateProductDto {
   name: string;
   description?: string;
   price: number;
-  stock: number;
+  // never taken: a new product has no stock, it comes with a delivery; one sent is refused
+  stock?: unknown;
   categoryId: CategoryId;
   images: UploadedProductImage[];
 }
@@ -242,7 +245,8 @@ export interface UpdateProductBodyDto {
   name?: string;
   description?: string;
   price?: number;
-  stock?: number;
+  // never taken: the stock changes only with a delivery or a write-off; one sent is refused
+  stock?: unknown;
   categoryId?: CategoryId;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
@@ -404,3 +408,91 @@ export interface UpdateProductCategoryDto extends UpdateProductCategoryBodyDto {
 }
 
 export type UpdateProductCategoryResponseDto = FullProductResponseDto;
+
+// STOCK: a delivery takes in a batch of each item, a write-off takes free units out
+// where a batch came from: a supplier, a surplus an inventory found, goods a buyer brought back
+export type StockSourceName = 'supplier' | 'surplus' | 'customer_return';
+
+// shortage: what an inventory did not find; returned_to_supplier: goods sent back to the supplier
+export type WriteOffReason =
+  'damaged' | 'defective' | 'expired' | 'shortage' | 'returned_to_supplier' | 'other';
+
+export interface DeliveryItemBodyDto {
+  productId: ProductId;
+  quantity: number;
+  // the cost of a unit in the currency of the shop, to the cent
+  unitCost: number;
+  // the last good day, yyyy-mm-dd
+  expiresAt?: string;
+  supplierBatchNumber?: string;
+}
+
+export interface DeliveryBodyDto {
+  source: StockSourceName;
+  supplier?: string;
+  document?: string;
+  note?: string;
+  items: DeliveryItemBodyDto[];
+}
+
+export interface ReceiveStockDto extends DeliveryBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface ProductBatchDto {
+  id: number;
+  productId: ProductId;
+  source: StockSourceName;
+  supplierBatchNumber: string | null;
+  unitCost: number;
+  quantity: number;
+  remaining: number;
+  expiresAt: string | null;
+  createdAt: Date;
+}
+
+// the stock of a product after the request: free units, the whole stock and the reserve
+export interface StockProductSummaryDto {
+  id: ProductId;
+  stock: number;
+  totalStock: number;
+  reservedStock: number;
+  expiredStock: number;
+}
+
+export interface ReceiveStockResponseDto {
+  deliveryId: string;
+  batches: ProductBatchDto[];
+  products: StockProductSummaryDto[];
+}
+
+export interface WriteOffItemBodyDto {
+  productId: ProductId;
+  quantity: number;
+  // the batch to take the units from; without one they come in the order of a sale
+  batchId?: number;
+}
+
+export interface WriteOffBodyDto {
+  reason: WriteOffReason;
+  note?: string;
+  items: WriteOffItemBodyDto[];
+}
+
+export interface WriteOffStockDto extends WriteOffBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface WriteOffTakenDto {
+  batchId: number;
+  quantity: number;
+  unitCost: number;
+}
+
+export interface WriteOffStockResponseDto {
+  writeOffId: string;
+  items: { productId: ProductId; quantity: number; batches: WriteOffTakenDto[] }[];
+  products: StockProductSummaryDto[];
+}

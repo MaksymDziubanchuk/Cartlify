@@ -9,6 +9,8 @@ import { createReview } from './services/createReview.service.js';
 import { findReviews } from './services/findReviews.service.js';
 import { deleteProductReview } from './services/deleteReview.service.js';
 import { deleteProductById } from './services/deleteProduct.service.js';
+import { receiveStock } from './services/receiveStock.service.js';
+import { writeOffStock } from './services/writeOffStock.service.js';
 
 export const productServices = {
   findAll,
@@ -22,4 +24,6 @@ export const productServices = {
   deleteProductById,
   deleteProductReview,
   updateProductCategory,
+  receiveStock,
+  writeOffStock,
 };

@@ -389,13 +389,15 @@ CREATE POLICY products_select ON cartlify.products FOR
 SELECT
   USING (true);
 
--- INSERT (admin/root): a new product starts with no reserve, rating, reviews, popularity or views,
--- the database counts them from what happens to it; and with no sale, a sale is set on a product
--- of the catalog (db/05 checks its end on an update only)
+-- INSERT (admin/root): a new product starts with no stock, reserve, rating, reviews, popularity
+-- or views, the database counts them from what happens to it (the stock comes with the batches
+-- of a delivery, receive_product_batch); and with no sale, a sale is set on a product of the
+-- catalog (db/05 checks its end on an update only)
 CREATE POLICY products_insert ON cartlify.products FOR INSERT
 WITH
   CHECK (
     cartlify.is_admin ()
+    AND "stock" = 0
     AND "reservedStock" = 0
     AND "avgRating" = 0
     AND "reviewsCount" = 0
@@ -405,9 +407,10 @@ WITH
     AND "saleEndsAt" IS NULL
   );
 
--- UPDATE (admin/root) - every field but the ones the database counts: the reserve (what the
--- waiting orders hold), the rating and the count of reviews (the reviews), the popularity (what
--- people do; an admin sets popularityOverride instead). A visit of an admin adds one view like any
+-- UPDATE (admin/root) - every field but the ones the database counts: the stock (what the
+-- batches have left: a delivery, a sale, a write-off, a cancel), the reserve (what the waiting
+-- orders hold), the rating and the count of reviews (the reviews), the popularity (what people
+-- do; an admin sets popularityOverride instead). A visit of an admin adds one view like any
 -- other. The steps of the database change these through products_update_owner
 CREATE POLICY products_update_admin ON cartlify.products
 FOR UPDATE
@@ -422,6 +425,7 @@ WITH
         cartlify.products AS p
       WHERE
         p.id = products.id
+        AND p."stock" = products."stock"
         AND p."reservedStock" = products."reservedStock"
         AND p."avgRating" = products."avgRating"
         AND p."reviewsCount" = products."reviewsCount"
@@ -508,6 +512,106 @@ WITH
 
 -- DELETE (admin/root)
 CREATE POLICY products_delete ON cartlify.products FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
+-- PRODUCT BATCHES
+----------------------------------------
+-- a batch and its cost are for the shop, never for a buyer; only the functions of the database
+-- take a batch in and take units out of it (receive_product_batch, write_off_product_stock, the
+-- steps of an order), the app reads them as an admin
+ALTER TABLE cartlify.product_batches ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.product_batches FORCE ROW LEVEL SECURITY;
+
+-- reset policies (safe rerun)
+DROP POLICY IF EXISTS product_batches_select ON cartlify.product_batches;
+
+DROP POLICY IF EXISTS product_batches_select_owner ON cartlify.product_batches;
+
+DROP POLICY IF EXISTS product_batches_insert_owner ON cartlify.product_batches;
+
+DROP POLICY IF EXISTS product_batches_update_owner ON cartlify.product_batches;
+
+DROP POLICY IF EXISTS product_batches_delete_deny ON cartlify.product_batches;
+
+-- SELECT (admin/root)
+CREATE POLICY product_batches_select ON cartlify.product_batches FOR
+SELECT
+  USING (cartlify.is_admin ());
+
+-- SELECT cartlify_owner for the system functions and the check of the stock
+CREATE POLICY product_batches_select_owner ON cartlify.product_batches FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- INSERT cartlify_owner: a batch comes in whole, nothing taken out of it yet
+CREATE POLICY product_batches_insert_owner ON cartlify.product_batches FOR INSERT TO cartlify_owner
+WITH
+  CHECK (remaining = quantity);
+
+-- UPDATE cartlify_owner: a sale, a write-off or a cancel changes only what the batch has left
+CREATE POLICY product_batches_update_owner ON cartlify.product_batches
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (
+    (to_jsonb(product_batches) - 'remaining') = (
+      SELECT
+        to_jsonb(b) - 'remaining'
+      FROM
+        cartlify.product_batches AS b
+      WHERE
+        b.id = product_batches.id
+    )
+  );
+
+-- DELETE (deny for all): a batch goes only with its product removed for good
+CREATE POLICY product_batches_delete_deny ON cartlify.product_batches FOR DELETE USING (false);
+
+----------------------------------------
+-- ORDER BATCH ALLOCATIONS
+----------------------------------------
+-- the units a paid order took from each batch, its cost of goods; history: pay_order writes it,
+-- nobody changes or removes it, a cancel keeps it too
+ALTER TABLE cartlify.order_batch_allocations ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.order_batch_allocations FORCE ROW LEVEL SECURITY;
+
+-- reset policies (safe rerun)
+DROP POLICY IF EXISTS order_batch_allocations_select ON cartlify.order_batch_allocations;
+
+DROP POLICY IF EXISTS order_batch_allocations_select_owner ON cartlify.order_batch_allocations;
+
+DROP POLICY IF EXISTS order_batch_allocations_insert_owner ON cartlify.order_batch_allocations;
+
+DROP POLICY IF EXISTS order_batch_allocations_update_deny ON cartlify.order_batch_allocations;
+
+DROP POLICY IF EXISTS order_batch_allocations_delete_deny ON cartlify.order_batch_allocations;
+
+-- SELECT (admin/root)
+CREATE POLICY order_batch_allocations_select ON cartlify.order_batch_allocations FOR
+SELECT
+  USING (cartlify.is_admin ());
+
+-- SELECT cartlify_owner for the system functions
+CREATE POLICY order_batch_allocations_select_owner ON cartlify.order_batch_allocations FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- INSERT cartlify_owner: the payment of an order
+CREATE POLICY order_batch_allocations_insert_owner ON cartlify.order_batch_allocations FOR INSERT TO cartlify_owner
+WITH
+  CHECK (quantity > 0);
+
+-- UPDATE (deny for all)
+CREATE POLICY order_batch_allocations_update_deny ON cartlify.order_batch_allocations
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- DELETE (deny for all)
+CREATE POLICY order_batch_allocations_delete_deny ON cartlify.order_batch_allocations FOR DELETE USING (false);
 
 ----------------------------------------
 -- PRODUCT IMAGES
@@ -816,6 +920,8 @@ WITH
     AND "reservationExpiresAt" IS NULL
     AND "paymentId" IS NULL
     AND "paymentProvider" IS NULL
+    AND "paidAt" IS NULL
+    AND "cancelledAt" IS NULL
   );
 
 -- UPDATE (owner only, order stays unconfirmed; confirmation goes through cartlify.confirm_order)
@@ -930,20 +1036,22 @@ WITH
         )
       )
     )
-    -- pay_order: the payment and who took it are set together, nothing else but the state changes
+    -- pay_order: the payment, who took it and when are set together, nothing else but the state
+    -- changes
     OR (
       confirmed = true
       AND status = 'paid'
       AND "reservationExpiresAt" IS NULL
       AND "paymentId" IS NOT NULL
       AND "paymentProvider" IS NOT NULL
+      AND "paidAt" IS NOT NULL
       AND "total" >= 0
       AND (
         (
-          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'total' - 'updatedAt'
+          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'paidAt' - 'total' - 'updatedAt'
         ) = (
           SELECT
-            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'total' - 'updatedAt'
+            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'paidAt' - 'total' - 'updatedAt'
           FROM
             cartlify.orders AS o
           WHERE
@@ -978,8 +1086,9 @@ WITH
   );
 
 -- UPDATE cartlify_owner for cancel_paid_order only: a paid or shipped order of the admin context
--- becomes cancelled and nothing else changes; the rows it reaches are the ones the admin policy
--- above reaches already, so it opens no other order to the system functions
+-- becomes cancelled with the time of the cancel and nothing else changes; the rows it reaches are
+-- the ones the admin policy above reaches already, so it opens no other order to the system
+-- functions
 CREATE POLICY orders_update_owner_cancel ON cartlify.orders
 FOR UPDATE
   TO cartlify_owner USING (
@@ -990,10 +1099,11 @@ WITH
   CHECK (
     cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
     AND status = 'cancelled'
+    AND "cancelledAt" IS NOT NULL
     AND (
-      (to_jsonb(orders) - 'status' - 'updatedAt') = (
+      (to_jsonb(orders) - 'status' - 'cancelledAt' - 'updatedAt') = (
         SELECT
-          (to_jsonb(o) - 'status' - 'updatedAt')
+          (to_jsonb(o) - 'status' - 'cancelledAt' - 'updatedAt')
         FROM
           cartlify.orders o
         WHERE

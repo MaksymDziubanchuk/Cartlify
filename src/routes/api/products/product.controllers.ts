@@ -42,6 +42,10 @@ import type {
   UpdateProductCategoryBodyDto,
   UpdateProductCategoryDto,
   UpdateProductCategoryResponseDto,
+  DeliveryBodyDto,
+  ReceiveStockResponseDto,
+  WriteOffBodyDto,
+  WriteOffStockResponseDto,
 } from 'types/dto/products.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
@@ -230,14 +234,14 @@ const postProduct: ControllerRouter<
     const productIdReq = productId;
     const nameReq = name?.trim();
     const priceReq = priceRaw?.trim();
-    const stockReq = stockRaw?.trim();
     const categoryIdReq = categoryIdRaw?.trim();
     const descriptionReq = description?.trim();
-    if (!productIdReq || !nameReq || !priceReq || !stockReq || !categoryIdReq || !uploads.length) {
+    if (!productIdReq || !nameReq || !priceReq || !categoryIdReq || !uploads.length) {
       throw new BadRequestError('BODY_NOT_FULL');
     }
 
-    // build dto, service normalizes and validates values
+    // build dto, service normalizes and validates values; a stock is refused there, a new product
+    // gets its stock with a delivery
     const args = pickDefined<CreateProductDto>(
       {
         actorId,
@@ -245,11 +249,10 @@ const postProduct: ControllerRouter<
         productId: productIdReq,
         name: nameReq,
         price: Number(priceReq),
-        stock: Number(stockReq),
         categoryId: Number(categoryIdReq) as CategoryId,
         images: uploads,
       },
-      { description: descriptionReq },
+      { description: descriptionReq, stock: stockRaw },
     );
 
     const result = await productServices.createProduct(args);
@@ -295,7 +298,8 @@ const updateProductById: ControllerRouter<
   let description: string | undefined;
 
   let price: number | undefined;
-  let stock: number | undefined;
+  // never taken: a stock sent is refused, it changes only with a delivery or a write-off
+  let stock: unknown;
   let categoryId: number | undefined;
 
   let popularityOverride: number | null | undefined;
@@ -343,7 +347,7 @@ const updateProductById: ControllerRouter<
         if (part.fieldname === 'name') name = v;
         else if (part.fieldname === 'description') description = v;
         else if (part.fieldname === 'price') price = t ? Number(t) : undefined;
-        else if (part.fieldname === 'stock') stock = t ? Number(t) : undefined;
+        else if (part.fieldname === 'stock') stock = v;
         else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
         else if (part.fieldname === 'popularityOverride') {
           if (!t || t === 'null') popularityOverride = null;
@@ -489,6 +493,32 @@ const patchProductCategory: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// takes in a delivery: a batch of each item; the admin log keeps a line for each
+const postStockDelivery: ControllerRouter<
+  {},
+  DeliveryBodyDto,
+  {},
+  ReceiveStockResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.receiveStock({ ...req.body, actorId, actorRole });
+  return reply.code(201).send(result);
+};
+
+// writes off free units of the items; the admin log keeps a line for each
+const postStockWriteOff: ControllerRouter<
+  {},
+  WriteOffBodyDto,
+  {},
+  WriteOffStockResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.writeOffStock({ ...req.body, actorId, actorRole });
+  return reply.code(201).send(result);
+};
+
 export const productController = {
   getAllProducts,
   getProductById,
@@ -501,4 +531,6 @@ export const productController = {
   deleteProductById,
   deleteProductReview,
   patchProductCategory,
+  postStockDelivery,
+  postStockWriteOff,
 };

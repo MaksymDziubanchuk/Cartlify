@@ -10,7 +10,7 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
+import { mapOrderRowToResponse, expiredOfOrders, orderResponseSelect } from './helpers/index.js';
 import {
   sendOrderStatusEmail,
   type OrderStatusMailLogger,
@@ -88,7 +88,7 @@ export async function updateOrderStatus(
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_STATUS_UPDATE' });
 
-        return mapOrderRowToResponse(order);
+        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

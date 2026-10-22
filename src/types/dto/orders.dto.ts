@@ -56,6 +56,9 @@ export interface OrderResponseDto {
   recipientLastName?: string;
   recipientPhone?: string;
   note?: string;
+  // when the payment was recorded and when an admin cancelled the paid order
+  paidAt?: Date;
+  cancelledAt?: Date;
 }
 
 // GET /current
@@ -144,7 +147,7 @@ export interface ConfirmCurrentOrderDto extends ConfirmCurrentOrderBodyDto {
 }
 
 // GET /
-export type OrdersSortBy = 'createdAt' | 'updatedAt' | 'total' | 'shippingAddress';
+export type OrdersSortBy = 'createdAt' | 'updatedAt' | 'total' | 'shippingAddress' | 'paidAt';
 export type OrdersSortDir = 'asc' | 'desc';
 
 export interface GetOrdersQueryDto {
@@ -153,6 +156,9 @@ export interface GetOrdersQueryDto {
 
   status?: OrderStatus;
   confirmed?: ConfirmedStatus;
+  // the orders paid from paidFrom and before paidTo, iso date-times
+  paidFrom?: string;
+  paidTo?: string;
 
   sortBy?: OrdersSortBy;
   sortDir?: OrdersSortDir;
@@ -166,6 +172,8 @@ export interface FindOrdersDto {
 
   status?: OrderStatus;
   confirmed?: ConfirmedStatus;
+  paidFrom?: Date;
+  paidTo?: Date;
 
   sortBy: OrdersSortBy;
   sortDir: OrdersSortDir;

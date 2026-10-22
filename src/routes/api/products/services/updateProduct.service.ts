@@ -1,3 +1,4 @@
+import { expiredUnitsNow } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
@@ -54,12 +55,12 @@ export async function updateProduct({
   // normalize and validate id
   const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId });
 
-  // normalize and validate provided fields
+  // normalize and validate provided fields; a stock sent is refused, it changes only with a
+  // delivery or a write-off
   const {
     nameNorm,
     descriptionNorm,
     priceRaw,
-    stockRaw,
     categoryIdRaw,
     popularityOverrideRaw,
     popularityOverrideUntilDate,
@@ -85,7 +86,6 @@ export async function updateProduct({
     name !== undefined ||
     description !== undefined ||
     price !== undefined ||
-    stock !== undefined ||
     categoryId !== undefined ||
     popularityOverride !== undefined ||
     popularityOverrideUntil !== undefined;
@@ -107,7 +107,7 @@ export async function updateProduct({
         // bound lock wait to avoid hanging on concurrent updates
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // lock product row to serialize concurrent patches (including stock)
+        // lock product row to serialize concurrent patches
         await db.$queryRaw`SELECT id FROM cartlify.products WHERE id = ${productIdRaw} FOR UPDATE`;
 
         // load previous state for audit and price change log
@@ -120,8 +120,6 @@ export async function updateProduct({
             price: true,
             salePrice: true,
             saleEndsAt: true,
-            stock: true,
-            reservedStock: true,
             categoryId: true,
             popularityOverride: true,
             popularityOverrideUntil: true,
@@ -171,18 +169,6 @@ export async function updateProduct({
         const saleContext = { db, actorId, actorRole };
         if (saleOn && sale !== undefined && sale !== 'keep') await takeSaleOff(saleContext, before);
 
-        // use stock as delta (negative value takes units off)
-        const newStock = stockRaw !== undefined ? before.stock + stockRaw : undefined;
-
-        // take off only free units (real stock = stock - reservedStock)
-        if (newStock !== undefined && newStock < before.reservedStock) {
-          throw new ConflictError('INSUFFICIENT_AVAILABLE_STOCK', {
-            productId: before.id,
-            available: before.stock - before.reservedStock,
-            requested: -stockRaw!,
-          });
-        }
-
         // build update payload only for provided fields
         const data: Prisma.ProductUpdateInput = {
           ...(name !== undefined ? { name: nameNorm! } : {}),
@@ -190,7 +176,6 @@ export async function updateProduct({
             ? { description: descriptionNorm ? descriptionNorm : null }
             : {}),
           ...(price !== undefined ? { price: new Prisma.Decimal(priceRaw!) } : {}),
-          ...(stock !== undefined ? { stock: newStock! } : {}),
           ...(categoryId !== undefined ? { categoryId: categoryIdRaw! } : {}),
         };
 
@@ -227,7 +212,6 @@ export async function updateProduct({
             name,
             description,
             price,
-            stock,
             categoryId,
             popularityOverride,
             popularityOverrideUntil,
@@ -316,9 +300,14 @@ export async function updateProduct({
 
     // fetch images and map urls
     const imageRows = await readProductImageUrls(updated.id as any);
+    const expired = await expiredUnitsNow([updated.id]);
 
     // map db row into api dto
-    return mapProductRowToResponse({ product: updated, images: imageRows, view: 'admin' });
+    return mapProductRowToResponse({
+      product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
+      images: imageRows,
+      view: 'admin',
+    });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

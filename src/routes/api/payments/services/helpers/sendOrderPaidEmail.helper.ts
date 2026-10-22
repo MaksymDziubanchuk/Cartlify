@@ -32,7 +32,7 @@ function loadOrder(orderId: number) {
         recipientFirstName: true,
         recipientLastName: true,
         recipientPhone: true,
-        updatedAt: true,
+        paidAt: true,
         user: { select: { email: true, name: true } },
         items: {
           orderBy: { id: 'asc' },
@@ -60,6 +60,13 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       return;
     }
 
+    // the mail names the time of the payment; an order without one was never paid
+    if (!order.paidAt) {
+      log.warn({ orderId }, 'order paid mail skipped: the order is not paid');
+      return;
+    }
+    const { paidAt } = order;
+
     const { subject, text, html } = buildOrderPaidTemplate({
       orderId: order.id,
       orderUrl: webUrl(orderPage(order.id)),
@@ -72,8 +79,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       total: order.total.toString(),
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),
-      // the payment is the last change of the order at this moment
-      paidAt: order.updatedAt,
+      paidAt,
       ...(order.user.name ? { userName: order.user.name } : {}),
       shippingAddress: order.shippingAddress,
       recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),

@@ -111,17 +111,25 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
 
-  const { limit, cursor, status, confirmed, sortBy, sortDir } = req.query;
+  const { limit, cursor, status, confirmed, paidFrom, paidTo, sortBy, sortDir } = req.query;
 
   const args = pickDefined<FindOrdersDto>(
     {
       actorId,
       actorRole,
       limit: limit ?? 20,
-      sortBy: sortBy ?? 'updatedAt',
+      // newest first by default, as the schema says
+      sortBy: sortBy ?? 'createdAt',
       sortDir: sortDir ?? 'desc',
     },
-    { cursor, status, confirmed },
+    {
+      cursor,
+      status,
+      confirmed,
+      // the schema let through date-times only
+      paidFrom: paidFrom ? new Date(paidFrom) : undefined,
+      paidTo: paidTo ? new Date(paidTo) : undefined,
+    },
   );
 
   const result = await ordersServices.findOrders(args);

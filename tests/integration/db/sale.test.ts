@@ -5,6 +5,7 @@ import { prisma } from '@db/client.js';
 
 import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js';
 import { cartOf, changedRows, confirm, orderStateOf } from '../../helpers/dbOrders.js';
+import { batchIdOf } from '../../helpers/dbStock.js';
 import { closeSessions, createUser, uniqueTag, type TestUser } from '../../helpers/factories.js';
 
 // the sale of a product: a sale price and the end of the sale (db/05, db/06). While the end is
@@ -32,7 +33,7 @@ afterAll(async () => {
 const asUser = (): Actor => ({ role: 'USER', userId: user.id });
 const asAdmin = (): Actor => ({ role: 'ADMIN', userId: admin.id });
 
-// a product of its own in a category of its own, made by the admin
+// a product of its own in a category of its own, made by the admin, 50 units of it in a batch
 async function freshProduct(db: DbSession, price = 20) {
   await db.as(asAdmin());
   const tag = uniqueTag();
@@ -42,11 +43,12 @@ async function freshProduct(db: DbSession, price = 20) {
     `sale-category-${tag}`,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.products (name, price, stock, "categoryId") values ($1, $2, 50, $3) returning id`,
+    `insert into cartlify.products (name, price, "categoryId") values ($1, $2, $3) returning id`,
     `Sale product ${tag}`,
     price,
     category!.id,
   );
+  await batchIdOf(db, asAdmin(), row!.id, { quantity: 50 });
   return row!.id;
 }
 
@@ -122,11 +124,13 @@ const saleEndOf = async (db: DbSession, productId: number) => {
   return row!.endsAt;
 };
 
+// the lines of the product besides the one of the batch it came with
 const productAuditOf = async (db: DbSession, productId: number) => {
   await db.as(asAdmin());
   return db.rows<{ action: string; actorId: number; meta: unknown }>(
     `select action::text as action, "actorId", meta from cartlify.admin_audit_log
-     where "entityType" = 'product' and "entityId" = $1 order by id`,
+     where "entityType" = 'product' and "entityId" = $1 and action <> 'STOCK_DELIVERY'
+     order by id`,
     productId,
   );
 };
@@ -191,7 +195,7 @@ describe('a sale of a product', () => {
       );
       return db.attempt(
         `insert into cartlify.products (name, price, stock, "categoryId", "salePrice", "saleEndsAt")
-         values ('Forged', 20, 5, $1, 15, (now() at time zone 'utc') + interval '1 day') returning id`,
+         values ('Forged', 20, 0, $1, 15, (now() at time zone 'utc') + interval '1 day') returning id`,
         category!.id,
       );
     });

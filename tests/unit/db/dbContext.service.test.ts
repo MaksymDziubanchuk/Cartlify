@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
   isUuid,
@@ -26,6 +26,19 @@ function fakeTx() {
 }
 
 const guestId = randomUUID();
+
+// the day of the shop goes with every context (cartlify.shop_today): it says which batches are
+// over; a fixed clock gives a fixed day, Madrid is an hour ahead of utc in winter
+const NOW = Date.parse('2026-10-31T23:30:00.000Z');
+const TODAY = '2026-11-01';
+
+beforeEach(() => {
+  jest.spyOn(Date, 'now').mockReturnValue(NOW);
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 describe('isUuid', () => {
   it.each([guestId, guestId.toUpperCase(), '0b9d6f1e-3c2a-1f4b-9e8d-7c6b5a4f3e2d'])(
@@ -56,7 +69,7 @@ describe('setActorContext', () => {
 
     expect(queries).toHaveLength(1);
     expect(queries[0]?.sql).toContain(`'GUEST'::cartlify."Role", NULL, ?::uuid`);
-    expect(queries[0]?.values).toEqual([guestId]);
+    expect(queries[0]?.values).toEqual([guestId, TODAY]);
   });
 
   it.each([
@@ -84,7 +97,7 @@ describe('setActorContext', () => {
     await setActorContext(tx, { actorId, role });
 
     expect(queries[0]?.sql).toContain('?::cartlify."Role", ?::int, NULL');
-    expect(queries[0]?.values).toEqual([role, id]);
+    expect(queries[0]?.values).toEqual([role, id, TODAY]);
   });
 
   it.each([
@@ -113,7 +126,7 @@ describe('setUserContext', () => {
 
     await setUserContext(tx, { userId: 5, role: 'ADMIN' });
 
-    expect(queries[0]?.values).toEqual(['ADMIN', 5]);
+    expect(queries[0]?.values).toEqual(['ADMIN', 5, TODAY]);
   });
 
   it('takes a numeric string id', async () => {
@@ -121,7 +134,7 @@ describe('setUserContext', () => {
 
     await setUserContext(tx, { userId: '5', role: 'USER' });
 
-    expect(queries[0]?.values).toEqual(['USER', 5]);
+    expect(queries[0]?.values).toEqual(['USER', 5, TODAY]);
   });
 
   it('requires a role', async () => {
@@ -152,7 +165,7 @@ describe('contexts without an actor id', () => {
     await setAdminContext(tx);
 
     expect(queries[0]?.sql).toContain(`'ADMIN'::cartlify."Role", NULL, NULL`);
-    expect(queries[0]?.values).toEqual([]);
+    expect(queries[0]?.values).toEqual([TODAY]);
   });
 
   it('sets an anonymous guest context with no ids', async () => {
@@ -161,6 +174,17 @@ describe('contexts without an actor id', () => {
     await setGuestNullContext(tx);
 
     expect(queries[0]?.sql).toContain(`'GUEST'::cartlify."Role", NULL, NULL`);
+    expect(queries[0]?.values).toEqual([TODAY]);
+  });
+
+  // one statement: the context and the day of the shop are set together, for the transaction
+  it('sets the day of the shop in the same statement as the context, for the transaction only', async () => {
+    const { tx, queries } = fakeTx();
+
+    await setAdminContext(tx);
+
+    expect(queries).toHaveLength(1);
+    expect(queries[0]?.sql).toContain("set_config('cartlify.shop_today', ?, true)");
   });
 
   it('requires a guest id for a guest context', async () => {

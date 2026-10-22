@@ -117,7 +117,6 @@ const updateProductBodyExample = {
   name: 'Wireless headphones Pro',
   description: 'Updated product description.',
   price: 59.99,
-  stock: 20,
   categoryId: 1,
   popularityOverride: 500,
   popularityOverrideUntil: '2026-02-01T10:00:00.000Z',
@@ -323,7 +322,8 @@ const postProductRouterSchema = {
     'Creates a new product from a multipart form: its fields and one or more image files in ' +
     '`images`, the first is the main image. This operation is restricted to privileged users. ' +
     'The images are checked by their content; they become the images of the product only when ' +
-    'the product is written, a refused request leaves no files.',
+    'the product is written, a refused request leaves no files. A new product has no stock: it ' +
+    'comes with a delivery, POST /api/products/stock/deliveries.',
 
   response: {
     201: {
@@ -335,9 +335,9 @@ const postProductRouterSchema = {
     400: {
       description:
         'Invalid product form: not a form (MULTIPART_REQUIRED), no images ' +
-        '(PRODUCT_IMAGES_REQUIRED), a missing field (BODY_NOT_FULL), a wrong name, price, stock ' +
-        'or category id (PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, PRODUCT_STOCK_INVALID, ' +
-        'CATEGORY_ID_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
+        '(PRODUCT_IMAGES_REQUIRED), a missing field (BODY_NOT_FULL), a wrong name, price ' +
+        'or category id (PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, CATEGORY_ID_INVALID), a ' +
+        'stock (PRODUCT_STOCK_NOT_ALLOWED), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -427,8 +427,8 @@ const updateProductByIdRouterSchema = {
   summary: 'Update product by id',
   description:
     'Updates product details by product id. This operation is restricted to privileged users. ' +
-    'Field stock is a delta: a positive value adds units, a negative value takes off only free ' +
-    'units that are not reserved by confirmed orders. Takes a JSON body, or a multipart form when ' +
+    'The stock is not changed here (PRODUCT_STOCK_NOT_ALLOWED): it changes only with a delivery ' +
+    'or a write-off, POST /api/products/stock/deliveries and /write-offs. Takes a JSON body, or a multipart form when ' +
     'it carries images: the images of a form replace all images of the product in their order, ' +
     'the first is the main one, and the files the product no longer has are deleted. A JSON body ' +
     'has no images. A refused request leaves the images as they were. A new price of a product ' +
@@ -457,7 +457,6 @@ const updateProductByIdRouterSchema = {
           name: 'Wireless headphones Pro',
           description: 'Updated product description.',
           price: 59.99,
-          stock: 20,
           updatedAt: '2026-01-02T10:00:00.000Z',
         },
       ],
@@ -467,11 +466,12 @@ const updateProductByIdRouterSchema = {
       description:
         'Invalid product update request: nothing to change (NO_FIELDS_TO_UPDATE), a wrong field ' +
         '(VALIDATION_ERROR for a JSON body, PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, ' +
-        'PRODUCT_STOCK_INVALID, CATEGORY_ID_INVALID, POPULARITY_OVERRIDE_INVALID, ' +
+        'CATEGORY_ID_INVALID, POPULARITY_OVERRIDE_INVALID, ' +
         'POPULARITY_OVERRIDE_UNTIL_INVALID for an end that is not ahead), a popularity override ' +
         'without its end or an end without an override after the change ' +
         '(POPULARITY_OVERRIDE_UNTIL_REQUIRED, POPULARITY_OVERRIDE_REQUIRED), a word on the sale ' +
-        'without a price (PRODUCT_SALE_REQUIRES_PRICE), another word on the sale in a form ' +
+        'without a price (PRODUCT_SALE_REQUIRES_PRICE), a stock (PRODUCT_STOCK_NOT_ALLOWED), ' +
+        'another word on the sale in a form ' +
         '(PRODUCT_SALE_ACTION_INVALID), a new sale that does not fit the new price ' +
         '(PRODUCT_SALE_AMOUNT_TOO_HIGH, PRODUCT_SALE_TOO_SMALL, PRODUCT_SALE_ENDS_AT_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
@@ -490,8 +490,7 @@ const updateProductByIdRouterSchema = {
     },
     409: {
       description:
-        'Product update conflicts with existing data, or stock decrease exceeds free units. A ' +
-        'new price of a product with a sale that is on without a word on the sale ' +
+        'Product update conflicts with existing data. A new price of a product with a sale that is on without a word on the sale ' +
         '(PRODUCT_SALE_DECISION_REQUIRED, `details`: the sale price and its end), or keep for a ' +
         'price down to the sale price or below (PRODUCT_SALE_NOT_BELOW_PRICE); nothing is changed.',
       $ref: 'errorResponseSchema#',
@@ -790,6 +789,173 @@ const patchProductCategorySchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for a delivery taken in by an admin
+const postStockDeliveryRouterSchema = {
+  operationId: 'receiveStockDelivery',
+  summary: 'Take in a delivery',
+  description:
+    'Takes in a batch of each item: its units at its cost of a unit, in the currency of the ' +
+    'shop, an optional last good day and the number the supplier gave it. The stock of each ' +
+    'product grows by its batches; this is the only way the stock grows, besides a cancel of a ' +
+    'paid order that puts its units back. `source` says where the goods come from: `supplier`, ' +
+    '`surplus` (an inventory found more than the stock says) or `customer_return` (a buyer ' +
+    'brought goods back); the admin gives the cost they count at. The admin log keeps a line ' +
+    '`STOCK_DELIVERY` for each item in the name of the admin, with the delivery, the supplier, ' +
+    'the invoice and the note. All of the items or none. A sale takes the batch that ends ' +
+    'first, then the ones without an end, the oldest first. This operation is restricted to ' +
+    'privileged users.',
+
+  body: {
+    $ref: 'stockDeliveryBodySchema#',
+    examples: [
+      {
+        source: 'supplier',
+        supplier: 'Acme',
+        document: 'INV-1024',
+        items: [
+          {
+            productId: 1,
+            quantity: 20,
+            unitCost: 31.5,
+            expiresAt: '2027-06-30',
+            supplierBatchNumber: 'LOT-77',
+          },
+        ],
+      },
+    ],
+  },
+
+  response: {
+    201: {
+      description: 'The batches were taken in; the stock of each product after them.',
+      $ref: 'stockDeliveryResponseSchema#',
+      examples: [
+        {
+          deliveryId: '2f6a2c3e-6c7b-4d1e-9a51-3b8f0f1d2c4a',
+          batches: [
+            {
+              id: 12,
+              productId: 1,
+              source: 'supplier',
+              supplierBatchNumber: 'LOT-77',
+              unitCost: 31.5,
+              quantity: 20,
+              remaining: 20,
+              expiresAt: '2027-06-30',
+              createdAt: '2026-10-22T10:00:00.000Z',
+            },
+          ],
+          products: [{ id: 1, stock: 35, totalStock: 38, reservedStock: 3 }],
+        },
+      ],
+    },
+    400: {
+      description:
+        'Invalid delivery: a wrong body (VALIDATION_ERROR: no items or more than 100, a wrong ' +
+        'source, units or cost, a day that is not a day, a text too long), a cost finer than a ' +
+        'cent (BATCH_UNIT_COST_INVALID), a last good day that is over (BATCH_EXPIRES_AT_INVALID). ' +
+        'Nothing is taken in.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to take in a delivery.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        'A product does not exist or is removed from the catalog (PRODUCT_NOT_FOUND, ' +
+        '`details.productId`). Nothing is taken in.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The products are busy with another change (RESOURCE_BUSY_TRY_AGAIN).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while taking in the delivery.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for a write-off by an admin
+const postStockWriteOffRouterSchema = {
+  operationId: 'writeOffStock',
+  summary: 'Write off stock',
+  description:
+    'Writes off free units of each item: from the batch the item names (`batchId`), or from the ' +
+    'batches in the order of a sale, the one that ends first, then the oldest. The units the ' +
+    'waiting orders hold are not written off. A batch named gives its units before the units of ' +
+    'the same product without one. A product removed from the catalog keeps its units until ' +
+    'they are written off. The reason: `damaged`, `defective`, `expired`, `shortage` (an ' +
+    'inventory did not find them), `returned_to_supplier`, `other` (with a note). The admin log ' +
+    'keeps a line `STOCK_WRITE_OFF` for each item in the name of the admin, with the reason, ' +
+    'the batches and their costs, the write-off and the note. All of the items or none. This ' +
+    'operation is restricted to privileged users.',
+
+  body: {
+    $ref: 'stockWriteOffBodySchema#',
+    examples: [
+      { reason: 'damaged', note: 'Wet box', items: [{ productId: 1, batchId: 12, quantity: 2 }] },
+      { reason: 'shortage', items: [{ productId: 1, quantity: 1 }] },
+    ],
+  },
+
+  response: {
+    201: {
+      description: 'The units were written off: what each item took from which batch.',
+      $ref: 'stockWriteOffResponseSchema#',
+      examples: [
+        {
+          writeOffId: '7d1f4f6e-6b1f-4a43-9a1b-0d2a3c4b5e6f',
+          items: [
+            { productId: 1, quantity: 2, batches: [{ batchId: 12, quantity: 2, unitCost: 31.5 }] },
+          ],
+          products: [{ id: 1, stock: 33, totalStock: 36, reservedStock: 3 }],
+        },
+      ],
+    },
+    400: {
+      description:
+        'Invalid write-off: a wrong body (VALIDATION_ERROR: no items or more than 100, a wrong ' +
+        'reason or units, a note too long), the reason other without a note ' +
+        '(WRITE_OFF_NOTE_REQUIRED). Nothing is written off.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to write off stock.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        'A product does not exist (PRODUCT_NOT_FOUND, `details.productId`), or a batch is not ' +
+        'a batch of the product (BATCH_NOT_FOUND, `details.batchId`). Nothing is written off.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'Not enough free units: every product short of them (INSUFFICIENT_AVAILABLE_STOCK, ' +
+        '`details.products`: productId, available, requested, the lines of a product counted ' +
+        'together), or every batch short of units (BATCH_INSUFFICIENT, `details.batches`: ' +
+        'batchId, remaining, requested); the products are busy with another change ' +
+        '(RESOURCE_BUSY_TRY_AGAIN). Nothing is written off.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while writing off stock.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group product routes under the products Swagger tag
 const taggedProductSchemas = withOpenApiTag(
   {
@@ -804,6 +970,8 @@ const taggedProductSchemas = withOpenApiTag(
     deleteProductByIdRouterSchema,
     deleteProductReviewRouterSchema,
     patchProductCategorySchema,
+    postStockDeliveryRouterSchema,
+    postStockWriteOffRouterSchema,
   },
   'products',
 );
@@ -828,5 +996,7 @@ export const productSchemas = withOpenApiSecurityFor(
     'deleteProductByIdRouterSchema',
     'deleteProductReviewRouterSchema',
     'patchProductCategorySchema',
+    'postStockDeliveryRouterSchema',
+    'postStockWriteOffRouterSchema',
   ],
 );

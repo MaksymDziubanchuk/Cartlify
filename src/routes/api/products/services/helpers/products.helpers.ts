@@ -16,9 +16,12 @@ export function normalizeCreateProductInput(args: {
   name: unknown;
   description?: unknown;
   price: unknown;
-  stock: unknown;
+  stock?: unknown;
   categoryId: unknown;
 }) {
+  // a new product has no stock: it comes only with a delivery (POST /api/products/stock/deliveries)
+  if (args.stock !== undefined) throw new BadRequestError('PRODUCT_STOCK_NOT_ALLOWED');
+
   // normalize required category id
   const categoryIdRaw = toNumberSafe(args.categoryId);
   if (categoryIdRaw == null || !Number.isInteger(categoryIdRaw) || categoryIdRaw <= 0) {
@@ -28,7 +31,6 @@ export function normalizeCreateProductInput(args: {
   // normalize required scalars
   const nameRaw = toStringSafe(args.name);
   const priceRaw = toNumberSafe(args.price);
-  const stockRaw = toNumberSafe(args.stock);
 
   // normalize optional description
   const descriptionRaw = args.description != null ? toStringSafe(args.description) : undefined;
@@ -47,16 +49,10 @@ export function normalizeCreateProductInput(args: {
     throw new BadRequestError('PRODUCT_PRICE_INVALID');
   }
 
-  // validate required stock
-  if (stockRaw == null || !Number.isInteger(stockRaw) || stockRaw < 0) {
-    throw new BadRequestError('PRODUCT_STOCK_INVALID');
-  }
-
   return {
     nameNorm,
     descriptionNorm,
     priceRaw,
-    stockNorm: stockRaw,
     categoryIdRaw,
   };
 }
@@ -72,6 +68,9 @@ export function normalizeUpdateProductInput(
   },
   now = Date.now(),
 ) {
+  // the stock changes only with a delivery or a write-off, each with its line in the admin log
+  if (args.stock !== undefined) throw new BadRequestError('PRODUCT_STOCK_NOT_ALLOWED');
+
   // normalize optional ids
   const categoryIdRaw = args.categoryId != null ? toNumberSafe(args.categoryId) : undefined;
   if (args.categoryId != null) {
@@ -84,7 +83,6 @@ export function normalizeUpdateProductInput(
   const nameRaw = args.name != null ? toStringSafe(args.name) : undefined;
   const descriptionRaw = args.description != null ? toStringSafe(args.description) : undefined;
   const priceRaw = args.price != null ? toNumberSafe(args.price) : undefined;
-  const stockRaw = args.stock != null ? toNumberSafe(args.stock) : undefined;
 
   const popularityOverrideRaw =
     args.popularityOverride === null
@@ -111,13 +109,6 @@ export function normalizeUpdateProductInput(
   // validate optional price
   if (args.price != null && (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0)) {
     throw new BadRequestError('PRODUCT_PRICE_INVALID');
-  }
-
-  // validate optional stock delta (negative value takes units off)
-  if (args.stock != null) {
-    if (stockRaw == null || !Number.isInteger(stockRaw)) {
-      throw new BadRequestError('PRODUCT_STOCK_INVALID');
-    }
   }
 
   // validate optional popularity override
@@ -150,7 +141,6 @@ export function normalizeUpdateProductInput(
     nameNorm,
     descriptionNorm,
     priceRaw,
-    stockRaw,
     categoryIdRaw,
     popularityOverrideRaw,
     popularityOverrideUntilDate,

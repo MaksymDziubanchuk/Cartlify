@@ -110,6 +110,36 @@ describe('GET /api/orders/:orderId', () => {
     });
     expect(res.json()).not.toHaveProperty('paymentId');
     expect(res.json()).not.toHaveProperty('paymentProvider');
+    // not paid yet
+    expect(res.json()).not.toHaveProperty('paidAt');
+    expect(res.json()).not.toHaveProperty('cancelledAt');
+  });
+
+  it('gives the time of the payment of a paid order and keeps it once the order is shipped', async () => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'paid');
+    const paid = (await getOrder(user, orderId)).json();
+
+    await asAdmin((tx) => tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } }));
+    const shipped = (await getOrder(user, orderId)).json();
+
+    expect(paid.paidAt).toEqual(expect.any(String));
+    expect(Date.parse(paid.paidAt)).toBeGreaterThanOrEqual(Date.parse(paid.createdAt));
+    expect(paid).not.toHaveProperty('cancelledAt');
+    expect(shipped).toMatchObject({ status: 'shipped', paidAt: paid.paidAt });
+    expect(Date.parse(shipped.updatedAt)).toBeGreaterThan(Date.parse(shipped.paidAt));
+  });
+
+  it('gives the time of the cancel of a cancelled order next to the time of its payment', async () => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'paid');
+    const { paidAt } = (await getOrder(user, orderId)).json();
+
+    await asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
+    const res = await getOrder(user, orderId);
+
+    expect(res.json()).toMatchObject({ status: 'cancelled', paidAt });
+    expect(Date.parse(res.json().cancelledAt)).toBeGreaterThan(Date.parse(paidAt));
   });
 
   it('hides the order of another user as not found', async () => {

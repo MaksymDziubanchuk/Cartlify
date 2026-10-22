@@ -56,7 +56,7 @@ async function freshProduct(db: DbSession) {
     `db-category-${tag}`,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.products (name, price, stock, "categoryId") values ($1, 10, 5, $2) returning id`,
+    `insert into cartlify.products (name, price, "categoryId") values ($1, 10, $2) returning id`,
     `Db product ${tag}`,
     category!.id,
   );

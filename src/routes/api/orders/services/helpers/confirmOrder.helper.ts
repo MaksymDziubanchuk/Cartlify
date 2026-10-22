@@ -1,3 +1,4 @@
+import { freeUnits } from '@db/expiredStock.helper.js';
 import { isPhone } from '@helpers/profileText.js';
 import { BadRequestError } from '@utils/errors.js';
 
@@ -21,7 +22,8 @@ export type UnavailableOrderItem = {
   requested: number;
 };
 
-// the items an order cannot be confirmed with, so the page can show which ones and why
+// the items an order cannot be confirmed with, so the page can show which ones and why; the
+// units of batches that are over are no free units (expired, by product)
 export function findUnavailableItems(
   items: {
     id: number;
@@ -29,11 +31,12 @@ export function findUnavailableItems(
     quantity: number;
     product: { deletedAt: Date | null; stock: number; reservedStock: number };
   }[],
+  expired: Map<number, number>,
 ): UnavailableOrderItem[] {
   return items.flatMap((item) => {
     const available = item.product.deletedAt
       ? 0
-      : Math.max(0, item.product.stock - item.product.reservedStock);
+      : freeUnits(item.product.stock, item.product.reservedStock, expired.get(item.productId) ?? 0);
 
     if (!item.product.deletedAt && item.quantity <= available) return [];
 

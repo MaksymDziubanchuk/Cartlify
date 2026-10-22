@@ -528,30 +528,349 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS add stock to product inventory
--- the app has no execute right (db/01): cancel_paid_order calls it as the owner to return the stock
--- of a cancelled order; the role check stays for any other caller
-CREATE OR REPLACE FUNCTION cartlify.add_product_stock (p_product_id integer, p_delta integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+-- PRODUCTS the stock of a product is what its batches have left; every step that changes one
+-- changes the other in the same transaction: a batch taken in, a sale, a write-off, a cancel.
+-- Only the functions below change them, the batches and the stock are closed for plain changes
+-- (db/03). Costs go into the admin log as the app writes them (trim_scale, 1.50 is 1.5)
+
+-- the version that put units back without a batch; a temporary line, it goes once dev and prod
+-- match the reference
+DROP FUNCTION IF EXISTS cartlify.add_product_stock (integer, integer);
+
+-- PRODUCTS the day of the shop: the server sets it with the context of every transaction
+-- (cartlify.shop_today, yyyy-mm-dd, by the time zone of the shop); without it the day of utc.
+-- It says which batches are over, it is no right of anybody: the policies never read it
+CREATE OR REPLACE FUNCTION cartlify.shop_today () RETURNS date LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT COALESCE(
+    NULLIF(current_setting('cartlify.shop_today', true), '')::date,
+    (now() AT TIME ZONE 'UTC')::date
+  );
+$$;
+
+-- PRODUCTS the units of a product in batches whose last good day is over: they are not sold, so
+-- they are no free units; an admin writes them off. Runs as the owner: a buyer sees no batch
+CREATE OR REPLACE FUNCTION cartlify.product_expired_units (p_product_id integer) RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT COALESCE(SUM(b.remaining), 0)::integer
+  FROM cartlify.product_batches AS b
+  WHERE b."productId" = p_product_id
+    AND b.remaining > 0
+    AND b."expiresAt" < cartlify.shop_today();
+$$;
+
+-- PRODUCTS take units out of the batches of a product: the batch that ends first, then the ones
+-- without an end, the oldest first; returns what each batch gave and its cost of a unit. A sale
+-- skips the batches that are over (p_skip_expired), a write-off takes them first
+-- internal step: runs with caller rights, only the system functions reach the batches (db/03);
+-- the app has no execute right (db/01). The caller holds the lock of the product row
+
+-- the version that took the batches that are over in a sale too; a temporary line, it goes once
+-- dev and prod match the reference
+DROP FUNCTION IF EXISTS cartlify.take_from_batches (integer, integer);
+
+CREATE OR REPLACE FUNCTION cartlify.take_from_batches (
+  p_product_id integer,
+  p_qty integer,
+  p_skip_expired boolean
+) RETURNS TABLE (
+  taken_batch_id integer,
+  taken_quantity integer,
+  taken_unit_cost numeric
+) LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_role text;
-  v_stock integer;
+  v_left integer := p_qty;
+  v_take integer;
+  v_today date := cartlify.shop_today();
+
+  r record;
 BEGIN
-  IF p_delta IS NULL OR p_delta <= 0 THEN
-    RAISE EXCEPTION 'STOCK_DELTA_INVALID';
+  IF p_qty IS NULL OR p_qty <= 0 THEN
+    RAISE EXCEPTION 'STOCK_QTY_INVALID';
   END IF;
 
-  v_role := cartlify.current_actor_role();
+  FOR r IN
+    SELECT b.id, b.remaining, b."unitCost"
+    FROM cartlify.product_batches AS b
+    WHERE b."productId" = p_product_id
+      AND b.remaining > 0
+      AND (NOT p_skip_expired OR b."expiresAt" IS NULL OR b."expiresAt" >= v_today)
+    ORDER BY b."expiresAt" ASC NULLS LAST, b."createdAt" ASC, b.id ASC
+    FOR UPDATE
+  LOOP
+    EXIT WHEN v_left = 0;
 
-  IF v_role IS NULL OR v_role NOT IN ('ADMIN', 'ROOT') THEN
-    RAISE EXCEPTION 'STOCK_ADD_FORBIDDEN';
+    v_take := LEAST(v_left, r.remaining);
+
+    UPDATE cartlify.product_batches AS b
+    SET remaining = b.remaining - v_take
+    WHERE b.id = r.id;
+
+    taken_batch_id := r.id;
+    taken_quantity := v_take;
+    taken_unit_cost := r."unitCost";
+    RETURN NEXT;
+
+    v_left := v_left - v_take;
+  END LOOP;
+
+  -- the stock is the sum of the batches: less in them than the stock says is a broken state
+  IF v_left > 0 THEN
+    RAISE EXCEPTION 'PRODUCT_BATCHES_SHORT';
+  END IF;
+END;
+$$;
+
+-- PRODUCTS put the units of a cancelled paid order back into the batches they came from
+-- internal step: runs with caller rights; cancel_paid_order calls it as the owner. The lines of
+-- the allocations stay: the reports take the cost back from the time of the cancel
+CREATE OR REPLACE FUNCTION cartlify.return_order_stock (p_order_id integer) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  r record;
+BEGIN
+  -- every unit a paid order sold came from a batch; an order paid before the batches has none
+  IF EXISTS (
+    SELECT 1
+    FROM (
+      SELECT oi."productId" AS product_id, SUM(oi.quantity) AS qty
+      FROM cartlify.order_items AS oi
+      WHERE oi."orderId" = p_order_id
+      GROUP BY oi."productId"
+    ) AS i
+    LEFT JOIN (
+      SELECT a."productId" AS product_id, SUM(a.quantity) AS qty
+      FROM cartlify.order_batch_allocations AS a
+      WHERE a."orderId" = p_order_id
+      GROUP BY a."productId"
+    ) AS a ON a.product_id = i.product_id
+    WHERE a.qty IS DISTINCT FROM i.qty
+  ) THEN
+    RAISE EXCEPTION 'ORDER_ALLOCATIONS_MISSING';
+  END IF;
+
+  -- the products in a deterministic lock order by id, then their batches
+  FOR r IN
+    SELECT a."productId" AS product_id,
+           SUM(a.quantity)::integer AS qty
+    FROM cartlify.order_batch_allocations AS a
+    WHERE a."orderId" = p_order_id
+    GROUP BY a."productId"
+    ORDER BY a."productId"
+  LOOP
+    UPDATE cartlify.products AS p
+    SET "stock" = p."stock" + r.qty
+    WHERE p.id = r.product_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    END IF;
+  END LOOP;
+
+  UPDATE cartlify.product_batches AS b
+  SET remaining = b.remaining + a.quantity
+  FROM cartlify.order_batch_allocations AS a
+  WHERE a."orderId" = p_order_id
+    AND b.id = a."batchId";
+END;
+$$;
+
+-- PRODUCTS take in a batch of a product: the stock grows by it, the admin log keeps the line
+-- (STOCK_DELIVERY) with the delivery it came with, the supplier, the invoice and the note
+-- system function: runs as the owner, the batches and the stock are closed for plain changes
+-- (db/03); callable only by a signed-in admin or root, the line of the log is in their name.
+-- A product removed from the catalog takes in nothing
+CREATE OR REPLACE FUNCTION cartlify.receive_product_batch (
+  p_delivery_id uuid,
+  p_product_id integer,
+  p_source cartlify."StockSource",
+  p_quantity integer,
+  p_unit_cost numeric,
+  p_expires_at date,
+  p_supplier_batch_number text,
+  p_supplier text,
+  p_document text,
+  p_note text
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor_id integer := cartlify.current_actor_id();
+  v_number   text := NULLIF(btrim(p_supplier_batch_number), '');
+  v_supplier text := NULLIF(btrim(p_supplier), '');
+  v_document text := NULLIF(btrim(p_document), '');
+  v_note     text := NULLIF(btrim(p_note), '');
+  v_stock    integer;
+  v_batch_id integer;
+BEGIN
+  IF v_actor_id IS NULL OR NOT cartlify.is_admin() THEN
+    RAISE EXCEPTION 'STOCK_RECEIVE_FORBIDDEN';
+  END IF;
+
+  IF p_delivery_id IS NULL OR p_source IS NULL THEN
+    RAISE EXCEPTION 'DELIVERY_INVALID';
+  END IF;
+
+  IF p_quantity IS NULL OR p_quantity <= 0 THEN
+    RAISE EXCEPTION 'BATCH_QUANTITY_INVALID';
+  END IF;
+
+  -- a cost in cents, of the currency of the shop; a gift or a sample costs 0
+  IF p_unit_cost IS NULL OR p_unit_cost < 0 OR p_unit_cost <> round(p_unit_cost, 2) THEN
+    RAISE EXCEPTION 'BATCH_UNIT_COST_INVALID';
+  END IF;
+
+  -- the last good day is today or later, by the calendar of the shop
+  IF p_expires_at IS NOT NULL AND p_expires_at < cartlify.shop_today() THEN
+    RAISE EXCEPTION 'BATCH_EXPIRES_AT_INVALID';
+  END IF;
+
+  IF char_length(v_supplier) > 200
+     OR char_length(v_document) > 100
+     OR char_length(v_note) > 500 THEN
+    RAISE EXCEPTION 'STOCK_TEXT_TOO_LONG';
   END IF;
 
   -- lock product row
   SELECT p."stock"
   INTO v_stock
+  FROM cartlify.products AS p
+  WHERE p.id = p_product_id
+    AND p."deletedAt" IS NULL
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+  END IF;
+
+  INSERT INTO cartlify.product_batches (
+    "productId",
+    "deliveryId",
+    source,
+    "supplierBatchNumber",
+    "unitCost",
+    quantity,
+    remaining,
+    "expiresAt"
+  )
+  VALUES (
+    p_product_id,
+    p_delivery_id,
+    p_source,
+    v_number,
+    p_unit_cost,
+    p_quantity,
+    p_quantity,
+    p_expires_at
+  )
+  RETURNING id INTO v_batch_id;
+
+  UPDATE cartlify.products AS p
+  SET "stock" = v_stock + p_quantity
+  WHERE p.id = p_product_id;
+
+  PERFORM cartlify.log_admin_action(
+    v_actor_id,
+    cartlify.current_actor_role(),
+    'product',
+    p_product_id,
+    'STOCK_DELIVERY',
+    jsonb_build_array(
+      jsonb_build_object('field', 'stock', 'old', v_stock, 'new', v_stock + p_quantity),
+      jsonb_build_object(
+        'field', 'batch',
+        'old', NULL,
+        'new', jsonb_build_object(
+          'id', v_batch_id,
+          'source', p_source,
+          'quantity', p_quantity,
+          'unitCost', trim_scale(p_unit_cost)::text,
+          'expiresAt', to_char(p_expires_at, 'YYYY-MM-DD'),
+          'supplierBatchNumber', v_number
+        )
+      ),
+      jsonb_build_object('field', 'delivery', 'old', NULL, 'new', p_delivery_id)
+    )
+    || CASE WHEN v_supplier IS NULL THEN '[]'::jsonb
+         ELSE jsonb_build_array(jsonb_build_object('field', 'supplier', 'old', NULL, 'new', v_supplier))
+       END
+    || CASE WHEN v_document IS NULL THEN '[]'::jsonb
+         ELSE jsonb_build_array(jsonb_build_object('field', 'document', 'old', NULL, 'new', v_document))
+       END
+    || CASE WHEN v_note IS NULL THEN '[]'::jsonb
+         ELSE jsonb_build_array(jsonb_build_object('field', 'note', 'old', NULL, 'new', v_note))
+       END
+  );
+
+  RETURN v_batch_id;
+END;
+$$;
+
+-- PRODUCTS write off free units of a product: from the batch an admin names, or from the batches
+-- in the order a sale takes them (the one that ends first, then the oldest). The admin log keeps
+-- the line (STOCK_WRITE_OFF) with the reason, the batches and their costs. A product removed
+-- from the catalog keeps its units until they are written off, so it is written off too; the
+-- units the waiting orders hold are not
+-- system function: runs as the owner; callable only by a signed-in admin or root
+CREATE OR REPLACE FUNCTION cartlify.write_off_product_stock (
+  p_write_off_id uuid,
+  p_product_id integer,
+  p_batch_id integer,
+  p_quantity integer,
+  p_reason text,
+  p_note text
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor_id  integer := cartlify.current_actor_id();
+  v_note      text := NULLIF(btrim(p_note), '');
+  v_stock     integer;
+  v_reserved  integer;
+  v_remaining integer;
+  v_cost      numeric;
+  v_taken     jsonb;
+BEGIN
+  IF v_actor_id IS NULL OR NOT cartlify.is_admin() THEN
+    RAISE EXCEPTION 'STOCK_WRITE_OFF_FORBIDDEN';
+  END IF;
+
+  IF p_write_off_id IS NULL THEN
+    RAISE EXCEPTION 'WRITE_OFF_INVALID';
+  END IF;
+
+  -- shortage: what an inventory did not find; returned_to_supplier: goods sent back
+  IF p_reason IS NULL
+     OR p_reason NOT IN ('damaged', 'defective', 'expired', 'shortage', 'returned_to_supplier', 'other') THEN
+    RAISE EXCEPTION 'WRITE_OFF_REASON_INVALID';
+  END IF;
+
+  IF p_reason = 'other' AND v_note IS NULL THEN
+    RAISE EXCEPTION 'WRITE_OFF_NOTE_REQUIRED';
+  END IF;
+
+  IF char_length(v_note) > 500 THEN
+    RAISE EXCEPTION 'STOCK_TEXT_TOO_LONG';
+  END IF;
+
+  IF p_quantity IS NULL OR p_quantity <= 0 THEN
+    RAISE EXCEPTION 'WRITE_OFF_QUANTITY_INVALID';
+  END IF;
+
+  -- lock product row
+  SELECT p."stock", p."reservedStock"
+  INTO v_stock, v_reserved
   FROM cartlify.products AS p
   WHERE p.id = p_product_id
   FOR UPDATE;
@@ -560,15 +879,131 @@ BEGIN
     RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
   END IF;
 
-  v_stock := v_stock + p_delta;
+  IF v_stock - v_reserved < p_quantity THEN
+    RAISE EXCEPTION 'INSUFFICIENT_AVAILABLE_STOCK';
+  END IF;
+
+  IF p_batch_id IS NOT NULL THEN
+    SELECT b.remaining, b."unitCost"
+    INTO v_remaining, v_cost
+    FROM cartlify.product_batches AS b
+    WHERE b.id = p_batch_id
+      AND b."productId" = p_product_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'BATCH_NOT_FOUND';
+    END IF;
+
+    IF v_remaining < p_quantity THEN
+      RAISE EXCEPTION 'BATCH_INSUFFICIENT';
+    END IF;
+
+    UPDATE cartlify.product_batches AS b
+    SET remaining = b.remaining - p_quantity
+    WHERE b.id = p_batch_id;
+
+    v_taken := jsonb_build_array(
+      jsonb_build_object(
+        'batchId', p_batch_id,
+        'quantity', p_quantity,
+        'unitCost', trim_scale(v_cost)::text
+      )
+    );
+  ELSE
+    SELECT jsonb_agg(
+             jsonb_build_object(
+               'batchId', t.taken_batch_id,
+               'quantity', t.taken_quantity,
+               'unitCost', trim_scale(t.taken_unit_cost)::text
+             )
+             ORDER BY t.n
+           )
+    INTO v_taken
+    FROM cartlify.take_from_batches(p_product_id, p_quantity, false)
+      WITH ORDINALITY AS t(taken_batch_id, taken_quantity, taken_unit_cost, n);
+  END IF;
 
   UPDATE cartlify.products AS p
-  SET "stock" = v_stock
+  SET "stock" = v_stock - p_quantity
   WHERE p.id = p_product_id;
 
-  RETURN v_stock;
+  PERFORM cartlify.log_admin_action(
+    v_actor_id,
+    cartlify.current_actor_role(),
+    'product',
+    p_product_id,
+    'STOCK_WRITE_OFF',
+    jsonb_build_array(
+      jsonb_build_object('field', 'stock', 'old', v_stock, 'new', v_stock - p_quantity),
+      jsonb_build_object('field', 'reason', 'old', NULL, 'new', p_reason),
+      jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_taken),
+      jsonb_build_object('field', 'writeOff', 'old', NULL, 'new', p_write_off_id)
+    )
+    || CASE WHEN v_note IS NULL THEN '[]'::jsonb
+         ELSE jsonb_build_array(jsonb_build_object('field', 'note', 'old', NULL, 'new', v_note))
+       END
+  );
+
+  RETURN v_taken;
 END;
 $$;
+
+-- PRODUCTS the stock is what the batches have left: checked at the end of the transaction, a step
+-- changes the stock and the batches one after the other. Rows copied in without batches (dev
+-- restored from a copy of prod, reseed) stop at their next change; their data are wiped
+CREATE OR REPLACE FUNCTION cartlify.check_product_stock_batches () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_product_id integer;
+  v_stock      integer;
+BEGIN
+  IF TG_TABLE_NAME = 'products' THEN
+    v_product_id := NEW.id;
+  ELSE
+    v_product_id := NEW."productId";
+  END IF;
+
+  SELECT p."stock"
+  INTO v_stock
+  FROM cartlify.products AS p
+  WHERE p.id = v_product_id;
+
+  -- a product removed for good in the same transaction takes its batches with it
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_stock <> (
+    SELECT COALESCE(SUM(b.remaining), 0)
+    FROM cartlify.product_batches AS b
+    WHERE b."productId" = v_product_id
+  ) THEN
+    RAISE EXCEPTION 'PRODUCT_STOCK_BATCHES_MISMATCH'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_products_stock_batches ON cartlify.products;
+
+CREATE CONSTRAINT TRIGGER trg_products_stock_batches
+AFTER INSERT OR UPDATE OF "stock" ON cartlify.products
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION cartlify.check_product_stock_batches ();
+
+DROP TRIGGER IF EXISTS trg_product_batches_stock ON cartlify.product_batches;
+
+CREATE CONSTRAINT TRIGGER trg_product_batches_stock
+AFTER INSERT OR UPDATE OF remaining ON cartlify.product_batches
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION cartlify.check_product_stock_batches ();
 
 -- PRODUCTS reserve product stock for order confirmation
 -- internal step: runs with caller rights, so only system functions pass rls on stock columns;
@@ -587,12 +1022,12 @@ BEGIN
     RAISE EXCEPTION 'RESERVE_QTY_INVALID';
   END IF;
 
-  -- reserve only available stock
+  -- reserve only available stock: the units of batches that are over are not sold
   UPDATE cartlify.products p
   SET "reservedStock" = p."reservedStock" + p_qty
   WHERE p.id = p_product_id
     AND p."deletedAt" IS NULL
-    AND (p.stock - p."reservedStock") >= p_qty;
+    AND (p.stock - p."reservedStock" - cartlify.product_expired_units(p.id)) >= p_qty;
 
   -- nothing updated
   IF NOT FOUND THEN
@@ -655,10 +1090,16 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS consume reserved stock after payment
+-- PRODUCTS consume reserved stock after payment, out of the batches: the order keeps which batch
+-- gave how many (order_batch_allocations), its cost of goods
 -- internal step: runs with caller rights, so only system functions pass rls on stock columns;
 -- the app has no execute right (db/01), pay_order calls it as the owner
-CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
+
+-- the version before the batches (product, quantity); a temporary line, it goes once dev and prod
+-- match the reference
+DROP FUNCTION IF EXISTS cartlify.consume_product_stock (integer, integer);
+
+CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_order_id integer, p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -706,6 +1147,10 @@ BEGIN
     "stock" = v_stock,
     "reservedStock" = v_reserved_stock
   WHERE p.id = p_product_id;
+
+  INSERT INTO cartlify.order_batch_allocations ("orderId", "productId", "batchId", quantity)
+  SELECT p_order_id, p_product_id, t.taken_batch_id, t.taken_quantity
+  FROM cartlify.take_from_batches(p_product_id, p_qty, true) AS t;
 
   RETURN v_stock;
 END;
@@ -1442,8 +1887,6 @@ SET
   pg_temp AS $$
 DECLARE
   v_status text;
-
-  r record;
 BEGIN
   IF NOT cartlify.is_admin() THEN
     RAISE EXCEPTION 'ORDER_CANCEL_FORBIDDEN';
@@ -1483,21 +1926,15 @@ BEGIN
     RAISE EXCEPTION 'ORDER_STATUS_CHANGED';
   END IF;
 
-  -- items of a confirmed order cannot change (order items trigger), so they are read without
-  -- a lock; the stock goes back in a deterministic lock order by productId
-  FOR r IN
-    SELECT oi."productId" AS product_id,
-           SUM(oi.quantity)::integer AS qty
-    FROM cartlify.order_items AS oi
-    WHERE oi."orderId" = p_order_id
-    GROUP BY oi."productId"
-    ORDER BY oi."productId"
-  LOOP
-    PERFORM cartlify.add_product_stock(r.product_id, r.qty);
-  END LOOP;
+  -- items of a confirmed order cannot change (order items trigger); the stock goes back into the
+  -- batches the payment took it from
+  PERFORM cartlify.return_order_stock(p_order_id);
 
+  -- the reports of a period take the payment back from the time of the cancel
   UPDATE cartlify.orders AS o
-  SET status = 'cancelled'
+  SET
+    status = 'cancelled',
+    "cancelledAt" = now() AT TIME ZONE 'UTC'
   WHERE o.id = p_order_id;
 END;
 $$;
@@ -1615,17 +2052,28 @@ BEGIN
   END IF;
 
   IF v_confirmed AND v_status = 'waiting' THEN
-    -- regular path: stock is still reserved for this order
-    FOR r IN
-      SELECT oi."productId" AS product_id,
-             SUM(oi.quantity)::integer AS qty
-      FROM cartlify.order_items AS oi
-      WHERE oi."orderId" = p_order_id
-      GROUP BY oi."productId"
-      ORDER BY oi."productId"
-    LOOP
-      PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
-    END LOOP;
+    -- regular path: stock is still reserved for this order. A batch may be over since the
+    -- reservation: what is over is never sold, the money goes back
+    BEGIN
+      FOR r IN
+        SELECT oi."productId" AS product_id,
+               SUM(oi.quantity)::integer AS qty
+        FROM cartlify.order_items AS oi
+        WHERE oi."orderId" = p_order_id
+        GROUP BY oi."productId"
+        ORDER BY oi."productId"
+      LOOP
+        PERFORM cartlify.consume_product_stock(p_order_id, r.product_id, r.qty);
+      END LOOP;
+    EXCEPTION
+      WHEN raise_exception THEN
+        -- all or nothing: stock changes made in this block are rolled back
+        IF SQLERRM = 'PRODUCT_BATCHES_SHORT' THEN
+          RETURN 'OUT_OF_STOCK';
+        END IF;
+
+        RAISE;
+    END;
   ELSIF NOT v_confirmed AND v_status IN ('pending', 'unconfirmed') THEN
     -- emergency path: reservation is gone, sell only when every item is still available
     -- the order becomes confirmed, so it needs what the confirm trigger requires
@@ -1646,12 +2094,12 @@ BEGIN
         ORDER BY oi."productId"
       LOOP
         PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
-        PERFORM cartlify.consume_product_stock(r.product_id, r.qty);
+        PERFORM cartlify.consume_product_stock(p_order_id, r.product_id, r.qty);
       END LOOP;
     EXCEPTION
       WHEN raise_exception THEN
         -- all or nothing: stock changes made in this block are rolled back
-        IF SQLERRM IN ('INSUFFICIENT_AVAILABLE_STOCK', 'PRODUCT_NOT_FOUND') THEN
+        IF SQLERRM IN ('INSUFFICIENT_AVAILABLE_STOCK', 'PRODUCT_NOT_FOUND', 'PRODUCT_BATCHES_SHORT') THEN
           RETURN 'OUT_OF_STOCK';
         END IF;
 
@@ -1661,14 +2109,16 @@ BEGIN
     RETURN 'ORDER_NOT_PAYABLE';
   END IF;
 
-  -- mark order as paid together with the payment that paid it and who took it
+  -- mark order as paid together with the payment that paid it, who took it and when: the reports
+  -- of a period count a sale from this time; utc without a zone, as prisma writes the dates
   UPDATE cartlify.orders AS o
   SET
     confirmed = true,
     status = 'paid',
     "reservationExpiresAt" = NULL,
     "paymentProvider" = p_payment_provider,
-    "paymentId" = p_payment_id
+    "paymentId" = p_payment_id,
+    "paidAt" = now() AT TIME ZONE 'UTC'
   WHERE o.id = p_order_id;
 
   RETURN 'PAID';

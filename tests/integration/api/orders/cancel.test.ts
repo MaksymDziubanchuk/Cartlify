@@ -112,6 +112,8 @@ describe('POST /api/orders/:orderId/cancel', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ id: orderId, status: 'cancelled', total: 20 });
+      // the reports of a period take the payment back on the day of the cancel
+      expect(Date.parse(res.json().cancelledAt)).toBeGreaterThan(Date.parse(res.json().paidAt));
       // the whole payment goes back
       expect(await refundsOf(paymentId)).toEqual([
         expect.objectContaining({ amount: 2000, currency: 'eur' }),

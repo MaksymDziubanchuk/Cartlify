@@ -69,8 +69,13 @@ const OVERRIDE_ON_SQL = Prisma.raw(
     `AND p."popularityOverrideUntil" > (now() AT TIME ZONE 'UTC'))`,
 );
 
+// the units of batches that are over by the day of the shop (db/05): not sold, so no free units
+const EXPIRED_STOCK_SQL = Prisma.raw(`cartlify.product_expired_units(p.id)`);
+
 // the stock a list shows: free units, never below 0
-const FREE_STOCK_SQL = Prisma.raw(`GREATEST(p."stock" - p."reservedStock", 0)`);
+const FREE_STOCK_SQL = Prisma.raw(
+  `GREATEST(p."stock" - p."reservedStock" - cartlify.product_expired_units(p.id), 0)`,
+);
 
 export type ProductListQuery = {
   view: ProductView;
@@ -210,6 +215,8 @@ function sortExpressionOf(
       return { sql: FREE_STOCK_SQL, kind: 'number' };
     case 'totalStock':
       return { sql: Prisma.raw(`p."stock"`), kind: 'number' };
+    case 'expiredStock':
+      return { sql: EXPIRED_STOCK_SQL, kind: 'number' };
     case 'reservedStock':
     case 'popularity':
     case 'views':
@@ -314,8 +321,8 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
   if (q.popularityOverridden === false) whereParts.push(Prisma.sql`NOT ${OVERRIDE_ON_SQL}`);
 
   // stock filter by free units, the same number the list shows as stock
-  if (q.inStock === true) whereParts.push(Prisma.sql`p."stock" > p."reservedStock"`);
-  if (q.inStock === false) whereParts.push(Prisma.sql`p."stock" <= p."reservedStock"`);
+  if (q.inStock === true) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} > 0`);
+  if (q.inStock === false) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} = 0`);
 
   // category filter
   if (q.categoryIds?.length) {

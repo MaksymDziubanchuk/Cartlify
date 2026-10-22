@@ -1,3 +1,4 @@
+import { freeUnits } from '@db/expiredStock.helper.js';
 import { saleFieldsOf } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
@@ -45,6 +46,8 @@ export type ProductResponseRow = {
   saleEndsAt: Date | null;
   stock: number;
   reservedStock: number;
+  // the units of batches that are over (expiredUnitsOf): not sold, so no free units
+  expiredStock: number;
   category: { id: number; name: string; slug: string };
   views: number;
   popularity: number;
@@ -66,8 +69,9 @@ export function buyerFieldsOf(product: ProductResponseRow): Omit<ProductResponse
     price: decimalToNumber(product.price),
     // the sale next to the price while it lasts, a sale that is over is left out
     ...saleFieldsOf(product),
-    // free units, never below zero, the same in a card, a list and an order
-    stock: Math.max(0, product.stock - product.reservedStock),
+    // free units, never below zero, the same in a card, a list and an order: the stock less what
+    // the waiting orders hold and what is over
+    stock: freeUnits(product.stock, product.reservedStock, product.expiredStock),
     category: {
       id: product.category.id as any,
       name: product.category.name,
@@ -79,7 +83,8 @@ export function buyerFieldsOf(product: ProductResponseRow): Omit<ProductResponse
   };
 }
 
-// what only an admin sees of a product: the counters, the whole stock and the reserve, and the
+// what only an admin sees of a product: the counters, the whole stock, the reserve and the units
+// that are over, and the
 // fields of the row as they are, null when empty: the sale and the override of the popularity, a
 // sale or an override past its end too, and the delete date
 export function adminFieldsOf(
@@ -91,6 +96,7 @@ export function adminFieldsOf(
   | 'updatedAt'
   | 'totalStock'
   | 'reservedStock'
+  | 'expiredStock'
   | 'popularityOverride'
   | 'popularityOverrideUntil'
   | 'salePrice'
@@ -103,6 +109,7 @@ export function adminFieldsOf(
     updatedAt: product.updatedAt.toISOString(),
     totalStock: product.stock,
     reservedStock: product.reservedStock,
+    expiredStock: product.expiredStock,
     popularityOverride: product.popularityOverride,
     popularityOverrideUntil: product.popularityOverrideUntil
       ? product.popularityOverrideUntil.toISOString()

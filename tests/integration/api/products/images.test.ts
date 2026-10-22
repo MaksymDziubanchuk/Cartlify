@@ -25,6 +25,7 @@ import {
   createProduct,
   createUser,
   removeProducts,
+  stockOf,
   uniqueTag,
   type TestProduct,
   type TestUser,
@@ -58,7 +59,6 @@ const productFields = (overrides: Record<string, string | undefined> = {}) =>
   fields({
     name: `Image test product ${uniqueTag()}`,
     price: '10',
-    stock: '5',
     categoryId: String(categoryId),
     ...overrides,
   });
@@ -170,7 +170,8 @@ describe('product images (Cloudinary)', () => {
         name: 'Form headphones',
         description: 'Over-ear.',
         price: 49.99,
-        stock: 5,
+        // a new product has no stock, it comes with a delivery
+        stock: 0,
         category: expect.objectContaining({ id: categoryId }),
         images: [expect.any(Object)],
       });
@@ -183,7 +184,7 @@ describe('product images (Cloudinary)', () => {
       expect(row).toEqual({
         name: 'Form headphones',
         description: 'Over-ear.',
-        stock: 5,
+        stock: 0,
         categoryId,
       });
     });
@@ -243,7 +244,8 @@ describe('product images (Cloudinary)', () => {
     it.each([
       ['no name', { name: undefined }, 'BODY_NOT_FULL'],
       ['a price that is not a number', { price: 'abc' }, 'PRODUCT_PRICE_INVALID'],
-      ['a negative stock', { stock: '-1' }, 'PRODUCT_STOCK_INVALID'],
+      // the stock comes only with a delivery
+      ['a stock', { stock: '5' }, 'PRODUCT_STOCK_NOT_ALLOWED'],
     ])('uploads nothing for a product with %s', async (_case, overrides, errorCode) => {
       const mark = uploadMark();
 
@@ -322,18 +324,32 @@ describe('product images (Cloudinary)', () => {
       const productId = await productWithImages([pngImage(30, 20)]);
 
       const res = await patchForm(productId, [
-        ...fields({ name: 'Renamed in a form', description: 'New text.', stock: '3' }),
+        ...fields({ name: 'Renamed in a form', description: 'New text.' }),
         image(pngImage(44, 22)),
       ]);
 
       expect(res.statusCode).toBe(200);
-      // the stock of a form is a delta too: 5 of the factory and 3 more
       expect(bodyOf(res)).toMatchObject({
         name: 'Renamed in a form',
         description: 'New text.',
-        stock: 8,
+        stock: 5,
       });
       expect(await storedImage(imagePath(productId, 1))).toMatchObject({ width: 44, height: 22 });
+    });
+
+    // the stock changes only with a delivery or a write-off
+    it('refuses a stock in the form and keeps the images and the stock', async () => {
+      const productId = await productWithImages([pngImage(30, 20)]);
+      const before = await filesAt(productId, 1);
+      const mark = uploadMark();
+
+      const res = await patchForm(productId, [...fields({ stock: '3' }), image(pngImage(44, 22))]);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_STOCK_NOT_ALLOWED' });
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(await filesAt(productId, 1)).toEqual(before);
+      expect(await stockOf(productId)).toMatchObject({ stock: 5 });
     });
 
     it('replaces the images of the product', async () => {

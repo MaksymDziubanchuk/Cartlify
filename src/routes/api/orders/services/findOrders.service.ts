@@ -5,6 +5,7 @@ import { InternalError, isAppError } from '@utils/errors.js';
 import {
   freshenUnconfirmedOrders,
   mapOrderRowToResponse,
+  expiredOfOrders,
   orderResponseSelect,
   normalizeFindOrdersInput,
   buildOrdersWhere,
@@ -16,10 +17,28 @@ import {
 import type { FindOrdersDto, GetOrdersResponseDto } from 'types/dto/orders.dto.js';
 
 export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseDto> {
-  const { actorId, actorRole, limit, cursor, status, confirmed, sortBy, sortDir } =
-    normalizeFindOrdersInput(dto);
+  const {
+    actorId,
+    actorRole,
+    limit,
+    cursor,
+    status,
+    confirmed,
+    paidFrom,
+    paidTo,
+    sortBy,
+    sortDir,
+  } = normalizeFindOrdersInput(dto);
 
-  const baseWhere = buildOrdersWhere({ actorId, actorRole, status, confirmed, sortBy });
+  const baseWhere = buildOrdersWhere({
+    actorId,
+    actorRole,
+    status,
+    confirmed,
+    paidFrom,
+    paidTo,
+    sortBy,
+  });
   const cursorWhere = buildOrdersCursorWhere({ sortBy, sortDir, cursor });
 
   const where = cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
@@ -46,13 +65,15 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
       const hasNext = rows.length > limit;
       const pageRows = hasNext ? rows.slice(0, limit) : rows;
 
+      const expired = await expiredOfOrders(tx, pageRows);
+
       const nextCursor =
         hasNext && pageRows.length
           ? makeNextOrdersCursor(sortBy, pageRows[pageRows.length - 1])
           : null;
 
       return {
-        items: pageRows.map(mapOrderRowToResponse),
+        items: pageRows.map((row) => mapOrderRowToResponse(row, expired)),
         limit,
         nextCursor,
         total,

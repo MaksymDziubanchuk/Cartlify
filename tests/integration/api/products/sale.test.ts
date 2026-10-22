@@ -133,10 +133,11 @@ const priceLogOf = async (productId: number) => {
   }));
 };
 
+// the lines of the product besides the one of the batch it came with
 const productAuditOf = (productId: number) =>
   asAdmin((tx) =>
     tx.adminAuditLog.findMany({
-      where: { entityType: 'product', entityId: productId },
+      where: { entityType: 'product', entityId: productId, action: { not: 'STOCK_DELIVERY' } },
       orderBy: { id: 'asc' },
       select: { action: true, actorId: true, meta: true },
     }),

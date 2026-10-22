@@ -32,14 +32,14 @@ export async function createProduct({
   assertAdminActor(actorId, actorRole);
 
   // normalize and validate required scalar fields
-  const { nameNorm, descriptionNorm, priceRaw, categoryIdRaw, stockNorm } =
-    normalizeCreateProductInput({
-      name,
-      description,
-      price,
-      categoryId,
-      stock,
-    });
+  // a stock sent is refused: a new product has none, it comes with a delivery
+  const { nameNorm, descriptionNorm, priceRaw, categoryIdRaw } = normalizeCreateProductInput({
+    name,
+    description,
+    price,
+    categoryId,
+    stock,
+  });
 
   // reject invalid payload when controller sent no uploads
   if (!Array.isArray(images) || images.length === 0) {
@@ -51,7 +51,6 @@ export async function createProduct({
     { field: 'name', old: null, new: nameNorm },
     { field: 'description', old: null, new: descriptionNorm ?? null },
     { field: 'price', old: null, new: priceRaw },
-    { field: 'stock', old: null, new: stockNorm },
     { field: 'categoryId', old: null, new: categoryIdRaw },
   ];
 
@@ -69,7 +68,6 @@ export async function createProduct({
             name: nameNorm,
             description: descriptionNorm ? descriptionNorm : null,
             price: new Prisma.Decimal(priceRaw),
-            stock: stockNorm,
             categoryId: categoryIdRaw,
           },
           select: productResponseSelect,
@@ -98,8 +96,9 @@ export async function createProduct({
     const imageRows = await readProductImageUrls(created.id);
 
     // map db row into api dto
+    // a new product has no batch yet, so nothing of it is over
     return mapProductRowToResponse({
-      product: created,
+      product: { ...created, expiredStock: 0 },
       images: imageRows,
       view: 'admin',
     });

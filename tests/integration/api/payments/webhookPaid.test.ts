@@ -82,18 +82,22 @@ describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.complete
   it('marks the order paid with the payment of its page and sells the reserved stock', async () => {
     const { product, orderId, sessionId } = await orderWithPage();
     const { paymentId, event } = await payPage(sessionId);
+    const delivered = Date.now();
 
     const res = await deliver(app, event);
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ received: true });
-    expect(await orderStateOf(orderId)).toMatchObject({
+    const state = await orderStateOf(orderId);
+    expect(state).toMatchObject({
       status: 'paid',
       confirmed: true,
       paymentProvider: 'stripe',
       paymentId,
       reservationExpiresAt: null,
     });
+    // the time the payment is recorded; the clock of the database may run a little apart
+    expect(state!.paidAt!.getTime()).toBeGreaterThan(delivered - 5_000);
     expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
   });
 

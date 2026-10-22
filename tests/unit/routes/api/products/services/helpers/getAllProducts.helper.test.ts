@@ -31,6 +31,7 @@ const row = {
   saleEndsAt: null as Date | null,
   stock: 10,
   reservedStock: 3,
+  expiredStock: 0,
   category: { id: 2, name: 'Lamps', slug: 'lamps' },
   views: 40,
   popularity: 7,
@@ -396,6 +397,10 @@ describe('normalizeFindAllProductsInput', () => {
 
 // the price a product sells at now, the expression the raw query sorts and filters by
 const CURRENT_PRICE = 'cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt")';
+// the free units a list shows and filters by: stock less the reserved units and the units of
+// batches that are over, never below 0
+const FREE_STOCK =
+  'GREATEST(p."stock" - p."reservedStock" - cartlify.product_expired_units(p.id), 0)';
 // a sale that is on: the sale price while the end is ahead, in utc as prisma keeps dates
 const SALE_ON = `(p."salePrice" IS NOT NULL AND p."saleEndsAt" > (now() AT TIME ZONE 'UTC'))`;
 // an override that is on: the database takes it while its end is ahead, an override without an
@@ -485,11 +490,11 @@ describe('buildProductIdsQuery', () => {
     expect(text).not.toContain(CURRENT_PRICE);
   });
 
-  // the list shows stock minus reserved units, the filter has to use the same number,
-  // or "in stock" returns products the list shows with stock 0
+  // the list shows stock minus reserved units and the units of batches that are over, the
+  // filter has to use the same number, or "in stock" returns products the list shows with stock 0
   it.each([
-    [true, 'p."stock" > p."reservedStock"'],
-    [false, 'p."stock" <= p."reservedStock"'],
+    [true, `${FREE_STOCK} > 0`],
+    [false, `${FREE_STOCK} = 0`],
   ])('compares free units, not the raw stock, when inStock is %s', (inStock, condition) => {
     expect(sqlText(query({ inStock }))).toContain(condition);
   });
@@ -544,7 +549,8 @@ describe('buildProductIdsQuery', () => {
       ['reservedStock', 'p."reservedStock"'],
       ['totalStock', 'p."stock"'],
       // the stock a list shows: free units, never below 0
-      ['stock', 'GREATEST(p."stock" - p."reservedStock", 0)'],
+      ['stock', FREE_STOCK],
+      ['expiredStock', 'cartlify.product_expired_units(p.id)'],
       // the usual price, the one the field shows; the sale price is a sort of its own
       ['price', 'p."price"'],
       ['salePrice', 'p."salePrice"'],

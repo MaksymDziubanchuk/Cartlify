@@ -1,3 +1,4 @@
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
@@ -17,6 +18,7 @@ import {
   buildConfirmOrderData,
   findUnavailableItems,
   mapOrderRowToResponse,
+  expiredOfOrders,
   orderResponseSelect,
   scheduleOrderReservationExpiry,
 } from './helpers/index.js';
@@ -80,7 +82,13 @@ export async function confirmOrder({
           orderBy: { id: 'asc' },
         });
 
-        const unavailable = findUnavailableItems(items);
+        const unavailable = findUnavailableItems(
+          items,
+          await expiredUnitsOf(
+            db,
+            items.map((item) => item.productId),
+          ),
+        );
         if (unavailable.length) {
           throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', { items: unavailable });
         }
@@ -116,7 +124,7 @@ export async function confirmOrder({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
 
-        const response = mapOrderRowToResponse(order);
+        const response = mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
 
         // schedule expiry before commit so a redis failure rolls the confirmation back
         await scheduleOrderReservationExpiry(response.id, order.reservationExpiresAt);

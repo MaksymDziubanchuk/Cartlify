@@ -1,3 +1,4 @@
+import { expiredUnitsNow } from '@db/expiredStock.helper.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -76,10 +77,11 @@ export async function updateProductCategory({
 
     // fetch all product images and map urls
     const images = await readProductImageUrls(updated.id);
+    const expired = await expiredUnitsNow([updated.id]);
 
     // map db row into api dto
     return mapProductRowToResponse({
-      product: updated,
+      product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
       images,
       view: 'admin',
     });

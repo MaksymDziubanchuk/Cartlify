@@ -13,3 +13,5 @@ export * from './reviews.helpers.js';
 export * from './products.helpers.js';
 
 export * from './getAllProducts.helper.js';
+
+export * from './stock.helper.js';

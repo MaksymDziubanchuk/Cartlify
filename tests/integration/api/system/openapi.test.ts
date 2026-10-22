@@ -202,7 +202,6 @@ describe('the product routes', () => {
       'images',
       'name',
       'price',
-      'stock',
     ]);
     expect(form.images).toMatchObject({
       type: 'array',

@@ -236,6 +236,41 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- ORDERS: the time of the payment and of the cancel
+----------------------------------------
+-- the time of the payment comes with the payment (pay_order sets them together); the time of the
+-- cancel comes with the cancel, and only a paid order is cancelled (cancel_paid_order), never
+-- before its payment. An order paid or cancelled before the columns came has no such time and
+-- fails the check: those rows are wiped before the script runs
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_paid_at_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_paid_at_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_paid_at_chk
+    CHECK (("paidAt" IS NULL) = ("paymentId" IS NULL));
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_cancelled_at_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_cancelled_at_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_cancelled_at_chk
+    CHECK (
+      ("cancelledAt" IS NULL) = (status <> 'cancelled')
+      AND ("cancelledAt" IS NULL OR ("paidAt" IS NOT NULL AND "cancelledAt" >= "paidAt"))
+    );
+END $$;
+
+----------------------------------------
 -- ORDERS: recipient fields keep the form the server writes
 ----------------------------------------
 -- names are trimmed, 1-100 characters, without digits; the server also needs a letter in them,
@@ -412,6 +447,64 @@ BEGIN
   ALTER TABLE cartlify.products
     ADD CONSTRAINT products_reserved_stock_within_stock
     CHECK ("reservedStock" >= 0 AND "reservedStock" <= "stock");
+END $$;
+
+----------------------------------------
+-- PRODUCT BATCHES: what came in, what is left, its cost and number
+----------------------------------------
+-- a batch has units; what it has left goes from all of them down to none; a cost of a unit in
+-- cents, 0 for a gift; the number of the supplier is trimmed, 1-100 characters
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_batches_quantity_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_batches
+      DROP CONSTRAINT product_batches_quantity_chk;
+  END IF;
+
+  ALTER TABLE cartlify.product_batches
+    ADD CONSTRAINT product_batches_quantity_chk
+    CHECK (quantity > 0 AND remaining >= 0 AND remaining <= quantity);
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_batches_unit_cost_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_batches
+      DROP CONSTRAINT product_batches_unit_cost_chk;
+  END IF;
+
+  ALTER TABLE cartlify.product_batches
+    ADD CONSTRAINT product_batches_unit_cost_chk
+    CHECK ("unitCost" >= 0);
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_batches_number_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_batches
+      DROP CONSTRAINT product_batches_number_chk;
+  END IF;
+
+  ALTER TABLE cartlify.product_batches
+    ADD CONSTRAINT product_batches_number_chk
+    CHECK (
+      "supplierBatchNumber" IS NULL
+      OR (
+        "supplierBatchNumber" = btrim("supplierBatchNumber")
+        AND char_length("supplierBatchNumber") BETWEEN 1 AND 100
+      )
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_batch_allocations_quantity_chk'
+  ) THEN
+    ALTER TABLE cartlify.order_batch_allocations
+      DROP CONSTRAINT order_batch_allocations_quantity_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_batch_allocations
+    ADD CONSTRAINT order_batch_allocations_quantity_chk
+    CHECK (quantity > 0);
 END $$;
 
 ----------------------------------------

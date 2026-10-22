@@ -103,6 +103,24 @@ export default async function productsRouter(app: FastifyInstance) {
     productController.updateProductsBulkPrice,
   );
 
+  app.post(
+    '/stock/deliveries',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.postStockDeliveryRouterSchema,
+    },
+    productController.postStockDelivery,
+  );
+
+  app.post(
+    '/stock/write-offs',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.postStockWriteOffRouterSchema,
+    },
+    productController.postStockWriteOff,
+  );
+
   app.delete(
     '/:productId',
     {

@@ -243,9 +243,13 @@ BEGIN
     'cartlify.expire_order_reservation(integer)',
     'cartlify.anonymize_login_logs(integer)',
     'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
+    'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
+    'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
     -- functions that run with the app rights, under its rls
     'cartlify.refresh_order_prices(integer)',
     'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
+    'cartlify.shop_today()',
+    'cartlify.product_expired_units(integer)',
     'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)'
   ]
   LOOP

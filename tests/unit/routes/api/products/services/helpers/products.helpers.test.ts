@@ -19,7 +19,7 @@ const codeOf = (fn: () => unknown) => {
   return (err as BadRequestError).errorCode;
 };
 
-const validProduct = { name: 'Desk lamp', price: 25.5, stock: 10, categoryId: 3 };
+const validProduct = { name: 'Desk lamp', price: 25.5, categoryId: 3 };
 
 describe('normalizeFindProductByIdInput', () => {
   it('accepts a positive integer or its string form', () => {
@@ -44,7 +44,6 @@ describe('normalizeCreateProductInput', () => {
       nameNorm: 'Desk lamp',
       descriptionNorm: 'Warm light',
       priceRaw: 25.5,
-      stockNorm: 10,
       categoryIdRaw: 3,
     });
   });
@@ -59,18 +58,23 @@ describe('normalizeCreateProductInput', () => {
     const out = normalizeCreateProductInput({
       name: { value: 'Mug' },
       price: { value: '4.99' },
-      stock: { value: '3' },
       categoryId: { value: '2' },
     });
 
-    expect(out).toMatchObject({ nameNorm: 'Mug', priceRaw: 4.99, stockNorm: 3, categoryIdRaw: 2 });
+    expect(out).toMatchObject({ nameNorm: 'Mug', priceRaw: 4.99, categoryIdRaw: 2 });
   });
 
-  it('allows a free product and an empty stock', () => {
-    expect(normalizeCreateProductInput({ ...validProduct, price: 0, stock: 0 })).toMatchObject({
+  it('allows a free product', () => {
+    expect(normalizeCreateProductInput({ ...validProduct, price: 0 })).toMatchObject({
       priceRaw: 0,
-      stockNorm: 0,
     });
+  });
+
+  // a new product has no stock: it comes only with a delivery
+  it.each([5, 0, ' '])('refuses a stock of %p', (stock) => {
+    expect(codeOf(() => normalizeCreateProductInput({ ...validProduct, stock }))).toBe(
+      'PRODUCT_STOCK_NOT_ALLOWED',
+    );
   });
 
   it.each([
@@ -80,9 +84,6 @@ describe('normalizeCreateProductInput', () => {
     ['the price is a word', { price: 'free' }, 'PRODUCT_PRICE_INVALID'],
     // a blank multipart field must not turn into a price of 0
     ['the price is blank', { price: '  ' }, 'PRODUCT_PRICE_INVALID'],
-    ['the stock is negative', { stock: -2 }, 'PRODUCT_STOCK_INVALID'],
-    ['the stock is a fraction', { stock: 1.5 }, 'PRODUCT_STOCK_INVALID'],
-    ['the stock is blank', { stock: ' ' }, 'PRODUCT_STOCK_INVALID'],
     ['the category is zero', { categoryId: 0 }, 'CATEGORY_ID_INVALID'],
     ['the category is missing', { categoryId: undefined }, 'CATEGORY_ID_INVALID'],
   ])('throws when %s', (_case, patch, code) => {
@@ -96,16 +97,15 @@ describe('normalizeUpdateProductInput', () => {
       nameNorm: undefined,
       descriptionNorm: undefined,
       priceRaw: undefined,
-      stockRaw: undefined,
       categoryIdRaw: undefined,
       popularityOverrideRaw: undefined,
       popularityOverrideUntilDate: undefined,
     });
   });
 
-  it('takes the stock as a delta that can be negative', () => {
-    expect(normalizeUpdateProductInput({ stock: -3 }).stockRaw).toBe(-3);
-    expect(normalizeUpdateProductInput({ stock: 5 }).stockRaw).toBe(5);
+  // the stock changes only with a delivery or a write-off
+  it.each([-3, 5, 0])('refuses a stock of %p', (stock) => {
+    expect(codeOf(() => normalizeUpdateProductInput({ stock }))).toBe('PRODUCT_STOCK_NOT_ALLOWED');
   });
 
   it('clears the popularity override with null', () => {
@@ -142,7 +142,6 @@ describe('normalizeUpdateProductInput', () => {
   it.each([
     ['the name is blank', { name: ' ' }, 'PRODUCT_NAME_INVALID'],
     ['the price is negative', { price: -0.01 }, 'PRODUCT_PRICE_INVALID'],
-    ['the stock delta is a fraction', { stock: 0.5 }, 'PRODUCT_STOCK_INVALID'],
     ['the category is negative', { categoryId: -4 }, 'CATEGORY_ID_INVALID'],
     ['the override is negative', { popularityOverride: -1 }, 'POPULARITY_OVERRIDE_INVALID'],
     ['the override is a fraction', { popularityOverride: 1.5 }, 'POPULARITY_OVERRIDE_INVALID'],

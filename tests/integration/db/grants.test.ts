@@ -41,6 +41,10 @@ const APP_FUNCTIONS = [
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)',
   'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
+  'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
+  'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
+  'cartlify.shop_today()',
+  'cartlify.product_expired_units(integer)',
 ];
 
 // the context readers rls policies call and the search helpers, all readonly may run
@@ -230,8 +234,9 @@ describe(`role ${APP}`, () => {
   });
 
   it.each([
-    ['add_product_stock', 'select cartlify.add_product_stock(1, 1)'],
-    ['consume_product_stock', 'select cartlify.consume_product_stock(1, 1)'],
+    ['take_from_batches', 'select * from cartlify.take_from_batches(1, 1, true)'],
+    ['return_order_stock', 'select cartlify.return_order_stock(1)'],
+    ['consume_product_stock', 'select cartlify.consume_product_stock(1, 1, 1)'],
     ['reserve_product_stock', 'select cartlify.reserve_product_stock(1, 1)'],
     ['release_product_stock', 'select cartlify.release_product_stock(1, 1)'],
     ['recalc_order_total', 'select cartlify.recalc_order_total(1)'],

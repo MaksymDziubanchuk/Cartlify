@@ -144,6 +144,21 @@ export async function orderStateOf(db: DbSession, adminId: number, orderId: numb
   return row;
 }
 
+export type OrderDates = { paidAt: string | null; cancelledAt: string | null; now: string };
+
+// when the order was paid and cancelled, as an admin reads it, next to the time of the
+// transaction: utc without a zone and to the millisecond, the way the columns hold it
+export async function orderDatesOf(db: DbSession, adminId: number, orderId: number) {
+  await db.as({ role: 'ADMIN', userId: adminId });
+  const [row] = await db.rows<OrderDates>(
+    `select "paidAt"::text as "paidAt", "cancelledAt"::text as "cancelledAt",
+            (now() at time zone 'UTC')::timestamp(3)::text as now
+     from cartlify.orders where id = $1`,
+    orderId,
+  );
+  return row!;
+}
+
 export async function stockOf(db: DbSession, adminId: number, productId: number) {
   await db.as({ role: 'ADMIN', userId: adminId });
   const [row] = await db.rows<{ stock: number; reserved: number }>(

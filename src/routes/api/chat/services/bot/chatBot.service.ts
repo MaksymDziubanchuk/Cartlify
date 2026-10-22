@@ -1,3 +1,4 @@
+import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
@@ -276,11 +277,18 @@ const buildProductSearchWhere = (
     };
 };
 
-// converts product rows into compact prompt context items
+// converts product rows into compact prompt context items; a product whose free units are all
+// gone (held by waiting orders or in batches that are over) is no product to recommend
 const mapProductContext = (
     products: Awaited<ReturnType<typeof findProductsForBotContext>>,
+    expired: Map<number, number>,
 ): ChatBotProductContextItemDto[] => {
-    return products.map((product) => ({
+    return products
+        .filter(
+            (product) =>
+                freeUnits(product.stock, product.reservedStock, expired.get(product.id) ?? 0) > 0,
+        )
+        .map((product) => ({
         id: product.id,
         name: product.name,
         price: Number(product.price),
@@ -292,7 +300,7 @@ const mapProductContext = (
               }
             : null,
         // free units, never below zero, the stock the catalog shows
-        stock: Math.max(0, product.stock - product.reservedStock),
+        stock: freeUnits(product.stock, product.reservedStock, expired.get(product.id) ?? 0),
         categoryName: product.category.name,
         description: product.description,
         popularity: product.popularity,
@@ -419,7 +427,13 @@ const loadChatBotContext = async ({
         return {
             thread,
             history: mapHistoryMessages(historyMessages.reverse()),
-            productContext: mapProductContext(productRows),
+            productContext: mapProductContext(
+                productRows,
+                await expiredUnitsOf(
+                    db,
+                    productRows.map((product) => product.id),
+                ),
+            ),
         };
     });
 };

@@ -31,6 +31,8 @@ declare global {
 
       RATE_LIMIT_MAX?: string;
 
+      SHOP_TIME_ZONE?: string;
+
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -97,6 +99,27 @@ function positiveInt(name: string, fallback: number): number {
   return value;
 }
 
+// fail fast on a time zone that is not a name of the iana list, as the database knows them too
+// (Europe/Madrid, UTC); an offset like +03:00 or UTC+3 reads the other way round in postgres
+function timeZone(name: string, fallback: string): string {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  let known = /^(UTC|[A-Z][A-Za-z]+(\/[A-Za-z0-9_+-]+)+)$/.test(raw);
+  if (known) {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: raw });
+    } catch {
+      known = false;
+    }
+  }
+  if (!known) {
+    throw new Error(`Invalid env variable: ${name} must be a time zone like Europe/Madrid`);
+  }
+
+  return raw;
+}
+
 export default {
   // runtime mode and server bind
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -136,6 +159,9 @@ export default {
 
   // the requests a minute one address may make (@fastify/rate-limit)
   RATE_LIMIT_MAX: positiveInt('RATE_LIMIT_MAX', 100),
+
+  // the days, weeks and months of the reports are the ones of the shop
+  SHOP_TIME_ZONE: timeZone('SHOP_TIME_ZONE', 'Europe/Madrid'),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',

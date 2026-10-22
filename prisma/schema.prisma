@@ -54,6 +54,14 @@ enum PriceChangeMode {
   fixed
 }
 
+// where a batch of a product came from: a delivery of a supplier, a surplus an inventory found,
+// the goods a buyer brought back
+enum StockSource {
+  supplier
+  surplus
+  customer_return
+}
+
 enum AdminAuditEntityType {
   user
   product
@@ -71,6 +79,9 @@ enum AdminAuditAction {
   PRODUCT_PRICE_BULK_UPDATE
   // a sale set, changed or taken off by an admin, or ended by a price down to it (db/05)
   PRODUCT_SALE
+  // a batch taken in and the units written off, a line for each product (db/05)
+  STOCK_DELIVERY
+  STOCK_WRITE_OFF
   ORDER_STATUS_CHANGE
   CATEGORY_UPDATE
   REVIEW_DELETE
@@ -219,6 +230,8 @@ model Product {
   orderItems      OrderItem[]
   priceChangeLogs ProductPriceChangeLog[]
   images          ProductImage[]
+  batches         ProductBatch[]
+  allocations     OrderBatchAllocation[]
 
   @@index([categoryId])
   @@index([price, id])
@@ -334,6 +347,11 @@ model Order {
   paymentProvider PaymentProvider?
   paymentId       String?          @unique
 
+  // when the payment was recorded (pay_order, with the payment) and when an admin cancelled the
+  // paid order (cancel_paid_order); utc, only those functions set them (db/03, db/06)
+  paidAt      DateTime?
+  cancelledAt DateTime?
+
   shippingAddress    String?
   recipientFirstName String?
   recipientLastName  String?
@@ -343,7 +361,8 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  items OrderItem[]
+  items       OrderItem[]
+  allocations OrderBatchAllocation[]
 
   @@index([userId, createdAt])
   @@index([userId, updatedAt])
@@ -351,7 +370,69 @@ model Order {
   @@index([status, createdAt])
   @@index([status, updatedAt])
   @@index([confirmed, reservationExpiresAt])
+  @@index([paidAt, id])
+  @@index([cancelledAt])
   @@map("orders")
+}
+
+// a batch of a product: what came in at once at one cost of a unit, in the currency of the shop.
+// The stock of the product is what its batches have left (db/05); only the functions of the
+// database take a batch in and take units out of it. Who took it in, the supplier, the invoice
+// and the note are in the admin log (STOCK_DELIVERY)
+model ProductBatch {
+  id Int @id @default(autoincrement())
+
+  // a product removed for good takes its batches with it; a batch a paid order took units from
+  // stays, so does its product
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // the delivery it came with: one delivery takes in batches of several products
+  deliveryId String @db.Uuid
+
+  source              StockSource
+  // the number the supplier gave the batch, when there is one
+  supplierBatchNumber String?
+
+  unitCost  Decimal   @db.Decimal(10, 2)
+  quantity  Int
+  remaining Int
+  // the last day the goods are good for; a sale takes the batch that ends first, a batch without
+  // an end after them, the oldest first
+  expiresAt DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+
+  allocations OrderBatchAllocation[]
+
+  @@index([productId, expiresAt, createdAt, id])
+  @@index([createdAt, id])
+  @@index([deliveryId])
+  @@map("product_batches")
+}
+
+// the units a paid order took from each batch: the cost of the goods it sold. A cancel of the
+// order puts them back into the same batches and keeps the line for the reports
+model OrderBatchAllocation {
+  id Int @id @default(autoincrement())
+
+  orderId Int
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  batchId Int
+  batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  quantity Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([orderId, batchId])
+  @@index([batchId])
+  @@index([productId])
+  @@map("order_batch_allocations")
 }
 
 model OrderItem {
@@ -470,5 +551,7 @@ model AdminAuditLog {
 
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
+  // the reports read the lines of an action in a period: the write-offs of a month
+  @@index([action, createdAt])
   @@map("admin_audit_log")
 }

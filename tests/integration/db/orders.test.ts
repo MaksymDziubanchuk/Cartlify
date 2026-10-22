@@ -8,6 +8,7 @@ import {
   addItem,
   cartOf,
   changedRows,
+  orderDatesOf,
   orderStateOf,
   paidOrderOf,
   stockOf,
@@ -153,6 +154,8 @@ describe('orders: a new order', () => {
       () => [owner.id],
       `$1, 0, 'unconfirmed'`,
     ],
+    ['with a time of payment', '"userId", total, "paidAt"', () => [owner.id], '$1, 0, now()'],
+    ['with a time of cancel', '"userId", total, "cancelledAt"', () => [owner.id], '$1, 0, now()'],
   ])('refuses a user an order %s', async (_case, columns, values, placeholders) => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as({ role: 'USER', userId: owner.id });
@@ -212,6 +215,8 @@ describe('orders: a user changes an own order', () => {
     ['change its status', `status = 'unconfirmed'`, () => []],
     ['set its total', 'total = 0.01', () => []],
     ['change when it was made', `"createdAt" = now() - interval '1 year'`, () => []],
+    ['give it a time of payment', `"paidAt" = now()`, () => []],
+    ['give it a time of cancel', `"cancelledAt" = now()`, () => []],
   ])('does not let a user %s with a plain update', async (_case, set, values) => {
     const outcome = await inRolledBackTx(async (db) => {
       const orderId = await cartOf(db, owner.id, [[product.id, 2]]);
@@ -289,6 +294,20 @@ describe('orders: an admin', () => {
     expect(state).toMatchObject({ status: 'delivered', paymentProvider: 'stripe' });
   });
 
+  it('keeps the time of the payment when the order is shipped and delivered', async () => {
+    const { paid, delivered } = await inRolledBackTx(async (db) => {
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const paid = await orderDatesOf(db, admin.id, orderId);
+      await db.as({ role: 'ADMIN', userId: admin.id });
+      await updateOrder(db, `status = 'shipped'`, orderId);
+      await updateOrder(db, `status = 'delivered'`, orderId);
+      return { paid, delivered: await orderDatesOf(db, admin.id, orderId) };
+    });
+
+    expect(paid.paidAt).not.toBeNull();
+    expect(delivered).toEqual(paid);
+  });
+
   it.each([
     [
       'cancel it with a plain update, past the refund and the stock',
@@ -300,6 +319,10 @@ describe('orders: an admin', () => {
     ['change its address', `"shippingAddress" = 'Elsewhere 2'`, () => []],
     ['give it to another user', '"userId" = $2', () => [other.id]],
     ['change its payment', `"paymentId" = 'pi_other'`, () => []],
+    ['change the time of its payment', `"paidAt" = now() - interval '1 day'`, () => []],
+    ['take the time of its payment away', `"paidAt" = null`, () => []],
+    ['give it a time of cancel', `"cancelledAt" = now()`, () => []],
+    ['ship it with a time of cancel', `status = 'shipped', "cancelledAt" = now()`, () => []],
   ])('does not let an admin %s', async (_case, set, values) => {
     const outcome = await inRolledBackTx(async (db) => {
       const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
@@ -595,24 +618,21 @@ describe('the stock of a product', () => {
     },
   );
 
-  it('lets an admin change the stock of a product, never below what is reserved', async () => {
-    const { lower, belowReserve, stock } = await inRolledBackTx(async (db) => {
+  // the stock is what the batches have left: a delivery and a write-off change it (stock.test.ts),
+  // a write-off never takes what the waiting orders hold
+  it('does not let an admin change the stock of a product with a plain update', async () => {
+    const { lower, stock } = await inRolledBackTx(async (db) => {
       await waitingOrderOf(db, owner.id, [[product.id, 3]]);
       await db.as({ role: 'ADMIN', userId: admin.id });
       const lower = await db.attempt(
         'update cartlify.products set stock = 5 where id = $1 returning id',
         product.id,
       );
-      const belowReserve = await db.attempt(
-        'update cartlify.products set stock = 2 where id = $1 returning id',
-        product.id,
-      );
-      return { lower, belowReserve, stock: await stockOf(db, admin.id, product.id) };
+      return { lower, stock: await stockOf(db, admin.id, product.id) };
     });
 
-    expect(changedRows(lower)).toBe(true);
-    expect(belowReserve).toMatchObject({ ok: false, code: '23514' });
-    expect(stock).toEqual({ stock: 5, reserved: 3 });
+    expect(changedRows(lower)).toBe(false);
+    expect(stock).toEqual({ stock: 10, reserved: 3 });
   });
 
   // the reserve is what the waiting orders hold; only their steps change it, or a later release

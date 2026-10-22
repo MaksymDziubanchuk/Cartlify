@@ -11,7 +11,7 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
-import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
+import { mapOrderRowToResponse, expiredOfOrders, orderResponseSelect } from './helpers/index.js';
 import {
   sendOrderCancelledEmail,
   type OrderCancelLogger,
@@ -89,7 +89,7 @@ export async function cancelPaidOrder(
         const deleted = user.deletedAt !== null;
 
         return {
-          ...mapOrderRowToResponse(row),
+          ...mapOrderRowToResponse(row, await expiredOfOrders(db, [row])),
           user: { id: user.id as any, deleted, ...(deleted ? {} : { email: user.email }) },
         };
       },

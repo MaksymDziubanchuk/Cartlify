@@ -4,7 +4,7 @@ import { Prisma, PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { parseDatabaseUrl, prisma } from '@db/client.js';
-import { setUserContext } from '@db/dbContext.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import { inRolledBackTx, type DbSession } from '../../helpers/db.js';
 import {
@@ -108,6 +108,26 @@ beforeAll(async () => {
       select: { id: true },
     });
     return order.id;
+  });
+
+  // a paid order: what it took from the batch of the product is in order_batch_allocations
+  await prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId: owner.id, role: 'USER' });
+    const paid = await tx.order.create({
+      data: {
+        userId: owner.id,
+        total: 0,
+        shippingAddress: 'Test street 1, Kyiv',
+        recipientFirstName: 'Anna',
+        recipientLastName: 'Koval',
+        recipientPhone: '+380501234567',
+        items: { create: { productId: product.id, quantity: 1, unitPrice: 10, totalPrice: 10 } },
+      },
+      select: { id: true },
+    });
+    await tx.$executeRaw`select cartlify.confirm_order(${paid.id}::int, '15 minutes'::interval)`;
+    await setAdminContext(tx);
+    await tx.$executeRaw`select cartlify.pay_order(${paid.id}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_context_${paid.id}`}, 10)`;
   });
 
   await prisma.$transaction(async (tx) => {
@@ -304,7 +324,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(15);
+    expect(Object.keys(hidden)).toHaveLength(17);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

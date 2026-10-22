@@ -59,7 +59,7 @@ async function freshProduct(db: DbSession, price = 10) {
     `db-category-${tag}`,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.products (name, price, stock, "categoryId") values ($1, $2, 5, $3) returning id`,
+    `insert into cartlify.products (name, price, "categoryId") values ($1, $2, $3) returning id`,
     `Db product ${tag}`,
     price,
     category!.id,
@@ -193,10 +193,11 @@ describe('products', () => {
     expect(outcomes.map(changedRows)).toEqual([false, false, false, false, false]);
   });
 
-  it('let an admin create a product and change its price, stock and description', async () => {
+  // the stock comes with the batches (stock.test.ts)
+  it('let an admin create a product and change its price and description', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       const fresh = await freshProduct(db);
-      return updateProduct(db, `price = 12, stock = 9, description = 'New'`, fresh.id);
+      return updateProduct(db, `price = 12, description = 'New'`, fresh.id);
     });
 
     expect(changedRows(outcome)).toBe(true);
@@ -230,7 +231,7 @@ describe('products', () => {
       await db.as(asAdmin());
       return db.attempt(
         `insert into cartlify.products (name, price, stock, "categoryId", ${column})
-         values ('Forged', 1, 5, $1, $2) returning id`,
+         values ('Forged', 1, 0, $1, $2) returning id`,
         product.categoryId,
         value,
       );

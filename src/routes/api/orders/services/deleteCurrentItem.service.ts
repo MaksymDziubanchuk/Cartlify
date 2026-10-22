@@ -11,6 +11,7 @@ import {
 import {
   dropDeletedProductItems,
   mapOrderRowToResponse,
+  expiredOfOrders,
   orderResponseSelect,
   orderTargetSql,
 } from './helpers/index.js';
@@ -76,7 +77,7 @@ export async function deleteCurrentItem({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_DELETE' });
 
-        return mapOrderRowToResponse(order);
+        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

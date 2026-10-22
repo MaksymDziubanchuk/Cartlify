@@ -81,6 +81,16 @@ const ordersOrderResponseSchema = {
       description:
         'Until when the stock is held for the payment, only while the order waits for it.',
     },
+    paidAt: {
+      type: 'string',
+      format: 'date-time',
+      description: 'When the payment was recorded, only once the order is paid; it stays.',
+    },
+    cancelledAt: {
+      type: 'string',
+      format: 'date-time',
+      description: 'When an admin cancelled the paid order, only for a cancelled order.',
+    },
     note: { type: 'string' },
     shippingAddress: {
       type: 'string',
@@ -212,12 +222,25 @@ const ordersGetQuerySchema = {
       enum: ['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
     confirmed: { type: 'boolean' },
+    paidFrom: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Only the orders paid at this time or later; with paidTo it has to come before it ' +
+        '(PAID_PERIOD_INVALID).',
+    },
+    paidTo: {
+      type: 'string',
+      format: 'date-time',
+      description: 'Only the orders paid before this time.',
+    },
 
     // sorting
     sortBy: {
       type: 'string',
-      enum: ['createdAt', 'updatedAt', 'total', 'shippingAddress'],
-      description: 'createdAt by default, newest first.',
+      enum: ['createdAt', 'updatedAt', 'total', 'shippingAddress', 'paidAt'],
+      description:
+        'createdAt by default, newest first. paidAt lists only the orders that are paid.',
     },
     sortDir: {
       type: 'string',

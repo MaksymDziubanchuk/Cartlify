@@ -1,53 +1,42 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import { prisma } from '@db/client.js';
-import { setUserContext } from '@db/dbContext.service.js';
 import { sendOrderPaidEmail } from '@routes/api/payments/services/helpers/sendOrderPaidEmail.helper.js';
 
-import { sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { getCsrf, withCsrf } from '../../../helpers/csrf.js';
+import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createProduct,
   createUser,
-  removeProducts,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { watchMail } from '../../../helpers/mail.js';
+import { placeOrder } from '../../../helpers/orders.js';
 
-// the mail the stripe webhook sends once an order is paid; the order is a real cart of a user,
-// the mail goes to the SendGrid mock (tests/helpers/mail.ts)
+// the mail the stripe webhook sends once an order is paid; the order is a real order of a user
+// paid the way the webhook pays it, the mail goes to the SendGrid mock (tests/helpers/mail.ts).
+// A paid order keeps its product, so the product stays; the test database goes after the run
 
 let app: FastifyInstance;
+let csrf: Csrf;
 let user: TestUser;
 let product: TestProduct;
 let orderId: number;
+const userIds: number[] = [];
 
 const log = () => ({ warn: jest.fn(), error: jest.fn() });
 
 beforeAll(async () => {
   app = await startApp();
-  const csrf = await getCsrf(app);
+  csrf = await getCsrf(app);
 
   user = await createUser({ name: 'Anna' });
+  userIds.push(user.id);
   product = await createProduct({ price: 25.5, stock: 5 });
-  const session = await signIn(app, csrf, user);
-
-  const added = await app.inject({
-    method: 'POST',
-    url: '/api/orders/current/items',
-    headers: withCsrf(csrf, sessionCookie(session)),
-    payload: { productId: product.id, quantity: 2 },
-  });
-  expect(added.statusCode).toBe(200);
-
-  ({ id: orderId } = await asAdmin((tx) =>
-    tx.order.findFirstOrThrow({ where: { userId: user.id }, select: { id: true } }),
-  ));
+  orderId = await placeOrder(app, csrf, user, product, 'paid', 2);
 });
 
 afterEach(() => {
@@ -56,13 +45,7 @@ afterEach(() => {
 
 afterAll(async () => {
   try {
-    // only the owner deletes an order that is still a cart; its items go with it
-    await prisma.$transaction(async (tx) => {
-      await setUserContext(tx, { userId: user.id, role: 'USER' });
-      await tx.order.deleteMany({ where: { id: orderId } });
-    });
-    await removeProducts([product]);
-    await closeSessions([user.id]);
+    await closeSessions(userIds);
   } finally {
     await stopApp();
   }
@@ -81,6 +64,39 @@ describe('sendOrderPaidEmail', () => {
     expect(mails[0]!.text).toContain('Total: €51.00');
     expect(mails[0]!.text).toContain(`https://shop.example.com/orders/${orderId}`);
     expect(mails[0]!.html).toContain('Hi Anna,');
+  });
+
+  // the time of the payment the order holds, not of its last change; in utc, as the mail says
+  it('names the time the order was paid', async () => {
+    const { paidAt } = await asAdmin((tx) =>
+      tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paidAt: true } }),
+    );
+    const mails = watchMail();
+
+    await sendOrderPaidEmail(orderId, log());
+
+    const shown = new Intl.DateTimeFormat('en-GB', {
+      dateStyle: 'long',
+      timeStyle: 'short',
+      timeZone: 'UTC',
+    }).format(paidAt!);
+    expect(mails[0]!.text).toContain(`${shown} UTC`);
+  });
+
+  it('skips an order that is not paid with a warning', async () => {
+    const buyer = await createUser();
+    userIds.push(buyer.id);
+    const waitingId = await placeOrder(app, csrf, buyer, product, 'waiting');
+    const mails = watchMail();
+    const logger = log();
+
+    await sendOrderPaidEmail(waitingId, logger);
+
+    expect(mails).toHaveLength(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      { orderId: waitingId },
+      'order paid mail skipped: the order is not paid',
+    );
   });
 
   // the payment is recorded before the mail: a failure must not reach the webhook,
