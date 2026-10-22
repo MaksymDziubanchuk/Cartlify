@@ -3,12 +3,19 @@ import { setActorContext } from '@db/dbContext.service.js';
 
 import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
-import { mapProductRowToResponse, normalizeFindProductByIdInput } from './helpers/index.js';
+import {
+  mapProductRowToResponse,
+  normalizeFindProductByIdInput,
+  productResponseSelect,
+  productViewOf,
+} from './helpers/index.js';
 
 import type { FullProductResponseDto, FindProductByIdDto } from 'types/dto/products.dto.js';
 
+// the card of a product page, as a buyer or as an admin sees it (productViewOf)
 export async function findById(dto: FindProductByIdDto): Promise<FullProductResponseDto> {
   const { productId } = normalizeFindProductByIdInput(dto);
+  const view = productViewOf(dto.actorRole);
 
   try {
     const { product, images } = await prisma.$transaction(async (tx) => {
@@ -20,30 +27,22 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
         where: { id: productId },
         select: { id: true, deletedAt: true },
       });
-      const isAdmin = dto.actorRole === 'ADMIN' || dto.actorRole === 'ROOT';
-      if (!exists || (exists.deletedAt && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      if (!exists || (exists.deletedAt && view !== 'admin')) {
+        throw new NotFoundError('PRODUCT_NOT_FOUND');
+      }
 
-      // increment views and return updated row
-      const product = await tx.product.update({
-        where: { id: productId },
-        data: { views: { increment: 1 } },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          reservedStock: true,
-          categoryId: true,
-          views: true,
-          popularity: true,
-          avgRating: true,
-          reviewsCount: true,
-          deletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
-      });
+      // a visit of a buyer is a view of the product, the one of an admin is not
+      const product =
+        view === 'admin'
+          ? await tx.product.findUniqueOrThrow({
+              where: { id: productId },
+              select: productResponseSelect,
+            })
+          : await tx.product.update({
+              where: { id: productId },
+              data: { views: { increment: 1 } },
+              select: productResponseSelect,
+            });
 
       // load images for response mapping
       const imageRows = await tx.productImage.findMany({
@@ -59,7 +58,7 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
     });
 
     // map db row into api dto
-    return mapProductRowToResponse({ product, images });
+    return mapProductRowToResponse({ product, images, view });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

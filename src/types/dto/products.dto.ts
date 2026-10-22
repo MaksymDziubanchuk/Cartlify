@@ -26,6 +26,9 @@ export type ProductImagesUrls = {
 
 //GET ALL PRODUCTS
 
+// a buyer sorts by createdAt, price (the price it sells at now), popularity, avgRating, name and
+// saleEndsAt (the products on sale first); an admin by every field (price: the usual one), the ones
+// only some products have with their flag
 export type ProductsSortField =
   | 'createdAt'
   | 'updatedAt'
@@ -36,6 +39,12 @@ export type ProductsSortField =
   | 'avgRating'
   | 'reviewsCount'
   | 'stock'
+  | 'totalStock'
+  | 'reservedStock'
+  | 'popularityOverride'
+  | 'popularityOverrideUntil'
+  | 'saleEndsAt'
+  | 'salePrice'
   | 'name';
 
 export type SortOrder = 'asc' | 'desc';
@@ -57,6 +66,11 @@ export interface GetAllProductsQueryDto {
   // free units (stock - reservedStock): true -> some are free, false -> none are free
   inStock?: boolean;
 
+  // admin and root only: true -> only products with an active sale / with a popularity override;
+  // without it or false -> only products without one
+  onSale?: boolean;
+  popularityOverridden?: boolean;
+
   // sorting (default popularity desc)
   sort?: ProductsSortField;
   order?: SortOrder;
@@ -76,26 +90,47 @@ export interface FindAllProductsDto {
 
   deleted?: boolean;
   inStock?: boolean;
+  onSale?: boolean;
+  popularityOverridden?: boolean;
 
   sort: ProductsSortField;
   order: SortOrder;
 }
 
+export interface ProductCategoryDto {
+  id: CategoryId;
+  name: string;
+  slug: string;
+}
+
+// a product as a buyer (guest, user) gets it; an admin (admin, root) gets the fields below the
+// line too. The list of a buyer has the popularity, the card of a buyer does not
 export interface ProductResponseDto {
   id: ProductId;
   name: string;
   description?: string;
   price: number;
+  // the sale next to the price: a buyer gets it only while it lasts (the product sells at
+  // salePrice until saleEndsAt), an admin always, as the row keeps it, null without one
+  salePrice?: number | null;
+  saleEndsAt?: string | null;
+  // free units: the stock that orders do not hold
   stock: number;
-  categoryId: CategoryId;
+  category: ProductCategoryDto;
   images: ProductImagesUrls;
-  createdAt: string;
-  updatedAt: string;
-  popularity: number;
-  views: number;
   avgRating: number;
   reviewsCount: number;
-  deletedAt?: string;
+  createdAt: string;
+  popularity?: number;
+
+  // admin and root only
+  views?: number;
+  updatedAt?: string;
+  totalStock?: number;
+  reservedStock?: number;
+  popularityOverride?: number | null;
+  popularityOverrideUntil?: string | null;
+  deletedAt?: string | null;
 }
 
 export interface ProductsResponseDto {
@@ -211,6 +246,9 @@ export interface UpdateProductBodyDto {
   categoryId?: CategoryId;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
+  // with a price: what happens to the sale that is on. keep keeps it, null takes it off, a new
+  // sale takes the old one off and is put on from the new price
+  sale?: ProductSaleWord;
 }
 
 export interface UpdateProductDto extends UpdateProductBodyDto {
@@ -224,6 +262,34 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
 }
 
 export type UpdateProductResponseDto = FullProductResponseDto;
+
+// PRODUCT SALE
+// a percent of the price, or an amount of money off it
+export type ProductSaleDiscountDto = { percent: number } | { amount: number };
+
+export type ProductSaleDto = ProductSaleDiscountDto & { endsAt: string };
+
+// the word on the sale of a change of a price
+export type ProductSaleWord = 'keep' | ProductSaleDto | null;
+
+export type BulkSaleWord = 'keep' | 'remove';
+
+export interface SetProductSaleParamsDto {
+  productId: IdParam;
+}
+
+export interface SetProductSaleBodyDto {
+  // null takes the sale off
+  sale: ProductSaleDto | null;
+}
+
+export interface SetProductSaleDto extends SetProductSaleBodyDto {
+  productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export type SetProductSaleResponseDto = FullProductResponseDto;
 
 // BULK UPDATE PRODUCT PRICE
 
@@ -252,6 +318,9 @@ export interface BulkUpdateProductsPriceBodyDto {
   // optional flags
   dryRun?: boolean;
   reason?: string;
+
+  // the same for the sale that is on of every product: keep it, or take it off
+  sale?: BulkSaleWord;
 }
 
 export interface BulkUpdateProductsPriceDto extends BulkUpdateProductsPriceBodyDto {

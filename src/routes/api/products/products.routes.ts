@@ -77,6 +77,15 @@ export default async function productsRouter(app: FastifyInstance) {
   );
 
   app.patch(
+    '/:productId/sale',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.patchProductSaleRouterSchema,
+    },
+    productController.patchProductSale,
+  );
+
+  app.patch(
     '/:productId/category',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],

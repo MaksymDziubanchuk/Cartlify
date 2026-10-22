@@ -3,154 +3,44 @@ import { prisma } from '@db/client.js';
 import {
   mapProductListRowToResponse,
   normalizeFindAllProductsInput,
-  buildCursorWhere,
-  buildOrderBy,
   makeNextCursor,
-  buildProductSearchIdsQuery,
+  buildProductIdsQuery,
+  productListSelect,
+  type ProductKeyRow,
 } from './helpers/index.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 
 import type { FindAllProductsDto, ProductsResponseDto } from 'types/dto/products.dto.js';
-import type { ProductId } from 'types/ids.js';
 
-type ProductIdRow = { id: ProductId };
-
+// the catalog list of a buyer or of an admin. The price a product sells at and its sale depend on
+// the time (cartlify.product_current_price), so one raw query finds the ids of the page and the
+// values of their sort; Prisma reads the rows of those ids
 export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponseDto> {
-  const { limit, sort, order, search, categoryIds, minPrice, maxPrice, deleted, inStock, cursor } =
-    normalizeFindAllProductsInput(dto);
+  const q = normalizeFindAllProductsInput(dto);
 
   try {
-    const where: any = {};
+    const keyRows = await prisma.$queryRaw<ProductKeyRow[]>(buildProductIdsQuery(q));
 
-    // deleted filter
-    if (deleted === true) where.deletedAt = { not: null };
-    if (deleted === false) where.deletedAt = null;
+    // detect next page
+    const hasNext = keyRows.length > q.limit;
+    const pageRows = hasNext ? keyRows.slice(0, q.limit) : keyRows;
 
-    // stock filter by free units, the same number the list shows as stock
-    if (inStock === true) where.stock = { gt: prisma.product.fields.reservedStock };
-    if (inStock === false) where.stock = { lte: prisma.product.fields.reservedStock };
+    // empty page
+    if (!pageRows.length) return { items: [], limit: q.limit };
 
-    // category filter
-    if (categoryIds?.length) where.categoryId = { in: categoryIds };
-
-    // price range
-    if (minPrice != null || maxPrice != null) {
-      where.price = {
-        ...(minPrice != null ? { gte: minPrice } : {}),
-        ...(maxPrice != null ? { lte: maxPrice } : {}),
-      };
-    }
-
-    // indexed search
-    if (search) {
-      const idRows = await prisma.$queryRaw<ProductIdRow[]>(
-        buildProductSearchIdsQuery({
-          limit,
-          sort,
-          order,
-          search,
-          ...(categoryIds !== undefined ? { categoryIds } : {}),
-          ...(minPrice !== undefined ? { minPrice } : {}),
-          ...(maxPrice !== undefined ? { maxPrice } : {}),
-          ...(deleted !== undefined ? { deleted } : {}),
-          ...(inStock !== undefined ? { inStock } : {}),
-          ...(cursor !== undefined ? { cursor } : {}),
-        }),
-      );
-
-      // detect next page
-      const hasNext = idRows.length > limit;
-
-      // keep only current page ids
-      const pageIds = (hasNext ? idRows.slice(0, limit) : idRows).map((row) => row.id);
-
-      // empty page
-      if (!pageIds.length) {
-        return { items: [], limit };
-      }
-
-      // preserve raw sql order after findMany by ids
-      const position = new Map(pageIds.map((id, index) => [id, index]));
-
-      // fetch full rows by ids
-      const rows = await prisma.product.findMany({
-        where: { id: { in: pageIds } },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          reservedStock: true,
-          categoryId: true,
-          views: true,
-          popularity: true,
-          avgRating: true,
-          reviewsCount: true,
-          createdAt: true,
-          updatedAt: true,
-          deletedAt: true,
-          images: {
-            where: { isPrimary: true },
-            select: { url: true, position: true, isPrimary: true },
-            orderBy: { position: 'asc' },
-            take: 1,
-          },
-        },
-      });
-
-      // restore original order from raw query
-      rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
-
-      const items = rows.map(mapProductListRowToResponse);
-
-      return {
-        items,
-        limit,
-        ...(hasNext ? { nextCursor: makeNextCursor(sort, rows[rows.length - 1]) } : {}),
-      };
-    }
-
-    const cursorWhere = buildCursorWhere({ sort, order, cursor });
-    const finalWhere = cursorWhere ? { AND: [where, cursorWhere] } : where;
+    // preserve raw sql order after findMany by ids
+    const position = new Map(pageRows.map((row, index) => [row.id, index]));
 
     const rows = await prisma.product.findMany({
-      where: finalWhere,
-      orderBy: buildOrderBy(sort, order) as any,
-      take: limit + 1, // fetch one extra to know if next page exists
-      select: {
-        id: true,
-        name: true,
-        description: true,
-        price: true,
-        stock: true,
-        reservedStock: true,
-        categoryId: true,
-        views: true,
-        popularity: true,
-        avgRating: true,
-        reviewsCount: true,
-        createdAt: true,
-        updatedAt: true,
-        deletedAt: true,
-        images: {
-          where: { isPrimary: true },
-          select: { url: true, position: true, isPrimary: true },
-          orderBy: { position: 'asc' },
-          take: 1,
-        },
-      },
+      where: { id: { in: pageRows.map((row) => row.id) } },
+      select: productListSelect,
     });
-
-    const hasNext = rows.length > limit;
-    const pageRows = hasNext ? rows.slice(0, limit) : rows;
-
-    const items = pageRows.map(mapProductListRowToResponse);
+    rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
 
     return {
-      items,
-      limit,
-      ...(hasNext ? { nextCursor: makeNextCursor(sort, pageRows[pageRows.length - 1]) } : {}),
+      items: rows.map((row) => mapProductListRowToResponse(row, q.view)),
+      limit: q.limit,
+      ...(hasNext ? { nextCursor: makeNextCursor(q, pageRows[pageRows.length - 1]!) } : {}),
     };
   } catch (err) {
     if (isAppError(err)) throw err;

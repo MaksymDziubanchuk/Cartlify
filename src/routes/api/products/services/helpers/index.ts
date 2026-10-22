@@ -4,6 +4,10 @@ export * from './productMapper.helper.js';
 
 export * from './priceChangeLog.helper.js';
 
+export * from './productSale.helper.js';
+
+export * from './productSaleSteps.helper.js';
+
 export * from './reviews.helpers.js';
 
 export * from './products.helpers.js';

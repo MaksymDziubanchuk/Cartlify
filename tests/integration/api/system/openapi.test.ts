@@ -228,8 +228,103 @@ describe('the product routes', () => {
       '/api/products/{productId}',
       ['200', '400', '401', '403', '404', '409', '413', '500'],
     ],
+    ['patch', '/api/products/{productId}/sale', ['200', '400', '401', '403', '404', '409', '500']],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
+  });
+
+  // a discount by a percent or by an amount, or null to take the sale off
+  it('asks a sale or null in the body of PATCH /api/products/{productId}/sale', () => {
+    const body = resolve(
+      operation('patch', '/api/products/{productId}/sale').requestBody!.content['application/json']!
+        .schema,
+    );
+
+    expect(requiredOf(body)).toEqual(['sale']);
+    // openapi 3.0 has no null type: swagger shows the null shape as a nullable one
+    const sale = propertiesOf(body).sale as { anyOf?: (Schema & { nullable?: boolean })[] };
+    const shapes = (sale.anyOf ?? []).map((shape) =>
+      shape.nullable ? 'null' : Object.keys(propertiesOf(shape)).sort().join(','),
+    );
+    expect(shapes.sort()).toEqual(['amount,endsAt', 'endsAt,percent', 'null']);
+  });
+
+  it('shows the sale of a product next to its price, only while it lasts', () => {
+    const answerOf = (path: string) =>
+      resolve(
+        (
+          operation('get', path).responses?.['200']?.content?.['application/json'] as {
+            schema: Schema;
+          }
+        ).schema,
+      );
+    const card = answerOf('/api/products/{productId}');
+    const item = resolve(
+      (propertiesOf(answerOf('/api/products/')).items as { items: Schema }).items,
+    );
+
+    for (const schema of [card, item]) {
+      // a buyer gets them while the sale lasts, an admin always, null without a sale
+      expect(Object.keys(propertiesOf(schema))).toEqual(
+        expect.arrayContaining(['salePrice', 'saleEndsAt']),
+      );
+      expect(requiredOf(schema)).not.toContain('salePrice');
+      expect(requiredOf(schema)).not.toContain('saleEndsAt');
+    }
+  });
+
+  // a buyer and an admin get other fields of a product: the fields of an admin are optional, and
+  // the card of a buyer has no popularity
+  it('requires of a product only the fields every role gets, with its category', () => {
+    const answerOf = (path: string) =>
+      resolve(
+        (
+          operation('get', path).responses?.['200']?.content?.['application/json'] as {
+            schema: Schema;
+          }
+        ).schema,
+      );
+    const card = answerOf('/api/products/{productId}');
+    const item = resolve(
+      (propertiesOf(answerOf('/api/products/')).items as { items: Schema }).items,
+    );
+    const every = [
+      'avgRating',
+      'category',
+      'createdAt',
+      'id',
+      'images',
+      'name',
+      'price',
+      'reviewsCount',
+      'stock',
+    ];
+
+    expect(requiredOf(card).sort()).toEqual(every);
+    expect(requiredOf(item).sort()).toEqual(every);
+    for (const schema of [card, item]) {
+      expect(propertiesOf(schema)).not.toHaveProperty('categoryId');
+      expect(Object.keys(propertiesOf(schema))).toEqual(
+        expect.arrayContaining([
+          'popularity',
+          'views',
+          'updatedAt',
+          'totalStock',
+          'reservedStock',
+          'popularityOverride',
+          'popularityOverrideUntil',
+          'deletedAt',
+        ]),
+      );
+    }
+  });
+
+  it('lists the flags of an admin among the query of GET /api/products/', () => {
+    const query = (operation('get', '/api/products/').parameters ?? [])
+      .filter((parameter) => parameter.in === 'query')
+      .map((parameter) => parameter.name);
+
+    expect(query).toEqual(expect.arrayContaining(['deleted', 'onSale', 'popularityOverridden']));
   });
 });
 

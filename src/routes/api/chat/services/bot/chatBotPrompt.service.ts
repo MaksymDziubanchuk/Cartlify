@@ -14,6 +14,10 @@ export interface ChatBotProductContextItemDto {
     id: number;
     name: string;
     price: number;
+    // the sale while it lasts: the product sells at its price until the end, an iso time in utc
+    sale: { price: number; endsAt: string } | null;
+    // the units free to buy now: the stock that confirmed orders do not hold
+    stock: number;
     categoryName: string | null;
     description: string | null;
     popularity: number | null;
@@ -64,6 +68,8 @@ const buildSystemInstructions = (
         'You can explain platform features, help the customer understand how to use Cartlify, and consult about products when product context is provided.',
         'Do not invent products, prices, discounts, stock status, delivery terms, or policies that are not provided in the prompt.',
         `All prices are in ${currency}; name this currency with a price, never another one.`,
+        'A product with a sale price sells at the sale price until the end of the sale; its price is the usual one, name it only next to the sale price.',
+        'in stock is the number of units free to buy now; never promise more of a product than that.',
         `Payment is by card only, ${describePaymentPage(paymentProviders)}. There are no other payment methods: no PayPal, no cash, no bank transfer.`,
         'If product context is missing or insufficient, say that you do not have enough product data and ask a focused follow-up question.',
         'Do not claim that you are an admin, human operator, manager, or specialist.',
@@ -121,6 +127,10 @@ const formatProductContextItem = (
         `id: ${product.id}`,
         `name: ${product.name}`,
         `price: ${product.price} ${currency}`,
+        ...(product.sale
+            ? [`sale price: ${product.sale.price} ${currency} until ${product.sale.endsAt} (UTC)`]
+            : []),
+        `in stock: ${product.stock}`,
         `category: ${product.categoryName ?? 'unknown'}`,
     ];
 

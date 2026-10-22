@@ -26,7 +26,7 @@ const getAllProductsQuerySchema = {
       pattern: '^[A-Za-z0-9_-]+$',
       description:
         'nextCursor of the previous page, with the same sort and order. A changed cursor, or one ' +
-        'from another sort, is CURSOR_INVALID.',
+        'from another sort or order, is CURSOR_INVALID.',
     },
 
     // filters
@@ -38,14 +38,42 @@ const getAllProductsQuerySchema = {
         'Category ids separated by commas, for example 1,2. Ids that are not positive are ' +
         'dropped; a list with no valid id is CATEGORY_IDS_INVALID.',
     },
-    minPrice: { type: 'number', minimum: 0 },
-    maxPrice: { type: 'number', minimum: 0 },
+    minPrice: {
+      type: 'number',
+      minimum: 0,
+      description:
+        'A buyer: the price a product sells at now, the sale price while its sale lasts. An ' +
+        'admin: the usual price, the one the field price shows.',
+    },
+    maxPrice: {
+      type: 'number',
+      minimum: 0,
+      description:
+        'A buyer: the price a product sells at now, the sale price while its sale lasts. An ' +
+        'admin: the usual price, the one the field price shows.',
+    },
 
     deleted: {
       type: 'boolean',
       description:
-        'Admin and root only: true lists only deleted products. Without it, or with false, ' +
-        'every role gets products that are not deleted.',
+        'Admin and root only (DELETED_PRODUCTS_FORBIDDEN for a buyer): true lists only deleted ' +
+        'products. Without it, or with false, every role gets products that are not deleted.',
+    },
+    onSale: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer): true lists only the products with ' +
+        'a sale that is on, whatever else they have. Without any flag an admin gets only the ' +
+        'plain products (not deleted, without a sale and an override that are on); with another ' +
+        'flag the sale does not filter. A buyer always gets every product of the catalog.',
+    },
+    popularityOverridden: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer): true lists only the products with ' +
+        'a popularity override that is on, whatever else they have: an override with its end ' +
+        'ahead (one without an end or past it overrides nothing). Without any flag an admin gets ' +
+        'only the plain products; with another flag the override does not filter.',
     },
     inStock: {
       type: 'boolean',
@@ -67,117 +95,145 @@ const getAllProductsQuerySchema = {
         'avgRating',
         'reviewsCount',
         'stock',
+        'totalStock',
+        'reservedStock',
+        'popularityOverride',
+        'popularityOverrideUntil',
+        'saleEndsAt',
+        'salePrice',
         'name',
       ],
+      description:
+        'A buyer sorts by createdAt, price (the price a product sells at now), popularity ' +
+        '(the default), avgRating, name and saleEndsAt: the products on sale first by the end of ' +
+        'their sale in the order asked for, then every other one by popularity, the most popular ' +
+        'first; any other sort is SORT_FORBIDDEN. An admin sorts by any field; price is the usual ' +
+        'price, salePrice the sale price, stock the free units, totalStock the whole stock. A ' +
+        'field only some products have comes with its flag: deletedAt with deleted, saleEndsAt ' +
+        'and salePrice with onSale, popularityOverride and popularityOverrideUntil with ' +
+        'popularityOverridden, otherwise SORT_DELETED_AT_REQUIRES_DELETED, ' +
+        'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE, SORT_SALE_PRICE_REQUIRES_ON_SALE, ' +
+        'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN.',
     },
     order: { type: 'string', enum: ['asc', 'desc'] },
   },
 } as const;
 
+const imageUrlsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    url200: { type: 'string' },
+    url400: { type: 'string' },
+    url800: { type: 'string' },
+  },
+  required: ['url200', 'url400', 'url800'],
+} as const;
+
+const ADMIN_ONLY = 'Admin and root only.';
+
+// the fields of a product every role gets, and the ones only admin and root get; images and the
+// popularity differ between the card and a list item
+const productFields = {
+  id: { type: 'integer' },
+
+  name: { type: 'string' },
+  description: { type: 'string' },
+
+  price: { type: 'number' },
+  // the sale next to the price: a buyer gets it only while it lasts, an admin always
+  salePrice: {
+    anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
+    description:
+      'The product sells at it until saleEndsAt. A buyer gets it only while the sale lasts; ' +
+      'admin and root always, as the row keeps it (a sale past its end too), null without one.',
+  },
+  saleEndsAt: {
+    anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+    description:
+      'The end of the sale. A buyer gets it only while the sale lasts; admin and root always, ' +
+      'null without a sale.',
+  },
+  stock: {
+    type: 'integer',
+    description: 'Free units: the stock that confirmed orders do not hold.',
+  },
+  category: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'integer' },
+      name: { type: 'string' },
+      slug: { type: 'string' },
+    },
+    required: ['id', 'name', 'slug'],
+  },
+
+  avgRating: { type: 'number' },
+  reviewsCount: { type: 'integer' },
+
+  createdAt: { type: 'string', format: 'date-time' },
+
+  views: { type: 'integer', description: ADMIN_ONLY },
+  updatedAt: { type: 'string', format: 'date-time', description: ADMIN_ONLY },
+  totalStock: {
+    type: 'integer',
+    description: `${ADMIN_ONLY} The whole stock, the reserved units with it.`,
+  },
+  reservedStock: {
+    type: 'integer',
+    description: `${ADMIN_ONLY} The units confirmed orders hold.`,
+  },
+  popularityOverride: {
+    anyOf: [{ type: 'integer' }, { type: 'null' }],
+    description: `${ADMIN_ONLY} The popularity the admin set, null when there is none; it overrides while its end is ahead.`,
+  },
+  popularityOverrideUntil: {
+    anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+    description: `${ADMIN_ONLY} The end of the override, null when it has none.`,
+  },
+  deletedAt: {
+    anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+    description: `${ADMIN_ONLY} The delete date, null for a product that is not deleted.`,
+  },
+} as const;
+
+const productRequired = [
+  'id',
+  'name',
+  'price',
+  'stock',
+  'category',
+  'images',
+  'avgRating',
+  'reviewsCount',
+  'createdAt',
+] as const;
+
+// the card of a product page: every image; a buyer gets no popularity in it
 const productResponseSchema = {
   $id: 'productResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'integer' },
-
-    name: { type: 'string' },
-    description: { type: 'string' },
-
-    price: { type: 'number' },
-    stock: { type: 'number' },
-    categoryId: { type: 'integer' },
-
-    images: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          url200: { type: 'string' },
-          url400: { type: 'string' },
-          url800: { type: 'string' },
-        },
-        required: ['url200', 'url400', 'url800'],
-      },
-    },
-
-    views: { type: 'integer' },
-    popularity: { type: 'integer' },
-
-    avgRating: { type: 'number' },
-    reviewsCount: { type: 'integer' },
-
-    createdAt: { type: 'string', format: 'date-time' },
-    updatedAt: { type: 'string', format: 'date-time' },
-    deletedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+    ...productFields,
+    images: { type: 'array', items: imageUrlsSchema },
+    popularity: { type: 'integer', description: ADMIN_ONLY },
   },
-  required: [
-    'id',
-    'name',
-    'price',
-    'stock',
-    'categoryId',
-    'images',
-    'views',
-    'popularity',
-    'avgRating',
-    'reviewsCount',
-    'createdAt',
-    'updatedAt',
-  ],
+  required: productRequired,
 } as const;
 
+// a product of a list: the primary image only; every role gets the popularity it sorts by
 const productItemResponseSchema = {
   $id: 'productItemResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'integer' },
-
-    name: { type: 'string' },
-    description: { type: 'string' },
-
-    price: { type: 'number' },
-    stock: { type: 'integer' },
-
-    categoryId: { type: 'integer' },
-
-    // single "primary" image urls (not array)
-    images: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        url200: { type: 'string' },
-        url400: { type: 'string' },
-        url800: { type: 'string' },
-      },
-      required: ['url200', 'url400', 'url800'],
-    },
-
+    ...productFields,
+    images: imageUrlsSchema,
     popularity: { type: 'integer' },
-    views: { type: 'integer' },
-    avgRating: { type: 'number' },
-    reviewsCount: { type: 'integer' },
-
-    createdAt: { type: 'string', format: 'date-time' },
-    updatedAt: { type: 'string', format: 'date-time' },
-    deletedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
   },
-  required: [
-    'id',
-    'name',
-    'price',
-    'stock',
-    'categoryId',
-    'images',
-    'popularity',
-    'views',
-    'avgRating',
-    'reviewsCount',
-    'createdAt',
-    'updatedAt',
-  ],
+  required: productRequired,
 } as const;
 
 const productsListResponseSchema = {
@@ -288,6 +344,45 @@ const productCreateFormSchema = {
   required: ['name', 'price', 'stock', 'categoryId', 'images'],
 } as const;
 
+const saleEndsAtField = {
+  type: 'string',
+  format: 'date-time',
+  description: 'When the sale ends, in the future; the sale starts right away.',
+} as const;
+
+// a percent of the price or an amount off it, never both: the shapes leave out
+// additionalProperties, ajv strips an unknown field while it tries a shape of anyOf (fastify
+// removeAdditional) and would let a percent and an amount through as a percent
+const saleDiscountShapes = [
+  {
+    type: 'object',
+    properties: {
+      percent: {
+        type: 'number',
+        exclusiveMinimum: 0,
+        maximum: 100,
+        description: 'A percent of the price, above 0 and up to 100.',
+      },
+      endsAt: saleEndsAtField,
+    },
+    required: ['percent', 'endsAt'],
+    not: { required: ['amount'] },
+  },
+  {
+    type: 'object',
+    properties: {
+      amount: {
+        type: 'number',
+        exclusiveMinimum: 0,
+        description: 'Money off the price, above 0 and up to the price.',
+      },
+      endsAt: saleEndsAtField,
+    },
+    required: ['amount', 'endsAt'],
+    not: { required: ['percent'] },
+  },
+] as const;
+
 const updateProductBodySchema = {
   $id: 'updateProductBodySchema',
   type: 'object',
@@ -303,14 +398,37 @@ const updateProductBodySchema = {
 
     categoryId: { type: 'integer', minimum: 1 },
 
-    popularityOverride: { anyOf: [{ type: 'integer', minimum: 0 }, { type: 'null' }] },
+    // a type list, not anyOf: with coerceTypes ajv turns null into 0 in the integer shape of an
+    // anyOf, and null would set an override of 0 instead of taking it off
+    popularityOverride: {
+      type: ['integer', 'null'],
+      minimum: 0,
+      description:
+        'The popularity the product shows while popularityOverrideUntil is ahead; it goes with an end: after the change the product has both or neither (POPULARITY_OVERRIDE_UNTIL_REQUIRED, POPULARITY_OVERRIDE_REQUIRED). Null takes it off, together with its end.',
+    },
 
-    popularityOverrideUntil: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+    popularityOverrideUntil: {
+      type: ['string', 'null'],
+      format: 'date-time',
+      description:
+        'The end of the popularity override, in the future (POPULARITY_OVERRIDE_UNTIL_INVALID); it goes with an override. Null takes it off, together with the override.',
+    },
+
+    // null first: with coerceTypes the string shape would turn null into ""
+    sale: {
+      description:
+        'With a price, what happens to the sale that is on: keep keeps it (a price down to the ' +
+        'sale price or below cannot, PRODUCT_SALE_NOT_BELOW_PRICE), null takes it off, a new ' +
+        'sale takes the old one off and is put on from the new price. Each step writes every ' +
+        'line of the logs. A new price of a product on sale without it is ' +
+        'PRODUCT_SALE_DECISION_REQUIRED; without a price it is PRODUCT_SALE_REQUIRES_PRICE.',
+      anyOf: [{ type: 'null' }, { type: 'string', enum: ['keep'] }, ...saleDiscountShapes],
+    },
   },
 } as const;
 
 // documentation only: the form of PATCH /api/products/:productId, the fields of the json body
-// and the images; empty or null clears a popularity override
+// and the images; empty or null clears a popularity override and its end, which go together
 const productUpdateFormSchema = {
   $id: 'productUpdateFormSchema',
   type: 'object',
@@ -326,17 +444,45 @@ const productUpdateFormSchema = {
     categoryId: { type: 'integer', minimum: 1 },
     popularityOverride: {
       type: 'string',
-      description: 'A whole number from 0; empty or null clears it.',
+      description:
+        'A whole number from 0, with popularityOverrideUntil; empty or null clears it, together ' +
+        'with its end.',
     },
     popularityOverrideUntil: {
       type: 'string',
-      description: 'A date-time; empty or null clears it.',
+      description:
+        'A date-time in the future, with popularityOverride; empty or null clears it, together ' +
+        'with the override.',
+    },
+    sale: {
+      type: 'string',
+      enum: ['keep', 'remove'],
+      description:
+        'With a price, what happens to the sale that is on: keep it or remove it ' +
+        '(PRODUCT_SALE_ACTION_INVALID for any other word). A new sale comes as JSON or through ' +
+        'PATCH /api/products/{productId}/sale.',
     },
     images: {
       ...productImagesFormField,
       description: `${productImagesFormField.description} They replace all images of the product.`,
     },
   },
+} as const;
+
+const productSaleBodySchema = {
+  $id: 'productSaleBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sale: {
+      description:
+        'The discount until endsAt, by a percent of the price or by an amount of money off it; ' +
+        'the sale price is rounded to cents and stays below the price, 0 gives the product ' +
+        'away. A new sale writes over the one there is. null takes the sale off.',
+      anyOf: [...saleDiscountShapes, { type: 'null' }],
+    },
+  },
+  required: ['sale'],
 } as const;
 
 const bulkUpdateProductsPriceBodySchema = {
@@ -368,6 +514,15 @@ const bulkUpdateProductsPriceBodySchema = {
     },
 
     dryRun: { type: 'boolean' },
+    sale: {
+      type: 'string',
+      enum: ['keep', 'remove'],
+      description:
+        'The same for the sale that is on of every product of the scope: keep it (a new price ' +
+        'down to a sale price or below cannot, PRODUCT_SALE_NOT_BELOW_PRICE, and no product ' +
+        'changes), or remove it the way it goes for one product, then the price. Needed when the ' +
+        'scope has a product on sale (PRODUCT_SALE_DECISION_REQUIRED); a dry run needs none.',
+    },
     reason: { type: 'string', minLength: 1, maxLength: 200 },
   },
   required: ['mode', 'value'],
@@ -426,6 +581,7 @@ export const productDtoSchemas = [
   productCreateFormSchema,
   updateProductBodySchema,
   productUpdateFormSchema,
+  productSaleBodySchema,
   bulkUpdateProductsPriceBodySchema,
   bulkUpdateProductsPriceResponseSchema,
   createReviewBodySchema,

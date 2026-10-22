@@ -1,7 +1,11 @@
 import { Prisma } from '@prisma/client';
 import { describe, expect, it, jest } from '@jest/globals';
 
-import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import {
+  buildProductUpdateAuditChanges,
+  buildSaleAuditChanges,
+  writeAdminAuditLog,
+} from '@db/adminAudit.helper.js';
 
 type Tx = Parameters<typeof writeAdminAuditLog>[0];
 type Product = Parameters<typeof buildProductUpdateAuditChanges>[0];
@@ -91,6 +95,101 @@ describe('buildProductUpdateAuditChanges', () => {
 
     expect(diff({ deletedAt }, { deletedAt })).toEqual([
       { field: 'deletedAt', old: null, new: '2026-08-01T10:00:00.000Z' },
+    ]);
+  });
+
+  // the sale is not a field of this line: a sale of its own (PRODUCT_SALE) describes it, the end
+  // of one by a price down to it is written by the database (db/05)
+  it('records no sale, also when the price ended one', () => {
+    const out = buildProductUpdateAuditChanges(before, {
+      after: { ...before, price: new Prisma.Decimal('8.00') },
+      input: { price: 8 },
+    });
+
+    expect(out).toEqual([{ field: 'price', old: '9.99', new: '8' }]);
+  });
+});
+
+// a line of the admin log of a sale (PRODUCT_SALE): what happened, the price, the sale before and
+// after it as the answers show it, and the discount the admin gave
+describe('buildSaleAuditChanges', () => {
+  const ends = (ms: number) => new Date(Date.now() + ms);
+  const noSale = { salePrice: null, saleEndsAt: null };
+  const price = new Prisma.Decimal('20.00');
+
+  it('describes a sale that starts: the event, the price, the sale and the discount', () => {
+    const saleEndsAt = ends(60_000);
+
+    expect(
+      buildSaleAuditChanges({
+        event: 'start',
+        price,
+        before: noSale,
+        after: { salePrice: new Prisma.Decimal('15.00'), saleEndsAt },
+        discount: { percent: 25 },
+      }),
+    ).toEqual([
+      { field: 'event', old: null, new: 'start' },
+      { field: 'price', old: '20', new: '20' },
+      { field: 'salePrice', old: null, new: '15' },
+      { field: 'saleEndsAt', old: null, new: saleEndsAt.toISOString() },
+      { field: 'discount', old: null, new: { percent: 25 } },
+    ]);
+  });
+
+  it('describes a sale written over one that is on, with the sale before it', () => {
+    const firstEnd = ends(60_000);
+    const secondEnd = ends(120_000);
+
+    expect(
+      buildSaleAuditChanges({
+        event: 'change',
+        price,
+        before: { salePrice: new Prisma.Decimal('15.50'), saleEndsAt: firstEnd },
+        after: { salePrice: new Prisma.Decimal('12.00'), saleEndsAt: secondEnd },
+        discount: { amount: 8 },
+      }),
+    ).toEqual([
+      { field: 'event', old: null, new: 'change' },
+      { field: 'price', old: '20', new: '20' },
+      { field: 'salePrice', old: '15.5', new: '12' },
+      { field: 'saleEndsAt', old: firstEnd.toISOString(), new: secondEnd.toISOString() },
+      { field: 'discount', old: null, new: { amount: 8 } },
+    ]);
+  });
+
+  it('describes a sale taken off, with no discount', () => {
+    const saleEndsAt = ends(60_000);
+
+    expect(
+      buildSaleAuditChanges({
+        event: 'removed',
+        price,
+        before: { salePrice: new Prisma.Decimal('15.00'), saleEndsAt },
+        after: noSale,
+      }),
+    ).toEqual([
+      { field: 'event', old: null, new: 'removed' },
+      { field: 'price', old: '20', new: '20' },
+      { field: 'salePrice', old: '15', new: null },
+      { field: 'saleEndsAt', old: saleEndsAt.toISOString(), new: null },
+    ]);
+  });
+
+  // a sale past its end is no sale, the answers leave it out as well
+  it('shows a sale that is over as no sale before', () => {
+    const saleEndsAt = ends(60_000);
+    const out = buildSaleAuditChanges({
+      event: 'start',
+      price,
+      before: { salePrice: new Prisma.Decimal('15.00'), saleEndsAt: ends(-1) },
+      after: { salePrice: new Prisma.Decimal('18.00'), saleEndsAt },
+      discount: { amount: 2 },
+    });
+
+    expect(out.slice(2, 4)).toEqual([
+      { field: 'salePrice', old: null, new: '18' },
+      { field: 'saleEndsAt', old: null, new: saleEndsAt.toISOString() },
     ]);
   });
 });

@@ -47,6 +47,8 @@ enum PaymentProvider {
   liqpay
 }
 
+// how a change of a price is given: a percent of the price or an amount of money; a line of the
+// log with endsAt is the start of a sale
 enum PriceChangeMode {
   percent
   fixed
@@ -67,6 +69,8 @@ enum AdminAuditAction {
   PRODUCT_UPDATE
   PRODUCT_DELETE
   PRODUCT_PRICE_BULK_UPDATE
+  // a sale set, changed or taken off by an admin, or ended by a price down to it (db/05)
+  PRODUCT_SALE
   ORDER_STATUS_CHANGE
   CATEGORY_UPDATE
   REVIEW_DELETE
@@ -187,6 +191,11 @@ model Product {
   price         Decimal @db.Decimal(10, 2)
   stock         Int     @default(0)
   reservedStock Int     @default(0)
+
+  // the sale: its price is the price of the product while saleEndsAt is ahead; both empty or both
+  // set (db/06), a price down to the sale price or below empties them (db/05)
+  salePrice  Decimal?  @db.Decimal(10, 2)
+  saleEndsAt DateTime?
 
   categoryId Int
   category   Category @relation(fields: [categoryId], references: [id])
@@ -428,6 +437,10 @@ model ProductPriceChangeLog {
 
   mode  PriceChangeMode
   value Decimal         @db.Decimal(10, 2)
+
+  // the end of the sale a line starts: a line with an end is the start of a sale, from the price
+  // down to the sale price (db/06); empty for any other line
+  endsAt DateTime?
 
   createdAt DateTime @default(now())
 

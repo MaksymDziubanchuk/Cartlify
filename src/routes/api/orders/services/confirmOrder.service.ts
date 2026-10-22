@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { currentPrice } from '@helpers/productSale.js';
 import { assertRedisReady } from '@redis/client.js';
 import { lowestMinimumTotal, shopCurrency } from '@routes/api/payments/providers/index.js';
 import {
@@ -65,7 +66,16 @@ export async function confirmOrder({
             id: true,
             productId: true,
             quantity: true,
-            product: { select: { deletedAt: true, stock: true, reservedStock: true, price: true } },
+            product: {
+              select: {
+                deletedAt: true,
+                stock: true,
+                reservedStock: true,
+                price: true,
+                salePrice: true,
+                saleEndsAt: true,
+              },
+            },
           },
           orderBy: { id: 'asc' },
         });
@@ -78,11 +88,12 @@ export async function confirmOrder({
         // no payment provider takes a smaller payment: refused before the stock is held, the page
         // tells the buyer the smallest total. The buyer picks the provider after this, so only a
         // total below the minimum of every one of them is refused here; the payment page checks the
-        // one picked. The total at the prices of the catalog, the ones confirm_order takes; an
-        // empty order is left to confirm_order (ORDER_ITEMS_REQUIRED)
+        // one picked. The total at the prices the products sell at now (the sale price while a
+        // sale lasts), the ones confirm_order takes; an empty order is left to confirm_order
+        // (ORDER_ITEMS_REQUIRED)
         const minimum = lowestMinimumTotal();
         const totalCents = items.reduce(
-          (sum, item) => sum + Math.round(Number(item.product.price) * 100) * item.quantity,
+          (sum, item) => sum + Math.round(currentPrice(item.product) * 100) * item.quantity,
           0,
         );
         if (items.length > 0 && totalCents < Math.round(minimum * 100)) {

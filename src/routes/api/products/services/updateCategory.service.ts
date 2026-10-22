@@ -8,6 +8,7 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
   mapProductRowToResponse,
+  productResponseSelect,
   readProductImageUrls,
   normalizeFindProductByIdInput,
 } from './helpers/index.js';
@@ -51,22 +52,7 @@ export async function updateProductCategory({
       const product = await tx.product.update({
         where: { id: productIdRaw },
         data: { categoryId: categoryIdRaw },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          reservedStock: true,
-          categoryId: true,
-          views: true,
-          popularity: true,
-          avgRating: true,
-          reviewsCount: true,
-          deletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: productResponseSelect,
       });
 
       // build audit changes only for category update
@@ -95,6 +81,7 @@ export async function updateProductCategory({
     return mapProductRowToResponse({
       product: updated,
       images,
+      view: 'admin',
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

@@ -1,3 +1,5 @@
+import { isSaleOn } from '@helpers/productSale.js';
+
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { UserId } from 'types/ids.js';
 
@@ -5,6 +7,39 @@ export type AuditChange = { field: string; old: unknown; new: unknown };
 
 type DbClient = Prisma.TransactionClient | PrismaClient;
 
+type SaleState = { salePrice: { toString(): string } | null; saleEndsAt: Date | null };
+
+// what an admin did to a sale; the database writes its end by a price down to it, ended_by_price
+export type SaleAuditEvent = 'start' | 'change' | 'removed';
+
+// a line of the admin log of a sale (PRODUCT_SALE): what happened, the price, the sale before and
+// after it the way the answers show it (a sale that is over is no sale) and the discount the admin
+// gave. The same fields as the line of the database (db/05), prices the way Decimal writes them
+export function buildSaleAuditChanges(args: {
+  event: SaleAuditEvent;
+  price: { toString(): string };
+  before: SaleState;
+  after: SaleState;
+  discount?: { percent: number } | { amount: number };
+}): AuditChange[] {
+  const shown = (sale: SaleState) =>
+    isSaleOn(sale)
+      ? { salePrice: sale.salePrice!.toString(), saleEndsAt: sale.saleEndsAt!.toISOString() }
+      : { salePrice: null, saleEndsAt: null };
+  const old = shown(args.before);
+  const next = shown(args.after);
+  const price = args.price.toString();
+
+  return [
+    { field: 'event', old: null, new: args.event },
+    { field: 'price', old: price, new: price },
+    { field: 'salePrice', old: old.salePrice, new: next.salePrice },
+    { field: 'saleEndsAt', old: old.saleEndsAt, new: next.saleEndsAt },
+    ...(args.discount ? [{ field: 'discount', old: null, new: args.discount }] : []),
+  ];
+}
+
+// the sale is no field here: a line of its own describes it (buildSaleAuditChanges, db/05)
 export function buildProductUpdateAuditChanges(
   before: {
     name: string;
@@ -114,6 +149,7 @@ export async function writeAdminAuditLog(
       | 'PRODUCT_UPDATE'
       | 'PRODUCT_DELETE'
       | 'PRODUCT_PRICE_BULK_UPDATE'
+      | 'PRODUCT_SALE'
       | 'USER_ROLE_CHANGE'
       | 'ORDER_STATUS_CHANGE'
       | 'CATEGORY_UPDATE'

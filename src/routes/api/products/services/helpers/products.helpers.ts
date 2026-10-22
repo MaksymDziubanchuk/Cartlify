@@ -60,15 +60,18 @@ export function normalizeCreateProductInput(args: {
     categoryIdRaw,
   };
 }
-export function normalizeUpdateProductInput(args: {
-  name?: unknown;
-  description?: unknown;
-  price?: unknown;
-  stock?: unknown;
-  categoryId?: unknown;
-  popularityOverride?: unknown;
-  popularityOverrideUntil?: unknown;
-}) {
+export function normalizeUpdateProductInput(
+  args: {
+    name?: unknown;
+    description?: unknown;
+    price?: unknown;
+    stock?: unknown;
+    categoryId?: unknown;
+    popularityOverride?: unknown;
+    popularityOverrideUntil?: unknown;
+  },
+  now = Date.now(),
+) {
   // normalize optional ids
   const categoryIdRaw = args.categoryId != null ? toNumberSafe(args.categoryId) : undefined;
   if (args.categoryId != null) {
@@ -128,14 +131,17 @@ export function normalizeUpdateProductInput(args: {
     }
   }
 
-  // validate optional popularity override until
+  // validate optional popularity override until: an override overrides while its end is ahead
+  // (recalc_product_popularity, db/05), an end that is not ahead would override nothing
   let popularityOverrideUntilDate: Date | null | undefined = undefined;
   if (popularityOverrideUntilRaw !== undefined) {
     if (popularityOverrideUntilRaw === null) {
       popularityOverrideUntilDate = null;
     } else {
       const d = new Date(popularityOverrideUntilRaw);
-      if (Number.isNaN(d.getTime())) throw new BadRequestError('POPULARITY_OVERRIDE_UNTIL_INVALID');
+      if (Number.isNaN(d.getTime()) || d.getTime() <= now) {
+        throw new BadRequestError('POPULARITY_OVERRIDE_UNTIL_INVALID');
+      }
       popularityOverrideUntilDate = d;
     }
   }
@@ -151,6 +157,20 @@ export function normalizeUpdateProductInput(args: {
   };
 }
 
+// an override of the popularity overrides only with its end, and an end is the end of an
+// override: after a change the product has both or neither
+export function assertPopularityOverridePair(next: {
+  popularityOverride: number | null;
+  popularityOverrideUntil: Date | null;
+}): void {
+  if (next.popularityOverride !== null && next.popularityOverrideUntil === null) {
+    throw new BadRequestError('POPULARITY_OVERRIDE_UNTIL_REQUIRED');
+  }
+  if (next.popularityOverride === null && next.popularityOverrideUntil !== null) {
+    throw new BadRequestError('POPULARITY_OVERRIDE_REQUIRED');
+  }
+}
+
 export function normalizeBulkUpdateProductsPriceInput(args: {
   mode: unknown;
   value: unknown;
@@ -159,6 +179,7 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
 
   dryRun?: unknown;
   reason?: unknown;
+  sale?: unknown;
 }): {
   mode: 'percent' | 'fixed';
   value: number;
@@ -167,6 +188,7 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
 
   dryRun: boolean;
   reason?: string;
+  sale?: 'keep' | 'remove';
 } {
   // normalize mode and value
   const modeRaw =
@@ -264,5 +286,7 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
     where,
     dryRun,
     ...(reason ? { reason } : {}),
+    // the same word on the sales for every product, the schema lets through keep or remove
+    ...(args.sale === 'keep' || args.sale === 'remove' ? { sale: args.sale } : {}),
   };
 }

@@ -61,6 +61,24 @@ BEGIN
       ADD CONSTRAINT products_pop_override_non_negative
       CHECK ("popularityOverride" IS NULL OR "popularityOverride" >= 0);
   END IF;
+
+  -- a sale has a price and an end, or neither; its price is 0 (free) or more and below the price.
+  -- A price down to the sale price or below empties the sale before this check (db/05)
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_chk'
+  ) THEN
+    ALTER TABLE cartlify.products
+      ADD CONSTRAINT products_sale_chk
+      CHECK (
+        ("salePrice" IS NULL AND "saleEndsAt" IS NULL)
+        OR (
+          "salePrice" IS NOT NULL
+          AND "saleEndsAt" IS NOT NULL
+          AND "salePrice" >= 0
+          AND "salePrice" < price
+        )
+      );
+  END IF;
 END $$;
 
 ----------------------------------------
@@ -319,16 +337,30 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- PRICE CHANGE LOG: prices/value >= 0
+-- PRICE CHANGE LOG: prices >= 0, the start of a sale goes down
 ----------------------------------------
 DO $$
 BEGIN
+  -- the check that kept the value from going below 0 too (21.10.2026): a change down has a
+  -- negative value; a temporary line, it goes once dev and prod match the reference
+  ALTER TABLE cartlify.product_price_change_logs
+    DROP CONSTRAINT IF EXISTS price_change_non_negative;
+
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'price_change_non_negative'
+    SELECT 1 FROM pg_constraint WHERE conname = 'price_change_prices_non_negative'
   ) THEN
     ALTER TABLE cartlify.product_price_change_logs
-      ADD CONSTRAINT price_change_non_negative
-      CHECK ("oldPrice" >= 0 AND "newPrice" >= 0 AND value >= 0);
+      ADD CONSTRAINT price_change_prices_non_negative
+      CHECK ("oldPrice" >= 0 AND "newPrice" >= 0);
+  END IF;
+
+  -- a line with an end is the start of a sale: from the price down to the sale price
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'price_change_sale_below_price'
+  ) THEN
+    ALTER TABLE cartlify.product_price_change_logs
+      ADD CONSTRAINT price_change_sale_below_price
+      CHECK ("endsAt" IS NULL OR "newPrice" < "oldPrice");
   END IF;
 END $$;
 

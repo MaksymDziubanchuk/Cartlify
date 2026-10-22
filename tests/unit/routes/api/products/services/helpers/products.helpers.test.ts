@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { describe, expect, it } from '@jest/globals';
 
 import {
+  assertPopularityOverridePair,
   normalizeBulkUpdateProductsPriceInput,
   normalizeCreateProductInput,
   normalizeFindProductByIdInput,
@@ -118,11 +119,24 @@ describe('normalizeUpdateProductInput', () => {
   });
 
   it('parses the override end date', () => {
-    const out = normalizeUpdateProductInput({
-      popularityOverrideUntil: '2026-12-31T00:00:00.000Z',
-    });
+    const until = new Date(Date.now() + 86_400_000).toISOString();
 
-    expect(out.popularityOverrideUntilDate?.toISOString()).toBe('2026-12-31T00:00:00.000Z');
+    const out = normalizeUpdateProductInput({ popularityOverrideUntil: until });
+
+    expect(out.popularityOverrideUntilDate?.toISOString()).toBe(until);
+  });
+
+  // an override overrides while its end is ahead (recalc_product_popularity, db/05)
+  it.each([
+    ['in the past', -60_000],
+    ['at this moment', 0],
+  ])('refuses an override end %s', (_case, ms) => {
+    const now = Date.parse('2026-10-22T12:00:00.000Z');
+    const until = new Date(now + ms).toISOString();
+
+    expect(codeOf(() => normalizeUpdateProductInput({ popularityOverrideUntil: until }, now))).toBe(
+      'POPULARITY_OVERRIDE_UNTIL_INVALID',
+    );
   });
 
   it.each([
@@ -142,6 +156,35 @@ describe('normalizeUpdateProductInput', () => {
   });
 });
 
+// an override overrides only with its end, and an end is the end of an override: the product has
+// both after a change, or neither
+describe('assertPopularityOverridePair', () => {
+  const until = new Date('2026-12-01T00:00:00.000Z');
+
+  it.each([
+    ['an override with its end', { popularityOverride: 500, popularityOverrideUntil: until }],
+    ['neither', { popularityOverride: null, popularityOverrideUntil: null }],
+    ['an override of 0 with its end', { popularityOverride: 0, popularityOverrideUntil: until }],
+  ])('lets a product have %s', (_case, next) => {
+    expect(() => assertPopularityOverridePair(next)).not.toThrow();
+  });
+
+  it.each([
+    [
+      'an override without an end',
+      { popularityOverride: 500, popularityOverrideUntil: null },
+      'POPULARITY_OVERRIDE_UNTIL_REQUIRED',
+    ],
+    [
+      'an end without an override',
+      { popularityOverride: null, popularityOverrideUntil: until },
+      'POPULARITY_OVERRIDE_REQUIRED',
+    ],
+  ])('refuses %s', (_case, next, code) => {
+    expect(codeOf(() => assertPopularityOverridePair(next))).toBe(code);
+  });
+});
+
 describe('normalizeBulkUpdateProductsPriceInput', () => {
   // the server always sets deleted to false unless the request says otherwise
   it('changes every product that is not deleted when no scope is given', () => {
@@ -153,6 +196,19 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
       where: { AND: [{ deletedAt: null }] },
       dryRun: false,
     });
+  });
+
+  // the same word on the sales for every product: keep them or take them off
+  it.each(['keep', 'remove'] as const)('passes the word %s on the sales', (sale) => {
+    expect(normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, sale }).sale).toBe(
+      sale,
+    );
+  });
+
+  it('passes no word on the sales when none is sent', () => {
+    expect(normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1 })).not.toHaveProperty(
+      'sale',
+    );
   });
 
   it('changes every product that is not deleted when the scope is empty', () => {

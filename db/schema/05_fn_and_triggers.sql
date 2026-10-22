@@ -485,7 +485,24 @@ EXECUTE FUNCTION cartlify.categories_before_parent_change ();
 ------------------------------------------------------------
 -- PRODUCTS
 ------------------------------------------------------------
--- PRODUCTS === system functions === 
+-- PRODUCTS === prices ===
+-- PRODUCTS the price a product sells at now: the sale price while the sale is ahead of its end,
+-- the price otherwise. A sale that is over keeps its fields until the next sale writes over them
+-- or the price goes down to them (products_before_price_change), it is no price any more. The
+-- order items, the reservation check of a confirm and the catalog (sort, filter) take this price.
+-- Prisma keeps dates as utc in columns without a time zone, so the end is compared in utc
+CREATE OR REPLACE FUNCTION cartlify.product_current_price (
+  p_price numeric,
+  p_sale_price numeric,
+  p_sale_ends_at timestamp
+) RETURNS numeric LANGUAGE sql STABLE AS $$
+  SELECT CASE
+    WHEN p_sale_price IS NOT NULL AND p_sale_ends_at > (now() AT TIME ZONE 'UTC') THEN p_sale_price
+    ELSE p_price
+  END
+$$;
+
+-- PRODUCTS === system functions ===
 -- PRODUCTS recalc product rating from reviews
 -- internal: only the reviews rating trigger calls it, the app has no execute right (db/01)
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
@@ -867,6 +884,78 @@ CREATE TRIGGER trg_products_before_views_change
 BEFORE UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_before_views_change ();
 
+-- PRODUCTS the sale of a product, whatever way the row changes: a sale set or changed ends in the
+-- future; a price down to the sale price or below ends the sale and its fields go empty. A sale
+-- that was still on gets the line of its end in the admin log (PRODUCT_SALE, event
+-- ended_by_price) in the name of the admin who changed the price, the system has no id; the log
+-- of prices has the change of the price itself. Prices go as the app writes them (trim_scale,
+-- 15.50 is 15.5), dates as iso utc. Only an update: rows copied in (dev restored from a copy of
+-- prod) keep their sales, ended ones too. Prisma keeps dates as utc in columns without a time zone
+CREATE OR REPLACE FUNCTION cartlify.products_before_price_change () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_now timestamp := now() AT TIME ZONE 'UTC';
+  v_actor_id integer := cartlify.current_actor_id();
+BEGIN
+  IF NEW."salePrice" IS NOT NULL
+     AND (
+       NEW."salePrice" IS DISTINCT FROM OLD."salePrice"
+       OR NEW."saleEndsAt" IS DISTINCT FROM OLD."saleEndsAt"
+     )
+     AND (NEW."saleEndsAt" IS NULL OR NEW."saleEndsAt" <= v_now)
+  THEN
+    RAISE EXCEPTION 'PRODUCT_SALE_ENDS_AT_INVALID';
+  END IF;
+
+  IF NEW."price" IS DISTINCT FROM OLD."price"
+     AND NEW."salePrice" IS NOT NULL
+     AND NEW."price" <= NEW."salePrice"
+  THEN
+    IF NEW."saleEndsAt" > v_now THEN
+      IF v_actor_id IS NULL OR NOT cartlify.is_admin() THEN
+        RAISE EXCEPTION 'PRODUCT_SALE_ACTOR_REQUIRED';
+      END IF;
+
+      PERFORM cartlify.log_admin_action(
+        v_actor_id,
+        cartlify.current_actor_role(),
+        'product',
+        NEW.id,
+        'PRODUCT_SALE',
+        jsonb_build_array(
+          jsonb_build_object('field', 'event', 'old', NULL, 'new', 'ended_by_price'),
+          jsonb_build_object(
+            'field', 'price',
+            'old', trim_scale(OLD."price")::text,
+            'new', trim_scale(NEW."price")::text
+          ),
+          jsonb_build_object(
+            'field', 'salePrice',
+            'old', trim_scale(NEW."salePrice")::text,
+            'new', NULL
+          ),
+          jsonb_build_object(
+            'field', 'saleEndsAt',
+            'old', to_char(NEW."saleEndsAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'new', NULL
+          )
+        )
+      );
+    END IF;
+
+    NEW."salePrice" := NULL;
+    NEW."saleEndsAt" := NULL;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_products_before_price_change ON cartlify.products;
+
+CREATE TRIGGER trg_products_before_price_change
+BEFORE UPDATE OF "price", "salePrice", "saleEndsAt" ON cartlify.products FOR EACH ROW
+EXECUTE FUNCTION cartlify.products_before_price_change ();
+
 -- PRODUCTS sync popularity after product views change
 -- views enter the score through a logarithm, so one view rarely changes it:
 -- recalc while the counter is small, on every tenth view and on any manual change
@@ -1052,6 +1141,7 @@ $$;
 
 -- ORDERS AND ITEMS === user actions ===
 -- ORDERS AND ITEMS refresh item prices of an unconfirmed order from current product prices
+-- (product_current_price: the sale price while the sale lasts)
 -- runs with caller rights: rls lets only the order owner change items, and only before confirmation
 -- returns the number of items whose price changed
 CREATE OR REPLACE FUNCTION cartlify.refresh_order_prices (p_order_id integer) RETURNS integer LANGUAGE plpgsql
@@ -1062,11 +1152,12 @@ DECLARE
   v_changed integer;
 BEGIN
   UPDATE cartlify.order_items AS oi
-  SET "unitPrice" = p."price"
+  SET "unitPrice" = cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt")
   FROM cartlify.products AS p
   WHERE oi."orderId" = p_order_id
     AND p.id = oi."productId"
-    AND oi."unitPrice" IS DISTINCT FROM p."price";
+    AND oi."unitPrice" IS DISTINCT FROM
+      cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt");
 
   GET DIAGNOSTICS v_changed = ROW_COUNT;
 
@@ -1151,13 +1242,15 @@ END IF;
   END LOOP;
 
   -- product rows are locked by the reservation above, so prices cannot change until commit:
-  -- refuse if any item price differs, the user must confirm the amount they see
+  -- refuse if any item price differs from the price the product sells at now (a sale that just
+  -- ended counts), the user must confirm the amount they see
   IF EXISTS (
     SELECT 1
     FROM cartlify.order_items AS oi
     JOIN cartlify.products AS p ON p.id = oi."productId"
     WHERE oi."orderId" = p_order_id
-      AND oi."unitPrice" IS DISTINCT FROM p."price"
+      AND oi."unitPrice" IS DISTINCT FROM
+        cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt")
   ) THEN
     RAISE EXCEPTION 'ORDER_PRICES_CHANGED';
   END IF;
@@ -1708,8 +1801,8 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
-  -- unit price always comes from the product, never from the caller
-  SELECT p."price", p."deletedAt"
+  -- unit price always comes from the product, never from the caller: the price it sells at now
+  SELECT cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt"), p."deletedAt"
   INTO v_price, v_deleted_at
   FROM cartlify.products AS p
   WHERE p.id = NEW."productId";
@@ -2002,15 +2095,24 @@ EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 -- a temporary line, it goes once dev and prod match the reference
 DROP FUNCTION IF EXISTS cartlify.log_product_price_change (integer, integer, numeric, numeric, cartlify."PriceChangeMode", numeric);
 
+-- PRICE CHANGE LOGS the version without the end of a sale (21.10.2026): a call of five arguments
+-- would match both versions; a temporary line, it goes once dev and prod match the reference
+DROP FUNCTION IF EXISTS cartlify.log_product_price_change (integer, numeric, numeric, cartlify."PriceChangeMode", numeric);
+
 -- PRICE CHANGE LOGS insert product price change log entry
 -- system function: runs as the owner, the app writes no line straight into the table (db/03);
--- the actor of a line is the admin of the context, a signed-in admin with an id is required
+-- the actor of a line is the admin of the context, a signed-in admin with an id is required.
+-- p_mode is how the change was given, p_value is its size in that mode: the percent of the price
+-- or the amount of money, negative for a change down. A line with an end (p_ends_at) is the start
+-- of a sale, from the price down to the sale price (db/06); a sale taken off goes from the sale
+-- price back to the price. A change that changes nothing is no line
 CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_product_id integer,
   p_old_price numeric,
   p_new_price numeric,
   p_mode cartlify."PriceChangeMode",
-  p_value numeric
+  p_value numeric,
+  p_ends_at timestamp DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2039,6 +2141,7 @@ BEGIN
     "newPrice",
     "mode",
     "value",
+    "endsAt",
     "createdAt"
   )
   VALUES (
@@ -2048,6 +2151,7 @@ BEGIN
     p_new_price,
     p_mode,
     p_value,
+    p_ends_at,
     now()
   );
 END;

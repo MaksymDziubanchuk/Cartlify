@@ -242,9 +242,10 @@ BEGIN
     'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
     'cartlify.expire_order_reservation(integer)',
     'cartlify.anonymize_login_logs(integer)',
-    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric)',
+    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
     -- functions that run with the app rights, under its rls
     'cartlify.refresh_order_prices(integer)',
+    'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
     'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)'
   ]
   LOOP

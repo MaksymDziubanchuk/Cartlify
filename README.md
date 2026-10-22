@@ -140,12 +140,12 @@ What is important to state honestly:
 ### Catalog and product management
 
 - category listing and admin CRUD; the tree goes from the top down: a move takes the whole branch of a category, `parentId: null` moves it to the top, and a category never goes inside its own branch (`409 CATEGORY_PARENT_CYCLE`, refused by the database too, also for two moves at the same time); a new parent category gets its children one PATCH each; deleting a category gives its direct children to its parent
-- product listing with filtering / pagination helpers
-- product details endpoint
+- product listing with filtering, sorting and cursor pages, and the product details endpoint: a buyer (guest, user) gets what helps to buy (the price, the sale, the free units, the rating, the category; the list also the popularity) and sorts by date, price, popularity, rating, name or the sale (the products on sale first, then the rest by popularity); admin and root get the counters, the whole stock, the reserve and the popularity override too, sort by any field (the price by the usual one, the sale price in the list of the products on sale) and list the deleted products, the ones on sale or with a popularity override that is on with their flags (an override goes with its end in the future, an end with an override) (without a flag only the plain products, with one every product of its condition). A visit of an admin is not counted as a view
 - admin product CRUD
 - product image upload flow: images come only as files of a form (creating a product takes only a form, an update takes JSON or a form), jpeg, png or webp by their content, up to 5 MB per file; an upload waits at a temporary id and takes the place of the product images only once the product is written, a refused request leaves no files and the images as they were; the files a product no longer has after an update are deleted
 - product category reassignment
-- bulk price update endpoint for admin/root
+- sales (`PATCH /api/products/:productId/sale`, admin/root): a discount by a percent of the price or an amount off it until an end in the future, `sale: null` takes it off (the same sale again, or nothing to take off, is `409` and changes nothing); while the sale lasts the product sells at the sale price (the cart, the confirmation and its smallest payment, the price sort and the price filters of the catalog), and the product answers show `salePrice` and `saleEndsAt` next to the usual `price`; a sale past its end is left out. A new price of a product on sale says what happens to the sale (`sale`: keep it, take it off, or a new one, each step with its log lines; the bulk price update keeps or removes the sales of every product alike), without it the change is `409 PRODUCT_SALE_DECISION_REQUIRED`. The log of prices keeps the start of a sale (by its percent or amount, negative, with the end) and a sale taken off; the admin log keeps every sale as `PRODUCT_SALE` (started, changed, taken off, ended by a price down to it) with the price, the sale before and after and the discount. A free product (a sale price of 0) is bought together with something that makes the smallest payment
+- bulk price update endpoint for admin/root (the usual prices)
 - product view/popularity-related fields in the data model
 
 ### Reviews and favorites
@@ -592,7 +592,7 @@ Examples of implemented business endpoints:
 
 - auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
 - users: admin list of users, get/update current user (an empty avatar removes it), get user by id, moderator removal of an avatar, root delete user
-- products: list, details, reviews, create/update/delete, upload images, bulk price update
+- products: list, details, reviews, create/update/delete, upload images, sale, bulk price update
 - categories: list, create, update, delete
 - favorites: get/add/remove
 - orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund

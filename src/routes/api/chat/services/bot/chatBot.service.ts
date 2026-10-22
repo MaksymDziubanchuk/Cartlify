@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
+import { isSaleOn } from '@helpers/productSale.js';
 import { paymentProviders, shopCurrency } from '@routes/api/payments/providers/index.js';
 import { askAiForBotReply, askAiForBotText, type ChatBotLogger } from './chatBotAi.service.js';
 import {
@@ -283,6 +284,15 @@ const mapProductContext = (
         id: product.id,
         name: product.name,
         price: Number(product.price),
+        // the sale while it lasts, the one the catalog shows next to the price
+        sale: isSaleOn(product)
+            ? {
+                  price: Number(product.salePrice),
+                  endsAt: product.saleEndsAt!.toISOString(),
+              }
+            : null,
+        // free units, never below zero, the stock the catalog shows
+        stock: Math.max(0, product.stock - product.reservedStock),
         categoryName: product.category.name,
         description: product.description,
         popularity: product.popularity,

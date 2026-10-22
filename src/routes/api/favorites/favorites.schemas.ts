@@ -10,19 +10,16 @@ const favoriteProductExample = {
   description: 'Bluetooth headphones with noise cancellation.',
   price: 49.99,
   stock: 15,
-  categoryId: 1,
+  category: { id: 1, name: 'Headphones', slug: 'headphones' },
   images: {
     url200: 'https://example.com/products/headphones-200.webp',
     url400: 'https://example.com/products/headphones-400.webp',
     url800: 'https://example.com/products/headphones-800.webp',
   },
   popularity: 120,
-  views: 350,
   avgRating: 4.7,
   reviewsCount: 18,
   createdAt: '2026-01-01T10:00:00.000Z',
-  updatedAt: '2026-01-01T10:00:00.000Z',
-  deletedAt: null,
 };
 
 const favoritesQueryExample = {
@@ -57,7 +54,9 @@ const deleteFavoriteResponseExample = {
 const getFavoritesSchema = {
   operationId: 'getFavorites',
   summary: 'Get favorites',
-  description: 'Returns the current guest or authenticated user favorite products.',
+  description:
+    'Returns the current guest or authenticated user favorite products, each as a product of the ' +
+    'list of a buyer: with its popularity, without the fields of an admin.',
 
   querystring: {
     $ref: 'favoritesGetQuerySchema#',

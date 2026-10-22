@@ -25,6 +25,8 @@ const product = (
   categoryName: 'Kitchen',
   description: 'Holds 300 ml',
   popularity: 12,
+  sale: null,
+  stock: 5,
   ...patch,
 });
 
@@ -142,7 +144,7 @@ describe('buildChatBotPrompt', () => {
 
       expect(first?.role).toBe('developer');
       expect(first?.content).toContain(
-        '- id: 4; name: Mug; price: 9.99 EUR; category: Kitchen; description: Holds 300 ml; popularity: 12',
+        '- id: 4; name: Mug; price: 9.99 EUR; in stock: 5; category: Kitchen; description: Holds 300 ml; popularity: 12',
       );
     });
 
@@ -158,7 +160,9 @@ describe('buildChatBotPrompt', () => {
         productContext: [product({ categoryName: null, description: '   ', popularity: null })],
       }).messages[0]?.content;
 
-      expect(content).toContain('- id: 4; name: Mug; price: 9.99 EUR; category: unknown\n');
+      expect(content).toContain(
+        '- id: 4; name: Mug; price: 9.99 EUR; in stock: 5; category: unknown\n',
+      );
     });
 
     it('keeps a popularity of zero', () => {
@@ -169,6 +173,38 @@ describe('buildChatBotPrompt', () => {
 
     it('sends no product message when there are no products', () => {
       expect(build().messages.some((message) => message.role === 'developer')).toBe(false);
+    });
+
+    // the buyer pays the sale price; the usual price stays next to it, as the catalog shows it
+    it('names the sale price and its end next to the price of a product on sale', () => {
+      const content = build({
+        productContext: [product({ sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z' } })],
+      }).messages[0]?.content;
+
+      expect(content).toContain(
+        '- id: 4; name: Mug; price: 9.99 EUR; sale price: 7.5 EUR until 2026-11-01T10:00:00.000Z (UTC); in stock: 5; category: Kitchen',
+      );
+    });
+
+    // the units free to buy now: the stock that confirmed orders do not hold
+    it('names the free units of a product, none too', () => {
+      expect(build({ productContext: [product({ stock: 0 })] }).messages[0]?.content).toContain(
+        'in stock: 0;',
+      );
+    });
+
+    it('tells the model to promise no more units than are free', () => {
+      expect(build().instructions).toContain(
+        'in stock is the number of units free to buy now; never promise more of a product',
+      );
+    });
+
+    it('tells the model a product on sale sells at its sale price until the end of the sale', () => {
+      const { instructions } = build();
+
+      expect(instructions).toContain(
+        'A product with a sale price sells at the sale price until the end of the sale',
+      );
     });
   });
 });

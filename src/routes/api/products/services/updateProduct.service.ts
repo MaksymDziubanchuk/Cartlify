@@ -3,6 +3,8 @@ import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
+import { isSaleOn } from '@helpers/productSale.js';
+import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { deleteImage, isOwnFile, type UploadImageResult } from '@utils/cloudinary.util.js';
 
 import {
@@ -17,11 +19,16 @@ import {
 import {
   placeProductImages,
   mapProductRowToResponse,
+  productResponseSelect,
   writeProductPriceChangeLog,
   computeFixedDelta,
   readProductImageUrls,
   normalizeFindProductByIdInput,
   normalizeUpdateProductInput,
+  normalizeSaleEnd,
+  assertPopularityOverridePair,
+  putSaleOn,
+  takeSaleOff,
 } from './helpers/index.js';
 
 import type { UpdateProductDto, UpdateProductResponseDto } from 'types/dto/products.dto.js';
@@ -38,6 +45,7 @@ export async function updateProduct({
   images,
   popularityOverride,
   popularityOverrideUntil,
+  sale,
   log,
 }: UpdateProductDto): Promise<UpdateProductResponseDto> {
   // validate actor context for rls and admin-only update
@@ -65,6 +73,11 @@ export async function updateProduct({
     popularityOverrideUntil,
   });
 
+  // the word on the sale goes with a price; the sale alone has a route of its own
+  if (sale !== undefined && price === undefined) {
+    throw new BadRequestError('PRODUCT_SALE_REQUIRES_PRICE');
+  }
+
   // reject empty patch
   const hasImages = Array.isArray(images) && images.length > 0;
   const hasAnyUpdates =
@@ -78,6 +91,9 @@ export async function updateProduct({
     popularityOverrideUntil !== undefined;
 
   if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
+
+  // a new sale starts right away, its end is in the future
+  const newSaleEndsAt = sale && sale !== 'keep' ? normalizeSaleEnd(sale.endsAt) : undefined;
 
   // a retried transaction must not move the same upload twice
   const moved = new Map<string, UploadImageResult>();
@@ -102,6 +118,8 @@ export async function updateProduct({
             name: true,
             description: true,
             price: true,
+            salePrice: true,
+            saleEndsAt: true,
             stock: true,
             reservedStock: true,
             categoryId: true,
@@ -112,6 +130,46 @@ export async function updateProduct({
           },
         });
         if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
+
+        // an override with its end, or neither: a change of one keeps the other one of the
+        // product. A change that leaves the override alone is not checked, old rows of dev may
+        // have an override without an end
+        if (popularityOverride !== undefined || popularityOverrideUntil !== undefined) {
+          assertPopularityOverridePair({
+            popularityOverride:
+              popularityOverride === undefined
+                ? before.popularityOverride
+                : (popularityOverrideRaw ?? null),
+            popularityOverrideUntil:
+              popularityOverrideUntil === undefined
+                ? before.popularityOverrideUntil
+                : (popularityOverrideUntilDate ?? null),
+          });
+        }
+
+        // a new price of a product with a sale that is on says what happens to the sale: keep it,
+        // take it off, or a new one. Each step writes every line of the logs: the old sale off,
+        // the price, the new sale from the new price
+        const saleOn = isSaleOn(before);
+        const newPrice = priceRaw !== undefined ? new Prisma.Decimal(priceRaw) : undefined;
+        if (saleOn && newPrice && !newPrice.equals(before.price)) {
+          if (sale === undefined) {
+            throw new ConflictError('PRODUCT_SALE_DECISION_REQUIRED', {
+              salePrice: decimalToNumber(before.salePrice),
+              saleEndsAt: before.saleEndsAt!.toISOString(),
+            });
+          }
+          // a sale stays below the price: a price down to it cannot keep it
+          if (sale === 'keep' && newPrice.lessThanOrEqualTo(before.salePrice!)) {
+            throw new ConflictError('PRODUCT_SALE_NOT_BELOW_PRICE', {
+              salePrice: decimalToNumber(before.salePrice),
+              price: decimalToNumber(newPrice),
+            });
+          }
+        }
+
+        const saleContext = { db, actorId, actorRole };
+        if (saleOn && sale !== undefined && sale !== 'keep') await takeSaleOff(saleContext, before);
 
         // use stock as delta (negative value takes units off)
         const newStock = stockRaw !== undefined ? before.stock + stockRaw : undefined;
@@ -154,28 +212,12 @@ export async function updateProduct({
           data.updatedAt = new Date();
         }
 
-        // persist product update under row lock
+        // persist product update under row lock; a price down to the sale price or below ends the
+        // sale in the database (db/05), which writes its end in the admin log (PRODUCT_SALE)
         const after = await db.product.update({
           where: { id: productIdRaw },
           data,
-          select: {
-            id: true,
-            name: true,
-            description: true,
-            price: true,
-            stock: true,
-            reservedStock: true,
-            categoryId: true,
-            popularityOverride: true,
-            popularityOverrideUntil: true,
-            popularity: true,
-            views: true,
-            avgRating: true,
-            reviewsCount: true,
-            deletedAt: true,
-            createdAt: true,
-            updatedAt: true,
-          },
+          select: productResponseSelect,
         });
 
         // build diff list for admin audit log
@@ -215,6 +257,17 @@ export async function updateProduct({
           });
         }
 
+        // the new sale is counted from the new price, after the old one went and the price changed
+        const final =
+          sale && sale !== 'keep'
+            ? await putSaleOn(
+                saleContext,
+                { id: after.id, price: after.price, salePrice: null, saleEndsAt: null },
+                sale,
+                newSaleEndsAt!,
+              )
+            : after;
+
         // the new images replace the old ones last, once every other row is written: the uploads
         // move to the paths of the product only for a request that is taken
         let staleFiles: string[] = [];
@@ -237,7 +290,7 @@ export async function updateProduct({
             .filter((publicId) => isOwnFile(publicId) && !kept.includes(publicId)) as string[];
         }
 
-        return { after, staleFiles };
+        return { after: final, staleFiles };
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
@@ -265,7 +318,7 @@ export async function updateProduct({
     const imageRows = await readProductImageUrls(updated.id as any);
 
     // map db row into api dto
-    return mapProductRowToResponse({ product: updated, images: imageRows });
+    return mapProductRowToResponse({ product: updated, images: imageRows, view: 'admin' });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

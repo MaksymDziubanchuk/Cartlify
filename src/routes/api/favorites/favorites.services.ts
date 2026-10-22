@@ -3,7 +3,10 @@ import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 import { encodeCursor, decodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
-import { mapProductListRowToResponse } from '../products/services/helpers/getAllProducts.helper.js';
+import {
+  mapProductListRowToResponse,
+  productListSelect,
+} from '../products/services/helpers/getAllProducts.helper.js';
 
 import { BadRequestError, NotFoundError, InternalError, isAppError } from '@utils/errors.js';
 import type {
@@ -75,31 +78,8 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
         select: {
           id: true,
           createdAt: true,
-          product: {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              price: true,
-              stock: true,
-              // the card shows free units, stock minus the reserved ones
-              reservedStock: true,
-              categoryId: true,
-              views: true,
-              popularity: true,
-              avgRating: true,
-              reviewsCount: true,
-              createdAt: true,
-              updatedAt: true,
-              deletedAt: true,
-              images: {
-                where: { isPrimary: true },
-                select: { url: true, position: true, isPrimary: true },
-                orderBy: { position: 'asc' },
-                take: 1,
-              },
-            },
-          },
+          // the card of a list: free units, the sale while it lasts, the primary image
+          product: { select: productListSelect },
         },
       });
 
@@ -108,7 +88,8 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
 
       // map favorites into product cards
       const items = pageRows.map((r) => ({
-        product: mapProductListRowToResponse(r.product),
+        // a favorite is a product of a buyer list
+        product: mapProductListRowToResponse(r.product, 'buyer'),
         addedAt: r.createdAt,
       }));
 

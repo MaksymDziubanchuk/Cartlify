@@ -9,6 +9,7 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 import {
   placeProductImages,
   mapProductRowToResponse,
+  productResponseSelect,
   readProductImageUrls,
   normalizeCreateProductInput,
 } from './helpers/index.js';
@@ -71,22 +72,7 @@ export async function createProduct({
             stock: stockNorm,
             categoryId: categoryIdRaw,
           },
-          select: {
-            id: true,
-            name: true,
-            description: true,
-            price: true,
-            stock: true,
-            reservedStock: true,
-            categoryId: true,
-            views: true,
-            popularity: true,
-            avgRating: true,
-            reviewsCount: true,
-            deletedAt: true,
-            createdAt: true,
-            updatedAt: true,
-          },
+          select: productResponseSelect,
         });
 
         // write admin audit log for product create
@@ -115,6 +101,7 @@ export async function createProduct({
     return mapProductRowToResponse({
       product: created,
       images: imageRows,
+      view: 'admin',
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

@@ -3,19 +3,22 @@ import { describe, expect, it } from '@jest/globals';
 
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import {
-  buildCursorWhere,
-  buildOrderBy,
-  buildProductSearchIdsQuery,
+  BUYER_SORTS,
+  buildProductIdsQuery,
   makeNextCursor,
   mapProductListRowToResponse,
   normalizeFindAllProductsInput,
+  type ProductListQuery,
 } from '@routes/api/products/services/helpers/getAllProducts.helper.js';
 import { InternalError } from '@utils/errors.js';
 
-import type { FindAllProductsDto, ProductsSortField, SortOrder } from 'types/dto/products.dto.js';
+import type { FindAllProductsDto, ProductsSortField } from 'types/dto/products.dto.js';
 
 import { thrownBy } from '../../../../../../helpers/errors.js';
-import { matchesWhere, sortRows, walkPages } from '../../../../../../helpers/prismaWhere.js';
+
+// the catalog list: a buyer (guest, user) and an admin (admin, root) see other fields and sort by
+// other ones. Every list goes through one raw query of ids (the price a product sells at and its
+// sale depend on the time), Prisma reads the rows of the page
 
 const imageUrl = 'https://res.cloudinary.com/demo/image/upload/v1/products/1/0.jpg';
 
@@ -24,11 +27,15 @@ const row = {
   name: 'Desk lamp',
   description: 'Warm light' as string | null,
   price: new Prisma.Decimal('25.50') as unknown,
+  salePrice: null as unknown,
+  saleEndsAt: null as Date | null,
   stock: 10,
   reservedStock: 3,
-  categoryId: 2,
+  category: { id: 2, name: 'Lamps', slug: 'lamps' },
   views: 40,
   popularity: 7,
+  popularityOverride: null as number | null,
+  popularityOverrideUntil: null as Date | null,
   avgRating: new Prisma.Decimal('4.25') as unknown,
   reviewsCount: 4,
   createdAt: new Date('2026-01-01T10:00:00.000Z'),
@@ -37,7 +44,8 @@ const row = {
   images: [{ url: imageUrl, position: 0, isPrimary: true }],
 };
 
-const map = (patch: Partial<typeof row> = {}) => mapProductListRowToResponse({ ...row, ...patch });
+const map = (patch: Partial<typeof row> = {}, view: 'buyer' | 'admin' = 'buyer') =>
+  mapProductListRowToResponse({ ...row, ...patch }, view);
 
 const dto = (patch: Partial<FindAllProductsDto> = {}): FindAllProductsDto =>
   ({
@@ -71,11 +79,13 @@ describe('mapProductListRowToResponse', () => {
     expect(map({ stock: 2, reservedStock: 5 }).stock).toBe(0);
   });
 
-  it('leaves out an empty description and shows when a product was deleted', () => {
-    const out = map({ description: null, deletedAt: new Date('2026-02-01T00:00:00.000Z') });
+  it('names the category of the product', () => {
+    expect(map().category).toEqual({ id: 2, name: 'Lamps', slug: 'lamps' });
+    expect(map()).not.toHaveProperty('categoryId');
+  });
 
-    expect(out).not.toHaveProperty('description');
-    expect(out.deletedAt).toBe('2026-02-01T00:00:00.000Z');
+  it('leaves out an empty description', () => {
+    expect(map({ description: null })).not.toHaveProperty('description');
   });
 
   it('builds the image urls from the primary image', () => {
@@ -85,6 +95,82 @@ describe('mapProductListRowToResponse', () => {
   it('throws an internal error when a product has no image, which every product must have', () => {
     expect(thrownBy(() => map({ images: [] }))).toBeInstanceOf(InternalError);
   });
+
+  // the card of the product page does the same
+  it('shows the sale next to the price while it lasts, and leaves it out past its end', () => {
+    const salePrice = new Prisma.Decimal('19.90');
+    const saleEndsAt = new Date(Date.now() + 60_000);
+
+    expect(map({ salePrice, saleEndsAt })).toMatchObject({
+      price: 25.5,
+      salePrice: 19.9,
+      saleEndsAt: saleEndsAt.toISOString(),
+    });
+    expect(map({ salePrice, saleEndsAt: new Date(Date.now() - 1) })).not.toHaveProperty(
+      'salePrice',
+    );
+  });
+
+  // a buyer sorts by popularity and the list shows it; the rest is for admins
+  it('shows a buyer the popularity and nothing of the admin', () => {
+    const out = map({ deletedAt: new Date('2026-02-01T00:00:00.000Z') });
+
+    expect(out.popularity).toBe(7);
+    for (const field of [
+      'views',
+      'updatedAt',
+      'totalStock',
+      'reservedStock',
+      'popularityOverride',
+      'popularityOverrideUntil',
+      'deletedAt',
+    ]) {
+      expect(out).not.toHaveProperty(field);
+    }
+  });
+
+  it('shows an admin the counters, the whole stock, the override and the delete date', () => {
+    const out = map(
+      {
+        popularityOverride: 500,
+        popularityOverrideUntil: new Date('2026-03-01T00:00:00.000Z'),
+        deletedAt: new Date('2026-02-01T00:00:00.000Z'),
+      },
+      'admin',
+    );
+
+    expect(out).toMatchObject({
+      stock: 7,
+      totalStock: 10,
+      reservedStock: 3,
+      popularity: 7,
+      views: 40,
+      updatedAt: '2026-01-05T10:00:00.000Z',
+      popularityOverride: 500,
+      popularityOverrideUntil: '2026-03-01T00:00:00.000Z',
+      deletedAt: '2026-02-01T00:00:00.000Z',
+    });
+  });
+
+  // an empty field of an admin is null, so every field is there
+  it('shows an admin an empty override, sale and delete date as null', () => {
+    expect(map({}, 'admin')).toMatchObject({
+      popularityOverride: null,
+      popularityOverrideUntil: null,
+      salePrice: null,
+      saleEndsAt: null,
+      deletedAt: null,
+    });
+  });
+
+  it('shows an admin a sale past its end, the way the row keeps it', () => {
+    const saleEndsAt = new Date(Date.now() - 1);
+
+    expect(map({ salePrice: new Prisma.Decimal('19.90'), saleEndsAt }, 'admin')).toMatchObject({
+      salePrice: 19.9,
+      saleEndsAt: saleEndsAt.toISOString(),
+    });
+  });
 });
 
 describe('normalizeFindAllProductsInput', () => {
@@ -92,6 +178,7 @@ describe('normalizeFindAllProductsInput', () => {
     expect(
       normalizeFindAllProductsInput({ actorRole: 'GUEST' } as FindAllProductsDto),
     ).toMatchObject({
+      view: 'buyer',
       limit: 20,
       sort: 'popularity',
       order: 'desc',
@@ -121,25 +208,14 @@ describe('normalizeFindAllProductsInput', () => {
   });
 
   // a filter that asked for something must not turn into "every product"
-  it('rejects a category filter in which no id is valid instead of dropping the filter', () => {
-    expect(thrownBy(() => normalizeFindAllProductsInput(dto({ categoryIds: [0] })))).toMatchObject({
-      statusCode: 400,
-      errorCode: 'CATEGORY_IDS_INVALID',
-    });
-  });
-
-  // the controller drops invalid ids, ?categoryIds=0 reaches the helper as []
   it.each([
     ['empty, as the controller passes ?categoryIds=0', []],
     ['only zero and negative ids', [0, -1]],
   ])('rejects a category filter that is %s', (_case, categoryIds) => {
     expect(thrownBy(() => normalizeFindAllProductsInput(dto({ categoryIds })))).toMatchObject({
+      statusCode: 400,
       errorCode: 'CATEGORY_IDS_INVALID',
     });
-  });
-
-  it('lists every category when the filter is not sent', () => {
-    expect(normalizeFindAllProductsInput(dto()).categoryIds).toBeUndefined();
   });
 
   it.each([
@@ -171,285 +247,189 @@ describe('normalizeFindAllProductsInput', () => {
     ).toBeUndefined();
   });
 
-  describe('deleted products', () => {
-    it.each(['GUEST', 'USER', 'ADMIN', 'ROOT'] as const)(
-      'shows %s only products that are not deleted when the flag is not sent',
-      (actorRole) => {
-        expect(normalizeFindAllProductsInput(dto({ actorRole })).deleted).toBe(false);
-      },
-    );
+  describe('a buyer', () => {
+    it.each(['GUEST', 'USER'] as const)('%s sees the catalog of a buyer', (actorRole) => {
+      expect(normalizeFindAllProductsInput(dto({ actorRole })).view).toBe('buyer');
+    });
 
-    it.each(['GUEST', 'USER'] as const)(
-      'lets %s ask for products that are not deleted',
-      (actorRole) => {
-        expect(normalizeFindAllProductsInput(dto({ actorRole, deleted: false })).deleted).toBe(
-          false,
-        );
-      },
-    );
+    // a buyer sees every product of the catalog, on sale or not; the flags are the admin's
+    it('has no filter by the sale or by the override', () => {
+      const q = normalizeFindAllProductsInput(dto());
 
-    it.each(['GUEST', 'USER'] as const)('forbids %s to see deleted products', (actorRole) => {
+      expect(q.onSale).toBeUndefined();
+      expect(q.popularityOverridden).toBeUndefined();
+    });
+
+    it.each(BUYER_SORTS)('sorts by %s', (sort) => {
+      expect(normalizeFindAllProductsInput(dto({ sort })).sort).toBe(sort);
+    });
+
+    it.each([
+      'views',
+      'updatedAt',
+      'stock',
+      'reviewsCount',
+      'salePrice',
+      'totalStock',
+      'reservedStock',
+      'popularityOverride',
+      'popularityOverrideUntil',
+      'deletedAt',
+    ] as ProductsSortField[])('may not sort by %s', (sort) => {
+      expect(thrownBy(() => normalizeFindAllProductsInput(dto({ sort })))).toMatchObject({
+        statusCode: 403,
+        errorCode: 'SORT_FORBIDDEN',
+        details: { sort },
+      });
+    });
+
+    it.each(['GUEST', 'USER'] as const)('%s may not see deleted products', (actorRole) => {
       expect(
         thrownBy(() => normalizeFindAllProductsInput(dto({ actorRole, deleted: true }))),
       ).toMatchObject({ statusCode: 403, errorCode: 'DELETED_PRODUCTS_FORBIDDEN' });
     });
 
-    it.each(['ADMIN', 'ROOT'] as const)(
-      'shows %s only deleted products on request',
-      (actorRole) => {
-        expect(normalizeFindAllProductsInput(dto({ actorRole, deleted: true })).deleted).toBe(true);
+    it.each(['onSale', 'popularityOverridden'] as const)(
+      'may not use the admin flag %s',
+      (filter) => {
+        expect(
+          thrownBy(() => normalizeFindAllProductsInput(dto({ [filter]: true }))),
+        ).toMatchObject({ statusCode: 403, errorCode: 'FILTER_FORBIDDEN', details: { filter } });
       },
     );
 
-    it('treats a deleted flag that is not a boolean as not sent', () => {
-      const input = dto({
-        actorRole: 'ADMIN',
-        deleted: 'yes',
-      } as unknown as Partial<FindAllProductsDto>);
+    // false is what no flag means
+    it('may send the flags as false', () => {
+      const q = normalizeFindAllProductsInput(
+        dto({ deleted: false, onSale: false, popularityOverridden: false }),
+      );
 
-      expect(normalizeFindAllProductsInput(input).deleted).toBe(false);
-    });
-
-    // products that are not deleted have no deletedAt to sort by
-    it.each([
-      ['a guest', { actorRole: 'GUEST' as const }],
-      ['an admin without the flag', { actorRole: 'ADMIN' as const }],
-      [
-        'an admin asking for products that are not deleted',
-        { actorRole: 'ADMIN' as const, deleted: false },
-      ],
-    ])('rejects a sort by deletedAt from %s', (_case, patch) => {
-      expect(
-        thrownBy(() => normalizeFindAllProductsInput(dto({ ...patch, sort: 'deletedAt' }))),
-      ).toMatchObject({ statusCode: 400, errorCode: 'SORT_DELETED_AT_REQUIRES_DELETED' });
-    });
-
-    it('sorts the deleted products of an admin by deletedAt', () => {
-      expect(
-        normalizeFindAllProductsInput(dto({ actorRole: 'ROOT', deleted: true, sort: 'deletedAt' })),
-      ).toMatchObject({ deleted: true, sort: 'deletedAt' });
+      expect(q.deleted).toBe(false);
+      expect(q.onSale).toBeUndefined();
+      expect(q.popularityOverridden).toBeUndefined();
     });
   });
-});
 
-const day = (n: number) => new Date(`2026-04-${String(n).padStart(2, '0')}T08:00:00.000Z`);
+  describe('an admin', () => {
+    const asAdmin = (patch: Partial<FindAllProductsDto> = {}) =>
+      normalizeFindAllProductsInput(dto({ actorRole: 'ADMIN', ...patch }));
 
-// ties on every sort field, deleted and not deleted products mixed
-const products = [
-  {
-    id: 1,
-    name: 'Lamp',
-    price: new Prisma.Decimal('25.50'),
-    stock: 4,
-    popularity: 9,
-    views: 10,
-    avgRating: new Prisma.Decimal('4.50'),
-    reviewsCount: 2,
-    createdAt: day(1),
-    updatedAt: day(3),
-    deletedAt: null,
-  },
-  {
-    id: 2,
-    name: 'Desk',
-    price: new Prisma.Decimal('99.00'),
-    stock: 0,
-    popularity: 9,
-    views: 10,
-    avgRating: new Prisma.Decimal('0.00'),
-    reviewsCount: 0,
-    createdAt: day(2),
-    updatedAt: day(2),
-    deletedAt: day(8),
-  },
-  {
-    id: 3,
-    name: 'Lamp',
-    price: new Prisma.Decimal('25.50'),
-    stock: 4,
-    popularity: 1,
-    views: 3,
-    avgRating: new Prisma.Decimal('4.50'),
-    reviewsCount: 2,
-    createdAt: day(2),
-    updatedAt: day(3),
-    deletedAt: null,
-  },
-  {
-    id: 4,
-    name: 'Chair',
-    price: new Prisma.Decimal('49.99'),
-    stock: 12,
-    popularity: 5,
-    views: 40,
-    avgRating: new Prisma.Decimal('3.00'),
-    reviewsCount: 7,
-    createdAt: day(4),
-    updatedAt: day(9),
-    deletedAt: day(8),
-  },
-  {
-    id: 5,
-    name: 'Mug',
-    price: new Prisma.Decimal('5.00'),
-    stock: 0,
-    popularity: 5,
-    views: 3,
-    avgRating: new Prisma.Decimal('5.00'),
-    reviewsCount: 1,
-    createdAt: day(4),
-    updatedAt: day(5),
-    deletedAt: null,
-  },
-  {
-    id: 6,
-    name: 'Shelf',
-    price: new Prisma.Decimal('49.99'),
-    stock: 1,
-    popularity: 0,
-    views: 0,
-    avgRating: new Prisma.Decimal('0.00'),
-    reviewsCount: 0,
-    createdAt: day(6),
-    updatedAt: day(6),
-    deletedAt: day(9),
-  },
-  {
-    id: 7,
-    name: 'Desk',
-    price: new Prisma.Decimal('120.00'),
-    stock: 3,
-    popularity: 2,
-    views: 8,
-    avgRating: new Prisma.Decimal('3.00'),
-    reviewsCount: 7,
-    createdAt: day(7),
-    updatedAt: day(9),
-    deletedAt: null,
-  },
-  {
-    id: 8,
-    name: 'Rug',
-    price: new Prisma.Decimal('5.00'),
-    stock: 12,
-    popularity: 1,
-    views: 40,
-    avgRating: new Prisma.Decimal('4.50'),
-    reviewsCount: 1,
-    createdAt: day(7),
-    updatedAt: day(1),
-    deletedAt: null,
-  },
-];
+    it.each(['ADMIN', 'ROOT'] as const)('%s sees the catalog of an admin', (actorRole) => {
+      expect(normalizeFindAllProductsInput(dto({ actorRole })).view).toBe('admin');
+    });
 
-const SORTS: ProductsSortField[] = [
-  'name',
-  'price',
-  'stock',
-  'popularity',
-  'views',
-  'avgRating',
-  'reviewsCount',
-  'createdAt',
-  'updatedAt',
-  'deletedAt',
-];
-const ORDERS: SortOrder[] = ['asc', 'desc'];
-
-// the service filters by the deleted flag the same way: a list holds either live or deleted products
-const LISTS = [
-  [
-    'products that are not deleted',
-    { deletedAt: null },
-    SORTS.filter((sort) => sort !== 'deletedAt'),
-  ],
-  ['deleted products', { deletedAt: { not: null } }, SORTS],
-] as const;
-
-describe.each(LISTS)('product list pagination without search: %s', (_list, where, sorts) => {
-  describe.each(sorts)('sorted by %s', (sort) => {
-    it.each(ORDERS)('visits every product exactly once, in order, going %s', (order) => {
-      const orderBy = buildOrderBy(sort, order);
-
-      const visited = walkPages({
-        rows: products,
-        where,
-        orderBy,
-        limit: 2,
-        cursorWhere: (cursor) => buildCursorWhere({ sort, order, cursor }),
-        nextCursor: (last) => makeNextCursor(sort, last),
+    // without any flag an admin gets the plain products: not deleted, without a sale that is on
+    // and without an override that is on
+    it('lists the plain products when no flag is sent', () => {
+      expect(asAdmin()).toMatchObject({
+        deleted: false,
+        onSale: false,
+        popularityOverridden: false,
       });
+    });
 
-      const listed = products.filter((product) => matchesWhere(product, where));
-      expect(visited).toEqual(sortRows(listed, orderBy).map((product) => product.id));
+    it('treats a flag that is not a boolean as not sent', () => {
+      expect(
+        asAdmin({ deleted: 'yes', onSale: 1 } as unknown as Partial<FindAllProductsDto>),
+      ).toMatchObject({ deleted: false, onSale: false, popularityOverridden: false });
+    });
+
+    // with a flag only its condition counts: the other marks do not filter, the deleted products
+    // stay out without their flag
+    it.each([
+      ['deleted', { deleted: true, onSale: undefined, popularityOverridden: undefined }],
+      ['onSale', { deleted: false, onSale: true, popularityOverridden: undefined }],
+      ['popularityOverridden', { deleted: false, onSale: undefined, popularityOverridden: true }],
+    ] as const)('lists by the condition of the flag %s only', (flag, expected) => {
+      const q = asAdmin({ [flag]: true });
+
+      expect(q.deleted).toBe(expected.deleted);
+      expect(q.onSale).toBe(expected.onSale);
+      expect(q.popularityOverridden).toBe(expected.popularityOverridden);
+    });
+
+    it('lists by the conditions of every flag sent', () => {
+      expect(asAdmin({ onSale: true, popularityOverridden: true })).toMatchObject({
+        deleted: false,
+        onSale: true,
+        popularityOverridden: true,
+      });
+    });
+
+    it.each([
+      'createdAt',
+      'updatedAt',
+      'price',
+      'popularity',
+      'views',
+      'avgRating',
+      'reviewsCount',
+      'stock',
+      'totalStock',
+      'reservedStock',
+      'name',
+    ] as ProductsSortField[])('sorts by %s', (sort) => {
+      expect(asAdmin({ sort }).sort).toBe(sort);
+    });
+
+    // a field that only the products of a flag have is sorted with that flag
+    it.each([
+      ['deletedAt', { deleted: true }, 'SORT_DELETED_AT_REQUIRES_DELETED'],
+      [
+        'popularityOverride',
+        { popularityOverridden: true },
+        'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN',
+      ],
+      [
+        'popularityOverrideUntil',
+        { popularityOverridden: true },
+        'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN',
+      ],
+      ['saleEndsAt', { onSale: true }, 'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE'],
+      ['salePrice', { onSale: true }, 'SORT_SALE_PRICE_REQUIRES_ON_SALE'],
+    ] as const)('sorts by %s only with its flag', (sort, flag, errorCode) => {
+      expect(asAdmin({ sort, ...flag }).sort).toBe(sort);
+      expect(thrownBy(() => asAdmin({ sort }))).toMatchObject({ statusCode: 400, errorCode });
     });
   });
 });
 
-describe('buildCursorWhere', () => {
-  it('adds no condition without a cursor', () => {
-    expect(buildCursorWhere({ sort: 'price', order: 'asc' })).toBeUndefined();
-  });
+// the price a product sells at now, the expression the raw query sorts and filters by
+const CURRENT_PRICE = 'cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt")';
+// a sale that is on: the sale price while the end is ahead, in utc as prisma keeps dates
+const SALE_ON = `(p."salePrice" IS NOT NULL AND p."saleEndsAt" > (now() AT TIME ZONE 'UTC'))`;
+// an override that is on: the database takes it while its end is ahead, an override without an
+// end does nothing (recalc_product_popularity, db/05)
+// the end is checked for null first: NOT of the condition keeps an override without an end
+const OVERRIDE_ON =
+  `(p."popularityOverride" IS NOT NULL AND p."popularityOverrideUntil" IS NOT NULL ` +
+  `AND p."popularityOverrideUntil" > (now() AT TIME ZONE 'UTC'))`;
 
-  // a cursor comes back from the client: a changed one is a bad request, not a server error
-  it.each([
-    ['a date sort gets a word', 'createdAt', 'last week'],
-    ['a date sort gets null', 'updatedAt', null],
-    ['a deleted date sort gets a word', 'deletedAt', 'never'],
-    ['a deleted date sort gets null', 'deletedAt', null],
-    ['a price sort gets a word', 'price', 'cheap'],
-    ['a counter sort gets null', 'views', null],
-  ] as const)('rejects the cursor when %s', (_case, sort, v) => {
-    const cursor = encodeCursor({ id: 3, v });
-
-    expect(thrownBy(() => buildCursorWhere({ sort, order: 'asc', cursor }))).toMatchObject({
-      statusCode: 400,
-      errorCode: 'CURSOR_INVALID',
-    });
-  });
-});
-
-describe('makeNextCursor', () => {
-  it.each([
-    ['name', products[3]!, 'Chair'],
-    ['price', products[3]!, 49.99],
-    ['avgRating', products[3]!, 3],
-    ['reviewsCount', products[3]!, 7],
-    ['createdAt', products[3]!, '2026-04-04T08:00:00.000Z'],
-    ['deletedAt', products[3]!, '2026-04-08T08:00:00.000Z'],
-    ['deletedAt', products[0]!, null],
-  ] as const)('puts the %s of the last row next to its id', (sort, last, v) => {
-    expect(decodeCursor(makeNextCursor(sort, last))).toEqual({ id: last.id, v });
-  });
-});
-
-const search = (patch: Partial<Parameters<typeof buildProductSearchIdsQuery>[0]> = {}) =>
-  buildProductSearchIdsQuery({
+const query = (patch: Partial<ProductListQuery> = {}) =>
+  buildProductIdsQuery({
+    view: 'buyer',
     limit: 20,
     sort: 'popularity',
     order: 'desc',
-    search: 'lamp',
+    deleted: false,
     ...patch,
   });
 
-describe('buildProductSearchIdsQuery', () => {
-  it('requires a search text', () => {
-    expect(thrownBy(() => search({ search: '   ' }))).toMatchObject({
-      statusCode: 400,
-      errorCode: 'SEARCH_REQUIRED',
-    });
-  });
+// a cursor of the sort, the way makeNextCursor gives it
+const cursorOf = (payload: Record<string, unknown>, sort = 'popularity:desc') =>
+  encodeCursor({ s: sort, ...payload } as never);
 
+describe('buildProductIdsQuery', () => {
   it('passes the search text as a parameter, never inside the sql text', () => {
     const text = "lamp'; drop table products; --";
-    const sql = search({ search: text });
+    const sql = query({ search: text });
 
     expect(sql.sql).not.toContain('drop table');
     expect(sql.values).toContain(text);
   });
 
   it('matches names without accents and case through the indexed expression', () => {
-    expect(sqlText(search())).toContain(
+    expect(sqlText(query({ search: 'lamp' }))).toContain(
       `cartlify.immutable_unaccent(p."name") ILIKE '%' || cartlify.immutable_unaccent(?) || '%'`,
     );
   });
@@ -460,32 +440,49 @@ describe('buildProductSearchIdsQuery', () => {
     ['_', 'usb_c', 'usb\\_c'],
     ['a backslash', 'a\\b', 'a\\\\b'],
   ])('matches %s in the search text literally', (_case, text, escaped) => {
-    const sql = search({ search: text });
+    const sql = query({ search: text });
 
     expect(sql.values).toContain(escaped);
     expect(sql.values).not.toContain(text);
   });
 
+  it('matches no name without a search text', () => {
+    expect(sqlText(query())).not.toContain('ILIKE');
+  });
+
   it('fetches one id more than the page size, to know if a next page exists', () => {
-    const sql = search({ limit: 5 });
+    const sql = query({ limit: 5 });
 
     expect(sqlText(sql)).toMatch(/LIMIT \?$/);
     expect(sql.values.at(-1)).toBe(6);
   });
 
-  it('adds the deleted, category and price filters as parameters', () => {
-    const sql = search({ deleted: false, categoryIds: [2, 7], minPrice: 10, maxPrice: 50 });
+  it.each([
+    [false, 'p."deletedAt" IS NULL'],
+    [true, 'p."deletedAt" IS NOT NULL'],
+  ])('keeps deleted products %s apart', (deleted, condition) => {
+    expect(sqlText(query({ deleted }))).toContain(condition);
+  });
+
+  // a product on sale sells at its sale price, the filter takes the price it sells at now
+  it('adds the category and the price filters as parameters', () => {
+    const sql = query({ categoryIds: [2, 7], minPrice: 10, maxPrice: 50 });
     const text = sqlText(sql);
 
-    expect(text).toContain('p."deletedAt" IS NULL');
     expect(text).toContain('p."categoryId" IN (?,?)');
-    expect(text).toContain('p."price" >= ?');
-    expect(text).toContain('p."price" <= ?');
+    expect(text).toContain(`${CURRENT_PRICE} >= ?`);
+    expect(text).toContain(`${CURRENT_PRICE} <= ?`);
+    expect(text).not.toMatch(/p\."price" [<>]=/);
     expect(sql.values).toEqual(expect.arrayContaining([2, 7, 10, 50]));
   });
 
-  it('keeps only deleted products when asked for them', () => {
-    expect(sqlText(search({ deleted: true }))).toContain('p."deletedAt" IS NOT NULL');
+  // an admin sorts and filters by the price the field shows, the sale price has its own sort
+  it('filters the prices of an admin by the usual price', () => {
+    const text = sqlText(query({ view: 'admin', minPrice: 10, maxPrice: 50 }));
+
+    expect(text).toContain('p."price" >= ?');
+    expect(text).toContain('p."price" <= ?');
+    expect(text).not.toContain(CURRENT_PRICE);
   });
 
   // the list shows stock minus reserved units, the filter has to use the same number,
@@ -494,15 +491,96 @@ describe('buildProductSearchIdsQuery', () => {
     [true, 'p."stock" > p."reservedStock"'],
     [false, 'p."stock" <= p."reservedStock"'],
   ])('compares free units, not the raw stock, when inStock is %s', (inStock, condition) => {
-    const text = sqlText(search({ inStock }));
-
-    expect(text).toContain(condition);
-    expect(text).not.toMatch(/p\."stock" (> 0|= 0)/);
+    expect(sqlText(query({ inStock }))).toContain(condition);
   });
 
-  it.each(SORTS)('orders by %s and then by id in the same direction', (sort) => {
-    expect(sqlText(search({ sort, order: 'asc' }))).toContain(
-      `ORDER BY p."${sort}" ASC, p."id" ASC`,
+  describe('the flags of an admin', () => {
+    it.each([
+      [true, `AND ${SALE_ON}`],
+      [false, `NOT ${SALE_ON}`],
+    ])('keeps products by an active sale when onSale is %s', (onSale, condition) => {
+      expect(sqlText(query({ view: 'admin', onSale }))).toContain(condition);
+    });
+
+    it.each([
+      [true, `AND ${OVERRIDE_ON}`],
+      [false, `NOT ${OVERRIDE_ON}`],
+    ])(
+      'keeps products by an override that is on when popularityOverridden is %s',
+      (flag, condition) => {
+        expect(sqlText(query({ view: 'admin', popularityOverridden: flag }))).toContain(condition);
+      },
+    );
+
+    // a flag that is not part of the list filters nothing
+    it('filters by neither when no flag is part of the list, as for a buyer', () => {
+      const text = sqlText(query({ view: 'admin', deleted: true }));
+
+      expect(text).not.toContain(OVERRIDE_ON);
+      expect(text).not.toContain(SALE_ON);
+    });
+
+    // a buyer sees every product of the catalog, on sale or not
+    it('filters a buyer by neither', () => {
+      const text = sqlText(query());
+
+      expect(text).not.toContain('"popularityOverride"');
+      expect(text).not.toContain(SALE_ON);
+    });
+  });
+
+  describe('the order', () => {
+    it.each([
+      ['name', 'p."name"'],
+      ['popularity', 'p."popularity"'],
+      ['views', 'p."views"'],
+      ['avgRating', 'p."avgRating"'],
+      ['reviewsCount', 'p."reviewsCount"'],
+      ['createdAt', 'p."createdAt"'],
+      ['updatedAt', 'p."updatedAt"'],
+      ['deletedAt', 'p."deletedAt"'],
+      ['popularityOverride', 'p."popularityOverride"'],
+      ['popularityOverrideUntil', 'p."popularityOverrideUntil"'],
+      ['reservedStock', 'p."reservedStock"'],
+      ['totalStock', 'p."stock"'],
+      // the stock a list shows: free units, never below 0
+      ['stock', 'GREATEST(p."stock" - p."reservedStock", 0)'],
+      // the usual price, the one the field shows; the sale price is a sort of its own
+      ['price', 'p."price"'],
+      ['salePrice', 'p."salePrice"'],
+    ] as const)('orders by %s and then by id in the same direction', (sort, expression) => {
+      expect(sqlText(query({ view: 'admin', sort, order: 'asc' }))).toContain(
+        `ORDER BY ${expression} ASC, p."id" ASC`,
+      );
+    });
+
+    // a buyer pays the sale price while the sale lasts
+    it('orders a price sort of a buyer by the price a product sells at now', () => {
+      expect(sqlText(query({ sort: 'price', order: 'asc' }))).toContain(
+        `ORDER BY ${CURRENT_PRICE} ASC, p."id" ASC`,
+      );
+    });
+
+    it('orders the sales of an admin by their end', () => {
+      expect(
+        sqlText(query({ view: 'admin', onSale: true, sort: 'saleEndsAt', order: 'asc' })),
+      ).toContain('ORDER BY p."saleEndsAt" ASC, p."id" ASC');
+    });
+
+    // a buyer gets the whole catalog: the products on sale first by the end of the sale, in the
+    // direction asked for, then every other one by popularity, the most popular first
+    it.each(['ASC', 'DESC'] as const)(
+      'gives a buyer the products on sale first going %s, then the rest by popularity',
+      (dir) => {
+        const sql = query({ sort: 'saleEndsAt', order: dir === 'ASC' ? 'asc' : 'desc' });
+
+        expect(sqlText(sql)).toContain(
+          `ORDER BY CASE WHEN ${SALE_ON} THEN 1 ELSE 0 END DESC, ` +
+            `CASE WHEN ${SALE_ON} THEN p."saleEndsAt" END ${dir}, ` +
+            `CASE WHEN ${SALE_ON} THEN p."id" END ${dir}, ` +
+            `p."popularity" DESC, p."id" DESC`,
+        );
+      },
     );
   });
 
@@ -510,10 +588,10 @@ describe('buildProductSearchIdsQuery', () => {
     const at = '2026-04-08T08:00:00.000Z';
 
     it('continues a name sort after the last name, passing the name as a parameter', () => {
-      const sql = search({
+      const sql = query({
         sort: 'name',
         order: 'desc',
-        cursor: encodeCursor({ id: 4, v: 'Lamp' }),
+        cursor: cursorOf({ id: 4, v: 'Lamp' }, 'name:desc'),
       });
 
       expect(sqlText(sql)).toContain('AND ( p."name" < ? OR (p."name" = ? AND p."id" < ?) )');
@@ -521,54 +599,143 @@ describe('buildProductSearchIdsQuery', () => {
     });
 
     it('continues after the last row: a later value, or the same value and a later id', () => {
-      const sql = search({
+      const sql = query({
         sort: 'price',
         order: 'asc',
-        cursor: encodeCursor({ id: 4, v: 49.99 }),
+        cursor: cursorOf({ id: 4, v: 49.99 }, 'price:asc'),
       });
 
-      expect(sqlText(sql)).toContain('AND ( p."price" > ? OR (p."price" = ? AND p."id" > ?) )');
+      expect(sqlText(sql)).toContain(
+        `AND ( ${CURRENT_PRICE} > ? OR (${CURRENT_PRICE} = ? AND p."id" > ?) )`,
+      );
       expect(sql.values).toEqual(expect.arrayContaining([49.99, 4]));
     });
 
     it('turns a date cursor into a date parameter', () => {
-      const sql = search({
+      const sql = query({
         sort: 'createdAt',
         order: 'desc',
-        cursor: encodeCursor({ id: 4, v: at }),
+        cursor: cursorOf({ id: 4, v: at }, 'createdAt:desc'),
       });
 
       expect(sql.values).toContainEqual(new Date(at));
     });
 
-    // a deletedAt sort lists only deleted products, every one of them has the date
-    it.each([
-      ['asc', 'AND ( p."deletedAt" > ? OR (p."deletedAt" = ? AND p."id" > ?) )'],
-      ['desc', 'AND ( p."deletedAt" < ? OR (p."deletedAt" = ? AND p."id" < ?) )'],
-    ] as const)('continues a deleted date sort going %s like any date sort', (order, text) => {
-      const sql = search({
-        deleted: true,
-        sort: 'deletedAt',
-        order,
-        cursor: encodeCursor({ id: 4, v: at }),
+    // an override that is on always has its end, the list of the flag sorts by it like any date
+    it('continues a sort by the end of an override like any date sort', () => {
+      const sql = query({
+        view: 'admin',
+        popularityOverridden: true,
+        sort: 'popularityOverrideUntil',
+        order: 'asc',
+        cursor: cursorOf({ id: 4, v: at }, 'popularityOverrideUntil:asc'),
       });
 
-      expect(sqlText(sql)).toContain(text);
+      expect(sqlText(sql)).toContain(
+        'AND ( p."popularityOverrideUntil" > ? OR (p."popularityOverrideUntil" = ? AND p."id" > ?) )',
+      );
+    });
+
+    // the products on sale go first: after one of them come the later ones and every product
+    // without a sale; after a product without a sale only the less popular ones
+    it('continues the sale sort of a buyer inside the products on sale', () => {
+      const sql = query({
+        sort: 'saleEndsAt',
+        order: 'asc',
+        cursor: cursorOf({ id: 4, g: 1, v: at }, 'saleEndsAt:asc'),
+      });
+
+      expect(sqlText(sql)).toContain(
+        `AND ( (${SALE_ON} AND (p."saleEndsAt" > ? OR (p."saleEndsAt" = ? AND p."id" > ?))) OR NOT ${SALE_ON} )`,
+      );
       expect(sql.values).toContainEqual(new Date(at));
     });
 
+    it('continues the sale sort of a buyer inside the products without a sale', () => {
+      const sql = query({
+        sort: 'saleEndsAt',
+        order: 'asc',
+        cursor: cursorOf({ id: 4, g: 0, v: 12 }, 'saleEndsAt:asc'),
+      });
+
+      expect(sqlText(sql)).toContain(
+        `AND ( NOT ${SALE_ON} AND (p."popularity" < ? OR (p."popularity" = ? AND p."id" < ?)) )`,
+      );
+      expect(sql.values).toEqual(expect.arrayContaining([12, 4]));
+    });
+
+    // a cursor comes back from the client: a changed one is a bad request, not a server error
     it.each([
-      ['a date sort gets a word', 'createdAt', 'soon'],
-      ['a date sort gets null', 'updatedAt', null],
-      ['a deleted date sort gets a word', 'deletedAt', 'never'],
-      ['a deleted date sort gets null', 'deletedAt', null],
-      ['a counter sort gets a word', 'views', 'many'],
-      ['a counter sort gets null', 'views', null],
-    ] as const)('rejects the cursor when %s', (_case, sort, v) => {
-      expect(thrownBy(() => search({ sort, cursor: encodeCursor({ id: 4, v }) }))).toMatchObject({
+      ['comes from another sort', { sort: 'price' as const }, { id: 4, v: 10 }, 'popularity:desc'],
+      ['comes from another direction', {}, { id: 4, v: 10 }, 'popularity:asc'],
+      ['has no sort', {}, { id: 4, v: 10 }, undefined],
+      [
+        'gives a date sort a word',
+        { sort: 'createdAt' as const },
+        { id: 4, v: 'soon' },
+        'createdAt:desc',
+      ],
+      [
+        'gives a date sort null',
+        { sort: 'updatedAt' as const },
+        { id: 4, v: null },
+        'updatedAt:desc',
+      ],
+      ['gives a counter sort a word', {}, { id: 4, v: 'many' }, 'popularity:desc'],
+      ['gives a counter sort null', {}, { id: 4, v: null }, 'popularity:desc'],
+      [
+        'gives the sale sort no part',
+        { sort: 'saleEndsAt' as const },
+        { id: 4, v: 12 },
+        'saleEndsAt:desc',
+      ],
+      [
+        'gives the sale sort a word for a product without a sale',
+        { sort: 'saleEndsAt' as const },
+        { id: 4, g: 0, v: 'x' },
+        'saleEndsAt:desc',
+      ],
+    ])('rejects a cursor that %s', (_case, patch, payload, sort) => {
+      const cursor = encodeCursor((sort ? { s: sort, ...payload } : payload) as never);
+
+      expect(thrownBy(() => query({ ...patch, cursor }))).toMatchObject({
         statusCode: 400,
         errorCode: 'CURSOR_INVALID',
       });
+    });
+  });
+});
+
+describe('makeNextCursor', () => {
+  const next = (q: Partial<ProductListQuery>, keys: Record<string, unknown>) =>
+    decodeCursor(
+      makeNextCursor(
+        { view: 'buyer', sort: 'popularity', order: 'desc', ...q } as ProductListQuery,
+        { id: 4, ...keys },
+      ),
+    );
+
+  it.each([
+    ['name', 'Chair', 'Chair'],
+    ['price', new Prisma.Decimal('49.99'), 49.99],
+    ['popularity', 7, 7],
+    ['createdAt', new Date('2026-04-04T08:00:00.000Z'), '2026-04-04T08:00:00.000Z'],
+  ] as const)('puts the %s of the last row next to its id and the sort', (sort, v, shown) => {
+    expect(next({ sort, order: 'asc' }, { v })).toEqual({ id: 4, v: shown, s: `${sort}:asc` });
+  });
+
+  it.each([
+    [
+      'on sale, with the end of its sale',
+      { g: 1, endsAt: new Date('2026-04-08T08:00:00.000Z'), popularity: 3 },
+      { g: 1, v: '2026-04-08T08:00:00.000Z' },
+    ],
+    ['without a sale, with its popularity', { g: 0, endsAt: null, popularity: 3 }, { g: 0, v: 3 }],
+  ])('puts the part and the value of a buyer sale sort for a product %s', (_case, keys, part) => {
+    expect(next({ sort: 'saleEndsAt', order: 'asc' }, keys)).toEqual({
+      id: 4,
+      s: 'saleEndsAt:asc',
+      ...part,
     });
   });
 });

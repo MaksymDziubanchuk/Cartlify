@@ -171,7 +171,7 @@ describe('product images (Cloudinary)', () => {
         description: 'Over-ear.',
         price: 49.99,
         stock: 5,
-        categoryId,
+        category: expect.objectContaining({ id: categoryId }),
         images: [expect.any(Object)],
       });
       const row = await asAdmin((tx) =>

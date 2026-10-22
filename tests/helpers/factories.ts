@@ -203,6 +203,34 @@ export const deleteProductFromCatalog = (productId: number) =>
 export const setProductPrice = (productId: number, price: number) =>
   asAdmin((tx) => tx.product.update({ where: { id: productId }, data: { price } }));
 
+// a sale of the product that ends endsInMs after now by the clock of the database (utc, the way
+// prisma keeps dates), with no line in the log of prices: the sale route writes that one
+export const putOnSale = (productId: number, salePrice: number, endsInMs = 86_400_000) =>
+  asAdmin(
+    (tx) => tx.$executeRaw`
+      update cartlify.products
+      set "salePrice" = ${salePrice}::numeric,
+          "saleEndsAt" = (now() at time zone 'utc') + make_interval(secs => ${endsInMs / 1000}::float8)
+      where id = ${productId}
+    `,
+  );
+
+// waits until the sales of the products are over by the clock of the database, which prices the
+// orders, and by the clock of the app, which leaves an ended sale out of its answers
+export async function waitForSalesEnd(productIds: number[]): Promise<void> {
+  for (;;) {
+    const [row] = await asAdmin(
+      (tx) => tx.$queryRaw<{ over: boolean; endsAtMs: number }[]>`
+        select bool_and((now() at time zone 'utc') > "saleEndsAt") as over,
+               (max(extract(epoch from ("saleEndsAt" at time zone 'utc'))) * 1000)::float8 as "endsAtMs"
+        from cartlify.products where id = any(${productIds}::int[])
+      `,
+    );
+    if (row?.over && Date.now() > row.endsAtMs) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 export const stockOf = (productId: number) =>
   asAdmin((tx) =>
     tx.product.findUniqueOrThrow({

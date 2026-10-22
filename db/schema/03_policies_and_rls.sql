@@ -390,7 +390,8 @@ SELECT
   USING (true);
 
 -- INSERT (admin/root): a new product starts with no reserve, rating, reviews, popularity or views,
--- the database counts them from what happens to it
+-- the database counts them from what happens to it; and with no sale, a sale is set on a product
+-- of the catalog (db/05 checks its end on an update only)
 CREATE POLICY products_insert ON cartlify.products FOR INSERT
 WITH
   CHECK (
@@ -400,6 +401,8 @@ WITH
     AND "reviewsCount" = 0
     AND popularity = 0
     AND views = 0
+    AND "salePrice" IS NULL
+    AND "saleEndsAt" IS NULL
   );
 
 -- UPDATE (admin/root) - every field but the ones the database counts: the reserve (what the

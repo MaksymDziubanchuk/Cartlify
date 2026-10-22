@@ -38,8 +38,9 @@ const APP_FUNCTIONS = [
   'cartlify.expire_order_reservation(integer)',
   'cartlify.anonymize_login_logs(integer)',
   'cartlify.refresh_order_prices(integer)',
+  'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)',
-  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric)',
+  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
 ];
 
 // the context readers rls policies call and the search helpers, all readonly may run

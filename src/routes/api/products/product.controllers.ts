@@ -26,6 +26,10 @@ import type {
   UpdateProductBodyDto,
   UpdateProductDto,
   UpdateProductResponseDto,
+  ProductSaleWord,
+  SetProductSaleParamsDto,
+  SetProductSaleBodyDto,
+  SetProductSaleResponseDto,
   BulkUpdateProductsPriceBodyDto,
   BulkUpdateProductsPriceResponseDto,
   BulkUpdateProductsPriceDto,
@@ -70,6 +74,9 @@ const getAllProducts: ControllerRouter<
 
   const deleted = typeof q.deleted === 'boolean' ? q.deleted : undefined;
   const inStock = typeof q.inStock === 'boolean' ? q.inStock : undefined;
+  const onSale = typeof q.onSale === 'boolean' ? q.onSale : undefined;
+  const popularityOverridden =
+    typeof q.popularityOverridden === 'boolean' ? q.popularityOverridden : undefined;
 
   const sort: ProductsSortField = (q.sort as ProductsSortField) ?? 'popularity';
   const order: SortOrder = (q.order as SortOrder) ?? 'desc';
@@ -88,7 +95,17 @@ const getAllProducts: ControllerRouter<
 
   const args = pickDefined<FindAllProductsDto>(
     { actorRole, limit, sort, order },
-    { cursor, search, categoryIds, minPrice, maxPrice, deleted, inStock },
+    {
+      cursor,
+      search,
+      categoryIds,
+      minPrice,
+      maxPrice,
+      deleted,
+      inStock,
+      onSale,
+      popularityOverridden,
+    },
   );
 
   const result = await productServices.findAll(args);
@@ -284,6 +301,10 @@ const updateProductById: ControllerRouter<
   let popularityOverride: number | null | undefined;
   let popularityOverrideUntil: string | null | undefined;
 
+  // what happens to the sale that is on with a new price; a form names keep or remove only
+  let sale: ProductSaleWord | undefined;
+  let saleWordInvalid = false;
+
   let uploads: UploadedProductImage[] | undefined;
 
   // start image uploads as soon as we see file parts
@@ -330,8 +351,15 @@ const updateProductById: ControllerRouter<
         } else if (part.fieldname === 'popularityOverrideUntil') {
           if (!t || t === 'null') popularityOverrideUntil = null;
           else popularityOverrideUntil = t;
+        } else if (part.fieldname === 'sale') {
+          if (t === 'keep') sale = 'keep';
+          else if (t === 'remove') sale = null;
+          else saleWordInvalid = true;
         }
       }
+
+      // a new sale needs its fields: it comes as json or through the sale route
+      if (saleWordInvalid) throw new BadRequestError('PRODUCT_SALE_ACTION_INVALID');
 
       // wait for uploads only when images were provided
       if (imageUploads.length) uploads = await Promise.all(imageUploads);
@@ -345,6 +373,7 @@ const updateProductById: ControllerRouter<
       categoryId = b.categoryId;
       popularityOverride = b.popularityOverride;
       popularityOverrideUntil = b.popularityOverrideUntil;
+      sale = b.sale;
     }
 
     // build service dto with only provided fields
@@ -359,6 +388,7 @@ const updateProductById: ControllerRouter<
         images: uploads,
         popularityOverride,
         popularityOverrideUntil,
+        sale,
       },
     );
 
@@ -371,6 +401,25 @@ const updateProductById: ControllerRouter<
   }
 };
 
+const patchProductSale: ControllerRouter<
+  SetProductSaleParamsDto,
+  SetProductSaleBodyDto,
+  {},
+  SetProductSaleResponseDto
+> = async (req, reply) => {
+  const productId = Number(req.params.productId);
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  // null takes the sale off, the schema lets through a percent or an amount with its end
+  const result = await productServices.setProductSale({
+    productId,
+    actorId,
+    actorRole,
+    sale: req.body.sale,
+  });
+  return reply.code(200).send(result);
+};
+
 const updateProductsBulkPrice: ControllerRouter<
   {},
   BulkUpdateProductsPriceBodyDto,
@@ -380,11 +429,11 @@ const updateProductsBulkPrice: ControllerRouter<
   // bind actor
   const { id: actorId, role: actorRole } = req.user as User;
 
-  const { mode, value, scope, dryRun, reason } = req.body;
+  const { mode, value, scope, dryRun, reason, sale } = req.body;
 
   const args = pickDefined<BulkUpdateProductsPriceDto>(
     { actorId, actorRole, mode, value },
-    { scope, dryRun, reason },
+    { scope, dryRun, reason, sale },
   );
 
   const result = await productServices.updateProductsBulkPrice(args);
@@ -447,6 +496,7 @@ export const productController = {
   postProduct,
   postProductReview,
   updateProductById,
+  patchProductSale,
   updateProductsBulkPrice,
   deleteProductById,
   deleteProductReview,
