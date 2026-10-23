@@ -4,7 +4,10 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { shopToday } from '@helpers/shopDay.js';
+
 import { asAdmin } from '../../../helpers/db.js';
+import { dayAfter } from '../../../helpers/dbStock.js';
 import {
   closeSessions,
   createProduct,
@@ -253,6 +256,8 @@ describe('POST /api/products/stock/deliveries', () => {
     expect(await batchesOf(product.id)).toEqual([]);
   });
 
+  // today is the day of the shop (SHOP_TIME_ZONE): late in the evening of utc it is already the
+  // next day in Madrid, and the day of utc is over there
   it('refuses a batch whose last good day is over and takes one good until today', async () => {
     const product = await newProduct();
     const item = (expiresAt: string) => ({
@@ -262,8 +267,8 @@ describe('POST /api/products/stock/deliveries', () => {
       expiresAt,
     });
 
-    const over = await deliver({ source: 'supplier', items: [item(utcDay(-1))] });
-    const today = await deliver({ source: 'supplier', items: [item(utcDay(0))] });
+    const over = await deliver({ source: 'supplier', items: [item(dayAfter(shopToday(), -1))] });
+    const today = await deliver({ source: 'supplier', items: [item(shopToday())] });
 
     expect(over.statusCode).toBe(400);
     expect(over.json()).toMatchObject({ errorCode: 'BATCH_EXPIRES_AT_INVALID' });

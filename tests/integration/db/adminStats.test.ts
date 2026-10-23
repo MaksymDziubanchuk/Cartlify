@@ -2,10 +2,11 @@ import { Prisma } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { prisma } from '@db/client.js';
+import { shopToday } from '@helpers/shopDay.js';
 
 import { inCommittedTx, inRolledBackTx, type DbSession } from '../../helpers/db.js';
 import { pay, waitingOrderOf } from '../../helpers/dbOrders.js';
-import { dayAfter, setShopDay, utcDay } from '../../helpers/dbStock.js';
+import { dayAfter, setShopDay } from '../../helpers/dbStock.js';
 import {
   closeSessions,
   createProduct,
@@ -204,14 +205,18 @@ describe('cartlify.admin_stats_view', () => {
     expect(counts).toEqual([counts[0], counts[0], counts[0]]);
   });
 
-  // the units of a batch whose last good day is over are not for sale
+  // the units of a batch whose last good day is over are not for sale. The batch comes in the way
+  // the app takes it in, by the day of the shop (SHOP_TIME_ZONE), not of utc: late in the evening
+  // of utc it is already the next day in Madrid
   it('counts a product out of stock once all its units are over', async () => {
+    const today = shopToday();
     const product = await createProduct({ stock: 0 });
-    await receiveBatch(product.id, { quantity: 3, expiresAt: utcDay() });
+    await receiveBatch(product.id, { quantity: 3, expiresAt: today });
 
     const { before, after } = await inRolledBackTx(async (db) => {
+      await setShopDay(db, today);
       const before = await statsOf(db, FAR_PAST, FAR_FUTURE);
-      await setShopDay(db, dayAfter(utcDay(), 2));
+      await setShopDay(db, dayAfter(today, 2));
       return { before, after: await statsOf(db, FAR_PAST, FAR_FUTURE) };
     }, REPEATABLE_READ);
 
