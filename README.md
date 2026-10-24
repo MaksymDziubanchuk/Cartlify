@@ -559,10 +559,11 @@ http://localhost:3000/documentation/json
 # development
 npm run dev
 
-# build
+# build: tsc, then tsc-alias puts relative paths in place of the @… aliases in dist
 npm run build
 
-# start built app
+# start the built app with node (dist/index.js); the mail templates, the logo and /static
+# are read from src/ in the working directory, so src/ stays next to dist/
 npm start
 
 # generate prisma client
