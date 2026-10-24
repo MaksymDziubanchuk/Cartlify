@@ -25,8 +25,21 @@ export async function refundStripePayment({
       { idempotencyKey: `refund:${paymentIntentId}` },
     );
 
+    // a refund stripe failed or cancelled took no money back: the order must not count as refunded
+    if (refund.status === 'failed' || refund.status === 'canceled') {
+      throw new InternalError({
+        reason: 'STRIPE_REFUND_FAILED',
+        orderId,
+        paymentIntentId,
+        refundId: refund.id,
+        refundStatus: refund.status,
+      });
+    }
+
     return { refundId: refund.id };
   } catch (err) {
+    if (err instanceof InternalError) throw err;
+
     // money is already back, e.g. webhook was redelivered after stripe forgot the idempotency key
     if ((err as { code?: unknown } | null)?.code === 'charge_already_refunded') {
       return { refundId: null };

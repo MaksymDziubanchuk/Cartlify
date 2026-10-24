@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import { closeRedis, connectRedis } from '@redis/client.js';
+import { closeRedis, connectRedis, getRedis } from '@redis/client.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
@@ -13,6 +13,7 @@ import {
   stockOf,
   type TestProduct,
 } from '../../../helpers/factories.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail } from '../../../helpers/mail.js';
 import { loseReservation, placeOrder } from '../../../helpers/orders.js';
 import {
@@ -26,7 +27,6 @@ import {
   closeOpenSessions,
   craftEvent,
   deliver,
-  describeWithStripe,
   readSession,
   refundsOf,
 } from '../../../helpers/stripe.js';
@@ -78,7 +78,7 @@ afterAll(async () => {
   }
 });
 
-describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.completed', () => {
+describe('POST /api/payments/stripe/webhook: checkout.session.completed', () => {
   it('marks the order paid with the payment of its page and sells the reserved stock', async () => {
     const { product, orderId, sessionId } = await orderWithPage();
     const { paymentId, event } = await payPage(sessionId);
@@ -225,6 +225,39 @@ describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.complete
       paymentId,
     });
     expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
+  });
+
+  // redis is up but drops the connection in the middle of the cleanup: the payment is committed,
+  // the answer used to be an error, Stripe delivered the event again, that delivery was a repeated
+  // one and the buyer never got the mail
+  it('mails the buyer when Redis fails while the timers of the paid order are taken off', async () => {
+    const { orderId, sessionId } = await orderWithPage();
+    const { event } = await payPage(sessionId);
+    const mails = watchMail();
+    const redis = await getRedis();
+    const failOnce = jest
+      .spyOn(redis, 'zRem')
+      .mockRejectedValueOnce(new Error('Socket closed unexpectedly'));
+
+    try {
+      const res = await deliver(app, event);
+
+      expect(res.statusCode).toBe(200);
+      expect(mails.map((mail) => mail.subject)).toEqual([`Cartlify — Order #${orderId} is paid`]);
+      expect(
+        takeLogs({ msg: 'paid order cleanup in redis failed, its timers stay until they run out' }),
+      ).toHaveLength(1);
+    } finally {
+      failOnce.mockRestore();
+    }
+
+    // the next delivery of the same payment takes off what the first one left
+    expect((await deliver(app, event)).statusCode).toBe(200);
+    expect(await redisStateOf(orderId)).toEqual({
+      pageLink: null,
+      reservationTimer: null,
+      graceTimer: null,
+    });
   });
 
   // the payment is in the database before redis is asked: a redis outage must not lose it

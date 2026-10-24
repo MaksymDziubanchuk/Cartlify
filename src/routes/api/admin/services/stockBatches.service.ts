@@ -19,6 +19,7 @@ import type {
 import type { StockSourceName } from 'types/dto/products.dto.js';
 import type { ProductId, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
+import { isDbYear } from '@helpers/dbDate.js';
 
 // the batches of the stock for an admin: what each came in with, what is left of it, what the
 // paid orders took and what was written off, the delivery it came with (its line in the admin
@@ -83,6 +84,14 @@ export type StockBatchesArgs = {
   cursor?: string | undefined;
 };
 
+// a last day the database has no date for (the year 0) is a bad request, not a server error
+const expiresByOf = (value: string | undefined): string | undefined => {
+  if (value !== undefined && !isDbYear(new Date(value))) {
+    throw new BadRequestError('EXPIRES_BY_INVALID', { expiresBy: value });
+  }
+  return value;
+};
+
 export const stockBatchesArgsOf = (
   query: AdminStockBatchesQueryDto,
   actor: { id: UserId; role: Role },
@@ -94,7 +103,7 @@ export const stockBatchesArgsOf = (
   source: query.source,
   inStock: query.inStock,
   expired: query.expired,
-  expiresBy: query.expiresBy,
+  expiresBy: expiresByOf(query.expiresBy),
   sortBy: query.sortBy ?? 'createdAt',
   sortOrder: query.sortOrder ?? 'desc',
   limit: query.limit ?? 20,

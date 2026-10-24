@@ -1,12 +1,13 @@
+import { Prisma } from '@prisma/client';
+
 import { buildSaleAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { isSaleOn } from '@helpers/productSale.js';
 import { ConflictError } from '@utils/errors.js';
 
 import { computeFixedDelta, writeProductPriceChangeLog } from './priceChangeLog.helper.js';
 import { productResponseSelect } from './productMapper.helper.js';
-import { computeSalePrice } from './productSale.helper.js';
+import { SALE_PRIOR_PRICE_DAYS, computeSalePrice, lowestPriceOf } from './productSale.helper.js';
 
-import type { Prisma } from '@prisma/client';
 import type { SaleAuditEvent } from '@db/adminAudit.helper.js';
 import type { ProductSaleDiscountDto, ProductSaleDto } from 'types/dto/products.dto.js';
 import type { UserId } from 'types/ids.js';
@@ -28,7 +29,27 @@ export type ProductSaleState = {
   price: Prisma.Decimal;
   salePrice: Prisma.Decimal | null;
   saleEndsAt: Date | null;
+  // the lowest price of the 30 days before the sale; a sale from before it was written has none
+  salePriorPrice?: Prisma.Decimal | null;
 };
+
+const DAY_MS = 86_400_000;
+
+// the lowest price of the 30 days before a sale that starts now: the prices of its log of prices,
+// read in the transaction of the step, and the price it sells at right now. The time is the one
+// of the app, the dates of the log are utc as prisma keeps them
+async function lowestPriorPrice(ctx: SaleStepContext, product: ProductSaleState) {
+  const to = new Date(Date.now());
+  const from = new Date(to.getTime() - SALE_PRIOR_PRICE_DAYS * DAY_MS);
+  const lines = await ctx.db.productPriceChangeLog.findMany({
+    where: { productId: product.id, createdAt: { lt: to } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { oldPrice: true, newPrice: true, endsAt: true, createdAt: true },
+  });
+  const current = isSaleOn(product) ? new Prisma.Decimal(product.salePrice!) : product.price;
+
+  return lowestPriceOf({ lines, current, from, to });
+}
 
 const auditSale = (
   ctx: SaleStepContext,
@@ -57,7 +78,7 @@ const auditSale = (
 export async function takeSaleOff(ctx: SaleStepContext, product: ProductSaleState) {
   const after = await ctx.db.product.update({
     where: { id: product.id },
-    data: { salePrice: null, saleEndsAt: null },
+    data: { salePrice: null, saleEndsAt: null, salePriorPrice: null },
     select: productResponseSelect,
   });
 
@@ -95,9 +116,15 @@ export async function putSaleOn(
     throw new ConflictError('PRODUCT_SALE_ALREADY_SET');
   }
 
+  // one reduction after another: a sale that replaces the one that is on keeps its lowest price
+  const salePriorPrice =
+    wasOn && product.salePriorPrice != null
+      ? product.salePriorPrice
+      : await lowestPriorPrice(ctx, product);
+
   const after = await ctx.db.product.update({
     where: { id: product.id },
-    data: { salePrice, saleEndsAt: endsAt },
+    data: { salePrice, saleEndsAt: endsAt, salePriorPrice },
     select: productResponseSelect,
   });
 

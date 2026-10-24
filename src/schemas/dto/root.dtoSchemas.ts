@@ -1,3 +1,4 @@
+import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { idPathParam } from '@schemas/idPathParam.js';
 
 const rootAdminsGetQuerySchema = {
@@ -11,9 +12,40 @@ const rootAdminsGetQuerySchema = {
   },
 } as const;
 
+// an admin of the list of root; a deleted admin keeps the role and has its deletedAt
 const rootAdminsItemSchema = {
   $id: 'rootAdminsItemSchema',
-  allOf: [{ $ref: 'usersUserResponseSchema#' }],
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'number' },
+    email: { type: 'string', format: 'email' },
+    role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'] },
+    isVerified: { type: 'boolean' },
+    createdAt: { type: 'string', format: 'date-time' },
+    updatedAt: { type: 'string', format: 'date-time' },
+    name: { type: 'string' },
+    avatarUrls: avatarUrlsField,
+    avatarIsDefault: avatarIsDefaultField,
+    locale: { type: 'string' },
+    phone: { type: 'string' },
+    deletedAt: {
+      type: ['string', 'null'],
+      format: 'date-time',
+      description: 'When the account was deleted; null for a working admin.',
+    },
+  },
+  required: [
+    'id',
+    'email',
+    'role',
+    'isVerified',
+    'createdAt',
+    'updatedAt',
+    'avatarUrls',
+    'avatarIsDefault',
+    'deletedAt',
+  ],
 } as const;
 
 const rootAdminsGetResponseSchema = {

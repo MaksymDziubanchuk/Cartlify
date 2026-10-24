@@ -245,6 +245,31 @@ const getMeSchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for the export of the data of the signed-in person
+const getMeExportSchema = {
+  operationId: 'exportCurrentUser',
+  summary: 'Export my data',
+  description:
+    'Everything the shop keeps of the signed-in person, read with the rights of the person, as one JSON file ' +
+    '(content-disposition attachment): the profile, the orders, the favorites, the reviews and votes, the ' +
+    'chats, the logins and the open sessions. Once an hour.',
+
+  response: {
+    200: {
+      description: 'The data of the person.',
+      $ref: 'usersExportResponseSchema#',
+    },
+    404: {
+      description: 'The account was deleted (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description: 'The data was exported in the last hour (RATE_LIMITED, `details.limit` export).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for current authenticated user update
 const patchMeSchema = {
   operationId: 'updateCurrentUser',
@@ -281,7 +306,8 @@ const patchMeSchema = {
         'Invalid current user update request: nothing to change (NO_FIELDS_TO_UPDATE), a name or ' +
         'locale over 100 characters (VALIDATION_ERROR, NAME_TOO_LONG, LOCALE_TOO_LONG), a wrong ' +
         'phone (PHONE_INVALID), two avatar files (AVATAR_MULTIPLE), an empty avatar ' +
-        '(AVATAR_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, ' +
+        '(AVATAR_STREAM_ERROR), a text field avatar that is not empty (AVATAR_NOT_A_FILE: only an ' +
+        'empty one removes the avatar), a file that is not a jpeg, png or webp image by its content, ' +
         'whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot ' +
         'read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
@@ -484,7 +510,7 @@ const deleteUserByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'User was not found.',
+      description: '`USER_NOT_FOUND`: there is no user with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -548,6 +574,11 @@ const deleteMeSchema = {
         '(RECENT_LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
+    404: {
+      description:
+        'The account is already deleted: its access cookie lives a few minutes on (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
     409: {
       description:
         'The account has orders waiting for payment, paid or shipped (ACCOUNT_HAS_OPEN_ORDERS, ' +
@@ -569,6 +600,7 @@ const taggedUsersSchema = withOpenApiTag(
   {
     getUsersSchema,
     getMeSchema,
+    getMeExportSchema,
     patchMeSchema,
     getUserByIdSchema,
     deleteUserByIdSchema,

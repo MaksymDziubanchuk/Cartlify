@@ -8,6 +8,7 @@ import {
   addItem,
   cartOf,
   changedRows,
+  confirm,
   orderDatesOf,
   orderStateOf,
   paidOrderOf,
@@ -648,5 +649,55 @@ describe('the stock of a product', () => {
     });
 
     expect(changedRows(outcome)).toBe(false);
+  });
+});
+
+// the name of a product an item holds: it follows the product while the order is a cart, the
+// confirm keeps the name of that moment for good, the history shows what was bought
+describe('the name of the product of an item', () => {
+  const namesOf = async (db: DbSession, orderId: number) => {
+    await db.as({ role: 'ADMIN', userId: admin.id });
+    return (
+      await db.rows<{ name: string | null }>(
+        'select "productName" as name from cartlify.order_items where "orderId" = $1 order by id',
+        orderId,
+      )
+    ).map((row) => row.name);
+  };
+
+  const rename = async (db: DbSession, productId: number, name: string) => {
+    await db.as({ role: 'ADMIN', userId: admin.id });
+    await db.rows(
+      'update cartlify.products set name = $2 where id = $1 returning id',
+      productId,
+      name,
+    );
+  };
+
+  it('is the name of the product when the item goes into a cart', async () => {
+    const { names, expected } = await inRolledBackTx(async (db) => {
+      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      await db.as({ role: 'ADMIN', userId: admin.id });
+      const [row] = await db.rows<{ name: string }>(
+        'select name from cartlify.products where id = $1',
+        product.id,
+      );
+      return { names: await namesOf(db, orderId), expected: row!.name };
+    });
+
+    expect(names).toEqual([expected]);
+  });
+
+  it('takes the name of the moment of the confirm and keeps it after a rename', async () => {
+    const names = await inRolledBackTx(async (db) => {
+      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      await rename(db, product.id, 'Named at the confirm');
+      const confirmed = await confirm(db, owner.id, orderId);
+      if (!confirmed.ok) throw new Error(confirmed.message ?? 'confirm_order refused');
+      await rename(db, product.id, 'Named after the confirm');
+      return namesOf(db, orderId);
+    });
+
+    expect(names).toEqual(['Named at the confirm']);
   });
 });

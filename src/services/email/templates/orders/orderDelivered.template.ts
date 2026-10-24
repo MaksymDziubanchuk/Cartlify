@@ -5,6 +5,8 @@ export type OrderDeliveredItem = {
   quantity: number;
   // prices come as numbers or as prisma decimals turned into strings
   totalPrice: number | string;
+  // the page where the buyer rates the product; an item without one is not offered to rate
+  reviewUrl?: string;
 };
 
 export type OrderDeliveredTemplateArgs = {
@@ -51,6 +53,11 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
       lineTotal: price(item.totalPrice),
     })),
     total: price(args.total),
+    // the products to rate, each with the page of its reviews
+    ratings: args.items
+      .filter((item) => item.reviewUrl?.trim())
+      .map((item) => ({ name: item.name.trim(), reviewUrl: item.reviewUrl!.trim() })),
+    hasRatings: args.items.some((item) => item.reviewUrl?.trim()) ? 'yes' : '',
     shippingAddress: args.shippingAddress?.trim() || '',
     // the name and the phone in one line; an order confirmed before the recipient fields existed
     // has neither, then the line is left out

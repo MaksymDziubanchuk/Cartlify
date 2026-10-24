@@ -142,3 +142,16 @@ describe('findUnavailableItems', () => {
     ]);
   });
 });
+
+describe('findUnavailableItems at the free units', () => {
+  it('lets through an item of exactly the free units', () => {
+    const item = {
+      id: 41,
+      productId: 6,
+      quantity: 3,
+      product: { deletedAt: null, stock: 5, reservedStock: 2 },
+    };
+
+    expect(findUnavailableItems([item], new Map())).toEqual([]);
+  });
+});

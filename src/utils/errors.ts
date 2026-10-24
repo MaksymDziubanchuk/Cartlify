@@ -116,13 +116,14 @@ export class NotFoundError extends AppError {
 
 // 409 conflict
 export class ConflictError extends AppError {
-  constructor(errorCode = 'CONFLICT', details?: ErrorDetails, cause?: unknown) {
+  constructor(errorCode = 'CONFLICT', details?: ErrorDetails, cause?: unknown, expose?: boolean) {
     super({
       statusCode: 409,
       errorCode,
       message: 'Conflict',
       ...(details !== undefined ? { details } : {}),
       ...(cause !== undefined ? { cause } : {}),
+      ...(expose !== undefined ? { expose } : {}),
     });
   }
 }
@@ -134,10 +135,11 @@ export class AlreadyAuthenticatedError extends ConflictError {
   }
 }
 
-// 409 resource busy
+// 409 resource busy: other requests hold the rows; the client only learns to try again, the
+// details (attempts, database codes) go to the log
 export class ResourceBusyError extends ConflictError {
-  constructor(details?: ErrorDetails, cause?: unknown) {
-    super('RESOURCE_BUSY', details, cause);
+  constructor(logDetails?: ErrorDetails, cause?: unknown) {
+    super('RESOURCE_BUSY', logDetails, cause, false);
   }
 }
 

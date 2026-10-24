@@ -29,6 +29,9 @@ interface SendChatMessageDto {
     threadId: string;
     content: string;
     log: ChatBotLogger;
+    // called once the message is written, before the bot answers it: the socket shows the
+    // message to the chat right away, the answer of the model takes seconds
+    onSaved?: (saved: SendChatMessageResultDto) => void;
 }
 
 interface LockedChatThreadDto {
@@ -47,6 +50,10 @@ interface SendChatMessageResultDto {
     botMessage: ChatMessageItemDto | null;
     adminRequested: boolean;
 }
+
+// the chats the bot answers now, in this server process: one turn of the bot at a time in a chat,
+// two would be two paid calls of the model for one conversation and answers in any order
+const botTurnsRunning = new Set<string>();
 
 // normalizes actor id for DB comparisons and senderId writes
 function toUserId(actorId: string | number): number {
@@ -69,6 +76,11 @@ function normalizeContent(content: string): string {
 
     if (normalized.length > 2000) {
         throw new BadRequestError('CHAT_MESSAGE_TOO_LONG');
+    }
+
+    // a NUL sign is no text postgres keeps: the message failed with a server error
+    if (normalized.includes('\u0000')) {
+        throw new BadRequestError('TEXT_NUL_FORBIDDEN');
     }
 
     return normalized;
@@ -101,7 +113,7 @@ async function createChatMessage({
     actorRole,
     threadId,
     normalizedContent,
-}: Omit<SendChatMessageDto, 'log'> & {
+}: Omit<SendChatMessageDto, 'log' | 'onSaved'> & {
     normalizedContent: string;
 }): Promise<SendChatMessageResultDto> {
     return tx(
@@ -230,6 +242,9 @@ async function createChatMessage({
                     ...(adminAnswered && {
                         unreadCount: 0,
                         adminRequestedAt: null,
+                        // an answer before the customer described the problem takes the chat to
+                        // the active queue: an open chat of an admin keeps one of the two marks
+                        adminUnreadSince: lockedThread.adminUnreadSince ?? message.createdAt,
                     }),
                 },
             });
@@ -252,22 +267,17 @@ async function createChatMessage({
 }
 
 // runs bot after customer message transaction is already committed
-async function attachBotTurnIfNeeded({
+async function attachBotTurn({
     actorId,
     actorRole,
     threadId,
     normalizedContent,
     result,
     log,
-}: SendChatMessageDto & {
+}: Omit<SendChatMessageDto, 'onSaved'> & {
     normalizedContent: string;
     result: SendChatMessageResultDto;
 }): Promise<SendChatMessageResultDto> {
-    // skips bot for admins, admin threads, closed threads, and non-customer senders
-    if (!shouldTriggerBotTurn(result.message.senderType, result.thread)) {
-        return result;
-    }
-
     try {
         // calls bot outside the message transaction to avoid holding DB locks during AI request
         const botResult = await chatBotService.handleChatBotTurn({
@@ -300,8 +310,15 @@ export async function sendChatMessageService({
     threadId,
     content,
     log,
+    onSaved,
 }: SendChatMessageDto): Promise<SendChatMessageResultDto> {
     const normalizedContent = normalizeContent(content);
+
+    // a message of the customer while the bot answers the one before is not taken: the widget
+    // keeps it and sends it once the answer came
+    if ((actorRole === 'GUEST' || actorRole === 'USER') && botTurnsRunning.has(threadId)) {
+        throw new ConflictError('CHAT_BOT_REPLYING');
+    }
 
     try {
         // saves the original message first
@@ -313,23 +330,38 @@ export async function sendChatMessageService({
             normalizedContent,
         });
 
-        // optionally creates bot response after message save
-        return await attachBotTurnIfNeeded({
-            actorId,
-            actorRole,
-            threadId,
-            content,
-            normalizedContent,
-            result,
-            log,
-        });
+        // skips bot for admins, admin threads, closed threads, and non-customer senders; a
+        // message written at the very moment of another one of the chat gets no turn of its own,
+        // the bot answers the other
+        const botTurn =
+            shouldTriggerBotTurn(result.message.senderType, result.thread) &&
+            !botTurnsRunning.has(threadId);
+        if (botTurn) botTurnsRunning.add(threadId);
+
+        try {
+            onSaved?.(result);
+            if (!botTurn) return result;
+
+            // creates bot response after message save
+            return await attachBotTurn({
+                actorId,
+                actorRole,
+                threadId,
+                content,
+                normalizedContent,
+                result,
+                log,
+            });
+        } finally {
+            if (botTurn) botTurnsRunning.delete(threadId);
+        }
     } catch (err) {
         // preserves known application errors
         if (isAppError(err)) throw err;
 
         // maps retryable transaction errors to stable resource-busy response
         if (isRetryableTxError(err)) {
-            throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+            throw new ResourceBusyError();
         }
 
         // wraps unexpected send-message failures

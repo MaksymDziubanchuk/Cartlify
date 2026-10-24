@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 
 import { InternalError, UnauthorizedError } from '@utils/errors.js';
+import { fetchFromProvider } from '@utils/oauthFetch.js';
 
 type Jwk = {
   kty: string;
@@ -85,8 +86,11 @@ async function getJwkByKid(jwksUri: string, kid: string) {
     if (key) return key;
   }
 
-  const res = await fetch(jwksUri, { method: 'GET', headers: { accept: 'application/json' } });
-  const text = await res.text();
+  const res = await fetchFromProvider(jwksUri, {
+    method: 'GET',
+    headers: { accept: 'application/json' },
+  });
+  const { text } = res;
 
   if (!res.ok) throw new UnauthorizedError('JWKS_FETCH_FAILED', { status: res.status });
 

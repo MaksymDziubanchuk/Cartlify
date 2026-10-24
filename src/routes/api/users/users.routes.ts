@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { requestLimits } from '../../../plugins/requestLimits.js';
 import { usersSchema } from './users.schemas.js';
 import { usersController } from './users.controllers.js';
 
@@ -21,6 +22,14 @@ export default async function usersRouter(app: FastifyInstance) {
       schema: usersSchema.getMeSchema,
     },
     usersController.getMe,
+  );
+  app.get(
+    '/me/export',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER']), ...requestLimits.export],
+      schema: usersSchema.getMeExportSchema,
+    },
+    usersController.getMeExport,
   );
   app.patch(
     '/me',

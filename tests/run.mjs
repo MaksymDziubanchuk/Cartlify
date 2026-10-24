@@ -37,6 +37,8 @@ const DEFAULT_WORKERS = Math.min(6, availableParallelism());
 const SERVICES = [
   { name: 'sendgrid', real: true },
   { name: 'cloudinary', real: true },
+  { name: 'stripe', real: true },
+  { name: 'openai', real: true },
 ];
 const SERVICE_PREFIX = 'service:';
 

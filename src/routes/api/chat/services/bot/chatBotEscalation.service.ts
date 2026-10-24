@@ -9,7 +9,6 @@ export type ChatBotEscalationReason =
 
 export interface EvaluateChatBotEscalationDto {
     userMessage: string;
-    botMessage: string;
     history: ChatBotHistoryMessageDto[];
 }
 
@@ -22,6 +21,10 @@ export interface ChatBotEscalationResultDto {
 
 const MIN_LOOP_REPEATED_USER_MESSAGES = 2;
 const MAX_LOOP_HISTORY_MESSAGES = 8;
+
+// "yes", "ok thanks" or "the red one" come again and again in a good conversation: a message of
+// up to this many words said again is no loop
+const MAX_SHORT_MESSAGE_WORDS = 3;
 
 // phrases that mean the customer directly asks for human/admin support
 // only explicit requests of several words: a single word like "admin" or "manager" also
@@ -42,39 +45,6 @@ const DIRECT_ADMIN_REQUEST_PHRASES = [
     'i need admin',
 ];
 
-// phrases that mean the bot admits it cannot solve the issue
-const BOT_CANNOT_HELP_PHRASES = [
-    'i cannot help with this',
-    'i can not help with this',
-    'i cannot solve this',
-    'i can not solve this',
-    'i do not have enough information to solve this',
-    'i am not able to solve this',
-    'this needs admin support',
-    'this requires admin support',
-    'an admin is needed',
-    'a specialist is needed',
-    'a human is needed',
-    'please contact admin',
-    'please contact support',
-];
-
-// phrases that usually require a human decision or account-specific support
-const HUMAN_REQUIRED_PHRASES = [
-    'refund',
-    'chargeback',
-    'payment failed',
-    'payment problem',
-    'cancel order',
-    'order cancellation',
-    'change order',
-    'account blocked',
-    'account locked',
-    'delete account',
-    'personal data',
-    'complaint',
-];
-
 // normalizes text before phrase matching
 const normalizeText = (value: string): string => {
     return value.toLowerCase().replace(/\s+/g, ' ').trim();
@@ -87,8 +57,7 @@ const escapeRegExp = (value: string): string => {
 
 // a phrase starts at the start of a word, so "admin" does not match inside "badminton";
 // a phrase of several words also ends at the end of a word, so "transfer me" does not match
-// "transfer methods"; one word may go on with an ending: "refund" matches "refunds";
-// \b knows only latin letters, the lookarounds work for cyrillic too
+// "transfer methods"; \b knows only latin letters, the lookarounds work for cyrillic too
 const buildPhraseRegExp = (phrase: string): RegExp => {
     const normalizedPhrase = normalizeText(phrase);
     const end = normalizedPhrase.includes(' ') ? '(?![\\p{L}\\p{N}])' : '';
@@ -107,6 +76,11 @@ const findMatchedPhrase = (
         phrases.find((phrase) => buildPhraseRegExp(phrase).test(normalizedText)) ??
         null
     );
+};
+
+// the words of a message: runs of letters or digits, punctuation is none
+const countWords = (text: string): number => {
+    return text.match(/[\p{L}\p{N}]+/gu)?.length ?? 0;
 };
 
 // checks if the customer directly asked for admin or human support
@@ -130,48 +104,6 @@ const evaluateDirectAdminRequest = (
     };
 };
 
-// checks if the bot response says that human/admin help is needed
-const evaluateBotCannotHelp = (
-    botMessage: string,
-): ChatBotEscalationResultDto | null => {
-    const matchedPhrase = findMatchedPhrase(
-        botMessage,
-        BOT_CANNOT_HELP_PHRASES,
-    );
-
-    if (!matchedPhrase) {
-        return null;
-    }
-
-    return {
-        shouldEscalate: true,
-        reason: 'BOT_CANNOT_HELP',
-        confidence: 0.9,
-        matchedPhrase,
-    };
-};
-
-// checks if the current issue likely needs a human decision
-const evaluateHumanRequired = (
-    userMessage: string,
-): ChatBotEscalationResultDto | null => {
-    const matchedPhrase = findMatchedPhrase(
-        userMessage,
-        HUMAN_REQUIRED_PHRASES,
-    );
-
-    if (!matchedPhrase) {
-        return null;
-    }
-
-    return {
-        shouldEscalate: true,
-        reason: 'HUMAN_REQUIRED',
-        confidence: 0.75,
-        matchedPhrase,
-    };
-};
-
 // extracts recent customer messages from thread history
 const getRecentCustomerMessages = (
     history: ChatBotHistoryMessageDto[],
@@ -190,7 +122,7 @@ const evaluateLoopDetected = (
 ): ChatBotEscalationResultDto | null => {
     const normalizedUserMessage = normalizeText(userMessage);
 
-    if (!normalizedUserMessage) {
+    if (!normalizedUserMessage || countWords(normalizedUserMessage) <= MAX_SHORT_MESSAGE_WORDS) {
         return null;
     }
 
@@ -220,15 +152,15 @@ const createNoEscalationResult = (): ChatBotEscalationResultDto => {
     };
 };
 
-// evaluates all escalation signals in priority order
+// the signals the code finds before the model is asked: an explicit request for a person in
+// english words and a loop. Whether a matter needs a human (a refund, a complaint) the model
+// decides by meaning in any language: most of them it answers itself
 export const evaluateChatBotEscalation = (
     dto: EvaluateChatBotEscalationDto,
 ): ChatBotEscalationResultDto => {
     return (
         evaluateDirectAdminRequest(dto.userMessage) ??
-        evaluateBotCannotHelp(dto.botMessage) ??
         evaluateLoopDetected(dto.userMessage, dto.history) ??
-        evaluateHumanRequired(dto.userMessage) ??
         createNoEscalationResult()
     );
 };

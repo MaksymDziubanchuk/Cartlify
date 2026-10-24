@@ -123,6 +123,17 @@ describe('GET /api/users/:userId', () => {
     expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'K' });
   });
 
+  // a name of signs only has no letter for the picture: the other user got a "?"
+  it('draws the first letter of the email when the name has no letter or digit', async () => {
+    const viewer = await newUser();
+    const target = await newUser({ name: '~~ !!', email: `mira-${uniqueTag()}@example.com` });
+
+    const res = await profileOf(target.id, accessCookie(viewer));
+
+    expect(res.json()).toMatchObject({ name: '~~ !!', avatarIsDefault: true });
+    expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'M' });
+  });
+
   it('lets a user read their own public profile', async () => {
     const user = await newUser({ name: 'Anna' });
 
@@ -252,7 +263,7 @@ describe('GET /api/users/:userId for an admin', () => {
   it('leaves out the name, the locale and the phone a user has not set and draws the avatar', async () => {
     const target = await newUser({
       authProvider: 'GITHUB',
-      providerSub: 'gh-1',
+      providerSub: `gh-${uniqueTag()}`,
       isVerified: false,
     });
 

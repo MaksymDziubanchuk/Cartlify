@@ -8,6 +8,7 @@ import {
   DELETED_AVATAR_COLOR,
   avatarOf,
   ensureAvatarBase,
+  nameGivesLetter,
 } from '@utils/avatar.util.js';
 
 import { drawnAvatar as drawn } from '../../helpers/avatar.js';
@@ -196,5 +197,19 @@ describe('ensureAvatarBase', () => {
     await expect(ensureAvatarBase(log)).resolves.toBeUndefined();
 
     expect(log.warn).toHaveBeenCalledWith(expect.any(Object), 'avatar base was not uploaded');
+  });
+});
+
+// a name of signs only draws no letter: the public profile reads the email for the picture then
+describe('nameGivesLetter', () => {
+  it.each([
+    ['a name with a letter', 'Anna', true],
+    ['a name of a digit', '7 days', true],
+    ['a name of cyrillic letters', 'Олена', true],
+    ['a name of signs only', '~~ !!', false],
+    ['a blank name', '   ', false],
+    ['no name', null, false],
+  ])('tells %s', (_case, name, gives) => {
+    expect(nameGivesLetter(name)).toBe(gives);
   });
 });

@@ -65,6 +65,9 @@ function firstSign(text: string | null | undefined): string | null {
 const letterOf = (owner: AvatarOwner) =>
   firstSign(owner.name) ?? firstSign(owner.email?.split('@')[0]) ?? '?';
 
+// whether the picture draws its letter from the name: a name of signs only gives none, the email does
+export const nameGivesLetter = (name: string | null | undefined): boolean => firstSign(name) !== null;
+
 const colorOf = (owner: AvatarOwner) =>
   owner.deleted ? DELETED_AVATAR_COLOR : AVATAR_COLORS[owner.id % AVATAR_COLORS.length]!;
 

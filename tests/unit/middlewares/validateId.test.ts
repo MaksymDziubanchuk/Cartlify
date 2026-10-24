@@ -62,3 +62,16 @@ describe('validateId', () => {
     await expect(run).rejects.toMatchObject({ errorCode: 'INVALID_ID_PARAM' });
   });
 });
+
+describe('validateId and a raw id', () => {
+  it('tells the parameter it checks, for the swagger document', () => {
+    expect(validateId('productId').idParam).toBe('productId');
+  });
+
+  // Number() reads these as numbers, a raw id is digits only
+  it.each(['1e3', '0x1A', ' 7 ', '7.0'])('refuses the raw id %p', async (productId) => {
+    expect(
+      await rejectedBy(() => validateId('productId')(fakeRequest({ params: { productId } }))),
+    ).toBeInstanceOf(BadRequestError);
+  });
+});

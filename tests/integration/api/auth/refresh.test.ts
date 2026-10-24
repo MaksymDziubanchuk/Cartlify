@@ -115,9 +115,11 @@ describe('POST /api/auth/refresh', () => {
     expect(reused.statusCode).toBe(403);
     expect(reused.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_REUSE_DETECTED' });
 
-    // the token the rightful owner got is closed as well
+    // the token the rightful owner got is closed as well: closed, not stolen, so it is a plain
+    // refusal that closes nothing more
     const afterReuse = await refresh({ refreshToken: second });
-    expect(afterReuse.statusCode).toBe(403);
+    expect(afterReuse.statusCode).toBe(401);
+    expect(afterReuse.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_REVOKED' });
 
     const open = await asAdmin((tx) =>
       tx.userToken.count({ where: { userId, type: 'REFRESH_TOKEN', usedAt: null } }),
@@ -149,11 +151,39 @@ describe('POST /api/auth/refresh', () => {
     const res = await refresh({ refreshToken });
 
     expect(res.statusCode).toBe(401);
+    // a code the page can read, as every other refusal of the session
+    expect(res.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_EXPIRED' });
     expect(setCookies(res).refreshToken?.cleared).toBe(true);
 
     const stored = await asAdmin((tx) =>
       tx.userToken.findUniqueOrThrow({ where: { id: row.id }, select: { usedAt: true } }),
     );
     expect(stored.usedAt).not.toBeNull();
+  });
+
+  // a session past its deadline is no stolen token: the other sessions of the user go on, and the
+  // same cookie again is the same plain refusal
+  it('leaves the other sessions alone when a session past its deadline comes back', async () => {
+    const other = await login();
+    const { refreshToken } = await login();
+    await asAdmin(async (tx) => {
+      const row = await tx.userToken.findFirstOrThrow({
+        where: { userId, type: 'REFRESH_TOKEN', usedAt: null },
+        orderBy: { id: 'desc' },
+      });
+      await tx.userToken.update({
+        where: { id: row.id },
+        data: {
+          createdAt: new Date(Date.now() - 3_600_000),
+          expiresAt: new Date(Date.now() - 1000),
+        },
+      });
+    });
+
+    expect((await refresh({ refreshToken })).statusCode).toBe(401);
+    const again = await refresh({ refreshToken });
+    expect(again.statusCode).toBe(401);
+    expect(again.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_REVOKED' });
+    expect((await refresh({ refreshToken: other.refreshToken })).statusCode).toBe(204);
   });
 });

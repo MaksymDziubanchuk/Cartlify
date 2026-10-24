@@ -23,7 +23,18 @@ type BuildCheckoutSessionPayloadArgs = {
   orderId: number;
   userId: number;
   total: number;
+  reservationExpiresAt: Date;
+  items: { name: string; unitPrice: number; quantity: number }[];
+  customerEmail: string | null;
 };
+
+// money in cents without float math: 10.15 * 100 is 1014.9999999999999
+const centsOf = (value: number) => Math.round(Math.round(value * 1000) / 10);
+
+// how long after the reservation stripe closes the page itself: 30 minutes is the least stripe
+// takes. The timer closes it at the end of the reservation; when it cannot (stripe out of reach),
+// this keeps a late payment within half an hour instead of a day
+const PAGE_EXPIRES_AFTER_RESERVATION_MS = 30 * 60 * 1000;
 
 type ExpireCheckoutSessionArgs = {
   sessionId: string;
@@ -36,9 +47,15 @@ const CHECKOUT_CANCEL_PAGE = '/checkout/cancel';
 
 // build stripe idempotency key for checkout session create
 // same order with the same reservation gets the same session back, so a double click does not open a second payment
-// a new confirmation has a new reservation time, so it gets a new session
-function buildCheckoutIdempotencyKey(orderId: number, reservationExpiresAt: Date): string {
-  return `checkout:order:${orderId}:${reservationExpiresAt.getTime()}`;
+// a new confirmation has a new reservation time, so it gets a new session; so does a page opened
+// after the app closed one of the order for another provider, stripe would give the closed one back
+function buildCheckoutIdempotencyKey(
+  orderId: number,
+  reservationExpiresAt: Date,
+  pageClosedAt: Date | null = null,
+): string {
+  const key = `checkout:order:${orderId}:${reservationExpiresAt.getTime()}`;
+  return pageClosedAt ? `${key}:closed:${pageClosedAt.getTime()}` : key;
 }
 
 // build stripe checkout session payload
@@ -46,7 +63,28 @@ function buildCheckoutSessionPayload({
   orderId,
   userId,
   total,
+  reservationExpiresAt,
+  items,
+  customerEmail,
 }: BuildCheckoutSessionPayloadArgs): Stripe.Checkout.SessionCreateParams {
+  // a line for each item; the webhook takes the paid amount for the total of the order, so the
+  // lines add up to it to the cent, or the page is not opened
+  const lines = items.map((item) => ({
+    quantity: item.quantity,
+    price_data: {
+      currency: env.STRIPE_CURRENCY,
+      unit_amount: centsOf(item.unitPrice),
+      product_data: { name: item.name },
+    },
+  }));
+  const linesTotal = lines.reduce(
+    (sum, line) => sum + line.price_data.unit_amount * line.quantity,
+    0,
+  );
+  if (linesTotal !== centsOf(total)) {
+    throw new InternalError({ reason: 'STRIPE_LINES_TOTAL_MISMATCH', orderId });
+  }
+
   // build success return url; stripe replaces only the literal {CHECKOUT_SESSION_ID} with the
   // session id, while URLSearchParams encodes the braces, so they are put back after encoding
   const successUrlText = webUrl(CHECKOUT_SUCCESS_PAGE, {
@@ -67,20 +105,16 @@ function buildCheckoutSessionPayload({
       entityId: String(orderId),
       userId: String(userId),
     },
-    line_items: [
-      {
-        quantity: 1,
-        price_data: {
-          currency: env.STRIPE_CURRENCY,
-          unit_amount: Math.round(total * 100),
-          product_data: {
-            name: `Cartlify order #${orderId}`,
-          },
-        },
-      },
-    ],
+    line_items: lines,
+    // the payment names the shop and the order, the bank statement and the dashboard show it
+    payment_intent_data: { description: `${env.SHOP_NAME} order #${orderId}` },
+    ...(customerEmail ? { customer_email: customerEmail } : {}),
     success_url: successUrlText,
     cancel_url: cancelUrlText,
+    // from the reservation, not the clock: a repeated request with the same key sends the same values
+    expires_at: Math.floor(
+      (reservationExpiresAt.getTime() + PAGE_EXPIRES_AFTER_RESERVATION_MS) / 1000,
+    ),
   };
 }
 

@@ -8,15 +8,21 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  writeOffStock,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
-import { placeOrder } from '../../../helpers/orders.js';
-import { STRIPE_SESSION_URL, openPaymentPage, orderStateOf } from '../../../helpers/payments.js';
+import { loseReservation, placeOrder } from '../../../helpers/orders.js';
+import {
+  STRIPE_SESSION_URL,
+  openPaymentPage,
+  orderStateOf,
+  payPage,
+} from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
-  describeWithStripe,
+  deliver,
   expireSession,
   openForeignSession,
   payCheckoutSession,
@@ -25,7 +31,8 @@ import {
 } from '../../../helpers/stripe.js';
 
 // GET /api/payments/stripe/checkout/sessions/:sessionId: the page the buyer comes back to after Stripe
-// asks how the payment page of the order stands. The pages are real ones of the test sandbox
+// asks how the payment page of the order stands. The pages are opened at Stripe, its mock or the
+// test sandbox (service:stripe)
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -119,7 +126,7 @@ describe('GET /api/payments/stripe/checkout/sessions/:sessionId', () => {
       },
     );
 
-    // a real failed connection, it needs no key
+    // a real failed connection
     it('answers PAYMENT_PROVIDER_UNAVAILABLE when Stripe cannot be reached', async () => {
       const user = await newUser();
 
@@ -133,7 +140,7 @@ describe('GET /api/payments/stripe/checkout/sessions/:sessionId', () => {
     });
   });
 
-  describeWithStripe('at Stripe', () => {
+  describe('at Stripe', () => {
     it('shows the open page of the order until the reservation ends', async () => {
       const { user, orderId, sessionId } = await orderWithPage();
 
@@ -151,6 +158,25 @@ describe('GET /api/payments/stripe/checkout/sessions/:sessionId', () => {
           paymentStatus: 'unpaid',
           expiresAt: order!.reservationExpiresAt!.toISOString(),
         },
+        order: { id: orderId, status: 'waiting', paymentRefunded: false },
+      });
+    });
+
+    // the buyer paid after the reservation, the stock was gone and the money went back: Stripe
+    // still calls the page paid, the answer has to tell the order is not
+    it('tells the page of a payment the order could not take that it went back', async () => {
+      const { user, orderId, sessionId } = await orderWithPage();
+      await loseReservation(orderId);
+      await writeOffStock(products.at(-1)!.id, 5);
+      const { event } = await payPage(sessionId);
+      expect((await deliver(app, event)).statusCode).toBe(200);
+
+      const res = await getPage(user, sessionId);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({
+        checkoutSession: { sessionId, status: 'complete', paymentStatus: 'paid' },
+        order: { id: orderId, status: 'unconfirmed', paymentRefunded: true },
       });
     });
 
@@ -167,6 +193,8 @@ describe('GET /api/payments/stripe/checkout/sessions/:sessionId', () => {
         status: 'complete',
         paymentStatus: 'paid',
       });
+      // the webhook did not come yet: the order still waits for it
+      expect(res.json().order).toMatchObject({ status: 'waiting', paymentRefunded: false });
     });
 
     it('shows a closed page as expired', async () => {

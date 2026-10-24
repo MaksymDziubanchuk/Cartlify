@@ -12,6 +12,9 @@ const wholeNumberField = (description: string) =>
     description: `${description}: a whole number from 1 to ${MAX_ID}.`,
   }) as const;
 
+// the statuses of the list, for the pattern of a list of them
+const LIST_STATUSES = 'waiting|unconfirmed|paid|shipped|delivered|cancelled';
+
 // the longest shipping address and note, in characters
 const SHIPPING_TEXT_MAX_LENGTH = 500;
 
@@ -26,7 +29,9 @@ const ordersOrderItemProductSchema = {
 
     images: {
       type: 'object',
+      nullable: true,
       additionalProperties: false,
+      description: 'The primary image of the product; null for a product without one.',
       properties: {
         url200: { type: 'string' },
         url400: { type: 'string' },
@@ -39,6 +44,23 @@ const ordersOrderItemProductSchema = {
     availableStock: { type: 'integer', minimum: 0 },
 
     deletedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
+
+    // an order that is not paid (a cart, unconfirmed, waiting for its payment)
+    price: {
+      type: 'number',
+      description:
+        'The price of the product now, for an order that is not paid; a paid order shows what ' +
+        'it was paid at in unitPrice.',
+    },
+    salePrice: {
+      type: 'number',
+      description: 'The sale price of the product while its sale lasts, for an order not paid.',
+    },
+    saleEndsAt: { type: 'string', format: 'date-time', description: 'The end of that sale.' },
+    salePriorPrice: {
+      type: 'number',
+      description: 'The lowest price of the 30 days before that sale.',
+    },
   },
   required: ['id', 'name', 'categoryId', 'images', 'availableStock'],
 } as const;
@@ -51,13 +73,19 @@ const ordersOrderItemSchema = {
     // order item id, used as itemId in cart item routes
     id: { type: 'integer' },
     productId: { type: 'integer' },
+    name: {
+      type: 'string',
+      description:
+        'The name of the item: the one the product had when the order was confirmed, kept after ' +
+        'a rename; the name the product has now for a cart or an unconfirmed order.',
+    },
     product: { $ref: 'ordersOrderItemProductSchema#' },
 
     quantity: { type: 'number' },
     unitPrice: { type: 'number' },
     totalPrice: { type: 'number' },
   },
-  required: ['id', 'productId', 'product', 'quantity', 'unitPrice', 'totalPrice'],
+  required: ['id', 'productId', 'name', 'product', 'quantity', 'unitPrice', 'totalPrice'],
 } as const;
 
 const ordersOrderResponseSchema = {
@@ -73,6 +101,21 @@ const ordersOrderResponseSchema = {
     },
     items: { type: 'array', items: { $ref: 'ordersOrderItemSchema#' } },
     total: { type: 'number' },
+    // the list of an admin names the buyer of each order
+    buyer: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'Admin and root, in the list: the buyer of the order; a deleted account keeps its id, ' +
+        'the name Guest and no email.',
+      properties: {
+        id: { type: 'integer' },
+        name: { type: ['string', 'null'] },
+        email: { type: ['string', 'null'] },
+        deleted: { type: 'boolean' },
+      },
+      required: ['id', 'name', 'email', 'deleted'],
+    },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
     reservationExpiresAt: {
@@ -221,6 +264,39 @@ const ordersGetQuerySchema = {
       type: 'string',
       enum: ['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
+    statuses: {
+      type: 'string',
+      pattern: `^(${LIST_STATUSES})(,(${LIST_STATUSES}))*$`,
+      description: 'A few statuses separated by commas, for example paid,shipped.',
+    },
+    productId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description: 'Only the orders that hold the product.',
+    },
+    userId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description: 'Admin and root only (FILTER_FORBIDDEN for a buyer): the orders of the account.',
+    },
+    q: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer): a whole number is the number of an ' +
+        'order; any other text a part of the email of the buyer, of the name or the phone of ' +
+        'the recipient, whatever the case of its letters.',
+    },
+    format: {
+      type: 'string',
+      enum: ['json', 'csv'],
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer): csv gives every order of the ' +
+        'filters as a file for the courier, without pages.',
+    },
     confirmed: { type: 'boolean' },
     paidFrom: {
       type: 'string',
@@ -272,6 +348,55 @@ const ordersGetByIdParamsSchema = {
     orderId: idPathParam('the order'),
   },
   required: ['orderId'],
+} as const;
+
+// one step of shipping for many orders
+const ordersBulkStatusBodySchema = {
+  $id: 'ordersBulkStatusBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      uniqueItems: true,
+      items: { type: 'integer', minimum: 1, maximum: MAX_ID },
+    },
+    status: { type: 'string', enum: ['shipped', 'delivered'] },
+  },
+  required: ['orderIds', 'status'],
+} as const;
+
+const ordersBulkStatusResponseSchema = {
+  $id: 'ordersBulkStatusResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    results: {
+      type: 'array',
+      description: 'An answer for each order, in the order of the request.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          orderId: { type: 'integer' },
+          ok: { type: 'boolean' },
+          status: { type: 'string', description: 'With ok: the status of the order now.' },
+          errorCode: {
+            type: 'string',
+            description:
+              'Without ok: why the order did not take the step, the code PATCH ' +
+              '/api/orders/{orderId}/status would answer (ORDER_NOT_FOUND, ' +
+              'ORDER_STATUS_TRANSITION_INVALID, ORDER_STATUS_CHANGED, RESOURCE_BUSY).',
+          },
+          details: { type: 'object', additionalProperties: true },
+        },
+        required: ['orderId', 'ok'],
+      },
+    },
+  },
+  required: ['results'],
 } as const;
 
 const ordersUpdateStatusBodySchema = {
@@ -339,6 +464,8 @@ export const ordersDtoSchemas = [
   ordersOrderItemSchema,
   ordersOrderResponseSchema,
   ordersUpdateStatusParamsSchema,
+  ordersBulkStatusBodySchema,
+  ordersBulkStatusResponseSchema,
   ordersUpdateStatusBodySchema,
   ordersUpdateStatusResponseSchema,
   ordersListResponseSchema,

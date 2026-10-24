@@ -63,9 +63,11 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
           ? { guestId: dto.actorId as string }
           : { userId: Number(dto.actorId) };
 
+      // the list of a buyer: a product taken out of the catalog or without an image is left out,
+      // the favorite itself stays
       const baseWhere: any = {
         ...actorWhere,
-        product: { deletedAt: null },
+        product: { deletedAt: null, images: { some: { isPrimary: true } } },
       };
 
       // apply cursor window when provided

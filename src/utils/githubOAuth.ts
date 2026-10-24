@@ -8,6 +8,7 @@ import {
 } from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
+import { fetchFromProvider } from '@utils/oauthFetch.js';
 
 type StatePayload = {
   guestId: string;
@@ -177,7 +178,7 @@ export async function exchangeGithubCodeForTokens(
   });
 
   // call github token endpoint
-  const res = await fetch('https://github.com/login/oauth/access_token', {
+  const res = await fetchFromProvider('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: {
       'content-type': 'application/x-www-form-urlencoded',
@@ -186,7 +187,7 @@ export async function exchangeGithubCodeForTokens(
     body,
   });
 
-  const text = await res.text();
+  const { text } = res;
   if (!res.ok) {
     throw new UnauthorizedError('GITHUB_OAUTH_TOKEN_EXCHANGE_FAILED', { status: res.status });
   }
@@ -211,7 +212,7 @@ export async function exchangeGithubCodeForTokens(
 
 // fetch github user profile
 export async function fetchGithubUser(accessToken: string): Promise<GithubUserResponse> {
-  const res = await fetch('https://api.github.com/user', {
+  const res = await fetchFromProvider('https://api.github.com/user', {
     method: 'GET',
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -221,7 +222,7 @@ export async function fetchGithubUser(accessToken: string): Promise<GithubUserRe
     },
   });
 
-  const text = await res.text();
+  const { text } = res;
   if (!res.ok) {
     throw new UnauthorizedError('GITHUB_OAUTH_FETCH_USER_FAILED', { status: res.status });
   }
@@ -231,7 +232,7 @@ export async function fetchGithubUser(accessToken: string): Promise<GithubUserRe
 
 // fetch github email list
 export async function fetchGithubEmails(accessToken: string): Promise<GithubEmailItem[]> {
-  const res = await fetch('https://api.github.com/user/emails', {
+  const res = await fetchFromProvider('https://api.github.com/user/emails', {
     method: 'GET',
     headers: {
       authorization: `Bearer ${accessToken}`,
@@ -241,7 +242,7 @@ export async function fetchGithubEmails(accessToken: string): Promise<GithubEmai
     },
   });
 
-  const text = await res.text();
+  const { text } = res;
   if (!res.ok) {
     throw new UnauthorizedError('GITHUB_OAUTH_FETCH_EMAILS_FAILED', { status: res.status });
   }

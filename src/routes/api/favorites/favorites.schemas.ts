@@ -56,7 +56,8 @@ const getFavoritesSchema = {
   summary: 'Get favorites',
   description:
     'Returns the current guest or authenticated user favorite products, each as a product of the ' +
-    'list of a buyer: with its popularity, without the fields of an admin.',
+    'list of a buyer: with its popularity, without the fields of an admin. A product taken out of ' +
+    'the catalog or without an image stays a favorite but is not in the list.',
 
   querystring: {
     $ref: 'favoritesGetQuerySchema#',
@@ -71,7 +72,8 @@ const getFavoritesSchema = {
     },
 
     400: {
-      description: 'Invalid favorites query parameters.',
+      description:
+        'Invalid favorites query parameters. `CURSOR_INVALID`: the cursor is not one the list gave.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -120,11 +122,9 @@ const postAddFavoriteSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found.',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: 'Product is already in favorites or cannot be added.',
+      description:
+        '`PRODUCT_NOT_FOUND`: there is no such product, or it was taken out of the catalog. A ' +
+        'product among the favorites already answers 200 as the first time.',
       $ref: 'errorResponseSchema#',
     },
     500: {

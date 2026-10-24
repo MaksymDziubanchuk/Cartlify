@@ -69,6 +69,15 @@ export default async function ordersRouter(app: FastifyInstance) {
     ordersController.getOrderById,
   );
 
+  app.post(
+    '/status',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: ordersSchema.postOrdersStatusSchema,
+    },
+    ordersController.postOrdersStatus,
+  );
+
   app.patch(
     '/:orderId/status',
     {

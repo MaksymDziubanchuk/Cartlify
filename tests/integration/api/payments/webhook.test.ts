@@ -168,7 +168,7 @@ describe('POST /api/payments/stripe/webhook', () => {
 
   // the sandbox and the account are shared with other tools: an error answer about their pages
   // would make Stripe deliver the event again for days and at last turn the endpoint off. The
-  // money of such a page is not touched, webhookRefund.test.ts pays one for real
+  // money of such a page is not touched, webhookRefund.test.ts pays one
   describe('a page that is not of an order', () => {
     const skipped = () =>
       takeLogs({ msg: 'stripe event of a page that is not an order was skipped' });

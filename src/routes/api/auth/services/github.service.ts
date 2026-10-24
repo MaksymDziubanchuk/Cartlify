@@ -162,6 +162,7 @@ export async function githubCallback({
         userId: u.id,
         role: u.role as any,
         rememberMe,
+        ...(userAgent ? { userAgent } : {}),
       });
 
       assertEmail(u.email);

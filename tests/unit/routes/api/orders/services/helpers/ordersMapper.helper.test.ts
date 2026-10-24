@@ -5,9 +5,6 @@ import {
   mapOrderRowToResponse,
   orderResponseSelect,
 } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
-import { InternalError } from '@utils/errors.js';
-
-import { thrownBy } from '../../../../../../helpers/errors.js';
 
 const primaryUrl = 'https://res.cloudinary.com/demo/image/upload/v1/products/4/0.jpg';
 
@@ -86,7 +83,7 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('builds the product image urls from the primary image', () => {
-    expect(map().items[0]?.product.images.url200).toContain('/upload/c_fit,w_200');
+    expect(map().items[0]?.product.images?.url200).toContain('/upload/c_fit,w_200');
   });
 
   it('sends an empty shipping address instead of null and leaves out an empty note', () => {
@@ -165,9 +162,10 @@ describe('mapOrderRowToResponse', () => {
     expect(map({ items: [], total: new Prisma.Decimal(0) })).toMatchObject({ items: [], total: 0 });
   });
 
-  it('throws an internal error when a product has no image, which every product must have', () => {
+  // a product without an image opens by its id and goes into a cart: the item shows no images
+  it('gives the product of an item without an image no images', () => {
     const noImage = item({ product: { ...item().product, images: [] } });
 
-    expect(thrownBy(() => map({ items: [noImage] }))).toBeInstanceOf(InternalError);
+    expect(map({ items: [noImage] }).items[0]?.product.images).toBeNull();
   });
 });

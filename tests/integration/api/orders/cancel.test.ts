@@ -22,18 +22,13 @@ import {
   shippingData,
 } from '../../../helpers/orders.js';
 import { placePaidOrder } from '../../../helpers/payments.js';
-import {
-  describeWithStripe,
-  refundsOf,
-  stripeRequestsDuring,
-  withStripeOutOfReach,
-} from '../../../helpers/stripe.js';
+import { refundsOf, stripeRequestsDuring, withStripeOutOfReach } from '../../../helpers/stripe.js';
 
 // POST /api/orders/:orderId/cancel: an admin cancels a paid or shipped order, for example one that
 // cannot be delivered. The payment is refunded in full, the stock comes back, the buyer gets a mail
 // and the admin gets how to reach the buyer, also a deleted one. A delivered order stays.
-// The payments are real ones of the Stripe test sandbox (a test card), the refund goes to Stripe
-// for real; Stripe out of reach is a real failed connection
+// The payments are taken with a test card at Stripe (its mock, or the test sandbox with
+// service:stripe) and the refund goes to it; Stripe out of reach is a real failed connection
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -104,7 +99,7 @@ afterAll(async () => {
 });
 
 describe('POST /api/orders/:orderId/cancel', () => {
-  describeWithStripe('a paid order', () => {
+  describe('a paid order', () => {
     it('cancels a paid order, refunds the payment in full and returns the stock', async () => {
       const { orderId, paymentId, product } = await paidOrder(undefined, { quantity: 2 });
 
@@ -247,7 +242,7 @@ describe('POST /api/orders/:orderId/cancel', () => {
       expect(takeLogs({ msg: 'request failed', reason: 'STRIPE_REFUND_FAILED' })).toHaveLength(1);
     });
 
-    // an order paid with a payment Stripe does not know: Stripe refuses the refund for real
+    // an order paid with a payment Stripe does not know: Stripe refuses the refund
     it('changes nothing when Stripe refuses the refund', async () => {
       const product = await newProduct();
       const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid');

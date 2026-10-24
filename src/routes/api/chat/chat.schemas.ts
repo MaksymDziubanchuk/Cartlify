@@ -57,6 +57,7 @@ const adminChatMessageExample = {
 const currentChatResponseExample = {
   thread: chatThreadExample,
   messages: [chatMessageExample],
+  nextCursor: null,
   ws: {
     url: '/api/chat/ws',
     threadId: '11111111-1111-4111-8111-111111111111',
@@ -83,7 +84,13 @@ const chatThreadIdParamsExample = {
 const adminChatThreadResponseExample = {
   thread: adminChatThreadExample,
   messages: [adminChatMessageExample],
+  nextCursor: null,
   previousThreads: [chatThreadExample],
+};
+
+const chatThreadMessagesResponseExample = {
+  messages: [chatMessageExample],
+  nextCursor: 'eyJpZCI6MSwidiI6bnVsbH0',
 };
 
 const closeChatThreadResponseExample = {
@@ -99,7 +106,7 @@ const getCurrentChatSchema = {
   operationId: 'getCurrentChat',
   summary: 'Get current chat',
   description:
-    'Returns the current guest or authenticated user chat thread, recent messages and WebSocket connection info.',
+    'Returns the open chat of the guest or the user, a new chat with the bot when there is none, with its newest 50 messages and WebSocket connection info. The messages before them come page by page from GET /api/chat/threads/{threadId}/messages with nextCursor. Two tabs that open the chat at once get the same one.',
 
   response: {
     200: {
@@ -108,10 +115,6 @@ const getCurrentChatSchema = {
       examples: [currentChatResponseExample],
     },
 
-    400: {
-      description: 'Invalid current chat request.',
-      $ref: 'errorResponseSchema#',
-    },
     401: {
       description: 'Authentication or guest session is required to read current chat.',
       $ref: 'errorResponseSchema#',
@@ -122,6 +125,40 @@ const getCurrentChatSchema = {
     },
     500: {
       description: 'Unexpected server error while loading current chat.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for a page of older messages of a chat
+const getChatThreadMessagesSchema = {
+  operationId: 'getChatThreadMessages',
+  summary: 'Get older chat messages',
+  description:
+    'Returns up to 50 messages of a chat, the newest before the cursor, oldest first; without a cursor the newest ones. A guest or a user reads their own chat, an admin or root a chat given to the admins, open or closed.',
+
+  params: {
+    $ref: 'chatThreadIdParamsSchema#',
+    examples: [chatThreadIdParamsExample],
+  },
+  querystring: { $ref: 'chatThreadMessagesQuerySchema#' },
+
+  response: {
+    200: {
+      description: 'A page of messages was returned successfully.',
+      $ref: 'chatThreadMessagesResponseSchema#',
+      examples: [chatThreadMessagesResponseExample],
+    },
+    400: {
+      description: 'The cursor is not one this route gave (CURSOR_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: "An admin asked for a chat with the bot, it is the customer's alone (CHAT_THREAD_FORBIDDEN).",
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'There is no such chat, or it is a chat of another customer (CHAT_THREAD_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -168,7 +205,8 @@ const getAdminChatThreadsSchema = {
 const getAdminChatThreadSchema = {
   operationId: 'getAdminChatThread',
   summary: 'Get admin chat thread',
-  description: 'Returns one admin chat thread with messages and previous related customer threads.',
+  description:
+    'Returns one admin chat thread with its newest 50 messages and previous related customer threads; the messages before them come from GET /api/chat/threads/{threadId}/messages with nextCursor.',
 
   params: {
     $ref: 'chatThreadIdParamsSchema#',
@@ -191,11 +229,12 @@ const getAdminChatThreadSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Only admin or root users can read this chat thread.',
+      description:
+        "Only admin or root users can read this chat thread; a chat with the bot is the customer's alone (CHAT_THREAD_FORBIDDEN).",
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Chat thread was not found.',
+      description: 'Chat thread was not found (CHAT_THREAD_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -232,15 +271,17 @@ const closeAdminChatThreadSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Only admin or root users can close this chat thread.',
+      description:
+        'Only admin or root users close a chat. `CHAT_THREAD_FORBIDDEN`: it is a chat with the ' +
+        "bot, the customer's alone.",
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Chat thread was not found.',
+      description: '`CHAT_THREAD_NOT_FOUND`: there is no such chat.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Chat thread state does not allow closing.',
+      description: '`CHAT_THREAD_ALREADY_CLOSED`: the chat is closed already.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -254,6 +295,7 @@ const closeAdminChatThreadSchema = {
 const taggedChatSchemas = withOpenApiTag(
   {
     getCurrentChatSchema,
+    getChatThreadMessagesSchema,
     getAdminChatThreadsSchema,
     getAdminChatThreadSchema,
     closeAdminChatThreadSchema,
@@ -265,7 +307,7 @@ const taggedChatSchemas = withOpenApiTag(
 const chatSchemasWithCurrentSecurity = withOpenApiSecurityFor(
   taggedChatSchemas,
   openApiSecurity.userOrGuestCookie,
-  ['getCurrentChatSchema'],
+  ['getCurrentChatSchema', 'getChatThreadMessagesSchema'],
 );
 
 // Add access token security to admin chat routes

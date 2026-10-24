@@ -27,7 +27,6 @@ import {
 import { openPaymentPage, redisStateOf } from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
-  describeWithStripe,
   expireSession,
   openBankPaymentPage,
   outOfReachDuring,
@@ -42,8 +41,8 @@ type Response = Awaited<ReturnType<FastifyInstance['inject']>>;
 // POST /api/orders/:orderId/cancel-payment: the owner gives up paying an order that waits for its
 // payment. The payment page at Stripe is closed first, so no payment can come for it any more;
 // then the reservation goes and the order becomes unconfirmed with its items and shipping data.
-// The pages are real ones of the Stripe test sandbox, opened by the checkout route; Stripe out of
-// reach is a real failed connection
+// The pages are opened at Stripe (its mock, or the test sandbox with service:stripe) by the
+// checkout route; Stripe out of reach is a real failed connection
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -160,7 +159,7 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
     expect((await redisStateOf(orderId)).pageLink).toBeNull();
   });
 
-  describeWithStripe('with a payment page open at Stripe', () => {
+  describe('with a payment page open at Stripe', () => {
     it('closes the payment page first and forgets it', async () => {
       const user = await newUser();
       const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
@@ -246,6 +245,22 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
         takeLogs({ msg: 'request failed', errorCode: 'PAYMENT_PROVIDER_UNAVAILABLE' }),
       ).toHaveLength(1);
     });
+  });
+
+  // redis is up but the connection drops in the middle of reading the page link: the request
+  // cannot go on, and the answer is the one the swagger document promises for redis, not a 500
+  it('answers 503 REDIS_UNAVAILABLE when Redis drops the connection on the page link', async () => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
+    const redis = await getRedis();
+    jest.spyOn(redis, 'hGet').mockRejectedValueOnce(new Error('Socket closed unexpectedly'));
+
+    const res = await cancelPayment(user, orderId);
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ errorCode: 'REDIS_UNAVAILABLE' });
+    expect(takeLogs({ msg: 'request failed', errorCode: 'REDIS_UNAVAILABLE' })).toHaveLength(1);
+    expect((await orderRowOf(orderId))!.status).toBe('waiting');
   });
 
   it('answers ORDER_ALREADY_PAID for a paid order and does not touch Stripe', async () => {

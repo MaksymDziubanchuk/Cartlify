@@ -288,6 +288,24 @@ describe('GET /api/auth/github/callback', () => {
     expectRefused(res, errorCode);
   });
 
+  // GitHub out of reach, or silent for 5 seconds: the page says to try again, not that it failed
+  it('sends the browser back with OAUTH_PROVIDER_UNAVAILABLE when GitHub cannot be reached', async () => {
+    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const { guestId, state } = await startLogin(app, 'github');
+
+    const res = await callback(
+      app,
+      'github',
+      { code: 'any-code', state },
+      cookieHeader({ guestId }),
+    );
+
+    expectRefused(res, 'OAUTH_PROVIDER_UNAVAILABLE');
+    expect(takeLogs({ msg: 'oauth provider unavailable' })).toEqual([
+      expect.objectContaining({ errorCode: 'OAUTH_PROVIDER_UNAVAILABLE' }),
+    ]);
+  });
+
   it('refuses a login started in another browser without redeeming its code', async () => {
     const calls = answerAsGithub(account());
     const { state } = await startLogin(app, 'github');
@@ -347,8 +365,9 @@ describe('GET /api/auth/github/callback', () => {
     expectRefused(res, 'ALREADY_AUTHENTICATED');
   });
 
+  // an answer the server cannot read is a failure of the server, not a refusal
   it('keeps a server failure out of the address the browser gets', async () => {
-    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not json', { status: 200 }));
     const { guestId, state } = await startLogin(app, 'github');
 
     const res = await callback(

@@ -1,6 +1,7 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
 import { avatarOf } from '@utils/avatar.util.js';
@@ -48,10 +49,11 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
       // load current role
       const before = await tx.user.findUnique({
         where: { id: userId },
-        select: { id: true, role: true },
+        select: { id: true, role: true, deletedAt: true },
       });
 
-      if (!before) throw new NotFoundError('USER_NOT_FOUND');
+      // a deleted account is no account to make an admin
+      if (!before || before.deletedAt) throw new NotFoundError('USER_NOT_FOUND');
 
       if (before.role === 'ADMIN') {
         throw new ConflictError('USER_ALREADY_ADMIN');
@@ -78,6 +80,9 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
           phone: true,
         },
       });
+
+      // a session holds the role it was opened with: the new role takes a new login
+      await revokeAllActiveRefreshTokens(tx, { userId, at: new Date() });
 
       // audit role change
       const changes: AuditChange[] = [{ field: 'role', old: before.role, new: updated.role }];

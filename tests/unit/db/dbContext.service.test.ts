@@ -1,5 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
+
+import { requestContext } from '@helpers/requestContext.js';
 
 import {
   isUuid,
@@ -14,11 +17,13 @@ import { rejectedBy } from '../../helpers/errors.js';
 
 type Tx = Parameters<typeof setUserContext>[0];
 
-// a transaction that only records the context query: the sql text and its parameters
+// a transaction that only records the context query: the sql text and its parameters, the
+// fragments it holds put in their place the way prisma does
 function fakeTx() {
   const queries: Array<{ sql: string; values: unknown[] }> = [];
   const $executeRaw = jest.fn(async (strings: TemplateStringsArray, ...values: unknown[]) => {
-    queries.push({ sql: strings.join('?').replace(/\s+/g, ' '), values });
+    const query = Prisma.sql(strings, ...values);
+    queries.push({ sql: query.sql.replace(/\s+/g, ' '), values: query.values });
     return 1;
   });
 
@@ -69,7 +74,7 @@ describe('setActorContext', () => {
 
     expect(queries).toHaveLength(1);
     expect(queries[0]?.sql).toContain(`'GUEST'::cartlify."Role", NULL, ?::uuid`);
-    expect(queries[0]?.values).toEqual([guestId, TODAY]);
+    expect(queries[0]?.values).toEqual([guestId, TODAY, '', '']);
   });
 
   it.each([
@@ -97,7 +102,7 @@ describe('setActorContext', () => {
     await setActorContext(tx, { actorId, role });
 
     expect(queries[0]?.sql).toContain('?::cartlify."Role", ?::int, NULL');
-    expect(queries[0]?.values).toEqual([role, id, TODAY]);
+    expect(queries[0]?.values).toEqual([role, id, TODAY, '', '']);
   });
 
   it.each([
@@ -126,7 +131,7 @@ describe('setUserContext', () => {
 
     await setUserContext(tx, { userId: 5, role: 'ADMIN' });
 
-    expect(queries[0]?.values).toEqual(['ADMIN', 5, TODAY]);
+    expect(queries[0]?.values).toEqual(['ADMIN', 5, TODAY, '', '']);
   });
 
   it('takes a numeric string id', async () => {
@@ -134,7 +139,7 @@ describe('setUserContext', () => {
 
     await setUserContext(tx, { userId: '5', role: 'USER' });
 
-    expect(queries[0]?.values).toEqual(['USER', 5, TODAY]);
+    expect(queries[0]?.values).toEqual(['USER', 5, TODAY, '', '']);
   });
 
   it('requires a role', async () => {
@@ -165,7 +170,7 @@ describe('contexts without an actor id', () => {
     await setAdminContext(tx);
 
     expect(queries[0]?.sql).toContain(`'ADMIN'::cartlify."Role", NULL, NULL`);
-    expect(queries[0]?.values).toEqual([TODAY]);
+    expect(queries[0]?.values).toEqual([TODAY, '', '']);
   });
 
   it('sets an anonymous guest context with no ids', async () => {
@@ -174,7 +179,7 @@ describe('contexts without an actor id', () => {
     await setGuestNullContext(tx);
 
     expect(queries[0]?.sql).toContain(`'GUEST'::cartlify."Role", NULL, NULL`);
-    expect(queries[0]?.values).toEqual([TODAY]);
+    expect(queries[0]?.values).toEqual([TODAY, '', '']);
   });
 
   // one statement: the context and the day of the shop are set together, for the transaction
@@ -194,5 +199,29 @@ describe('contexts without an actor id', () => {
       errorCode: 'GUEST_ID_REQUIRED',
     });
     expect(queries).toHaveLength(0);
+  });
+});
+
+// the address and the browser of the request go with the context, the admin log keeps them with a
+// line; outside a request they are empty
+describe('the request of a context', () => {
+  it('carries the address and the browser of the request it is set in', async () => {
+    const { tx, queries } = fakeTx();
+
+    await requestContext.run({ ip: '203.0.113.7', userAgent: 'Test browser' }, () =>
+      setUserContext(tx, { userId: 7, role: 'ADMIN' }),
+    );
+
+    expect(queries[0]?.sql).toContain("set_config('cartlify.request_ip', ?, true)");
+    expect(queries[0]?.sql).toContain("set_config('cartlify.request_user_agent', ?, true)");
+    expect(queries[0]?.values).toEqual(['ADMIN', 7, TODAY, '203.0.113.7', 'Test browser']);
+  });
+
+  it('carries nothing outside a request', async () => {
+    const { tx, queries } = fakeTx();
+
+    await setAdminContext(tx);
+
+    expect(queries[0]?.values).toEqual([TODAY, '', '']);
   });
 });

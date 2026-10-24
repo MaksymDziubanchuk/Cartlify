@@ -3,7 +3,12 @@ import { decimalToNumber } from '@helpers/safeNormalizer.js';
 // the sale of a product: a sale price and the end of the sale (db/06 keeps both or neither). It
 // lasts while its end is ahead, the way cartlify.product_current_price reads it in the database;
 // past the end its fields stay in the row until a new sale writes over them, and mean nothing
-export type ProductSaleFields = { salePrice: unknown; saleEndsAt: Date | null };
+export type ProductSaleFields = {
+  salePrice: unknown;
+  saleEndsAt: Date | null;
+  // the lowest price of the 30 days before the sale, none for a sale from before it was written
+  salePriorPrice?: unknown;
+};
 
 export function isSaleOn(row: ProductSaleFields, now = Date.now()): boolean {
   return row.salePrice != null && row.saleEndsAt != null && row.saleEndsAt.getTime() > now;
@@ -17,12 +22,17 @@ export function currentPrice(
   return decimalToNumber(isSaleOn(row, now) ? row.salePrice : row.price);
 }
 
-// the sale as an answer shows it, next to the price; a sale that is over is left out
+// the sale as an answer shows it, next to the price, with the lowest price of the 30 days before
+// it when the row has one; a sale that is over is left out
 export function saleFieldsOf(
   row: ProductSaleFields,
   now = Date.now(),
-): { salePrice: number; saleEndsAt: string } | Record<string, never> {
+): { salePrice: number; saleEndsAt: string; salePriorPrice?: number } | Record<string, never> {
   if (!isSaleOn(row, now)) return {};
 
-  return { salePrice: decimalToNumber(row.salePrice), saleEndsAt: row.saleEndsAt!.toISOString() };
+  return {
+    salePrice: decimalToNumber(row.salePrice),
+    saleEndsAt: row.saleEndsAt!.toISOString(),
+    ...(row.salePriorPrice != null ? { salePriorPrice: decimalToNumber(row.salePriorPrice) } : {}),
+  };
 }

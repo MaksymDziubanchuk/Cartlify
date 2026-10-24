@@ -1,3 +1,7 @@
+-- on a live database a busy table makes the script wait for its lock, and every request of the
+-- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+SET lock_timeout = '5s';
+
 -- everything below is created and owned by cartlify_owner, whoever runs the script
 SET ROLE cartlify_owner;
 
@@ -78,6 +82,28 @@ BEGIN
           AND "salePrice" < price
         )
       );
+  END IF;
+
+  -- the lowest price of the 30 days before a sale goes only with a sale; a sale from before it
+  -- was written has none
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_prior_price_chk'
+  ) THEN
+    ALTER TABLE cartlify.products
+      ADD CONSTRAINT products_sale_prior_price_chk
+      CHECK (
+        "salePriorPrice" IS NULL
+        OR ("salePrice" IS NOT NULL AND "salePriorPrice" >= 0)
+      );
+  END IF;
+
+  -- an article number is written trimmed and not empty: the server takes an empty one as none
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_sku_chk'
+  ) THEN
+    ALTER TABLE cartlify.products
+      ADD CONSTRAINT products_sku_chk
+      CHECK (sku IS NULL OR (sku = btrim(sku) AND length(sku) > 0));
   END IF;
 END $$;
 
@@ -274,7 +300,9 @@ END $$;
 -- ORDERS: recipient fields keep the form the server writes
 ----------------------------------------
 -- names are trimmed, 1-100 characters, without digits; the server also needs a letter in them,
--- the database does not check letters: what is a letter depends on the database locale
+-- the database does not check letters: what is a letter depends on the database locale. The
+-- length is two comparisons, not BETWEEN first in the list: a dump writes such a check back with
+-- other brackets, and a database restored from it would differ from the structure snapshot
 -- the phone is a plus and 8-15 digits, the first is not zero, the same as the profile phone
 DO $$
 BEGIN
@@ -290,7 +318,8 @@ BEGIN
     CHECK (
       "recipientFirstName" IS NULL
       OR (
-        char_length("recipientFirstName") BETWEEN 1 AND 100
+        char_length("recipientFirstName") >= 1
+        AND char_length("recipientFirstName") <= 100
         AND "recipientFirstName" = btrim("recipientFirstName")
         AND "recipientFirstName" !~ '[0-9]'
       )
@@ -308,7 +337,8 @@ BEGIN
     CHECK (
       "recipientLastName" IS NULL
       OR (
-        char_length("recipientLastName") BETWEEN 1 AND 100
+        char_length("recipientLastName") >= 1
+        AND char_length("recipientLastName") <= 100
         AND "recipientLastName" = btrim("recipientLastName")
         AND "recipientLastName" !~ '[0-9]'
       )
@@ -368,6 +398,30 @@ BEGIN
     ALTER TABLE cartlify.user_tokens
       ADD CONSTRAINT user_tokens_expires_after_created
       CHECK ("expiresAt" > "createdAt");
+  END IF;
+END $$;
+
+----------------------------------------
+-- USER_TOKENS: a session token has a session, no other link has one; a session is revoked at the
+-- moment it is closed. The sessions opened before 23.10.2026 have none, they get one at their next
+-- renewal: the session check is NOT VALID, a new or changed row is checked
+----------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_tokens_session_chk'
+  ) THEN
+    ALTER TABLE cartlify.user_tokens
+      ADD CONSTRAINT user_tokens_session_chk
+      CHECK ((type = 'REFRESH_TOKEN') = ("sessionId" IS NOT NULL)) NOT VALID;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_tokens_revoked_closed_chk'
+  ) THEN
+    ALTER TABLE cartlify.user_tokens
+      ADD CONSTRAINT user_tokens_revoked_closed_chk
+      CHECK ("revokedAt" IS NULL OR ("usedAt" IS NOT NULL AND "revokedAt" = "usedAt"));
   END IF;
 END $$;
 
@@ -553,6 +607,16 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS product_images_one_primary_idx ON cartlify.product_images ("productId")
 WHERE
   "isPrimary";
+
+----------------------------------------
+-- PRODUCTS: one product of the catalog per article number
+----------------------------------------
+-- the papers of a delivery name a product by its article number, whatever the case of its letters;
+-- a product taken out of the catalog lets its number go. The search finds a product by it too
+CREATE UNIQUE INDEX IF NOT EXISTS products_sku_catalog_uidx ON cartlify.products (lower(sku))
+WHERE
+  sku IS NOT NULL
+  AND "deletedAt" IS NULL;
 
 ----------------------------------------
 -- CHAT_THREADS: one open thread per actor

@@ -63,6 +63,11 @@ const postCheckoutSessionSchema = {
         'The order cannot be paid now: `ORDER_NOT_CONFIRMED` (a cart or an order that lost its reservation, confirm it first), `ORDER_ALREADY_PAID` (also when the page of another provider took the money meanwhile), `ORDER_PAYMENT_IN_PROGRESS` (a payment on the page of another provider is still on its way), `ORDER_STATUS_NOT_WAITING`, `ORDER_RESERVATION_EXPIRED`, `ORDER_ITEMS_UNAVAILABLE` (an item was removed from the catalog: `details.items` names it as the confirmation does; cancel the payment, change the order and confirm it again).',
       $ref: 'errorResponseSchema#',
     },
+    429: {
+      description:
+        '`RATE_LIMITED` with `details.limit: checkout`: more than 10 payment pages of a user in a minute; `retry-after` and `details.retryAfterSeconds` tell the wait.',
+      $ref: 'errorResponseSchema#',
+    },
     500: {
       description: 'Unexpected server error while creating checkout session.',
       $ref: 'errorResponseSchema#',

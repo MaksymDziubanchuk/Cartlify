@@ -44,8 +44,28 @@ export const systemHealthResponseSchema = {
             },
             required: ['orderConfirmation', 'checkout', 'orderTimeoutQueue'],
         },
+        orderTimeoutWorker: {
+            type: 'object',
+            additionalProperties: false,
+            description:
+                'The pulse of the reservation worker: when its loop last ran (null before the first run) and how many jobs wait in its queues (null while redis is down). A time far behind means the worker stopped.',
+            properties: {
+                lastRunAt: { type: ['string', 'null'], format: 'date-time' },
+                queued: { type: ['integer', 'null'] },
+            },
+            required: ['lastRunAt', 'queued'],
+        },
     },
-    required: ['status', 'uptime', 'timestamp', 'env', 'pid', 'redis', 'features'],
+    required: [
+        'status',
+        'uptime',
+        'timestamp',
+        'env',
+        'pid',
+        'redis',
+        'features',
+        'orderTimeoutWorker',
+    ],
 } as const;
 
 export const systemReadyOkResponseSchema = {

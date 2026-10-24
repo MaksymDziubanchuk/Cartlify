@@ -10,8 +10,10 @@ import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
   mapProductRowToResponse,
   productResponseSelect,
+  readCategoryPath,
   readProductImageUrls,
   normalizeFindProductByIdInput,
+  assertCategoryExists,
 } from './helpers/index.js';
 
 import type {
@@ -49,6 +51,7 @@ export async function updateProductCategory({
         select: { id: true, categoryId: true },
       });
       if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      await assertCategoryExists(tx, categoryIdRaw);
 
       const product = await tx.product.update({
         where: { id: productIdRaw },
@@ -83,6 +86,7 @@ export async function updateProductCategory({
     return mapProductRowToResponse({
       product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
       images,
+      categoryPath: await readCategoryPath(updated.category.id),
       view: 'admin',
     });
   } catch (err) {

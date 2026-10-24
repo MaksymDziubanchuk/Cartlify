@@ -34,3 +34,16 @@ describe('requireRole', () => {
     );
   });
 });
+
+describe('requireRole and the swagger document', () => {
+  // the document names INSUFFICIENT_ROLE with the roles of the guard
+  it('tells the roles it lets through', () => {
+    expect(requireRole(['ADMIN', 'ROOT']).allowedRoles).toEqual(['ADMIN', 'ROOT']);
+  });
+
+  it('refuses a request without a user', async () => {
+    expect(await rejectedBy(() => requireRole(['USER'])({} as FastifyRequest))).toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+});

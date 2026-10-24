@@ -530,8 +530,16 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     expect(sum((item) => item.purchases!.value!)).toBe(48);
   });
 
-  it('gives the step of now and the eleven before it without a start', async () => {
-    const res = await get('timeline', { step: 'month', categoryId: String(top.id) });
+  // the end a minute after the money: the last step is the month of the setup, also when the test
+  // runs just after the month turned
+  const endOfSetup = () => new Date(startedAt + 60_000).toISOString();
+
+  it('gives the step of its end and the eleven before it without a start', async () => {
+    const res = await get('timeline', {
+      step: 'month',
+      to: endOfSetup(),
+      categoryId: String(top.id),
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.json().items).toHaveLength(12);
@@ -540,9 +548,50 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     expect(last.net.revenue).toBe(70);
   });
 
+  // an end at the start of a month is the end of the month before it: that month is the last step
+  it('gives twelve steps for an end at the start of a month', async () => {
+    const res = await get('timeline', {
+      step: 'month',
+      to: '2026-10-31T23:00:00.000Z',
+      categoryId: String(top.id),
+    });
+
+    const labels = res.json().items.map((item: { label: string }) => item.label);
+    expect(labels).toHaveLength(12);
+    expect(labels[0]).toBe('2025-11');
+    expect(labels.at(-1)).toBe('2026-10');
+  });
+
+  it.each([
+    ['day', '2026-10-24T22:00:00.000Z', '2026-10-24'],
+    ['week', '2026-10-25T23:00:00.000Z', '2026-10-19'],
+  ])('gives twelve steps of a %s for an end at the start of one', async (unit, to, lastLabel) => {
+    const res = await get('timeline', { step: unit, to, categoryId: String(top.id) });
+
+    const labels = res.json().items.map((item: { label: string }) => item.label);
+    expect(labels).toHaveLength(12);
+    expect(labels.at(-1)).toBe(lastLabel);
+  });
+
+  // the steps are counted before they are made: a typo in the year asks for millions of days
+  it('refuses a period of thousands of years at once, without making its steps', async () => {
+    const started = Date.now();
+
+    const res = await get('timeline', {
+      from: '0001-01-01T00:00:00.000Z',
+      to: '9999-12-31T00:00:00.000Z',
+      step: 'day',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'REPORT_PERIOD_TOO_LONG' });
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
   it('sorts the steps by their money when asked', async () => {
     const res = await get('timeline', {
       step: 'month',
+      to: endOfSetup(),
       categoryId: String(top.id),
       sortBy: 'revenue',
       sortOrder: 'desc',
@@ -559,7 +608,7 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     ['writeOffs', (row: Step) => row.writeOffs.value, 2],
     ['purchases', (row: Step) => row.purchases.value, 48],
   ] as const)('sorts the steps by %s', async (sortBy, valueOf, value) => {
-    const query = { step: 'month', categoryId: String(top.id), sortBy };
+    const query = { step: 'month', to: endOfSetup(), categoryId: String(top.id), sortBy };
 
     const desc = (await get('timeline', { ...query, sortOrder: 'desc' })).json().items;
     const asc = (await get('timeline', { ...query, sortOrder: 'asc' })).json().items;

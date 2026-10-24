@@ -5,6 +5,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { isSaleOn } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
+import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
 
 import { InternalError, BadRequestError, ConflictError, isAppError } from '@utils/errors.js';
 
@@ -20,11 +21,14 @@ import type {
 } from 'types/dto/products.dto.js';
 import type { AuditChange } from '@db/adminAudit.helper.js';
 
-// the new price of a row: a percent of it or an amount on it, in cents
+// the new price of a row: a percent of it or an amount on it, in cents, half up, counted in
+// decimals: 1.15 plus 10 percent is 1.265 and 1.27, in floating point it was 1.2649999 and 1.26
 const newPriceOf = (price: Prisma.Decimal, mode: 'percent' | 'fixed', value: number) => {
-  const beforeNum = Number(price.toString());
-  const afterNumRaw = mode === 'fixed' ? beforeNum + value : beforeNum * (1 + value / 100);
-  return Math.round(afterNumRaw * 100) / 100;
+  const after =
+    mode === 'fixed'
+      ? price.plus(value)
+      : price.times(new Prisma.Decimal(100).plus(value)).dividedBy(100);
+  return after.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toNumber();
 };
 
 // the prices of many products at once. Their sales that are on get one word for all: keep them,
@@ -37,7 +41,7 @@ export async function updateProductsBulkPrice(
   assertAdminActor(dto.actorId, dto.actorRole);
 
   // normalize inputs and build where outside tx
-  const { mode, value, where, dryRun, reason, sale } = normalizeBulkUpdateProductsPriceInput({
+  const { mode, value, where, inStock, dryRun, reason, sale } = normalizeBulkUpdateProductsPriceInput({
     mode: dto.mode,
     value: dto.value,
     scope: dto.scope,
@@ -52,10 +56,30 @@ export async function updateProductsBulkPrice(
       await setUserContext(tx, { userId: dto.actorId, role: dto.actorRole });
 
       // load matching rows to compute per-row price changes
-      const rows = await tx.product.findMany({
+      const matching = await tx.product.findMany({
         where,
-        select: { id: true, price: true, salePrice: true, saleEndsAt: true },
+        select: {
+          id: true,
+          price: true,
+          salePrice: true,
+          saleEndsAt: true,
+          stock: true,
+          reservedStock: true,
+        },
       });
+
+      // in stock means free units, as in the catalog: the stock less what the waiting orders hold
+      // and the units over; without the word every product of the scope changes, the ones in carts
+      // and the ones with units over too
+      const expired =
+        inStock === undefined ? null : await expiredUnitsOf(tx, matching.map((row) => row.id));
+      const rows =
+        inStock === undefined
+          ? matching
+          : matching.filter(
+              (row) =>
+                freeUnits(row.stock, row.reservedStock, expired!.get(row.id) ?? 0) > 0 === inStock,
+            );
 
       // dry run returns only how many rows match
       if (dryRun) {

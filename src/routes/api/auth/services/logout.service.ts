@@ -12,8 +12,8 @@ import { setUserContext } from '@db/dbContext.service.js';
 
 import {
   getRefreshTokenRow,
-  markRefreshTokenUsed,
   revokeAllActiveRefreshTokens,
+  revokeRefreshToken,
 } from './helpers/tokenRotation.helper.js';
 
 // end every session of the signed-in user, whatever refresh token the browser holds
@@ -81,7 +81,7 @@ export async function logout({
       if (!ok) return { message: 'ok' };
 
       // end the session of this browser
-      await markRefreshTokenUsed(tx, { jwtId: tokenRow.id, at: now });
+      await revokeRefreshToken(tx, { jwtId: tokenRow.id, at: now });
 
       return { message: 'ok' };
     });

@@ -935,6 +935,194 @@ const adminStockMovementsResponseSchema = {
   required: ['currency', 'items', 'limit', 'nextCursor', 'total'],
 } as const;
 
+// the admin log: its filters and its lines
+const AUDIT_ACTIONS = [
+  'USER_ROLE_CHANGE',
+  'PRODUCT_CREATE',
+  'PRODUCT_UPDATE',
+  'PRODUCT_DELETE',
+  'PRODUCT_PRICE_BULK_UPDATE',
+  'PRODUCT_SALE',
+  'STOCK_DELIVERY',
+  'STOCK_WRITE_OFF',
+  'ORDER_STATUS_CHANGE',
+  'CATEGORY_UPDATE',
+  'REVIEW_DELETE',
+  'OTHER',
+] as const;
+const AUDIT_ENTITY_TYPES = ['product', 'user', 'category', 'order', 'review', 'other'] as const;
+const auditActionPattern = `(${AUDIT_ACTIONS.join('|')})`;
+
+const adminAuditLogQuerySchema = {
+  $id: 'adminAuditLogQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    actorId: { ...positiveIntegerSchema, description: 'Only the lines of this account.' },
+    entityType: { type: 'string', enum: AUDIT_ENTITY_TYPES },
+    entityId: { ...positiveIntegerSchema, description: 'Only the lines of this thing.' },
+    actions: {
+      type: 'string',
+      pattern: `^${auditActionPattern}(,${auditActionPattern})*$`,
+      description: 'Actions, one or several through commas. All unless given.',
+    },
+    from: { ...dateTimeSchema, description: 'The start of the period, taken in.' },
+    to: { ...dateTimeSchema, description: 'The end of the period, left out.' },
+    format: {
+      type: 'string',
+      enum: ['json', 'csv'],
+      description: 'csv gives every line of the filters as a file, without pages.',
+    },
+    ...stockPageQueryFields,
+  },
+} as const;
+
+const adminAuditLogResponseSchema = {
+  $id: 'adminAuditLogResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          actor: {
+            type: 'object',
+            additionalProperties: false,
+            description: 'The account that did it; a deleted one keeps its lines, not its email.',
+            properties: {
+              id: { type: 'integer' },
+              name: { type: ['string', 'null'] },
+              email: { type: ['string', 'null'] },
+              role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'] },
+            },
+            required: ['id', 'name', 'email', 'role'],
+          },
+          actorRole: {
+            type: 'string',
+            enum: ['USER', 'ADMIN', 'ROOT'],
+            description: 'The role it had when it did it.',
+          },
+          entityType: { type: 'string', enum: AUDIT_ENTITY_TYPES },
+          entityId: { type: ['integer', 'null'] },
+          action: { type: 'string', enum: AUDIT_ACTIONS },
+          changes: {
+            type: 'array',
+            description: 'What changed: each field with its value before and after.',
+            items: {
+              type: 'object',
+              properties: { field: { type: 'string' }, old: {}, new: {} },
+              required: ['field'],
+            },
+          },
+          ip: {
+            type: ['string', 'null'],
+            description: 'The address of the request, none for the work of the server alone.',
+          },
+          userAgent: { type: ['string', 'null'], description: 'The browser of the request.' },
+          createdAt: dateTimeSchema,
+        },
+        required: [
+          'id',
+          'actor',
+          'actorRole',
+          'entityType',
+          'entityId',
+          'action',
+          'changes',
+          'ip',
+          'userAgent',
+          'createdAt',
+        ],
+      },
+    },
+    limit: { type: 'integer' },
+    total: { type: 'integer', description: 'The lines of the filters.' },
+    nextCursor: { type: ['string', 'null'] },
+  },
+  required: ['items', 'limit', 'total', 'nextCursor'],
+} as const;
+
+// the alerts of an admin
+const ALERT_KINDS = [
+  'paid_orders_waiting',
+  'shipped_orders_waiting',
+  'out_of_stock',
+  'low_stock',
+  'expiring_batches',
+  'expired_batches',
+  'chats_waiting',
+  'refunded_payments',
+  'worker_stalled',
+  'admin_actions',
+] as const;
+
+const adminAlertsResponseSchema = {
+  $id: 'adminAlertsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    alerts: {
+      type: 'array',
+      description: 'Each kind the actor has on, in a fixed order, with zero too.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ALERT_KINDS },
+          count: { type: 'integer', minimum: 0 },
+          ids: {
+            type: 'array',
+            maxItems: 20,
+            description:
+              'The latest of them: order ids, product ids, batch ids, chat ids or the lines of ' +
+              'the admin log; none for the worker.',
+            items: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+          },
+        },
+        required: ['kind', 'count', 'ids'],
+      },
+    },
+    total: { type: 'integer', minimum: 0, description: 'The counts of every alert together.' },
+    generatedAt: dateTimeSchema,
+  },
+  required: ['alerts', 'total', 'generatedAt'],
+} as const;
+
+const adminAlertSubscriptionSchema = {
+  $id: 'adminAlertSubscriptionSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', enum: ALERT_KINDS },
+    subscribed: { type: 'boolean' },
+  },
+  required: ['kind', 'subscribed'],
+} as const;
+
+const adminAlertSubscriptionsResponseSchema = {
+  $id: 'adminAlertSubscriptionsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: { type: 'array', items: { $ref: 'adminAlertSubscriptionSchema#' } },
+  },
+  required: ['items'],
+} as const;
+
+const adminAlertKindParamsSchema = {
+  $id: 'adminAlertKindParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z_]+$' },
+  },
+  required: ['kind'],
+} as const;
+
 export const adminDtoSchemas = [
   adminStatsQuerySchema,
   adminStatsPeriodSchema,
@@ -959,4 +1147,10 @@ export const adminDtoSchemas = [
   adminStockBatchesResponseSchema,
   adminStockMovementsQuerySchema,
   adminStockMovementsResponseSchema,
+  adminAuditLogQuerySchema,
+  adminAuditLogResponseSchema,
+  adminAlertsResponseSchema,
+  adminAlertSubscriptionSchema,
+  adminAlertSubscriptionsResponseSchema,
+  adminAlertKindParamsSchema,
 ];

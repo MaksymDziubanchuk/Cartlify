@@ -94,20 +94,17 @@ export async function getAdminChatThreadsService(
                 role: dto.actorRole,
             });
 
-            // load admin queue threads
-            const [items, total] = await Promise.all([
-                tx.chatThread.findMany({
-                    where,
-                    orderBy,
-                    skip: (page - 1) * limit,
-                    take: limit,
-                }),
-
-                // count matching threads
-                tx.chatThread.count({
-                    where,
-                }),
-            ]);
+            // load admin queue threads, then count matching threads: one after the other, the
+            // transaction has one connection, and it runs one statement at a time
+            const items = await tx.chatThread.findMany({
+                where,
+                orderBy,
+                skip: (page - 1) * limit,
+                take: limit,
+            });
+            const total = await tx.chatThread.count({
+                where,
+            });
 
             // return paginated list
             return {

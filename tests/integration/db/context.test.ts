@@ -137,6 +137,8 @@ beforeAll(async () => {
       ${product.id}::int, 'OTHER'::cartlify."AdminAuditAction", '[]'::jsonb)`;
     await tx.$executeRaw`select cartlify.log_product_price_change(
       ${product.id}::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2)`;
+    // an alert the admin turned off
+    await tx.adminAlertMute.create({ data: { userId: admin.id, kind: 'low_stock' } });
   });
 });
 
@@ -324,7 +326,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(17);
+    expect(Object.keys(hidden)).toHaveLength(18);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

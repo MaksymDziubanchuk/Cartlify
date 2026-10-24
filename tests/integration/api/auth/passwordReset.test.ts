@@ -109,6 +109,21 @@ describe('POST /api/auth/password/forgot', () => {
     expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).toBe(204);
   });
 
+  // the newest link is the one the person waits for: an older one in a mailbox is a way in
+  it('closes the links it mailed before', async () => {
+    const user = await newUser();
+    const mails = watchMail();
+
+    await forgot(user.email);
+    await forgot(user.email);
+    const [first, second] = mails.map((mail) => linkToken(mail, '/web/auth/reset')!);
+
+    const old = await reset(first!, 'new-password-7');
+    expect(old.statusCode).toBe(400);
+    expect(old.json()).toMatchObject({ errorCode: 'RESET_TOKEN_INVALID_OR_EXPIRED' });
+    expect((await reset(second!, 'new-password-7')).statusCode).toBe(200);
+  });
+
   it('refuses an email that is not an email', async () => {
     const res = await forgot('not-an-email');
 
@@ -141,7 +156,33 @@ describe('POST /api/auth/password/reset', () => {
 
     await reset(token, 'new-password-2');
 
-    expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).not.toBe(204);
+    const res = await refreshWith(app, csrf, session.refreshToken);
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_REVOKED' });
+  });
+
+  // the phone kept the cookie of a session the reset closed: it is no stolen token, the session
+  // the person just opened on the laptop goes on
+  it('leaves the session after the reset alone when a session it closed comes back', async () => {
+    const user = await newUser();
+    const phone = await signIn(app, csrf, user);
+    await reset(await createResetToken(user.id), 'new-password-3');
+    const laptop = await signIn(app, csrf, { ...user, password: 'new-password-3' });
+
+    expect((await refreshWith(app, csrf, phone.refreshToken)).statusCode).toBe(401);
+    expect((await refreshWith(app, csrf, laptop.refreshToken)).statusCode).toBe(204);
+  });
+
+  it('closes every other reset link of the account', async () => {
+    const user = await newUser();
+    const older = await createResetToken(user.id);
+    const newer = await createResetToken(user.id);
+
+    expect((await reset(newer, 'new-password-8')).statusCode).toBe(200);
+
+    const res = await reset(older, 'new-password-9');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'RESET_TOKEN_INVALID_OR_EXPIRED' });
   });
 
   it('takes a link only once', async () => {

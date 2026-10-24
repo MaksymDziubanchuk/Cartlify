@@ -85,7 +85,7 @@ export async function closeAdminChatThreadService({
         if (isAppError(err)) throw err;
 
         if (isRetryableTxError(err)) {
-            throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+            throw new ResourceBusyError();
         }
 
         throw new InternalError({ reason: 'CHAT_THREAD_CLOSE_UNEXPECTED' }, err);

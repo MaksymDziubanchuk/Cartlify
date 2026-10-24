@@ -99,7 +99,8 @@ const getStatsSchema = {
     },
 
     400: {
-      description: 'Invalid admin stats query parameters.',
+      description:
+        'Invalid admin stats query parameters: a period that ends before it starts (INVALID_STATS_PERIOD).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -189,6 +190,10 @@ const getAccountingReportSchema = {
       description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
+    404: {
+      description: 'The category of `categoryId` does not exist (CATEGORY_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
     500: {
       description: 'Unexpected server error while counting the report.',
       $ref: 'errorResponseSchema#',
@@ -232,6 +237,9 @@ const CSV_TEXT =
   'mark, commas, money to the cent with a point, a text that looks like a formula kept as ' +
   'text), every row and no pages.';
 
+// the answer of format=csv: the file itself, sent as it is (content-disposition names it)
+const CSV_FILE_SCHEMA = { type: 'string', description: 'The rows of the report as a csv file.' };
+
 // Schema for the money of each product
 const getAccountingProductsSchema = {
   operationId: 'getAccountingProducts',
@@ -256,7 +264,10 @@ const getAccountingProductsSchema = {
   response: {
     200: {
       description: 'The products of the page and the totals; a csv file with format=csv.',
-      $ref: 'adminReportProductsResponseSchema#',
+      content: {
+        'application/json': { schema: { $ref: 'adminReportProductsResponseSchema#' } },
+        'text/csv': { schema: CSV_FILE_SCHEMA },
+      },
     },
     ...reportErrors('the report by product'),
   },
@@ -284,7 +295,10 @@ const getAccountingCategoriesSchema = {
   response: {
     200: {
       description: 'The categories; a csv file with format=csv.',
-      $ref: 'adminReportCategoriesResponseSchema#',
+      content: {
+        'application/json': { schema: { $ref: 'adminReportCategoriesResponseSchema#' } },
+        'text/csv': { schema: CSV_FILE_SCHEMA },
+      },
     },
     ...reportErrors('the report by category'),
   },
@@ -313,7 +327,10 @@ const getAccountingTimelineSchema = {
   response: {
     200: {
       description: 'The steps of the period; a csv file with format=csv.',
-      $ref: 'adminReportTimelineResponseSchema#',
+      content: {
+        'application/json': { schema: { $ref: 'adminReportTimelineResponseSchema#' } },
+        'text/csv': { schema: CSV_FILE_SCHEMA },
+      },
     },
     ...reportErrors('the report by time'),
     400: {
@@ -329,8 +346,9 @@ const getAccountingTimelineSchema = {
 const stockErrors = (what: string) => ({
   400: {
     description:
-      'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
-      '(INVALID_STATS_PERIOD), a cursor of another order (CURSOR_INVALID).',
+      'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts or a ' +
+      'date of the year 0 (INVALID_STATS_PERIOD), a last day of the year 0 (EXPIRES_BY_INVALID), a ' +
+      'cursor of another order or past the ids (CURSOR_INVALID).',
     $ref: 'errorResponseSchema#',
   },
   401: {
@@ -395,6 +413,154 @@ const getStockMovementsSchema = {
 } satisfies FastifySchema;
 
 // Group admin routes under the admin Swagger tag
+// Schema for the admin log
+const getAuditLogSchema = {
+  operationId: 'getAdminAuditLog',
+  summary: 'Get the admin log',
+  description:
+    'The lines of the admin log, the newest first: who did what to what, the changes, the ' +
+    'address and the browser of the request (none for the work of the server alone). Filters: ' +
+    'the account (`actorId`), the thing (`entityType`, `entityId`), the actions (`actions`), ' +
+    'the period (`from` taken in, `to` left out). `format=csv` gives every line of the filters ' +
+    'as a file, without pages. Admin and root read every line.',
+
+  querystring: { $ref: 'adminAuditLogQuerySchema#' },
+
+  response: {
+    200: {
+      description: 'The lines of the page; a csv file with format=csv.',
+      content: {
+        'application/json': { schema: { $ref: 'adminAuditLogResponseSchema#' } },
+        'text/csv': { schema: CSV_FILE_SCHEMA },
+      },
+    },
+    400: {
+      description:
+        'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
+        '(INVALID_STATS_PERIOD), a cursor of another list (CURSOR_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the admin log.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while reading the admin log.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the alerts of an admin
+const getAlertsSchema = {
+  operationId: 'getAdminAlerts',
+  summary: 'Get the alerts',
+  description:
+    'What waits for the work of an admin, each kind the actor has on with how many there are ' +
+    'and the latest of them (up to 20), counted now: paid orders to ship ' +
+    '(`paid_orders_waiting`), shipped orders not delivered for `ALERT_SHIPPED_DAYS` days ' +
+    '(`shipped_orders_waiting`), products of the catalog with no free units (`out_of_stock`) ' +
+    'or with up to `ALERT_LOW_STOCK_UNITS` (`low_stock`), batches whose last good day is in ' +
+    '`ALERT_BATCH_EXPIRY_DAYS` days (`expiring_batches`) or over with units left ' +
+    '(`expired_batches`), chats waiting for an admin (`chats_waiting`), late payments given ' +
+    'back in the last week (`refunded_payments`), a reservation worker that has not run for ' +
+    '`ALERT_WORKER_STALL_SECONDS` seconds (`worker_stalled`). Root also gets the lines the ' +
+    'admins wrote in the last day (`admin_actions`). A kind turned off is left out.',
+
+  response: {
+    200: {
+      description: 'The alerts of the actor.',
+      $ref: 'adminAlertsResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the alerts.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while reading the alerts.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the kinds of alerts an actor has on
+const getAlertSubscriptionsSchema = {
+  operationId: 'getAdminAlertSubscriptions',
+  summary: 'Get the subscriptions to the alerts',
+  description:
+    'Each kind of alerts of the actor and whether it is on; every kind is on until the actor ' +
+    'turns it off. Each admin and each root has their own.',
+
+  response: {
+    200: {
+      description: 'The kinds of the actor.',
+      $ref: 'adminAlertSubscriptionsResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the subscriptions.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while reading the subscriptions.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const alertSubscriptionSchema = (on: boolean) =>
+  ({
+    operationId: on ? 'subscribeAdminAlert' : 'unsubscribeAdminAlert',
+    summary: on ? 'Turn a kind of alerts on' : 'Turn a kind of alerts off',
+    description: on
+      ? 'Turns the kind on for the actor: GET /api/admin/alerts names it again. One that is on stays on.'
+      : 'Turns the kind off for the actor only: GET /api/admin/alerts leaves it out. One that is off stays off.',
+
+    params: { $ref: 'adminAlertKindParamsSchema#' },
+
+    response: {
+      200: {
+        description: 'The kind and whether it is on now.',
+        $ref: 'adminAlertSubscriptionSchema#',
+      },
+      400: {
+        description: 'A kind that is not a name of a kind (VALIDATION_ERROR).',
+        $ref: 'errorResponseSchema#',
+      },
+      401: {
+        description: 'Authentication is required to change the subscriptions.',
+        $ref: 'errorResponseSchema#',
+      },
+      403: {
+        description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+        $ref: 'errorResponseSchema#',
+      },
+      404: {
+        description:
+          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root.',
+        $ref: 'errorResponseSchema#',
+      },
+      500: {
+        description: 'Unexpected server error while changing the subscription.',
+        $ref: 'errorResponseSchema#',
+      },
+    },
+  }) satisfies FastifySchema;
+
+const putAlertSubscriptionSchema = alertSubscriptionSchema(true);
+const deleteAlertSubscriptionSchema = alertSubscriptionSchema(false);
+
 const taggedAdminSchema = withOpenApiTag(
   {
     getStatsSchema,
@@ -404,6 +570,11 @@ const taggedAdminSchema = withOpenApiTag(
     getAccountingTimelineSchema,
     getStockBatchesSchema,
     getStockMovementsSchema,
+    getAuditLogSchema,
+    getAlertsSchema,
+    getAlertSubscriptionsSchema,
+    putAlertSubscriptionSchema,
+    deleteAlertSubscriptionSchema,
   },
   'admin',
 );

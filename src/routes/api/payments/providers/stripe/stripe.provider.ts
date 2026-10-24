@@ -25,18 +25,36 @@ export const STRIPE_WEBHOOK_PATH = '/api/payments/stripe/webhook';
 export const stripeProvider: PaymentProvider = {
   name: 'stripe',
   label: 'Stripe',
-  currency: env.STRIPE_CURRENCY.trim().toLowerCase(),
+  // env.ts reads it in lower case and lets only a currency with cents through
+  currency: env.STRIPE_CURRENCY,
   minimumTotal: STRIPE_MINIMUM_TOTAL,
   callbackPath: STRIPE_WEBHOOK_PATH,
 
-  async openPaymentPage({ orderId, userId, total, reservationExpiresAt }) {
+  async openPaymentPage({
+    orderId,
+    userId,
+    total,
+    reservationExpiresAt,
+    pageClosedAt,
+    items,
+    customerEmail,
+  }) {
     // a repeated request for the same order and reservation gets the same session, not a second payment
     let session: Stripe.Checkout.Session;
 
     try {
       session = await stripe.checkout.sessions.create(
-        buildCheckoutSessionPayload({ orderId, userId, total }),
-        { idempotencyKey: buildCheckoutIdempotencyKey(orderId, reservationExpiresAt) },
+        buildCheckoutSessionPayload({
+          orderId,
+          userId,
+          total,
+          reservationExpiresAt,
+          items,
+          customerEmail,
+        }),
+        {
+          idempotencyKey: buildCheckoutIdempotencyKey(orderId, reservationExpiresAt, pageClosedAt),
+        },
       );
     } catch (err) {
       // nothing is opened, the page asks the buyer to try again a bit later

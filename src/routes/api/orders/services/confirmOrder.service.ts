@@ -1,6 +1,6 @@
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
-import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
+import { getPgMessage, prisma, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { currentPrice } from '@helpers/productSale.js';
 import { assertRedisReady } from '@redis/client.js';
@@ -24,8 +24,33 @@ import {
 } from './helpers/index.js';
 
 import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
+import type { UserId } from 'types/ids.js';
 
 const DEFAULT_RESERVE_FOR = '15 minutes';
+
+// the items of an unconfirmed order of the user the order cannot be confirmed with now
+async function unavailableItemsOf(actorId: UserId, orderId: number) {
+  return prisma.$transaction(async (db) => {
+    await setUserContext(db, { userId: actorId, role: 'USER' });
+    const items = await db.orderItem.findMany({
+      where: { orderId, order: { userId: actorId as any, confirmed: false } },
+      select: {
+        id: true,
+        productId: true,
+        quantity: true,
+        product: { select: { deletedAt: true, stock: true, reservedStock: true } },
+      },
+      orderBy: { id: 'asc' },
+    });
+    return findUnavailableItems(
+      items,
+      await expiredUnitsOf(
+        db,
+        items.map((item) => item.productId),
+      ),
+    );
+  });
+}
 
 export async function confirmOrder({
   actorId,
@@ -145,7 +170,7 @@ export async function confirmOrder({
     if (isAppError(err)) throw err;
 
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     // db function errors come as P2010
@@ -174,8 +199,13 @@ export async function confirmOrder({
       // some item price differs from current product price
       // nothing is reserved; client reloads the order to get fresh prices and confirms again
       if (msg.includes('ORDER_PRICES_CHANGED')) throw new ConflictError('ORDER_PRICES_CHANGED');
-      if (msg.includes('INSUFFICIENT_AVAILABLE_STOCK'))
-        throw new ConflictError('INSUFFICIENT_AVAILABLE_STOCK');
+      // another buyer took the last free units between the check and the reserve: the items are
+      // named the way the check names them, from a fresh read
+      if (msg.includes('INSUFFICIENT_AVAILABLE_STOCK')) {
+        throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', {
+          items: await unavailableItemsOf(actorId, Number(orderId)),
+        });
+      }
       if (msg.includes('PRODUCT_NOT_FOUND')) throw new NotFoundError('PRODUCT_NOT_FOUND');
       if (msg.includes('ORDER_RESERVATION_DURATION_INVALID'))
         throw new BadRequestError('ORDER_RESERVATION_DURATION_INVALID');

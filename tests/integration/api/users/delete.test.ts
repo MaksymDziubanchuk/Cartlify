@@ -135,6 +135,26 @@ describe('what is refused', () => {
     expect(res.json()).toMatchObject({ errorCode: 'USER_NOT_FOUND' });
   });
 
+  // a second click of root emptied the row once more, a longer address and a new date of the
+  // deletion, and mailed the person again
+  it('answers 404 for an account that is already deleted and changes nothing', async () => {
+    const target = await newUser();
+    expect((await deleteUser(target.id, rootCookie)).statusCode).toBe(200);
+    const before = await rowOf(target.id);
+    const mails = watchMail();
+
+    const res = await deleteUser(target.id, rootCookie);
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'USER_NOT_FOUND' });
+    const after = await rowOf(target.id);
+    expect({ email: after.email, deletedAt: after.deletedAt }).toEqual({
+      email: before.email,
+      deletedAt: before.deletedAt,
+    });
+    expect(mails).toHaveLength(0);
+  });
+
   it.each([
     ['letters', 'abc'],
     ['zero', '0'],
@@ -191,6 +211,28 @@ describe('what the deletion does', () => {
   });
 
   // the log of logins stays, its lines take the email the account has now
+  // the deletion of an account is the heaviest step of root, it keeps a line in the admin log
+  it('writes the deletion to the admin log under the name of root', async () => {
+    const target = await newUser();
+
+    await deleteUser(target.id, rootCookie);
+
+    const lines = await asAdmin((tx) =>
+      tx.adminAuditLog.findMany({
+        where: { entityType: 'user', entityId: target.id },
+        select: { actorId: true, actorRole: true, action: true, meta: true },
+      }),
+    );
+    expect(lines).toEqual([
+      {
+        actorId: root.id,
+        actorRole: 'ROOT',
+        action: 'OTHER',
+        meta: [{ field: 'deletedAt', old: null, new: expect.any(String) }],
+      },
+    ]);
+  });
+
   it('gives the logins of the account its new email, the rest of the log stays', async () => {
     const target = await newUser();
     const times = [new Date(Date.now() - 2 * 86_400_000), new Date(Date.now() - 3_600_000)];

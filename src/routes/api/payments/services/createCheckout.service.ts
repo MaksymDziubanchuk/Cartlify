@@ -1,8 +1,9 @@
 import { prisma } from '@db/client.js';
 import { assertRedisReady } from '@redis/client.js';
 import {
-  deleteOrderPaymentPageLink,
+  getOrderPaymentPageClosedAt,
   getOrderPaymentPageLink,
+  markOrderPaymentPageClosed,
   setOrderPaymentPageLink,
 } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
 
@@ -40,7 +41,8 @@ async function closePageOfOtherProvider(orderId: number, provider: PaymentProvid
     throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, closed.cause);
   }
 
-  await deleteOrderPaymentPageLink(orderId);
+  // the time of the close goes into the key of the next page of the order
+  await markOrderPaymentPageClosed(orderId);
 }
 
 // the payment page of a confirmed order at the provider the buyer picked
@@ -73,14 +75,19 @@ export async function createCheckoutSession({
           confirmed: true,
           reservationExpiresAt: true,
           total: true,
+          // the buyer reads their own account: the page fills in the email
+          user: { select: { email: true, deletedAt: true } },
           items: {
             orderBy: { id: 'asc' },
             select: {
               id: true,
               productId: true,
               quantity: true,
+              unitPrice: true,
+              productName: true,
               product: {
                 select: {
+                  name: true,
                   deletedAt: true,
                 },
               },
@@ -160,13 +167,24 @@ export async function createCheckoutSession({
         userId: order.userId,
         total: totalRaw,
         reservationExpiresAt: order.reservationExpiresAt,
+        // the name each item was confirmed with, the page shows what is bought
+        items: order.items.map((item) => ({
+          name: item.productName ?? item.product.name,
+          unitPrice: Number(item.unitPrice),
+          quantity: item.quantity,
+        })),
+        customerEmail: order.user.deletedAt ? null : order.user.email,
       };
     });
 
     await closePageOfOtherProvider(orderSnapshot.orderId, provider);
+    const pageClosedAt = await getOrderPaymentPageClosedAt(orderSnapshot.orderId);
 
     // the same order with the same reservation gets the same page, not a second payment
-    const { pageId, checkoutSession } = await paymentProvider.openPaymentPage(orderSnapshot);
+    const { pageId, checkoutSession } = await paymentProvider.openPaymentPage({
+      ...orderSnapshot,
+      pageClosedAt,
+    });
 
     // the link from the order to its page, for closing it at the reservation end or on a cancel;
     // the page is not closed when this fails: the retry gets the same page back and links it

@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 
-import { BadRequestError, ForbiddenError, InternalError } from '@utils/errors.js';
+import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 import {
@@ -47,7 +47,12 @@ export const BUYER_SORTS: ProductsSortField[] = [
   'avgRating',
   'name',
   'saleEndsAt',
+  'relevance',
 ];
+
+// how close a word of the search is to a word of a name for the product to be found: a typo or
+// two in a word of a usual length (pg_trgm, word_similarity)
+const SEARCH_SIMILARITY = 0.45;
 
 // the price a product sells at now (db/05): the sale price while the sale lasts. It depends on the
 // time, so no index holds it and Prisma cannot order or filter by it: every list goes through one
@@ -72,6 +77,12 @@ const OVERRIDE_ON_SQL = Prisma.raw(
 // the units of batches that are over by the day of the shop (db/05): not sold, so no free units
 const EXPIRED_STOCK_SQL = Prisma.raw(`cartlify.product_expired_units(p.id)`);
 
+// a product a list of a buyer shows has its primary image: one without opens only by its id, an
+// admin lists it with no images
+const HAS_PRIMARY_IMAGE_SQL = Prisma.raw(
+  `EXISTS (SELECT 1 FROM "product_images" i WHERE i."productId" = p."id" AND i."isPrimary")`,
+);
+
 // the stock a list shows: free units, never below 0
 const FREE_STOCK_SQL = Prisma.raw(
   `GREATEST(p."stock" - p."reservedStock" - cartlify.product_expired_units(p.id), 0)`,
@@ -84,6 +95,8 @@ export type ProductListQuery = {
   order: SortOrder;
   search?: string | undefined;
   categoryIds?: number[] | undefined;
+  // the categories with their whole branch (the default), or only the products of each itself
+  branch: boolean;
   minPrice?: number | undefined;
   maxPrice?: number | undefined;
   // every role: true lists only deleted products, false only the products that are not deleted
@@ -119,11 +132,14 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
   const view = productViewOf(dto.actorRole);
   const limit = assertLimit(dto.limit ?? 20);
 
-  const sort: ProductsSortField = (dto.sort ?? 'popularity') as ProductsSortField;
-  const order: SortOrder = dto.order === 'asc' ? 'asc' : 'desc';
-
   const search =
     typeof dto.search === 'string' && dto.search.trim() ? dto.search.trim() : undefined;
+
+  // a search puts the best match first unless another sort is asked for
+  const sort: ProductsSortField = (dto.sort ??
+    (search ? 'relevance' : 'popularity')) as ProductsSortField;
+  const order: SortOrder = dto.order === 'asc' ? 'asc' : 'desc';
+  if (sort === 'relevance' && !search) throw new BadRequestError('SORT_RELEVANCE_REQUIRES_SEARCH');
 
   // a sent category filter with no valid id must not turn into "every product";
   // the controller drops invalid ids, so ?categoryIds=0 arrives here as an empty list
@@ -156,7 +172,20 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
   // normalize cursor
   const cursor = typeof dto.cursor === 'string' && dto.cursor ? dto.cursor : undefined;
 
-  const base = { view, limit, sort, order, search, categoryIds, minPrice, maxPrice, inStock };
+  const branch = dto.branch !== false;
+
+  const base = {
+    view,
+    limit,
+    sort,
+    order,
+    search,
+    categoryIds,
+    branch,
+    minPrice,
+    maxPrice,
+    inStock,
+  };
 
   if (view === 'buyer') {
     // deleted products are for admin and root only
@@ -203,8 +232,11 @@ const priceSqlOf = (view: ProductView) =>
 function sortExpressionOf(
   sort: ProductsSortField,
   view: ProductView,
+  search?: string,
 ): { sql: Prisma.Sql; kind: SortKind } {
   switch (sort) {
+    case 'relevance':
+      return { sql: relevanceSqlOf(search ?? ''), kind: 'number' };
     case 'name':
       return { sql: Prisma.raw(`p."name"`), kind: 'string' };
     case 'price':
@@ -293,7 +325,7 @@ function buildCursorSql(q: ProductListQuery): Prisma.Sql {
     throw new BadRequestError('CURSOR_INVALID');
   }
 
-  const { sql: col, kind } = sortExpressionOf(q.sort, q.view);
+  const { sql: col, kind } = sortExpressionOf(q.sort, q.view, q.search);
   const value = cursorValueOf(kind, cursor.v);
 
   return Prisma.sql`
@@ -313,6 +345,9 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
     q.deleted ? Prisma.sql`p."deletedAt" IS NOT NULL` : Prisma.sql`p."deletedAt" IS NULL`,
   );
 
+  // a buyer lists only the products with an image
+  if (q.view === 'buyer') whereParts.push(HAS_PRIMARY_IMAGE_SQL);
+
   // the flags of an admin: only the products with a sale / an override that is on, or only the
   // ones without; undefined does not filter
   if (q.onSale === true) whereParts.push(SALE_ON_SQL);
@@ -324,9 +359,21 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
   if (q.inStock === true) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} > 0`);
   if (q.inStock === false) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} = 0`);
 
-  // category filter
+  // category filter: each category with its whole branch, a parent category shows the products
+  // of its children; branch=false takes only the products of each category itself
   if (q.categoryIds?.length) {
-    whereParts.push(Prisma.sql`p."categoryId" IN (${Prisma.join(q.categoryIds)})`);
+    whereParts.push(
+      q.branch
+        ? Prisma.sql`p."categoryId" IN (
+            WITH RECURSIVE branch AS (
+              SELECT c."id" FROM "categories" c WHERE c."id" IN (${Prisma.join(q.categoryIds)})
+              UNION
+              SELECT c."id" FROM "categories" c JOIN branch b ON c."parentId" = b."id"
+            )
+            SELECT "id" FROM branch
+          )`
+        : Prisma.sql`p."categoryId" IN (${Prisma.join(q.categoryIds)})`,
+    );
   }
 
   // price range: the price a buyer pays now, the usual price for an admin
@@ -334,21 +381,66 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
   if (q.minPrice != null) whereParts.push(Prisma.sql`${price} >= ${q.minPrice}`);
   if (q.maxPrice != null) whereParts.push(Prisma.sql`${price} <= ${q.maxPrice}`);
 
-  // the search text is matched literally: % and _ are wildcards of ILIKE and \ is its escape,
-  // so each of them gets a \ in front
-  const searchText = q.search?.trim().replace(/[\\%_]/g, '\\$&');
-
-  // indexed search by immutable_unaccent(name)
-  if (searchText) {
-    whereParts.push(
-      Prisma.sql`
-        cartlify.immutable_unaccent(p."name")
-        ILIKE '%' || cartlify.immutable_unaccent(${searchText}) || '%'
-      `,
-    );
-  }
+  if (q.search) whereParts.push(searchSqlOf(q.search));
 
   return Prisma.join(whereParts, ' AND ');
+}
+
+// the text of a search, without its accents, as the names are compared
+const unaccented = (text: string) => Prisma.sql`cartlify.immutable_unaccent(${text})`;
+const NAME_SQL = Prisma.raw(`cartlify.immutable_unaccent(p."name")`);
+const CATEGORY_NAME_SQL = Prisma.raw(
+  `(SELECT cartlify.immutable_unaccent(c."name") FROM "categories" c WHERE c."id" = p."categoryId")`,
+);
+
+// a product the search finds: its name holds the text as it is (% and _ are wildcards of ILIKE and
+// \ is its escape, so each of them gets a \ in front), a word of its name is close to a word of the
+// text (a typo, another order of the words), the name of its category does, or its article number
+// is the text
+function searchSqlOf(search: string): Prisma.Sql {
+  const text = search.trim();
+  const literal = text.replace(/[\\%_]/g, '\\$&');
+
+  return Prisma.sql`(
+    ${NAME_SQL} ILIKE '%' || ${unaccented(literal)} || '%'
+    OR cartlify.word_similarity(${unaccented(text)}, ${NAME_SQL}) >= ${SEARCH_SIMILARITY}
+    OR ${CATEGORY_NAME_SQL} ILIKE '%' || ${unaccented(literal)} || '%'
+    OR cartlify.word_similarity(${unaccented(text)}, ${CATEGORY_NAME_SQL}) >= ${SEARCH_SIMILARITY}
+    OR lower(p."sku") = lower(${text})
+  )`;
+}
+
+// how well a product matches the search, from 0 to 1: the words of the text in its name, and the
+// whole name close to the text (a short name of just these words ranks above a long one), its
+// article number, the name of its category a little lower. Rounded, so the cursor keeps the value
+function relevanceSqlOf(search: string): Prisma.Sql {
+  const text = search.trim();
+
+  return Prisma.sql`round((GREATEST(
+    cartlify.word_similarity(${unaccented(text)}, ${NAME_SQL}) * 0.8
+      + cartlify.similarity(${unaccented(text)}, ${NAME_SQL}) * 0.2,
+    CASE WHEN lower(p."sku") = lower(${text}) THEN 1 ELSE 0 END,
+    COALESCE(cartlify.word_similarity(${unaccented(text)}, ${CATEGORY_NAME_SQL}), 0) * 0.7
+  ))::numeric, 6)`;
+}
+
+// up to 8 names of the catalog for what a person types, the best match first
+export function buildSuggestionsQuery(text: string, view: ProductView): Prisma.Sql {
+  // a buyer is told of the products a list shows, the ones with an image
+  const listed = view === 'buyer' ? Prisma.sql`AND ${HAS_PRIMARY_IMAGE_SQL}` : Prisma.empty;
+
+  return Prisma.sql`
+    SELECT p."id" AS id, p."name" AS name
+    FROM "products" p
+    WHERE p."deletedAt" IS NULL
+      ${listed}
+      AND (
+        ${NAME_SQL} ILIKE '%' || ${unaccented(text.replace(/[\\%_]/g, '\\$&'))} || '%'
+        OR cartlify.word_similarity(${unaccented(text)}, ${NAME_SQL}) >= ${SEARCH_SIMILARITY}
+      )
+    ORDER BY ${relevanceSqlOf(text)} DESC, p."id" DESC
+    LIMIT 8
+  `;
 }
 
 // build raw query that returns the ids of a page and the values of their sort, for the cursor; one
@@ -377,7 +469,7 @@ export function buildProductIdsQuery(q: ProductListQuery): Prisma.Sql {
     `;
   }
 
-  const { sql: col } = sortExpressionOf(q.sort, q.view);
+  const { sql: col } = sortExpressionOf(q.sort, q.view, q.search);
 
   return Prisma.sql`
     SELECT p."id" AS id, ${col} AS v
@@ -424,7 +516,8 @@ export function makeNextCursor(
 }
 
 // a product of a list: the card fields of every role and the primary image; a buyer gets the
-// popularity a list sorts by, an admin every field of an admin
+// popularity a list sorts by, an admin every field of an admin. A product without an image is in
+// the lists of an admin only, with no images (null)
 export function mapProductListRowToResponse(
   row: ProductResponseRow & {
     images: Array<{ url: string; position: number; isPrimary: boolean }>;
@@ -432,11 +525,10 @@ export function mapProductListRowToResponse(
   view: ProductView,
 ): ProductResponseDto {
   const primaryUrl = row.images?.[0]?.url;
-  if (!primaryUrl) throw new InternalError({ reason: 'PRODUCT_PRIMARY_IMAGE_NOT_FOUND' });
 
   return {
     ...buyerFieldsOf(row),
-    images: buildImageUrls(primaryUrl, 'product'),
+    images: primaryUrl ? buildImageUrls(primaryUrl, 'product') : null,
     ...(view === 'admin' ? adminFieldsOf(row) : { popularity: row.popularity }),
   };
 }

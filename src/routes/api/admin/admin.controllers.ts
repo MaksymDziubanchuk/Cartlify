@@ -2,6 +2,11 @@ import type { ControllerRouter } from 'types/controller.js';
 import type { User } from 'types/user.js';
 import type { FastifyReply } from 'fastify';
 import type {
+  AdminAlertKindParamsDto,
+  AdminAlertSubscriptionDto,
+  AdminAuditLogQueryDto,
+  GetAdminAlertsResponseDto,
+  GetAdminAuditLogResponseDto,
   AdminAccountingQueryDto,
   AdminReportCategoriesQueryDto,
   AdminReportProductsQueryDto,
@@ -20,10 +25,12 @@ import type {
   GetAdminStockMovementsResponseDto,
 } from 'types/dto/admin.dto.js';
 import { BadRequestError, UnauthorizedError } from '@utils/errors.js';
+import { isDbYear } from '@helpers/dbDate.js';
 import { adminServices } from './admin.services.js';
 import { parseProductIds } from './services/helpers/accountingReport.helper.js';
 import { stockBatchesArgsOf } from './services/stockBatches.service.js';
 import { stockMovementsArgsOf } from './services/stockMovements.service.js';
+import { auditLogArgsOf } from './services/auditLog.service.js';
 
 const ALL_TIME_FROM_MS = 0;
 
@@ -32,7 +39,7 @@ function parseOptionalStatsDateMs(value: string | undefined, field: 'from' | 'to
 
   const ms = Date.parse(value);
 
-  if (Number.isNaN(ms)) {
+  if (Number.isNaN(ms) || !isDbYear(new Date(ms))) {
     throw new BadRequestError('INVALID_STATS_PERIOD', {
       field,
       reason: 'INVALID_DATE',
@@ -219,6 +226,64 @@ const getStockMovements: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// the admin log with its filters; the csv has every line of them
+const getAuditLog: ControllerRouter<
+  {},
+  {},
+  AdminAuditLogQueryDto,
+  GetAdminAuditLogResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = auditLogArgsOf(req.query, req.user);
+  if (req.query.format === 'csv') return sendCsv(reply, await adminServices.auditLogCsv(args));
+
+  return reply.code(200).send(await adminServices.listAuditLog(args));
+};
+
+// the alerts of the actor, each kind they have on with its count
+const getAlerts: ControllerRouter<{}, {}, {}, GetAdminAlertsResponseDto> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const result = await adminServices.getAdminAlerts({
+    actorId: req.user.id,
+    actorRole: req.user.role,
+  });
+  return reply.code(200).send(result);
+};
+
+const getAlertSubscriptions: ControllerRouter<
+  {},
+  {},
+  {},
+  { items: AdminAlertSubscriptionDto[] }
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const result = await adminServices.getAlertSubscriptions({
+    actorId: req.user.id,
+    actorRole: req.user.role,
+  });
+  return reply.code(200).send(result);
+};
+
+// a kind of alerts on (PUT) or off (DELETE) for the actor
+const alertSubscription =
+  (
+    subscribed: boolean,
+  ): ControllerRouter<AdminAlertKindParamsDto, {}, {}, AdminAlertSubscriptionDto> =>
+  async (req, reply) => {
+    if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+    const result = await adminServices.setAlertSubscription({
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      kind: req.params.kind,
+      subscribed,
+    });
+    return reply.code(200).send(result);
+  };
+
 export const adminController = {
   getAllStats,
   getAccountingReport,
@@ -227,4 +292,9 @@ export const adminController = {
   getAccountingTimeline,
   getStockBatches,
   getStockMovements,
+  getAuditLog,
+  getAlerts,
+  getAlertSubscriptions,
+  putAlertSubscription: alertSubscription(true),
+  deleteAlertSubscription: alertSubscription(false),
 };

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { webUrl } from '@helpers/webOrigin.js';
@@ -30,7 +31,12 @@ function loadOrder(orderId: number) {
         user: { select: { email: true, name: true, deletedAt: true } },
         items: {
           orderBy: { id: 'asc' },
-          select: { quantity: true, totalPrice: true, product: { select: { name: true } } },
+          select: {
+            quantity: true,
+            totalPrice: true,
+            productName: true,
+            product: { select: { name: true } },
+          },
         },
       },
     });
@@ -54,10 +60,13 @@ export async function sendOrderCancelledEmail(
     if (order.user.deletedAt) return;
 
     const { subject, text, html } = buildOrderCancelledTemplate({
+      // the name of the shop the mail is from
+      appName: env.SHOP_NAME,
       orderId: order.id,
       orderUrl: webUrl(orderPage(order.id)),
       items: order.items.map((item) => ({
-        name: item.product.name,
+        // the name the product had when the order was confirmed
+        name: item.productName ?? item.product.name,
         quantity: item.quantity,
         totalPrice: item.totalPrice.toString(),
       })),

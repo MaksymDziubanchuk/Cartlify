@@ -23,7 +23,8 @@ on:
           - db/schema/04_views.sql
           - db/schema/05_fn_and_triggers.sql
           - db/schema/06_indexes_and_constraints.sql
-          - db/data/reseed.sql
+          # db/data/* (reseed, clear) wipe data: they are run only by hand from a local machine,
+          # never through this workflow, on dev neither
 
 concurrency:
   # prevent parallel db mutations per target
@@ -34,21 +35,24 @@ jobs:
   run_sql:
     runs-on: ubuntu-latest
 
-    steps:
-      # the repo is public and so are its logs: psql and prisma print the database host,
-      # github hides only whole secrets, so every host is masked before anything connects
-      - name: Mask database hosts
-        env:
-          DB_URLS: ${{ secrets.DEV_DB_URL }} ${{ secrets.PROD_DB_URL }} ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
-        run: |
-          for url in $DB_URLS; do
-            host="${url#*://}"; host="${host##*@}"; host="${host%%[:/?]*}"
-            if [ -n "$host" ]; then echo "::add-mask::$host"; fi
-          done
+    # prod only from develop, the branch its migrations come from too
+    if: inputs.target_db != 'prod' || github.ref == 'refs/heads/develop'
 
-      # get repo files so runner can access db scripts
+    # the github environment of the target: the prod one asks a reviewer to approve the run
+    # (Settings -> Environments -> prod -> Required reviewers)
+    environment: ${{ inputs.target_db }}
+
+    steps:
+      # get repo files so runner can access db scripts; nothing connects before the masking
       - name: Checkout repo
         uses: actions/checkout@v7
+
+      # the repo is public and so are its logs: psql and prisma print parts of a database
+      # address, github hides only whole secrets; every part is masked before anything connects
+      - name: Mask database addresses
+        env:
+          DB_URLS: ${{ secrets.DEV_DB_URL }} ${{ secrets.PROD_DB_URL }} ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: bash .github/scripts/mask-db-urls.sh
 
       # install psql client for executing postgres scripts
       - name: Install psql client
@@ -85,6 +89,11 @@ jobs:
             *) echo "only scripts under db/ are allowed"; exit 1 ;;
           esac
 
+          # the data scripts wipe or reseed a database, they run only by hand from a local machine
+          case "$SCRIPT" in
+            db/data/*) echo "db/data scripts are not run by this workflow"; exit 1 ;;
+          esac
+
           # require file to exist
           if [ ! -f "$SCRIPT" ]; then
             echo "file not found: $SCRIPT"
@@ -95,7 +104,8 @@ jobs:
 
           echo "script ok: $SCRIPT"
 
-      # show target info to reduce human mistakes
+      # name the target before executing mutations, to reduce human mistakes; the database
+      # name and the user are masked, so the step names the input and checks the connection
       - name: Show db target info
         env:
           DEV_URL: ${{ secrets.DEV_DB_URL }}
@@ -109,30 +119,24 @@ jobs:
             URL="$PROD_URL"
           fi
 
-          # show current database/user before executing mutations
-          psql -v ON_ERROR_STOP=1 -c "select current_database() as db, current_user as usr;" "$URL"
+          psql -v ON_ERROR_STOP=1 -tAc "select 1" "$URL" > /dev/null
+          echo "target: ${{ inputs.target_db }}, script: ${{ inputs.sql_file }}, connection ok"
 
-      # run selected sql on dev db
+      # run selected sql on dev db; a script waits at most 5 s for a busy table (lock_timeout)
+      # and rolls back, so it runs again, up to 3 times
       - name: Run script on DEV
         if: inputs.target_db == 'dev'
         env:
           DATABASE_URL: ${{ secrets.DEV_DB_URL }}
-        run: |
-          set -euo pipefail
+        run: bash .github/scripts/run-sql-with-retry.sh "${{ inputs.sql_file }}"
 
-          # url goes last so psql does not ignore following args
-          psql -v ON_ERROR_STOP=1 -f "${{ inputs.sql_file }}" "$DATABASE_URL"
-
-      # run selected sql on prod db
+      # run selected sql on prod db; a script waits at most 5 s for a busy table (lock_timeout)
+      # and rolls back, so it runs again, up to 3 times
       - name: Run script on PROD
         if: inputs.target_db == 'prod'
         env:
           DATABASE_URL: ${{ secrets.PROD_DB_URL }}
-        run: |
-          set -euo pipefail
-
-          # url goes last so psql does not ignore following args
-          psql -v ON_ERROR_STOP=1 -f "${{ inputs.sql_file }}" "$DATABASE_URL"
+        run: bash .github/scripts/run-sql-with-retry.sh "${{ inputs.sql_file }}"
 
       # node and prisma client are needed only for the structure check below
       - name: Setup Node
@@ -160,3 +164,12 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PROD_DB_URL }}
         run: npm run db:snapshot:check:db
+
+  deny_prod_from_other_branches:
+    name: Deny prod runs outside develop
+    runs-on: ubuntu-latest
+    if: inputs.target_db == 'prod' && github.ref != 'refs/heads/develop'
+    steps:
+      - run: |
+          echo "SQL on prod may only run from the develop branch."
+          exit 1

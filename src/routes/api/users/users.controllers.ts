@@ -25,6 +25,7 @@ import { BadRequestError } from '@utils/errors.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { clearAuthCookies } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 import { usersServices } from './users.services.js';
+import type { ExportMeResponseDto } from './services/exportMe.service.js';
 import { UserId } from 'types/ids.js';
 
 const getUsers: ControllerRouter<{}, {}, GetUsersQueryDto, UsersListResponseDto> = async (
@@ -51,6 +52,16 @@ const getMe: ControllerRouter<{}, {}, {}, UserResponseDto> = async (req, reply) 
   return reply.code(200).send(result);
 };
 
+// the data of the person as a file the browser saves
+const getMeExport: ControllerRouter<{}, {}, {}, ExportMeResponseDto> = async (req, reply) => {
+  const { id, role } = req.user as UserEntity;
+
+  const result = await usersServices.exportMe({ userId: Number(id), role });
+
+  reply.header('content-disposition', `attachment; filename="cartlify-data-${Number(id)}.json"`);
+  return reply.code(200).send(result);
+};
+
 const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = async (req, reply) => {
   // actor identity comes from authGuard
   const { id, role } = req.user as UserEntity;
@@ -70,6 +81,13 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
       // parse multipart parts manually because file streams must be consumed during parsing
       for await (const part of req.parts()) {
         if (part.type === 'file') {
+          // a file input left empty: the browser sends the part without a file name and without
+          // bytes. No file was chosen, the other fields of the form are saved
+          if (part.filename === '') {
+            part.file.resume();
+            continue;
+          }
+
           if (part.fieldname === 'avatar') {
             // prevent sending multiple avatar files in one request, or a file and a removal
             if (avatarUpload || removeAvatar) {
@@ -97,6 +115,9 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
 
         // multipart field values are typed loosely, normalize to string
         const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+
+        // a NUL sign is no text postgres keeps, the same refusal as for a json body
+        if (v.includes('\u0000')) throw new BadRequestError('TEXT_NUL_FORBIDDEN');
 
         // an avatar of text can only be the empty value that removes it; a picture is a file
         if (part.fieldname === 'avatar') {
@@ -203,6 +224,7 @@ const deleteMe: ControllerRouter<{}, DeleteMeBodyDto, {}, void> = async (req, re
 export const usersController = {
   getUsers,
   getMe,
+  getMeExport,
   patchMe,
   getUserById,
   deleteUserById,

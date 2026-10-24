@@ -37,6 +37,11 @@ const APP_FUNCTIONS = [
   'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
   'cartlify.expire_order_reservation(integer)',
   'cartlify.anonymize_login_logs(integer)',
+  // maintenance the periodic tasks run as the system
+  'cartlify.cleanup_user_tokens(integer)',
+  'cartlify.cleanup_login_log_addresses(integer)',
+  'cartlify.cleanup_guest_data(integer)',
+  'cartlify.cleanup_deleted_accounts_chats(integer)',
   'cartlify.refresh_order_prices(integer)',
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)',
@@ -207,6 +212,19 @@ describe.each([APP, READONLY])('role %s', (role) => {
 });
 
 describe(`role ${APP}`, () => {
+  // the timeout of a prisma transaction only stops the waiting of the app, the statement went on
+  // in the database; a statement or an open transaction left behind ends on its own
+  it('stops a statement after 15 s and a transaction left idle after 30 s', async () => {
+    const settings = await inRolledBackTx((db) =>
+      db.rows<{ statement: string; idle: string }>(
+        `select current_setting('statement_timeout') as statement,
+                current_setting('idle_in_transaction_session_timeout') as idle`,
+      ),
+    );
+
+    expect(settings).toEqual([{ statement: '15s', idle: '30s' }]);
+  });
+
   it('runs only the functions db/schema/01 opens for it, besides the extension functions', async () => {
     const { expected, actual } = await inRolledBackTx(async (db) => ({
       expected: await listed(db, APP_FUNCTIONS),

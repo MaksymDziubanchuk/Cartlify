@@ -18,20 +18,31 @@ export interface OrderItemProductDto {
   name: string;
   categoryId: CategoryId;
 
+  // the primary image; null for a product without one
   images: {
     url200: string;
     url400: string;
     url800: string;
-  };
+  } | null;
 
   availableStock: number;
   deletedAt?: Date | null;
+
+  // an order that is not paid: the price of the product now and its sale while it lasts, the
+  // way the catalog shows them
+  price?: number;
+  salePrice?: number;
+  saleEndsAt?: string;
+  salePriorPrice?: number;
 }
 
 export interface OrderItemDto {
   // order item id, used as itemId in PATCH/DELETE /current/items/:itemId
   id: number;
   productId: ProductId;
+  // the name of the item: the one the product had when the order was confirmed, the one of now
+  // for a cart
+  name: string;
   product: OrderItemProductDto;
   quantity: number;
   unitPrice: number;
@@ -155,10 +166,19 @@ export interface GetOrdersQueryDto {
   cursor?: string;
 
   status?: OrderStatus;
+  // a few statuses, separated by commas
+  statuses?: string;
   confirmed?: ConfirmedStatus;
   // the orders paid from paidFrom and before paidTo, iso date-times
   paidFrom?: string;
   paidTo?: string;
+  // the orders that hold the product
+  productId?: number;
+
+  // the desk of an admin: the orders of a buyer, a text of a buyer or a recipient, a csv
+  userId?: number;
+  q?: string;
+  format?: 'json' | 'csv';
 
   sortBy?: OrdersSortBy;
   sortDir?: OrdersSortDir;
@@ -171,16 +191,29 @@ export interface FindOrdersDto {
   cursor?: string;
 
   status?: OrderStatus;
+  statuses?: string;
   confirmed?: ConfirmedStatus;
   paidFrom?: Date;
   paidTo?: Date;
+  productId?: number;
+  userId?: number;
+  q?: string;
+  format?: 'json' | 'csv';
 
   sortBy: OrdersSortBy;
   sortDir: OrdersSortDir;
 }
 
+// the buyer of an order in the list of an admin; a deleted account has no email
+export interface OrderBuyerDto {
+  id: UserId;
+  name: string | null;
+  email: string | null;
+  deleted: boolean;
+}
+
 export interface GetOrdersResponseDto {
-  items: OrderResponseDto[];
+  items: Array<OrderResponseDto & { buyer?: OrderBuyerDto }>;
   limit: number;
   nextCursor: string | null;
   total: number;
@@ -216,3 +249,22 @@ export interface UpdateOrderStatusDto {
 }
 
 export type UpdateOrderStatusResponseDto = OrderResponseDto;
+
+// one step of shipping for many orders, each in a transaction of its own with its own answer
+export interface UpdateOrdersStatusBodyDto {
+  orderIds: OrderId[];
+  status: 'shipped' | 'delivered';
+}
+
+export interface UpdateOrdersStatusDto extends UpdateOrdersStatusBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export type UpdateOrdersStatusResultDto =
+  | { orderId: OrderId; ok: true; status: OrderStatus }
+  | { orderId: OrderId; ok: false; errorCode: string; details?: Record<string, unknown> };
+
+export interface UpdateOrdersStatusResponseDto {
+  results: UpdateOrdersStatusResultDto[];
+}

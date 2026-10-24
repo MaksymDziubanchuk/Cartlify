@@ -8,11 +8,13 @@ import { deleteCurrentItem } from './services/deleteCurrentItem.service.js';
 
 import { confirmOrder } from './services/confirmOrder.service.js';
 
-import { findOrders } from './services/findOrders.service.js';
+import { findOrders, findOrdersCsv } from './services/findOrders.service.js';
 
 import { findById } from './services/findById.service.js';
 
 import { updateOrderStatus } from './services/updateOrderStatus.service.js';
+
+import { updateOrdersStatus } from './services/updateOrdersStatus.service.js';
 
 import { cancelOrderPayment } from './services/cancelOrderPayment.service.js';
 
@@ -26,8 +28,10 @@ export const ordersServices = {
   confirmOrder,
 
   findOrders,
+  findOrdersCsv,
   findById,
   updateOrderStatus,
+  updateOrdersStatus,
 
   cancelOrderPayment,
   cancelPaidOrder,

@@ -7,8 +7,8 @@ import { closeSessions, createUser, type TestUser } from '../../helpers/factorie
 
 // cartlify.remove_user_avatar: a moderator takes the avatar of another account away. A signed-in
 // admin takes it from a USER account, root from any account; the system, a user and a guest
-// cannot. Only the two avatar fields of the row change, the result is the id of the file the
-// account had
+// cannot. Only the two avatar fields of the row change; the result says whether it took an avatar,
+// read under the lock of the row, with the id of its file and its address
 
 const avatarOf = (id: number) => ({
   avatarUrl: `https://res.cloudinary.com/demo/image/upload/v1/test/users/${id}/avatar.png`,
@@ -60,13 +60,20 @@ async function withAvatar(db: DbSession, id: number) {
 }
 
 const removeAvatar = (db: DbSession, id: number) =>
-  db.attempt<{ publicId: string | null }>(
-    'select cartlify.remove_user_avatar($1) as "publicId"',
+  db.attempt<{ removed: boolean; public_id: string | null; avatar_url: string | null }>(
+    'select * from cartlify.remove_user_avatar($1)',
     id,
   );
 
+// what the function says it took
+const took = (id: number) => ({
+  removed: true,
+  public_id: avatarOf(id).publicId,
+  avatar_url: avatarOf(id).avatarUrl,
+});
+
 describe('cartlify.remove_user_avatar', () => {
-  it('lets a signed-in admin take the avatar of a user and gives the id of its file', () =>
+  it('lets a signed-in admin take the avatar of a user and gives the id of its file and its address', () =>
     inRolledBackTx(async (db) => {
       await withAvatar(db, user.id);
       const before = await rowOf(db, user.id);
@@ -74,7 +81,7 @@ describe('cartlify.remove_user_avatar', () => {
       await db.as(asAdmin());
       const removed = await removeAvatar(db, user.id);
 
-      expect(removed).toEqual({ ok: true, rows: [{ publicId: avatarOf(user.id).publicId }] });
+      expect(removed).toEqual({ ok: true, rows: [took(user.id)] });
       const after = await rowOf(db, user.id);
       expect(after).toMatchObject({ avatarUrl: null, publicId: null });
       // nothing else of the row changed but the time of the change
@@ -90,15 +97,34 @@ describe('cartlify.remove_user_avatar', () => {
       );
     }));
 
-  it('gives null and changes nothing for an account without an avatar', () =>
+  // of two moderators at once the second finds the avatar gone: no line, no count, no mail
+  it('says it took nothing and changes nothing for an account without an avatar', () =>
     inRolledBackTx(async (db) => {
       const before = await rowOf(db, user.id);
 
       await db.as(asAdmin());
       const removed = await removeAvatar(db, user.id);
 
-      expect(removed).toEqual({ ok: true, rows: [{ publicId: null }] });
+      expect(removed).toEqual({
+        ok: true,
+        rows: [{ removed: false, public_id: null, avatar_url: null }],
+      });
       expect(await rowOf(db, user.id)).toEqual(before);
+    }));
+
+  it('says it took the old address of a provider, which has no id of a file', () =>
+    inRolledBackTx(async (db) => {
+      const address = 'https://lh3.googleusercontent.com/a/old-picture';
+      await db.as(asRoot());
+      await db.rows('update cartlify.users set "avatarUrl" = $2 where id = $1', user.id, address);
+
+      await db.as(asAdmin());
+      const removed = await removeAvatar(db, user.id);
+
+      expect(removed).toEqual({
+        ok: true,
+        rows: [{ removed: true, public_id: null, avatar_url: address }],
+      });
     }));
 
   it.each([
@@ -123,7 +149,7 @@ describe('cartlify.remove_user_avatar', () => {
       await db.as(asRoot());
       const removed = await removeAvatar(db, otherAdmin.id);
 
-      expect(removed).toEqual({ ok: true, rows: [{ publicId: avatarOf(otherAdmin.id).publicId }] });
+      expect(removed).toEqual({ ok: true, rows: [took(otherAdmin.id)] });
       expect(await rowOf(db, otherAdmin.id)).toMatchObject({ avatarUrl: null, publicId: null });
     }));
 

@@ -29,6 +29,20 @@ describe('buildProductUpdateAuditChanges', () => {
     expect(diff({}, {})).toEqual([]);
   });
 
+  // an empty article number takes it away: null is a change the log keeps
+  it('records a new article number and the one taken away', () => {
+    expect(diff({ sku: 'MUG-2' }, { sku: 'MUG-2' })).toEqual([
+      { field: 'sku', old: null, new: 'MUG-2' },
+    ]);
+    expect(
+      buildProductUpdateAuditChanges(
+        { ...before, sku: 'MUG-1' },
+        { after: { ...before, sku: null }, input: { sku: '' } },
+      ),
+    ).toEqual([{ field: 'sku', old: 'MUG-1', new: null }]);
+    expect(diff({ sku: 'MUG-2' }, {})).toEqual([]);
+  });
+
   it('records only the fields the request sent', () => {
     expect(diff({ name: 'Cup', categoryId: 4 }, { name: 'Cup' })).toEqual([
       { field: 'name', old: 'Mug', new: 'Cup' },
@@ -59,14 +73,41 @@ describe('buildProductUpdateAuditChanges', () => {
       },
     );
 
+    // the text of a description taken away is none, the way the column keeps it
     expect(out).toEqual([
       { field: 'name', old: 'Mug', new: 'Cup' },
-      { field: 'description', old: 'White', new: '' },
+      { field: 'description', old: 'White', new: null },
       { field: 'categoryId', old: 1, new: 2 },
       { field: 'price', old: '9.99', new: '12.5' },
       { field: 'popularityOverride', old: 5, new: null },
       { field: 'popularityOverrideUntil', old: '2026-07-01T00:00:00.000Z', new: null },
     ]);
+  });
+
+  // the description keeps the text and the safety data in one column: each is a change of its own
+  it('records the text and the safety data of the description apart', () => {
+    const safety = {
+      manufacturer: { name: 'Lampwerk', address: 'Berlin', email: 'a@b.de', country: 'DE' },
+      responsiblePerson: null,
+      warnings: null,
+    };
+    const kept = (text: string, data: unknown) => JSON.stringify({ v: 1, text, safety: data });
+
+    expect(
+      buildProductUpdateAuditChanges(
+        { ...before, description: 'White' },
+        { after: { ...before, description: kept('White', safety) }, input: { safety } },
+      ),
+    ).toEqual([{ field: 'safety', old: null, new: safety }]);
+    expect(
+      buildProductUpdateAuditChanges(
+        { ...before, description: kept('White', safety) },
+        {
+          after: { ...before, description: kept('Black', safety) },
+          input: { description: 'Black' },
+        },
+      ),
+    ).toEqual([{ field: 'description', old: 'White', new: 'Black' }]);
   });
 
   it('compares prices by value, so 9.90 and 9.9 are the same price', () => {

@@ -33,12 +33,16 @@ import type {
   PasswordResetDto,
   LogoutBodyDto,
   LogoutDto,
+  PasswordChangeBodyDto,
+  SessionIdParamsDto,
+  SessionsResponseDto,
   RefreshDto,
   CsrfTokenResponseDto,
 } from 'types/dto/auth.dto.js';
 
 import { authServices } from './auth.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
+import { isUuid } from '@db/dbContext.service.js';
 import {
   AlreadyAuthenticatedError,
   BadRequestError,
@@ -47,6 +51,7 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import { webUrl } from '@helpers/webOrigin.js';
+import { clearLoginFailures, recordLoginFailure } from '../../../plugins/requestLimits.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { getTtl, verifyRefreshToken } from '@utils/jwt.js';
 import {
@@ -99,8 +104,17 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
     },
   );
 
-  // authenticate and get tokens
-  const { result, refreshToken, accessToken } = await authServices.login(args);
+  // authenticate and get tokens; a wrong password counts toward the pause of the account
+  // (src/plugins/requestLimits.ts), the right one starts the count over
+  let login: Awaited<ReturnType<typeof authServices.login>>;
+  try {
+    login = await authServices.login(args);
+  } catch (err) {
+    if (isAppError(err) && err.errorCode === 'INVALID_CREDENTIALS') recordLoginFailure(email);
+    throw err;
+  }
+  clearLoginFailures(email);
+  const { result, refreshToken, accessToken } = login;
 
   const refreshTtl = rememberMe ? getTtl(rememberMe, 'refresh') : getTtl(false, 'refresh');
   const accessTtl = rememberMe ? getTtl(rememberMe, 'access') : getTtl(false, 'access');
@@ -199,6 +213,10 @@ async function finishOAuthLogin(
     if (isAppError(err) && err.statusCode < 500) {
       error = err.errorCode;
       req.log.info({ errorCode: error }, 'oauth login rejected');
+    } else if (isAppError(err) && err.errorCode === 'OAUTH_PROVIDER_UNAVAILABLE') {
+      // the provider is out of reach or silent: the page tells the person to try again
+      error = err.errorCode;
+      req.log.warn({ errorCode: error, details: err.details }, 'oauth provider unavailable');
     } else {
       error = 'OAUTH_LOGIN_FAILED';
       req.log.error({ err }, 'oauth login failed');
@@ -322,11 +340,13 @@ const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDt
   reply,
 ) => {
   const { token } = req.query;
+  // the route reads no session: the guest of the browser comes from its cookie
+  const guestCookie = req.cookies?.guestId;
   const args = pickDefined<VerifyEmailDto>(
     {
       token,
     },
-    {},
+    { guestId: isUuid(guestCookie) ? guestCookie : undefined },
   );
   // verify email by token
   const result = await authServices.verifyEmail(args);
@@ -374,6 +394,59 @@ const postLogout: ControllerRouter<{}, LogoutBodyDto, {}, void> = async (req, re
   await authServices.logout(args);
 
   clearAuthCookies(reply);
+  return reply.code(204).send();
+};
+
+// the refresh cookie of this browser: the guard may have renewed the session in this request
+const refreshTokenOf = (req: FastifyRequest) => req.issuedRefreshToken ?? req.cookies?.refreshToken;
+
+const getSessions: ControllerRouter<{}, {}, {}, SessionsResponseDto> = async (req, reply) => {
+  const { id, role } = req.user as User;
+
+  const result = await authServices.listSessions(
+    pickDefined<Parameters<typeof authServices.listSessions>[0]>(
+      { userId: Number(id), role },
+      { refreshToken: refreshTokenOf(req) },
+    ),
+  );
+
+  return reply.code(200).send(result);
+};
+
+const deleteSession: ControllerRouter<SessionIdParamsDto, {}, {}, void> = async (req, reply) => {
+  const { id, role } = req.user as User;
+
+  const { current } = await authServices.closeSession(
+    pickDefined<Parameters<typeof authServices.closeSession>[0]>(
+      { userId: Number(id), role, sessionId: req.params.sessionId },
+      { refreshToken: refreshTokenOf(req) },
+    ),
+  );
+
+  // the session of this browser ended: its cookies go, like at a logout
+  if (current) clearAuthCookies(reply);
+  return reply.code(204).send();
+};
+
+const postPasswordChange: ControllerRouter<{}, PasswordChangeBodyDto, {}, void> = async (
+  req,
+  reply,
+) => {
+  const { id, role } = req.user as User;
+
+  await authServices.changePassword(
+    pickDefined<Parameters<typeof authServices.changePassword>[0]>(
+      {
+        userId: Number(id),
+        role,
+        currentPassword: req.body.currentPassword,
+        newPassword: req.body.newPassword,
+        log: req.log,
+      },
+      { refreshToken: refreshTokenOf(req) },
+    ),
+  );
+
   return reply.code(204).send();
 };
 
@@ -433,6 +506,9 @@ export const authController = {
   postPasswordForgot,
   postPasswordReset,
   postLogout,
+  getSessions,
+  deleteSession,
+  postPasswordChange,
   postRefresh,
   getCsrfToken,
 };

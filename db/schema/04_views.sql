@@ -1,5 +1,9 @@
 BEGIN;
 
+-- on a live database a busy table makes the script wait for its lock, and every request of the
+-- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+SET LOCAL lock_timeout = '5s';
+
 -- everything below is created and owned by cartlify_owner, whoever runs the script
 SET LOCAL ROLE cartlify_owner;
 

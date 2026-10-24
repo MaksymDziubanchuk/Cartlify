@@ -16,6 +16,7 @@ import {
 
 import {
   mapProductRowToResponse,
+  readCategoryPath,
   normalizeFindProductByIdInput,
   normalizeSaleEnd,
   productResponseSelect,
@@ -88,13 +89,14 @@ export async function setProductSale({
     return mapProductRowToResponse({
       product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
       images,
+      categoryPath: await readCategoryPath(updated.category.id),
       view: 'admin',
     });
   } catch (err) {
     if (isAppError(err)) throw err;
 
     // map lock/tx contention errors to a stable 409 for clients
-    if (isRetryableTxError(err)) throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+    if (isRetryableTxError(err)) throw new ResourceBusyError();
 
     // the end went by between the check and the write, by the clock of the database (db/05)
     if (String(getPgMessage(err) ?? '').includes('PRODUCT_SALE_ENDS_AT_INVALID')) {

@@ -246,6 +246,24 @@ describe('the views of a product', () => {
     await card(product.id, await newUser());
     expect(await viewsOf(product.id)).toBe(before + 2);
   });
+  // the last change of a product is a change an admin made: the sort of an admin by updatedAt
+  // showed the last visit of a buyer instead
+  it('keeps the time of the last change of the product when a buyer opens its card', async () => {
+    const product = await newProduct();
+    const updatedAtOf = async () =>
+      (
+        await asAdmin((tx) =>
+          tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { updatedAt: true } }),
+        )
+      ).updatedAt.toISOString();
+    const before = await updatedAtOf();
+
+    await card(product.id);
+    await card(product.id, await newUser());
+
+    expect(await updatedAtOf()).toBe(before);
+    expect(await viewsOf(product.id)).toBeGreaterThan(0);
+  });
 });
 
 describe('the sorts and the flags of a buyer', () => {

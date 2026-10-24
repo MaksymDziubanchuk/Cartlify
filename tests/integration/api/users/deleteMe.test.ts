@@ -171,6 +171,23 @@ describe('a local account', () => {
   });
 });
 
+// the access token of a deleted account lives a few minutes on: a second request deleted the
+// emptied row once more, or failed with 500 on the password it no longer has
+describe('a deleted account', () => {
+  it('answers 404 to a second deletion and changes nothing', async () => {
+    const user = await newUser();
+    const cookie = accessCookie(user);
+    expect((await deleteMe(cookie, { password: user.password })).statusCode).toBe(204);
+    const before = await rowOf(user.id);
+
+    const res = await deleteMe(cookie, { password: user.password });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'USER_NOT_FOUND' });
+    expect((await rowOf(user.id)).email).toBe(before.email);
+  });
+});
+
 describe('an oauth account', () => {
   it('is deleted without a password when the last login is at most 10 minutes old', async () => {
     const user = await newGoogleUser(9 * MINUTE);

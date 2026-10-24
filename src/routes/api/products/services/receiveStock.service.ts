@@ -13,6 +13,7 @@ import {
   normalizeDeliveryInput,
   stockErrorOf,
   stockSummaryOf,
+  withProductIds,
 } from './helpers/index.js';
 
 import type {
@@ -31,7 +32,10 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
   const { actorId, actorRole } = dto;
   assertAdminActor(actorId, actorRole);
 
-  const delivery = normalizeDeliveryInput(dto);
+  const delivery = normalizeDeliveryInput({
+    ...dto,
+    items: await withProductIds(dto.items, dto),
+  });
   const deliveryId = randomUUID();
 
   try {
@@ -121,7 +125,7 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
     if (isAppError(err)) throw err;
 
     // map lock/tx contention errors to a stable 409 for clients
-    if (isRetryableTxError(err)) throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+    if (isRetryableTxError(err)) throw new ResourceBusyError();
 
     throw new InternalError({ reason: 'STOCK_DELIVERY_UNEXPECTED' }, err);
   }

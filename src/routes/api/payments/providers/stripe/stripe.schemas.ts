@@ -18,6 +18,7 @@ const checkoutSessionResponseExample = {
     paymentStatus: 'unpaid',
     expiresAt: '2026-01-01T10:30:00.000Z',
   },
+  order: { id: 42, status: 'waiting', paymentRefunded: false },
 };
 
 const stripeWebhookHeadersExample = {
@@ -33,7 +34,7 @@ const getCheckoutSessionByIdSchema = {
   operationId: 'getStripeCheckoutSessionById',
   summary: 'Get Stripe checkout session by id',
   description:
-    'Returns a Stripe checkout session by session id for the authenticated user: the page the buyer comes back to from a Stripe payment page (`WEB_ORIGIN/checkout/success?session_id=<id>`) asks how the payment stands. Stripe is asked directly, it knows about the payment before the webhook comes, so `paymentStatus: paid` may come while the order still waits for it.',
+    'Returns a Stripe checkout session by session id for the authenticated user: the page the buyer comes back to from a Stripe payment page (`WEB_ORIGIN/checkout/success?session_id=<id>`) asks how the payment stands. Stripe is asked directly, it knows about the payment before the webhook comes, so `paymentStatus: paid` may come while the order still waits for it. `order` tells the status of the order and whether the money of this payment went back (`paymentRefunded`): a payment after the end of the reservation that the order could not take is paid at Stripe and refunded at once.',
 
   params: {
     $ref: 'paymentsGetCheckoutSessionByIdParamsSchema#',
@@ -43,7 +44,7 @@ const getCheckoutSessionByIdSchema = {
   response: {
     200: {
       description: 'Checkout session was returned successfully.',
-      $ref: 'paymentsCheckoutSessionResponseSchema#',
+      $ref: 'paymentsCheckoutSessionReadResponseSchema#',
       examples: [checkoutSessionResponseExample],
     },
 
@@ -83,7 +84,7 @@ const postStripeWebhookSchema = {
   operationId: 'handleStripeWebhook',
   summary: 'Handle Stripe webhook',
   description:
-    'Handles Stripe checkout webhook events and updates linked order payment state. When the order becomes paid, the buyer gets a mail with the order; a mail that fails is only logged and does not fail the webhook. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log; the same payment delivered again changes nothing, also after the order was shipped, delivered or cancelled. An expired checkout releases the order reservation only after the payment grace window; an expired or failed checkout of an already deleted order is acknowledged with `skipped: ORDER_NOT_FOUND`. A checkout the app did not open for an order (another tool in the same Stripe account) is acknowledged with `skipped: NOT_AN_ORDER` and left alone, its payment too. The route is outside the request rate limit: Stripe delivers every event from a few addresses, the signature keeps anybody else out.',
+    'Handles Stripe checkout webhook events and updates linked order payment state. When the order becomes paid, the buyer gets a mail with the order; a mail that fails is only logged and does not fail the webhook. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log; the same payment delivered again changes nothing, also after the order was shipped, delivered or cancelled, and a payment whose money went back is acknowledged with `skipped: REFUNDED` (the order does not take it, also when the stock came back meanwhile). An expired checkout releases the order reservation only after the payment grace window; an expired or failed checkout of an already deleted order is acknowledged with `skipped: ORDER_NOT_FOUND`. A checkout the app did not open for an order (another tool in the same Stripe account) is acknowledged with `skipped: NOT_AN_ORDER` and left alone, its payment too. The route is outside the request rate limit: Stripe delivers every event from a few addresses, the signature keeps anybody else out.',
 
   // inline, not a $ref: fastify lowercases header names only in an inline headers schema,
   // so `required` of a referenced one may not apply (FSTSEC002)
@@ -105,11 +106,22 @@ const postStripeWebhookSchema = {
     },
 
     400: {
-      description: 'Invalid Stripe webhook payload or missing signature.',
+      description:
+        'Invalid Stripe webhook payload or missing signature: no stripe-signature header ' +
+        '(STRIPE_SIGNATURE_REQUIRED), the raw body did not reach the route (STRIPE_RAW_BODY_REQUIRED), ' +
+        'a body that is not json (REQUEST_BODY_INVALID_JSON), an event without a checkout session ' +
+        '(STRIPE_EVENT_OBJECT_INVALID), an order of the page without items (ORDER_ITEMS_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Stripe webhook signature is invalid.',
+      description:
+        'Stripe webhook signature is invalid (STRIPE_SIGNATURE_INVALID): it does not match STRIPE_WEBHOOK_SECRET.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'The order changed while the event released its reservation (ORDER_NOT_CONFIRMED, ' +
+        'ORDER_STATUS_NOT_WAITING), or another request holds it (RESOURCE_BUSY); Stripe delivers the event again.',
       $ref: 'errorResponseSchema#',
     },
     500: {

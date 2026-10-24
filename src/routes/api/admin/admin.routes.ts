@@ -67,4 +67,49 @@ export default async function adminRouter(app: FastifyInstance) {
     },
     adminController.getStockMovements,
   );
+
+  app.get(
+    '/audit-log',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getAuditLogSchema,
+    },
+    adminController.getAuditLog,
+  );
+
+  app.get(
+    '/alerts',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getAlertsSchema,
+    },
+    adminController.getAlerts,
+  );
+
+  app.get(
+    '/alerts/subscriptions',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getAlertSubscriptionsSchema,
+    },
+    adminController.getAlertSubscriptions,
+  );
+
+  app.put(
+    '/alerts/subscriptions/:kind',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.putAlertSubscriptionSchema,
+    },
+    adminController.putAlertSubscription,
+  );
+
+  app.delete(
+    '/alerts/subscriptions/:kind',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.deleteAlertSubscriptionSchema,
+    },
+    adminController.deleteAlertSubscription,
+  );
 }

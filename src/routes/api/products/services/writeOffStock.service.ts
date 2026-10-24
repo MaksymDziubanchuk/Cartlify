@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 
 import { isRetryableTxError, tx } from '@db/client.js';
+import { shopToday } from '@helpers/shopDay.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
@@ -13,6 +14,7 @@ import {
   stockErrorOf,
   stockSummaryOf,
   writeOffSteps,
+  withProductIds,
 } from './helpers/index.js';
 
 import type {
@@ -34,7 +36,10 @@ export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStoc
   const { actorId, actorRole } = dto;
   assertAdminActor(actorId, actorRole);
 
-  const writeOff = normalizeWriteOffInput(dto);
+  const writeOff = normalizeWriteOffInput({
+    ...dto,
+    items: await withProductIds(dto.items, dto),
+  });
   const writeOffId = randomUUID();
   const productIds = [...new Set(writeOff.items.map((item) => item.productId))].sort(
     (a, b) => a - b,
@@ -61,14 +66,26 @@ export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStoc
         const batches = batchIds.length
           ? await db.productBatch.findMany({
               where: { id: { in: batchIds } },
-              select: { id: true, productId: true, remaining: true },
+              select: { id: true, productId: true, remaining: true, expiresAt: true },
             })
           : [];
 
+        // a batch is over once its last good day is behind the day of the shop
+        const today = shopToday();
         assertWriteOffFits({
           items: writeOff.items,
           products: new Map(products.map((row) => [row.id, row])),
-          batches: new Map(batches.map((row) => [row.id, row])),
+          batches: new Map(
+            batches.map((row) => [
+              row.id,
+              {
+                productId: row.productId,
+                remaining: row.remaining,
+                expired: row.expiresAt !== null && row.expiresAt.toISOString().slice(0, 10) < today,
+              },
+            ]),
+          ),
+          expired: await expiredUnitsOf(db, productIds),
         });
 
         const taken: Taken[][] = [];
@@ -126,7 +143,7 @@ export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStoc
     if (isAppError(err)) throw err;
 
     // map lock/tx contention errors to a stable 409 for clients
-    if (isRetryableTxError(err)) throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+    if (isRetryableTxError(err)) throw new ResourceBusyError();
 
     throw new InternalError({ reason: 'STOCK_WRITE_OFF_UNEXPECTED' }, err);
   }

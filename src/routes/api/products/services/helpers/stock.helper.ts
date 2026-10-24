@@ -1,16 +1,20 @@
 import { Prisma } from '@prisma/client';
 
-import { getPgCode, getPgMessage } from '@db/client.js';
+import { getPgCode, getPgMessage, prisma } from '@db/client.js';
+import { setUserContext } from '@db/dbContext.service.js';
 import { freeUnits } from '@db/expiredStock.helper.js';
 import { shopToday } from '@helpers/shopDay.js';
 import { BadRequestError, ConflictError, NotFoundError, type AppError } from '@utils/errors.js';
 
 import type {
   DeliveryBodyDto,
+  StockProductRefDto,
   StockProductSummaryDto,
   WriteOffBodyDto,
   WriteOffReason,
 } from 'types/dto/products.dto.js';
+import type { ProductId, UserId } from 'types/ids.js';
+import type { Role } from 'types/user.js';
 
 // a delivery takes in a batch of each of its items at its cost of a unit, in the currency of the
 // shop; a write-off takes free units of a product, from the batch named or from the batches in
@@ -30,6 +34,41 @@ export type DeliveryItem = {
   expiresAt: string | null;
   supplierBatchNumber: string | null;
 };
+
+// the items of a request with the id of their product: an item that names its product by the
+// article number gets the id of the product of the catalog that has it, whatever the case of its
+// letters. Numbers no product of the catalog has are 404 PRODUCT_NOT_FOUND with details.skus, and
+// nothing is taken in or written off
+export async function withProductIds<T extends object>(
+  items: Array<T & StockProductRefDto>,
+  actor: { actorId: UserId; actorRole: Role },
+): Promise<Array<T & { productId: ProductId }>> {
+  const skus = [
+    ...new Set(items.flatMap((item) => (item.sku === undefined ? [] : [item.sku.trim()]))),
+  ];
+  if (!skus.length) return items as Array<T & { productId: ProductId }>;
+
+  const rows = await prisma.$transaction(async (tx) => {
+    await setUserContext(tx, { userId: actor.actorId, role: actor.actorRole });
+    return tx.$queryRaw<{ id: number; sku: string }[]>`
+      select id, lower(sku) as sku
+      from cartlify.products
+      where "deletedAt" is null and lower(sku) = any(${skus.map((sku) => sku.toLowerCase())}::text[])
+    `;
+  });
+  const idOf = new Map(rows.map((row) => [row.sku, row.id]));
+
+  const missing = skus.filter((sku) => !idOf.has(sku.toLowerCase()));
+  if (missing.length) throw new NotFoundError('PRODUCT_NOT_FOUND', { skus: missing });
+
+  return items.map((item) => {
+    if (item.sku === undefined) return item as T & { productId: ProductId };
+    const { sku, ...rest } = item;
+    return { ...rest, productId: idOf.get(sku.trim().toLowerCase())! } as unknown as T & {
+      productId: ProductId;
+    };
+  });
+}
 
 export function normalizeDeliveryInput(input: DeliveryBodyDto, now = new Date()) {
   // the last good day by the calendar of the shop
@@ -114,12 +153,15 @@ const sumBy = <K>(entries: [K, number][]) => {
 
 // the products and batches of a write-off, read under the lock of the products: every item names
 // a product there is, a batch of that product, and asks no more than is free; the waiting orders
-// hold their units. Every product and batch short of units is named, the lines of one counted
-// together
+// hold their units, and only good ones: the good batches named by the items give no more than the
+// good units no order holds (the units that are over, and the units without a batch, which take
+// the ones that are over first, leave the reserve as it is). Every product and batch short of
+// units is named, the lines of one counted together
 export function assertWriteOffFits(args: {
   items: WriteOffItem[];
   products: Map<number, { stock: number; reservedStock: number }>;
-  batches: Map<number, { productId: number; remaining: number }>;
+  batches: Map<number, { productId: number; remaining: number; expired: boolean }>;
+  expired: Map<number, number>;
 }): void {
   for (const item of args.items) {
     if (!args.products.has(item.productId)) {
@@ -131,11 +173,24 @@ export function assertWriteOffFits(args: {
   }
 
   const byProduct = sumBy(args.items.map((item) => [item.productId, item.quantity]));
+  const fromGoodBatches = sumBy(
+    args.items.flatMap((item): [number, number][] =>
+      item.batchId !== null && !args.batches.get(item.batchId)!.expired
+        ? [[item.productId, item.quantity]]
+        : [],
+    ),
+  );
   const shortProducts = [...byProduct]
     .sort(([a], [b]) => a - b)
     .map(([productId, requested]) => {
       const { stock, reservedStock } = args.products.get(productId)!;
-      return { productId, available: Math.max(0, stock - reservedStock), requested };
+      const free = { productId, available: Math.max(0, stock - reservedStock), requested };
+      if (free.requested > free.available) return free;
+
+      // the good units of the named good batches
+      const good = fromGoodBatches.get(productId) ?? 0;
+      const goodFree = Math.max(0, stock - (args.expired.get(productId) ?? 0) - reservedStock);
+      return { productId, available: goodFree, requested: good };
     })
     .filter((line) => line.requested > line.available);
   if (shortProducts.length) {

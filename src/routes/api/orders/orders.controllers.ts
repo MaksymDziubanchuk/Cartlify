@@ -22,6 +22,8 @@ import type {
   OrderItemParamsDto,
   CancelOrderDto,
   CancelledOrderResponseDto,
+  UpdateOrdersStatusBodyDto,
+  UpdateOrdersStatusResponseDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
@@ -111,7 +113,21 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
 
-  const { limit, cursor, status, confirmed, paidFrom, paidTo, sortBy, sortDir } = req.query;
+  const {
+    limit,
+    cursor,
+    status,
+    statuses,
+    confirmed,
+    paidFrom,
+    paidTo,
+    productId,
+    userId,
+    q,
+    format,
+    sortBy,
+    sortDir,
+  } = req.query;
 
   const args = pickDefined<FindOrdersDto>(
     {
@@ -125,14 +141,45 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     {
       cursor,
       status,
+      statuses,
       confirmed,
       // the schema let through date-times only
       paidFrom: paidFrom ? new Date(paidFrom) : undefined,
       paidTo: paidTo ? new Date(paidTo) : undefined,
+      productId,
+      userId,
+      q,
+      format,
     },
   );
 
+  // every order of the filters as a file for the courier
+  if (format === 'csv') {
+    const file = await ordersServices.findOrdersCsv(args);
+    return reply
+      .code(200)
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', `attachment; filename="${file.fileName}"`)
+      .send(file.body as never);
+  }
+
   const result = await ordersServices.findOrders(args);
+  return reply.code(200).send(result);
+};
+
+// one step of shipping for many orders, each in a transaction of its own
+const postOrdersStatus: ControllerRouter<
+  {},
+  UpdateOrdersStatusBodyDto,
+  {},
+  UpdateOrdersStatusResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const result = await ordersServices.updateOrdersStatus(
+    { actorId, actorRole, orderIds: req.body.orderIds, status: req.body.status },
+    req.log,
+  );
   return reply.code(200).send(result);
 };
 
@@ -257,6 +304,7 @@ export const ordersController = {
   getOrders,
   getOrderById,
   putOrderStatus,
+  postOrdersStatus,
 
   postOrderItems,
   patchOrderItems,

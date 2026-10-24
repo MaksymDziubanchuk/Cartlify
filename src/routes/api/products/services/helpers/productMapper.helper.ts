@@ -1,9 +1,14 @@
 import { freeUnits } from '@db/expiredStock.helper.js';
+import { parseProductDescription } from '@helpers/productDescription.js';
 import { saleFieldsOf } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 
-import type { FullProductResponseDto, ProductResponseDto } from 'types/dto/products.dto.js';
+import type {
+  FullProductResponseDto,
+  ProductCategoryDto,
+  ProductResponseDto,
+} from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
 
 // a buyer (guest, user) sees what helps to buy a product; an admin (admin, root) sees the counters,
@@ -19,9 +24,11 @@ export const productResponseSelect = {
   id: true,
   name: true,
   description: true,
+  sku: true,
   price: true,
   salePrice: true,
   saleEndsAt: true,
+  salePriorPrice: true,
   stock: true,
   reservedStock: true,
   categoryId: true,
@@ -41,9 +48,11 @@ export type ProductResponseRow = {
   id: number;
   name: string;
   description: string | null;
+  sku: string | null;
   price: unknown;
   salePrice: unknown;
   saleEndsAt: Date | null;
+  salePriorPrice: unknown;
   stock: number;
   reservedStock: number;
   // the units of batches that are over (expiredUnitsOf): not sold, so no free units
@@ -60,12 +69,19 @@ export type ProductResponseRow = {
   updatedAt: Date;
 };
 
+const descriptionTextOf = (raw: string | null) => {
+  const { text } = parseProductDescription(raw);
+  return text ? { description: text } : {};
+};
+
 // what every role sees of a product, without its images
 export function buyerFieldsOf(product: ProductResponseRow): Omit<ProductResponseDto, 'images'> {
   return {
     id: product.id as any,
     name: product.name,
-    ...(product.description ? { description: product.description } : {}),
+    // the text of the description, without the safety data it keeps (the card gives them)
+    ...descriptionTextOf(product.description),
+    sku: product.sku,
     price: decimalToNumber(product.price),
     // the sale next to the price while it lasts, a sale that is over is left out
     ...saleFieldsOf(product),
@@ -101,6 +117,7 @@ export function adminFieldsOf(
   | 'popularityOverrideUntil'
   | 'salePrice'
   | 'saleEndsAt'
+  | 'salePriorPrice'
   | 'deletedAt'
 > {
   return {
@@ -116,21 +133,28 @@ export function adminFieldsOf(
       : null,
     salePrice: product.salePrice === null ? null : decimalToNumber(product.salePrice),
     saleEndsAt: product.saleEndsAt ? product.saleEndsAt.toISOString() : null,
+    salePriorPrice: product.salePriorPrice == null ? null : decimalToNumber(product.salePriorPrice),
     deletedAt: product.deletedAt ? product.deletedAt.toISOString() : null,
   };
 }
 
-// the card of a product page; a buyer gets no popularity in it, the list shows it
+// the card of a product page; a buyer gets no popularity in it, the list shows it. Its category
+// names the way to it from the top of the tree (readCategoryPath)
 export function mapProductRowToResponse(args: {
   product: ProductResponseRow;
   images: Array<{ url: string; position: number }>;
+  categoryPath: ProductCategoryDto[];
   view: ProductView;
 }): FullProductResponseDto {
-  const { product, images, view } = args;
+  const { product, images, categoryPath, view } = args;
+  const fields = buyerFieldsOf(product);
 
   return {
-    ...buyerFieldsOf(product),
+    ...fields,
+    category: { ...fields.category, path: categoryPath },
     images: images.map((r) => buildImageUrls(r.url, 'product')),
+    // the safety and origin data an offer shows (GPSR), null for a product from before them
+    safety: parseProductDescription(product.description).safety,
     ...(view === 'admin' ? adminFieldsOf(product) : {}),
   };
 }

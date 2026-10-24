@@ -198,6 +198,26 @@ describe('DELETE /api/users/:userId/avatar', () => {
   });
 
   // the same count and the same limit for an admin: root moderates the avatars of the admins
+  // the second moderator found the avatar before the first took it: two strikes and two mails
+  // for one avatar
+  it('counts, writes and mails one removal when two moderators take the same avatar at once', async () => {
+    for (let round = 0; round < 3; round += 1) {
+      const { user } = await userWithAvatar();
+      const mails = watchMail();
+
+      const answers = await Promise.all([
+        removeAvatar(user.id, admin),
+        removeAvatar(user.id, root),
+      ]);
+
+      expect(answers.map((res) => res.statusCode)).toEqual([200, 200]);
+      expect(answers.map((res) => res.json().removed).sort()).toEqual([false, true]);
+      expect(answers.map((res) => res.json().avatarRemovals)).toEqual([1, 1]);
+      expect(await journalOf(user.id)).toHaveLength(1);
+      expect(mails.filter((mail) => mail.to.includes(user.email))).toHaveLength(1);
+    }
+  });
+
   it('lets root take the avatar of an admin, counted and mailed the same way', async () => {
     const { user } = await userWithAvatar({ role: 'ADMIN' });
     const mails = watchMail();

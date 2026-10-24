@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -9,12 +9,14 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  receiveBatch,
   stockOf,
   writeOffStock,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
+import { watchMail } from '../../../helpers/mail.js';
 import { loseReservation, orderRowOf, placeOrder } from '../../../helpers/orders.js';
 import {
   deleteOrderAsOwner,
@@ -26,7 +28,6 @@ import {
 import {
   closeOpenSessions,
   deliver,
-  describeWithStripe,
   openForeignSession,
   refundAtStripe,
   refundsOf,
@@ -37,8 +38,9 @@ import {
 
 // POST /api/payments/stripe/webhook with a payment the order cannot take: the stock is gone, another
 // payment paid it, the items changed, the order is gone. The money goes back in full at Stripe
-// for real and the refund is recorded in the admin audit log for the buyer, once per payment.
-// The buyer paid a page of the test sandbox with a test card, the test delivers the event
+// and the refund is recorded in the admin audit log for the buyer, once per payment. The buyer
+// paid the page with a test card (the Stripe mock, or the test sandbox with service:stripe), the
+// test delivers the event
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -112,7 +114,7 @@ afterAll(async () => {
   }
 });
 
-describeWithStripe('POST /api/payments/stripe/webhook: a payment the order cannot take', () => {
+describe('POST /api/payments/stripe/webhook: a payment the order cannot take', () => {
   it('returns a late payment in full when the stock is gone', async () => {
     const { user, product, orderId, paymentId, event } = await paymentAfterTheStockIsGone();
 
@@ -228,6 +230,21 @@ describeWithStripe('POST /api/payments/stripe/webhook: a payment the order canno
     ]);
   });
 
+  // the return page of stripe said paid: without a mail the buyer waits for an order that never comes
+  it('mails the buyer once that the payment went back and why', async () => {
+    const { orderId, event } = await paymentAfterTheStockIsGone();
+    const mails = watchMail();
+
+    await deliver(app, event);
+    await deliver(app, event);
+
+    expect(mails.map((mail) => mail.subject)).toEqual([
+      `Cartlify — The payment for order #${orderId} is refunded`,
+    ]);
+    expect(mails[0]!.text).toContain('Your payment of €51.00');
+    expect(mails[0]!.text).toContain('some items of it were no longer in stock');
+  });
+
   it('returns the money once and records it once when Stripe delivers the event again', async () => {
     const { orderId, paymentId, event } = await paymentAfterTheStockIsGone();
 
@@ -235,6 +252,27 @@ describeWithStripe('POST /api/payments/stripe/webhook: a payment the order canno
     const again = await deliver(app, event);
 
     expect(again.statusCode).toBe(200);
+    expect(await refundsOf(paymentId)).toHaveLength(1);
+    expect(await refundAuditOf(orderId)).toHaveLength(1);
+  });
+
+  // the money of the payment went back; then the stock came back and Stripe delivered the event
+  // again: the order would take the payment the buyer already has back and go out without money
+  it('leaves a payment it gave back alone when Stripe delivers it again later', async () => {
+    const { product, orderId, paymentId, event } = await paymentAfterTheStockIsGone();
+    expect((await deliver(app, event)).statusCode).toBe(200);
+    await receiveBatch(product.id, { quantity: 5 });
+
+    const again = await deliver(app, event);
+
+    expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual({ received: true, skipped: 'REFUNDED' });
+    expect(await orderStateOf(orderId)).toMatchObject({
+      status: 'unconfirmed',
+      paymentProvider: null,
+      paymentId: null,
+    });
+    expect(await stockOf(product.id)).toEqual({ stock: 6, reservedStock: 0 });
     expect(await refundsOf(paymentId)).toHaveLength(1);
     expect(await refundAuditOf(orderId)).toHaveLength(1);
   });

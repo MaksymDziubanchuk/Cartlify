@@ -142,6 +142,7 @@ export async function googleCallback({
         userId: u.id,
         role: u.role as Role,
         rememberMe,
+        ...(userAgent ? { userAgent } : {}),
       });
 
       assertEmail(u.email);

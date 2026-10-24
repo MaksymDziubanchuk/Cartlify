@@ -159,13 +159,43 @@ describe('assertWriteOffFits', () => {
     [5, { stock: 1, reservedStock: 0 }],
   ]);
   const batches = new Map([
-    [11, { productId: 4, remaining: 2 }],
-    [12, { productId: 4, remaining: 3 }],
-    [21, { productId: 5, remaining: 1 }],
+    [11, { productId: 4, remaining: 2, expired: false }],
+    [12, { productId: 4, remaining: 3, expired: false }],
+    [21, { productId: 5, remaining: 1, expired: false }],
   ]);
 
   const fits = (items: { productId: number; quantity: number; batchId: number | null }[]) => () =>
-    assertWriteOffFits({ items, products, batches });
+    assertWriteOffFits({ items, products, batches, expired: new Map() });
+
+  // 10 in stock: 5 of a batch that is over, 5 of a good one; a waiting order holds 5, good ones
+  describe('with a batch that is over', () => {
+    const stock = new Map([[7, { stock: 10, reservedStock: 5 }]]);
+    const twoBatches = new Map([
+      [71, { productId: 7, remaining: 5, expired: true }],
+      [72, { productId: 7, remaining: 5, expired: false }],
+    ]);
+    const fitsOver =
+      (items: { productId: number; quantity: number; batchId: number | null }[]) => () =>
+        assertWriteOffFits({
+          items,
+          products: stock,
+          batches: twoBatches,
+          expired: new Map([[7, 5]]),
+        });
+
+    it('refuses the good batch the reserve needs, naming the good units left free', () => {
+      expect(thrownBy(fitsOver([{ productId: 7, quantity: 5, batchId: 72 }]))).toMatchObject({
+        statusCode: 409,
+        errorCode: 'INSUFFICIENT_AVAILABLE_STOCK',
+        details: { products: [{ productId: 7, available: 0, requested: 5 }] },
+      });
+    });
+
+    it('writes off the batch that is over, and units without a batch, which take it first', () => {
+      expect(fitsOver([{ productId: 7, quantity: 5, batchId: 71 }])).not.toThrow();
+      expect(fitsOver([{ productId: 7, quantity: 5, batchId: null }])).not.toThrow();
+    });
+  });
 
   it('lets through what the free units and the batches hold', () => {
     expect(
@@ -254,5 +284,45 @@ describe('stockSummaryOf', () => {
       { id: 7, stock: 2, totalStock: 5, reservedStock: 2, expiredStock: 1 },
       { id: 9, stock: 0, totalStock: 4, reservedStock: 3, expiredStock: 2 },
     ]);
+  });
+});
+
+describe('the order of the steps and of the shortages', () => {
+  it('keeps the items of one product in the order of the request', () => {
+    const steps = deliverySteps([
+      { productId: 5, quantity: 1 },
+      { productId: 5, quantity: 2 },
+      { productId: 5, quantity: 3 },
+      { productId: 5, quantity: 4 },
+      { productId: 5, quantity: 5 },
+    ]);
+
+    expect(steps.map((step) => step.index)).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('names the batches that have too few units by their ids', () => {
+    const err = thrownBy(() =>
+      assertWriteOffFits({
+        items: [
+          { productId: 4, quantity: 2, batchId: 13 },
+          { productId: 4, quantity: 2, batchId: 11 },
+          { productId: 4, quantity: 2, batchId: 12 },
+        ],
+        products: new Map([[4, { stock: 100, reservedStock: 0 }]]),
+        batches: new Map([
+          [11, { productId: 4, remaining: 1, expired: false }],
+          [12, { productId: 4, remaining: 1, expired: false }],
+          [13, { productId: 4, remaining: 1, expired: false }],
+        ]),
+        expired: new Map(),
+      }),
+    );
+
+    expect(err).toMatchObject({ errorCode: 'BATCH_INSUFFICIENT' });
+    expect(
+      (err as { details: { batches: { batchId: number }[] } }).details.batches.map(
+        (b) => b.batchId,
+      ),
+    ).toEqual([11, 12, 13]);
   });
 });

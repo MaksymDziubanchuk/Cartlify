@@ -1,10 +1,13 @@
-import { FastifyRequest, preHandlerHookHandler } from 'fastify';
+import { FastifyRequest } from 'fastify';
 import { BadRequestError } from '@utils/errors.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
+// the guard knows its parameter, so the swagger document names INVALID_ID_PARAM for it
+export type IdGuard = ((req: FastifyRequest) => Promise<void>) & { readonly idParam: string };
+
 // validate numeric id param
-export default function validateId(paramName: string): preHandlerHookHandler {
-  return async function (req: FastifyRequest): Promise<void> {
+export default function validateId(paramName: string): IdGuard {
+  const guard = async function (req: FastifyRequest): Promise<void> {
     const value = (req.params as Record<string, unknown>)[paramName];
 
     // a route with a params schema hands over a number already coerced by ajv;
@@ -22,4 +25,6 @@ export default function validateId(paramName: string): preHandlerHookHandler {
       throw new BadRequestError('INVALID_ID_PARAM');
     }
   };
+
+  return Object.assign(guard, { idParam: paramName });
 }

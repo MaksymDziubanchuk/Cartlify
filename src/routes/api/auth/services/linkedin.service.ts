@@ -146,6 +146,7 @@ export async function linkedInCallback({
         userId: u.id,
         role: u.role as Role,
         rememberMe,
+        ...(userAgent ? { userAgent } : {}),
       });
 
       assertEmail(u.email);

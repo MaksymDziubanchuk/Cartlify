@@ -91,6 +91,23 @@ export const createAiEmptyResponseError = (
     );
 };
 
+// the provider cut the answer short (the output limit, the content filter): its text is a piece,
+// and the same request is cut the same way again, so it is not retried
+export const createAiIncompleteResponseError = (
+    provider: AiProviderName,
+    reason: string,
+    cause?: unknown,
+): AiServiceError => {
+    return createAiError(
+        provider,
+        'AI_INCOMPLETE_RESPONSE',
+        `AI provider cut the answer short: ${reason}.`,
+        null,
+        false,
+        cause,
+    );
+};
+
 // provider response body does not match the format expected by our wrapper
 export const createAiInvalidResponseFormatError = (
     provider: AiProviderName,

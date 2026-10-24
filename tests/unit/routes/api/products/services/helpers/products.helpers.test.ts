@@ -3,9 +3,13 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   assertPopularityOverridePair,
+  isPrice,
+  isSkuTaken,
+  MAX_PRICE,
   normalizeBulkUpdateProductsPriceInput,
   normalizeCreateProductInput,
   normalizeFindProductByIdInput,
+  normalizeSku,
   normalizeUpdateProductInput,
 } from '@routes/api/products/services/helpers/products.helpers.js';
 import { BadRequestError } from '@utils/errors.js';
@@ -20,6 +24,102 @@ const codeOf = (fn: () => unknown) => {
 };
 
 const validProduct = { name: 'Desk lamp', price: 25.5, categoryId: 3 };
+
+// a price is whole cents from 0 up to what numeric(10, 2) holds
+describe('isPrice', () => {
+  it.each([0, 0.01, 10.01, 25.5, 19.99, MAX_PRICE])('takes %p', (value) => {
+    expect(isPrice(value)).toBe(true);
+  });
+
+  it.each([
+    ['a part of a cent', 10.004],
+    ['a half of a cent', 0.005],
+    ['a cent above the highest price', MAX_PRICE + 0.01],
+    ['a price below 0', -0.01],
+    ['no number', Number.NaN],
+    ['an endless number', Number.POSITIVE_INFINITY],
+  ])('refuses %s', (_case, value) => {
+    expect(isPrice(value)).toBe(false);
+  });
+});
+
+// the article number: trimmed, an empty one is none, up to 64 signs (a form is not checked by the
+// schema)
+describe('normalizeSku', () => {
+  it('keeps a number trimmed and takes an empty one as none', () => {
+    expect(normalizeSku('  AB-12 ')).toBe('AB-12');
+    expect(normalizeSku('   ')).toBeNull();
+    expect(normalizeSku(null)).toBeNull();
+    expect(normalizeSku(undefined)).toBeUndefined();
+  });
+
+  // the signs are code points, as the json schema counts them
+  it('takes 64 signs and refuses 65', () => {
+    expect(normalizeSku('😀'.repeat(64))).toBe('😀'.repeat(64));
+    expect(codeOf(() => normalizeSku('x'.repeat(65)))).toBe('PRODUCT_SKU_TOO_LONG');
+  });
+});
+
+describe('isSkuTaken', () => {
+  const unique = (meta: Record<string, unknown>) =>
+    new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta,
+    });
+
+  it('names the unique index of the article number only', () => {
+    expect(
+      isSkuTaken(
+        unique({
+          driverAdapterError: { cause: { constraint: { index: 'products_sku_catalog_uidx' } } },
+        }),
+      ),
+    ).toBe(true);
+    expect(isSkuTaken(unique({ target: ['id'] }))).toBe(false);
+    expect(isSkuTaken(new Error('products_sku_catalog_uidx'))).toBe(false);
+  });
+
+  // a raw query fails with P2010 and the code of postgres inside (getPgCode)
+  it('takes the unique error of postgres from a raw query', () => {
+    const raw = new Prisma.PrismaClientKnownRequestError('Raw query failed', {
+      code: 'P2010',
+      clientVersion: 'test',
+      meta: {
+        driverAdapterError: {
+          cause: {
+            originalCode: '23505',
+            originalMessage: 'duplicate key value violates "products_sku_catalog_uidx"',
+          },
+        },
+      },
+    });
+
+    expect(isSkuTaken(raw)).toBe(true);
+  });
+
+  it('finds the index named in the text of the error when the details do not name it', () => {
+    const named = new Prisma.PrismaClientKnownRequestError(
+      'Unique constraint failed on the constraint: `products_sku_catalog_uidx`',
+      { code: 'P2002', clientVersion: 'test', meta: {} },
+    );
+
+    expect(isSkuTaken(named)).toBe(true);
+  });
+
+  it('takes no other error of prisma, and no error that only looks like one', () => {
+    const other = new Prisma.PrismaClientKnownRequestError('Foreign key failed', {
+      code: 'P2003',
+      clientVersion: 'test',
+      meta: { constraint: 'products_sku_catalog_uidx' },
+    });
+
+    expect(isSkuTaken(other)).toBe(false);
+    expect(
+      isSkuTaken(Object.assign(new Error('products_sku_catalog_uidx'), { code: 'P2002' })),
+    ).toBe(false);
+  });
+});
 
 describe('normalizeFindProductByIdInput', () => {
   it('accepts a positive integer or its string form', () => {
@@ -86,6 +186,8 @@ describe('normalizeCreateProductInput', () => {
     ['the price is blank', { price: '  ' }, 'PRODUCT_PRICE_INVALID'],
     ['the category is zero', { categoryId: 0 }, 'CATEGORY_ID_INVALID'],
     ['the category is missing', { categoryId: undefined }, 'CATEGORY_ID_INVALID'],
+    ['the category is a fraction', { categoryId: 1.5 }, 'CATEGORY_ID_INVALID'],
+    ['the price has a part of a cent', { price: 10.004 }, 'PRODUCT_PRICE_INVALID'],
   ])('throws when %s', (_case, patch, code) => {
     expect(codeOf(() => normalizeCreateProductInput({ ...validProduct, ...patch }))).toBe(code);
   });
@@ -106,6 +208,41 @@ describe('normalizeUpdateProductInput', () => {
   // the stock changes only with a delivery or a write-off
   it.each([-3, 5, 0])('refuses a stock of %p', (stock) => {
     expect(codeOf(() => normalizeUpdateProductInput({ stock }))).toBe('PRODUCT_STOCK_NOT_ALLOWED');
+  });
+
+  // a form sends every field as text: the numbers come out as numbers, the texts trimmed
+  it('gives back each field sent, a number as a number and a text trimmed', () => {
+    const until = new Date(Date.now() + 86_400_000).toISOString();
+
+    expect(
+      normalizeUpdateProductInput({
+        name: '  Floor lamp ',
+        description: '  Warm light  ',
+        price: '12.50',
+        categoryId: '4',
+        popularityOverride: '7',
+        popularityOverrideUntil: until,
+      }),
+    ).toEqual({
+      nameNorm: 'Floor lamp',
+      descriptionNorm: 'Warm light',
+      priceRaw: 12.5,
+      categoryIdRaw: 4,
+      popularityOverrideRaw: 7,
+      popularityOverrideUntilDate: new Date(until),
+    });
+  });
+
+  // an empty description clears the text, the service writes it as none
+  it('gives an empty description back as an empty text', () => {
+    expect(normalizeUpdateProductInput({ description: '   ' }).descriptionNorm).toBe('');
+  });
+
+  it('takes a free product and a popularity override of 0', () => {
+    expect(normalizeUpdateProductInput({ price: 0, popularityOverride: 0 })).toMatchObject({
+      priceRaw: 0,
+      popularityOverrideRaw: 0,
+    });
   });
 
   it('clears the popularity override with null', () => {
@@ -142,7 +279,14 @@ describe('normalizeUpdateProductInput', () => {
   it.each([
     ['the name is blank', { name: ' ' }, 'PRODUCT_NAME_INVALID'],
     ['the price is negative', { price: -0.01 }, 'PRODUCT_PRICE_INVALID'],
+    ['the price is a word', { price: 'cheap' }, 'PRODUCT_PRICE_INVALID'],
+    ['the price has a part of a cent', { price: '10.004' }, 'PRODUCT_PRICE_INVALID'],
+    ['the price is above the highest one', { price: MAX_PRICE + 1 }, 'PRODUCT_PRICE_INVALID'],
     ['the category is negative', { categoryId: -4 }, 'CATEGORY_ID_INVALID'],
+    ['the category is zero', { categoryId: 0 }, 'CATEGORY_ID_INVALID'],
+    ['the category is a fraction', { categoryId: 2.5 }, 'CATEGORY_ID_INVALID'],
+    ['the category is a word', { categoryId: 'shoes' }, 'CATEGORY_ID_INVALID'],
+    ['the override is a word', { popularityOverride: 'high' }, 'POPULARITY_OVERRIDE_INVALID'],
     ['the override is negative', { popularityOverride: -1 }, 'POPULARITY_OVERRIDE_INVALID'],
     ['the override is a fraction', { popularityOverride: 1.5 }, 'POPULARITY_OVERRIDE_INVALID'],
     [
@@ -252,17 +396,19 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
       },
     });
 
+    // in stock is counted in free units, the stock less the reserve and the units over: the
+    // service counts them on the rows, a filter of prisma has no word for it
     expect(out).toEqual({
       mode: 'fixed',
       value: -2,
       dryRun: true,
       reason: 'winter sale',
+      inStock: true,
       where: {
         AND: [
           { categoryId: 4 },
           { id: { in: [3, 8] } },
           { price: { gte: new Prisma.Decimal(10), lte: new Prisma.Decimal(50) } },
-          { stock: { gt: 0 } },
           { deletedAt: null },
         ],
       },
@@ -280,6 +426,51 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
     ).toBe('BULK_PRICE_PERCENT_TOO_LOW');
   });
 
+  // a lowering in money below 100 is no percent: only a percent stops at -100
+  it('lets a fixed change go below -100', () => {
+    expect(normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: -150 }).value).toBe(-150);
+  });
+
+  it('takes a price of 0 as a bound, and one bound alone', () => {
+    expect(
+      normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, scope: { minPrice: 0 } })
+        .where,
+    ).toEqual({ AND: [{ price: { gte: new Prisma.Decimal(0) } }, { deletedAt: null }] });
+    expect(
+      normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, scope: { maxPrice: 0 } })
+        .where,
+    ).toEqual({ AND: [{ price: { lte: new Prisma.Decimal(0) } }, { deletedAt: null }] });
+  });
+
+  it('takes the same lowest and highest price', () => {
+    expect(
+      normalizeBulkUpdateProductsPriceInput({
+        mode: 'fixed',
+        value: 1,
+        scope: { minPrice: 10, maxPrice: 10 },
+      }).where,
+    ).toEqual({
+      AND: [
+        { price: { gte: new Prisma.Decimal(10), lte: new Prisma.Decimal(10) } },
+        { deletedAt: null },
+      ],
+    });
+  });
+
+  // in stock is a yes or a no, another value is no filter at all
+  it('passes in stock on only when it is true or false', () => {
+    expect(
+      normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, scope: { inStock: false } })
+        .inStock,
+    ).toBe(false);
+    expect(
+      normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, scope: { inStock: 'yes' } }),
+    ).not.toHaveProperty('inStock');
+    expect(normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1 })).not.toHaveProperty(
+      'inStock',
+    );
+  });
+
   it('treats only a real true as a dry run', () => {
     expect(
       normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, dryRun: 'true', scope: {} })
@@ -290,10 +481,17 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
   it.each([
     ['the mode is unknown', { mode: 'double' }, 'BULK_PRICE_MODE_INVALID'],
     ['the value is not a number', { value: 'ten' }, 'BULK_PRICE_VALUE_INVALID'],
+    ['the value is endless', { value: Number.POSITIVE_INFINITY }, 'BULK_PRICE_VALUE_INVALID'],
     ['the category is invalid', { scope: { categoryId: 0 } }, 'CATEGORY_ID_INVALID'],
+    ['the category is a fraction', { scope: { categoryId: 1.5 } }, 'CATEGORY_ID_INVALID'],
     ['a product id is invalid', { scope: { productIds: [1, -2] } }, 'PRODUCT_IDS_INVALID'],
+    ['a product id is 0', { scope: { productIds: [0] } }, 'PRODUCT_IDS_INVALID'],
+    ['a product id is a fraction', { scope: { productIds: [1.5] } }, 'PRODUCT_IDS_INVALID'],
+    ['a product id is a word', { scope: { productIds: ['x'] } }, 'PRODUCT_IDS_INVALID'],
     ['the min price is negative', { scope: { minPrice: -1 } }, 'MIN_PRICE_INVALID'],
+    ['the min price is a word', { scope: { minPrice: 'low' } }, 'MIN_PRICE_INVALID'],
     ['the max price is negative', { scope: { maxPrice: -1 } }, 'MAX_PRICE_INVALID'],
+    ['the max price is a word', { scope: { maxPrice: 'high' } }, 'MAX_PRICE_INVALID'],
     [
       'the price range is reversed',
       { scope: { minPrice: 20, maxPrice: 10 } },

@@ -51,6 +51,45 @@ export const categoriesListResponseSchema = {
   required: ['items', 'limit'],
 } as const;
 
+// a category of the tree with the categories below it, the same shape on every level
+const categoryTreeNodeSchema = {
+  $id: 'categoryTreeNodeSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'integer' },
+    name: { type: 'string' },
+    slug: { type: 'string' },
+    productCount: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'The products the catalog lists in the category and in every category below it: the ones ' +
+        'taken out of the catalog and the ones without an image are not counted.',
+    },
+    children: {
+      type: 'array',
+      description: 'The categories right below it, by name.',
+      items: { $ref: 'categoryTreeNodeSchema#' },
+    },
+  },
+  required: ['id', 'name', 'slug', 'productCount', 'children'],
+} as const;
+
+const categoryTreeResponseSchema = {
+  $id: 'categoryTreeResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      description: 'The categories at the top of the tree, by name.',
+      items: { $ref: 'categoryTreeNodeSchema#' },
+    },
+  },
+  required: ['items'],
+} as const;
+
 const categoriesCreateBodySchema = {
   $id: 'categoriesCreateBodySchema',
   type: 'object',
@@ -134,6 +173,8 @@ export const categoriesDtoSchemas = [
   categoriesGetQuerySchema,
   categoriesCategoryResponseSchema,
   categoriesListResponseSchema,
+  categoryTreeNodeSchema,
+  categoryTreeResponseSchema,
   categoriesCreateBodySchema,
   categoriesCreateResponseSchema,
   categoriesUpdateParamsSchema,

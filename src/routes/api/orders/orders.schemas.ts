@@ -148,11 +148,11 @@ const getCurrentOrderSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Current order was not found.',
+      description: '`CURRENT_ORDER_NOT_FOUND`: the user has no cart yet, the first item makes one.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order is being changed by another request, try again.',
+      description: '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -194,11 +194,15 @@ const postCurrentItemsSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product or current order was not found.',
+      description:
+        '`PRODUCT_NOT_FOUND`: the product does not exist or is removed from the catalog, `details.productId`.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order state or product stock does not allow adding this item.',
+      description:
+        '`OUT_OF_STOCK`: fewer free units than the cart would hold, `details: { productId, available, requested }`. ' +
+        '`ORDER_NOT_EDITABLE`: another request confirmed the cart meanwhile. ' +
+        '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -257,11 +261,16 @@ const patchCurrentItemsSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Current order item was not found.',
+      description:
+        '`ORDER_ITEM_NOT_FOUND`: no such item in the cart, `details.itemId`. ' +
+        '`PRODUCT_NOT_FOUND`: the product of the item was removed from the catalog, remove the item.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order state or product stock does not allow updating this item.',
+      description:
+        '`OUT_OF_STOCK`: fewer free units than the new quantity, `details: { productId, available, requested }`. ' +
+        '`ORDER_NOT_EDITABLE`: another request confirmed the cart meanwhile. ' +
+        '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -309,11 +318,13 @@ const deleteCurrentItemsSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Current order item was not found.',
+      description: '`ORDER_ITEM_NOT_FOUND`: no such item in the cart, `details.itemId`.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order state does not allow deleting this item.',
+      description:
+        '`ORDER_NOT_EDITABLE`: another request confirmed the cart meanwhile. ' +
+        '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -364,7 +375,9 @@ const postCurrentConfirmSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Current order or order items were not found.',
+      description:
+        '`ORDER_NOT_FOUND`: there is no cart, or no own unconfirmed order with the `orderId` of the body. ' +
+        '`PRODUCT_NOT_FOUND`: a product of the order is gone from the catalog.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -372,7 +385,9 @@ const postCurrentConfirmSchema = {
         'Order state, product stock or changed item prices do not allow confirmation. ' +
         '`ORDER_ITEMS_UNAVAILABLE`: some items cannot be confirmed, `details.items` names each: ' +
         '`{ itemId, productId, reason: deleted | out_of_stock, available, requested }`; the owner removes or changes them and confirms again. ' +
-        '`ORDER_PRICES_CHANGED`: reload the order and confirm again. `ORDER_ALREADY_CONFIRMED`: the order waits for its payment already.',
+        'The same code names the items when another buyer took the last free units at the same moment. ' +
+        '`ORDER_PRICES_CHANGED`: reload the order and confirm again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
+        '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -394,7 +409,8 @@ const getOrdersSchema = {
     'Returns orders visible to the authenticated user, admin or root role, newest first by default (`sortBy=createdAt`). ' +
     'The cart (`pending`) is not an order and is not listed, GET /api/orders/current gives it. ' +
     'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of products deleted from the catalog are removed from it. ' +
-    '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment.',
+    '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment. ' +
+    '`statuses` takes a few statuses, `productId` the orders that hold a product. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages.',
 
   querystring: {
     $ref: 'ordersGetQuerySchema#',
@@ -403,14 +419,25 @@ const getOrdersSchema = {
 
   response: {
     200: {
-      description: 'Orders were returned successfully.',
-      $ref: 'ordersListResponseSchema#',
-      examples: [ordersListResponseExample],
+      description: 'Orders were returned successfully; a csv file with format=csv.',
+      content: {
+        'application/json': {
+          schema: { $ref: 'ordersListResponseSchema#' },
+          examples: { orders: { value: ordersListResponseExample } },
+        },
+        'text/csv': {
+          schema: {
+            type: 'string',
+            description:
+              'Order, Status, Paid at, Buyer email, Recipient, Phone, Address, Items, Total.',
+          },
+        },
+      },
     },
 
     400: {
       description:
-        'Invalid orders query parameters, including `CURSOR_INVALID` and a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`).',
+        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`) and a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -418,7 +445,8 @@ const getOrdersSchema = {
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'The authenticated user is not allowed to read these orders.',
+      description:
+        'The authenticated user is not allowed to read these orders; a filter of the desk of an admin for a buyer (`FILTER_FORBIDDEN`, `details.filter`).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -462,11 +490,11 @@ const getOrderByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Order was not found.',
+      description: '`ORDER_NOT_FOUND`: no order with this id the user may read.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Order is being changed by another request, try again.',
+      description: '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -515,7 +543,7 @@ const patchOrderStatusSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Order was not found.',
+      description: '`ORDER_NOT_FOUND`: no order with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -526,6 +554,60 @@ const patchOrderStatusSchema = {
     },
     500: {
       description: 'Unexpected server error while updating order status.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for one step of shipping for many orders
+const postOrdersStatusSchema = {
+  operationId: 'updateOrdersStatus',
+  summary: 'Update the status of many orders',
+  description:
+    'Moves many orders one step: shipped (from paid) or delivered (from paid or shipped). Each ' +
+    'order goes on its own, in a transaction of its own, the way `PATCH /api/orders/{orderId}/status` ' +
+    'moves one: the admin log and the mail of each. A mail cannot be taken back, so an order that ' +
+    'cannot take the step does not stop the others: each order gets its answer. Admin and root only.',
+
+  body: {
+    $ref: 'ordersBulkStatusBodySchema#',
+    examples: [{ orderIds: [41, 42], status: 'shipped' }],
+  },
+
+  response: {
+    200: {
+      description: 'Each order with its answer.',
+      $ref: 'ordersBulkStatusResponseSchema#',
+      examples: [
+        {
+          results: [
+            { orderId: 41, ok: true, status: 'shipped' },
+            {
+              orderId: 42,
+              ok: false,
+              errorCode: 'ORDER_STATUS_TRANSITION_INVALID',
+              details: { status: 'waiting', requested: 'shipped' },
+            },
+          ],
+        },
+      ],
+    },
+    400: {
+      description:
+        'Invalid request (VALIDATION_ERROR): no orders or more than 100, an order named twice, ' +
+        'a status other than shipped or delivered.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to update order status.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while updating the orders.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -772,6 +854,7 @@ const taggedOrdersSchema = withOpenApiTag(
     getOrdersSchema,
     getOrderByIdSchema,
     patchOrderStatusSchema,
+    postOrdersStatusSchema,
     postOrderItemsSchema,
     patchOrderItemsSchema,
     deleteOrderItemsSchema,

@@ -3,6 +3,9 @@ import swaggerUi from '@fastify/swagger-ui';
 import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
+import authGuard, { authGuardWithoutRefresh } from '@middlewares/auth.js';
+import { isRateLimitFree } from '@helpers/rateLimitFree.js';
+
 import { requiresCsrfToken } from './csrf.plugin.js';
 
 import {
@@ -82,20 +85,148 @@ const withCsrfToken = (security?: readonly SecurityRequirement[]): SecurityRequi
         ? security.map((requirement) => ({ ...requirement, csrfTokenHeader: [] }))
         : [{ csrfTokenHeader: [] }];
 
-const CSRF_REFUSAL =
-    'CSRF_TOKEN_INVALID: the x-csrf-token header is missing or does not match the csrf cookie; ' +
-    'take a new token from GET /api/auth/csrf and repeat the request.';
+// A refusal that comes from a shared part of a route, not from its own code
+type Refusal = { status: string; code: string; text: string };
 
-// Every such route can also refuse a request for its csrf token, next to its own 403 reasons
-const withCsrfRefusal = (response: Record<string, unknown>): Record<string, unknown> => {
-    const forbidden = response['403'] as { description?: string } | undefined;
+type RouteHandlers = {
+    onRequest?: unknown;
+    preValidation?: unknown;
+    preHandler?: unknown;
+};
 
-    return {
-        ...response,
-        403: forbidden
-            ? { ...forbidden, description: `${forbidden.description ?? ''} Or ${CSRF_REFUSAL}`.trim() }
-            : { description: CSRF_REFUSAL, $ref: 'errorResponseSchema#' },
-    };
+const hooksOf = (route: RouteHandlers): unknown[] =>
+    [route.onRequest, route.preValidation, route.preHandler].flat().filter(Boolean);
+
+// validateId and requireRole mark the guards they build with what they check
+const idParamOf = (hook: unknown): string | undefined => {
+    const idParam = (hook as { idParam?: unknown } | null)?.idParam;
+    return typeof hook === 'function' && typeof idParam === 'string' ? idParam : undefined;
+};
+
+const allowedRolesOf = (hook: unknown): readonly string[] | undefined => {
+    const roles = (hook as { allowedRoles?: unknown } | null)?.allowedRoles;
+    return typeof hook === 'function' && Array.isArray(roles) ? (roles as string[]) : undefined;
+};
+
+// The refusals of the parts every route is built from: its request schema, the body parser, the
+// id and role guards, the session guard, the csrf check, the rate limit and the error handler.
+// They are written here once instead of in every route schema, and the contract check of the
+// integration tests (tests/helpers/contract.ts) holds every answer against them
+const sharedRefusals = (
+    url: string,
+    schema: Record<string, unknown>,
+    route: RouteHandlers,
+    needsCsrf: boolean,
+): Refusal[] => {
+    const hooks = hooksOf(route);
+    const refusals: Refusal[] = [];
+
+    if (schema.body || schema.querystring || schema.params || schema.headers) {
+        refusals.push({
+            status: '400',
+            code: 'VALIDATION_ERROR',
+            text: 'the request does not match the schema of the route; `details` names every field that failed (in, field, message).',
+        });
+    }
+    if (schema.body) {
+        refusals.push(
+            { status: '400', code: 'BAD_REQUEST', text: 'the body is not valid json.' },
+            {
+                status: '400',
+                code: 'TEXT_NUL_FORBIDDEN',
+                text: 'a text of the json body holds a NUL sign, which the database keeps in no text.',
+            },
+            { status: '413', code: 'PAYLOAD_TOO_LARGE', text: 'the json body is over 1 MB.' },
+            {
+                status: '415',
+                code: 'UNSUPPORTED_MEDIA_TYPE',
+                text: 'the body comes in a content type the route does not read.',
+            },
+        );
+    }
+    for (const param of hooks.map(idParamOf).filter((name) => name !== undefined)) {
+        refusals.push({
+            status: '400',
+            code: 'INVALID_ID_PARAM',
+            text: `\`${param}\` is not a whole number from 1 to 2147483647.`,
+        });
+    }
+    if (hooks.includes(authGuard)) {
+        refusals.push(
+            {
+                status: '401',
+                code: 'LOGIN_REQUIRED',
+                text: 'the session cookies are not valid any more (an expired or closed session); log in again.',
+            },
+            {
+                status: '503',
+                code: 'AUTH_TEMPORARILY_UNAVAILABLE',
+                text: 'the session could not be renewed right now, try again.',
+            },
+            {
+                status: '401',
+                code: 'ACCESS_TOKEN_EXPIRED',
+                text: 'the access cookie names a role the account no longer has (root changed it) and the rights refused the request; renew the session with POST /api/auth/refresh, a role change closes the sessions, so the person logs in again.',
+            },
+        );
+    }
+    if (hooks.includes(authGuardWithoutRefresh)) {
+        refusals.push({
+            status: '401',
+            code: 'ACCESS_TOKEN_EXPIRED',
+            text: 'the access cookie is missing or over while a session cookie is there; renew the session with POST /api/auth/refresh and connect again.',
+        });
+    }
+    for (const roles of hooks.map(allowedRolesOf).filter((list) => list !== undefined)) {
+        refusals.push({
+            status: '403',
+            code: 'INSUFFICIENT_ROLE',
+            text: `the route is for ${roles.join(', ')} only (a visitor without a login is GUEST).`,
+        });
+    }
+    if (needsCsrf) {
+        refusals.push({
+            status: '403',
+            code: 'CSRF_TOKEN_INVALID',
+            text: 'the x-csrf-token header is missing or does not match the csrf cookie; take a new token from GET /api/auth/csrf and repeat the request.',
+        });
+    }
+    if (!isRateLimitFree(url)) {
+        refusals.push({
+            status: '429',
+            code: 'RATE_LIMITED',
+            text: 'too many requests from this address in a minute; the retry-after header tells how many seconds to wait.',
+        });
+    }
+    refusals.push({
+        status: '500',
+        code: 'INTERNAL_ERROR',
+        text: 'an unexpected failure of the server; `reqId` of the answer finds it in the logs.',
+    });
+
+    return refusals;
+};
+
+// Each refusal goes into the description of its status next to the reasons of the route itself;
+// a status the route does not list yet gets the common error answer
+const withRefusals = (
+    response: Record<string, unknown>,
+    refusals: Refusal[],
+): Record<string, unknown> => {
+    const out: Record<string, unknown> = { ...response };
+
+    for (const { status, code, text } of refusals) {
+        const entry = out[status] as { description?: string } | undefined;
+        const line = `${code}: ${text}`;
+
+        if (!entry) {
+            out[status] = { description: line, $ref: 'errorResponseSchema#' };
+        } else if (!(entry.description ?? '').includes(code)) {
+            out[status] = { ...entry, description: `${entry.description ?? ''} ${line}`.trim() };
+        }
+    }
+
+    return out;
 };
 
 // Swagger UI runs in the browser, this function is copied into its page as source:
@@ -137,8 +268,11 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
             const needsCsrf = [route.method]
                 .flat()
                 .some((method) => requiresCsrfToken(method, route.config));
-            const ownResponse = schema.response as Record<string, unknown> | undefined;
-            const response = ownResponse && needsCsrf ? withCsrfRefusal(ownResponse) : ownResponse;
+            const ownResponse = (schema.response ?? {}) as Record<string, unknown>;
+            const response = withRefusals(
+                ownResponse,
+                sharedRefusals(url, schema as Record<string, unknown>, route, needsCsrf),
+            );
 
             return {
                 url,
@@ -163,16 +297,12 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
                         : route.config?.formBodySchema
                           ? { body: formOnlyBody(route.config.formBodySchema) }
                           : {}),
-                    ...(response
-                        ? {
-                              response: Object.fromEntries(
-                                  Object.entries(response).map(([statusCode, node]) => [
-                                      statusCode,
-                                      keepExamplesNextToRef(node),
-                                  ]),
-                              ),
-                          }
-                        : {}),
+                    response: Object.fromEntries(
+                        Object.entries(response).map(([statusCode, node]) => [
+                            statusCode,
+                            keepExamplesNextToRef(node),
+                        ]),
+                    ),
                 },
             };
         },

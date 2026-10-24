@@ -10,13 +10,16 @@ export const CLOUDINARY_PLACEHOLDERS = {
   CLOUDINARY_API_SECRET: 'test-api-secret',
 };
 
-// a key of the right form that Stripe does not know: without a test key nothing reaches Stripe
+// a key of the right form that Stripe does not know: the key of the Stripe mock of the tests, so
+// nothing reaches Stripe unless a run takes it for real with its test key
 export const STRIPE_PLACEHOLDER_KEY = 'sk_test_placeholder';
 
 const REQUIRED_AT_IMPORT: Record<string, string> = {
   JWT_ACCESS_SECRET: 'test-access-secret',
   JWT_REFRESH_SECRET: 'test-refresh-secret',
   STRIPE_SECRET_KEY: STRIPE_PLACEHOLDER_KEY,
+  // required when a test loads a module in production; a test without it sets it empty itself
+  STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
   ...CLOUDINARY_PLACEHOLDERS,
 };
 

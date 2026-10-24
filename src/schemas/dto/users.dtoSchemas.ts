@@ -524,7 +524,50 @@ const usersUpdateMeResponseSchema = {
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
+// a part of the export: whatever fields the rows have, as they are
+const exportRows = (description: string) => ({
+  type: 'array',
+  description,
+  items: { type: 'object', additionalProperties: true },
+});
+
+const usersExportResponseSchema = {
+  $id: 'usersExportResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    exportedAt: { type: 'string', format: 'date-time' },
+    profile: {
+      type: 'object',
+      additionalProperties: true,
+      description:
+        'id, email, name, locale, phone, avatarUrl, role, authProvider, isVerified, createdAt, updatedAt.',
+    },
+    orders: exportRows(
+      'The orders with their status, total, shipping data, note, dates and items (product, name, quantity, prices).',
+    ),
+    favorites: exportRows('The favorite products: productId, name, createdAt.'),
+    reviews: exportRows('The reviews: id, productId, rating, comment, createdAt, updatedAt.'),
+    reviewVotes: exportRows('The votes on reviews of others: reviewId, action, createdAt.'),
+    chats: exportRows('The chats: id, type, status, createdAt, messages (senderType, content, createdAt).'),
+    logins: exportRows('The logins, the newest first: createdAt, ipAddress, userAgent.'),
+    sessions: exportRows('The open sessions: device, lastUsedAt, expiresAt.'),
+  },
+  required: [
+    'exportedAt',
+    'profile',
+    'orders',
+    'favorites',
+    'reviews',
+    'reviewVotes',
+    'chats',
+    'logins',
+    'sessions',
+  ],
+} as const;
+
 export const usersDtoSchemas = [
+  usersExportResponseSchema,
   usersAvatarRemovalResponseSchema,
   usersListQuerySchema,
   usersListItemSchema,

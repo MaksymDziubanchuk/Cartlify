@@ -150,6 +150,8 @@ export interface ResendVerifyDto {
 
 export interface VerifyEmailDto {
   token: string;
+  // the guest of the browser that opens the link
+  guestId?: string;
 }
 
 export interface PasswordForgotBodyDto {
@@ -185,6 +187,35 @@ export interface LogoutDto {
 
 export interface RefreshDto {
   refreshToken: string;
+}
+
+// GET /sessions, DELETE /sessions/:sessionId
+
+export interface SessionItemDto {
+  // the session, the same across its renewals
+  id: string;
+  // the user agent of the browser that opened it
+  device: string | null;
+  // when it was renewed last (or opened)
+  lastUsedAt: Date;
+  expiresAt: Date;
+  // the session of this browser
+  current: boolean;
+}
+
+export interface SessionsResponseDto {
+  items: SessionItemDto[];
+}
+
+export interface SessionIdParamsDto {
+  sessionId: string;
+}
+
+// POST /password/change
+
+export interface PasswordChangeBodyDto {
+  currentPassword: string;
+  newPassword: string;
 }
 
 export interface CsrfTokenResponseDto {

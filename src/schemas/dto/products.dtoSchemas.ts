@@ -1,6 +1,20 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
+import {
+  SAFETY_COUNTRY_PATTERN,
+  SAFETY_EMAIL_PATTERN,
+  SAFETY_LIMITS,
+} from '@helpers/productDescription.js';
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
+
+// money of a request: whole cents up to what numeric(10, 2) holds
+const moneyField = {
+  type: 'number',
+  minimum: 0,
+  maximum: 99_999_999.99,
+  multipleOf: 0.01,
+  description: 'Whole cents, from 0 up to 99 999 999.99.',
+} as const;
 
 const MAX_IMAGE_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
 
@@ -30,13 +44,27 @@ const getAllProductsQuerySchema = {
     },
 
     // filters
-    search: { type: 'string', minLength: 1 },
+    search: {
+      type: 'string',
+      minLength: 1,
+      description:
+        'Finds a product by its name, forgiving a typo and another order of the words, by the ' +
+        'name of its category or by its article number (sku). Without a sort the best match ' +
+        'comes first (sort relevance).',
+    },
     categoryIds: {
       type: 'string',
       pattern: '^[0-9]+(,[0-9]+)*$',
       description:
-        'Category ids separated by commas, for example 1,2. Ids that are not positive are ' +
-        'dropped; a list with no valid id is CATEGORY_IDS_INVALID.',
+        'Category ids separated by commas, for example 1,2: the products of each category and ' +
+        'of its whole branch (see branch). Ids that are not positive are dropped; a list with no ' +
+        'valid id is CATEGORY_IDS_INVALID.',
+    },
+    branch: {
+      type: 'boolean',
+      description:
+        'With categoryIds: true (the default) takes the products of the categories below each ' +
+        'category too, false only the products of each category itself.',
     },
     minPrice: {
       type: 'number',
@@ -87,6 +115,7 @@ const getAllProductsQuerySchema = {
     sort: {
       type: 'string',
       enum: [
+        'relevance',
         'createdAt',
         'updatedAt',
         'deletedAt',
@@ -106,8 +135,10 @@ const getAllProductsQuerySchema = {
         'name',
       ],
       description:
+        'relevance (the default with a search, the best match first; without a search ' +
+        'SORT_RELEVANCE_REQUIRES_SEARCH) for every role. ' +
         'A buyer sorts by createdAt, price (the price a product sells at now), popularity ' +
-        '(the default), avgRating, name and saleEndsAt: the products on sale first by the end of ' +
+        '(the default without a search), avgRating, name and saleEndsAt: the products on sale first by the end of ' +
         'their sale in the order asked for, then every other one by popularity, the most popular ' +
         'first; any other sort is SORT_FORBIDDEN. An admin sorts by any field; price is the usual ' +
         'price, salePrice the sale price, stock the free units, totalStock the whole stock, ' +
@@ -120,6 +151,36 @@ const getAllProductsQuerySchema = {
     },
     order: { type: 'string', enum: ['asc', 'desc'] },
   },
+} as const;
+
+// the suggestions of the search: a text from 2 signs
+const productSuggestionsQuerySchema = {
+  $id: 'productSuggestionsQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    q: { type: 'string', minLength: 2, maxLength: 100, description: 'What a person types.' },
+  },
+  required: ['q'],
+} as const;
+
+const productSuggestionsResponseSchema = {
+  $id: 'productSuggestionsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      maxItems: 8,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { id: { type: 'integer' }, name: { type: 'string' } },
+        required: ['id', 'name'],
+      },
+    },
+  },
+  required: ['items'],
 } as const;
 
 const imageUrlsSchema = {
@@ -142,6 +203,12 @@ const productFields = {
 
   name: { type: 'string' },
   description: { type: 'string' },
+  sku: {
+    anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }],
+    description:
+      'The article number, null without one. One product of the catalog has it at a time, ' +
+      'whatever the case of its letters; the search finds the product by it.',
+  },
 
   price: { type: 'number' },
   // the sale next to the price: a buyer gets it only while it lasts, an admin always
@@ -156,6 +223,15 @@ const productFields = {
     description:
       'The end of the sale. A buyer gets it only while the sale lasts; admin and root always, ' +
       'null without a sale.',
+  },
+  salePriorPrice: {
+    anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
+    description:
+      'The lowest price the product sold at in the 30 days before the sale (a sale price of ' +
+      'that time too), the price a reduction is compared with. A sale that replaces the one ' +
+      'that is on keeps the lowest price of the first. A buyer gets it with the sale while it ' +
+      'lasts; admin and root as the row keeps it, null without a sale or for a sale from ' +
+      'before it was written.',
   },
   stock: {
     type: 'integer',
@@ -210,6 +286,7 @@ const productFields = {
 const productRequired = [
   'id',
   'name',
+  'sku',
   'price',
   'stock',
   'category',
@@ -220,12 +297,134 @@ const productRequired = [
 ] as const;
 
 // the card of a product page: every image; a buyer gets no popularity in it
+// the safety and origin data of a product (the EU GPSR): the manufacturer with its postal and
+// electronic address and its country, a person responsible in the EU for a manufacturer outside
+// it, the warnings. The database keeps them in the description, with its text
+const safetyPersonProperties = {
+  name: { type: 'string', minLength: 1, maxLength: SAFETY_LIMITS.name },
+  address: {
+    type: 'string',
+    minLength: 1,
+    maxLength: SAFETY_LIMITS.address,
+    description: 'The postal address.',
+  },
+  email: {
+    type: 'string',
+    minLength: 3,
+    maxLength: SAFETY_LIMITS.email,
+    pattern: SAFETY_EMAIL_PATTERN.source,
+    description: 'The electronic address.',
+  },
+} as const;
+
+const safetyManufacturerSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...safetyPersonProperties,
+    country: {
+      type: 'string',
+      pattern: SAFETY_COUNTRY_PATTERN.source,
+      description:
+        'The country of the manufacturer, its ISO 3166 code of two letters, DE for example; ' +
+        'outside the EU a responsible person in the EU is required (PRODUCT_EU_RESPONSIBLE_REQUIRED).',
+    },
+  },
+  required: ['name', 'address', 'email', 'country'],
+} as const;
+
+const safetyPersonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: safetyPersonProperties,
+  required: ['name', 'address', 'email'],
+} as const;
+
+const SAFETY_DESCRIPTION =
+  'The safety and origin data an offer shows (the EU GPSR): the manufacturer, a person ' +
+  'responsible in the EU when the manufacturer is outside it, the warnings.';
+
+// the data of a json body, whole: they replace the ones of the product
+const productSafetyBodyField = {
+  type: 'object',
+  additionalProperties: false,
+  description: `${SAFETY_DESCRIPTION} They replace the ones the product has, whole.`,
+  properties: {
+    manufacturer: safetyManufacturerSchema,
+    // a type list, not anyOf: removeAdditional would strip the fields while ajv tries a shape
+    responsiblePerson: { ...safetyPersonSchema, type: ['object', 'null'] },
+    warnings: { type: ['string', 'null'], maxLength: SAFETY_LIMITS.warnings },
+  },
+  required: ['manufacturer'],
+} as const;
+
+const productSafetyResponseField = {
+  description: `${SAFETY_DESCRIPTION} Null for a product from before them.`,
+  anyOf: [
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        manufacturer: safetyManufacturerSchema,
+        responsiblePerson: { anyOf: [safetyPersonSchema, { type: 'null' }] },
+        warnings: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+      },
+      required: ['manufacturer', 'responsiblePerson', 'warnings'],
+    },
+    { type: 'null' },
+  ],
+} as const;
+
+// the same data as the text fields of a form; a new product needs those of the manufacturer
+// (PRODUCT_SAFETY_REQUIRED), a wrong value is PRODUCT_SAFETY_INVALID, both with details.fields
+const safetyFormFields = {
+  'safety.manufacturer.name': { type: 'string', maxLength: SAFETY_LIMITS.name },
+  'safety.manufacturer.address': {
+    type: 'string',
+    maxLength: SAFETY_LIMITS.address,
+    description: 'The postal address of the manufacturer.',
+  },
+  'safety.manufacturer.email': {
+    type: 'string',
+    maxLength: SAFETY_LIMITS.email,
+    description: 'The electronic address of the manufacturer.',
+  },
+  'safety.manufacturer.country': {
+    type: 'string',
+    description: 'The ISO 3166 code of two letters, DE for example.',
+  },
+  'safety.responsiblePerson.name': {
+    type: 'string',
+    maxLength: SAFETY_LIMITS.name,
+    description: 'For a manufacturer outside the EU: the person responsible in the EU.',
+  },
+  'safety.responsiblePerson.address': { type: 'string', maxLength: SAFETY_LIMITS.address },
+  'safety.responsiblePerson.email': { type: 'string', maxLength: SAFETY_LIMITS.email },
+  'safety.warnings': { type: 'string', maxLength: SAFETY_LIMITS.warnings },
+} as const;
+
 const productResponseSchema = {
   $id: 'productResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     ...productFields,
+    safety: productSafetyResponseField,
+    category: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        ...productFields.category.properties,
+        path: {
+          type: 'array',
+          description:
+            'The way from the top of the tree to the category: its parent categories, the top ' +
+            'one first, without the category itself; empty for a category at the top.',
+          items: productFields.category,
+        },
+      },
+      required: ['id', 'name', 'slug', 'path'],
+    },
     images: { type: 'array', items: imageUrlsSchema },
     popularity: { type: 'integer', description: ADMIN_ONLY },
   },
@@ -239,7 +438,13 @@ const productItemResponseSchema = {
   additionalProperties: false,
   properties: {
     ...productFields,
-    images: imageUrlsSchema,
+    images: {
+      ...imageUrlsSchema,
+      nullable: true,
+      description:
+        'The primary image. A buyer lists only the products with one; an admin lists a product ' +
+        'without one too, with null here.',
+    },
     popularity: { type: 'integer' },
   },
   required: productRequired,
@@ -267,8 +472,20 @@ const getProductReviewsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description: 'nextCursor of the previous page, of the same sort (CURSOR_INVALID otherwise).',
+    },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
+    sort: {
+      type: 'string',
+      enum: ['newest', 'helpful', 'ratingHigh', 'ratingLow'],
+      description:
+        'newest (the default), helpful (the most votes up first), ratingHigh, ratingLow; a ' +
+        'review without a rating comes last, the newest first among the same values.',
+    },
   },
 } as const;
 
@@ -296,6 +513,12 @@ const reviewResponseSchema = {
       required: ['id', 'avatarUrls', 'avatarIsDefault', 'deleted'],
     },
 
+    verifiedPurchase: {
+      type: 'boolean',
+      description:
+        'The author bought the product: a paid order of it, shipped or delivered too, not ' +
+        'cancelled.',
+    },
     upVotes: { type: 'integer', minimum: 0 },
     downVotes: { type: 'integer', minimum: 0 },
     // null in the enum too: swagger shows the field as nullable, and openapi 3.0 lets null
@@ -305,7 +528,7 @@ const reviewResponseSchema = {
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
-  required: ['id', 'productId', 'userId', 'user', 'createdAt', 'updatedAt'],
+  required: ['id', 'productId', 'userId', 'user', 'verifiedPurchase', 'createdAt', 'updatedAt'],
   additionalProperties: false,
 } as const;
 
@@ -336,6 +559,17 @@ const deleteProductReviewParamsSchema = {
   required: ['productId', 'reviewId'],
 } as const;
 
+// the article number of a product: one product of the catalog has it at a time
+const skuField = {
+  type: ['string', 'null'],
+  maxLength: 64,
+  description:
+    'The article number, up to 64 signs of any kind, trimmed; empty or null takes it away. One ' +
+    'product of the catalog has it at a time, whatever the case of its letters ' +
+    '(PRODUCT_SKU_TAKEN); a product taken out of the catalog lets it go. A longer one in a form ' +
+    'is PRODUCT_SKU_TOO_LONG.',
+} as const;
+
 // documentation only: the form of POST /api/products. A form is not checked against a schema,
 // the controller and the service check its fields
 const productCreateFormSchema = {
@@ -344,12 +578,23 @@ const productCreateFormSchema = {
   additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1 },
-    description: { type: 'string' },
-    price: { type: 'number', minimum: 0 },
+    description: { type: 'string', description: 'The text of the description.' },
+    sku: { ...skuField, type: 'string' },
+    ...safetyFormFields,
+    price: moneyField,
     categoryId: { type: 'integer', minimum: 1 },
     images: productImagesFormField,
   },
-  required: ['name', 'price', 'categoryId', 'images'],
+  required: [
+    'name',
+    'price',
+    'categoryId',
+    'images',
+    'safety.manufacturer.name',
+    'safety.manufacturer.address',
+    'safety.manufacturer.email',
+    'safety.manufacturer.country',
+  ],
 } as const;
 
 const saleEndsAtField = {
@@ -397,9 +642,14 @@ const updateProductBodySchema = {
   additionalProperties: false,
   properties: {
     name: { type: 'string', minLength: 1 },
-    description: { type: 'string' },
+    description: {
+      type: 'string',
+      description: 'The text of the description; empty takes it away, the safety data stay.',
+    },
+    sku: skuField,
+    safety: productSafetyBodyField,
 
-    price: { type: 'number', minimum: 0 },
+    price: moneyField,
 
     // kept in the schema so that a stock sent is refused, not dropped without a word
     stock: {
@@ -448,7 +698,10 @@ const productUpdateFormSchema = {
   properties: {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
-    price: { type: 'number', minimum: 0 },
+    sku: { ...skuField, type: 'string' },
+    // any of them replaces the safety data whole, the ones of the manufacturer are required then
+    ...safetyFormFields,
+    price: moneyField,
     categoryId: { type: 'integer', minimum: 1 },
     popularityOverride: {
       type: 'string',
@@ -491,6 +744,98 @@ const productSaleBodySchema = {
     },
   },
   required: ['sale'],
+} as const;
+
+// sales of many products at once: a sale for each product, or one sale for the products of a
+// category. One of the two shapes; the fields sit on the object itself and the shapes only name
+// what they need, so that fastify removeAdditional strips nothing while ajv tries a shape
+const salesSaleField = {
+  description:
+    'The discount until endsAt, by a percent of the price or by an amount of money off it, the ' +
+    'way PATCH /api/products/{productId}/sale takes it.',
+  anyOf: saleDiscountShapes,
+} as const;
+
+const productSalesBodySchema = {
+  $id: 'productSalesBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      description:
+        'A sale for each product, each product once (SALE_PRODUCTS_REPEATED); without categoryId.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          productId: { type: 'integer', minimum: 1, maximum: MAX_ID },
+          sale: salesSaleField,
+        },
+        required: ['productId', 'sale'],
+      },
+    },
+    categoryId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description:
+        'One sale for the products of the catalog of the category, with sale; without items.',
+    },
+    branch: {
+      type: 'boolean',
+      description:
+        'With categoryId: true (the default) takes the products of the categories below it too, ' +
+        'false only the products of the category itself.',
+    },
+    sale: salesSaleField,
+  },
+  oneOf: [
+    {
+      required: ['items'],
+      not: {
+        anyOf: [{ required: ['categoryId'] }, { required: ['branch'] }, { required: ['sale'] }],
+      },
+    },
+    { required: ['categoryId', 'sale'], not: { required: ['items'] } },
+  ],
+} as const;
+
+const productSalesResponseSchema = {
+  $id: 'productSalesResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    products: {
+      type: 'array',
+      description:
+        'The products of the request: in the order of the items, or by id for a category.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          name: { type: 'string' },
+          price: { type: 'number' },
+          salePrice: { type: 'number' },
+          saleEndsAt: { type: 'string', format: 'date-time' },
+          salePriorPrice: {
+            anyOf: [{ type: 'number' }, { type: 'null' }],
+            description: 'The lowest price of the 30 days before the sale.',
+          },
+          status: {
+            type: 'string',
+            enum: ['set', 'unchanged'],
+            description: 'set: the sale was put on; unchanged: the product had this sale already.',
+          },
+        },
+        required: ['id', 'name', 'price', 'salePrice', 'saleEndsAt', 'salePriorPrice', 'status'],
+      },
+    },
+  },
+  required: ['products'],
 } as const;
 
 const bulkUpdateProductsPriceBodySchema = {
@@ -552,7 +897,8 @@ const createReviewBodySchema = {
   type: 'object',
   properties: {
     rating: { type: 'integer', minimum: 1, maximum: 5 },
-    comment: { type: 'string' },
+    // a review is a few lines: a megabyte of text went into the row of each product
+    comment: { type: 'string', maxLength: 2000 },
   },
   // the same rule as the db: a review has a rating, a comment or both
   anyOf: [{ required: ['rating'] }, { required: ['comment'] }],
@@ -602,6 +948,19 @@ const stockQuantityField = {
 
 const STOCK_SOURCES = ['supplier', 'surplus', 'customer_return'] as const;
 
+// an item names its product by the id or by the article number the papers of a supplier name,
+// one of the two
+const stockSkuField = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 64,
+  description:
+    'The article number of a product of the catalog, in place of productId, whatever the case of ' +
+    'its letters; a number no product of the catalog has is PRODUCT_NOT_FOUND with details.skus.',
+} as const;
+
+const STOCK_PRODUCT_REF = [{ required: ['productId'] }, { required: ['sku'] }] as const;
+
 const stockDeliveryBodySchema = {
   $id: 'stockDeliveryBodySchema',
   type: 'object',
@@ -625,7 +984,8 @@ const stockDeliveryBodySchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          productId: stockIdField('Id of the product'),
+          productId: stockIdField('Id of the product, or sku in its place'),
+          sku: stockSkuField,
           quantity: stockQuantityField,
           unitCost: {
             type: 'number',
@@ -648,7 +1008,8 @@ const stockDeliveryBodySchema = {
             description: 'The number the supplier gave the batch.',
           },
         },
-        required: ['productId', 'quantity', 'unitCost'],
+        required: ['quantity', 'unitCost'],
+        oneOf: STOCK_PRODUCT_REF,
       },
     },
   },
@@ -741,14 +1102,16 @@ const stockWriteOffBodySchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          productId: stockIdField('Id of the product'),
+          productId: stockIdField('Id of the product, or sku in its place'),
+          sku: stockSkuField,
           quantity: stockQuantityField,
           batchId: stockIdField(
             'The batch of the product to take the units from; without one they come in the ' +
               'order of a sale, the batch that ends first, then the oldest',
           ),
         },
-        required: ['productId', 'quantity'],
+        required: ['quantity'],
+        oneOf: STOCK_PRODUCT_REF,
       },
     },
   },
@@ -796,8 +1159,73 @@ const stockWriteOffResponseSchema = {
   required: ['writeOffId', 'items', 'products'],
 } as const;
 
+// the history of the price of a product
+const priceHistoryQuerySchema = {
+  $id: 'priceHistoryQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    limit: { type: 'integer', minimum: 1, maximum: 100, description: '50 unless given.' },
+    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+  },
+} as const;
+
+const priceHistoryResponseSchema = {
+  $id: 'priceHistoryResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          oldPrice: { type: 'number' },
+          newPrice: { type: 'number' },
+          mode: {
+            type: 'string',
+            enum: ['percent', 'fixed'],
+            description: 'How the change was given: by a percent or by an amount.',
+          },
+          value: {
+            type: 'number',
+            description: 'Its size in that mode, below 0 for a change down.',
+          },
+          endsAt: {
+            anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+            description: 'A line with an end is the start of a sale until it.',
+          },
+          actor: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              id: { type: 'integer' },
+              name: { type: ['string', 'null'] },
+              deleted: { type: 'boolean' },
+            },
+            required: ['id', 'name', 'deleted'],
+          },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+        required: ['id', 'oldPrice', 'newPrice', 'mode', 'value', 'endsAt', 'actor', 'createdAt'],
+      },
+    },
+    limit: { type: 'integer' },
+    nextCursor: { type: ['string', 'null'] },
+  },
+  required: ['items', 'limit', 'nextCursor'],
+} as const;
+
 export const productDtoSchemas = [
   getAllProductsQuerySchema,
+  priceHistoryQuerySchema,
+  priceHistoryResponseSchema,
+  productSalesBodySchema,
+  productSalesResponseSchema,
+  productSuggestionsQuerySchema,
+  productSuggestionsResponseSchema,
   productCreateFormSchema,
   updateProductBodySchema,
   productUpdateFormSchema,

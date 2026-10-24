@@ -6,12 +6,15 @@ import type {
     AdminChatThreadsQueryDto,
     AdminChatThreadsResponseDto,
     ChatThreadIdParamsDto,
+    ChatThreadMessagesQueryDto,
+    ChatThreadMessagesResponseDto,
     CloseChatThreadDto,
     CloseChatThreadResponseDto,
     GetCurrentChatDto,
     CurrentChatResponseDto,
     FindAdminChatThreadDto,
     FindAdminChatThreadsDto,
+    GetChatThreadMessagesDto,
 } from 'types/dto/chats.dto.js';
 import type { User } from 'types/user.js';
 
@@ -27,6 +30,23 @@ const getCurrentChat: ControllerRouter<{}, {}, {}, CurrentChatResponseDto> = asy
     const args = pickDefined<GetCurrentChatDto>({ actorId, actorRole }, {});
 
     const result = await chatsServices.getCurrentChatService(args);
+    return reply.code(200).send(result);
+};
+
+const getChatThreadMessages: ControllerRouter<
+    ChatThreadIdParamsDto,
+    {},
+    ChatThreadMessagesQueryDto,
+    ChatThreadMessagesResponseDto
+> = async (req, reply) => {
+    const { id: actorId, role: actorRole } = req.user as User;
+
+    const args = pickDefined<GetChatThreadMessagesDto>(
+        { actorId, actorRole, threadId: req.params.threadId },
+        { cursor: req.query.cursor },
+    );
+
+    const result = await chatsServices.getChatThreadMessagesService(args);
     return reply.code(200).send(result);
 };
 
@@ -114,6 +134,7 @@ const closeAdminChatThread: ControllerRouter<
 
 export const chatController = {
     getCurrentChat,
+    getChatThreadMessages,
     getAdminChatThreads,
     getAdminChatThread,
     closeAdminChatThread,

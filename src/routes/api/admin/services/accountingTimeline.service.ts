@@ -52,7 +52,9 @@ export type AccountingTimelineArgs = ReportScope & {
 };
 
 // the steps of the period by the calendar of the shop, from the start of the step of its start;
-// each step is cut to the period
+// each step is cut to the period. Without a start the period is the step of its last moment and
+// the eleven before it: an end at the start of a month ends the month before it. At most one step
+// over the limit is made, a typo in a year asks for millions of days
 async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArgs) {
   const zone = env.SHOP_TIME_ZONE;
   const interval = `1 ${args.step}`;
@@ -62,8 +64,10 @@ async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArg
     with bounds as (
       select coalesce(
                ${from}::timestamptz,
-               (date_trunc(${args.step}, ${args.to.toISOString()}::timestamptz at time zone ${zone})
-                 - ${interval}::interval * 11) at time zone ${zone}
+               (date_trunc(
+                  ${args.step},
+                  (${args.to.toISOString()}::timestamptz - interval '1 microsecond') at time zone ${zone}
+                ) - ${interval}::interval * 11) at time zone ${zone}
              ) as f,
              ${args.to.toISOString()}::timestamptz as t
     ),
@@ -76,6 +80,7 @@ async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArg
              ${interval}::interval
            ) as gs
       where gs < bounds.t at time zone ${zone}
+      limit ${MAX_REPORT_STEPS + 1}
     )
     select to_char(s.local_start, ${LABEL[args.step]}) as label,
            greatest(b.f, s.local_start at time zone ${zone}) as "from",

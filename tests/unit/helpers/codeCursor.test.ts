@@ -29,6 +29,26 @@ describe('codeCursor', () => {
     expect(encodeCursor({ id: 3, v: 'Café ✓' })).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
+  it('reads the last id the database holds', () => {
+    expect(decodeCursor(encodeCursor({ id: 2_147_483_647, v: null }))).toEqual({
+      id: 2_147_483_647,
+      v: null,
+    });
+  });
+
+  // base64url decoding skips a sign it does not know, so such a cursor would read as a good one:
+  // only the signs of base64url are a cursor
+  it.each([
+    ['a sign before it', `!${encodeCursor({ id: 4, v: 'x' })}`],
+    ['a sign after it', `${encodeCursor({ id: 4, v: 'x' })}!`],
+    [
+      'a space inside it',
+      `${encodeCursor({ id: 4, v: 'x' }).slice(0, 4)} ${encodeCursor({ id: 4, v: 'x' }).slice(4)}`,
+    ],
+  ])('refuses a good cursor with %s', (_case, cursor) => {
+    expect(() => decodeCursor(cursor)).toThrow(BadRequestError);
+  });
+
   it.each([
     ['the cursor is empty', ''],
     ['the cursor has characters outside base64url', 'abc+/='],
@@ -36,6 +56,8 @@ describe('codeCursor', () => {
     ['the id is zero', encodeJson({ id: 0, v: null })],
     ['the id is negative', encodeJson({ id: -5, v: null })],
     ['the id is not an integer', encodeJson({ id: 1.5, v: null })],
+    // the int of postgres ends there: a bigger id is no row, the database failed it with 500
+    ['the id is past the ids of the database', encodeJson({ id: 2_147_483_648, v: null })],
     ['the id is missing', encodeJson({ v: 'x' })],
     ['the payload is null', encodeJson(null)],
   ])('throws CURSOR_INVALID when %s', (_case, cursor) => {

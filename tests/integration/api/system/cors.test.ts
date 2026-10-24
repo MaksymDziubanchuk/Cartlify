@@ -47,6 +47,47 @@ describe('CORS', () => {
     expect(res.headers['access-control-allow-methods']).toContain('POST');
   });
 
+  // the frontend changes the cart, the profile and the catalog with these methods, and every
+  // request that changes data carries the csrf token in its own header
+  it.each(['PUT', 'PATCH', 'DELETE'])('lets the frontend send a %s request', async (method) => {
+    const res = await app.inject({
+      method: 'OPTIONS',
+      url: '/api/favorites/1',
+      headers: {
+        origin: WEB_ORIGIN,
+        'access-control-request-method': method,
+        'access-control-request-headers': 'content-type,x-csrf-token',
+      },
+    });
+
+    expect(res.statusCode).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe(WEB_ORIGIN);
+    expect(
+      String(res.headers['access-control-allow-methods'])
+        .split(',')
+        .map((name) => name.trim()),
+    ).toContain(method);
+    expect(String(res.headers['access-control-allow-headers']).toLowerCase()).toContain(
+      'x-csrf-token',
+    );
+  });
+
+  // the name of a csv report file and the wait after 429 come in headers the page reads itself
+  it('lets the frontend read the file name of a download and the wait after a refusal', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/health',
+      headers: { origin: WEB_ORIGIN },
+    });
+
+    const exposed = String(res.headers['access-control-expose-headers'] ?? '')
+      .toLowerCase()
+      .split(',')
+      .map((name) => name.trim());
+
+    expect(exposed).toEqual(expect.arrayContaining(['content-disposition', 'retry-after']));
+  });
+
   it.each([
     'https://evil.test',
     'https://shop.example.com.evil.test',

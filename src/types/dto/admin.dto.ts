@@ -364,3 +364,74 @@ export interface GetAdminStockMovementsResponseDto {
   nextCursor: string | null;
   total: number;
 }
+
+// THE ADMIN LOG: who did what to what, from which address and browser
+export interface AdminAuditLogQueryDto {
+  actorId?: number;
+  entityType?: string;
+  entityId?: number;
+  // a few actions separated by commas
+  actions?: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+  cursor?: string;
+  format?: 'json' | 'csv';
+}
+
+export interface AdminAuditLogItemDto {
+  id: number;
+  // the account that did it; a deleted one has no email
+  actor: { id: UserId; name: string | null; email: string | null; role: Role };
+  // the role it had when it did it
+  actorRole: Role;
+  entityType: string;
+  entityId: number | null;
+  action: string;
+  changes: Array<{ field: string; old: unknown; new: unknown }>;
+  ip: string | null;
+  userAgent: string | null;
+  createdAt: string;
+}
+
+export interface GetAdminAuditLogResponseDto {
+  items: AdminAuditLogItemDto[];
+  limit: number;
+  total: number;
+  nextCursor: string | null;
+}
+
+// ALERTS: what waits for the work of an admin, each kind with how many there are
+export type AdminAlertKind =
+  | 'paid_orders_waiting'
+  | 'shipped_orders_waiting'
+  | 'out_of_stock'
+  | 'low_stock'
+  | 'expiring_batches'
+  | 'expired_batches'
+  | 'chats_waiting'
+  | 'refunded_payments'
+  | 'worker_stalled'
+  | 'admin_actions';
+
+export interface AdminAlertDto {
+  kind: AdminAlertKind;
+  count: number;
+  // the latest of them: orders, products, batches, chats or lines of the admin log
+  ids: Array<number | string>;
+}
+
+export interface GetAdminAlertsResponseDto {
+  alerts: AdminAlertDto[];
+  total: number;
+  generatedAt: string;
+}
+
+export interface AdminAlertSubscriptionDto {
+  kind: AdminAlertKind;
+  subscribed: boolean;
+}
+
+export interface AdminAlertKindParamsDto {
+  kind: string;
+}

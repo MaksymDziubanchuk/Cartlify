@@ -123,7 +123,7 @@ export async function updateCurrentItem({
 
     // map lock/tx contention errors to a stable 409 for clients
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     // another request confirmed the cart while this one changed it

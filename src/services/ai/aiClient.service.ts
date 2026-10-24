@@ -10,6 +10,7 @@ import {
 import {
     createAiApiUnavailableError,
     createAiEmptyResponseError,
+    createAiIncompleteResponseError,
     createAiInvalidResponseFormatError,
     createAiTimeoutError,
     createAiUnknownError,
@@ -37,6 +38,7 @@ type OpenAiResponsesPayloadDto = {
     instructions: string;
     input: OpenAiInputMessageDto[];
     max_output_tokens: number;
+    store: false;
     text?: {
         format: {
             type: 'json_schema';
@@ -147,6 +149,7 @@ const isOpenAiResponse = (value: unknown): value is OpenAiResponseDto => {
     return (
         (value.id === undefined || typeof value.id === 'string') &&
         (value.model === undefined || typeof value.model === 'string') &&
+        (value.status === undefined || typeof value.status === 'string') &&
         (value.output_text === undefined ||
             typeof value.output_text === 'string') &&
         (value.output === undefined ||
@@ -180,6 +183,9 @@ const readOpenAiSuccessBody = async (
     try {
         body = (await response.json()) as unknown;
     } catch (error) {
+        // the time ran out while the body came: a timeout, not a broken answer to ask again
+        if (isAbortError(error)) throw error;
+
         throw createAiInvalidResponseFormatError('openai', error);
     }
 
@@ -229,6 +235,9 @@ const buildOpenAiPayload = (
         max_output_tokens: getOpenAiMaxOutputTokens(
             request.options?.maxOutputTokens,
         ),
+        // openai keeps every request and answer in the account unless told not to; the chat
+        // carries names, addresses and phones, and each turn sends the whole history anyway
+        store: false,
         // structured output: the model answers with json that matches the schema
         ...(jsonSchema
             ? {
@@ -306,6 +315,15 @@ export const generateText = async (
 
         // reads and validates successful OpenAI response
         const body = await readOpenAiSuccessBody(response);
+
+        // an answer cut short is never a text: the json of a structured answer breaks off
+        if (body.status === 'incomplete') {
+            const reason = isRecord(body.incomplete_details)
+                ? String(body.incomplete_details.reason ?? 'unknown')
+                : 'unknown';
+
+            throw createAiIncompleteResponseError('openai', reason, { id: body.id, reason });
+        }
 
         // extracts final assistant text
         const text = extractOpenAiText(body);

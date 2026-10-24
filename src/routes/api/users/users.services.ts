@@ -24,7 +24,7 @@ import {
   uploadImage,
   UploadImageResult,
 } from '@utils/cloudinary.util.js';
-import { avatarOf } from '@utils/avatar.util.js';
+import { avatarOf, nameGivesLetter } from '@utils/avatar.util.js';
 
 import type {
   AvatarPart,
@@ -50,6 +50,7 @@ import {
 import { deleteAccount } from './services/helpers/deleteAccount.helper.js';
 import { findUsers } from './services/findUsers.service.js';
 import { removeUserAvatar } from './services/removeUserAvatar.service.js';
+import { exportMe } from './services/exportMe.service.js';
 import { countAvatarRemovals, deleteAvatarFile } from './services/helpers/avatarRemovals.helper.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
@@ -488,7 +489,9 @@ async function findById({
       // the database function keeps from a user: it is read the way the authors of reviews are,
       // under the admin context, and only its first letter leaves the server
       const letterEmail =
-        user.name || user.email !== null ? user.email : await emailForAvatar(tx, id);
+        nameGivesLetter(user.name) || user.email !== null
+          ? user.email
+          : await emailForAvatar(tx, id);
 
       const profile: PublicUserProfileDto = {
         id: user.id as UserId,
@@ -571,7 +574,7 @@ async function loadDeletionConfirmation(id: number) {
       return {
         account: await tx.user.findUnique({
           where: { id },
-          select: { authProvider: true, passwordHash: true },
+          select: { authProvider: true, passwordHash: true, deletedAt: true },
         }),
         lastLogin: await tx.loginLog.findFirst({
           where: { userId: id },
@@ -595,7 +598,8 @@ async function deleteMe({ userId, password, confirmOpenOrders, log }: DeleteMeDt
 
   const { account, lastLogin } = await loadDeletionConfirmation(id);
 
-  if (!account) throw new NotFoundError('USER_NOT_FOUND');
+  // the access token of a deleted account lives a few minutes on: the account is gone
+  if (!account || account.deletedAt) throw new NotFoundError('USER_NOT_FOUND');
 
   if (account.authProvider === 'LOCAL') {
     // spaces at the edges of a password are dropped, the same as at the login
@@ -639,4 +643,5 @@ export const usersServices = {
   findById,
   deleteUserById,
   deleteMe,
+  exportMe,
 };

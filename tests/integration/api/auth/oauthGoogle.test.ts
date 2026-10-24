@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import { getMe, sessionCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createUser, uniqueEmail, uniqueTag } from '../../../helpers/factories.js';
@@ -106,6 +107,18 @@ describe('GET /api/auth/oauth/google', () => {
     expect(state).not.toBe('');
     expect(guestId).not.toBe('');
   });
+
+  // the router decodes the path and takes the absolute form, the guard used to look at the raw
+  // address and gave such a request no user, so the start of the login answered 500
+  it.each(['/%61pi/auth/oauth/google', 'http://api.example.com/api/auth/oauth/google'])(
+    'starts the login for an address the router reads as the route too (%s)',
+    async (url) => {
+      const res = await app.inject({ method: 'GET', url });
+
+      expect(res.statusCode).toBe(302);
+      expect(new URL(String(res.headers.location)).hostname).toBe('accounts.google.com');
+    },
+  );
 });
 
 describe('GET /api/auth/google/callback', () => {
@@ -294,6 +307,24 @@ describe('GET /api/auth/google/callback', () => {
     const res = await callback(app, 'google', { error: 'access_denied' });
 
     expectRefused(res, 'OAUTH_ACCESS_DENIED');
+  });
+
+  // Google out of reach, or silent for 5 seconds: the page says to try again, not that it failed
+  it('sends the browser back with OAUTH_PROVIDER_UNAVAILABLE when Google cannot be reached', async () => {
+    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const { guestId, state } = await startLogin(app, 'google');
+
+    const res = await callback(
+      app,
+      'google',
+      { code: 'any-code', state },
+      cookieHeader({ guestId }),
+    );
+
+    expectRefused(res, 'OAUTH_PROVIDER_UNAVAILABLE');
+    expect(takeLogs({ msg: 'oauth provider unavailable' })).toEqual([
+      expect.objectContaining({ errorCode: 'OAUTH_PROVIDER_UNAVAILABLE' }),
+    ]);
   });
 
   it('refuses a code google does not accept', async () => {

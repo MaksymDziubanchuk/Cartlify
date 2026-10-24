@@ -39,3 +39,14 @@ describe('assertLimit', () => {
     expect(err).toMatchObject({ statusCode: 400, errorCode: 'LIMIT_INVALID' });
   });
 });
+
+// a limit of a query comes as a text: digits only, the spaces around them dropped
+describe('assertLimit and a limit as text', () => {
+  it('reads digits with spaces around them', () => {
+    expect(assertLimit(' 25 ')).toBe(25);
+  });
+
+  it.each(['25x', 'x25', '2 5'])('refuses %p', (limit) => {
+    expect(thrownBy(() => assertLimit(limit))).toBeInstanceOf(BadRequestError);
+  });
+});

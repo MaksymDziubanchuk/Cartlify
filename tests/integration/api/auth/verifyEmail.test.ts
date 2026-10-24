@@ -5,10 +5,13 @@ import { logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { cookieHeader, cookieJar } from '../../../helpers/cookies.js';
 import {
   closeSessions,
+  createProduct,
   createUser,
   createVerifyToken,
+  removeProducts,
   uniqueEmail,
 } from '../../../helpers/factories.js';
 import { mailedToken, watchMail, type SentMail } from '../../../helpers/mail.js';
@@ -38,8 +41,12 @@ const resend = (email: string, cookie = '') =>
     payload: { email },
   });
 
-const verify = (token: string) =>
-  app.inject({ method: 'GET', url: `/api/auth/verify?token=${encodeURIComponent(token)}` });
+const verify = (token: string, cookie = '') =>
+  app.inject({
+    method: 'GET',
+    url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
+    headers: cookie ? { cookie } : {},
+  });
 
 // a new account and the token of the link in its mail
 async function registered(mails: SentMail[]) {
@@ -126,6 +133,64 @@ describe('GET /api/auth/verify', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VERIFY_TOKEN_INVALID_OR_EXPIRED' });
     expect(await isVerified(email)).toBe(false);
+  });
+
+  // the person proved the email in this browser: the favorites and the chat of its guest are theirs
+  it('moves the favorites and the chat of the guest of the browser to the account', async () => {
+    const { email, token } = await unverified();
+    const product = await createProduct();
+    const added = await app.inject({
+      method: 'POST',
+      url: `/api/favorites/${product.id}`,
+      headers: withCsrf(csrf),
+    });
+    const guestId = cookieJar(added).guestId!;
+    const chat = await app.inject({
+      method: 'GET',
+      url: '/api/chat/thread/current',
+      headers: { cookie: cookieHeader({ guestId }) },
+    });
+
+    const res = await verify(token, cookieHeader({ guestId }));
+
+    expect(res.statusCode).toBe(200);
+    const { id } = await asAdmin((tx) =>
+      tx.user.findUniqueOrThrow({ where: { email }, select: { id: true } }),
+    );
+    const moved = await asAdmin(async (tx) => ({
+      favorites: await tx.favorite.findMany({
+        where: { productId: product.id },
+        select: { userId: true },
+      }),
+      thread: await tx.chatThread.findUniqueOrThrow({
+        where: { id: chat.json().thread.id },
+        select: { userId: true, guestId: true },
+      }),
+    }));
+    expect(moved).toEqual({ favorites: [{ userId: id }], thread: { userId: id, guestId: null } });
+    await removeProducts([product]);
+  });
+
+  it('moves nothing when the link opens in a browser without a guest', async () => {
+    const { token } = await unverified();
+    const product = await createProduct();
+    const added = await app.inject({
+      method: 'POST',
+      url: `/api/favorites/${product.id}`,
+      headers: withCsrf(csrf),
+    });
+    const guestId = cookieJar(added).guestId!;
+
+    expect((await verify(token)).statusCode).toBe(200);
+
+    const favorites = await asAdmin((tx) =>
+      tx.favorite.findMany({
+        where: { productId: product.id },
+        select: { userId: true, guestId: true },
+      }),
+    );
+    expect(favorites).toEqual([{ userId: null, guestId }]);
+    await removeProducts([product]);
   });
 
   it('refuses a made-up token', async () => {

@@ -7,9 +7,15 @@ import { BadRequestError, InternalError, NotFoundError, isAppError } from '@util
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
+  buyersOf,
   mapReviewRowToResponse,
   normalizeFindProductByIdInput,
+  readReviewCursor,
   reviewAuthorSelect,
+  reviewOrderOf,
+  reviewSortValueOf,
+  reviewsAfter,
+  type ReviewSort,
 } from './helpers/index.js';
 
 import type { FindProductReviewsDto, ReviewsResponseDto } from 'types/dto/products.dto.js';
@@ -18,6 +24,7 @@ export async function findReviews({
   productId: productIdIn,
   limit: limitIn,
   cursor: cursorIn,
+  sort: sortIn,
   actorId: actorIdIn,
   actorRole,
 }: FindProductReviewsDto): Promise<ReviewsResponseDto> {
@@ -28,16 +35,13 @@ export async function findReviews({
   const limit =
     limitRaw != null && Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : 10;
 
+  const sort: ReviewSort = sortIn ?? 'newest';
+
+  // the cursor is bound to this product and this sort
   const cursor = typeof cursorIn === 'string' && cursorIn.trim() ? cursorIn.trim() : undefined;
-  const c = cursor ? decodeCursor(cursor) : undefined;
-
-  // bind cursor to this product to prevent cross-product reuse
-  if (c) {
-    const v = typeof c.v === 'number' ? c.v : Number(c.v);
-    if (!Number.isInteger(v) || v !== productId) throw new BadRequestError('CURSOR_INVALID');
-  }
-
-  const cursorId = c ? c.id : null;
+  const c = cursor
+    ? readReviewCursor(decodeCursor(cursor) as Record<string, unknown>, productId, sort)
+    : undefined;
 
   // normalize numeric user id only for user vote lookup
   const userId =
@@ -58,42 +62,50 @@ export async function findReviews({
         await setUserContext(tx, { userId: userId, role: actorRole });
       }
 
-      // ensure product exists for stable 404
+      // ensure product exists for stable 404; a product taken out of the catalog is no product for
+      // a buyer, as its card: an admin still reads its reviews
       const product = await tx.product.findUnique({
         where: { id: productId },
-        select: { id: true },
+        select: { id: true, deletedAt: true },
       });
-      if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
+      if (!product || (product.deletedAt && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
-      // read page and total, fetch limit + 1 to detect next page
-      const [rowsPlusOne, total] = await Promise.all([
-        tx.review.findMany({
-          where: { productId },
-          orderBy: { id: 'desc' },
-          ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
-          take: limit + 1,
-          select: {
-            id: true,
-            productId: true,
-            rating: true,
-            comment: true,
-            userId: true,
-            upVotes: true,
-            downVotes: true,
-            createdAt: true,
-            updatedAt: true,
-          },
-        }),
-        tx.review.count({ where: { productId } }),
-      ]);
+      // read page and total, fetch limit + 1 to detect next page. One after the other: the
+      // transaction has one connection, and it runs one statement at a time.
+      // The cursor is a value: the reviews after the last one of the page in the order of the
+      // sort, so a page goes on after that review is deleted
+      const rowsPlusOne = await tx.review.findMany({
+        where: { productId, ...(c ? { AND: [reviewsAfter(c)] } : {}) },
+        orderBy: reviewOrderOf(sort),
+        take: limit + 1,
+        select: {
+          id: true,
+          productId: true,
+          rating: true,
+          comment: true,
+          userId: true,
+          upVotes: true,
+          downVotes: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      const total = await tx.review.count({ where: { productId } });
 
       const hasNext = rowsPlusOne.length > limit;
       const rows = hasNext ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
 
       // compute next cursor from last item only when next page exists
+      const last = rows[rows.length - 1];
       const nextCursor =
-        hasNext && rows.length
-          ? encodeCursor({ id: rows[rows.length - 1].id, v: productId })
+        hasNext && last
+          ? encodeCursor({
+              id: last.id,
+              v: productId,
+              s: sort,
+              k: reviewSortValueOf(sort, last),
+            } as never)
           : undefined;
 
       // resolve current user votes for returned page only
@@ -134,6 +146,13 @@ export async function findReviews({
       });
       const authorById = new Map(authors.map((author) => [author.id, author]));
 
+      // the authors who bought the product, read as the system too
+      const buyers = await buyersOf(
+        tx,
+        productId,
+        rows.map((r) => r.userId),
+      );
+
       // map db rows into api dto; a review always has its author, the account row is never removed
       return {
         items: rowsWithUserVote.map((r) => {
@@ -141,7 +160,7 @@ export async function findReviews({
           if (!author)
             throw new InternalError({ reason: 'REVIEW_AUTHOR_NOT_FOUND', reviewId: r.id });
 
-          return mapReviewRowToResponse(r, author);
+          return mapReviewRowToResponse(r, author, buyers.has(r.userId));
         }),
         limit,
         total,

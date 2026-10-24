@@ -3,6 +3,8 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 
+import { requestLimits } from '../../../plugins/requestLimits.js';
+
 import { paymentsController } from './payments.controllers.js';
 import { paymentsSchema } from './payments.schemas.js';
 import { stripeRouter } from './providers/stripe/index.js';
@@ -12,7 +14,7 @@ export default async function paymentsRouter(app: FastifyInstance) {
   app.post(
     '/checkout/sessions',
     {
-      preHandler: [authGuard, requireRole(['USER'])],
+      preHandler: [authGuard, requireRole(['USER']), ...requestLimits.checkout],
       schema: paymentsSchema.postCheckoutSessionSchema,
     },
     paymentsController.postCheckoutSession,

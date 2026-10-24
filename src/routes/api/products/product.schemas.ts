@@ -18,9 +18,11 @@ const productBuyerFieldsExample = {
   id: 10,
   name: 'Wireless headphones',
   description: 'Bluetooth headphones with noise cancellation.',
+  sku: 'WH-1000',
   price: 49.99,
   salePrice: 39.99,
   saleEndsAt: '2026-12-01T00:00:00.000Z',
+  salePriorPrice: 44.99,
   stock: 15,
   category: { id: 1, name: 'Headphones', slug: 'headphones' },
   avgRating: 4.7,
@@ -48,7 +50,21 @@ const productListItemExample = {
 
 const productResponseExample = {
   ...productBuyerFieldsExample,
+  category: {
+    ...productBuyerFieldsExample.category,
+    path: [{ id: 3, name: 'Audio', slug: 'audio' }],
+  },
   images: [productImageUrlsExample],
+  safety: {
+    manufacturer: {
+      name: 'Sound GmbH',
+      address: 'Klangstrasse 2, 10115 Berlin, Germany',
+      email: 'safety@sound.example.com',
+      country: 'DE',
+    },
+    responsiblePerson: null,
+    warnings: 'Do not listen at a high volume for a long time.',
+  },
 };
 
 // the card an admin gets, the answer of every change of a product
@@ -90,6 +106,7 @@ const reviewExample = {
   comment: 'Great product.',
   userId: 1,
   user: { id: 1, name: 'Anna', deleted: false },
+  verifiedPurchase: true,
   upVotes: 3,
   downVotes: 0,
   userVote: 'up',
@@ -161,9 +178,14 @@ const getAllProductsRouterSchema = {
   summary: 'Get products',
   description:
     'Returns a paginated product list with filtering, sorting and search support. A buyer ' +
-    '(guest, user) gets every product of the catalog that is not deleted, with the fields that ' +
-    'help to buy it and its popularity; admin and root get the counters, the whole stock, the ' +
-    'reserve and the popularity override too. A buyer sorts by `createdAt`, `price`, ' +
+    '(guest, user) gets every product of the catalog that is not deleted and has an image, with ' +
+    'the fields that help to buy it and its popularity; a product without an image opens only by ' +
+    'its id. Admin and root list it too, with `images: null`, and get the counters, the whole stock, the ' +
+    'reserve and the popularity override too. `search` forgives a typo and another order of ' +
+    'the words and finds a product by the name of its category and by its article number too; ' +
+    'with it the best match comes first (`sort: relevance`). `categoryIds` takes the products ' +
+    'of the whole branch of each category, `branch=false` only of each category itself. ' +
+    'A buyer sorts by `relevance`, `createdAt`, `price`, ' +
     '`popularity`, `avgRating`, `name` and `saleEndsAt` (the products on sale first by the end ' +
     'of their sale, then the rest by popularity), any other sort is `SORT_FORBIDDEN`; the flags ' +
     'of an admin are `DELETED_PRODUCTS_FORBIDDEN` and `FILTER_FORBIDDEN` for a buyer. An admin ' +
@@ -200,7 +222,8 @@ const getAllProductsRouterSchema = {
         'Invalid products query parameters: a sort by the field of a flag without the flag ' +
         '(`SORT_DELETED_AT_REQUIRES_DELETED`, `SORT_SALE_ENDS_AT_REQUIRES_ON_SALE`, ' +
         '`SORT_SALE_PRICE_REQUIRES_ON_SALE`, ' +
-        '`SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN`), `CATEGORY_IDS_INVALID`, `CURSOR_INVALID`.',
+        '`SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN`), `sort: relevance` without a search ' +
+        '(`SORT_RELEVANCE_REQUIRES_SEARCH`), `CATEGORY_IDS_INVALID`, `CURSOR_INVALID`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -258,7 +281,8 @@ const getProductByIdRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found, or it is deleted and the actor is not admin or root.',
+      description:
+        'Product was not found, or it is deleted and the actor is not admin or root (PRODUCT_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -272,7 +296,11 @@ const getProductByIdRouterSchema = {
 const getProductReviewsRouterSchema = {
   operationId: 'getProductReviews',
   summary: 'Get product reviews',
-  description: 'Returns a paginated list of reviews for a product.',
+  description:
+    'Returns a paginated list of reviews for a product: the newest first, or `sort` helpful ' +
+    '(the most votes up), ratingHigh, ratingLow (a review without a rating last). Each review ' +
+    'says whether its author bought the product (`verifiedPurchase`: a paid order of it, ' +
+    'shipped or delivered too, not cancelled); nothing of it is kept, it is read for the page.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -292,7 +320,9 @@ const getProductReviewsRouterSchema = {
     },
 
     400: {
-      description: 'Invalid product reviews request.',
+      description:
+        'Invalid product reviews request: a sort it does not know (VALIDATION_ERROR), a cursor ' +
+        'of another product or another sort, or a changed one (CURSOR_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -304,7 +334,8 @@ const getProductReviewsRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found.',
+      description:
+        'There is no such product, or for a buyer it is removed from the catalog (PRODUCT_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -323,7 +354,11 @@ const postProductRouterSchema = {
     '`images`, the first is the main image. This operation is restricted to privileged users. ' +
     'The images are checked by their content; they become the images of the product only when ' +
     'the product is written, a refused request leaves no files. A new product has no stock: it ' +
-    'comes with a delivery, POST /api/products/stock/deliveries.',
+    'comes with a delivery, POST /api/products/stock/deliveries. It needs the safety and origin ' +
+    'data of the EU GPSR as text fields: the name, the postal and electronic address and the ' +
+    'country of the manufacturer (`safety.manufacturer.*`), a person responsible in the EU for a ' +
+    'manufacturer outside it (`safety.responsiblePerson.*`), the warnings (`safety.warnings`). ' +
+    'The description keeps them with its text; the card gives them apart, as `safety`.',
 
   response: {
     201: {
@@ -337,15 +372,28 @@ const postProductRouterSchema = {
         'Invalid product form: not a form (MULTIPART_REQUIRED), no images ' +
         '(PRODUCT_IMAGES_REQUIRED), a missing field (BODY_NOT_FULL), a wrong name, price ' +
         'or category id (PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, CATEGORY_ID_INVALID), a ' +
-        'stock (PRODUCT_STOCK_NOT_ALLOWED), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
+        'stock (PRODUCT_STOCK_NOT_ALLOWED), an article number over 64 signs (PRODUCT_SKU_TOO_LONG), ' +
+        'the safety data of the manufacturer missing (PRODUCT_SAFETY_REQUIRED, `details.fields`) ' +
+        'or wrong (PRODUCT_SAFETY_INVALID, `details.fields`), a manufacturer outside the EU ' +
+        'without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than 10 images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), an image Cloudinary cannot read (IMAGE_INVALID), or a text of the form with a NUL sign (TEXT_NUL_FORBIDDEN).',
       $ref: 'errorResponseSchema#',
     },
     401: {
       description: 'Authentication is required to create a product.',
       $ref: 'errorResponseSchema#',
     },
+    404: {
+      description: 'The category named does not exist (CATEGORY_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
     403: {
       description: 'The authenticated user is not allowed to create products.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'Another product of the catalog has the article number, whatever the case of its ' +
+        'letters (PRODUCT_SKU_TAKEN). Nothing was created.',
       $ref: 'errorResponseSchema#',
     },
     413: {
@@ -466,14 +514,17 @@ const updateProductByIdRouterSchema = {
       description:
         'Invalid product update request: nothing to change (NO_FIELDS_TO_UPDATE), a wrong field ' +
         '(VALIDATION_ERROR for a JSON body, PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, ' +
-        'CATEGORY_ID_INVALID, POPULARITY_OVERRIDE_INVALID, ' +
+        'CATEGORY_ID_INVALID, POPULARITY_OVERRIDE_INVALID, PRODUCT_SKU_TOO_LONG for an article ' +
+        'number of a form over 64 signs, safety data that are not whole or wrong in a form ' +
+        '(PRODUCT_SAFETY_REQUIRED, PRODUCT_SAFETY_INVALID, `details.fields`), a manufacturer ' +
+        'outside the EU without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), ' +
         'POPULARITY_OVERRIDE_UNTIL_INVALID for an end that is not ahead), a popularity override ' +
         'without its end or an end without an override after the change ' +
         '(POPULARITY_OVERRIDE_UNTIL_REQUIRED, POPULARITY_OVERRIDE_REQUIRED), a word on the sale ' +
         'without a price (PRODUCT_SALE_REQUIRES_PRICE), a stock (PRODUCT_STOCK_NOT_ALLOWED), ' +
         'another word on the sale in a form ' +
         '(PRODUCT_SALE_ACTION_INVALID), a new sale that does not fit the new price ' +
-        '(PRODUCT_SALE_AMOUNT_TOO_HIGH, PRODUCT_SALE_TOO_SMALL, PRODUCT_SALE_ENDS_AT_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
+        '(PRODUCT_SALE_AMOUNT_TOO_HIGH, PRODUCT_SALE_TOO_SMALL, PRODUCT_SALE_ENDS_AT_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than 10 images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -485,14 +536,17 @@ const updateProductByIdRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found.',
+      description:
+        '`PRODUCT_NOT_FOUND`: there is no product with this id, or it is removed from the catalog ' +
+        '(a new sale goes on a product of the catalog only); `CATEGORY_NOT_FOUND`: the category named does not exist.',
       $ref: 'errorResponseSchema#',
     },
     409: {
       description:
         'Product update conflicts with existing data. A new price of a product with a sale that is on without a word on the sale ' +
         '(PRODUCT_SALE_DECISION_REQUIRED, `details`: the sale price and its end), or keep for a ' +
-        'price down to the sale price or below (PRODUCT_SALE_NOT_BELOW_PRICE); nothing is changed.',
+        'price down to the sale price or below (PRODUCT_SALE_NOT_BELOW_PRICE); another product ' +
+        'of the catalog has the article number (PRODUCT_SKU_TAKEN); nothing is changed.',
       $ref: 'errorResponseSchema#',
     },
     413: {
@@ -679,11 +733,230 @@ const deleteProductByIdRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product was not found.',
+      description: 'Product was not found (PRODUCT_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The product is already out of the catalog (PRODUCT_ALREADY_DELETED).',
       $ref: 'errorResponseSchema#',
     },
     500: {
       description: 'Unexpected server error while deleting product.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for sales of many products at once
+const postProductSalesRouterSchema = {
+  operationId: 'postProductSales',
+  summary: 'Put many products on sale',
+  description:
+    'Puts sales on many products at once, all of them or none: `items` gives each product a ' +
+    'sale of its own, or `categoryId` with `sale` gives one sale to the products of the catalog ' +
+    'of the category and of the categories below it (`branch=false`: only of the category ' +
+    'itself). Each sale is the one of `PATCH /api/products/{productId}/sale`: it starts right ' +
+    'away, writes over a sale that is on, keeps every line of the logs and names the lowest ' +
+    'price of the 30 days before it. A product that has the same sale already stays as it is ' +
+    '(`status: unchanged`). There is no planned sale yet. Admin and root only.',
+
+  body: {
+    $ref: 'productSalesBodySchema#',
+    examples: [
+      {
+        items: [
+          { productId: 10, sale: { percent: 20, endsAt: '2026-12-01T00:00:00.000Z' } },
+          { productId: 11, sale: { amount: 5, endsAt: '2026-12-15T00:00:00.000Z' } },
+        ],
+      },
+      { categoryId: 1, sale: { percent: 10, endsAt: '2026-12-01T00:00:00.000Z' } },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The sales are on; each product of the request with its sale.',
+      $ref: 'productSalesResponseSchema#',
+      examples: [
+        {
+          products: [
+            {
+              id: 10,
+              name: 'Wireless headphones',
+              price: 49.99,
+              salePrice: 39.99,
+              saleEndsAt: '2026-12-01T00:00:00.000Z',
+              salePriorPrice: 49.99,
+              status: 'set',
+            },
+          ],
+        },
+      ],
+    },
+    400: {
+      description:
+        'Invalid request: a wrong body (VALIDATION_ERROR: neither items nor a category with a ' +
+        'sale, or both, no items or more than 100), a product named twice ' +
+        '(SALE_PRODUCTS_REPEATED, `details.productIds`), an end that is not ahead ' +
+        '(PRODUCT_SALE_ENDS_AT_INVALID, `details.productIds` for items), a sale that does not ' +
+        'fit a price: an amount above it (PRODUCT_SALE_AMOUNT_TOO_HIGH, `details.products`: ' +
+        'productId, price), a discount that rounds to nothing or a product for 0 ' +
+        '(PRODUCT_SALE_TOO_SMALL, `details.products`). Nothing is put on.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to put products on sale.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        'A product does not exist or is removed from the catalog (PRODUCT_NOT_FOUND, ' +
+        '`details.productIds`), or the category does not exist (CATEGORY_NOT_FOUND). Nothing ' +
+        'is put on.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: 'The products are busy with another change (RESOURCE_BUSY), try again.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while putting the products on sale.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the suggestions of the search
+const getProductSuggestionsRouterSchema = {
+  operationId: 'getProductSuggestions',
+  summary: 'Suggest product names',
+  description:
+    'Up to 8 names of the catalog for what a person types, from 2 signs, forgiving a typo; the ' +
+    'best match first. A product taken out of the catalog is not among them, nor for a buyer ' +
+    'one without an image (admin and root get it).',
+
+  querystring: {
+    $ref: 'productSuggestionsQuerySchema#',
+    examples: [{ q: 'headph' }],
+  },
+
+  response: {
+    200: {
+      description: 'The names were returned, maybe none.',
+      $ref: 'productSuggestionsResponseSchema#',
+      examples: [{ items: [{ id: 10, name: 'Wireless headphones' }] }],
+    },
+    400: {
+      description: 'The text is shorter than 2 signs or longer than 100 (VALIDATION_ERROR).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication or guest session is required.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not allowed to read the catalog.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while loading the suggestions.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the history of the price of a product
+const getPriceHistoryRouterSchema = {
+  operationId: 'getProductPriceHistory',
+  summary: 'Get the price history of a product',
+  description:
+    'Each change of the price of a product, the newest first, with who made it: a change of the ' +
+    'price, the start of a sale (with its end) and a sale taken off, in the mode it was given ' +
+    'and its size, below 0 for a change down. A product taken out of the catalog keeps its ' +
+    'history. Admin and root only.',
+
+  params: {
+    $ref: 'productIdParamSchema#',
+    examples: [productIdParamsExample],
+  },
+  querystring: { $ref: 'priceHistoryQuerySchema#' },
+
+  response: {
+    200: {
+      description: 'The changes of the price of the page.',
+      $ref: 'priceHistoryResponseSchema#',
+    },
+    400: {
+      description: 'Invalid product id or a cursor of another list (CURSOR_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the price history.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only admin and root read the price history (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'Product was not found (PRODUCT_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while reading the price history.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for putting a product back into the catalog
+const restoreProductRouterSchema = {
+  operationId: 'restoreProduct',
+  summary: 'Restore product',
+  description:
+    'Puts a product taken out of the catalog back: the catalog, the search and the cart see it ' +
+    'again. The admin log keeps the change of deletedAt (PRODUCT_UPDATE). Admin and root only; ' +
+    'they find the products taken out with `GET /api/products?deleted=true`.',
+
+  params: {
+    $ref: 'productIdParamSchema#',
+    examples: [productIdParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The product is back in the catalog: its card as an admin sees it.',
+      $ref: 'productResponseSchema#',
+      examples: [productAdminResponseExample],
+    },
+    400: {
+      description: 'Invalid product id.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to restore a product.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only admin and root restore a product (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'Product was not found (PRODUCT_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'The product is in the catalog (PRODUCT_NOT_DELETED), or another product of the ' +
+        'catalog took its article number meanwhile (PRODUCT_SKU_TAKEN).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while restoring the product.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -722,7 +995,8 @@ const deleteProductReviewRouterSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product review was not found.',
+      description:
+        'There is no such review, or it is a review of another product (REVIEW_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -775,7 +1049,8 @@ const patchProductCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Product or category was not found.',
+      description:
+        'Product was not found (PRODUCT_NOT_FOUND), or the category named does not exist (CATEGORY_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -868,11 +1143,12 @@ const postStockDeliveryRouterSchema = {
     404: {
       description:
         'A product does not exist or is removed from the catalog (PRODUCT_NOT_FOUND, ' +
-        '`details.productId`). Nothing is taken in.',
+        '`details.productId`), or no product of the catalog has an article number named ' +
+        '(PRODUCT_NOT_FOUND, `details.skus`: every such number). Nothing is taken in.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'The products are busy with another change (RESOURCE_BUSY_TRY_AGAIN).',
+      description: 'The products are busy with another change (RESOURCE_BUSY), try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -936,8 +1212,9 @@ const postStockWriteOffRouterSchema = {
     },
     404: {
       description:
-        'A product does not exist (PRODUCT_NOT_FOUND, `details.productId`), or a batch is not ' +
-        'a batch of the product (BATCH_NOT_FOUND, `details.batchId`). Nothing is written off.',
+        'A product does not exist (PRODUCT_NOT_FOUND, `details.productId`), no product of the ' +
+        'catalog has an article number named (PRODUCT_NOT_FOUND, `details.skus`), or a batch is ' +
+        'not a batch of the product (BATCH_NOT_FOUND, `details.batchId`). Nothing is written off.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -946,7 +1223,7 @@ const postStockWriteOffRouterSchema = {
         '`details.products`: productId, available, requested, the lines of a product counted ' +
         'together), or every batch short of units (BATCH_INSUFFICIENT, `details.batches`: ' +
         'batchId, remaining, requested); the products are busy with another change ' +
-        '(RESOURCE_BUSY_TRY_AGAIN). Nothing is written off.',
+        '(RESOURCE_BUSY, try again). Nothing is written off.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -960,12 +1237,16 @@ const postStockWriteOffRouterSchema = {
 const taggedProductSchemas = withOpenApiTag(
   {
     getAllProductsRouterSchema,
+    getProductSuggestionsRouterSchema,
     getProductByIdRouterSchema,
     getProductReviewsRouterSchema,
+    getPriceHistoryRouterSchema,
+    restoreProductRouterSchema,
     postProductRouterSchema,
     postProductReviewRouterSchema,
     updateProductByIdRouterSchema,
     patchProductSaleRouterSchema,
+    postProductSalesRouterSchema,
     patchProductsBulkPriceRouterSchema,
     deleteProductByIdRouterSchema,
     deleteProductReviewRouterSchema,
@@ -980,7 +1261,12 @@ const taggedProductSchemas = withOpenApiTag(
 const productSchemasWithGuestSecurity = withOpenApiSecurityFor(
   taggedProductSchemas,
   openApiSecurity.userOrGuestCookie,
-  ['getAllProductsRouterSchema', 'getProductByIdRouterSchema', 'getProductReviewsRouterSchema'],
+  [
+    'getAllProductsRouterSchema',
+    'getProductSuggestionsRouterSchema',
+    'getProductByIdRouterSchema',
+    'getProductReviewsRouterSchema',
+  ],
 );
 
 // Add access token security to product write and review write routes
@@ -992,8 +1278,11 @@ export const productSchemas = withOpenApiSecurityFor(
     'postProductReviewRouterSchema',
     'updateProductByIdRouterSchema',
     'patchProductSaleRouterSchema',
+    'postProductSalesRouterSchema',
     'patchProductsBulkPriceRouterSchema',
     'deleteProductByIdRouterSchema',
+    'restoreProductRouterSchema',
+    'getPriceHistoryRouterSchema',
     'deleteProductReviewRouterSchema',
     'patchProductCategorySchema',
     'postStockDeliveryRouterSchema',

@@ -720,6 +720,38 @@ describe('a batch that is over', () => {
     });
   });
 
+  // the reserve of a waiting order is of good units only: a write-off of the good batch by its
+  // name would leave the reserve on units that are over, and the payment of the order in time
+  // would find no good batch and give the money back
+  it('refuses to write off a good batch the reserve of a waiting order needs', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await setShopDay(db, DAY);
+      await batchIdOf(db, asAdmin(), product.id, { quantity: 5, expiresAt: DAY });
+      const good = await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
+      await setShopDay(db, dayAfter(DAY));
+      await waitingOrderOf(db, owner.id, [[product.id, 5]]);
+      return writeOff(db, asAdmin(), product.id, { batchId: good, quantity: 5 });
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('INSUFFICIENT_AVAILABLE_STOCK'),
+    });
+  });
+
+  it('writes off a batch that is over while a waiting order holds the good units', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await setShopDay(db, DAY);
+      const over = await batchIdOf(db, asAdmin(), product.id, { quantity: 5, expiresAt: DAY });
+      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
+      await setShopDay(db, dayAfter(DAY));
+      await waitingOrderOf(db, owner.id, [[product.id, 5]]);
+      return writeOff(db, asAdmin(), product.id, { batchId: over, quantity: 5, reason: 'expired' });
+    });
+
+    expect(outcome.ok).toBe(true);
+  });
+
   it('does not reserve the units of a batch that is over', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);

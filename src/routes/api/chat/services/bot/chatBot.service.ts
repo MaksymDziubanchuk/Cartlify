@@ -1,11 +1,20 @@
 import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 
+import env from '@config/env.js';
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
+import { parseProductDescription } from '@helpers/productDescription.js';
 import { isSaleOn } from '@helpers/productSale.js';
-import { paymentProviders, shopCurrency } from '@routes/api/payments/providers/index.js';
-import { askAiForBotReply, askAiForBotText, type ChatBotLogger } from './chatBotAi.service.js';
+import {
+    paymentProviders,
+    shopCurrency,
+} from '@routes/api/payments/providers/index.js';
+import {
+    askAiForBotReply,
+    askAiForBotText,
+    type ChatBotLogger,
+} from './chatBotAi.service.js';
 import {
     BadRequestError,
     ForbiddenError,
@@ -15,17 +24,15 @@ import {
     ResourceBusyError,
 } from '@utils/errors.js';
 
-import { requestAdminService } from '../requestAdmin.service.js';
 import {
     buildChatBotPrompt,
     ChatBotActorRole,
     ChatBotHistoryMessageDto,
+    ChatBotOrderContextItemDto,
+    ChatBotOrderStatus,
     ChatBotProductContextItemDto,
 } from './chatBotPrompt.service.js';
-import {
-    ChatBotEscalationResultDto,
-    evaluateChatBotEscalation,
-} from './chatBotEscalation.service.js';
+import { evaluateChatBotEscalation } from './chatBotEscalation.service.js';
 
 import type {
     ChatMessageItemDto,
@@ -53,7 +60,22 @@ interface LoadedChatBotContextDto {
     thread: ChatThreadItemDto;
     history: ChatBotHistoryMessageDto[];
     productContext: ChatBotProductContextItemDto[];
+    // the last orders of a user, none for a guest
+    orders: ChatBotOrderContextItemDto[];
+    // only a user who confirmed the email talks to an admin
+    emailConfirmed: boolean;
+    // the answers the customer got from the bot in the last 24 hours
+    recentTurns: number;
 }
+
+// what the bot writes in its turn, and whether the chat goes to the admins with it
+interface ChatBotTurnPlanDto {
+    text: string;
+    toAdmin: boolean;
+}
+
+// who the customer is to the admin chat: only a user with a confirmed email talks to an admin
+type AdminAccess = 'guest' | 'unconfirmed' | 'allowed';
 
 interface BotMessageWriteResultDto {
     thread: ChatThreadItemDto;
@@ -63,11 +85,39 @@ interface BotMessageWriteResultDto {
 const BOT_FALLBACK_MESSAGE =
     'I cannot answer reliably right now. Please try again later or ask for admin support.';
 
-const GUEST_ADMIN_REQUIRED_MESSAGE =
-    'To contact an admin, please log in or create an account first. After that, I will be able to transfer your chat to an admin.';
+// the fixed texts of a request for an admin, by who asks: the fallback text as it is and the
+// meaning the model puts in the language of the customer
+const ADMIN_REQUEST_TEXTS: Record<
+    AdminAccess,
+    { fallbackText: string; responseMeaning: string }
+> = {
+    guest: {
+        fallbackText:
+            'Only logged-in customers with a confirmed email can talk to an admin. Please log in, or create an account and confirm your email, then ask again.',
+        responseMeaning:
+            'Tell the customer that only logged-in customers with a confirmed email can talk to an admin. Ask them to log in, or to create an account and confirm their email, and then ask again.',
+    },
+    unconfirmed: {
+        fallbackText:
+            'Only customers with a confirmed email can talk to an admin. Please confirm your email with the link we sent you, then ask again.',
+        responseMeaning:
+            'Tell the customer that only customers with a confirmed email can talk to an admin. Ask them to confirm their email with the link that was mailed to them, and then ask again.',
+    },
+    allowed: {
+        fallbackText:
+            'Please describe your issue for the admin. An admin will be able to reply here later. The bot will stop replying in this thread now.',
+        responseMeaning:
+            'Tell the customer to describe their issue for the admin. Explain that an admin will be able to reply in this chat later. Also mention that the bot will stop replying in this thread now.',
+    },
+};
 
-const USER_ADMIN_TRANSFER_MESSAGE =
-    'Please describe your issue for the admin. An admin will be able to reply here later. The bot will stop replying in this thread now.';
+// the text past the answers of a day: no model call, so it is in english as it is
+const DAILY_LIMIT_MESSAGE =
+    'I have answered as many messages as I can today. Please come back tomorrow.';
+const DAILY_LIMIT_ADMIN_HINT =
+    ' If you need help now, ask to talk to a real person.';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface GenerateLanguageMatchedBotTextDto {
     userMessage: string;
@@ -76,7 +126,6 @@ interface GenerateLanguageMatchedBotTextDto {
     log: ChatBotLogger;
 }
 
-// generates a fixed-purpose bot response in the language of the latest customer message
 // generates a fixed-purpose bot response in the language of the latest customer message
 const generateLanguageMatchedBotText = async ({
     userMessage,
@@ -139,10 +188,8 @@ const LOOP_ASSISTANCE_MESSAGES = [
 
 const PRODUCT_CONTEXT_LIMIT = 6;
 const HISTORY_LIMIT = 12;
-
-// the model decides by meaning: surer than a phrase about a human decision, less than a
-// direct request in words the code knows
-const MODEL_DECISION_CONFIDENCE = 0.85;
+// the orders of a user the bot is told of, for "where is my order"
+const ORDER_CONTEXT_LIMIT = 5;
 
 const SEARCH_STOP_WORDS = new Set([
     'the',
@@ -211,7 +258,8 @@ const mapHistoryMessages = (
             );
         })
         .map((message) => ({
-            senderType: message.senderType as ChatBotHistoryMessageDto['senderType'],
+            senderType:
+                message.senderType as ChatBotHistoryMessageDto['senderType'],
             content: message.content,
             createdAt: message.createdAt,
         }));
@@ -238,19 +286,20 @@ const extractSearchTerms = (message: string): string[] => {
 // a product the bot may recommend has free units: stock not taken by confirmed orders
 const IN_STOCK = { gt: prisma.product.fields.reservedStock };
 
+// and is one the catalog lists: of the catalog, with an image
+const LISTED = { deletedAt: null, images: { some: { isPrimary: true } } };
+
 // builds product search conditions from extracted terms
-const buildProductSearchWhere = (
-    terms: string[],
-): Prisma.ProductWhereInput => {
+const buildProductSearchWhere = (terms: string[]): Prisma.ProductWhereInput => {
     if (terms.length === 0) {
         return {
-            deletedAt: null,
+            ...LISTED,
             stock: IN_STOCK,
         };
     }
 
     return {
-        deletedAt: null,
+        ...LISTED,
         stock: IN_STOCK,
         OR: terms.flatMap((term) => [
             {
@@ -286,25 +335,38 @@ const mapProductContext = (
     return products
         .filter(
             (product) =>
-                freeUnits(product.stock, product.reservedStock, expired.get(product.id) ?? 0) > 0,
+                freeUnits(
+                    product.stock,
+                    product.reservedStock,
+                    expired.get(product.id) ?? 0,
+                ) > 0,
         )
         .map((product) => ({
-        id: product.id,
-        name: product.name,
-        price: Number(product.price),
-        // the sale while it lasts, the one the catalog shows next to the price
-        sale: isSaleOn(product)
-            ? {
-                  price: Number(product.salePrice),
-                  endsAt: product.saleEndsAt!.toISOString(),
-              }
-            : null,
-        // free units, never below zero, the stock the catalog shows
-        stock: freeUnits(product.stock, product.reservedStock, expired.get(product.id) ?? 0),
-        categoryName: product.category.name,
-        description: product.description,
-        popularity: product.popularity,
-    }));
+            id: product.id,
+            name: product.name,
+            price: Number(product.price),
+            // the sale while it lasts, the one the catalog shows next to the price
+            sale: isSaleOn(product)
+                ? {
+                      price: Number(product.salePrice),
+                      endsAt: product.saleEndsAt!.toISOString(),
+                      priorPrice:
+                          product.salePriorPrice === null
+                              ? null
+                              : Number(product.salePriorPrice),
+                  }
+                : null,
+            // free units, never below zero, the stock the catalog shows
+            stock: freeUnits(
+                product.stock,
+                product.reservedStock,
+                expired.get(product.id) ?? 0,
+            ),
+            categoryName: product.category.name,
+            // the text of the description, without the safety data it keeps
+            description: parseProductDescription(product.description).text,
+            popularity: product.popularity,
+        }));
 };
 
 // loads matching products for the bot prompt
@@ -344,7 +406,7 @@ const findProductsForBotContext = async (
 
     return db.product.findMany({
         where: {
-            deletedAt: null,
+            ...LISTED,
             stock: IN_STOCK,
         },
         include: {
@@ -423,6 +485,8 @@ const loadChatBotContext = async ({
         // loads compact product context for shopping-related answers
         const productRows = await findProductsForBotContext(db, userMessage);
 
+        const userId = chatBotActorRole === 'USER' ? toUserId(actorId) : null;
+
         // returns prompt-ready context in chronological order
         return {
             thread,
@@ -434,8 +498,98 @@ const loadChatBotContext = async ({
                     productRows.map((product) => product.id),
                 ),
             ),
+            orders: userId ? await findOrdersForBotContext(db, userId) : [],
+            emailConfirmed: userId ? await isEmailConfirmed(db, userId) : false,
+            recentTurns: await countRecentBotTurns(
+                db,
+                chatBotActorRole,
+                actorId,
+            ),
         };
     });
+};
+
+// the last orders of the user under their own rights, newest first; the cart is no order
+const findOrdersForBotContext = async (
+    db: Prisma.TransactionClient,
+    userId: number,
+): Promise<ChatBotOrderContextItemDto[]> => {
+    const orders = await db.order.findMany({
+        where: { userId, status: { not: 'pending' } },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: ORDER_CONTEXT_LIMIT,
+        select: {
+            id: true,
+            status: true,
+            total: true,
+            createdAt: true,
+            paidAt: true,
+            items: {
+                orderBy: { id: 'asc' },
+                select: {
+                    quantity: true,
+                    productName: true,
+                    product: { select: { name: true } },
+                },
+            },
+        },
+    });
+
+    return orders.map((order) => ({
+        id: order.id,
+        status: order.status as ChatBotOrderStatus,
+        total: Number(order.total),
+        createdAt: order.createdAt.toISOString(),
+        paidAt: order.paidAt?.toISOString() ?? null,
+        // the name an item was confirmed with, the one of now for an unconfirmed order
+        items: order.items.map((item) => ({
+            name:
+                (order.status !== 'unconfirmed' && item.productName) ||
+                item.product.name,
+            quantity: item.quantity,
+        })),
+    }));
+};
+
+const isEmailConfirmed = async (
+    db: Prisma.TransactionClient,
+    userId: number,
+) => {
+    const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { isVerified: true },
+    });
+
+    return user?.isVerified === true;
+};
+
+// the answers the bot gave the customer in the last 24 hours, in all of their chats; the welcome
+// that opens a chat is the first message of it and no answer
+const countRecentBotTurns = async (
+    db: Prisma.TransactionClient,
+    actorRole: ChatBotActorRole,
+    actorId: UserId,
+): Promise<number> => {
+    const since = new Date(Date.now() - DAY_MS).toISOString();
+    const owner =
+        actorRole === 'GUEST'
+            ? Prisma.sql`t."guestId" = ${String(actorId)}::uuid`
+            : Prisma.sql`t."userId" = ${toUserId(actorId)}`;
+
+    const rows = await db.$queryRaw<{ turns: number }[]>`
+        SELECT count(*)::int AS turns
+        FROM cartlify.chat_messages m
+        JOIN cartlify.chat_threads t ON t.id = m."threadId"
+        WHERE ${owner}
+          AND m."senderType" = 'bot'
+          AND m."createdAt" > (${since}::timestamptz AT TIME ZONE 'UTC')
+          AND EXISTS (
+              SELECT 1 FROM cartlify.chat_messages p
+              WHERE p."threadId" = m."threadId" AND p.id < m.id
+          )
+    `;
+
+    return rows[0]?.turns ?? 0;
 };
 
 // generates fallback text in the customer's latest language when AI answer fails
@@ -452,72 +606,59 @@ const generateFallbackBotText = async (
     });
 };
 
-// calls AI client and protects chat flow from provider failures
-const generateAiBotText = async (
+// asks the model for the answer with its decision whether a human admin is needed; null when it
+// gave no usable answer
+const askModelForReply = (
     context: LoadedChatBotContextDto,
     actorRole: ChatBotActorRole,
     userMessage: string,
     log: ChatBotLogger,
-): Promise<{ text: string; decision: ChatBotEscalationResultDto | null }> => {
+) => {
     // builds Cartlify-specific prompt outside the low-level OpenAI wrapper
     const prompt = buildChatBotPrompt({
         actorRole,
+        emailConfirmed: context.emailConfirmed,
         userMessage,
         history: context.history,
         productContext: context.productContext,
+        orders: context.orders,
         // the currency checkout charges in, so the bot names the same one
         currency: shopCurrency(),
         paymentProviders: paymentProviders.map((provider) => provider.label),
     });
 
-    // sends normalized request to the AI client, a broken answer is asked once more
-    const answer = await askAiForBotReply(
+    // a broken answer is asked once more, a failure is not
+    return askAiForBotReply(
         { instructions: prompt.instructions, messages: prompt.messages },
         log,
     );
-
-    // keeps customer chat working even when AI provider fails, there is no decision then
-    if (!answer) {
-        return { text: await generateFallbackBotText(userMessage, log), decision: null };
-    }
-
-    // the model decided by meaning, in any language, whether a human admin is needed
-    return {
-        text: answer.reply,
-        decision: answer.escalate
-            ? {
-                  shouldEscalate: true,
-                  reason: answer.reason,
-                  confidence: MODEL_DECISION_CONFIDENCE,
-                  matchedPhrase: null,
-              }
-            : null,
-    };
 };
 
-// generates admin-related response in the customer's latest language
-const generateEscalationBotText = async (
+const adminAccessOf = (
     actorRole: ChatBotActorRole,
+    emailConfirmed: boolean,
+): AdminAccess =>
+    actorRole === 'GUEST'
+        ? 'guest'
+        : emailConfirmed
+          ? 'allowed'
+          : 'unconfirmed';
+
+// the answer to a request for an admin: a user with a confirmed email is asked to describe the
+// issue and the chat goes to the admins, that description is what they read first; anyone else is
+// told who talks to an admin. With the model, the text comes in the language of the customer
+const planAdminRequest = async (
+    access: AdminAccess,
     userMessage: string,
     log: ChatBotLogger,
-): Promise<string> => {
-    if (actorRole === 'GUEST') {
-        return generateLanguageMatchedBotText({
-            userMessage,
-            log,
-            fallbackText: GUEST_ADMIN_REQUIRED_MESSAGE,
-            responseMeaning:
-                'Tell the customer that to contact an admin, they need to log in or create an account first. After that, the chat can be transferred to an admin.',
-        });
-    }
+    withModel: boolean,
+): Promise<ChatBotTurnPlanDto> => {
+    const texts = ADMIN_REQUEST_TEXTS[access];
+    const text = withModel
+        ? await generateLanguageMatchedBotText({ userMessage, log, ...texts })
+        : texts.fallbackText;
 
-    return generateLanguageMatchedBotText({
-        userMessage,
-        log,
-        fallbackText: USER_ADMIN_TRANSFER_MESSAGE,
-        responseMeaning:
-            'Tell the customer to describe their issue for the admin. Explain that an admin will be able to reply in this chat later. Also mention that the bot will stop replying in this thread now.',
-    });
+    return { text, toAdmin: access === 'allowed' };
 };
 
 // generates loop-assistance response in the customer's latest language
@@ -534,42 +675,81 @@ const generateLoopAssistanceBotText = async (
     });
 };
 
-// evaluates direct escalation before spending an AI request
-const evaluatePreAiEscalation = (
+// decides the turn: an explicit request for a person and a loop are found before the model and
+// take one call of it, for the text in the language of the customer; past the answers of the day
+// the model is asked nothing; otherwise the model answers and decides by meaning whether a person
+// is needed
+const planBotTurn = async (
+    context: LoadedChatBotContextDto,
+    actorRole: ChatBotActorRole,
     userMessage: string,
-    history: ChatBotHistoryMessageDto[],
-): ChatBotEscalationResultDto => {
-    return evaluateChatBotEscalation({
+    log: ChatBotLogger,
+): Promise<ChatBotTurnPlanDto> => {
+    const access = adminAccessOf(actorRole, context.emailConfirmed);
+    const limit =
+        actorRole === 'GUEST'
+            ? env.CHAT_BOT_GUEST_DAILY_TURNS
+            : env.CHAT_BOT_USER_DAILY_TURNS;
+    const withModel = context.recentTurns < limit;
+
+    const signal = evaluateChatBotEscalation({
         userMessage,
-        botMessage: '',
-        history,
+        history: context.history,
     });
+
+    if (signal.reason === 'DIRECT_ADMIN_REQUEST') {
+        return planAdminRequest(access, userMessage, log, withModel);
+    }
+
+    if (signal.reason === 'LOOP_DETECTED') {
+        return {
+            text: withModel
+                ? await generateLoopAssistanceBotText(userMessage, log)
+                : LOOP_ASSISTANCE_MESSAGES[0],
+            toAdmin: false,
+        };
+    }
+
+    if (!withModel) {
+        return {
+            text:
+                DAILY_LIMIT_MESSAGE +
+                (access === 'allowed' ? DAILY_LIMIT_ADMIN_HINT : ''),
+            toAdmin: false,
+        };
+    }
+
+    const answer = await askModelForReply(context, actorRole, userMessage, log);
+
+    // keeps customer chat working even when AI provider fails, there is no decision then
+    if (!answer) {
+        return {
+            text: await generateFallbackBotText(userMessage, log),
+            toAdmin: false,
+        };
+    }
+
+    // the model decided by meaning, in any language, that a person is needed
+    if (answer.escalate)
+        return planAdminRequest(access, userMessage, log, true);
+
+    return { text: answer.reply, toAdmin: false };
 };
 
-// evaluates escalation again after AI response
-const evaluatePostAiEscalation = (
-    userMessage: string,
-    botMessage: string,
-    history: ChatBotHistoryMessageDto[],
-): ChatBotEscalationResultDto => {
-    return evaluateChatBotEscalation({
-        userMessage,
-        botMessage,
-        history,
-    });
-};
-
-// creates bot message and updates thread last-message metadata
-const createBotMessage = async ({
+// writes the answer of the bot and, when the plan says so, gives the chat to the admins in the
+// same transaction: a bot that promised an admin always leaves the chat with one
+const writeBotTurn = async ({
     actorId,
     actorRole,
     threadId,
     content,
+    toAdmin,
 }: {
     actorId: UserId;
     actorRole: ChatBotActorRole;
     threadId: string;
     content: string;
+    toAdmin: boolean;
 }): Promise<BotMessageWriteResultDto | null> => {
     return tx(
         async (db) => {
@@ -617,7 +797,8 @@ const createBotMessage = async ({
                 },
             });
 
-            // updates thread preview and last-message timestamp
+            // updates thread preview and last-message timestamp; a chat given to the admins waits
+            // from now, it enters their queue with the next message of the customer
             const thread = await db.chatThread.update({
                 where: {
                     id: threadId,
@@ -625,6 +806,10 @@ const createBotMessage = async ({
                 data: {
                     lastMessageAt: botMessage.createdAt,
                     lastMessagePreview: content.slice(0, 120),
+                    ...(toAdmin && {
+                        type: 'admin',
+                        adminRequestedAt: botMessage.createdAt,
+                    }),
                 },
             });
 
@@ -640,31 +825,6 @@ const createBotMessage = async ({
             timeout: 10_000,
         },
     );
-};
-
-// switches logged-in user thread to admin mode after bot message is saved
-const requestAdminIfNeeded = async ({
-    actorId,
-    actorRole,
-    threadId,
-    shouldEscalate,
-}: {
-    actorId: UserId;
-    actorRole: ChatBotActorRole;
-    threadId: string;
-    shouldEscalate: boolean;
-}): Promise<ChatThreadItemDto | null> => {
-    if (!shouldEscalate || actorRole !== 'USER') {
-        return null;
-    }
-
-    const result = await requestAdminService({
-        actorId,
-        actorRole,
-        threadId,
-    });
-
-    return result.thread;
 };
 
 // handles one full bot turn after customer message is already saved
@@ -686,47 +846,20 @@ export const handleChatBotTurn = async (
             };
         }
 
-        // checks direct admin/human request and loop signals before AI call
-        const preAiEscalation = evaluatePreAiEscalation(
+        const plan = await planBotTurn(
+            context,
+            actorRole,
             dto.userMessage,
-            context.history,
+            dto.log,
         );
 
-        // skips AI only for deterministic admin or loop responses
-        let aiText: string;
-        let modelDecision: ChatBotEscalationResultDto | null = null;
-
-        if (preAiEscalation.reason === 'LOOP_DETECTED') {
-            aiText = await generateLoopAssistanceBotText(dto.userMessage, dto.log);
-        } else if (preAiEscalation.shouldEscalate) {
-            aiText = await generateEscalationBotText(actorRole, dto.userMessage, dto.log);
-        } else {
-            const answer = await generateAiBotText(context, actorRole, dto.userMessage, dto.log);
-
-            aiText = answer.text;
-            modelDecision = answer.decision;
-        }
-
-        // english phrases decide first, then the model by meaning, then the phrases of the answer
-        const finalEscalation = preAiEscalation.shouldEscalate
-            ? preAiEscalation
-            : (modelDecision ??
-              evaluatePostAiEscalation(dto.userMessage, aiText, context.history));
-
-        // keeps loop assistance text instead of forcing admin escalation text
-        const finalBotText =
-            finalEscalation.reason === 'LOOP_DETECTED'
-                ? aiText
-                : finalEscalation.shouldEscalate
-                    ? await generateEscalationBotText(actorRole, dto.userMessage, dto.log)
-                    : aiText;
-
-        // saves final bot message and updates thread metadata
-        const writeResult = await createBotMessage({
+        // saves the bot message, and gives the chat to the admins with it
+        const writeResult = await writeBotTurn({
             actorId: dto.actorId,
             actorRole,
             threadId: dto.threadId,
-            content: finalBotText,
+            content: plan.text,
+            toAdmin: plan.toAdmin,
         });
 
         // returns no bot output if another process already closed/escalated the thread
@@ -738,26 +871,12 @@ export const handleChatBotTurn = async (
             };
         }
 
-        // requests admin only for real escalation reasons, not for loop assistance
-        const shouldRequestAdmin =
-            finalEscalation.shouldEscalate &&
-            finalEscalation.reason !== 'LOOP_DETECTED';
-
-        const adminThread = await requestAdminIfNeeded({
-            actorId: dto.actorId,
-            actorRole,
-            threadId: dto.threadId,
-            shouldEscalate: shouldRequestAdmin,
-        });
-
-        // returns final thread state and created bot message
         return {
-            thread: adminThread ?? writeResult.thread,
+            thread: writeResult.thread,
             botMessage: writeResult.botMessage,
-            adminPending: Boolean(adminThread),
+            adminPending: plan.toAdmin,
         };
     } catch (err) {
-
         // preserves known application errors
         if (isAppError(err)) {
             throw err;
@@ -765,7 +884,7 @@ export const handleChatBotTurn = async (
 
         // maps retryable transaction errors to stable resource-busy error
         if (isRetryableTxError(err)) {
-            throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+            throw new ResourceBusyError();
         }
 
         // wraps unexpected bot failures into internal app error

@@ -28,6 +28,8 @@ describe('chatWsConnectionManager', () => {
       actorId: 3,
       actorRole: 'USER',
       joinedThreads: new Set(),
+      // the counts of what it sends, against the limits of a socket (chatWs.limits.ts)
+      limits: expect.anything(),
     });
   });
 

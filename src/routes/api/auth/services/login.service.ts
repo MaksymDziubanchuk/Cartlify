@@ -123,6 +123,7 @@ export async function login({
         userId: u.id,
         role: u.role,
         rememberMe,
+        ...(userAgent !== undefined ? { userAgent } : {}),
       });
 
       const result: LoginResponseDto = {

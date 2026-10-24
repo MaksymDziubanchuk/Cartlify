@@ -39,17 +39,21 @@ export async function removeUserAvatar({
     outcome = await prisma.$transaction(async (tx) => {
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
-      // what the account had: the function gives the id of the file only, an old address of a
-      // provider has none
+      // who gets the mail
       const target = await tx.user.findUnique({
         where: { id },
-        select: { email: true, name: true, avatarUrl: true, publicId: true, deletedAt: true },
+        select: { email: true, name: true, deletedAt: true },
       });
       if (!target) throw new NotFoundError('USER_NOT_FOUND');
 
-      await tx.$queryRaw`select cartlify.remove_user_avatar(${id}::int) as "publicId"`;
+      // the function reads the avatar under the lock of the row and says whether it took one: of
+      // two moderators at once only one writes the line, counts and mails. An old address of a
+      // provider has no id of a file
+      const [taken] = await tx.$queryRaw<
+        { removed: boolean; public_id: string | null; avatar_url: string | null }[]
+      >`select * from cartlify.remove_user_avatar(${id}::int)`;
 
-      const removed = target.avatarUrl !== null || target.publicId !== null;
+      const removed = taken?.removed === true;
       if (removed) {
         await writeAdminAuditLog(tx, {
           actorId,
@@ -57,14 +61,14 @@ export async function removeUserAvatar({
           entityType: 'user',
           entityId: id,
           action: 'OTHER',
-          changes: [avatarRemovalChange(target.publicId ?? target.avatarUrl)],
+          changes: [avatarRemovalChange(taken!.public_id ?? taken!.avatar_url)],
         });
       }
 
       return {
         removed,
         avatarRemovals: await countAvatarRemovals(tx, id),
-        publicId: target.publicId,
+        publicId: removed ? taken!.public_id : null,
         // a deleted account has no avatar and no address to write to
         mailTo: target.deletedAt ? null : target.email,
         userName: target.name,

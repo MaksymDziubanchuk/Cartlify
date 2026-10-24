@@ -20,7 +20,10 @@ import {
   payOrder,
   unconfirmOrderFromWebhook,
 } from '@routes/api/payments/services/helpers/orderPaymentTx.helper.js';
-import { refundLatePayment } from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
+import {
+  isPaymentRefunded,
+  refundLatePayment,
+} from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
 import { sendOrderPaidEmail } from '@routes/api/payments/services/helpers/sendOrderPaidEmail.helper.js';
 
 import {
@@ -52,6 +55,24 @@ function skipForeignPage(
   );
 
   return { received: true, skipped: 'NOT_AN_ORDER' };
+}
+
+// nothing waits for a paid order: its reservation timers and the link of its page go. A leftover
+// timer is harmless (it touches only a waiting order), so redis, down or dropping the connection
+// in the middle, never fails a payment that is recorded: the error answer would make stripe deliver
+// the event again, that delivery is a repeated one and the buyer would never get the mail
+async function dropPaidOrderTimers(orderId: number, log: WebhookLogger): Promise<void> {
+  if (!isRedisReady()) return;
+
+  try {
+    await cancelOrderReservationExpiry(orderId);
+    await deleteOrderPaymentPageLink(orderId);
+  } catch (err) {
+    log.warn(
+      { orderId, err: { code: (err as { code?: unknown })?.code } },
+      'paid order cleanup in redis failed, its timers stay until they run out',
+    );
+  }
 }
 
 export async function handleStripeWebhook(
@@ -96,18 +117,19 @@ export async function handleStripeWebhook(
         const paymentId = getPaymentIntentIdFromCheckoutSession(session);
         const paidAmount = getPaidAmountFromCheckoutSession(session);
 
+        // the money of this payment went back already (the order could not take it): a later
+        // delivery of the event must not sell the order, also when the stock came back meanwhile
+        if (await isPaymentRefunded({ provider: 'stripe', paymentId, orderId })) {
+          return { received: true, skipped: 'REFUNDED' };
+        }
+
         // db decides what this payment means for the order
         // a technical failure throws here, so stripe gets an error and delivers the event again
         const payResult = await payOrder({ provider: 'stripe', paymentId, orderId, paidAmount });
 
         // order is paid now, also when the payment came late and stock was taken without reservation
         if (payResult === 'PAID') {
-          // a leftover timeout job is harmless, so a redis outage must not fail a recorded payment;
-          // nothing closes the page of a paid order any more, its link would stay for good
-          if (isRedisReady()) {
-            await cancelOrderReservationExpiry(orderId);
-            await deleteOrderPaymentPageLink(orderId);
-          }
+          await dropPaidOrderTimers(orderId, log);
 
           // the payment is committed; the mail never fails the webhook, a failure is only logged.
           // A repeated delivery answers ALREADY_PAID_SAME_PAYMENT, so the buyer gets one mail
@@ -116,22 +138,27 @@ export async function handleStripeWebhook(
           break;
         }
 
-        // same payment delivered again, order already holds it
+        // same payment delivered again, order already holds it; what a failed cleanup of the
+        // first delivery left goes now
         if (payResult === 'ALREADY_PAID_SAME_PAYMENT') {
+          await dropPaidOrderTimers(orderId, log);
           break;
         }
 
         // every other answer means the order cannot take this money, so it goes back in full:
         // paid by another payment, cannot be paid, amount differs from order items, out of stock, order is gone
-        const refundResult = await refundLatePayment({
-          provider: 'stripe',
-          paymentId,
-          orderId,
-          fallbackUserId: getUserIdFromCheckoutSession(session),
-          reason: payResult,
-          amount: paidAmount,
-          currency: session.currency,
-        });
+        const refundResult = await refundLatePayment(
+          {
+            provider: 'stripe',
+            paymentId,
+            orderId,
+            fallbackUserId: getUserIdFromCheckoutSession(session),
+            reason: payResult,
+            amount: paidAmount,
+            currency: session.currency,
+          },
+          log,
+        );
 
         // audit log needs an existing user as actor, leave a trace when there is nobody to attribute
         if (!refundResult.logged) {
@@ -196,7 +223,7 @@ export async function handleStripeWebhook(
     if (isAppError(err)) throw err;
 
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2010') {

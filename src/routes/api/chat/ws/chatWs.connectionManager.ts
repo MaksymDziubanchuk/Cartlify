@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 
 import type WebSocket from 'ws';
+
+import { SocketLimits } from './chatWs.limits.js';
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
@@ -15,6 +17,8 @@ export interface ChatSocketContext {
     actorId: UserId;
     actorRole: Role;
     joinedThreads: Set<string>;
+    // what the socket sent lately, against its limits (chatWs.limits.ts)
+    limits: SocketLimits;
 }
 
 class ChatWsConnectionManager {
@@ -34,6 +38,7 @@ class ChatWsConnectionManager {
             actorId,
             actorRole,
             joinedThreads: new Set(),
+            limits: new SocketLimits(),
         });
 
         if (actorRole === 'ADMIN' || actorRole === 'ROOT') {

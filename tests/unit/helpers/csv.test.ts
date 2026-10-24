@@ -58,3 +58,13 @@ describe('toCsv', () => {
     expect(lines(toCsv(columns, []))).toEqual(['name,units,value', '']);
   });
 });
+
+describe('toCsv and a value that is not there', () => {
+  it('writes a value of undefined as nothing', () => {
+    const csv = toCsv(columns, [
+      { name: undefined as unknown as null, units: 1, value: undefined as unknown as null },
+    ]);
+
+    expect(csv.split('\r\n')[1]).toBe(',1,');
+  });
+});

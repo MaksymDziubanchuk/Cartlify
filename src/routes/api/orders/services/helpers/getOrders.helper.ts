@@ -7,15 +7,38 @@ import {
 } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
-import { BadRequestError } from '@utils/errors.js';
+import { MAX_ID } from '@schemas/idPathParam.js';
+import { BadRequestError, ForbiddenError } from '@utils/errors.js';
 
 import type { FindOrdersDto, OrdersSortBy, OrdersSortDir } from 'types/dto/orders.dto.js';
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
-// normalize dto for findOrders
+// the statuses of the list: the cart (pending) is not an order, the list never has it
+const LIST_STATUSES = ['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'];
+
+const isAdminRole = (role: Role) => role === 'ADMIN' || role === 'ROOT';
+
+// normalize dto for findOrders; the filters of the desk of an admin (a buyer, the text of a
+// buyer or a recipient, the csv) are FILTER_FORBIDDEN for a buyer, who sees only their own orders
 export function normalizeFindOrdersInput(dto: FindOrdersDto) {
   const limit = assertLimit(dto.limit ?? 20);
+
+  if (!isAdminRole(dto.actorRole)) {
+    for (const filter of ['userId', 'q', 'format'] as const) {
+      if (dto[filter] !== undefined) throw new ForbiddenError('FILTER_FORBIDDEN', { filter });
+    }
+  }
+
+  // a few statuses, separated by commas
+  const statuses = dto.statuses
+    ? [...new Set(dto.statuses.split(',').map((status) => status.trim()))]
+    : undefined;
+  if (statuses?.some((status) => !LIST_STATUSES.includes(status))) {
+    throw new BadRequestError('STATUS_INVALID');
+  }
+
+  const q = typeof dto.q === 'string' && dto.q.trim() ? dto.q.trim() : undefined;
 
   // newest first by default, whatever the status
   const sortBy: OrdersSortBy = (dto.sortBy ?? 'createdAt') as OrdersSortBy;
@@ -45,11 +68,33 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     limit,
     cursor,
     status,
+    statuses,
     confirmed,
     paidFrom,
     paidTo,
+    userId: dto.userId,
+    productId: dto.productId,
+    q,
     sortBy,
     sortDir,
+  };
+}
+
+// the text an admin looks for: a whole number is the number of an order, any other text a part of
+// the email of the buyer, the name or the phone of the recipient
+function searchWhereOf(q: string) {
+  if (/^[1-9][0-9]*$/.test(q) && Number(q) <= MAX_ID) return { id: Number(q) };
+
+  // prisma puts the text into a LIKE pattern as it is: % and _ are wildcards there and \ is the
+  // escape of postgres, so each of them gets a \ in front
+  const part = { contains: q.replace(/[\\%_]/g, '\\$&'), mode: 'insensitive' as const };
+  return {
+    OR: [
+      { user: { email: part } },
+      { recipientFirstName: part },
+      { recipientLastName: part },
+      { recipientPhone: part },
+    ],
   };
 }
 
@@ -58,16 +103,25 @@ export function buildOrdersWhere(args: {
   actorId: UserId;
   actorRole: Role;
   status?: string | undefined;
+  statuses?: string[] | undefined;
   confirmed?: boolean | undefined;
   paidFrom?: Date | undefined;
   paidTo?: Date | undefined;
+  userId?: number | undefined;
+  productId?: number | undefined;
+  q?: string | undefined;
   sortBy: OrdersSortBy;
 }) {
   const where: any = {};
   if (args.actorRole === 'USER') where.userId = args.actorId;
+  else if (args.userId !== undefined) where.userId = args.userId;
 
-  // the cart is not an order, the list never has it
-  where.status = args.status ? args.status : { not: 'pending' };
+  // the cart is not an order, the list never has it; status and statuses are both kept
+  const status = args.status ? args.status : { not: 'pending' };
+  where.status = args.statuses ? { in: args.statuses } : status;
+  if (args.statuses && args.status) where.AND = [{ status: args.status }];
+  if (args.productId !== undefined) where.items = { some: { productId: args.productId } };
+  if (args.q) Object.assign(where, searchWhereOf(args.q));
   if (args.confirmed !== undefined) where.confirmed = args.confirmed;
 
   if (args.sortBy === 'shippingAddress') where.shippingAddress = { not: null };
@@ -100,7 +154,13 @@ export function buildOrdersCursorWhere(args: {
 }) {
   if (!args.cursor) return undefined;
 
-  const { id, v } = decodeCursor(args.cursor);
+  // a cursor of another sort or direction would start the page from an order of another order
+  const { id, v, s } = decodeCursor(args.cursor) as {
+    id: number;
+    v: string | number | null;
+    s?: unknown;
+  };
+  if (s !== `${args.sortBy}:${args.sortDir}`) throw new BadRequestError('CURSOR_INVALID');
   const op = args.sortDir === 'asc' ? 'gt' : 'lt';
 
   // string sort
@@ -143,8 +203,12 @@ export function buildOrdersCursorWhere(args: {
   };
 }
 
-// build next cursor from last row
-export function makeNextOrdersCursor(sortBy: OrdersSortBy, last: any): string {
+// build next cursor from last row, with its sort and direction
+export function makeNextOrdersCursor(
+  sortBy: OrdersSortBy,
+  last: any,
+  sortDir: OrdersSortDir,
+): string {
   let v: string | number;
 
   if (sortBy === 'createdAt') v = new Date(last.createdAt).toISOString();
@@ -153,5 +217,5 @@ export function makeNextOrdersCursor(sortBy: OrdersSortBy, last: any): string {
   else if (sortBy === 'shippingAddress') v = String(last.shippingAddress ?? '');
   else v = decimalToNumber(last.total);
 
-  return encodeCursor({ id: last.id, v });
+  return encodeCursor({ id: last.id, v, s: `${sortBy}:${sortDir}` } as never);
 }

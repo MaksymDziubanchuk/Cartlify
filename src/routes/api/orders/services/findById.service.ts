@@ -58,7 +58,7 @@ export async function findById({
 
     // map lock/tx contention errors to a stable 409 for clients
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     throw new InternalError({ reason: 'ORDERS_GET_BY_ID_UNEXPECTED' }, err);

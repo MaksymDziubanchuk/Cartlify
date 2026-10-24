@@ -1,6 +1,46 @@
 import { Prisma } from '@prisma/client';
+import { getPgCode } from '@db/client.js';
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import { BadRequestError } from '@utils/errors.js';
+
+// the highest price numeric(10, 2) holds
+export const MAX_PRICE = 99_999_999.99;
+
+// a price of whole cents from 0 up to MAX_PRICE: 10.004 was kept as 10.00 by the database
+export const isPrice = (value: number): boolean =>
+  Number.isFinite(value) &&
+  value >= 0 &&
+  value <= MAX_PRICE &&
+  Math.abs(Math.round(value * 100) - value * 100) < 1e-6;
+
+// the longest article number the column keeps, in signs (code points, as the json schema counts)
+export const MAX_SKU_LENGTH = 64;
+
+// an article number as it is kept: trimmed, an empty one is none (null), undefined is not sent.
+// The json schema stops a longer one, a form is checked here
+export function normalizeSku(value: unknown): string | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+
+  const sku = String(value).trim();
+  if (!sku) return null;
+  if ([...sku].length > MAX_SKU_LENGTH) throw new BadRequestError('PRODUCT_SKU_TOO_LONG');
+
+  return sku;
+}
+
+// the article number another product of the catalog has already: the unique index of db/06
+export function isSkuTaken(err: unknown): boolean {
+  const unique =
+    (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') ||
+    getPgCode(err) === '23505';
+  if (!unique) return false;
+
+  const meta = err instanceof Prisma.PrismaClientKnownRequestError ? err.meta : undefined;
+  return `${JSON.stringify(meta ?? {})} ${String((err as Error)?.message ?? '')}`.includes(
+    'products_sku_catalog_uidx',
+  );
+}
 
 export function normalizeFindProductByIdInput(dto: { productId: unknown }) {
   // normalize and validate product id
@@ -44,8 +84,8 @@ export function normalizeCreateProductInput(args: {
     throw new BadRequestError('PRODUCT_NAME_INVALID');
   }
 
-  // validate required price
-  if (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0) {
+  // validate required price: cents, and what numeric(10, 2) holds
+  if (priceRaw == null || !isPrice(priceRaw)) {
     throw new BadRequestError('PRODUCT_PRICE_INVALID');
   }
 
@@ -106,8 +146,8 @@ export function normalizeUpdateProductInput(
     throw new BadRequestError('PRODUCT_NAME_INVALID');
   }
 
-  // validate optional price
-  if (args.price != null && (priceRaw == null || !Number.isFinite(priceRaw) || priceRaw < 0)) {
+  // validate optional price: cents, and what numeric(10, 2) holds
+  if (args.price != null && (priceRaw == null || !isPrice(priceRaw))) {
     throw new BadRequestError('PRODUCT_PRICE_INVALID');
   }
 
@@ -175,6 +215,8 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
   value: number;
 
   where: Prisma.ProductWhereInput;
+  // the products with free units (true) or without (false); none: every product of the scope
+  inStock?: boolean;
 
   dryRun: boolean;
   reason?: string;
@@ -262,8 +304,8 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
     });
   }
 
-  if (inStockRaw === true) and.push({ stock: { gt: 0 } });
-  else if (inStockRaw === false) and.push({ stock: 0 });
+  // in stock is counted in free units on the rows (the stock less the reserve and the units over):
+  // a filter of prisma has no word for it
 
   if (deletedRaw === true) and.push({ deletedAt: { not: null } });
   else if (deletedRaw === false) and.push({ deletedAt: null });
@@ -274,6 +316,7 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
     mode: modeRaw,
     value: valueRaw,
     where,
+    ...(inStockRaw !== undefined ? { inStock: inStockRaw } : {}),
     dryRun,
     ...(reason ? { reason } : {}),
     // the same word on the sales for every product, the schema lets through keep or remove

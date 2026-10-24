@@ -115,7 +115,7 @@ export async function cancelOrderPayment(
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    if (isRetryableTxError(err)) throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+    if (isRetryableTxError(err)) throw new ResourceBusyError();
 
     const message = getPgMessage(err) ?? '';
 

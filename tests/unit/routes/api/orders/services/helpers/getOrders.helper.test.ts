@@ -215,7 +215,7 @@ describe('buildOrdersWhere', () => {
       orderBy: buildOrdersOrderBy('paidAt', 'asc'),
       limit: 2,
       cursorWhere: (cursor) => buildOrdersCursorWhere({ sortBy: 'paidAt', sortDir: 'asc', cursor }),
-      nextCursor: (last) => makeNextOrdersCursor('paidAt', last),
+      nextCursor: (last) => makeNextOrdersCursor('paidAt', last, 'asc'),
     });
 
     expect(visited).toEqual([4, 5, 7]);
@@ -234,7 +234,7 @@ describe('order list pagination', () => {
         orderBy,
         limit: 2,
         cursorWhere: (cursor) => buildOrdersCursorWhere({ sortBy, sortDir, cursor }),
-        nextCursor: (last) => makeNextOrdersCursor(sortBy, last),
+        nextCursor: (last) => makeNextOrdersCursor(sortBy, last, sortDir),
       });
 
       const expected = sortRows(
@@ -282,7 +282,7 @@ describe('buildOrdersCursorWhere', () => {
     ['an amount sort gets null', 'total', null],
     ['an amount sort gets a date from another sort', 'total', '2026-03-01T10:00:00.000Z'],
   ] as const)('rejects the cursor when %s', (_case, sortBy, v) => {
-    const cursor = encodeCursor({ id: 4, v });
+    const cursor = encodeCursor({ id: 4, v, s: `${sortBy}:desc` } as never);
 
     expect(
       thrownBy(() => buildOrdersCursorWhere({ sortBy, sortDir: 'desc', cursor })),
@@ -299,7 +299,148 @@ describe('makeNextOrdersCursor', () => {
     ['paidAt', '2026-03-02T10:00:00.000Z'],
     ['total', 99.99],
     ['shippingAddress', 'Kyiv'],
-  ] as const)('puts the %s of the last row next to its id', (sortBy, v) => {
-    expect(decodeCursor(makeNextOrdersCursor(sortBy, last))).toEqual({ id: 4, v });
+  ] as const)('puts the %s of the last row next to its id, with the sort', (sortBy, v) => {
+    expect(decodeCursor(makeNextOrdersCursor(sortBy, last, 'desc'))).toEqual({
+      id: 4,
+      v,
+      s: `${sortBy}:desc`,
+    });
+  });
+});
+
+// a cursor names its sort and direction: one of another, or one without them, starts the page
+// from an order of another order
+describe('buildOrdersCursorWhere and the sort of a cursor', () => {
+  const cursorOf = (s?: string) =>
+    encodeCursor({ id: 4, v: '2026-03-02T10:00:00.000Z', ...(s ? { s } : {}) } as never);
+
+  it.each([
+    ['another direction', 'createdAt:asc'],
+    ['another sort', 'updatedAt:desc'],
+    ['no sort', undefined],
+  ])('rejects the cursor of %s', (_case, s) => {
+    expect(
+      thrownBy(() =>
+        buildOrdersCursorWhere({ sortBy: 'createdAt', sortDir: 'desc', cursor: cursorOf(s) }),
+      ),
+    ).toMatchObject({ statusCode: 400, errorCode: 'CURSOR_INVALID' });
+  });
+
+  it('takes the cursor of its own sort and direction', () => {
+    expect(
+      buildOrdersCursorWhere({
+        sortBy: 'createdAt',
+        sortDir: 'desc',
+        cursor: cursorOf('createdAt:desc'),
+      }),
+    ).toBeDefined();
+  });
+});
+
+// the desk of an admin: the filters a buyer may not send
+describe('normalizeFindOrdersInput and the desk', () => {
+  it.each(['userId', 'q', 'format'] as const)('refuses %s to a buyer', (filter) => {
+    expect(
+      thrownBy(() => normalizeFindOrdersInput(dto({ [filter]: filter === 'format' ? 'csv' : 1 }))),
+    ).toMatchObject({ statusCode: 403, errorCode: 'FILTER_FORBIDDEN', details: { filter } });
+  });
+
+  it.each(['ADMIN', 'ROOT'] as const)('lets %s use the filters of the desk', (actorRole) => {
+    expect(
+      normalizeFindOrdersInput(dto({ actorRole, userId: 5, q: '  Koval ', format: 'csv' })),
+    ).toMatchObject({ userId: 5, q: 'Koval' });
+  });
+
+  it('drops a text of spaces, and orders as asked', () => {
+    expect(normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', q: '   ' })).q).toBeUndefined();
+    expect(normalizeFindOrdersInput(dto({ sortDir: 'asc' })).sortDir).toBe('asc');
+  });
+
+  it('takes statuses with spaces around them, and refuses a list with one unknown status', () => {
+    expect(normalizeFindOrdersInput(dto({ statuses: ' paid , shipped ' })).statuses).toEqual([
+      'paid',
+      'shipped',
+    ]);
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ statuses: 'paid,lost' })))).toMatchObject({
+      errorCode: 'STATUS_INVALID',
+    });
+  });
+
+  it('takes a few statuses and refuses one the list has not', () => {
+    expect(
+      normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', statuses: 'paid,shipped,paid' })).statuses,
+    ).toEqual(['paid', 'shipped']);
+    expect(
+      thrownBy(() => normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', statuses: 'pending' }))),
+    ).toMatchObject({ errorCode: 'STATUS_INVALID' });
+  });
+});
+
+describe('buildOrdersWhere and the desk', () => {
+  const base = { actorId: 1, actorRole: 'ADMIN', sortBy: 'createdAt' } as const;
+
+  it('finds an order by its number, and by a part of the buyer or the recipient otherwise', () => {
+    expect(buildOrdersWhere({ ...base, q: '42' })).toMatchObject({ id: 42 });
+    expect(buildOrdersWhere({ ...base, q: 'koval' })).toMatchObject({
+      OR: [
+        { user: { email: { contains: 'koval', mode: 'insensitive' } } },
+        { recipientFirstName: { contains: 'koval', mode: 'insensitive' } },
+        { recipientLastName: { contains: 'koval', mode: 'insensitive' } },
+        { recipientPhone: { contains: 'koval', mode: 'insensitive' } },
+      ],
+    });
+  });
+
+  // a number is a number of an order only as a whole number from 1 the ids of the database hold
+  it.each([
+    ['a number of one digit', '4', { id: 4 }],
+    ['a number of three digits', '123', { id: 123 }],
+    ['the last id', '2147483647', { id: 2_147_483_647 }],
+  ])('finds an order by %s', (_case, q, where) => {
+    expect(buildOrdersWhere({ ...base, q })).toMatchObject(where);
+  });
+
+  it.each([
+    ['a number past the last id', '2147483648'],
+    ['a number with a zero in front', '042'],
+    ['a letter before the number', 'a42'],
+    ['a letter after the number', '42a'],
+  ])('looks for %s as a text', (_case, q) => {
+    const where = buildOrdersWhere({ ...base, q });
+
+    expect(where).not.toHaveProperty('id');
+    expect(where.OR).toHaveLength(4);
+  });
+
+  it('keeps one status within a few statuses', () => {
+    expect(
+      buildOrdersWhere({ ...base, statuses: ['paid', 'shipped'], status: 'paid' }),
+    ).toMatchObject({ status: { in: ['paid', 'shipped'] }, AND: [{ status: 'paid' }] });
+  });
+
+  // prisma puts the text into a LIKE pattern as it is
+  it('takes the wildcards of a pattern in the text as they are', () => {
+    expect(buildOrdersWhere({ ...base, q: '50%_a\\b' })).toMatchObject({
+      OR: expect.arrayContaining([
+        { recipientPhone: { contains: '50\\%\\_a\\\\b', mode: 'insensitive' } },
+      ]),
+    });
+  });
+
+  it('keeps the orders of a buyer, of a few statuses and with a product', () => {
+    expect(
+      buildOrdersWhere({ ...base, userId: 7, statuses: ['paid', 'shipped'], productId: 9 }),
+    ).toMatchObject({
+      userId: 7,
+      status: { in: ['paid', 'shipped'] },
+      items: { some: { productId: 9 } },
+    });
+  });
+
+  // a buyer sees only their own orders, whatever the request names
+  it('keeps a buyer to their own orders', () => {
+    expect(buildOrdersWhere({ ...base, actorRole: 'USER', actorId: 3, userId: 7 })).toMatchObject({
+      userId: 3,
+    });
   });
 });

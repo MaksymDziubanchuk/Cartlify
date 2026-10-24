@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import type { Prisma } from '@prisma/client';
 
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -59,6 +60,8 @@ export async function sendAvatarRemovedEmail(
 ): Promise<void> {
   try {
     const { subject, text, html } = buildAvatarRemovedTemplate({
+      // the name of the shop the mail is from
+      appName: env.SHOP_NAME,
       removals: args.removals,
       limit: args.limit,
       userName: args.userName,

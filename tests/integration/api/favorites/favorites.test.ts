@@ -96,3 +96,54 @@ describe('GET /api/favorites', () => {
     expect(res.json().items).toEqual([]);
   });
 });
+
+describe('DELETE /api/favorites/:productId', () => {
+  it('takes a product out of the favorites of a guest', async () => {
+    const own = await createProduct({ price: 10 });
+    const cookie = await guestWithFavorite(own.id);
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/favorites/${own.id}`,
+      headers: withCsrf(csrf, cookie),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ productId: own.id, isFavorite: false });
+    expect((await listOf(cookie)).json().items).toEqual([]);
+  });
+
+  // a second click of the heart: the same answer, nothing breaks
+  it('answers the same for a product that is not among the favorites', async () => {
+    const cookie = await guestWithFavorite(product.id);
+    const other = await createProduct({ price: 10 });
+
+    const res = await app.inject({
+      method: 'DELETE',
+      url: `/api/favorites/${other.id}`,
+      headers: withCsrf(csrf, cookie),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ productId: other.id, isFavorite: false });
+    expect((await listOf(cookie)).json().items).toHaveLength(1);
+  });
+
+  it('leaves the favorite of another guest alone', async () => {
+    const shared = await createProduct({ price: 10 });
+    const owner = await guestWithFavorite(shared.id);
+    const stranger = await guestWithFavorite(product.id);
+
+    await app.inject({
+      method: 'DELETE',
+      url: `/api/favorites/${shared.id}`,
+      headers: withCsrf(csrf, stranger),
+    });
+
+    expect(
+      (await listOf(owner))
+        .json()
+        .items.map((item: { product: { id: number } }) => item.product.id),
+    ).toEqual([shared.id]);
+  });
+});

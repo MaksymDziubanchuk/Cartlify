@@ -1,5 +1,9 @@
 BEGIN;
 
+-- on a live database a busy table makes the script wait for its lock, and every request of the
+-- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+SET LOCAL lock_timeout = '5s';
+
 -- everything below is created and owned by cartlify_owner, whoever runs the script
 SET LOCAL ROLE cartlify_owner;
 
@@ -54,52 +58,18 @@ FOR UPDATE
     OR cartlify.is_root ()
   )
 WITH
-  CHECK (
-    (
-      cartlify.is_owner (id)
-      AND role = cartlify.current_actor_role ()
-      AND "deletedAt" IS NULL
-      AND EXISTS (
-        SELECT
-          1
-        FROM
-          cartlify.users u
-        WHERE
-          u.id = users.id
-          AND u.email = users.email
-          AND u.role = users.role
-          AND (
-            u."isVerified" = users."isVerified"
-            OR (
-              u."authProvider" = 'LOCAL'
-              AND users."authProvider" <> 'LOCAL'
-              AND users."isVerified" = true
-              AND users."passwordHash" IS NULL
-            )
-          )
-      )
-    )
-    OR cartlify.is_root ()
-  );
+  -- what the update may change: trg_users_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner - email verification only, other fields stay the same
 CREATE POLICY users_update_owner ON cartlify.users
 FOR UPDATE
   TO cartlify_owner USING ("isVerified" = false)
 WITH
-  CHECK (
-    "isVerified" = true
-    AND (
-      (to_jsonb(users) - 'isVerified' - 'updatedAt') = (
-        SELECT
-          to_jsonb(u) - 'isVerified' - 'updatedAt'
-        FROM
-          cartlify.users u
-        WHERE
-          u.id = users.id
-      )
-    )
-  );
+  -- what the update may change: trg_users_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner for remove_user_avatar only: the avatar of an account goes, nothing else
 -- of the row changes but the time of the change
@@ -107,20 +77,9 @@ CREATE POLICY users_update_owner_avatar ON cartlify.users
 FOR UPDATE
   TO cartlify_owner USING (true)
 WITH
-  CHECK (
-    "avatarUrl" IS NULL
-    AND "publicId" IS NULL
-    AND (
-      (to_jsonb(users) - 'avatarUrl' - 'publicId' - 'updatedAt') = (
-        SELECT
-          to_jsonb(u) - 'avatarUrl' - 'publicId' - 'updatedAt'
-        FROM
-          cartlify.users u
-        WHERE
-          u.id = users.id
-      )
-    )
-  );
+  -- what the update may change: trg_users_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- INSERT:
 -- - registration can only create unverified USER
@@ -208,30 +167,9 @@ CREATE POLICY user_tokens_update ON cartlify.user_tokens
 FOR UPDATE
   USING (cartlify.is_owner_or_admin ("userId"))
 WITH
-  CHECK (
-    cartlify.is_owner_or_admin ("userId")
-    AND EXISTS (
-      SELECT
-        1
-      FROM
-        cartlify.user_tokens AS t
-      WHERE
-        t.id = user_tokens.id
-        AND t."userId" = user_tokens."userId"
-        AND t.type = user_tokens.type
-        AND (
-          t."usedAt" IS NULL
-          OR user_tokens."usedAt" IS NOT NULL
-        )
-        AND (
-          user_tokens.type = 'REFRESH_TOKEN'
-          OR (
-            t.token = user_tokens.token
-            AND t."expiresAt" = user_tokens."expiresAt"
-          )
-        )
-    )
-  );
+  -- what the update may change: trg_user_tokens_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner
 CREATE POLICY user_tokens_update_owner ON cartlify.user_tokens
@@ -242,10 +180,9 @@ FOR UPDATE
     AND "expiresAt" > now()
   )
 WITH
-  CHECK (
-    type = 'VERIFY_EMAIL'
-    AND "usedAt" IS NOT NULL
-  );
+  -- what the update may change: trg_user_tokens_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (owner or admin/root)
 CREATE POLICY user_tokens_delete ON cartlify.user_tokens FOR DELETE USING (cartlify.is_owner_or_admin ("userId"));
@@ -266,6 +203,8 @@ DROP POLICY IF EXISTS login_logs_insert ON cartlify.login_logs;
 DROP POLICY IF EXISTS login_logs_update_deny ON cartlify.login_logs;
 
 DROP POLICY IF EXISTS login_logs_update_owner ON cartlify.login_logs;
+
+DROP POLICY IF EXISTS login_logs_update_owner_network ON cartlify.login_logs;
 
 DROP POLICY IF EXISTS login_logs_delete_deny ON cartlify.login_logs;
 
@@ -302,28 +241,22 @@ FOR UPDATE
     )
   )
 WITH
-  CHECK (
-    EXISTS (
-      SELECT
-        1
-      FROM
-        cartlify.users AS u
-      WHERE
-        u.id = login_logs."userId"
-        AND u."deletedAt" IS NOT NULL
-        AND u.email = login_logs.email
-    )
-    AND (to_jsonb(login_logs) - 'email') = (
-      SELECT
-        to_jsonb(l) - 'email'
-      FROM
-        cartlify.login_logs AS l
-      WHERE
-        l.id = login_logs.id
-    )
-  );
+  -- what the update may change: trg_login_logs_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (deny for all)
+-- UPDATE cartlify_owner for cleanup_login_log_addresses only: the address and the browser of an old
+-- login go (trg_login_logs_update_columns, db/05, lets nothing else change)
+CREATE POLICY login_logs_update_owner_network ON cartlify.login_logs
+FOR UPDATE
+  TO cartlify_owner USING (
+    "ipAddress" IS NOT NULL
+    OR "userAgent" IS NOT NULL
+  )
+WITH
+  CHECK (true);
+
 CREATE POLICY login_logs_delete_deny ON cartlify.login_logs FOR DELETE USING (false);
 
 ----------------------------------------
@@ -416,23 +349,9 @@ CREATE POLICY products_update_admin ON cartlify.products
 FOR UPDATE
   USING (cartlify.is_admin ())
 WITH
-  CHECK (
-    cartlify.is_admin ()
-    AND EXISTS (
-      SELECT
-        1
-      FROM
-        cartlify.products AS p
-      WHERE
-        p.id = products.id
-        AND p."stock" = products."stock"
-        AND p."reservedStock" = products."reservedStock"
-        AND p."avgRating" = products."avgRating"
-        AND p."reviewsCount" = products."reviewsCount"
-        AND p.popularity = products.popularity
-        AND products.views IN (p.views, p.views + 1)
-    )
-  );
+  -- what the update may change: trg_products_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE (GUEST/USER)
 -- allows changing: views, updatedAt
@@ -441,74 +360,18 @@ CREATE POLICY products_update_computed ON cartlify.products
 FOR UPDATE
   USING (true)
 WITH
-  CHECK (
-    cartlify.current_actor_role () IN ('GUEST', 'USER')
-    AND (
-      (to_jsonb(products) - 'views' - 'updatedAt') = (
-        SELECT
-          (to_jsonb(p) - 'views' - 'updatedAt')
-        FROM
-          cartlify.products p
-        WHERE
-          p.id = products.id
-      )
-    )
-  );
+  -- what the update may change: trg_products_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner
 CREATE POLICY products_update_owner ON cartlify.products
 FOR UPDATE
   TO cartlify_owner USING (true)
 WITH
-  CHECK (
-    (
-      "avgRating" >= 0
-      AND "avgRating" <= 5
-      AND "reviewsCount" >= 0
-      AND (
-        (
-          to_jsonb(products) - 'avgRating' - 'reviewsCount' - 'updatedAt'
-        ) = (
-          SELECT
-            to_jsonb(p) - 'avgRating' - 'reviewsCount' - 'updatedAt'
-          FROM
-            cartlify.products p
-          WHERE
-            p.id = products.id
-        )
-      )
-    )
-    OR (
-      "stock" >= 0
-      AND "reservedStock" >= 0
-      AND "reservedStock" <= "stock"
-      AND (
-        (
-          to_jsonb(products) - 'stock' - 'reservedStock' - 'updatedAt'
-        ) = (
-          SELECT
-            to_jsonb(p) - 'stock' - 'reservedStock' - 'updatedAt'
-          FROM
-            cartlify.products p
-          WHERE
-            p.id = products.id
-        )
-      )
-    )
-    OR (
-      "popularity" >= 0
-      AND (
-        (to_jsonb(products) - 'popularity' - 'updatedAt') = (
-          SELECT
-            to_jsonb(p) - 'popularity' - 'updatedAt'
-          FROM
-            cartlify.products p
-          WHERE
-            p.id = products.id
-        )
-      )
-    )
-  );
+  -- what the update may change: trg_products_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (admin/root)
 CREATE POLICY products_delete ON cartlify.products FOR DELETE USING (cartlify.is_admin ());
@@ -554,16 +417,9 @@ CREATE POLICY product_batches_update_owner ON cartlify.product_batches
 FOR UPDATE
   TO cartlify_owner USING (true)
 WITH
-  CHECK (
-    (to_jsonb(product_batches) - 'remaining') = (
-      SELECT
-        to_jsonb(b) - 'remaining'
-      FROM
-        cartlify.product_batches AS b
-      WHERE
-        b.id = product_batches.id
-    )
-  );
+  -- what the update may change: trg_product_batches_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (deny for all): a batch goes only with its product removed for good
 CREATE POLICY product_batches_delete_deny ON cartlify.product_batches FOR DELETE USING (false);
@@ -701,36 +557,18 @@ FOR UPDATE
     )
   )
 WITH
-  CHECK (
-    cartlify.is_owner ("userId")
-    AND (
-      "rating" IS NOT NULL
-      OR (
-        "comment" IS NOT NULL
-        AND btrim("comment") <> ''
-      )
-    )
-    -- the author adds the missing rating or comment and nothing else: the votes are counted
-    -- from review_votes (reviews_update_owner_votes)
-    AND (to_jsonb(reviews) - 'rating' - 'comment' - 'updatedAt') = (
-      SELECT
-        to_jsonb(r) - 'rating' - 'comment' - 'updatedAt'
-      FROM
-        cartlify.reviews AS r
-      WHERE
-        r.id = reviews.id
-    )
-  );
+  -- what the update may change: trg_reviews_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE vote counters by system functions
 CREATE POLICY reviews_update_owner_votes ON cartlify.reviews
 FOR UPDATE
   TO cartlify_owner USING (true)
 WITH
-  CHECK (
-    "upVotes" >= 0
-    AND "downVotes" >= 0
-  );
+  -- what the update may change: trg_reviews_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (owner or admin/root)
 CREATE POLICY reviews_delete ON cartlify.reviews FOR DELETE USING (cartlify.is_owner_or_admin ("userId"));
@@ -934,26 +772,9 @@ FOR UPDATE
     AND confirmed = false
   )
 WITH
-  CHECK (
-    cartlify.is_owner ("userId")
-    AND "paymentId" IS NULL
-    AND "paymentProvider" IS NULL
-    AND confirmed = false
-    AND status IN ('pending', 'unconfirmed')
-    AND "reservationExpiresAt" IS NULL
-    AND (
-      (
-        to_jsonb(orders) - 'shippingAddress' - 'recipientFirstName' - 'recipientLastName' - 'recipientPhone' - 'note' - 'updatedAt'
-      ) = (
-        SELECT
-          to_jsonb(o) - 'shippingAddress' - 'recipientFirstName' - 'recipientLastName' - 'recipientPhone' - 'note' - 'updatedAt'
-        FROM
-          cartlify.orders AS o
-        WHERE
-          o.id = orders.id
-      )
-    )
-  );
+  -- what the update may change: trg_orders_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner
 CREATE POLICY orders_update_owner ON cartlify.orders
@@ -967,99 +788,9 @@ FOR UPDATE
     )
   )
 WITH
-  CHECK (
-    (
-      "total" >= 0
-      AND (
-        (to_jsonb(orders) - 'total' - 'updatedAt') = (
-          SELECT
-            to_jsonb(o) - 'total' - 'updatedAt'
-          FROM
-            cartlify.orders o
-          WHERE
-            o.id = orders.id
-        )
-      )
-    )
-    OR (
-      confirmed = false
-      AND status = 'pending'
-      AND "reservationExpiresAt" IS NULL
-      AND (
-        (
-          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
-        ) = (
-          SELECT
-            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
-          FROM
-            cartlify.orders o
-          WHERE
-            o.id = orders.id
-        )
-      )
-    )
-    OR (
-      confirmed = false
-      AND status = 'unconfirmed'
-      AND "reservationExpiresAt" IS NULL
-      AND (
-        (
-          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
-        ) = (
-          SELECT
-            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'updatedAt'
-          FROM
-            cartlify.orders AS o
-          WHERE
-            o.id = orders.id
-        )
-      )
-    )
-    OR (
-      confirmed = true
-      AND status = 'waiting'
-      AND "reservationExpiresAt" IS NOT NULL
-      AND "paymentId" IS NULL
-      AND "paymentProvider" IS NULL
-      AND "total" >= 0
-      AND cartlify.is_owner ("userId")
-      AND (
-        (
-          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'total' - 'updatedAt'
-        ) = (
-          SELECT
-            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'total' - 'updatedAt'
-          FROM
-            cartlify.orders AS o
-          WHERE
-            o.id = orders.id
-        )
-      )
-    )
-    -- pay_order: the payment, who took it and when are set together, nothing else but the state
-    -- changes
-    OR (
-      confirmed = true
-      AND status = 'paid'
-      AND "reservationExpiresAt" IS NULL
-      AND "paymentId" IS NOT NULL
-      AND "paymentProvider" IS NOT NULL
-      AND "paidAt" IS NOT NULL
-      AND "total" >= 0
-      AND (
-        (
-          to_jsonb(orders) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'paidAt' - 'total' - 'updatedAt'
-        ) = (
-          SELECT
-            to_jsonb(o) - 'confirmed' - 'status' - 'reservationExpiresAt' - 'paymentId' - 'paymentProvider' - 'paidAt' - 'total' - 'updatedAt'
-          FROM
-            cartlify.orders AS o
-          WHERE
-            o.id = orders.id
-        )
-      )
-    )
-  );
+  -- what the update may change: trg_orders_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE (admin/root) - allow only shipping status change
 -- a cancel is not a status change here: it goes through cartlify.cancel_paid_order with the stock return
@@ -1070,20 +801,9 @@ FOR UPDATE
     AND status IN ('paid', 'shipped')
   )
 WITH
-  CHECK (
-    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
-    AND status IN ('shipped', 'delivered')
-    AND (
-      (to_jsonb(orders) - 'status' - 'updatedAt') = (
-        SELECT
-          (to_jsonb(o) - 'status' - 'updatedAt')
-        FROM
-          cartlify.orders o
-        WHERE
-          o.id = orders.id
-      )
-    )
-  );
+  -- what the update may change: trg_orders_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner for cancel_paid_order only: a paid or shipped order of the admin context
 -- becomes cancelled with the time of the cancel and nothing else changes; the rows it reaches are
@@ -1096,21 +816,9 @@ FOR UPDATE
     AND status IN ('paid', 'shipped')
   )
 WITH
-  CHECK (
-    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
-    AND status = 'cancelled'
-    AND "cancelledAt" IS NOT NULL
-    AND (
-      (to_jsonb(orders) - 'status' - 'cancelledAt' - 'updatedAt') = (
-        SELECT
-          (to_jsonb(o) - 'status' - 'cancelledAt' - 'updatedAt')
-        FROM
-          cartlify.orders o
-        WHERE
-          o.id = orders.id
-      )
-    )
-  );
+  -- what the update may change: trg_orders_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (owner only, USER role, not confirmed)
 CREATE POLICY orders_delete ON cartlify.orders FOR DELETE USING (
@@ -1266,6 +974,8 @@ DROP POLICY IF EXISTS chat_threads_update ON cartlify.chat_threads;
 
 DROP POLICY IF EXISTS chat_threads_delete ON cartlify.chat_threads;
 
+DROP POLICY IF EXISTS chat_threads_delete_owner ON cartlify.chat_threads;
+
 DROP POLICY IF EXISTS chat_threads_select_owner ON cartlify.chat_threads;
 
 DROP POLICY IF EXISTS chat_threads_update_owner ON cartlify.chat_threads;
@@ -1323,34 +1033,9 @@ FOR UPDATE
     )
   )
 WITH
-  CHECK (
-    (
-      cartlify.is_owner_or_admin ("userId")
-      OR (
-        cartlify.current_actor_role () = 'GUEST'
-        AND "guestId" = cartlify.current_guest_id ()
-      )
-    )
-    AND EXISTS (
-      SELECT
-        1
-      FROM
-        cartlify.chat_threads AS t
-      WHERE
-        t.id = chat_threads.id
-        AND t."userId" IS NOT DISTINCT FROM chat_threads."userId"
-        AND t."guestId" IS NOT DISTINCT FROM chat_threads."guestId"
-        AND (
-          t.status <> 'closed'
-          OR chat_threads.status = 'closed'
-        )
-        AND (
-          chat_threads."adminRequestedAt" IS NULL
-          OR chat_threads."adminRequestedAt" IS NOT DISTINCT FROM t."adminRequestedAt"
-          OR chat_threads."adminRequestedAt" >= (now() AT TIME ZONE 'UTC') - interval '1 minute'
-        )
-    )
-  );
+  -- what the update may change: trg_chat_threads_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- UPDATE cartlify_owner for migrate_guest_data_to_user only:
 -- a guest thread may only become a user thread
@@ -1358,13 +1043,27 @@ CREATE POLICY chat_threads_update_owner ON cartlify.chat_threads
 FOR UPDATE
   TO cartlify_owner USING ("userId" IS NULL)
 WITH
-  CHECK (
-    "userId" IS NOT NULL
-    AND "guestId" IS NULL
-  );
+  -- what the update may change: trg_chat_threads_update_columns (db/05), against the row
+  -- the update changes; a check here would read the version from the start of the statement
+  CHECK (true);
 
 -- DELETE (deny for all)
 CREATE POLICY chat_threads_delete ON cartlify.chat_threads FOR DELETE USING (false);
+
+-- DELETE cartlify_owner for cleanup_guest_data and cleanup_deleted_accounts_chats only: a chat of a
+-- guest or of a deleted account, the messages go with it
+CREATE POLICY chat_threads_delete_owner ON cartlify.chat_threads FOR DELETE TO cartlify_owner USING (
+  "userId" IS NULL
+  OR EXISTS (
+    SELECT
+      1
+    FROM
+      cartlify.users AS u
+    WHERE
+      u.id = chat_threads."userId"
+      AND u."deletedAt" IS NOT NULL
+  )
+);
 
 ----------------------------------------
 -- CHAT MESSAGES
@@ -1597,6 +1296,40 @@ WITH
 
 -- DELETE (deny for all)
 CREATE POLICY ppcl_delete_deny ON cartlify.product_price_change_logs FOR DELETE USING (false);
+
+----------------------------------------
+-- ADMIN_ALERT_MUTES
+----------------------------------------
+-- the kinds of alerts an admin or root turned off: each one sees, adds and takes away only
+-- their own; nobody changes a row, a kind goes back on by taking its row away
+ALTER TABLE cartlify.admin_alert_mutes ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.admin_alert_mutes FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS admin_alert_mutes_select ON cartlify.admin_alert_mutes;
+
+DROP POLICY IF EXISTS admin_alert_mutes_insert ON cartlify.admin_alert_mutes;
+
+DROP POLICY IF EXISTS admin_alert_mutes_delete ON cartlify.admin_alert_mutes;
+
+CREATE POLICY admin_alert_mutes_select ON cartlify.admin_alert_mutes FOR
+SELECT
+  USING (
+    cartlify.is_admin ()
+    AND "userId" = cartlify.current_actor_id ()
+  );
+
+CREATE POLICY admin_alert_mutes_insert ON cartlify.admin_alert_mutes FOR INSERT
+WITH
+  CHECK (
+    cartlify.is_admin ()
+    AND "userId" = cartlify.current_actor_id ()
+  );
+
+CREATE POLICY admin_alert_mutes_delete ON cartlify.admin_alert_mutes FOR DELETE USING (
+  cartlify.is_admin ()
+  AND "userId" = cartlify.current_actor_id ()
+);
 
 ----------------------------------------
 -- ADMIN AUDIT LOG

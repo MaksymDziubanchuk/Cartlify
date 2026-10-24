@@ -12,6 +12,7 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVerifyToken,
   removeProducts,
   uniqueEmail,
   type TestProduct,
@@ -127,7 +128,10 @@ describe('POST /api/auth/register', () => {
     expect(stored[0]!.token).not.toBe(token);
   });
 
-  it('moves the favorites of the guest to the new account', async () => {
+  // nobody proved the email yet: a mistyped address would take the chats of the guest (the
+  // address, the phone, the order) away from the browser into the account of somebody else. The
+  // data of the guest moves with the verification of the email or with a login
+  it('leaves the favorites of the guest with the guest', async () => {
     const product = await createProduct();
     products.push(product);
     const added = await app.inject({
@@ -135,17 +139,85 @@ describe('POST /api/auth/register', () => {
       url: `/api/favorites/${product.id}`,
       headers: withCsrf(csrf),
     });
-    const guest = cookieHeader({ guestId: cookieJar(added).guestId });
+    const guestId = cookieJar(added).guestId!;
     watchMail();
-    const email = newEmail();
 
-    const res = await register({ email, password: 'password123' }, guest);
+    const res = await register(
+      { email: newEmail(), password: 'password123' },
+      cookieHeader({ guestId }),
+    );
 
     expect(res.statusCode).toBe(201);
     const favorites = await asAdmin((tx) =>
-      tx.favorite.findMany({ where: { productId: product.id }, select: { userId: true } }),
+      tx.favorite.findMany({
+        where: { productId: product.id },
+        select: { userId: true, guestId: true },
+      }),
     );
-    expect(favorites).toEqual([{ userId: res.json().id }]);
+    expect(favorites).toEqual([{ userId: null, guestId }]);
+  });
+
+  // somebody registered the address with a password of their own and never verified it: the owner
+  // registering now sets the password, and the link goes to the owner
+  it('takes a new password for an account nobody verified yet and mails a new link', async () => {
+    const taken = await createUser({
+      email: newEmail(),
+      isVerified: false,
+      password: 'not-mine-1',
+    });
+    const mails = watchMail();
+
+    const res = await register({ email: taken.email, password: 'my-password-1', name: 'Ann' });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      id: taken.id,
+      email: taken.email,
+      isVerified: false,
+      name: 'Ann',
+    });
+    expect(mails).toHaveLength(1);
+
+    const verify = await app.inject({
+      method: 'GET',
+      url: `/api/auth/verify?token=${encodeURIComponent(mailedToken(mails, '/web/login'))}`,
+    });
+    expect(verify.statusCode).toBe(200);
+    expect(
+      (await logIn(app, csrf, { email: taken.email, password: 'my-password-1' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await logIn(app, csrf, { email: taken.email, password: 'not-mine-1' })).statusCode,
+    ).toBe(401);
+  });
+
+  it('closes the links mailed for the account before', async () => {
+    const taken = await createUser({ email: newEmail(), isVerified: false });
+    const old = await createVerifyToken(taken.id);
+    watchMail();
+
+    await register({ email: taken.email, password: 'my-password-2' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/auth/verify?token=${encodeURIComponent(old)}`,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VERIFY_TOKEN_INVALID_OR_EXPIRED' });
+  });
+
+  it('still refuses an unverified account of a provider', async () => {
+    const taken = await createUser({
+      email: newEmail(),
+      isVerified: false,
+      authProvider: 'GITHUB',
+      providerSub: `github-${Date.now()}`,
+    });
+
+    const res = await register({ email: taken.email, password: 'my-password-3' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ errorCode: 'EMAIL_ALREADY_IN_USE' });
   });
 
   it('answers 502 VERIFY_EMAIL_SEND_FAILED when SendGrid refuses the mail', async () => {

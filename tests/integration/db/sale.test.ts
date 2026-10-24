@@ -343,6 +343,54 @@ describe('a sale of a product', () => {
   });
 });
 
+// the lowest price of the 30 days before a sale (salePriorPrice) goes with the sale: the app writes
+// it with the sale, a price down to the sale price takes it away with the sale
+describe('the lowest price before a sale', () => {
+  const priorOf = async (db: DbSession, productId: number) => {
+    await db.as(asAdmin());
+    const [row] = await db.rows<{ prior: number | null }>(
+      'select "salePriorPrice"::float8 as prior from cartlify.products where id = $1',
+      productId,
+    );
+    return row!.prior;
+  };
+
+  const setPrior = async (db: DbSession, productId: number, prior: number) => {
+    await db.as(asAdmin());
+    return db.attempt(
+      'update cartlify.products set "salePriorPrice" = $2 where id = $1 returning id',
+      productId,
+      prior,
+    );
+  };
+
+  it('goes with a sale a price down to the sale price ends', async () => {
+    const prior = await inRolledBackTx(async (db) => {
+      const productId = await freshProduct(db);
+      await setSale(db, productId, 15, '1 day');
+      await setPrior(db, productId, 20);
+      await setPrice(db, productId, 12);
+      return priorOf(db, productId);
+    });
+
+    expect(prior).toBeNull();
+  });
+
+  // products_sale_prior_price_chk: only with a sale, never below 0
+  it.each([
+    ['without a sale', false, 10],
+    ['below 0', true, -1],
+  ])('is refused %s', async (_case, onSale, prior) => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const productId = await freshProduct(db);
+      if (onSale) await setSale(db, productId, 15, '1 day');
+      return setPrior(db, productId, prior);
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: '23514' });
+  });
+});
+
 describe('the items of an order and a sale', () => {
   it('give an item the sale price while the sale lasts', async () => {
     const prices = await inRolledBackTx(async (db) => {

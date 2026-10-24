@@ -12,9 +12,11 @@ const product = {
   id: 1,
   name: 'Desk lamp',
   description: 'Warm light' as string | null,
+  sku: 'DL-1' as string | null,
   price: new Prisma.Decimal('25.50'),
   salePrice: null as unknown,
   saleEndsAt: null as Date | null,
+  salePriorPrice: null as unknown,
   stock: 10,
   reservedStock: 3,
   expiredStock: 0,
@@ -34,6 +36,7 @@ const map = (patch: Partial<typeof product> = {}, view: 'buyer' | 'admin' = 'buy
   mapProductRowToResponse({
     product: { ...product, ...patch },
     images: [{ url: imageUrl, position: 0 }],
+    categoryPath: [{ id: 1 as never, name: 'Home', slug: 'home' }],
     view,
   });
 
@@ -83,8 +86,14 @@ describe('mapProductRowToResponse', () => {
     expect(map({ stock: 2, reservedStock: 5 }).stock).toBe(0);
   });
 
-  it('names the category of the product', () => {
-    expect(map().category).toEqual({ id: 2, name: 'Lamps', slug: 'lamps' });
+  // the card names the way to its category from the top of the tree
+  it('names the category of the product and the way to it', () => {
+    expect(map().category).toEqual({
+      id: 2,
+      name: 'Lamps',
+      slug: 'lamps',
+      path: [{ id: 1, name: 'Home', slug: 'home' }],
+    });
     expect(map()).not.toHaveProperty('categoryId');
   });
 
@@ -117,12 +126,49 @@ describe('mapProductRowToResponse', () => {
     const over = map({
       salePrice: new Prisma.Decimal('19.90'),
       saleEndsAt: new Date(Date.now() - 1),
+      salePriorPrice: new Prisma.Decimal('25.50'),
     });
 
     for (const out of [over, map()]) {
       expect(out).not.toHaveProperty('salePrice');
       expect(out).not.toHaveProperty('saleEndsAt');
+      expect(out).not.toHaveProperty('salePriorPrice');
     }
+  });
+
+  // the price a reduction is compared with; a sale from before it was written has none
+  it('shows the lowest price of the 30 days before a sale next to it', () => {
+    const saleEndsAt = new Date(Date.now() + 60_000);
+    const sale = { salePrice: new Prisma.Decimal('19.90'), saleEndsAt };
+
+    expect(map({ ...sale, salePriorPrice: new Prisma.Decimal('22.00') })).toMatchObject({
+      salePriorPrice: 22,
+    });
+    expect(map(sale)).not.toHaveProperty('salePriorPrice');
+    expect(map({ ...sale, salePriorPrice: new Prisma.Decimal('22.00') }, 'admin')).toMatchObject({
+      salePriorPrice: 22,
+    });
+    expect(map({}, 'admin')).toMatchObject({ salePriorPrice: null });
+  });
+
+  // the description keeps its text and the safety data; the card gives them apart
+  it('gives the text of the description and the safety data apart', () => {
+    const safety = {
+      manufacturer: { name: 'Lampwerk', address: 'Berlin', email: 'a@b.de', country: 'DE' },
+      responsiblePerson: null,
+      warnings: 'Hot.',
+    };
+
+    expect(
+      map({ description: JSON.stringify({ v: 1, text: 'Warm light', safety }) }),
+    ).toMatchObject({ description: 'Warm light', safety });
+    expect(map({ description: 'Plain text' })).toMatchObject({
+      description: 'Plain text',
+      safety: null,
+    });
+    expect(map({ description: JSON.stringify({ v: 1, text: null, safety }) })).not.toHaveProperty(
+      'description',
+    );
   });
 
   // the list shows a buyer the popularity it sorts by, the card does not

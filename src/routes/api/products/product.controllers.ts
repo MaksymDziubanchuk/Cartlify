@@ -42,16 +42,27 @@ import type {
   UpdateProductCategoryBodyDto,
   UpdateProductCategoryDto,
   UpdateProductCategoryResponseDto,
-  DeliveryBodyDto,
+  ReceiveStockDto,
   ReceiveStockResponseDto,
-  WriteOffBodyDto,
+  WriteOffStockDto,
   WriteOffStockResponseDto,
+  ProductSuggestionsQueryDto,
+  ProductSuggestionsResponseDto,
+  ProductSalesBodyDto,
+  ProductSalesResponseDto,
+  RestoreProductParamsDto,
+  PriceHistoryDto,
+  PriceHistoryParamsDto,
+  PriceHistoryQueryDto,
+  PriceHistoryResponseDto,
 } from 'types/dto/products.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { discardUploads } from '@utils/cloudinary.util.js';
+import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
 import { BadRequestError } from '@utils/errors.js';
+import { safetyFromFormFields } from '@helpers/productDescription.js';
 import {
   reserveNextProductId,
   beginProductImageUpload,
@@ -82,8 +93,10 @@ const getAllProducts: ControllerRouter<
   const popularityOverridden =
     typeof q.popularityOverridden === 'boolean' ? q.popularityOverridden : undefined;
 
-  const sort: ProductsSortField = (q.sort as ProductsSortField) ?? 'popularity';
+  // without a sort the service takes the best match of a search, or the popularity
+  const sort = q.sort as ProductsSortField | undefined;
   const order: SortOrder = (q.order as SortOrder) ?? 'desc';
+  const branch = typeof q.branch === 'boolean' ? q.branch : undefined;
 
   const categoryIds = Array.isArray(q.categoryIds)
     ? (q.categoryIds
@@ -98,11 +111,13 @@ const getAllProducts: ControllerRouter<
       : undefined;
 
   const args = pickDefined<FindAllProductsDto>(
-    { actorRole, limit, sort, order },
+    { actorRole, limit, order },
     {
+      sort,
       cursor,
       search,
       categoryIds,
+      branch,
       minPrice,
       maxPrice,
       deleted,
@@ -148,7 +163,7 @@ const getProductReviews: ControllerRouter<
 
   const args = pickDefined<FindProductReviewsDto>(
     { productId, limit, actorId, actorRole },
-    { cursor },
+    { cursor, sort: req.query.sort },
   );
 
   const result = await productServices.findReviews(args);
@@ -172,9 +187,12 @@ const postProduct: ControllerRouter<
   // collect scalar fields from multipart
   let name: string | undefined;
   let description: string | undefined;
+  let sku: string | undefined;
   let priceRaw: string | undefined;
   let stockRaw: string | undefined;
   let categoryIdRaw: string | undefined;
+  // the safety data as text fields: safety.manufacturer.name and so on
+  const safetyFields = new Map<string, string>();
 
   // reserve product id lazily when we see the first image
   let productId: ProductId | null = null;
@@ -190,6 +208,12 @@ const postProduct: ControllerRouter<
         if (part.fieldname !== 'images' && part.fieldname !== 'images[]') {
           part.file.resume();
           continue;
+        }
+
+        // a product has at most so many images: the part is read to its end, the uploads begun go
+        if (imageUploads.length >= MAX_PRODUCT_IMAGES) {
+          part.file.resume();
+          throw new BadRequestError('PRODUCT_IMAGES_TOO_MANY', { max: MAX_PRODUCT_IMAGES });
         }
 
         // allocate id once, before the first upload starts
@@ -214,12 +238,17 @@ const postProduct: ControllerRouter<
       // multipart field values are typed loosely, normalize to string
       const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
 
+      // a NUL sign is no text postgres keeps, the same refusal as for a json body
+      if (v.includes('\u0000')) throw new BadRequestError('TEXT_NUL_FORBIDDEN');
+
       // map allowed fields only
       if (part.fieldname === 'name') name = v;
       else if (part.fieldname === 'description') description = v;
+      else if (part.fieldname === 'sku') sku = v;
       else if (part.fieldname === 'price') priceRaw = v;
       else if (part.fieldname === 'stock') stockRaw = v;
       else if (part.fieldname === 'categoryId') categoryIdRaw = v;
+      else if (part.fieldname.startsWith('safety.')) safetyFields.set(part.fieldname, v);
     }
 
     // enforce required images
@@ -251,8 +280,14 @@ const postProduct: ControllerRouter<
         price: Number(priceReq),
         categoryId: Number(categoryIdReq) as CategoryId,
         images: uploads,
+        log: req.log,
       },
-      { description: descriptionReq, stock: stockRaw },
+      {
+        description: descriptionReq,
+        sku,
+        safety: safetyFromFormFields(safetyFields),
+        stock: stockRaw,
+      },
     );
 
     const result = await productServices.createProduct(args);
@@ -296,6 +331,11 @@ const updateProductById: ControllerRouter<
   // collect optional fields from multipart or json
   let name: string | undefined;
   let description: string | undefined;
+  // an empty one takes the article number away
+  let sku: string | null | undefined;
+  // the safety data, whole; a form gives them as text fields
+  let safety: unknown;
+  const safetyFields = new Map<string, string>();
 
   let price: number | undefined;
   // never taken: a stock sent is refused, it changes only with a delivery or a write-off
@@ -325,6 +365,12 @@ const updateProductById: ControllerRouter<
             continue;
           }
 
+          // a product has at most so many images: the part is read to its end, the uploads begun go
+          if (imageUploads.length >= MAX_PRODUCT_IMAGES) {
+            part.file.resume();
+            throw new BadRequestError('PRODUCT_IMAGES_TOO_MANY', { max: MAX_PRODUCT_IMAGES });
+          }
+
           // start consuming the stream immediately, the upload waits under an id of its own
           const position = imageUploads.length;
           const upload = beginProductImageUpload({
@@ -341,11 +387,14 @@ const updateProductById: ControllerRouter<
 
         // multipart field values are typed loosely, normalize to string
         const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+        if (v.includes('\u0000')) throw new BadRequestError('TEXT_NUL_FORBIDDEN');
         const t = v.trim();
 
         // map allowed fields only
         if (part.fieldname === 'name') name = v;
         else if (part.fieldname === 'description') description = v;
+        else if (part.fieldname === 'sku') sku = v;
+        else if (part.fieldname.startsWith('safety.')) safetyFields.set(part.fieldname, v);
         else if (part.fieldname === 'price') price = t ? Number(t) : undefined;
         else if (part.fieldname === 'stock') stock = v;
         else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
@@ -364,6 +413,7 @@ const updateProductById: ControllerRouter<
 
       // a new sale needs its fields: it comes as json or through the sale route
       if (saleWordInvalid) throw new BadRequestError('PRODUCT_SALE_ACTION_INVALID');
+      safety = safetyFromFormFields(safetyFields);
 
       // wait for uploads only when images were provided
       if (imageUploads.length) uploads = await Promise.all(imageUploads);
@@ -372,6 +422,8 @@ const updateProductById: ControllerRouter<
       const b = req.body ?? {};
       name = b.name;
       description = b.description;
+      sku = b.sku;
+      safety = b.safety;
       price = b.price;
       stock = b.stock;
       categoryId = b.categoryId;
@@ -386,6 +438,8 @@ const updateProductById: ControllerRouter<
       {
         name,
         description,
+        sku,
+        safety: safety as UpdateProductDto['safety'],
         price,
         stock,
         categoryId,
@@ -493,10 +547,71 @@ const patchProductCategory: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// sales of many products at once: a sale for each product, or one for a category
+const postProductSales: ControllerRouter<
+  {},
+  ProductSalesBodyDto,
+  {},
+  ProductSalesResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.setProductSales({ ...req.body, actorId, actorRole });
+  return reply.code(200).send(result);
+};
+
+// a few names of the catalog for what a person types, the best match first
+const getProductSuggestions: ControllerRouter<
+  {},
+  {},
+  ProductSuggestionsQueryDto,
+  ProductSuggestionsResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.findSuggestions({ text: req.query.q, actorId, actorRole });
+  return reply.code(200).send(result);
+};
+
+// the history of the price of a product, for admin and root
+const getPriceHistory: ControllerRouter<
+  PriceHistoryParamsDto,
+  {},
+  PriceHistoryQueryDto,
+  PriceHistoryResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.findPriceHistory(
+    pickDefined<PriceHistoryDto>(
+      { productId: Number(req.params.productId), actorId, actorRole },
+      { limit: req.query.limit, cursor: req.query.cursor },
+    ),
+  );
+  return reply.code(200).send(result);
+};
+
+// puts a product taken out of the catalog back, the admin log keeps the change
+const restoreProduct: ControllerRouter<
+  RestoreProductParamsDto,
+  {},
+  {},
+  FullProductResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.restoreProduct({
+    productId: Number(req.params.productId),
+    actorId,
+    actorRole,
+  });
+  return reply.code(200).send(result);
+};
+
 // takes in a delivery: a batch of each item; the admin log keeps a line for each
 const postStockDelivery: ControllerRouter<
   {},
-  DeliveryBodyDto,
+  Omit<ReceiveStockDto, 'actorId' | 'actorRole'>,
   {},
   ReceiveStockResponseDto
 > = async (req, reply) => {
@@ -509,7 +624,7 @@ const postStockDelivery: ControllerRouter<
 // writes off free units of the items; the admin log keeps a line for each
 const postStockWriteOff: ControllerRouter<
   {},
-  WriteOffBodyDto,
+  Omit<WriteOffStockDto, 'actorId' | 'actorRole'>,
   {},
   WriteOffStockResponseDto
 > = async (req, reply) => {
@@ -521,12 +636,16 @@ const postStockWriteOff: ControllerRouter<
 
 export const productController = {
   getAllProducts,
+  getProductSuggestions,
   getProductById,
+  restoreProduct,
+  getPriceHistory,
   getProductReviews,
   postProduct,
   postProductReview,
   updateProductById,
   patchProductSale,
+  postProductSales,
   updateProductsBulkPrice,
   deleteProductById,
   deleteProductReview,

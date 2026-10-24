@@ -1,3 +1,4 @@
+import { parseProductDescription } from '@helpers/productDescription.js';
 import { isSaleOn } from '@helpers/productSale.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
@@ -45,6 +46,7 @@ export function buildProductUpdateAuditChanges(
   before: {
     name: string;
     description: string | null;
+    sku?: string | null;
     price: { toString(): string };
     categoryId: number;
     popularityOverride: number | null;
@@ -55,6 +57,7 @@ export function buildProductUpdateAuditChanges(
     after: {
       name: string;
       description: string | null;
+      sku?: string | null;
       price: { toString(): string };
       categoryId: number;
       popularityOverride: number | null;
@@ -64,6 +67,8 @@ export function buildProductUpdateAuditChanges(
     input: {
       name?: unknown;
       description?: unknown;
+      safety?: unknown;
+      sku?: unknown;
       price?: unknown;
       categoryId?: unknown;
       popularityOverride?: unknown;
@@ -79,8 +84,25 @@ export function buildProductUpdateAuditChanges(
     changes.push({ field: 'name', old: before.name, new: args.after.name });
   }
 
-  if (args.input.description != null && before.description !== args.after.description) {
-    changes.push({ field: 'description', old: before.description, new: args.after.description });
+  // the text of the description, without the safety data it keeps
+  const oldText = parseProductDescription(before.description).text;
+  const newText = parseProductDescription(args.after.description).text;
+  if (args.input.description != null && oldText !== newText) {
+    changes.push({ field: 'description', old: oldText, new: newText });
+  }
+
+  // the safety data the description keeps, whole: they are replaced whole
+  if (args.input.safety !== undefined) {
+    const old = parseProductDescription(before.description).safety;
+    const next = parseProductDescription(args.after.description).safety;
+    if (JSON.stringify(old) !== JSON.stringify(next)) {
+      changes.push({ field: 'safety', old, new: next });
+    }
+  }
+
+  // an empty article number takes it away: null is a change too
+  if (args.input.sku !== undefined && (before.sku ?? null) !== (args.after.sku ?? null)) {
+    changes.push({ field: 'sku', old: before.sku ?? null, new: args.after.sku ?? null });
   }
 
   if (args.input.categoryId != null && before.categoryId !== args.after.categoryId) {

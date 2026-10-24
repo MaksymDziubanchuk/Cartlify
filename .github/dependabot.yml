@@ -1,0 +1,28 @@
+# weekly pull requests with updates into develop, where tests.yml checks them
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # one pull request for the small updates, every major update on its own
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # ts-jest and typescript-eslint support typescript up to 6.x
+      - dependency-name: typescript
+        update-types:
+          - version-update:semver-major
+    # a package with an install script in allowScripts (package.json) needs
+    # npm install-scripts approve <package> after its update
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly

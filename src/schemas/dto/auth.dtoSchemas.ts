@@ -211,6 +211,62 @@ const authLogoutBodySchema = {
   },
 } as const;
 
+const authPasswordChangeBodySchema = {
+  $id: 'authPasswordChangeBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    currentPassword: { type: 'string', minLength: 1, maxLength: 128 },
+    newPassword: newPasswordSchema,
+  },
+  required: ['currentPassword', 'newPassword'],
+} as const;
+
+const authSessionIdParamsSchema = {
+  $id: 'authSessionIdParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sessionId: { type: 'string', format: 'uuid' },
+  },
+  required: ['sessionId'],
+} as const;
+
+const authSessionsResponseSchema = {
+  $id: 'authSessionsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: {
+            type: 'string',
+            format: 'uuid',
+            description: 'The session, the same across its renewals.',
+          },
+          device: {
+            type: ['string', 'null'],
+            description: 'The user agent of the browser that opened the session.',
+          },
+          lastUsedAt: {
+            type: 'string',
+            format: 'date-time',
+            description: 'When the session was renewed last, or opened.',
+          },
+          expiresAt: { type: 'string', format: 'date-time' },
+          current: { type: 'boolean', description: 'The session of this browser.' },
+        },
+        required: ['id', 'device', 'lastUsedAt', 'expiresAt', 'current'],
+      },
+    },
+  },
+  required: ['items'],
+} as const;
+
 const authLogoutResponseSchema = {
   $id: 'authLogoutResponseSchema',
   type: 'null',
@@ -248,6 +304,9 @@ export const authDtoSchemas = [
   authPasswordResetBodySchema,
   authLogoutResponseSchema,
   authLogoutBodySchema,
+  authPasswordChangeBodySchema,
+  authSessionIdParamsSchema,
+  authSessionsResponseSchema,
   authRefreshResponseSchema,
   authCsrfTokenResponseSchema,
 ];

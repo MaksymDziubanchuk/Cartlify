@@ -7,6 +7,12 @@ import { reportProducts, reportProductsCsv } from './services/accountingProducts
 import { reportTimeline, reportTimelineCsv } from './services/accountingTimeline.service.js';
 import { listStockBatches } from './services/stockBatches.service.js';
 import { listStockMovements } from './services/stockMovements.service.js';
+import { auditLogCsv, listAuditLog } from './services/auditLog.service.js';
+import {
+  getAdminAlerts,
+  getAlertSubscriptions,
+  setAlertSubscription,
+} from './services/alerts.service.js';
 import type {
   AdminStatsDto,
   AdminStatsOrdersByStatusDto,
@@ -282,4 +288,9 @@ export const adminServices = {
   reportTimelineCsv,
   listStockBatches,
   listStockMovements,
+  listAuditLog,
+  auditLogCsv,
+  getAdminAlerts,
+  getAlertSubscriptions,
+  setAlertSubscription,
 };

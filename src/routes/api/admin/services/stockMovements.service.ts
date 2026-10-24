@@ -20,6 +20,7 @@ import type {
 import type { StockSourceName, WriteOffReason } from 'types/dto/products.dto.js';
 import type { ProductId, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
+import { isDbYear } from '@helpers/dbDate.js';
 
 // the journal of the stock for an admin, every step of a product in one list: a delivery and a
 // write-off are the lines the database wrote in the admin log (one for each product), a sale is
@@ -71,15 +72,15 @@ export type StockMovementsArgs = {
 };
 
 // a period [from, to): either end can be left out; one that ends before it starts is refused, as
-// the period of the reports
-function periodOf(query: AdminStockMovementsQueryDto) {
+// the period of the reports (the admin log reads its period the same way)
+export function periodOf(query: { from?: string | undefined; to?: string | undefined }) {
   const from = query.from === undefined ? undefined : new Date(query.from);
   const to = query.to === undefined ? undefined : new Date(query.to);
   for (const [field, date] of [
     ['from', from],
     ['to', to],
   ] as const) {
-    if (date && Number.isNaN(date.getTime())) {
+    if (date && (Number.isNaN(date.getTime()) || !isDbYear(date))) {
       throw new BadRequestError('INVALID_STATS_PERIOD', { field, reason: 'INVALID_DATE' });
     }
   }

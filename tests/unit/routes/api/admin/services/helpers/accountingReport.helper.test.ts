@@ -39,11 +39,16 @@ describe('parseProductIds', () => {
     expect(parseProductIds('7,3,7,12')).toEqual([3, 7, 12]);
   });
 
-  it('refuses an id past the largest int of the database', () => {
+  it('refuses an id past the largest int of the database, and names the bounds', () => {
     expect(thrownBy(() => parseProductIds('1,2147483648'))).toMatchObject({
       statusCode: 400,
       errorCode: 'PRODUCT_IDS_INVALID',
+      details: { maxIds: 100, maxId: 2_147_483_647 },
     });
+  });
+
+  it('takes the last id the database holds', () => {
+    expect(parseProductIds('2147483647')).toEqual([2_147_483_647]);
   });
 
   it('takes 100 ids and refuses more', () => {
@@ -104,14 +109,23 @@ describe('summarizeWriteOffs', () => {
     });
   });
 
+  // the log of the server names what is broken in the line
   it.each([
-    ['an unknown reason', line('stolen', [{ quantity: 1, unitCost: '1' }])],
-    ['no batches', line('damaged', []).filter((change) => change.field !== 'batches')],
-    ['a cost that is not a number', line('damaged', [{ quantity: 1, unitCost: 'cheap' }])],
-    ['a part of a unit', line('damaged', [{ quantity: 1.5, unitCost: '1' }])],
-    ['a quantity as text', line('damaged', [{ quantity: '1', unitCost: '1' }])],
-    ['a meta that is not a list of changes', { reason: 'damaged' }],
-  ])('takes a line with %s as a broken state of the log', (_case, meta) => {
-    expect(thrownBy(() => summarizeWriteOffs([meta]))).toBeInstanceOf(InternalError);
+    ['an unknown reason', line('stolen', [{ quantity: 1, unitCost: '1' }]), 'reason'],
+    ['no reason', line('damaged', []).filter((change) => change.field !== 'reason'), 'reason'],
+    ['no batches', line('damaged', []).filter((change) => change.field !== 'batches'), 'batches'],
+    [
+      'a cost that is not a number',
+      line('damaged', [{ quantity: 1, unitCost: 'cheap' }]),
+      'unitCost',
+    ],
+    ['a part of a unit', line('damaged', [{ quantity: 1.5, unitCost: '1' }]), 'quantity'],
+    ['a quantity as text', line('damaged', [{ quantity: '1', unitCost: '1' }]), 'quantity'],
+    ['a meta that is not a list of changes', { reason: 'damaged' }, 'not a list'],
+  ])('takes a line with %s as a broken state of the log', (_case, meta, detail) => {
+    const err = thrownBy(() => summarizeWriteOffs([meta]));
+
+    expect(err).toBeInstanceOf(InternalError);
+    expect(err).toMatchObject({ details: { reason: 'WRITE_OFF_LINE_INVALID', detail } });
   });
 });

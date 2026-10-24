@@ -11,6 +11,8 @@ import { passwordForgot, passwordReset } from './services/passwordReset.service.
 
 import { logout } from './services/logout.service.js';
 import { refresh } from './services/refresh.service.js';
+import { closeSession, listSessions } from './services/sessions.service.js';
+import { changePassword } from './services/passwordChange.service.js';
 
 export const authServices = {
   login,
@@ -33,4 +35,8 @@ export const authServices = {
 
   logout,
   refresh,
+
+  listSessions,
+  closeSession,
+  changePassword,
 };

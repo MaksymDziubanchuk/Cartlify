@@ -8,6 +8,7 @@ import {
   parsePaymentPageLink,
   type OrderPaymentPage,
 } from '@routes/api/payments/providers/pageLink.js';
+import { failureOf } from '@helpers/failureOf.js';
 import { InternalError, ServiceUnavailableError, isAppError } from '@utils/errors.js';
 
 import type { OrderId } from 'types/ids.js';
@@ -15,6 +16,8 @@ import type { OrderId } from 'types/ids.js';
 export type { OrderPaymentPage };
 
 type WorkerLogger = {
+  info: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
   error: (obj: unknown, msg?: string) => void;
 };
 
@@ -23,6 +26,22 @@ export const PAYMENT_WEBHOOK_GRACE_MS = 120_000;
 
 // treat a reservation as missed by redis when it expired this long ago
 const MISSED_RESERVATION_EXPIRY_MS = 300_000;
+
+// how many times a job runs before the worker gives it up with an error
+export const ORDER_TIMEOUT_MAX_ATTEMPTS = 5;
+
+// the pause before the next run of a job that failed, longer after each attempt: 30 s, 1 min,
+// 2 min, 4 min, at most 5 min. A job the worker takes moves this far ahead at once, so a server
+// that stops in the middle of it leaves it to run again then
+const RETRY_BASE_MS = 30_000;
+const RETRY_MAX_MS = 300_000;
+
+export function orderTimeoutRetryDelayMs(attempt: number): number {
+  return Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_MAX_MS);
+}
+
+// the attempts of the jobs of a queue, a hash next to it
+const attemptsKeyOf = (queueKey: string) => `${queueKey}:attempts`;
 
 // report redis command failures to api callers as a stable 503
 function toRedisUnavailableError(err: unknown): unknown {
@@ -65,83 +84,169 @@ export async function scheduleOrderReservationExpiry(
         value: String(orderId),
       },
     ]);
+
+    // a new reservation: the jobs of the order start their attempts over
+    await redis.hDel(attemptsKeyOf(redisKeys.orderTimeoutBaseZset), String(orderId));
+    await redis.hDel(attemptsKeyOf(redisKeys.orderTimeoutZset), String(orderId));
   } catch (err: unknown) {
     throw toRedisUnavailableError(err);
   }
 }
 
-async function claimDueOrderIdsByKey(redisKey: string, batchSize = 100): Promise<OrderId[]> {
+// a job the worker took: the order, which attempt this is, and the time the job moved to
+type ClaimedJob = { orderId: OrderId; attempt: number; leaseScore: string };
+
+// takes the due jobs of a queue: each moves ahead by the pause of its attempt and counts the
+// attempt, in one step, so two workers never take the same job and none is lost on a stop
+const CLAIM_LUA = `
+  local queue = KEYS[1]
+  local attempts = KEYS[2]
+  local now = tonumber(ARGV[1])
+  local base = tonumber(ARGV[3])
+  local cap = tonumber(ARGV[4])
+
+  local ids = redis.call('ZRANGE', queue, '0', ARGV[1], 'BYSCORE', 'LIMIT', '0', ARGV[2])
+  local out = {}
+
+  for _, id in ipairs(ids) do
+    local attempt = redis.call('HINCRBY', attempts, id, 1)
+    local delay = math.min(base * 2 ^ (attempt - 1), cap)
+    local lease = string.format('%.0f', now + delay)
+
+    redis.call('ZADD', queue, lease, id)
+    table.insert(out, id)
+    table.insert(out, tostring(attempt))
+    table.insert(out, lease)
+  end
+
+  return out
+`;
+
+// the job is done or given up: it goes, unless a new confirmation scheduled the order again
+// meanwhile (its time is not the one the worker moved it to)
+const COMPLETE_LUA = `
+  if redis.call('ZSCORE', KEYS[1], ARGV[1]) == ARGV[2] then
+    redis.call('ZREM', KEYS[1], ARGV[1])
+    redis.call('HDEL', KEYS[2], ARGV[1])
+  end
+  return 1
+`;
+
+async function claimDueJobs(queueKey: string, batchSize: number): Promise<ClaimedJob[]> {
   const redis = await getRedis();
-  const nowMs = Date.now();
 
-  const lua = `
-    local key = KEYS[1]
-    local now = ARGV[1]
-    local limit = tonumber(ARGV[2])
-
-    local ids = redis.call('ZRANGE', key, '0', now, 'BYSCORE', 'LIMIT', '0', limit)
-
-    if #ids == 0 then
-      return ids
-    end
-
-    redis.call('ZREM', key, unpack(ids))
-    return ids
-  `;
-
-  // atomically claim due jobs from the target sorted set
   const raw = (await redis.sendCommand([
     'EVAL',
-    lua,
-    '1',
-    redisKey,
-    String(nowMs),
+    CLAIM_LUA,
+    '2',
+    queueKey,
+    attemptsKeyOf(queueKey),
+    String(Date.now()),
     String(batchSize),
+    String(RETRY_BASE_MS),
+    String(RETRY_MAX_MS),
   ])) as string[];
 
-  // convert claimed redis values into numeric order ids
-  return raw.map((value) => Number(value) as OrderId).filter((value) => Number.isInteger(value));
+  const jobs: ClaimedJob[] = [];
+  for (let i = 0; i + 2 < raw.length; i += 3) {
+    const orderId = Number(raw[i]);
+    if (!Number.isInteger(orderId)) continue;
+
+    jobs.push({
+      orderId: orderId as OrderId,
+      attempt: Number(raw[i + 1]),
+      leaseScore: raw[i + 2]!,
+    });
+  }
+
+  return jobs;
+}
+
+async function completeJob(queueKey: string, job: ClaimedJob): Promise<void> {
+  const redis = await getRedis();
+
+  await redis.sendCommand([
+    'EVAL',
+    COMPLETE_LUA,
+    '2',
+    queueKey,
+    attemptsKeyOf(queueKey),
+    String(job.orderId),
+    job.leaseScore,
+  ]);
+}
+
+// runs the due jobs of a queue one by one: a job that fails stays for its next attempt with a
+// warning; when its last attempt fails the job is given up with one error
+async function runDueJobs(
+  queueKey: string,
+  batchSize: number,
+  log: WorkerLogger,
+  label: string,
+  run: (orderId: OrderId) => Promise<void>,
+): Promise<number> {
+  const jobs = await claimDueJobs(queueKey, batchSize);
+  let processed = 0;
+
+  for (const job of jobs) {
+    try {
+      await run(job.orderId);
+      await completeJob(queueKey, job);
+      processed += 1;
+    } catch (err: unknown) {
+      if (job.attempt >= ORDER_TIMEOUT_MAX_ATTEMPTS) {
+        log.error(
+          { orderId: job.orderId, attempts: job.attempt, ...failureOf(err) },
+          `${label} gave up`,
+        );
+        await completeJob(queueKey, job);
+      } else {
+        log.warn(
+          {
+            orderId: job.orderId,
+            attempt: job.attempt,
+            retryInMs: orderTimeoutRetryDelayMs(job.attempt),
+            ...failureOf(err),
+          },
+          `${label} failed, it runs again later`,
+        );
+      }
+    }
+  }
+
+  return processed;
 }
 
 export async function claimDueOrderReservationExpiryIds(batchSize = 100): Promise<OrderId[]> {
   // claim grace-phase jobs from the main timeout queue
-  return claimDueOrderIdsByKey(redisKeys.orderTimeoutZset, batchSize);
+  return (await claimDueJobs(redisKeys.orderTimeoutZset, batchSize)).map((job) => job.orderId);
 }
 
 export async function claimDueOrderReservationBaseIds(batchSize = 100): Promise<OrderId[]> {
   // claim base-phase jobs from the exact-expiry queue
-  return claimDueOrderIdsByKey(redisKeys.orderTimeoutBaseZset, batchSize);
+  return (await claimDueJobs(redisKeys.orderTimeoutBaseZset, batchSize)).map((job) => job.orderId);
 }
 
 export async function processClaimedOrderReservationExpiries(
   log: WorkerLogger,
   batchSize = 100,
 ): Promise<number> {
-  const orderIds = await claimDueOrderReservationExpiryIds(batchSize);
-  if (orderIds.length === 0) return 0;
-
-  let processed = 0;
-
-  for (const orderId of orderIds) {
-    try {
-      // expire the order reservation after the webhook grace window is over;
-      // the db function accepts only the admin context
-      await prisma.$transaction(async (db) => {
+  return runDueJobs(
+    redisKeys.orderTimeoutZset,
+    batchSize,
+    log,
+    'order reservation expiry',
+    (orderId) =>
+      // expire the order reservation after the webhook grace window is over; a stale job (paid,
+      // confirmed again, deleted) changes nothing. The db function accepts only the admin context
+      prisma.$transaction(async (db) => {
         await setAdminContext(db);
 
         await db.$queryRaw`
-          select cartlify.expire_order_reservation(${orderId}::int)
-        `;
-      });
-
-      processed += 1;
-    } catch (err: unknown) {
-      // log per-order failures and continue processing the remaining jobs
-      log.error({ orderId, err }, 'order reservation expiry failed');
-    }
-  }
-
-  return processed;
+        select cartlify.expire_order_reservation(${orderId}::int)
+      `;
+      }),
+  );
 }
 
 export async function processMissedOrderReservationExpiries(
@@ -183,7 +288,7 @@ export async function processMissedOrderReservationExpiries(
       if (rows[0]?.expired) processed += 1;
     } catch (err: unknown) {
       // log per-order failures and continue processing the remaining orders
-      log.error({ orderId, err }, 'missed order reservation expiry failed');
+      log.error({ orderId, ...failureOf(err) }, 'missed order reservation expiry failed');
     }
   }
 
@@ -209,66 +314,115 @@ export async function setOrderPaymentPageLink(
 
 // the payment page of the order, null when none was linked
 export async function getOrderPaymentPageLink(orderId: OrderId): Promise<OrderPaymentPage | null> {
-  const redis = await getRedis();
+  try {
+    const redis = await getRedis();
 
-  return parsePaymentPageLink(await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId)));
+    return parsePaymentPageLink(
+      await redis.hGet(redisKeys.orderPaymentSessionMap, String(orderId)),
+    );
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
 }
 
+// the order needs no page any more (paid, released): its link and the time of a closed page go
 export async function deleteOrderPaymentPageLink(orderId: OrderId): Promise<void> {
-  const redis = await getRedis();
-  await redis.hDel(redisKeys.orderPaymentSessionMap, String(orderId));
+  try {
+    const redis = await getRedis();
+    await redis.hDel(redisKeys.orderPaymentSessionMap, String(orderId));
+    await redis.hDel(redisKeys.orderPaymentPageClosedAtMap, String(orderId));
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
 }
 
-// the reservation is over: the page closes, so no payment comes for it any more. A page the
-// provider did not close (paid meanwhile, a payment on its way) keeps its link, the payment event
-// takes it away
-async function handleReservationExpiredBase(
-  orderId: OrderId,
-  page: OrderPaymentPage,
-): Promise<void> {
+// the app closed the page of the order to open one at another provider: the link goes, the time
+// stays, and the next page of the order gets a key of its own with it
+export async function markOrderPaymentPageClosed(orderId: OrderId): Promise<void> {
+  try {
+    const redis = await getRedis();
+    await redis.hDel(redisKeys.orderPaymentSessionMap, String(orderId));
+    await redis.hSet(redisKeys.orderPaymentPageClosedAtMap, String(orderId), String(Date.now()));
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
+}
+
+// when the app last closed a page of the order for another provider, null when it never did
+export async function getOrderPaymentPageClosedAt(orderId: OrderId): Promise<Date | null> {
+  try {
+    const redis = await getRedis();
+    const raw = await redis.hGet(redisKeys.orderPaymentPageClosedAtMap, String(orderId));
+    const ms = raw === null || raw === undefined ? Number.NaN : Number(raw);
+
+    return Number.isSafeInteger(ms) && ms > 0 ? new Date(ms) : null;
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
+}
+
+// the reservation is over: the page closes, so no payment comes for it any more. An order
+// confirmed without a page opened has nothing to close. A page the provider did not close because
+// the money is taken or on its way keeps its link, the payment event takes it away; one it could
+// not close (out of reach) is tried again
+async function closePageOfExpiredReservation(orderId: OrderId, log: WorkerLogger): Promise<void> {
+  const page = await getOrderPaymentPageLink(orderId);
+  if (!page) return;
+
   const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
 
-  if (closed.state !== 'closed') {
-    throw new InternalError(
-      { reason: 'PAYMENT_PAGE_NOT_CLOSED', provider: page.provider, state: closed.state },
-      closed.state === 'open' ? closed.cause : undefined,
-    );
+  if (closed.state === 'closed') {
+    await deleteOrderPaymentPageLink(orderId);
+    return;
   }
 
-  await deleteOrderPaymentPageLink(orderId);
+  if (closed.state === 'paid' || closed.state === 'in_progress') {
+    log.info(
+      { orderId, provider: page.provider, state: closed.state },
+      'payment page of a reservation that is over is paid or paying, its payment event decides',
+    );
+    return;
+  }
+
+  throw new InternalError(
+    { reason: 'PAYMENT_PAGE_NOT_CLOSED', provider: page.provider, state: closed.state },
+    closed.cause,
+  );
 }
 
 export async function processClaimedOrderReservationBase(
   log: WorkerLogger,
   batchSize = 100,
 ): Promise<number> {
-  const orderIds = await claimDueOrderReservationBaseIds(batchSize);
-  if (orderIds.length === 0) return 0;
+  return runDueJobs(
+    redisKeys.orderTimeoutBaseZset,
+    batchSize,
+    log,
+    'order reservation base expiry',
+    (orderId) => closePageOfExpiredReservation(orderId, log),
+  );
+}
 
-  let processed = 0;
+// how many jobs wait in both queues, due or not, for the pulse of the worker in /health
+export async function countQueuedOrderReservationJobs(): Promise<number> {
+  const redis = await getRedis();
 
-  for (const orderId of orderIds) {
-    try {
-      // run the base-phase handler for jobs scheduled at reservation expiry time
-      const page = await getOrderPaymentPageLink(orderId);
-
-      if (!page) throw new Error();
-
-      await handleReservationExpiredBase(orderId, page);
-      processed += 1;
-    } catch (err: unknown) {
-      // log per-order failures and continue processing the remaining jobs
-      log.error({ orderId, err }, 'order reservation base expiry failed');
-    }
-  }
-
-  return processed;
+  return (
+    (await redis.zCard(redisKeys.orderTimeoutBaseZset)) +
+    (await redis.zCard(redisKeys.orderTimeoutZset))
+  );
 }
 
 export async function cancelOrderReservationExpiry(orderId: number): Promise<void> {
-  const redis = await getRedis();
+  try {
+    const redis = await getRedis();
 
-  // remove both timeout jobs when the order no longer needs reservation cleanup
-  await redis.zRem(redisKeys.orderTimeoutBaseZset, String(orderId));
-  await redis.zRem(redisKeys.orderTimeoutZset, String(orderId));
+    // remove both timeout jobs when the order no longer needs reservation cleanup
+    await redis.zRem(redisKeys.orderTimeoutBaseZset, String(orderId));
+    await redis.zRem(redisKeys.orderTimeoutZset, String(orderId));
+    await redis.hDel(attemptsKeyOf(redisKeys.orderTimeoutBaseZset), String(orderId));
+    await redis.hDel(attemptsKeyOf(redisKeys.orderTimeoutZset), String(orderId));
+  } catch (err: unknown) {
+    throw toRedisUnavailableError(err);
+  }
 }

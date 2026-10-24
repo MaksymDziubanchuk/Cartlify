@@ -1,7 +1,9 @@
 import { STATUS_CODES } from 'node:http';
 import type { FastifyRequest, FastifyReply, FastifyInstance, FastifyError } from 'fastify';
-import { isAppError, ApiErrorResponse } from '@utils/errors.js';
+import { AccessTokenExpiredError, isAppError, ApiErrorResponse } from '@utils/errors.js';
 import { maskUrlSecrets } from '@helpers/maskUrlSecrets.js';
+import { readActorRole } from '@db/actorRole.helper.js';
+import { getPgCode } from '@db/client.js';
 
 // the swagger contract: message is the standard http phrase of the status, for every error;
 // a status without a phrase gets the one of its class
@@ -71,9 +73,30 @@ function validationDetails(error: FastifyError): ValidationDetail[] {
   });
 }
 
+// the rights of the database refused the request (42501), and the access token names a role the
+// account no longer has: root changed it, the token holds the old one until it runs out. That is
+// no server fault, the page renews the session (a role change closes the sessions: a new login).
+// The role is read only on such a refusal; a refusal with the role as it is stays a server error
+async function staleRoleRefusal(error: FastifyError, req: FastifyRequest) {
+  if (errorStatus(error) < 500) return null;
+  if (getPgCode(error) !== '42501' && getPgCode(isAppError(error) ? error.cause : null) !== '42501') {
+    return null;
+  }
+
+  const user = req.user;
+  if (!user || user.role === 'GUEST') return null;
+
+  const role = await readActorRole(Number(user.id)).catch(() => undefined);
+  if (role === undefined || role === user.role) return null;
+
+  return new AccessTokenExpiredError();
+}
+
 // normalize errors to a stable api shape
 export default function errorNormalizer(app: FastifyInstance) {
-  app.setErrorHandler((error: FastifyError, req: FastifyRequest, reply: FastifyReply) => {
+  app.setErrorHandler(async (raised: FastifyError, req: FastifyRequest, reply: FastifyReply) => {
+    const error = ((await staleRoleRefusal(raised, req)) ?? raised) as FastifyError;
+
     // a request that failed its route schema (body, query, params or headers)
     const isValidation = !isAppError(error) && Array.isArray(error.validation);
 
@@ -103,7 +126,13 @@ export default function errorNormalizer(app: FastifyInstance) {
       req.log.error({ err: error, ...extra }, 'request failed');
     } else {
       // a client error is expected traffic: one short info line without a stack;
-      // the query may carry tokens, their values are hidden
+      // the query may carry tokens, their values are hidden. Details kept from the client
+      // (a busy error: attempts, database codes) are for this line
+      const logOnlyDetails =
+        isAppError(error) && !error.expose && error.details !== undefined
+          ? { details: error.details }
+          : {};
+
       req.log.info(
         {
           statusCode,
@@ -111,6 +140,7 @@ export default function errorNormalizer(app: FastifyInstance) {
           method: req.method,
           url: maskUrlSecrets(req.url),
           ...(isValidation ? { details: payload.details } : {}),
+          ...logOnlyDetails,
         },
         'request rejected',
       );

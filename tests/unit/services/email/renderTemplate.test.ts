@@ -120,6 +120,9 @@ describe('renderTemplate', () => {
     total: '€2.00',
     shippingAddress: 'Main st 1',
     recipient: 'Anna Koval, +380501234567',
+    // the products a delivered order asks to rate
+    hasRatings: 'yes',
+    ratings: [{ name: 'Lamp', reviewUrl: 'https://shop.example.com/products/7#reviews' }],
   };
 
   it.each([

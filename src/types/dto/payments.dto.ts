@@ -35,6 +35,19 @@ export interface CheckoutSessionResponseDto {
   checkoutSession: CheckoutSessionDto;
 }
 
+// the order of a page the buyer comes back to: the provider may call the page paid while the
+// order could not take the money and it went back
+export interface CheckoutSessionOrderDto {
+  id: OrderId;
+  status: 'pending' | 'unconfirmed' | 'waiting' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
+  // the money of the payment of this page went back, the order does not hold it
+  paymentRefunded: boolean;
+}
+
+export interface CheckoutSessionReadResponseDto extends CheckoutSessionResponseDto {
+  order: CheckoutSessionOrderDto;
+}
+
 // GET /stripe/checkout/sessions/:sessionId
 export interface GetCheckoutSessionByIdParamsDto {
   sessionId: string;
@@ -54,5 +67,5 @@ export interface HandleStripeWebhookDto {
 export interface StripeWebhookResponseDto {
   received: true;
   // event was acknowledged without any action, with the reason
-  skipped?: 'ORDER_NOT_FOUND' | 'NOT_AN_ORDER';
+  skipped?: 'ORDER_NOT_FOUND' | 'NOT_AN_ORDER' | 'REFUNDED';
 }

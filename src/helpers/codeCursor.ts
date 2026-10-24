@@ -1,5 +1,6 @@
 import { BadRequestError } from '@utils/errors.js';
 import { b64urlJson } from '@helpers/b64Payload.js';
+import { MAX_ID } from '@schemas/idPathParam.js';
 
 export type CursorPayload = { id: number; v: string | number | null };
 
@@ -16,7 +17,8 @@ export function decodeCursor(cursor: string): CursorPayload {
     const raw = Buffer.from(cursor, 'base64url').toString('utf8');
     const obj = JSON.parse(raw) as CursorPayload;
 
-    if (!obj || !Number.isInteger(obj.id) || obj.id <= 0)
+    // an id past the int of postgres is no row: the database failed it with a server error
+    if (!obj || !Number.isInteger(obj.id) || obj.id <= 0 || obj.id > MAX_ID)
       throw new BadRequestError('CURSOR_INVALID');
 
     return obj;

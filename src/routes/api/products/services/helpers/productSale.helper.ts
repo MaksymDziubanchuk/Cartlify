@@ -42,3 +42,68 @@ export function normalizeSaleEnd(endsAt: string, now = Date.now()): Date {
   }
   return end;
 }
+
+// how many days before a sale its lowest price is looked for (the EU rule of a price reduction)
+export const SALE_PRIOR_PRICE_DAYS = 30;
+
+// a line of the log of prices, the oldest first
+export type PriceLogLine = {
+  oldPrice: Prisma.Decimal;
+  newPrice: Prisma.Decimal;
+  // a line with an end starts a sale: from the price down to the sale price
+  endsAt: Date | null;
+  createdAt: Date;
+};
+
+// the lowest price the product sold at from `from` to `to`, replayed from its log of prices: the
+// price `from` began with, every price after a line of the time, and `current`, the price it sells
+// at right before the new sale. A line with an end starts a sale; a line from the sale price back
+// up takes it off; any other line changes the price, and a price down to the sale price or below
+// ends the sale (db/05). A sale also ends by its end, with no line; its price stays only for the
+// time it lasted, and the price after it is not lower than it
+export function lowestPriceOf(args: {
+  lines: PriceLogLine[];
+  current: Prisma.Decimal;
+  from: Date;
+  to: Date;
+}): Prisma.Decimal {
+  const { lines, current, from, to } = args;
+
+  let price: Prisma.Decimal | null = lines.length ? lines[0]!.oldPrice : null;
+  let sale: { price: Prisma.Decimal; endsAt: Date } | null = null;
+  const appliedAt = (time: Date) =>
+    sale && sale.endsAt.getTime() > time.getTime() ? sale.price : price;
+
+  let lowest = current;
+  const take = (value: Prisma.Decimal | null) => {
+    if (value && value.lessThan(lowest)) lowest = value;
+  };
+
+  let began = false;
+  for (const line of lines) {
+    if (line.createdAt.getTime() >= to.getTime()) break;
+
+    // the price the time began with, once the lines before it are replayed
+    if (!began && line.createdAt.getTime() >= from.getTime()) {
+      take(appliedAt(from));
+      began = true;
+    }
+
+    if (line.endsAt) {
+      price = line.oldPrice;
+      sale = { price: line.newPrice, endsAt: line.endsAt };
+    } else if (sale && line.oldPrice.equals(sale.price)) {
+      sale = null;
+      price = line.newPrice;
+    } else {
+      price = line.newPrice;
+      if (sale && line.newPrice.lessThanOrEqualTo(sale.price)) sale = null;
+    }
+
+    if (began) take(appliedAt(line.createdAt));
+  }
+
+  if (!began) take(appliedAt(from));
+
+  return lowest;
+}

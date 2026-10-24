@@ -4,6 +4,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { ConflictError, NotFoundError, isAppError, InternalError } from '@utils/errors.js';
 
 import {
+  buyersOf,
   normalizeCreateReviewInput,
   mapReviewRowToResponse,
   reviewAuthorSelect,
@@ -15,7 +16,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
   const { productId, userId, rating, comment, actorRole } = normalizeCreateReviewInput(dto);
 
   try {
-    const { row, created, author } = await prisma.$transaction(async (tx) => {
+    const { row, created, author, bought } = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId, role: actorRole });
 
@@ -25,6 +26,9 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
         select: { id: true },
       });
       if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND');
+
+      // the author bought the product: rls lets them read their own orders
+      const bought = async () => (await buyersOf(tx, productId, [userId])).has(userId);
 
       // the author is the actor, rls lets them read their own account
       const author = await tx.user.findUnique({
@@ -51,12 +55,15 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
       const hasNewComment = typeof comment === 'string' && comment.length > 0;
       const hasNewRating = rating != null;
 
+      // the votes the review has: a review that gets its missing part may have some already
       const select = {
         id: true,
         productId: true,
         rating: true,
         comment: true,
         userId: true,
+        upVotes: true,
+        downVotes: true,
         createdAt: true,
         updatedAt: true,
       } as const;
@@ -73,7 +80,7 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
           select,
         });
 
-        return { row, created: true, author };
+        return { row, created: true, author, bought: await bought() };
       }
 
       // an existing review only gets its missing part, a part that is set never changes
@@ -103,10 +110,10 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
         select,
       });
 
-      return { row, created: false, author };
+      return { row, created: false, author, bought: await bought() };
     });
 
-    return { review: mapReviewRowToResponse(row, author), created };
+    return { review: mapReviewRowToResponse(row, author, bought), created };
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

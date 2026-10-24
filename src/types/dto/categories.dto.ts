@@ -33,6 +33,20 @@ export interface CategoriesListResponseDto {
   nextCursor?: string;
 }
 
+// a category of the tree with the categories below it; productCount counts the products of the
+// catalog of its whole branch
+export interface CategoryTreeNodeDto {
+  id: CategoryId;
+  name: string;
+  slug: string;
+  productCount: number;
+  children: CategoryTreeNodeDto[];
+}
+
+export interface CategoryTreeResponseDto {
+  items: CategoryTreeNodeDto[];
+}
+
 export interface CreateCategoryBodyDto {
   name: string;
   slug: string;

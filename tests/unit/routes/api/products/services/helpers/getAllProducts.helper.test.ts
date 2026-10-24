@@ -5,12 +5,12 @@ import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import {
   BUYER_SORTS,
   buildProductIdsQuery,
+  buildSuggestionsQuery,
   makeNextCursor,
   mapProductListRowToResponse,
   normalizeFindAllProductsInput,
   type ProductListQuery,
 } from '@routes/api/products/services/helpers/getAllProducts.helper.js';
-import { InternalError } from '@utils/errors.js';
 
 import type { FindAllProductsDto, ProductsSortField } from 'types/dto/products.dto.js';
 
@@ -26,9 +26,11 @@ const row = {
   id: 1,
   name: 'Desk lamp',
   description: 'Warm light' as string | null,
+  sku: 'DL-1' as string | null,
   price: new Prisma.Decimal('25.50') as unknown,
   salePrice: null as unknown,
   saleEndsAt: null as Date | null,
+  salePriorPrice: null as unknown,
   stock: 10,
   reservedStock: 3,
   expiredStock: 0,
@@ -90,11 +92,12 @@ describe('mapProductListRowToResponse', () => {
   });
 
   it('builds the image urls from the primary image', () => {
-    expect(map().images.url200).toContain('/upload/c_fit,w_200');
+    expect(map().images?.url200).toContain('/upload/c_fit,w_200');
   });
 
-  it('throws an internal error when a product has no image, which every product must have', () => {
-    expect(thrownBy(() => map({ images: [] }))).toBeInstanceOf(InternalError);
+  // a buyer lists only the products with an image, an admin lists the others with no images
+  it('gives a product without an image no images', () => {
+    expect(map({ images: [] }, 'admin').images).toBeNull();
   });
 
   // the card of the product page does the same
@@ -262,7 +265,32 @@ describe('normalizeFindAllProductsInput', () => {
     });
 
     it.each(BUYER_SORTS)('sorts by %s', (sort) => {
-      expect(normalizeFindAllProductsInput(dto({ sort })).sort).toBe(sort);
+      expect(normalizeFindAllProductsInput(dto({ sort, search: 'lamp' })).sort).toBe(sort);
+    });
+
+    // the best match first: a search sorts by it unless another sort is asked for
+    it('sorts a search by relevance and the catalog by popularity without a sort', () => {
+      const unsorted = { actorRole: 'GUEST', limit: 20, order: 'desc' } as const;
+
+      expect(normalizeFindAllProductsInput({ ...unsorted, search: 'lamp' }).sort).toBe('relevance');
+      expect(normalizeFindAllProductsInput(unsorted).sort).toBe('popularity');
+      expect(normalizeFindAllProductsInput(dto({ sort: 'price', search: 'lamp' })).sort).toBe(
+        'price',
+      );
+    });
+
+    it('refuses relevance without a search', () => {
+      expect(
+        thrownBy(() => normalizeFindAllProductsInput(dto({ sort: 'relevance' }))),
+      ).toMatchObject({ statusCode: 400, errorCode: 'SORT_RELEVANCE_REQUIRES_SEARCH' });
+    });
+
+    // a parent category shows the products of the categories below it unless branch is false
+    it('takes the whole branch of a category unless branch is false', () => {
+      expect(normalizeFindAllProductsInput(dto({ categoryIds: [2] })).branch).toBe(true);
+      expect(normalizeFindAllProductsInput(dto({ categoryIds: [2], branch: false })).branch).toBe(
+        false,
+      );
     });
 
     it.each([
@@ -417,6 +445,7 @@ const query = (patch: Partial<ProductListQuery> = {}) =>
     sort: 'popularity',
     order: 'desc',
     deleted: false,
+    branch: true,
     ...patch,
   });
 
@@ -424,7 +453,19 @@ const query = (patch: Partial<ProductListQuery> = {}) =>
 const cursorOf = (payload: Record<string, unknown>, sort = 'popularity:desc') =>
   encodeCursor({ s: sort, ...payload } as never);
 
+const HAS_PRIMARY_IMAGE = `EXISTS (SELECT 1 FROM "product_images" i WHERE i."productId" = p."id" AND i."isPrimary")`;
+
 describe('buildProductIdsQuery', () => {
+  it('lists to a buyer only the products with an image, to an admin every one', () => {
+    expect(sqlText(query())).toContain(HAS_PRIMARY_IMAGE);
+    expect(sqlText(query({ view: 'admin' }))).not.toContain(HAS_PRIMARY_IMAGE);
+  });
+
+  it('suggests to a buyer only the products with an image, to an admin every one', () => {
+    expect(sqlText(buildSuggestionsQuery('lamp', 'buyer'))).toContain(HAS_PRIMARY_IMAGE);
+    expect(sqlText(buildSuggestionsQuery('lamp', 'admin'))).not.toContain(HAS_PRIMARY_IMAGE);
+  });
+
   it('passes the search text as a parameter, never inside the sql text', () => {
     const text = "lamp'; drop table products; --";
     const sql = query({ search: text });
@@ -446,9 +487,32 @@ describe('buildProductIdsQuery', () => {
     ['a backslash', 'a\\b', 'a\\\\b'],
   ])('matches %s in the search text literally', (_case, text, escaped) => {
     const sql = query({ search: text });
+    const patterns = sqlText(sql).split('ILIKE').length - 1;
 
-    expect(sql.values).toContain(escaped);
-    expect(sql.values).not.toContain(text);
+    // every pattern of ILIKE (the name, the name of the category) takes the escaped text; the
+    // text as it is goes only to the closeness of the words, which has no wildcards
+    expect(patterns).toBe(2);
+    expect(sql.values.filter((value) => value === escaped)).toHaveLength(patterns);
+  });
+
+  // a typo, another order of the words, the name of the category, the article number
+  it('finds a product by a close name, by its category and by its article number', () => {
+    const sql = query({ search: 'lamp' });
+    const text = sqlText(sql);
+
+    expect(text).toContain(
+      'cartlify.word_similarity(cartlify.immutable_unaccent(?), cartlify.immutable_unaccent(p."name")) >= ?',
+    );
+    expect(text).toContain('FROM "categories" c WHERE c."id" = p."categoryId"');
+    expect(text).toContain('lower(p."sku") = lower(?)');
+  });
+
+  it('sorts a search by how well a product matches it, the best first', () => {
+    const text = sqlText(query({ search: 'lamp', sort: 'relevance' }));
+
+    expect(text).toMatch(
+      /ORDER BY round\(\(GREATEST\(.+\)\)::numeric, 6\) DESC, p\."id" DESC LIMIT \?$/,
+    );
   });
 
   it('matches no name without a search text', () => {
@@ -474,11 +538,20 @@ describe('buildProductIdsQuery', () => {
     const sql = query({ categoryIds: [2, 7], minPrice: 10, maxPrice: 50 });
     const text = sqlText(sql);
 
-    expect(text).toContain('p."categoryId" IN (?,?)');
+    expect(text).toContain(
+      'p."categoryId" IN ( WITH RECURSIVE branch AS ( SELECT c."id" FROM "categories" c WHERE c."id" IN (?,?) UNION SELECT c."id" FROM "categories" c JOIN branch b ON c."parentId" = b."id" ) SELECT "id" FROM branch )',
+    );
     expect(text).toContain(`${CURRENT_PRICE} >= ?`);
     expect(text).toContain(`${CURRENT_PRICE} <= ?`);
     expect(text).not.toMatch(/p\."price" [<>]=/);
     expect(sql.values).toEqual(expect.arrayContaining([2, 7, 10, 50]));
+  });
+
+  it('takes only the products of each category itself with branch false', () => {
+    const text = sqlText(query({ categoryIds: [2, 7], branch: false }));
+
+    expect(text).toContain('p."categoryId" IN (?,?)');
+    expect(text).not.toContain('RECURSIVE');
   });
 
   // an admin sorts and filters by the price the field shows, the sale price has its own sort

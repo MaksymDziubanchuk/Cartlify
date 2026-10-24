@@ -74,7 +74,7 @@ export async function refreshAccessTokenByRefreshToken({
           await assertNotExpiredInDbOrThrow(tx, {
             row: tokenRow,
             now,
-            expiredMessage: 'refresh: token expired (db)',
+            expiredMessage: 'REFRESH_TOKEN_EXPIRED',
           });
         } catch (err) {
           // these refusals have to keep what they wrote: thrown here, the error would roll back
@@ -100,6 +100,8 @@ export async function refreshAccessTokenByRefreshToken({
           now,
           user: { id: dbUser.id, role: dbUser.role },
           rememberMe,
+          sessionId: tokenRow.sessionId,
+          userAgent: tokenRow.userAgent,
         });
 
         return {

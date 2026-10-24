@@ -133,6 +133,7 @@ model User {
   orders                 Order[]
   productPriceChangeLogs ProductPriceChangeLog[]
   adminAuditLogs         AdminAuditLog[]
+  alertMutes             AdminAlertMute[]
   chatThreads            ChatThread[]
   chatMessages           ChatMessage[]
 
@@ -152,9 +153,18 @@ model UserToken {
   usedAt    DateTime?
   createdAt DateTime      @default(now())
 
+  // a session token: the session it belongs to, kept across its renewals, and the browser that
+  // opened it (db/06: a session token has a session, no other link has one)
+  sessionId String?   @db.Uuid
+  userAgent String?
+  // a session closed on purpose (a logout, a reset of the password, a role change), at the moment
+  // it was closed; a token closed by its renewal has none, and that one coming back is theft
+  revokedAt DateTime?
+
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId, type, createdAt])
+  @@index([sessionId])
   @@map("user_tokens")
 }
 
@@ -198,6 +208,9 @@ model Product {
   id          Int     @id @default(autoincrement())
   name        String
   description String?
+  // the article number: optional, one product of the catalog has it at a time, whatever the case
+  // of its letters (db/06)
+  sku         String? @db.VarChar(64)
 
   price         Decimal @db.Decimal(10, 2)
   stock         Int     @default(0)
@@ -205,8 +218,10 @@ model Product {
 
   // the sale: its price is the price of the product while saleEndsAt is ahead; both empty or both
   // set (db/06), a price down to the sale price or below empties them (db/05)
-  salePrice  Decimal?  @db.Decimal(10, 2)
-  saleEndsAt DateTime?
+  salePrice      Decimal?  @db.Decimal(10, 2)
+  saleEndsAt     DateTime?
+  // the lowest price of the 30 days before the sale, written with it and gone with it (db/06)
+  salePriorPrice Decimal?  @db.Decimal(10, 2)
 
   categoryId Int
   category   Category @relation(fields: [categoryId], references: [id])
@@ -444,9 +459,12 @@ model OrderItem {
   productId Int
   product   Product @relation(fields: [productId], references: [id])
 
-  quantity   Int
-  unitPrice  Decimal @db.Decimal(10, 2)
-  totalPrice Decimal @db.Decimal(10, 2)
+  quantity    Int
+  unitPrice   Decimal @db.Decimal(10, 2)
+  totalPrice  Decimal @db.Decimal(10, 2)
+  // the name of the product: it follows the product while the order is a cart, the confirm keeps
+  // the name of that moment (db/05); empty for an item from before it was kept
+  productName String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -528,6 +546,18 @@ model ProductPriceChangeLog {
   @@index([productId, createdAt])
   @@index([actorId, createdAt])
   @@map("product_price_change_logs")
+}
+
+// a kind of alerts an admin or root turned off for themselves: every kind is on until then
+model AdminAlertMute {
+  userId Int
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind   String @db.VarChar(64)
+
+  createdAt DateTime @default(now())
+
+  @@id([userId, kind])
+  @@map("admin_alert_mutes")
 }
 
 model AdminAuditLog {

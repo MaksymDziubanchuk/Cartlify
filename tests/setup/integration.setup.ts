@@ -15,10 +15,18 @@ const CLOUDINARY_KEYS = [
 ];
 const MOCK_CLOUDINARY = { CLOUDINARY_URL: '', ...CLOUDINARY_PLACEHOLDERS };
 
-// stripe has a test mode: the payment tests take the key of a test sandbox from
-// STRIPE_TEST_SECRET_KEY (.env locally, the secret of the same name in ci), never
-// STRIPE_SECRET_KEY, which one day holds the live key; without it they are skipped
+// stripe: a mock unless the run takes it for real (service:stripe). For real the payment tests take
+// the key of a test sandbox from STRIPE_TEST_SECRET_KEY (.env locally, the secret of the same name
+// in ci), never STRIPE_SECRET_KEY, which one day holds the live key. The mock takes the placeholder
+const realStripe = isRealService('stripe');
 const STRIPE_TEST_KEY = 'STRIPE_TEST_SECRET_KEY';
+
+// openai: the model of the bot is the test's (tests/helpers/openai.ts) unless the run takes it for
+// real (service:openai); then the tests that run with either model ask openai itself with the key
+// of OPENAI_API_TEST_KEY, never OPENAI_API_KEY, the key of the app. Every other test keeps the app
+// without a model, so the key goes to the app only for the time of such a test
+const realOpenAi = isRealService('openai');
+const OPENAI_TEST_KEY = 'OPENAI_API_TEST_KEY';
 
 // sendgrid: a mock unless the run takes it for real (service:sendgrid). For real the tests take the
 // key of SENDGRID_API_TEST_KEY (never SENDGRID_API_KEY, the key of dev) and the addresses of the
@@ -70,20 +78,36 @@ isolateEnv(
     // every request of the tests comes from 127.0.0.1; each test file has an app and a count of its
     // own, a file of many requests would hit the 100 a minute of the app
     RATE_LIMIT_MAX: '1000',
+    // the same for the limits of the login, the registration, the mails and the payment page;
+    // tests/integration/api/auth/limits.test.ts checks them as the server has them
+    REQUEST_LIMITS_SCALE: '1000',
     ...(realSendGrid ? {} : MOCK_SENDGRID),
     ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },
   {
     fromLocalEnv: [
       ...(realCloudinary ? CLOUDINARY_KEYS : []),
-      STRIPE_TEST_KEY,
+      ...(realStripe ? [STRIPE_TEST_KEY] : []),
       ...(realSendGrid ? [SENDGRID_TEST_KEY, ...MAIL_ADDRESS_KEYS] : []),
+      ...(realOpenAi ? [OPENAI_TEST_KEY] : []),
     ],
   },
 );
 
-// set here and not left to the environment: a STRIPE_SECRET_KEY of the shell may be a live key
-process.env.STRIPE_SECRET_KEY = process.env[STRIPE_TEST_KEY]?.trim() || STRIPE_PLACEHOLDER_KEY;
+// set here and not left to the environment: a STRIPE_SECRET_KEY of the shell may be a live key;
+// the mock takes the placeholder only, a test key of the shell does not reach it
+if (realStripe) {
+  if (!process.env[STRIPE_TEST_KEY]?.trim()) {
+    throw new Error(`service:stripe takes ${STRIPE_TEST_KEY} from .env or the environment`);
+  }
+  process.env.STRIPE_SECRET_KEY = process.env[STRIPE_TEST_KEY]!.trim();
+} else {
+  process.env.STRIPE_SECRET_KEY = STRIPE_PLACEHOLDER_KEY;
+}
+
+if (realOpenAi && !process.env[OPENAI_TEST_KEY]?.trim()) {
+  throw new Error(`service:openai takes ${OPENAI_TEST_KEY} from .env or the environment`);
+}
 
 // the same for sendgrid: the key of the app in the tests is the test key, never one of the shell
 if (realSendGrid) {

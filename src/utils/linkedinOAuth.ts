@@ -7,6 +7,7 @@ import {
 } from '@utils/errors.js';
 import { createPlaceholder, decodePlaceholderInternal } from '@helpers/placeholder.js';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
+import { fetchFromProvider } from '@utils/oauthFetch.js';
 
 type StatePayload = {
   guestId: string;
@@ -181,13 +182,13 @@ export async function exchangeLinkedInCodeForTokens(code: string): Promise<Linke
   });
 
   // call linkedin token endpoint
-  const res = await fetch('https://www.linkedin.com/oauth/v2/accessToken', {
+  const res = await fetchFromProvider('https://www.linkedin.com/oauth/v2/accessToken', {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body,
   });
 
-  const text = await res.text();
+  const { text } = res;
 
   if (!res.ok) {
     throw new UnauthorizedError('LINKEDIN_OAUTH_TOKEN_EXCHANGE_FAILED', {

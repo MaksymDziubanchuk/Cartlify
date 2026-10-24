@@ -86,6 +86,7 @@ export async function findAdmins(dto: FindAdminsDto): Promise<GetAdminsResponseD
           avatarUrl: true,
           locale: true,
           phone: true,
+          deletedAt: true,
         },
       });
 
@@ -121,9 +122,11 @@ export async function findAdmins(dto: FindAdminsDto): Promise<GetAdminsResponseD
           createdAt: u.createdAt,
           updatedAt: u.updatedAt,
           ...(u.name ? { name: u.name } : {}),
-          ...avatarOf(u),
+          ...avatarOf({ ...u, deleted: u.deletedAt !== null }),
           ...(u.locale ? { locale: u.locale } : {}),
           ...(u.phone ? { phone: u.phone } : {}),
+          // a deleted admin keeps the role: the page tells it from a working one
+          deletedAt: u.deletedAt,
         };
       });
 

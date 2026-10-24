@@ -181,6 +181,26 @@ describe('PATCH /api/users/me with a form', () => {
   });
 
   describe('avatar', () => {
+    // a browser sends a file input left empty as a part without a file name and without bytes:
+    // no file was chosen, the name of the same form has to be saved
+    it('takes a file field left empty for no file and saves the other fields', async () => {
+      const user = await newUser({ name: 'Anna', ...ownAvatar() });
+
+      const res = await patchForm(accessCookie(user), [
+        ...fields({ name: 'Hanna' }),
+        {
+          name: 'avatar',
+          filename: '',
+          contentType: 'application/octet-stream',
+          data: Buffer.alloc(0),
+        },
+      ]);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ name: 'Hanna', avatarIsDefault: false });
+      expect(await rowOf(user.id)).toMatchObject({ name: 'Hanna', ...ownAvatar() });
+    });
+
     it('refuses an empty file and changes nothing', async () => {
       const user = await newUser({ name: 'Anna' });
 

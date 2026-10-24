@@ -209,6 +209,35 @@ describe('a batch that is over', () => {
     expect(order).toEqual({ status: 'waiting', paidAt: null });
   });
 
+  // a waiting order holds the good units: written off by the name of their batch, the reserve
+  // would stay on units that are over and the payment of the order would go back
+  it('refuses to write off the good batch the reserve of a waiting order needs', async () => {
+    const product = await createProduct({ stock: 0, price: 10 });
+    products.push(product);
+    const over = await receiveBatch(product.id, { quantity: 4, expiresAt: shopToday() });
+    const good = await receiveBatch(product.id, { quantity: 4 });
+    twoDaysOn();
+    await placeOrder(app, csrf, await newUser(), product, 'waiting', 4);
+    const writeOff = (batchId: number) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/products/stock/write-offs',
+        headers: withCsrf(csrf, accessCookie(admin)),
+        payload: { reason: 'expired', items: [{ productId: product.id, batchId, quantity: 4 }] },
+      });
+
+    const refused = await writeOff(good);
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({
+      errorCode: 'INSUFFICIENT_AVAILABLE_STOCK',
+      details: { products: [{ productId: product.id, available: 0, requested: 4 }] },
+    });
+
+    // the batch that is over goes, the good units stay held
+    expect((await writeOff(over)).statusCode).toBe(201);
+  });
+
   it('gives the units that are over in the stock answer of a delivery', async () => {
     const product = await productWithBatchOfToday();
     twoDaysOn();

@@ -1,5 +1,7 @@
 export * from './productImages.helper.js';
 
+export * from './productCategory.helper.js';
+
 export * from './productMapper.helper.js';
 
 export * from './priceChangeLog.helper.js';
