@@ -437,7 +437,7 @@ const getOrdersSchema = {
 
     400: {
       description:
-        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`) and a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`).',
+        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`) a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`) and such a period of the last change (`UPDATED_PERIOD_INVALID`).',
       $ref: 'errorResponseSchema#',
     },
     401: {

@@ -37,11 +37,6 @@ declare global {
       SHOP_TIME_ZONE?: string;
       SHOP_NAME?: string;
 
-      ALERT_LOW_STOCK_UNITS?: string;
-      ALERT_BATCH_EXPIRY_DAYS?: string;
-      ALERT_SHIPPED_DAYS?: string;
-      ALERT_WORKER_STALL_SECONDS?: string;
-
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -263,13 +258,6 @@ export default {
 
   // the name of the shop on a payment and in the mails, Cartlify unless given
   SHOP_NAME: process.env.SHOP_NAME?.trim() || 'Cartlify',
-
-  // the alerts of the admins: few free units of a product, the days to the last good day of a
-  // batch, the days a shipped order waits for its delivery, the seconds the worker may not run
-  ALERT_LOW_STOCK_UNITS: positiveInt('ALERT_LOW_STOCK_UNITS', 5),
-  ALERT_BATCH_EXPIRY_DAYS: positiveInt('ALERT_BATCH_EXPIRY_DAYS', 7),
-  ALERT_SHIPPED_DAYS: positiveInt('ALERT_SHIPPED_DAYS', 14),
-  ALERT_WORKER_STALL_SECONDS: positiveInt('ALERT_WORKER_STALL_SECONDS', 180),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',

@@ -168,7 +168,9 @@ const getChatThreadMessagesSchema = {
 const getAdminChatThreadsSchema = {
   operationId: 'getAdminChatThreads',
   summary: 'Get admin chat threads',
-  description: 'Returns paginated admin chat queue threads for waiting or active support conversations.',
+  description:
+    'Returns paginated admin chat queue threads for waiting or active support conversations, ' +
+    'or both with a message no admin has read (queue=unread, the alerts of an admin send to it).',
 
   querystring: {
     $ref: 'adminChatThreadsQuerySchema#',

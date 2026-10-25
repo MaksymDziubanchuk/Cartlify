@@ -682,3 +682,22 @@ WHERE
 -- emails are stored in lower case (trg_users_before_write_email); the list of users looks for a
 -- part of an address with ILIKE, a trigram index serves it from 3 characters on
 CREATE INDEX IF NOT EXISTS users_email_trgm_idx ON cartlify.users USING gin (email cartlify.gin_trgm_ops);
+
+----------------------------------------
+-- ADMIN ALERT SETTINGS: the threshold of a kind
+----------------------------------------
+-- a threshold an admin set is a whole number from 1 (the bounds of each kind are the server's);
+-- none is the threshold the server gives
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'admin_alert_settings_threshold_chk'
+  ) THEN
+    ALTER TABLE cartlify.admin_alert_settings
+      DROP CONSTRAINT admin_alert_settings_threshold_chk;
+  END IF;
+
+  ALTER TABLE cartlify.admin_alert_settings
+    ADD CONSTRAINT admin_alert_settings_threshold_chk
+    CHECK (threshold IS NULL OR threshold >= 1);
+END $$;

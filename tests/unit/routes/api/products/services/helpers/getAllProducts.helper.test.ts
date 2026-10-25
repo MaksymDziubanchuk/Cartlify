@@ -327,6 +327,14 @@ describe('normalizeFindAllProductsInput', () => {
       },
     );
 
+    it('may not use the free units of an admin', () => {
+      expect(thrownBy(() => normalizeFindAllProductsInput(dto({ maxStock: 2 })))).toMatchObject({
+        statusCode: 403,
+        errorCode: 'FILTER_FORBIDDEN',
+        details: { filter: 'maxStock' },
+      });
+    });
+
     // false is what no flag means
     it('may send the flags as false', () => {
       const q = normalizeFindAllProductsInput(
@@ -375,6 +383,17 @@ describe('normalizeFindAllProductsInput', () => {
       expect(q.deleted).toBe(expected.deleted);
       expect(q.onSale).toBe(expected.onSale);
       expect(q.popularityOverridden).toBe(expected.popularityOverridden);
+    });
+
+    // few free units are a flag too: every product of the catalog with them, on sale or not
+    it('lists by the free units of maxStock only, whatever the sale and the override', () => {
+      expect(asAdmin({ maxStock: 3 })).toMatchObject({
+        deleted: false,
+        onSale: undefined,
+        popularityOverridden: undefined,
+        maxStock: 3,
+      });
+      expect(asAdmin({ maxStock: 0, onSale: true })).toMatchObject({ onSale: true, maxStock: 0 });
     });
 
     it('lists by the conditions of every flag sent', () => {
@@ -570,6 +589,12 @@ describe('buildProductIdsQuery', () => {
     [false, `${FREE_STOCK} = 0`],
   ])('compares free units, not the raw stock, when inStock is %s', (inStock, condition) => {
     expect(sqlText(query({ inStock }))).toContain(condition);
+  });
+
+  it('keeps the products with free units up to maxStock', () => {
+    const text = sqlText(query({ view: 'admin', maxStock: 4 }));
+
+    expect(text).toContain(`${FREE_STOCK} <= ?`);
   });
 
   describe('the flags of an admin', () => {

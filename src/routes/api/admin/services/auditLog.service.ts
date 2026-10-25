@@ -17,16 +17,20 @@ import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
 // the admin log for admin and root (GET /api/admin/audit-log): who did what to what, from which
-// address and browser, the newest first, with the filters of an actor, a thing, the actions and a
-// period; the policies let every admin read it (aal_select)
+// address and browser, the newest first, with the filters of an actor and its role, a thing, the
+// actions, a field among the changes and a period; the policies let every admin read it
+// (aal_select)
 
 export type AuditLogArgs = {
   actorId: UserId;
   actorRole: Role;
   filterActorId?: number | undefined;
+  filterActorRole?: Role | undefined;
   entityType?: string | undefined;
   entityId?: number | undefined;
   actions?: string[] | undefined;
+  // the lines with a change of this field
+  field?: string | undefined;
   from?: Date | undefined;
   to?: Date | undefined;
   limit: number;
@@ -41,9 +45,11 @@ export function auditLogArgsOf(
     actorId: actor.id,
     actorRole: actor.role,
     filterActorId: query.actorId,
+    filterActorRole: query.actorRole,
     entityType: query.entityType,
     entityId: query.entityId,
     actions: query.actions ? [...new Set(query.actions.split(','))] : undefined,
+    field: query.field,
     ...periodOf(query),
     limit: query.limit ?? 20,
     cursor: query.cursor,
@@ -65,11 +71,14 @@ function readCursor(text: string): Cursor {
 function whereOf(args: AuditLogArgs): Prisma.AdminAuditLogWhereInput {
   return {
     ...(args.filterActorId !== undefined ? { actorId: args.filterActorId } : {}),
+    ...(args.filterActorRole !== undefined ? { actorRole: args.filterActorRole } : {}),
     ...(args.entityType !== undefined
       ? { entityType: args.entityType as AdminAuditEntityType }
       : {}),
     ...(args.entityId !== undefined ? { entityId: args.entityId } : {}),
     ...(args.actions ? { action: { in: args.actions as never } } : {}),
+    // the changes of a line are a list of { field, old, new }
+    ...(args.field !== undefined ? { meta: { array_contains: [{ field: args.field }] } } : {}),
     ...(args.from || args.to
       ? {
           createdAt: {

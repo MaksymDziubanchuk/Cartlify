@@ -4,7 +4,8 @@ import type { Role } from 'types/user.js';
 export type ChatStatus = 'open' | 'closed';
 export type ChatType = 'bot' | 'admin';
 export type ChatSenderType = 'user' | 'admin' | 'bot' | 'guest';
-export type AdminChatQueue = 'waiting' | 'active';
+// waiting: no admin took it; active: an admin took it; unread: both, with a message unread
+export type AdminChatQueue = 'waiting' | 'active' | 'unread';
 
 // common
 

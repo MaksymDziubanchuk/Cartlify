@@ -70,6 +70,8 @@ export interface GetAllProductsQueryDto {
 
   // free units (stock - reservedStock): true -> some are free, false -> none are free
   inStock?: boolean;
+  // admin and root only, a flag: at most this many free units, any other mark
+  maxStock?: number;
 
   // admin and root only: true -> only products with an active sale / with a popularity override;
   // without it or false -> only products without one
@@ -96,6 +98,7 @@ export interface FindAllProductsDto {
 
   deleted?: boolean;
   inStock?: boolean;
+  maxStock?: number;
   onSale?: boolean;
   popularityOverridden?: boolean;
 

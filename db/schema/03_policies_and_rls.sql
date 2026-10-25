@@ -1298,35 +1298,56 @@ WITH
 CREATE POLICY ppcl_delete_deny ON cartlify.product_price_change_logs FOR DELETE USING (false);
 
 ----------------------------------------
--- ADMIN_ALERT_MUTES
+-- ADMIN_ALERT_SETTINGS
 ----------------------------------------
--- the kinds of alerts an admin or root turned off: each one sees, adds and takes away only
--- their own; nobody changes a row, a kind goes back on by taking its row away
-ALTER TABLE cartlify.admin_alert_mutes ENABLE ROW LEVEL SECURITY;
+-- the settings of the kinds of alerts of an admin or root (on or off, the threshold): each one
+-- sees, adds, changes and takes away only their own; what an update may change is in the guard
+-- of db/05 (trg_admin_alert_settings_update_columns)
+ALTER TABLE cartlify.admin_alert_settings ENABLE ROW LEVEL SECURITY;
 
-ALTER TABLE cartlify.admin_alert_mutes FORCE ROW LEVEL SECURITY;
+ALTER TABLE cartlify.admin_alert_settings FORCE ROW LEVEL SECURITY;
 
-DROP POLICY IF EXISTS admin_alert_mutes_select ON cartlify.admin_alert_mutes;
+-- the policies the table had as admin_alert_mutes, kept by the rename of
+-- 20261025120000_alert_mutes_to_alert_settings: temporary, until dev and prod have run this
+DROP POLICY IF EXISTS admin_alert_mutes_select ON cartlify.admin_alert_settings;
 
-DROP POLICY IF EXISTS admin_alert_mutes_insert ON cartlify.admin_alert_mutes;
+DROP POLICY IF EXISTS admin_alert_mutes_insert ON cartlify.admin_alert_settings;
 
-DROP POLICY IF EXISTS admin_alert_mutes_delete ON cartlify.admin_alert_mutes;
+DROP POLICY IF EXISTS admin_alert_mutes_delete ON cartlify.admin_alert_settings;
 
-CREATE POLICY admin_alert_mutes_select ON cartlify.admin_alert_mutes FOR
+DROP POLICY IF EXISTS admin_alert_settings_select ON cartlify.admin_alert_settings;
+
+DROP POLICY IF EXISTS admin_alert_settings_insert ON cartlify.admin_alert_settings;
+
+DROP POLICY IF EXISTS admin_alert_settings_update ON cartlify.admin_alert_settings;
+
+DROP POLICY IF EXISTS admin_alert_settings_delete ON cartlify.admin_alert_settings;
+
+CREATE POLICY admin_alert_settings_select ON cartlify.admin_alert_settings FOR
 SELECT
   USING (
     cartlify.is_admin ()
     AND "userId" = cartlify.current_actor_id ()
   );
 
-CREATE POLICY admin_alert_mutes_insert ON cartlify.admin_alert_mutes FOR INSERT
+CREATE POLICY admin_alert_settings_insert ON cartlify.admin_alert_settings FOR INSERT
 WITH
   CHECK (
     cartlify.is_admin ()
     AND "userId" = cartlify.current_actor_id ()
   );
 
-CREATE POLICY admin_alert_mutes_delete ON cartlify.admin_alert_mutes FOR DELETE USING (
+CREATE POLICY admin_alert_settings_update ON cartlify.admin_alert_settings
+FOR UPDATE
+  USING (
+    cartlify.is_admin ()
+    AND "userId" = cartlify.current_actor_id ()
+  )
+WITH
+  -- what the update may change: trg_admin_alert_settings_update_columns (db/05)
+  CHECK (true);
+
+CREATE POLICY admin_alert_settings_delete ON cartlify.admin_alert_settings FOR DELETE USING (
   cartlify.is_admin ()
   AND "userId" = cartlify.current_actor_id ()
 );

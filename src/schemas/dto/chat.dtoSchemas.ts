@@ -29,7 +29,14 @@ const adminChatThreadsQuerySchema = {
   properties: {
     page: { type: 'integer', minimum: 1 },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    queue: { type: 'string', enum: ['waiting', 'active'] },
+    queue: {
+      type: 'string',
+      enum: ['waiting', 'active', 'unread'],
+      description:
+        'waiting (default): the chats no admin took yet, the longest waiting first; active: the ' +
+        'chats an admin took with a message unread, the latest first; unread: every chat with ' +
+        'a message no admin has read, the longest waiting first.',
+    },
   },
 } as const;
 

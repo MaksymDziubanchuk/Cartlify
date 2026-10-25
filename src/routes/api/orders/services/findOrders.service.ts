@@ -44,6 +44,8 @@ const whereOf = (q: ReturnType<typeof normalizeFindOrdersInput>) =>
     confirmed: q.confirmed,
     paidFrom: q.paidFrom,
     paidTo: q.paidTo,
+    updatedFrom: q.updatedFrom,
+    updatedTo: q.updatedTo,
     userId: q.userId,
     productId: q.productId,
     q: q.q,

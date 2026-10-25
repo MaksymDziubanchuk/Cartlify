@@ -368,10 +368,14 @@ export interface GetAdminStockMovementsResponseDto {
 // THE ADMIN LOG: who did what to what, from which address and browser
 export interface AdminAuditLogQueryDto {
   actorId?: number;
+  // the lines written with this role
+  actorRole?: 'USER' | 'ADMIN' | 'ROOT';
   entityType?: string;
   entityId?: number;
   // a few actions separated by commas
   actions?: string;
+  // the lines with a change of this field
+  field?: string;
   from?: string;
   to?: string;
   limit?: number;
@@ -414,22 +418,75 @@ export type AdminAlertKind =
   | 'worker_stalled'
   | 'admin_actions';
 
+export type AdminAlertThresholdUnit = 'days' | 'units' | 'seconds' | 'hours';
+
+// the threshold of a kind: the one the admin set (custom) or the one the server gives
+export interface AdminAlertThresholdDto {
+  value: number;
+  default: number;
+  min: number;
+  max: number;
+  unit: AdminAlertThresholdUnit;
+  custom: boolean;
+}
+
+// the request to the list of the app that shows the cases of a kind: its path and query
+export interface AdminAlertListDto {
+  path: string;
+  query: Record<string, string>;
+}
+
 export interface AdminAlertDto {
   kind: AdminAlertKind;
+  // whether the actor follows the kind (the subscriptions)
+  subscribed: boolean;
+  // the cases that wait, without the ones the actor put aside
   count: number;
-  // the latest of them: orders, products, batches, chats or lines of the admin log
-  ids: Array<number | string>;
+  // the cases that wait the actor put aside
+  dismissed: number;
+  // the threshold the kind is counted with, null for a kind without one
+  threshold: number | null;
+  list: AdminAlertListDto | null;
+}
+
+export interface GetAdminAlertsQueryDto {
+  // true: only the kinds the actor follows
+  subscribed?: boolean;
 }
 
 export interface GetAdminAlertsResponseDto {
   alerts: AdminAlertDto[];
   total: number;
+  // false while redis is down: the cases put aside are counted with the rest
+  dismissalsAvailable: boolean;
   generatedAt: string;
 }
 
 export interface AdminAlertSubscriptionDto {
   kind: AdminAlertKind;
   subscribed: boolean;
+  threshold: AdminAlertThresholdDto | null;
+}
+
+export interface AdminAlertThresholdBodyDto {
+  value: number;
+}
+
+export interface AdminAlertDismissalParamsDto {
+  kind: string;
+  id: string;
+}
+
+export interface AdminAlertDismissalDto {
+  kind: AdminAlertKind;
+  id: string;
+  dismissed: boolean;
+}
+
+export interface AdminAlertDismissalItemDto {
+  kind: AdminAlertKind;
+  id: string;
+  dismissedAt: string;
 }
 
 export interface AdminAlertKindParamsDto {

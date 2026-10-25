@@ -959,12 +959,28 @@ const adminAuditLogQuerySchema = {
   additionalProperties: false,
   properties: {
     actorId: { ...positiveIntegerSchema, description: 'Only the lines of this account.' },
+    actorRole: {
+      type: 'string',
+      enum: ['USER', 'ADMIN', 'ROOT'],
+      description:
+        'Only the lines written with this role: root reads what the admins did with ADMIN; the ' +
+        'system writes a refund of a late payment in the name of the buyer (USER).',
+    },
     entityType: { type: 'string', enum: AUDIT_ENTITY_TYPES },
     entityId: { ...positiveIntegerSchema, description: 'Only the lines of this thing.' },
     actions: {
       type: 'string',
       pattern: `^${auditActionPattern}(,${auditActionPattern})*$`,
       description: 'Actions, one or several through commas. All unless given.',
+    },
+    field: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[A-Za-z]+$',
+      description:
+        'Only the lines with a change of this field: refund names the refunds of late ' +
+        'payments, price the changes of a price.',
     },
     from: { ...dateTimeSchema, description: 'The start of the period, taken in.' },
     to: { ...dateTimeSchema, description: 'The end of the period, left out.' },
@@ -1060,6 +1076,22 @@ const ALERT_KINDS = [
   'admin_actions',
 ] as const;
 
+const ALERT_THRESHOLD_UNITS = ['days', 'units', 'seconds', 'hours'] as const;
+
+const adminAlertsQuerySchema = {
+  $id: 'adminAlertsQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    subscribed: {
+      type: 'boolean',
+      description:
+        'true: only the kinds the actor follows, for the notifications; every kind of the zone ' +
+        'of the actor unless given.',
+    },
+  },
+} as const;
+
 const adminAlertsResponseSchema = {
   $id: 'adminAlertsResponseSchema',
   type: 'object',
@@ -1067,29 +1099,62 @@ const adminAlertsResponseSchema = {
   properties: {
     alerts: {
       type: 'array',
-      description: 'Each kind the actor has on, in a fixed order, with zero too.',
+      description: 'Each kind, in a fixed order, with zero too.',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
           kind: { type: 'string', enum: ALERT_KINDS },
-          count: { type: 'integer', minimum: 0 },
-          ids: {
-            type: 'array',
-            maxItems: 20,
+          subscribed: { type: 'boolean', description: 'Whether the actor follows the kind.' },
+          count: {
+            type: 'integer',
+            minimum: 0,
+            description: 'The cases that wait, without the ones the actor put aside.',
+          },
+          dismissed: {
+            type: 'integer',
+            minimum: 0,
+            description: 'The cases that wait the actor put aside.',
+          },
+          threshold: {
+            type: ['integer', 'null'],
             description:
-              'The latest of them: order ids, product ids, batch ids, chat ids or the lines of ' +
-              'the admin log; none for the worker.',
-            items: { anyOf: [{ type: 'integer' }, { type: 'string' }] },
+              'The threshold the kind is counted with, in its unit (GET ' +
+              '/api/admin/alerts/subscriptions); null for a kind without one.',
+          },
+          list: {
+            anyOf: [
+              {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  path: { type: 'string' },
+                  query: { type: 'object', additionalProperties: { type: 'string' } },
+                },
+                required: ['path', 'query'],
+              },
+              { type: 'null' },
+            ],
+            description:
+              'The request to the list of the app with the cases of the kind, the most urgent ' +
+              'first: the path and its query; the frontend adds a limit, a sort of that list or ' +
+              'a filter. Its rows are the cases the kind counts, the ones put aside too. null ' +
+              'for the worker.',
           },
         },
-        required: ['kind', 'count', 'ids'],
+        required: ['kind', 'subscribed', 'count', 'dismissed', 'threshold', 'list'],
       },
     },
     total: { type: 'integer', minimum: 0, description: 'The counts of every alert together.' },
+    dismissalsAvailable: {
+      type: 'boolean',
+      description:
+        'false while Redis is down: the cases put aside are counted with the rest, dismissed ' +
+        'is 0.',
+    },
     generatedAt: dateTimeSchema,
   },
-  required: ['alerts', 'total', 'generatedAt'],
+  required: ['alerts', 'total', 'dismissalsAvailable', 'generatedAt'],
 } as const;
 
 const adminAlertSubscriptionSchema = {
@@ -1099,8 +1164,27 @@ const adminAlertSubscriptionSchema = {
   properties: {
     kind: { type: 'string', enum: ALERT_KINDS },
     subscribed: { type: 'boolean' },
+    threshold: {
+      anyOf: [
+        {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            value: { type: 'integer', description: 'The threshold the kind is counted with.' },
+            default: { type: 'integer', description: 'The one the server gives.' },
+            min: { type: 'integer' },
+            max: { type: 'integer' },
+            unit: { type: 'string', enum: ALERT_THRESHOLD_UNITS },
+            custom: { type: 'boolean', description: 'Whether the actor set it.' },
+          },
+          required: ['value', 'default', 'min', 'max', 'unit', 'custom'],
+        },
+        { type: 'null' },
+      ],
+      description: 'null for a kind without a threshold.',
+    },
   },
-  required: ['kind', 'subscribed'],
+  required: ['kind', 'subscribed', 'threshold'],
 } as const;
 
 const adminAlertSubscriptionsResponseSchema = {
@@ -1121,6 +1205,75 @@ const adminAlertKindParamsSchema = {
     kind: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z_]+$' },
   },
   required: ['kind'],
+} as const;
+
+const adminAlertThresholdBodySchema = {
+  $id: 'adminAlertThresholdBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    value: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100_000,
+      description: 'The threshold, within the bounds of its kind.',
+    },
+  },
+  required: ['value'],
+} as const;
+
+const adminAlertDismissalParamsSchema = {
+  $id: 'adminAlertDismissalParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z_]+$' },
+    id: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[A-Za-z0-9-]+$',
+      description:
+        'The id of the case in the list of its kind: an order, a product, a batch, a chat or a ' +
+        'line of the admin log.',
+    },
+  },
+  required: ['kind', 'id'],
+} as const;
+
+const adminAlertDismissalSchema = {
+  $id: 'adminAlertDismissalSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kind: { type: 'string', enum: ALERT_KINDS },
+    id: { type: 'string' },
+    dismissed: { type: 'boolean', description: 'Whether the case is aside now.' },
+  },
+  required: ['kind', 'id', 'dismissed'],
+} as const;
+
+const adminAlertDismissalsResponseSchema = {
+  $id: 'adminAlertDismissalsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      description: 'The cases the actor put aside that still wait, the latest first.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ALERT_KINDS },
+          id: { type: 'string' },
+          dismissedAt: dateTimeSchema,
+        },
+        required: ['kind', 'id', 'dismissedAt'],
+      },
+    },
+  },
+  required: ['items'],
 } as const;
 
 export const adminDtoSchemas = [
@@ -1149,8 +1302,13 @@ export const adminDtoSchemas = [
   adminStockMovementsResponseSchema,
   adminAuditLogQuerySchema,
   adminAuditLogResponseSchema,
+  adminAlertsQuerySchema,
   adminAlertsResponseSchema,
   adminAlertSubscriptionSchema,
   adminAlertSubscriptionsResponseSchema,
   adminAlertKindParamsSchema,
+  adminAlertThresholdBodySchema,
+  adminAlertDismissalParamsSchema,
+  adminAlertDismissalSchema,
+  adminAlertDismissalsResponseSchema,
 ];

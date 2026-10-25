@@ -121,6 +121,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     confirmed,
     paidFrom,
     paidTo,
+    updatedFrom,
+    updatedTo,
     productId,
     userId,
     q,
@@ -146,6 +148,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
       // the schema let through date-times only
       paidFrom: paidFrom ? new Date(paidFrom) : undefined,
       paidTo: paidTo ? new Date(paidTo) : undefined,
+      updatedFrom: updatedFrom ? new Date(updatedFrom) : undefined,
+      updatedTo: updatedTo ? new Date(updatedTo) : undefined,
       productId,
       userId,
       q,

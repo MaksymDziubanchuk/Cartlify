@@ -139,6 +139,26 @@ describe('normalizeFindOrdersInput', () => {
       errorCode: 'PAID_PERIOD_INVALID',
     });
   });
+
+  it('keeps the period of the last change, either end alone too', () => {
+    expect(normalizeFindOrdersInput(dto({ updatedFrom: at(1), updatedTo: at(5) }))).toMatchObject({
+      updatedFrom: at(1),
+      updatedTo: at(5),
+    });
+    expect(normalizeFindOrdersInput(dto({ updatedTo: at(5) }))).toMatchObject({
+      updatedFrom: undefined,
+      updatedTo: at(5),
+    });
+  });
+
+  it.each([
+    ['ends before it starts', at(5), at(1)],
+    ['ends where it starts', at(5), at(5)],
+  ])('rejects a period of the last change that %s', (_case, updatedFrom, updatedTo) => {
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ updatedFrom, updatedTo })))).toMatchObject(
+      { statusCode: 400, errorCode: 'UPDATED_PERIOD_INVALID' },
+    );
+  });
 });
 
 const NOT_A_CART = { status: { not: 'pending' } };
@@ -199,6 +219,21 @@ describe('buildOrdersWhere', () => {
         paidTo: at(5),
       }),
     ).toEqual({ userId: 3, ...NOT_A_CART, paidAt: { gte: at(1), lt: at(5) } });
+  });
+
+  it('keeps the orders changed from the start of the period and before its end', () => {
+    expect(
+      buildOrdersWhere({
+        actorId: 3,
+        actorRole: 'USER',
+        sortBy: 'createdAt',
+        updatedFrom: at(1),
+        updatedTo: at(5),
+      }),
+    ).toEqual({ userId: 3, ...NOT_A_CART, updatedAt: { gte: at(1), lt: at(5) } });
+    expect(
+      buildOrdersWhere({ actorId: 3, actorRole: 'USER', sortBy: 'createdAt', updatedTo: at(5) }),
+    ).toEqual({ userId: 3, ...NOT_A_CART, updatedAt: { lt: at(5) } });
   });
 
   it('lists the orders paid in the period by the time of payment', () => {

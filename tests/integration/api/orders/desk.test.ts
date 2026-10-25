@@ -174,6 +174,32 @@ describe('GET /api/orders for an admin', () => {
     expect(idsOf(res)).toEqual([paid, shipped].sort((a, b) => a - b));
   });
 
+  // the time of the last change of an order is set by the database, so the time between two
+  // orders is taken from its clock; the alerts send an admin to the shipped orders changed long ago
+  it('lists the orders changed before a time, or from it', async () => {
+    const buyer = await newUser();
+    const first = await placeOrder(app, csrf, buyer, await createProduct({ price: 10 }), 'paid');
+    const [{ between }] = await asAdmin(
+      (tx) =>
+        tx.$queryRaw<[{ between: Date }]>`select clock_timestamp() at time zone 'utc' as between`,
+    );
+    const second = await placeOrder(app, csrf, buyer, await createProduct({ price: 10 }), 'paid');
+    const at = between.toISOString();
+
+    expect(idsOf(await listAs(admin, `userId=${buyer.id}&updatedTo=${at}`))).toEqual([first]);
+    expect(idsOf(await listAs(admin, `userId=${buyer.id}&updatedFrom=${at}`))).toEqual([second]);
+  });
+
+  it('answers UPDATED_PERIOD_INVALID for a period that ends at its start or before', async () => {
+    const res = await listAs(
+      admin,
+      'updatedFrom=2026-10-02T00:00:00.000Z&updatedTo=2026-10-02T00:00:00.000Z',
+    );
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'UPDATED_PERIOD_INVALID' });
+  });
+
   it('finds an order by its number, and the orders of a buyer by a part of the email', async () => {
     const { tag, paid, shipped, waiting } = await buyerWithOrders();
 

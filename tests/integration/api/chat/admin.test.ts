@@ -72,7 +72,7 @@ const closeChat = (threadId: string, actor: TestUser = admin) =>
   });
 
 // every chat of a queue, page by page: other files write chats at the same time
-async function queueOf(queue: 'waiting' | 'active'): Promise<string[]> {
+async function queueOf(queue: 'waiting' | 'active' | 'unread'): Promise<string[]> {
   const ids: string[] = [];
   for (let page = 1; ; page++) {
     const res = await app.inject({
@@ -129,6 +129,24 @@ describe('GET /api/chat/admin/threads', () => {
 
     expect(all).not.toContain(bot.id);
     expect(all).not.toContain(closed.id);
+  });
+
+  // the alerts of an admin send to it: every chat with a message no admin has read, the one that
+  // waits the longest first, whether an admin took it or not
+  it('gives the unread queue the chats of both queues, the longest waiting first', async () => {
+    const waiting = await createChatThread((await customer()).id);
+    const taken = await createChatThread((await customer()).id);
+    expect((await openChat(taken.id)).statusCode).toBe(200);
+    const undescribed = await escalatedChat((await customer()).id);
+    const bot = await createChatThread((await customer()).id, { type: 'bot' });
+
+    const unread = await queueOf('unread');
+
+    expect(unread).toContain(waiting.id);
+    expect(unread).toContain(taken.id);
+    expect(unread.indexOf(waiting.id)).toBeLessThan(unread.indexOf(taken.id));
+    expect(unread).not.toContain(undescribed.id);
+    expect(unread).not.toContain(bot.id);
   });
 
   it('refuses a page that is no whole number', async () => {

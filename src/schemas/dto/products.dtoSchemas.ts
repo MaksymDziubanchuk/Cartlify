@@ -110,6 +110,14 @@ const getAllProductsQuerySchema = {
         'products with none. Units reserved by confirmed orders and units of batches that are ' +
         'over are not free.',
     },
+    maxStock: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: lists every product of the ' +
+        'catalog with no more free units than the number, whatever else it has (a sale, an ' +
+        'override); 0 the products with none. With inStock=true the ones with some.',
+    },
 
     // sorting
     sort: {

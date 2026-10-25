@@ -69,15 +69,30 @@ describe('a payment that comes after the units were sold', () => {
       mails.filter((mail) => mail.to.includes(late.email)).map((mail) => mail.subject),
     ).toEqual([expect.stringContaining(`payment for order #${lateOrder} is refunded`)]);
 
-    // the admins see the refund among their alerts
+    // the admins see the refund among their alerts, and the list the alert names holds its line
     const alerts = await app.inject({
       method: 'GET',
       url: '/api/admin/alerts',
       headers: { cookie: accessCookie(admin) },
     });
-    const refunded = (alerts.json().alerts as { kind: string; ids: number[] }[]).find(
-      (alert) => alert.kind === 'refunded_payments',
-    );
-    expect(refunded?.ids).toContain(lateOrder);
+    const refunded = (
+      alerts.json().alerts as {
+        kind: string;
+        count: number;
+        list: { path: string; query: Record<string, string> };
+      }[]
+    ).find((alert) => alert.kind === 'refunded_payments');
+    expect(refunded?.count).toBeGreaterThanOrEqual(1);
+
+    const lines = await app.inject({
+      method: 'GET',
+      url: `${refunded!.list.path}?${new URLSearchParams({
+        ...refunded!.list.query,
+        entityId: String(lateOrder),
+      })}`,
+      headers: { cookie: accessCookie(admin) },
+    });
+    expect(lines.statusCode).toBe(200);
+    expect(lines.json().items).toHaveLength(1);
   });
 });

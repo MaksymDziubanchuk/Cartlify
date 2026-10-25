@@ -189,9 +189,10 @@ const getAllProductsRouterSchema = {
     '`popularity`, `avgRating`, `name` and `saleEndsAt` (the products on sale first by the end ' +
     'of their sale, then the rest by popularity), any other sort is `SORT_FORBIDDEN`; the flags ' +
     'of an admin are `DELETED_PRODUCTS_FORBIDDEN` and `FILTER_FORBIDDEN` for a buyer. An admin ' +
-    'sorts by any field. `deleted`, `onSale` and `popularityOverridden` list only the products ' +
-    'that are deleted, have a sale that is on, have a popularity override that is on (its end ' +
-    'ahead), whatever else they have; without any flag an admin gets only the plain products, ' +
+    'sorts by any field. `deleted`, `onSale`, `popularityOverridden` and `maxStock` list only ' +
+    'the products that are deleted, have a sale that is on, have a popularity override that is ' +
+    'on (its end ahead), have no more free units than the number, whatever else they have; ' +
+    'without any flag an admin gets only the plain products, ' +
     'not deleted, without a sale and an override that are on. A sort by the field of a flag ' +
     'needs the flag. ' +
     'For a buyer `sort: price`, `minPrice` and `maxPrice` take the price a product sells at ' +
@@ -233,7 +234,8 @@ const getAllProductsRouterSchema = {
     403: {
       description:
         'A guest or a user asks for something of an admin: deleted products ' +
-        '(`DELETED_PRODUCTS_FORBIDDEN`), the flag `onSale` or `popularityOverridden` ' +
+        '(`DELETED_PRODUCTS_FORBIDDEN`), the flag `onSale`, `popularityOverridden` or ' +
+        '`maxStock` ' +
         '(`FILTER_FORBIDDEN`, `details.filter`), a sort of an admin (`SORT_FORBIDDEN`, ' +
         '`details.sort`).',
       $ref: 'errorResponseSchema#',

@@ -133,7 +133,7 @@ model User {
   orders                 Order[]
   productPriceChangeLogs ProductPriceChangeLog[]
   adminAuditLogs         AdminAuditLog[]
-  alertMutes             AdminAlertMute[]
+  alertSettings          AdminAlertSetting[]
   chatThreads            ChatThread[]
   chatMessages           ChatMessage[]
 
@@ -548,16 +548,20 @@ model ProductPriceChangeLog {
   @@map("product_price_change_logs")
 }
 
-// a kind of alerts an admin or root turned off for themselves: every kind is on until then
-model AdminAlertMute {
-  userId Int
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  kind   String @db.VarChar(64)
+// the settings of a kind of alerts of an admin or root, each of their own: whether it is on and
+// its threshold; a kind without a row is on with the threshold the server gives, and a threshold
+// left empty is that one too
+model AdminAlertSetting {
+  userId     Int
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind       String  @db.VarChar(64)
+  subscribed Boolean @default(true)
+  threshold  Int?
 
   createdAt DateTime @default(now())
 
   @@id([userId, kind])
-  @@map("admin_alert_mutes")
+  @@map("admin_alert_settings")
 }
 
 model AdminAuditLog {

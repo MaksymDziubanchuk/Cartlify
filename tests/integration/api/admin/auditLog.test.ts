@@ -149,6 +149,47 @@ describe('GET /api/admin/audit-log', () => {
     ]);
   });
 
+  // the changes of a line name their fields: the refund of a late payment is one of field refund
+  it('keeps the lines with a change of one field', async () => {
+    const product = await createProduct({ price: 10, stock: 0 });
+    await patchProduct(admin, product.id, { name: `Field ${Date.now()}` });
+    await patchProduct(admin, product.id, { price: 12 });
+
+    const res = await readLog(admin, `entityType=product&entityId=${product.id}&field=price`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().total).toBe(1);
+    expect(res.json().items[0].changes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ field: 'price' })]),
+    );
+  });
+
+  // root reads what the admins did: the lines written with the role of an admin
+  it('keeps the lines written with one role', async () => {
+    const someRoot = await createUser({ role: 'ROOT' });
+    const product = await createProduct({ price: 10, stock: 0 });
+    await patchProduct(admin, product.id, { name: `Admin ${Date.now()}` });
+    await patchProduct(someRoot, product.id, { name: `Root ${Date.now()}` });
+
+    const ofAdmins = await readLog(someRoot, `entityId=${product.id}&actorRole=ADMIN`);
+    const ofRoots = await readLog(someRoot, `entityId=${product.id}&actorRole=ROOT`);
+
+    expect(ofAdmins.json().items.map((line: { actor: { id: number } }) => line.actor.id)).toEqual([
+      admin.id,
+    ]);
+    expect(ofRoots.json().items.map((line: { actor: { id: number } }) => line.actor.id)).toEqual([
+      someRoot.id,
+    ]);
+    await closeSessions([someRoot.id]);
+  });
+
+  it.each(['actorRole=GUEST', 'field=bad%20field'])('refuses %s', async (query) => {
+    const res = await readLog(admin, query);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+
   it('keeps the lines of a period', async () => {
     const product = await createProduct({ price: 10, stock: 0 });
     const before = new Date().toISOString();

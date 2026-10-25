@@ -137,8 +137,10 @@ beforeAll(async () => {
       ${product.id}::int, 'OTHER'::cartlify."AdminAuditAction", '[]'::jsonb)`;
     await tx.$executeRaw`select cartlify.log_product_price_change(
       ${product.id}::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2)`;
-    // an alert the admin turned off
-    await tx.adminAlertMute.create({ data: { userId: admin.id, kind: 'low_stock' } });
+    // a setting of an alert of the admin
+    await tx.adminAlertSetting.create({
+      data: { userId: admin.id, kind: 'low_stock', subscribed: false, threshold: 10 },
+    });
   });
 });
 

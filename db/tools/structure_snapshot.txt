@@ -11,7 +11,7 @@ membership | cartlify_owner is member of pg_read_all_stats
 schema | cartlify | cartlify_owner | cartlify_app=U/cartlify_owner,cartlify_owner=UC/cartlify_owner,cartlify_readonly=U/cartlify_owner
 schema | public | pg_database_owner | pg_database_owner=UC/pg_database_owner,=U/pg_database_owner
 table | _prisma_migrations | cartlify_owner | rls=false | force=false | cartlify_owner=arwdDxtm/cartlify_owner
-table | admin_alert_mutes | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | admin_alert_settings | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | admin_audit_log | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | categories | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | chat_messages | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -37,9 +37,11 @@ column | _prisma_migrations | 5 | logs | text | notnull=false | default=- | iden
 column | _prisma_migrations | 6 | rolled_back_at | timestamp with time zone | notnull=false | default=- | identity=- | generated=- | -
 column | _prisma_migrations | 7 | started_at | timestamp with time zone | notnull=true | default=now() | identity=- | generated=- | -
 column | _prisma_migrations | 8 | applied_steps_count | integer | notnull=true | default=0 | identity=- | generated=- | -
-column | admin_alert_mutes | 1 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
-column | admin_alert_mutes | 2 | kind | character varying(64) | notnull=true | default=- | identity=- | generated=- | -
-column | admin_alert_mutes | 3 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | admin_alert_settings | 1 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | admin_alert_settings | 2 | kind | character varying(64) | notnull=true | default=- | identity=- | generated=- | -
+column | admin_alert_settings | 3 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | admin_alert_settings | 4 | subscribed | boolean | notnull=true | default=true | identity=- | generated=- | -
+column | admin_alert_settings | 5 | threshold | integer | notnull=false | default=- | identity=- | generated=- | -
 column | admin_audit_log | 1 | id | integer | notnull=true | default=nextval('admin_audit_log_id_seq'::regclass) | identity=- | generated=- | -
 column | admin_audit_log | 2 | actorId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | admin_audit_log | 3 | actorRole | "Role" | notnull=true | default=- | identity=- | generated=- | -
@@ -209,8 +211,9 @@ column | users | 13 | providerSub | text | notnull=false | default=- | identity=
 column | users | 14 | publicId | text | notnull=false | default=- | identity=- | generated=- | -
 column | users | 15 | deletedAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
 constraint | _prisma_migrations | _prisma_migrations_pkey | p | validated=true | PRIMARY KEY (id)
-constraint | admin_alert_mutes | admin_alert_mutes_pkey | p | validated=true | PRIMARY KEY ("userId", kind)
-constraint | admin_alert_mutes | admin_alert_mutes_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | admin_alert_settings | admin_alert_settings_pkey | p | validated=true | PRIMARY KEY ("userId", kind)
+constraint | admin_alert_settings | admin_alert_settings_threshold_chk | c | validated=true | CHECK (((threshold IS NULL) OR (threshold >= 1)))
+constraint | admin_alert_settings | admin_alert_settings_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | admin_audit_log | admin_audit_log_actorId_fkey | f | validated=true | FOREIGN KEY ("actorId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | admin_audit_log | admin_audit_log_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | categories | categories_parentId_fkey | f | validated=true | FOREIGN KEY ("parentId") REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL
@@ -292,7 +295,7 @@ constraint | user_tokens | user_tokens_session_chk | c | validated=false | CHECK
 constraint | user_tokens | user_tokens_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | users | users_pkey | p | validated=true | PRIMARY KEY (id)
 index | _prisma_migrations | _prisma_migrations_pkey | valid=true | ready=true | CREATE UNIQUE INDEX _prisma_migrations_pkey ON cartlify._prisma_migrations USING btree (id)
-index | admin_alert_mutes | admin_alert_mutes_pkey | valid=true | ready=true | CREATE UNIQUE INDEX admin_alert_mutes_pkey ON cartlify.admin_alert_mutes USING btree ("userId", kind)
+index | admin_alert_settings | admin_alert_settings_pkey | valid=true | ready=true | CREATE UNIQUE INDEX admin_alert_settings_pkey ON cartlify.admin_alert_settings USING btree ("userId", kind)
 index | admin_audit_log | admin_audit_log_action_createdAt_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_action_createdAt_idx" ON cartlify.admin_audit_log USING btree (action, "createdAt")
 index | admin_audit_log | admin_audit_log_actorId_createdAt_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_actorId_createdAt_idx" ON cartlify.admin_audit_log USING btree ("actorId", "createdAt")
 index | admin_audit_log | admin_audit_log_entityType_entityId_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_entityType_entityId_idx" ON cartlify.admin_audit_log USING btree ("entityType", "entityId")
@@ -409,6 +412,7 @@ enum | ReviewVoteAction | cartlify_owner | UP,DOWN | -
 enum | Role | cartlify_owner | USER,ADMIN,ROOT,GUEST | -
 enum | StockSource | cartlify_owner | supplier,surplus,customer_return | -
 enum | UserTokenType | cartlify_owner | VERIFY_EMAIL,RESET_PASSWORD,REFRESH_TOKEN | -
+function | admin_alert_settings_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=1184fbe0bc094ebaa712c0776e3c9e5c | extension=-
 function | anonymize_login_logs(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d0e020c851ae9e99aa0e4bfab21fd709 | extension=-
 function | auth_get_user_for_login(p_email text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(id integer, password_hash text, role "Role", is_verified boolean, auth_provider "AuthProvider") | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=e7b670bf5ab3577fee21d1169e8beb71 | extension=-
 function | auth_resend_verify(p_email text, p_token text, p_expires_at timestamp with time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(user_id integer, token text, expires_at timestamp with time zone) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=a912698d8aaa5ba214b7268fb7b36006 | extension=-
@@ -516,6 +520,7 @@ function | word_similarity_dist_commutator_op(text, text) | postgres | c | defin
 function | word_similarity_dist_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=ba8863f446eceb450a04b6c324db7419 | extension=pg_trgm
 function | word_similarity_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=5412212962db1aa604d6b20bbcf89c75 | extension=pg_trgm
 function | write_off_product_stock(p_write_off_id uuid, p_product_id integer, p_batch_id integer, p_quantity integer, p_reason text, p_note text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=jsonb | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=bf7a67463b8ae7d75acb8821ee7d3c54 | extension=-
+trigger | admin_alert_settings | trg_admin_alert_settings_update_columns | enabled=O | CREATE TRIGGER trg_admin_alert_settings_update_columns BEFORE UPDATE ON cartlify.admin_alert_settings FOR EACH ROW EXECUTE FUNCTION admin_alert_settings_update_columns()
 trigger | categories | trg_categories_before_parent_change | enabled=O | CREATE TRIGGER trg_categories_before_parent_change BEFORE INSERT OR UPDATE OF "parentId" ON cartlify.categories FOR EACH ROW EXECUTE FUNCTION categories_before_parent_change()
 trigger | chat_messages | trg_chat_messages_before_update | enabled=O | CREATE TRIGGER trg_chat_messages_before_update BEFORE UPDATE ON cartlify.chat_messages FOR EACH ROW EXECUTE FUNCTION chat_messages_before_update()
 trigger | chat_threads | trg_chat_threads_update_columns | enabled=O | CREATE TRIGGER trg_chat_threads_update_columns BEFORE UPDATE ON cartlify.chat_threads FOR EACH ROW EXECUTE FUNCTION chat_threads_update_columns()
@@ -544,9 +549,10 @@ trigger | reviews | trg_reviews_update_columns | enabled=O | CREATE TRIGGER trg_
 trigger | user_tokens | trg_user_tokens_update_columns | enabled=O | CREATE TRIGGER trg_user_tokens_update_columns BEFORE UPDATE ON cartlify.user_tokens FOR EACH ROW EXECUTE FUNCTION user_tokens_update_columns()
 trigger | users | trg_users_before_write_email | enabled=O | CREATE TRIGGER trg_users_before_write_email BEFORE INSERT OR UPDATE OF email ON cartlify.users FOR EACH ROW EXECUTE FUNCTION users_before_write_email()
 trigger | users | trg_users_update_columns | enabled=O | CREATE TRIGGER trg_users_update_columns BEFORE UPDATE ON cartlify.users FOR EACH ROW EXECUTE FUNCTION users_update_columns()
-policy | admin_alert_mutes | admin_alert_mutes_delete | PERMISSIVE | public | DELETE | using=(is_admin() AND ("userId" = current_actor_id())) | check=-
-policy | admin_alert_mutes | admin_alert_mutes_insert | PERMISSIVE | public | INSERT | using=- | check=(is_admin() AND ("userId" = current_actor_id()))
-policy | admin_alert_mutes | admin_alert_mutes_select | PERMISSIVE | public | SELECT | using=(is_admin() AND ("userId" = current_actor_id())) | check=-
+policy | admin_alert_settings | admin_alert_settings_delete | PERMISSIVE | public | DELETE | using=(is_admin() AND ("userId" = current_actor_id())) | check=-
+policy | admin_alert_settings | admin_alert_settings_insert | PERMISSIVE | public | INSERT | using=- | check=(is_admin() AND ("userId" = current_actor_id()))
+policy | admin_alert_settings | admin_alert_settings_select | PERMISSIVE | public | SELECT | using=(is_admin() AND ("userId" = current_actor_id())) | check=-
+policy | admin_alert_settings | admin_alert_settings_update | PERMISSIVE | public | UPDATE | using=(is_admin() AND ("userId" = current_actor_id())) | check=true
 policy | admin_audit_log | aal_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
 policy | admin_audit_log | aal_insert | PERMISSIVE | public | INSERT | using=- | check=(is_system() OR (is_admin() AND ("actorId" = current_actor_id()) AND ("actorRole" = current_actor_role())))
 policy | admin_audit_log | aal_select | PERMISSIVE | public | SELECT | using=is_admin() | check=-

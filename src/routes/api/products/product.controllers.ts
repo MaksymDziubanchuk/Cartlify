@@ -89,6 +89,7 @@ const getAllProducts: ControllerRouter<
 
   const deleted = typeof q.deleted === 'boolean' ? q.deleted : undefined;
   const inStock = typeof q.inStock === 'boolean' ? q.inStock : undefined;
+  const maxStock = typeof q.maxStock === 'number' ? q.maxStock : undefined;
   const onSale = typeof q.onSale === 'boolean' ? q.onSale : undefined;
   const popularityOverridden =
     typeof q.popularityOverridden === 'boolean' ? q.popularityOverridden : undefined;
@@ -122,6 +123,7 @@ const getAllProducts: ControllerRouter<
       maxPrice,
       deleted,
       inStock,
+      maxStock,
       onSale,
       popularityOverridden,
     },

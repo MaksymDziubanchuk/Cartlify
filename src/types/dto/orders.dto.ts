@@ -172,6 +172,9 @@ export interface GetOrdersQueryDto {
   // the orders paid from paidFrom and before paidTo, iso date-times
   paidFrom?: string;
   paidTo?: string;
+  // the orders changed last from updatedFrom and before updatedTo, iso date-times
+  updatedFrom?: string;
+  updatedTo?: string;
   // the orders that hold the product
   productId?: number;
 
@@ -195,6 +198,8 @@ export interface FindOrdersDto {
   confirmed?: ConfirmedStatus;
   paidFrom?: Date;
   paidTo?: Date;
+  updatedFrom?: Date;
+  updatedTo?: Date;
   productId?: number;
   userId?: number;
   q?: string;

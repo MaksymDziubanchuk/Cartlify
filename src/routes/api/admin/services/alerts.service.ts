@@ -1,12 +1,34 @@
 import { Prisma } from '@prisma/client';
 
-import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { shopToday } from '@helpers/shopDay.js';
 import { NotFoundError } from '@utils/errors.js';
 import { orderTimeoutWorkerState } from '../../../../workers/orderTimeout.worker.js';
+import { FREE_STOCK_SQL } from '../../products/services/helpers/getAllProducts.helper.js';
+import { utcTime } from './helpers/accountingSql.helper.js';
+import {
+  dismissalFieldOf,
+  dropDismissals,
+  listDismissals,
+  putCaseAside,
+  readDismissals,
+  takeCaseBack,
+  type Dismissal,
+} from './helpers/alertDismissals.helper.js';
+import {
+  alertKindsOf,
+  alertListOf,
+  alertWindowOf,
+  assertThreshold,
+  thresholdOf,
+  workerStalled,
+  type AlertWindow,
+} from './helpers/alertKinds.helper.js';
 
 import type {
+  AdminAlertDismissalDto,
+  AdminAlertDismissalItemDto,
   AdminAlertDto,
   AdminAlertKind,
   AdminAlertSubscriptionDto,
@@ -16,191 +38,200 @@ import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
 // the alerts of an admin (GET /api/admin/alerts): what waits for the work of an admin, each kind
-// with how many there are and the latest of them, counted when asked in one snapshot. Root has the
-// actions of the admins too. Each admin and each root turns a kind off and on for themselves
-// (admin_alert_mutes): every kind is on until it is turned off
-
-export const ADMIN_ALERT_KINDS = [
-  'paid_orders_waiting',
-  'shipped_orders_waiting',
-  'out_of_stock',
-  'low_stock',
-  'expiring_batches',
-  'expired_batches',
-  'chats_waiting',
-  'refunded_payments',
-  'worker_stalled',
-] as const satisfies readonly AdminAlertKind[];
-
-export const ROOT_ALERT_KINDS = ['admin_actions'] as const satisfies readonly AdminAlertKind[];
-
-// how many of the latest of a kind an alert names
-const LATEST = 20;
-// the refunds of the late payments of the last week, the actions of the admins of the last day
-const REFUNDS_DAYS = 7;
-const ADMIN_ACTIONS_HOURS = 24;
-
-export const alertKindsOf = (role: Role): AdminAlertKind[] =>
-  role === 'ROOT' ? [...ADMIN_ALERT_KINDS, ...ROOT_ALERT_KINDS] : [...ADMIN_ALERT_KINDS];
+// with how many cases wait, counted when asked in one snapshot with the thresholds of the actor,
+// and the request to the list of the app that shows those cases. Root has the actions of the
+// admins too. Each admin and each root, for themselves, follows a kind or not and sets its
+// threshold (admin_alert_settings), and puts single cases aside (in redis)
 
 type Db = Prisma.TransactionClient;
-type Counted = { count: number; ids: Array<number | string> };
+type Actor = { actorId: UserId; actorRole: Role };
 
-// the products of the catalog with their free units, the way the catalog counts them: the stock
-// less the reserve and the units of the batches that are over, those of every product at once
-// (cartlify.product_expired_units does one product), for every product of the shop
-const PRODUCTS_FREE = Prisma.raw(`from (
-    select p.id, p."deletedAt", greatest(p.stock - p."reservedStock" - coalesce(e.units, 0), 0) as free
-    from cartlify.products as p
-    left join (
-      select b."productId", sum(b.remaining)::int as units
-      from cartlify.product_batches as b
-      where b.remaining > 0 and b."expiresAt" < cartlify.shop_today()
-      group by b."productId"
-    ) as e on e."productId" = p.id
-  ) as t`);
+// the kinds whose cases have an id an admin can put aside: all but the stop of the worker
+type CaseKind = Exclude<AdminAlertKind, 'worker_stalled'>;
 
-async function countedRows(db: Db, where: Prisma.Sql, from: Prisma.Sql, order: Prisma.Sql) {
-  const [counted] = await db.$queryRaw<
-    { count: bigint }[]
-  >`select count(*) as count ${from} ${where}`;
-  const rows = await db.$queryRaw<{ id: number | string }[]>`
-    select x.id from (select ${order} as sort, t.id ${from} ${where}) as x
-    order by x.sort desc, x.id desc
-    limit ${LATEST}
-  `;
-  return { count: Number(counted?.count ?? 0), ids: rows.map((row) => row.id) };
-}
+const isCaseKind = (kind: AdminAlertKind): kind is CaseKind => kind !== 'worker_stalled';
 
-// the worker is pulsing when it ran within the stall time; one that started and never ran, or ran
-// long ago, has stopped. A server that never started it (the tests) has no worker to stop
-export function workerStalled(
-  state: { startedAt: Date | null; lastRunAt: Date | null },
-  now = Date.now(),
-): boolean {
-  if (!state.startedAt) return false;
-  const stallMs = env.ALERT_WORKER_STALL_SECONDS * 1000;
-  const last = state.lastRunAt ?? state.startedAt;
-  return now - last.getTime() > stallMs;
-}
+// the cases of a kind: the rows they are read from (t, t.id the id of a case) and the ones that
+// wait, in the window of the threshold; the same conditions as the filters of the list the
+// alert names (alertListOf)
+type Cases = { from: Prisma.Sql; where: Prisma.Sql };
 
-const COUNTERS: Record<AdminAlertKind, (db: Db) => Promise<Counted>> = {
+const ORDERS = Prisma.sql`from cartlify.orders as t`;
+const BATCHES = Prisma.sql`from cartlify.product_batches as t`;
+const LOG = Prisma.sql`from cartlify.admin_audit_log as t`;
+// the products with their free units, the number the catalog shows as stock
+const PRODUCTS = Prisma.sql`from (
+    select p.id, p."deletedAt", ${FREE_STOCK_SQL} as free from cartlify.products as p
+  ) as t`;
+
+const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   // paid, to be shipped
-  paid_orders_waiting: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t.status = 'paid'::cartlify."OrderStatus"`,
-      Prisma.sql`from cartlify.orders as t`,
-      Prisma.sql`t."paidAt"`,
-    ),
-  // shipped long ago and not delivered yet
-  shipped_orders_waiting: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t.status = 'shipped'::cartlify."OrderStatus"
-        and t."updatedAt" < (now() at time zone 'utc') - make_interval(days => ${env.ALERT_SHIPPED_DAYS})`,
-      Prisma.sql`from cartlify.orders as t`,
-      Prisma.sql`t."updatedAt"`,
-    ),
-  // products of the catalog with no free units
-  out_of_stock: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t."deletedAt" is null and t.free = 0`,
-      PRODUCTS_FREE,
-      Prisma.sql`t.id`,
-    ),
-  // products of the catalog with few free units
-  low_stock: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t."deletedAt" is null and t.free between 1 and ${env.ALERT_LOW_STOCK_UNITS}`,
-      PRODUCTS_FREE,
-      Prisma.sql`t.id`,
-    ),
-  // batches with units whose last good day is near, by the day of the shop
-  expiring_batches: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t.remaining > 0 and t."expiresAt" >= cartlify.shop_today()
-        and t."expiresAt" <= cartlify.shop_today() + ${env.ALERT_BATCH_EXPIRY_DAYS}::int`,
-      Prisma.sql`from cartlify.product_batches as t`,
-      Prisma.sql`t."createdAt"`,
-    ),
-  // batches with units that are over: to be written off
-  expired_batches: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t.remaining > 0 and t."expiresAt" < cartlify.shop_today()`,
-      Prisma.sql`from cartlify.product_batches as t`,
-      Prisma.sql`t."createdAt"`,
-    ),
-  // chats with a message that waits for an admin
-  chats_waiting: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t.type = 'admin'::cartlify."ChatType" and t.status = 'open'::cartlify."ChatStatus"
-        and t."adminUnreadSince" is not null`,
-      Prisma.sql`from cartlify.chat_threads as t`,
-      Prisma.sql`t."adminUnreadSince"`,
-    ),
-  // late payments the shop gave back in the last week: the buyer may ask
-  refunded_payments: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t.action = 'OTHER'::cartlify."AdminAuditAction"
-        and t."entityType" = 'order'::cartlify."AdminAuditEntityType"
-        and t.meta @> '[{"field": "refund"}]'::jsonb
-        and t."createdAt" > (now() at time zone 'utc') - make_interval(days => ${REFUNDS_DAYS})`,
-      Prisma.sql`from (select l.id as line, l."entityId" as id, l.action, l."entityType", l.meta, l."createdAt"
-        from cartlify.admin_audit_log as l) as t`,
-      Prisma.sql`t."createdAt"`,
-    ),
-  worker_stalled: async () => ({
-    count: workerStalled(orderTimeoutWorkerState()) ? 1 : 0,
-    ids: [],
+  paid_orders_waiting: () => ({
+    from: ORDERS,
+    where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus"`,
   }),
-  // root: the lines the admins wrote in the last day
-  admin_actions: (db) =>
-    countedRows(
-      db,
-      Prisma.sql`where t."actorRole" = 'ADMIN'::cartlify."Role"
-        and t."createdAt" > (now() at time zone 'utc') - make_interval(hours => ${ADMIN_ACTIONS_HOURS})`,
-      Prisma.sql`from cartlify.admin_audit_log as t`,
-      Prisma.sql`t."createdAt"`,
-    ),
+  // shipped long ago and not delivered yet
+  shipped_orders_waiting: (window) => ({
+    from: ORDERS,
+    where: Prisma.sql`t.status = 'shipped'::cartlify."OrderStatus"
+      and t."updatedAt" < ${utcTime(window.before ?? new Date(0))}`,
+  }),
+  // products of the catalog with no free units
+  out_of_stock: () => ({
+    from: PRODUCTS,
+    where: Prisma.sql`t."deletedAt" is null and t.free = 0`,
+  }),
+  // products of the catalog with few free units
+  low_stock: (window) => ({
+    from: PRODUCTS,
+    where: Prisma.sql`t."deletedAt" is null and t.free >= 1 and t.free <= ${window.units ?? 0}`,
+  }),
+  // batches with units whose last good day is near, by the day of the shop
+  expiring_batches: (window) => ({
+    from: BATCHES,
+    where: Prisma.sql`t.remaining > 0 and t."expiresAt" >= cartlify.shop_today()
+      and t."expiresAt" <= ${window.expiresBy ?? '1970-01-01'}::date`,
+  }),
+  // batches with units that are over: to be written off
+  expired_batches: () => ({
+    from: BATCHES,
+    where: Prisma.sql`t.remaining > 0 and t."expiresAt" < cartlify.shop_today()`,
+  }),
+  // chats with a message no admin has read
+  chats_waiting: () => ({
+    from: Prisma.sql`from cartlify.chat_threads as t`,
+    where: Prisma.sql`t.type = 'admin'::cartlify."ChatType" and t.status = 'open'::cartlify."ChatStatus"
+      and t."adminUnreadSince" is not null`,
+  }),
+  // the lines of the late payments the shop gave back: the buyer may ask
+  refunded_payments: (window) => ({
+    from: LOG,
+    where: Prisma.sql`t.action = 'OTHER'::cartlify."AdminAuditAction"
+      and t."entityType" = 'order'::cartlify."AdminAuditEntityType"
+      and t.meta @> '[{"field": "refund"}]'::jsonb
+      and t."createdAt" >= ${utcTime(window.since ?? new Date(0))}`,
+  }),
+  // root: the lines the admins wrote
+  admin_actions: (window) => ({
+    from: LOG,
+    where: Prisma.sql`t."actorRole" = 'ADMIN'::cartlify."Role"
+      and t."createdAt" >= ${utcTime(window.since ?? new Date(0))}`,
+  }),
 };
 
-const mutedOf = async (db: Db, userId: number) =>
-  new Set(
-    (await db.adminAlertMute.findMany({ where: { userId }, select: { kind: true } })).map(
-      (row) => row.kind,
-    ),
-  );
+// the cases of a kind that wait, without the ones put aside (aside: their ids), how many of those
+// still wait, and which
+async function countedCases(db: Db, kind: CaseKind, window: AlertWindow, aside: string[]) {
+  const { from, where } = CASES[kind](window);
+  const [row] = await db.$queryRaw<{ count: bigint; dismissed: bigint; found: string[] | null }[]>`
+    select count(*) filter (where not (t.id::text = any(${aside}::text[]))) as count,
+      count(*) filter (where t.id::text = any(${aside}::text[])) as dismissed,
+      array_agg(t.id::text) filter (where t.id::text = any(${aside}::text[])) as found
+    ${from}
+    where ${where}
+  `;
 
-export async function getAdminAlerts(actor: {
-  actorId: UserId;
-  actorRole: Role;
-}): Promise<GetAdminAlertsResponseDto> {
-  const alerts = await prisma.$transaction(
+  return {
+    count: Number(row?.count ?? 0),
+    dismissed: Number(row?.dismissed ?? 0),
+    found: row?.found ?? [],
+  };
+}
+
+type Setting = { subscribed: boolean; threshold: number | null };
+
+// a kind without a row is followed with the threshold the server gives
+const DEFAULT_SETTING: Setting = { subscribed: true, threshold: null };
+
+async function settingsOf(db: Db, userId: number): Promise<Map<string, Setting>> {
+  const rows = await db.adminAlertSetting.findMany({
+    where: { userId },
+    select: { kind: true, subscribed: true, threshold: true },
+  });
+  return new Map(
+    rows.map((row) => [row.kind, { subscribed: row.subscribed, threshold: row.threshold }]),
+  );
+}
+
+// the threshold a kind is counted with, and its window now
+const scopeOf = (kind: AdminAlertKind, setting: Setting, now: number) => {
+  const threshold = thresholdOf(kind, setting.threshold)?.value ?? null;
+  return { threshold, window: alertWindowOf(kind, threshold, now, shopToday(now)) };
+};
+
+const asideOf = (dismissals: Dismissal[] | null, kind: string) =>
+  (dismissals ?? [])
+    .filter((dismissal) => dismissal.kind === kind)
+    .map((dismissal) => dismissal.id);
+
+// the marks of the cases that are no longer aside: their case is over, or their kind is not one
+// of the cases of the actor any more
+const marksOver = (dismissals: Dismissal[], kept: Set<string>) =>
+  dismissals
+    .map((dismissal) => dismissalFieldOf(dismissal.kind, dismissal.id))
+    .filter((field) => !kept.has(field));
+
+// the alerts of the actor: every kind of their zone, or only the ones they follow (subscribed)
+export async function getAdminAlerts(
+  actor: Actor,
+  opts: { subscribed?: boolean | undefined } = {},
+): Promise<GetAdminAlertsResponseDto> {
+  const now = Date.now();
+  const userId = Number(actor.actorId);
+  const dismissals = await readDismissals(userId);
+
+  const { alerts, kept, countedKinds } = await prisma.$transaction(
     async (db) => {
       await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
-      const muted = await mutedOf(db, Number(actor.actorId));
+      const settings = await settingsOf(db, userId);
 
-      const list: AdminAlertDto[] = [];
+      const alerts: AdminAlertDto[] = [];
+      // the marks still aside, and the kinds counted: a mark of a kind not counted stays
+      const kept = new Set<string>();
+      const countedKinds = new Set<string>();
       for (const kind of alertKindsOf(actor.actorRole)) {
-        if (muted.has(kind)) continue;
-        list.push({ kind, ...(await COUNTERS[kind](db)) });
+        const setting = settings.get(kind) ?? DEFAULT_SETTING;
+        if (opts.subscribed && !setting.subscribed) continue;
+        const { threshold, window } = scopeOf(kind, setting, now);
+
+        let tally: { count: number; dismissed: number };
+        if (isCaseKind(kind)) {
+          const cases = await countedCases(db, kind, window, asideOf(dismissals, kind));
+          for (const id of cases.found) kept.add(dismissalFieldOf(kind, id));
+          countedKinds.add(kind);
+          tally = { count: cases.count, dismissed: cases.dismissed };
+        } else {
+          const stalled = workerStalled(orderTimeoutWorkerState(), threshold ?? 0, now);
+          tally = { count: stalled ? 1 : 0, dismissed: 0 };
+        }
+
+        alerts.push({
+          kind,
+          subscribed: setting.subscribed,
+          ...tally,
+          threshold,
+          list: alertListOf(kind, window),
+        });
       }
-      return list;
+      return { alerts, kept, countedKinds };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
   );
 
+  if (dismissals) {
+    // a kind that is not counted keeps its marks, unless it is not a kind of the actor at all
+    const kinds = new Set<string>(alertKindsOf(actor.actorRole));
+    const looked = dismissals.filter(
+      (dismissal) => countedKinds.has(dismissal.kind) || !kinds.has(dismissal.kind),
+    );
+    await dropDismissals(userId, marksOver(looked, kept));
+  }
+
   return {
     alerts,
     total: alerts.reduce((sum, alert) => sum + alert.count, 0),
-    generatedAt: new Date().toISOString(),
+    dismissalsAvailable: dismissals !== null,
+    generatedAt: new Date(now).toISOString(),
   };
 }
 
@@ -211,21 +242,62 @@ const assertKind = (kind: string, role: Role): AdminAlertKind => {
   return kind as AdminAlertKind;
 };
 
-export async function getAlertSubscriptions(actor: {
-  actorId: UserId;
-  actorRole: Role;
-}): Promise<{ items: AdminAlertSubscriptionDto[] }> {
-  const muted = await prisma.$transaction(async (db) => {
+// a kind of the actor whose cases have an id
+const assertCaseKind = (kind: string, role: Role): CaseKind => {
+  const known = assertKind(kind, role);
+  if (!isCaseKind(known)) throw new NotFoundError('ALERT_KIND_NOT_FOUND', { kind });
+  return known;
+};
+
+const subscriptionOf = (kind: AdminAlertKind, setting: Setting): AdminAlertSubscriptionDto => ({
+  kind,
+  subscribed: setting.subscribed,
+  threshold: thresholdOf(kind, setting.threshold),
+});
+
+export async function getAlertSubscriptions(
+  actor: Actor,
+): Promise<{ items: AdminAlertSubscriptionDto[] }> {
+  const settings = await prisma.$transaction(async (db) => {
     await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
-    return mutedOf(db, Number(actor.actorId));
+    return settingsOf(db, Number(actor.actorId));
   });
 
   return {
-    items: alertKindsOf(actor.actorRole).map((kind) => ({ kind, subscribed: !muted.has(kind) })),
+    items: alertKindsOf(actor.actorRole).map((kind) =>
+      subscriptionOf(kind, settings.get(kind) ?? DEFAULT_SETTING),
+    ),
   };
 }
 
-// turns a kind on (subscribed) or off for the actor; done already is no matter
+// one part of the setting of a kind of the actor, the other one as it is: the row is added or
+// changed in one step, so two changes at once do not lose one another
+async function writeSetting(
+  actor: Actor,
+  kind: AdminAlertKind,
+  change: { subscribed: boolean } | { threshold: number | null },
+): Promise<Setting> {
+  const userId = Number(actor.actorId);
+  const setsSubscribed = 'subscribed' in change;
+  const subscribed = 'subscribed' in change ? change.subscribed : DEFAULT_SETTING.subscribed;
+  const threshold = 'threshold' in change ? change.threshold : DEFAULT_SETTING.threshold;
+
+  const [row] = await prisma.$transaction(async (db) => {
+    await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
+    return db.$queryRaw<Setting[]>`
+      insert into cartlify.admin_alert_settings as s ("userId", kind, subscribed, threshold)
+      values (${userId}, ${kind}, ${subscribed}, ${threshold}::int)
+      on conflict ("userId", kind) do update set
+        subscribed = case when ${setsSubscribed} then excluded.subscribed else s.subscribed end,
+        threshold = case when ${setsSubscribed} then s.threshold else excluded.threshold end
+      returning subscribed, threshold
+    `;
+  });
+
+  return row ?? DEFAULT_SETTING;
+}
+
+// follows a kind (subscribed) or not; its threshold stays; done already is no matter
 export async function setAlertSubscription(args: {
   actorId: UserId;
   actorRole: Role;
@@ -233,16 +305,96 @@ export async function setAlertSubscription(args: {
   subscribed: boolean;
 }): Promise<AdminAlertSubscriptionDto> {
   const kind = assertKind(args.kind, args.actorRole);
+  const setting = await writeSetting(args, kind, { subscribed: args.subscribed });
+  return subscriptionOf(kind, setting);
+}
+
+// sets the threshold of a kind, or gives it back to the server (null); whether it is followed
+// stays
+export async function setAlertThreshold(args: {
+  actorId: UserId;
+  actorRole: Role;
+  kind: string;
+  value: number | null;
+}): Promise<AdminAlertSubscriptionDto> {
+  const kind = assertKind(args.kind, args.actorRole);
+  if (args.value === null) {
+    if (!thresholdOf(kind, null)) throw new NotFoundError('ALERT_THRESHOLD_NOT_FOUND', { kind });
+  } else {
+    assertThreshold(kind, args.value);
+  }
+
+  const setting = await writeSetting(args, kind, { threshold: args.value });
+  return subscriptionOf(kind, setting);
+}
+
+// the cases the actor put aside that still wait, the latest first; the rest go
+export async function getAlertDismissals(
+  actor: Actor,
+): Promise<{ items: AdminAlertDismissalItemDto[] }> {
+  const now = Date.now();
+  const userId = Number(actor.actorId);
+  const dismissals = await listDismissals(userId);
+
+  const kept = await prisma.$transaction(
+    async (db) => {
+      await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
+      const settings = await settingsOf(db, userId);
+
+      const kept = new Set<string>();
+      for (const kind of alertKindsOf(actor.actorRole)) {
+        const aside = asideOf(dismissals, kind);
+        if (!isCaseKind(kind) || !aside.length) continue;
+        const { window } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
+        const { found } = await countedCases(db, kind, window, aside);
+        for (const id of found) kept.add(dismissalFieldOf(kind, id));
+      }
+      return kept;
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
+  );
+
+  await dropDismissals(userId, marksOver(dismissals, kept));
+
+  return {
+    items: dismissals
+      .filter((dismissal) => kept.has(dismissalFieldOf(dismissal.kind, dismissal.id)))
+      .sort((a, b) => b.dismissedAt.localeCompare(a.dismissedAt))
+      .map((dismissal) => ({
+        kind: dismissal.kind as AdminAlertKind,
+        id: dismissal.id,
+        dismissedAt: dismissal.dismissedAt,
+      })),
+  };
+}
+
+// puts one case of a kind aside for the actor, or takes it back; done already is no matter. Only
+// a case the kind counts now is put aside
+export async function setAlertDismissal(args: {
+  actorId: UserId;
+  actorRole: Role;
+  kind: string;
+  id: string;
+  dismissed: boolean;
+}): Promise<AdminAlertDismissalDto> {
+  const kind = assertCaseKind(args.kind, args.actorRole);
   const userId = Number(args.actorId);
 
-  await prisma.$transaction(async (db) => {
-    await setUserContext(db, { userId: args.actorId, role: args.actorRole });
-    if (args.subscribed) {
-      await db.adminAlertMute.deleteMany({ where: { userId, kind } });
-    } else {
-      await db.adminAlertMute.createMany({ data: [{ userId, kind }], skipDuplicates: true });
-    }
-  });
+  if (!args.dismissed) {
+    await takeCaseBack(userId, kind, args.id);
+    return { kind, id: args.id, dismissed: false };
+  }
 
-  return { kind, subscribed: args.subscribed };
+  const now = Date.now();
+  const waits = await prisma.$transaction(async (db) => {
+    await setUserContext(db, { userId: args.actorId, role: args.actorRole });
+    const settings = await settingsOf(db, userId);
+    const { window } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
+    const { found } = await countedCases(db, kind, window, [args.id]);
+    return found.length > 0;
+  });
+  if (!waits) throw new NotFoundError('ALERT_ITEM_NOT_FOUND', { kind, id: args.id });
+
+  await putCaseAside(userId, kind, args.id);
+  return { kind, id: args.id, dismissed: true };
 }

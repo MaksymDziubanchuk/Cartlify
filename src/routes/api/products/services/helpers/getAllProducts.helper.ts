@@ -83,8 +83,8 @@ const HAS_PRIMARY_IMAGE_SQL = Prisma.raw(
   `EXISTS (SELECT 1 FROM "product_images" i WHERE i."productId" = p."id" AND i."isPrimary")`,
 );
 
-// the stock a list shows: free units, never below 0
-const FREE_STOCK_SQL = Prisma.raw(
+// the stock a list shows: free units, never below 0; the alerts of the stock count the same
+export const FREE_STOCK_SQL = Prisma.raw(
   `GREATEST(p."stock" - p."reservedStock" - cartlify.product_expired_units(p.id), 0)`,
 );
 
@@ -102,6 +102,8 @@ export type ProductListQuery = {
   // every role: true lists only deleted products, false only the products that are not deleted
   deleted: boolean;
   inStock?: boolean | undefined;
+  // an admin, a flag: at most this many free units
+  maxStock?: number | undefined;
   // an admin: true lists only the products with a sale / an override that is on, false only the
   // ones without, undefined does not filter; a buyer: undefined, every product of the catalog
   onSale?: boolean | undefined;
@@ -163,6 +165,10 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
   }
 
   const inStock = typeof dto.inStock === 'boolean' ? dto.inStock : undefined;
+  const maxStock =
+    typeof dto.maxStock === 'number' && Number.isInteger(dto.maxStock) && dto.maxStock >= 0
+      ? dto.maxStock
+      : undefined;
 
   // a flag is on only when it is true: false, or anything else, is no flag
   const deleted = dto.deleted === true;
@@ -194,6 +200,8 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
     if (popularityOverridden) {
       throw new ForbiddenError('FILTER_FORBIDDEN', { filter: 'popularityOverridden' });
     }
+    if (maxStock !== undefined)
+      throw new ForbiddenError('FILTER_FORBIDDEN', { filter: 'maxStock' });
     if (!BUYER_SORTS.includes(sort)) throw new ForbiddenError('SORT_FORBIDDEN', { sort });
 
     // a buyer sees every product of the catalog, on sale or not
@@ -208,11 +216,13 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
 
   // without any flag an admin gets the plain products: not deleted, without a sale and without an
   // override that are on. With a flag only its condition counts, the other marks do not filter;
-  // the deleted products stay out without their flag
-  const anyFlag = deleted || onSale || popularityOverridden;
+  // the deleted products stay out without their flag. Few free units are a flag too: the stock
+  // of every product of the catalog
+  const anyFlag = deleted || onSale || popularityOverridden || maxStock !== undefined;
 
   return {
     ...base,
+    maxStock,
     deleted,
     onSale: anyFlag ? onSale || undefined : false,
     popularityOverridden: anyFlag ? popularityOverridden || undefined : false,
@@ -358,6 +368,7 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
   // stock filter by free units, the same number the list shows as stock
   if (q.inStock === true) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} > 0`);
   if (q.inStock === false) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} = 0`);
+  if (q.maxStock !== undefined) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} <= ${q.maxStock}`);
 
   // category filter: each category with its whole branch, a parent category shows the products
   // of its children; branch=false takes only the products of each category itself

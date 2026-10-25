@@ -310,6 +310,20 @@ const ordersGetQuerySchema = {
       format: 'date-time',
       description: 'Only the orders paid before this time.',
     },
+    updatedFrom: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Only the orders changed last at this time or later; with updatedTo it has to come ' +
+        'before it (UPDATED_PERIOD_INVALID).',
+    },
+    updatedTo: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Only the orders changed last before this time: the shipped orders that wait for the ' +
+        'delivery longest.',
+    },
 
     // sorting
     sortBy: {

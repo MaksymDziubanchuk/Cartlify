@@ -2,8 +2,13 @@ import type { ControllerRouter } from 'types/controller.js';
 import type { User } from 'types/user.js';
 import type { FastifyReply } from 'fastify';
 import type {
+  AdminAlertDismissalDto,
+  AdminAlertDismissalItemDto,
+  AdminAlertDismissalParamsDto,
   AdminAlertKindParamsDto,
   AdminAlertSubscriptionDto,
+  AdminAlertThresholdBodyDto,
+  GetAdminAlertsQueryDto,
   AdminAuditLogQueryDto,
   GetAdminAlertsResponseDto,
   GetAdminAuditLogResponseDto,
@@ -241,14 +246,19 @@ const getAuditLog: ControllerRouter<
   return reply.code(200).send(await adminServices.listAuditLog(args));
 };
 
-// the alerts of the actor, each kind they have on with its count
-const getAlerts: ControllerRouter<{}, {}, {}, GetAdminAlertsResponseDto> = async (req, reply) => {
+// the alerts of the actor, each kind of their zone with its count, or the ones they follow
+const getAlerts: ControllerRouter<
+  {},
+  {},
+  GetAdminAlertsQueryDto,
+  GetAdminAlertsResponseDto
+> = async (req, reply) => {
   if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
 
-  const result = await adminServices.getAdminAlerts({
-    actorId: req.user.id,
-    actorRole: req.user.role,
-  });
+  const result = await adminServices.getAdminAlerts(
+    { actorId: req.user.id, actorRole: req.user.role },
+    { subscribed: req.query.subscribed === true },
+  );
   return reply.code(200).send(result);
 };
 
@@ -284,6 +294,74 @@ const alertSubscription =
     return reply.code(200).send(result);
   };
 
+// the threshold of a kind of alerts set (PUT) or given back to the server (DELETE) for the actor
+const putAlertThreshold: ControllerRouter<
+  AdminAlertKindParamsDto,
+  AdminAlertThresholdBodyDto,
+  {},
+  AdminAlertSubscriptionDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const result = await adminServices.setAlertThreshold({
+    actorId: req.user.id,
+    actorRole: req.user.role,
+    kind: req.params.kind,
+    value: req.body.value,
+  });
+  return reply.code(200).send(result);
+};
+
+const deleteAlertThreshold: ControllerRouter<
+  AdminAlertKindParamsDto,
+  {},
+  {},
+  AdminAlertSubscriptionDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const result = await adminServices.setAlertThreshold({
+    actorId: req.user.id,
+    actorRole: req.user.role,
+    kind: req.params.kind,
+    value: null,
+  });
+  return reply.code(200).send(result);
+};
+
+const getAlertDismissals: ControllerRouter<
+  {},
+  {},
+  {},
+  { items: AdminAlertDismissalItemDto[] }
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const result = await adminServices.getAlertDismissals({
+    actorId: req.user.id,
+    actorRole: req.user.role,
+  });
+  return reply.code(200).send(result);
+};
+
+// a case of an alert put aside (PUT) or taken back (DELETE) for the actor
+const alertDismissal =
+  (
+    dismissed: boolean,
+  ): ControllerRouter<AdminAlertDismissalParamsDto, {}, {}, AdminAlertDismissalDto> =>
+  async (req, reply) => {
+    if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+    const result = await adminServices.setAlertDismissal({
+      actorId: req.user.id,
+      actorRole: req.user.role,
+      kind: req.params.kind,
+      id: req.params.id,
+      dismissed,
+    });
+    return reply.code(200).send(result);
+  };
+
 export const adminController = {
   getAllStats,
   getAccountingReport,
@@ -297,4 +375,9 @@ export const adminController = {
   getAlertSubscriptions,
   putAlertSubscription: alertSubscription(true),
   deleteAlertSubscription: alertSubscription(false),
+  putAlertThreshold,
+  deleteAlertThreshold,
+  getAlertDismissals,
+  putAlertDismissal: alertDismissal(true),
+  deleteAlertDismissal: alertDismissal(false),
 };

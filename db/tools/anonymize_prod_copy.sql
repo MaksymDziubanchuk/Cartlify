@@ -65,7 +65,7 @@ BEGIN
       ('reviews', 'comment'), ('reviews', 'createdAt'), ('reviews', 'downVotes'),
       ('reviews', 'upVotes'), ('reviews', 'updatedAt'),
       -- tables with no personal data: the catalog, the stock, the money, what links them
-      ('_prisma_migrations', '*'), ('admin_alert_mutes', '*'), ('categories', '*'),
+      ('_prisma_migrations', '*'), ('admin_alert_settings', '*'), ('categories', '*'),
       ('favorites', '*'), ('order_batch_allocations', '*'), ('order_items', '*'),
       ('product_batches', '*'), ('product_images', '*'), ('product_price_change_logs', '*'),
       ('products', '*'), ('review_votes', '*')

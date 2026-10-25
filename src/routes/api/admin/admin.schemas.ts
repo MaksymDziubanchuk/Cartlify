@@ -420,8 +420,9 @@ const getAuditLogSchema = {
   description:
     'The lines of the admin log, the newest first: who did what to what, the changes, the ' +
     'address and the browser of the request (none for the work of the server alone). Filters: ' +
-    'the account (`actorId`), the thing (`entityType`, `entityId`), the actions (`actions`), ' +
-    'the period (`from` taken in, `to` left out). `format=csv` gives every line of the filters ' +
+    'the account (`actorId`), the role it wrote with (`actorRole`), the thing (`entityType`, ' +
+    '`entityId`), the actions (`actions`), a field among the changes (`field`), the period ' +
+    '(`from` taken in, `to` left out). `format=csv` gives every line of the filters ' +
     'as a file, without pages. Admin and root read every line.',
 
   querystring: { $ref: 'adminAuditLogQuerySchema#' },
@@ -460,16 +461,22 @@ const getAlertsSchema = {
   operationId: 'getAdminAlerts',
   summary: 'Get the alerts',
   description:
-    'What waits for the work of an admin, each kind the actor has on with how many there are ' +
-    'and the latest of them (up to 20), counted now: paid orders to ship ' +
-    '(`paid_orders_waiting`), shipped orders not delivered for `ALERT_SHIPPED_DAYS` days ' +
-    '(`shipped_orders_waiting`), products of the catalog with no free units (`out_of_stock`) ' +
-    'or with up to `ALERT_LOW_STOCK_UNITS` (`low_stock`), batches whose last good day is in ' +
-    '`ALERT_BATCH_EXPIRY_DAYS` days (`expiring_batches`) or over with units left ' +
-    '(`expired_batches`), chats waiting for an admin (`chats_waiting`), late payments given ' +
-    'back in the last week (`refunded_payments`), a reservation worker that has not run for ' +
-    '`ALERT_WORKER_STALL_SECONDS` seconds (`worker_stalled`). Root also gets the lines the ' +
-    'admins wrote in the last day (`admin_actions`). A kind turned off is left out.',
+    'What waits for the work of an admin, each kind of the zone of the actor with how many ' +
+    'cases wait now, counted with the thresholds of the actor (GET ' +
+    '/api/admin/alerts/subscriptions): paid orders to ship (`paid_orders_waiting`), shipped ' +
+    'orders not delivered for some days (`shipped_orders_waiting`), products of the catalog ' +
+    'with no free units (`out_of_stock`) or with a few (`low_stock`), batches whose last good ' +
+    'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
+    'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
+    'some last days (`refunded_payments`), a reservation worker that has not run for some ' +
+    'seconds (`worker_stalled`). Root also gets the lines the admins wrote in some last hours ' +
+    '(`admin_actions`). Each kind names the request to the list of the app with its cases ' +
+    '(`list`): the page of an admin shows a few of its rows and sorts them the way that list ' +
+    'sorts, a click leads to the list or to a case. The cases the actor put aside are left out ' +
+    'of `count` and counted in `dismissed`. The frontend asks again at the interval the admin ' +
+    'chose and notifies when the counts changed.',
+
+  querystring: { $ref: 'adminAlertsQuerySchema#' },
 
   response: {
     200: {
@@ -491,13 +498,14 @@ const getAlertsSchema = {
   },
 } satisfies FastifySchema;
 
-// Schema for the kinds of alerts an actor has on
+// Schema for the settings of the kinds of alerts of an actor
 const getAlertSubscriptionsSchema = {
   operationId: 'getAdminAlertSubscriptions',
-  summary: 'Get the subscriptions to the alerts',
+  summary: 'Get the settings of the alerts',
   description:
-    'Each kind of alerts of the actor and whether it is on; every kind is on until the actor ' +
-    'turns it off. Each admin and each root has their own.',
+    'Each kind of alerts of the actor: whether they follow it and its threshold (the one they ' +
+    'set or the one the server gives, its bounds and unit; null for a kind without one). Every ' +
+    'kind is followed until the actor turns it off. Each admin and each root has their own.',
 
   response: {
     200: {
@@ -505,7 +513,7 @@ const getAlertSubscriptionsSchema = {
       $ref: 'adminAlertSubscriptionsResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to read the subscriptions.',
+      description: 'Authentication is required to read the settings.',
       $ref: 'errorResponseSchema#',
     },
     403: {
@@ -513,7 +521,7 @@ const getAlertSubscriptionsSchema = {
       $ref: 'errorResponseSchema#',
     },
     500: {
-      description: 'Unexpected server error while reading the subscriptions.',
+      description: 'Unexpected server error while reading the settings.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -522,16 +530,19 @@ const getAlertSubscriptionsSchema = {
 const alertSubscriptionSchema = (on: boolean) =>
   ({
     operationId: on ? 'subscribeAdminAlert' : 'unsubscribeAdminAlert',
-    summary: on ? 'Turn a kind of alerts on' : 'Turn a kind of alerts off',
+    summary: on ? 'Follow a kind of alerts' : 'Stop following a kind of alerts',
     description: on
-      ? 'Turns the kind on for the actor: GET /api/admin/alerts names it again. One that is on stays on.'
-      : 'Turns the kind off for the actor only: GET /api/admin/alerts leaves it out. One that is off stays off.',
+      ? 'The actor follows the kind again: GET /api/admin/alerts?subscribed=true names it. Its ' +
+        'threshold stays. One followed stays so.'
+      : 'The actor alone stops following the kind: GET /api/admin/alerts?subscribed=true leaves ' +
+        'it out, GET /api/admin/alerts still names it. Its threshold stays. One not followed ' +
+        'stays so.',
 
     params: { $ref: 'adminAlertKindParamsSchema#' },
 
     response: {
       200: {
-        description: 'The kind and whether it is on now.',
+        description: 'The setting of the kind now.',
         $ref: 'adminAlertSubscriptionSchema#',
       },
       400: {
@@ -539,7 +550,7 @@ const alertSubscriptionSchema = (on: boolean) =>
         $ref: 'errorResponseSchema#',
       },
       401: {
-        description: 'Authentication is required to change the subscriptions.',
+        description: 'Authentication is required to change the settings.',
         $ref: 'errorResponseSchema#',
       },
       403: {
@@ -552,7 +563,7 @@ const alertSubscriptionSchema = (on: boolean) =>
         $ref: 'errorResponseSchema#',
       },
       500: {
-        description: 'Unexpected server error while changing the subscription.',
+        description: 'Unexpected server error while changing the setting.',
         $ref: 'errorResponseSchema#',
       },
     },
@@ -560,6 +571,143 @@ const alertSubscriptionSchema = (on: boolean) =>
 
 const putAlertSubscriptionSchema = alertSubscriptionSchema(true);
 const deleteAlertSubscriptionSchema = alertSubscriptionSchema(false);
+
+const alertThresholdSchema = (set: boolean) =>
+  ({
+    operationId: set ? 'setAdminAlertThreshold' : 'resetAdminAlertThreshold',
+    summary: set ? 'Set the threshold of a kind of alerts' : 'Give the threshold back',
+    description: set
+      ? 'Sets the threshold of the kind for the actor only, within the bounds of the kind (GET ' +
+        '/api/admin/alerts/subscriptions names them): the alerts count with it and its list is ' +
+        'asked with it. Whether the actor follows the kind stays.'
+      : 'The kind is counted with the threshold the server gives again, for the actor only. ' +
+        'Whether the actor follows the kind stays.',
+
+    params: { $ref: 'adminAlertKindParamsSchema#' },
+    ...(set ? { body: { $ref: 'adminAlertThresholdBodySchema#' } } : {}),
+
+    response: {
+      200: {
+        description: 'The setting of the kind now.',
+        $ref: 'adminAlertSubscriptionSchema#',
+      },
+      400: {
+        description: set
+          ? 'A kind that is not a name of a kind, a threshold that is not a whole number from 1 ' +
+            '(VALIDATION_ERROR); a threshold out of the bounds of the kind ' +
+            '(ALERT_THRESHOLD_INVALID, details.min and details.max).'
+          : 'A kind that is not a name of a kind (VALIDATION_ERROR).',
+        $ref: 'errorResponseSchema#',
+      },
+      401: {
+        description: 'Authentication is required to change the settings.',
+        $ref: 'errorResponseSchema#',
+      },
+      403: {
+        description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+        $ref: 'errorResponseSchema#',
+      },
+      404: {
+        description:
+          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root; ' +
+          'a kind without a threshold (ALERT_THRESHOLD_NOT_FOUND).',
+        $ref: 'errorResponseSchema#',
+      },
+      500: {
+        description: 'Unexpected server error while changing the setting.',
+        $ref: 'errorResponseSchema#',
+      },
+    },
+  }) satisfies FastifySchema;
+
+const putAlertThresholdSchema = alertThresholdSchema(true);
+const deleteAlertThresholdSchema = alertThresholdSchema(false);
+
+// Schema for the cases an actor put aside
+const getAlertDismissalsSchema = {
+  operationId: 'getAdminAlertDismissals',
+  summary: 'Get the cases put aside',
+  description:
+    'The cases of the alerts the actor put aside that still wait, the latest first. A case ' +
+    'that is over (the order shipped, the chat read, the batch written off) is no longer aside: ' +
+    'it alerts again if it comes back. They live in Redis.',
+
+  response: {
+    200: {
+      description: 'The cases the actor put aside.',
+      $ref: 'adminAlertDismissalsResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the cases put aside.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while reading the cases put aside.',
+      $ref: 'errorResponseSchema#',
+    },
+    503: {
+      description: 'Redis is down (REDIS_UNAVAILABLE).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const alertDismissalSchema = (on: boolean) =>
+  ({
+    operationId: on ? 'dismissAdminAlertCase' : 'restoreAdminAlertCase',
+    summary: on ? 'Put a case of an alert aside' : 'Take a case of an alert back',
+    description: on
+      ? 'Puts one case that waits aside for the actor only: it leaves `count` of its kind and ' +
+        'is counted in `dismissed`. It stays aside until the actor takes it back or the case is ' +
+        'over. One put aside stays aside.'
+      : 'Takes a case put aside back for the actor: it alerts again. One that is not aside ' +
+        'stays so.',
+
+    params: { $ref: 'adminAlertDismissalParamsSchema#' },
+
+    response: {
+      200: {
+        description: 'The case and whether it is aside now.',
+        $ref: 'adminAlertDismissalSchema#',
+      },
+      400: {
+        description: 'A kind or an id that is not a name or an id (VALIDATION_ERROR).',
+        $ref: 'errorResponseSchema#',
+      },
+      401: {
+        description: 'Authentication is required to put a case aside.',
+        $ref: 'errorResponseSchema#',
+      },
+      403: {
+        description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+        $ref: 'errorResponseSchema#',
+      },
+      404: {
+        description: on
+          ? 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled has ' +
+            'no cases, admin_actions is a kind of root; no case of the kind waits with the id ' +
+            '(ALERT_ITEM_NOT_FOUND).'
+          : 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled has ' +
+            'no cases, admin_actions is a kind of root.',
+        $ref: 'errorResponseSchema#',
+      },
+      500: {
+        description: 'Unexpected server error while changing the case.',
+        $ref: 'errorResponseSchema#',
+      },
+      503: {
+        description: 'Redis is down (REDIS_UNAVAILABLE).',
+        $ref: 'errorResponseSchema#',
+      },
+    },
+  }) satisfies FastifySchema;
+
+const putAlertDismissalSchema = alertDismissalSchema(true);
+const deleteAlertDismissalSchema = alertDismissalSchema(false);
 
 const taggedAdminSchema = withOpenApiTag(
   {
@@ -575,6 +723,11 @@ const taggedAdminSchema = withOpenApiTag(
     getAlertSubscriptionsSchema,
     putAlertSubscriptionSchema,
     deleteAlertSubscriptionSchema,
+    putAlertThresholdSchema,
+    deleteAlertThresholdSchema,
+    getAlertDismissalsSchema,
+    putAlertDismissalSchema,
+    deleteAlertDismissalSchema,
   },
   'admin',
 );

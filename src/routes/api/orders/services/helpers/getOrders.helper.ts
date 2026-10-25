@@ -62,6 +62,12 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     throw new BadRequestError('PAID_PERIOD_INVALID');
   }
 
+  // the same for the period of the last change
+  const { updatedFrom, updatedTo } = dto;
+  if (updatedFrom && updatedTo && updatedFrom.getTime() >= updatedTo.getTime()) {
+    throw new BadRequestError('UPDATED_PERIOD_INVALID');
+  }
+
   return {
     actorId: dto.actorId,
     actorRole: dto.actorRole,
@@ -72,6 +78,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     confirmed,
     paidFrom,
     paidTo,
+    updatedFrom,
+    updatedTo,
     userId: dto.userId,
     productId: dto.productId,
     q,
@@ -107,6 +115,8 @@ export function buildOrdersWhere(args: {
   confirmed?: boolean | undefined;
   paidFrom?: Date | undefined;
   paidTo?: Date | undefined;
+  updatedFrom?: Date | undefined;
+  updatedTo?: Date | undefined;
   userId?: number | undefined;
   productId?: number | undefined;
   q?: string | undefined;
@@ -133,6 +143,13 @@ export function buildOrdersWhere(args: {
     ...(args.paidTo ? { lt: args.paidTo } : {}),
   };
   if (Object.keys(paidAt).length) where.paidAt = paidAt;
+
+  // the time of the last change of an order: a shipped one has not moved since it was shipped
+  const updatedAt = {
+    ...(args.updatedFrom ? { gte: args.updatedFrom } : {}),
+    ...(args.updatedTo ? { lt: args.updatedTo } : {}),
+  };
+  if (Object.keys(updatedAt).length) where.updatedAt = updatedAt;
 
   return where;
 }

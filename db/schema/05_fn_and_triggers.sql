@@ -3489,4 +3489,31 @@ CREATE TRIGGER trg_chat_threads_update_columns
 BEFORE UPDATE ON cartlify.chat_threads FOR EACH ROW
 EXECUTE FUNCTION cartlify.chat_threads_update_columns ();
 
+-- UPDATE GUARDS admin alert settings: an admin or root changes whether a kind of their alerts is
+-- on and its threshold, never whose the row is or which kind
+CREATE OR REPLACE FUNCTION cartlify.admin_alert_settings_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['subscribed', 'threshold'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ADMIN_ALERT_SETTING_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_admin_alert_settings_update_columns ON cartlify.admin_alert_settings;
+
+CREATE TRIGGER trg_admin_alert_settings_update_columns
+BEFORE UPDATE ON cartlify.admin_alert_settings FOR EACH ROW
+EXECUTE FUNCTION cartlify.admin_alert_settings_update_columns ();
+
 COMMIT;

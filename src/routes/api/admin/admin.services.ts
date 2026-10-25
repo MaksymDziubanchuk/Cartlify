@@ -10,8 +10,11 @@ import { listStockMovements } from './services/stockMovements.service.js';
 import { auditLogCsv, listAuditLog } from './services/auditLog.service.js';
 import {
   getAdminAlerts,
+  getAlertDismissals,
   getAlertSubscriptions,
+  setAlertDismissal,
   setAlertSubscription,
+  setAlertThreshold,
 } from './services/alerts.service.js';
 import type {
   AdminStatsDto,
@@ -293,4 +296,7 @@ export const adminServices = {
   getAdminAlerts,
   getAlertSubscriptions,
   setAlertSubscription,
+  setAlertThreshold,
+  getAlertDismissals,
+  setAlertDismissal,
 };
