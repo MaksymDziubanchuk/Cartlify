@@ -171,8 +171,14 @@ describe('GET /api/admin/audit-log', () => {
     await patchProduct(admin, product.id, { name: `Admin ${Date.now()}` });
     await patchProduct(someRoot, product.id, { name: `Root ${Date.now()}` });
 
-    const ofAdmins = await readLog(someRoot, `entityId=${product.id}&actorRole=ADMIN`);
-    const ofRoots = await readLog(someRoot, `entityId=${product.id}&actorRole=ROOT`);
+    const ofAdmins = await readLog(
+      someRoot,
+      `entityType=product&entityId=${product.id}&actorRole=ADMIN`,
+    );
+    const ofRoots = await readLog(
+      someRoot,
+      `entityType=product&entityId=${product.id}&actorRole=ROOT`,
+    );
 
     expect(ofAdmins.json().items.map((line: { actor: { id: number } }) => line.actor.id)).toEqual([
       admin.id,
@@ -190,13 +196,15 @@ describe('GET /api/admin/audit-log', () => {
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
   });
 
+  // the numbers of products, categories and orders repeat: a line of another file about a category
+  // with the same number is no line of this product, so every query names the kind of the thing
   it('keeps the lines of a period', async () => {
     const product = await createProduct({ price: 10, stock: 0 });
     const before = new Date().toISOString();
     await patchProduct(admin, product.id, { name: `Period ${Date.now()}` });
 
-    const inside = await readLog(admin, `entityId=${product.id}&from=${before}`);
-    const outside = await readLog(admin, `entityId=${product.id}&to=${before}`);
+    const inside = await readLog(admin, `entityType=product&entityId=${product.id}&from=${before}`);
+    const outside = await readLog(admin, `entityType=product&entityId=${product.id}&to=${before}`);
 
     expect(inside.json().items).toHaveLength(1);
     expect(outside.json().items).toHaveLength(0);
