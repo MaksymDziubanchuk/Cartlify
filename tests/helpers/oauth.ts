@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 import { b64urlJson, signState } from '@helpers/b64Payload.js';
 
 import { setCookies } from './cookies.js';
-import { jsonResponse, stubFetch } from './fetchStub.js';
+import { jsonResponse, stubFetch, type FetchCall } from './fetchStub.js';
 
 // the oauth providers answer our server here, our own login code runs for real: the made-up apps
 // of tests/setup/integration.setup.ts, the provider answers, and for Google and LinkedIn a key
@@ -13,6 +13,10 @@ import { jsonResponse, stubFetch } from './fetchStub.js';
 // in oidcIdTokenVerify.ts works the way it does against the real providers
 
 export type Provider = 'google' | 'github' | 'linkedin';
+
+// the pictures of the accounts at the provider, by the address the server asks: an answer for each
+// call, a Response is read once
+export type Pictures = Record<string, (call: FetchCall) => Response | Promise<Response>>;
 
 // the frontend page every callback sends the browser to (WEB_ORIGIN from the setup)
 export const FRONTEND_CALLBACK = 'https://shop.example.com/auth/callback';
@@ -89,8 +93,10 @@ export function oidcProvider(name: 'google' | 'linkedin') {
   }
 
   // the code exchange gives this id_token, the key list holds the provider key
-  function answer(token: string) {
+  function answer(token: string, pictures: Pictures = {}) {
     return stubFetch((call) => {
+      const picture = pictures[call.url];
+      if (picture) return picture(call);
       if (call.url === tokenUrl) {
         return jsonResponse({
           access_token: `${name}-access-token`,
@@ -118,8 +124,10 @@ export type GithubAccount = {
 };
 
 // GitHub: the code exchange, the profile and the email list
-export function answerAsGithub(account: GithubAccount) {
+export function answerAsGithub(account: GithubAccount, pictures: Pictures = {}) {
   return stubFetch((call) => {
+    const picture = pictures[call.url];
+    if (picture) return picture(call);
     if (call.url === 'https://github.com/login/oauth/access_token') {
       return jsonResponse({ access_token: 'gho_test', token_type: 'bearer', scope: 'user:email' });
     }

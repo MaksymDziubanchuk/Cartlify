@@ -3,21 +3,23 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import { logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import {
   closeSessions,
   createProduct,
   createUser,
+  createVerifyToken,
   removeProducts,
   uniqueEmail,
   type TestProduct,
 } from '../../../helpers/factories.js';
-import { itWithMail, linkToken, mailedToken, watchMail } from '../../../helpers/mail.js';
+import { linkToken, mailedToken, refuseMail, watchMail } from '../../../helpers/mail.js';
 
-// the tests that mail go to SendGrid in sandbox mode: they need a SendGrid key in the test
-// environment and the app sending in sandbox mode, until then they fail
+// the mails go to the SendGrid mock (tests/helpers/mail.ts), a test reads its link from there
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -60,75 +62,76 @@ afterAll(async () => {
 });
 
 describe('POST /api/auth/register', () => {
-  itWithMail(
-    'creates an unverified user and mails a verification link (SendGrid sandbox)',
-    async () => {
-      const mails = watchMail();
-      const email = newEmail();
+  it('creates an unverified user and mails a verification link', async () => {
+    const mails = watchMail();
+    const email = newEmail();
 
-      const res = await register({
-        email: email.toUpperCase(),
-        password: 'password123',
-        name: ' Ann ',
-      });
+    const res = await register({
+      email: email.toUpperCase(),
+      password: 'password123',
+      name: ' Ann ',
+    });
 
-      expect(res.statusCode).toBe(201);
-      expect(res.json()).toMatchObject({ email, role: 'USER', isVerified: false, name: 'Ann' });
-      expect(JSON.stringify(res.json())).not.toMatch(/password/i);
-      // registration does not sign in: the email has to be verified first
-      expect(setCookies(res).accessToken).toBeUndefined();
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      email,
+      role: 'USER',
+      isVerified: false,
+      name: 'Ann',
+      avatarIsDefault: true,
+    });
+    expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'A' });
+    expect(JSON.stringify(res.json())).not.toMatch(/password/i);
+    // registration does not sign in: the email has to be verified first
+    expect(setCookies(res).accessToken).toBeUndefined();
 
-      expect(mails).toHaveLength(1);
-      expect(mails[0]).toMatchObject({ to: [email], sandbox: true });
-      expect(mails[0]!.status).toBeGreaterThanOrEqual(200);
-      expect(mails[0]!.status).toBeLessThan(300);
-      expect(mails[0]!.subject).toContain('Verify your email');
-      expect(linkToken(mails[0]!, '/web/login')).toEqual(expect.any(String));
-    },
-  );
+    expect(mails).toHaveLength(1);
+    expect(mails[0]).toMatchObject({ to: [email], accepted: true });
+    expect(mails[0]!.status).toBeGreaterThanOrEqual(200);
+    expect(mails[0]!.status).toBeLessThan(300);
+    expect(mails[0]!.subject).toContain('Verify your email');
+    expect(linkToken(mails[0]!, '/web/login')).toEqual(expect.any(String));
+  });
 
-  itWithMail(
-    'lets the link from the mail verify the email, after which the user logs in',
-    async () => {
-      const mails = watchMail();
-      const email = newEmail();
-      await register({ email, password: 'password123' });
-      const token = mailedToken(mails, '/web/login');
+  it('lets the link from the mail verify the email, after which the user logs in', async () => {
+    const mails = watchMail();
+    const email = newEmail();
+    await register({ email, password: 'password123' });
+    const token = mailedToken(mails, '/web/login');
 
-      const verify = await app.inject({
-        method: 'GET',
-        url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
-      });
-      const login = await logIn(app, csrf, { email, password: 'password123' });
+    const verify = await app.inject({
+      method: 'GET',
+      url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
+    });
+    const login = await logIn(app, csrf, { email, password: 'password123' });
 
-      expect(verify.statusCode).toBe(200);
-      expect(login.statusCode).toBe(200);
-    },
-  );
+    expect(verify.statusCode).toBe(200);
+    expect(login.statusCode).toBe(200);
+  });
 
   // a copy of the database must not be enough to verify someone else's email
-  itWithMail(
-    'keeps the token of the link out of the database in the form it is mailed',
-    async () => {
-      const mails = watchMail();
-      const email = newEmail();
-      await register({ email, password: 'password123' });
-      const token = mailedToken(mails, '/web/login');
+  it('keeps the token of the link out of the database in the form it is mailed', async () => {
+    const mails = watchMail();
+    const email = newEmail();
+    await register({ email, password: 'password123' });
+    const token = mailedToken(mails, '/web/login');
 
-      const stored = await asAdmin((tx) =>
-        tx.userToken.findMany({
-          where: { user: { email }, type: 'VERIFY_EMAIL' },
-          select: { token: true },
-        }),
-      );
+    const stored = await asAdmin((tx) =>
+      tx.userToken.findMany({
+        where: { user: { email }, type: 'VERIFY_EMAIL' },
+        select: { token: true },
+      }),
+    );
 
-      expect(token).toEqual(expect.any(String));
-      expect(stored).toHaveLength(1);
-      expect(stored[0]!.token).not.toBe(token);
-    },
-  );
+    expect(token).toEqual(expect.any(String));
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.token).not.toBe(token);
+  });
 
-  itWithMail('moves the favorites of the guest to the new account', async () => {
+  // nobody proved the email yet: a mistyped address would take the chats of the guest (the
+  // address, the phone, the order) away from the browser into the account of somebody else. The
+  // data of the guest moves with the verification of the email or with a login
+  it('leaves the favorites of the guest with the guest', async () => {
     const product = await createProduct();
     products.push(product);
     const added = await app.inject({
@@ -136,33 +139,97 @@ describe('POST /api/auth/register', () => {
       url: `/api/favorites/${product.id}`,
       headers: withCsrf(csrf),
     });
-    const guest = cookieHeader({ guestId: cookieJar(added).guestId });
+    const guestId = cookieJar(added).guestId!;
     watchMail();
-    const email = newEmail();
 
-    const res = await register({ email, password: 'password123' }, guest);
+    const res = await register(
+      { email: newEmail(), password: 'password123' },
+      cookieHeader({ guestId }),
+    );
 
     expect(res.statusCode).toBe(201);
     const favorites = await asAdmin((tx) =>
-      tx.favorite.findMany({ where: { productId: product.id }, select: { userId: true } }),
+      tx.favorite.findMany({
+        where: { productId: product.id },
+        select: { userId: true, guestId: true },
+      }),
     );
-    expect(favorites).toEqual([{ userId: res.json().id }]);
+    expect(favorites).toEqual([{ userId: null, guestId }]);
   });
 
-  itWithMail('answers 502 VERIFY_EMAIL_SEND_FAILED when SendGrid refuses the mail', async () => {
-    const realFetch = globalThis.fetch;
-    jest
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async (input, init) =>
-        String(input).startsWith('https://api.sendgrid.com/')
-          ? new Response('{"errors":[{"message":"down"}]}', { status: 503 })
-          : realFetch(input, init),
-      );
+  // somebody registered the address with a password of their own and never verified it: the owner
+  // registering now sets the password, and the link goes to the owner
+  it('takes a new password for an account nobody verified yet and mails a new link', async () => {
+    const taken = await createUser({
+      email: newEmail(),
+      isVerified: false,
+      password: 'not-mine-1',
+    });
+    const mails = watchMail();
+
+    const res = await register({ email: taken.email, password: 'my-password-1', name: 'Ann' });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      id: taken.id,
+      email: taken.email,
+      isVerified: false,
+      name: 'Ann',
+    });
+    expect(mails).toHaveLength(1);
+
+    const verify = await app.inject({
+      method: 'GET',
+      url: `/api/auth/verify?token=${encodeURIComponent(mailedToken(mails, '/web/login'))}`,
+    });
+    expect(verify.statusCode).toBe(200);
+    expect(
+      (await logIn(app, csrf, { email: taken.email, password: 'my-password-1' })).statusCode,
+    ).toBe(200);
+    expect(
+      (await logIn(app, csrf, { email: taken.email, password: 'not-mine-1' })).statusCode,
+    ).toBe(401);
+  });
+
+  it('closes the links mailed for the account before', async () => {
+    const taken = await createUser({ email: newEmail(), isVerified: false });
+    const old = await createVerifyToken(taken.id);
+    watchMail();
+
+    await register({ email: taken.email, password: 'my-password-2' });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/auth/verify?token=${encodeURIComponent(old)}`,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VERIFY_TOKEN_INVALID_OR_EXPIRED' });
+  });
+
+  it('still refuses an unverified account of a provider', async () => {
+    const taken = await createUser({
+      email: newEmail(),
+      isVerified: false,
+      authProvider: 'GITHUB',
+      providerSub: `github-${Date.now()}`,
+    });
+
+    const res = await register({ email: taken.email, password: 'my-password-3' });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ errorCode: 'EMAIL_ALREADY_IN_USE' });
+  });
+
+  it('answers 502 VERIFY_EMAIL_SEND_FAILED when SendGrid refuses the mail', async () => {
+    refuseMail();
 
     const res = await register({ email: newEmail(), password: 'password123' });
 
     expect(res.statusCode).toBe(502);
     expect(res.json()).toMatchObject({ errorCode: 'VERIFY_EMAIL_SEND_FAILED' });
+    expect(takeLogs({ msg: 'request failed', errorCode: 'VERIFY_EMAIL_SEND_FAILED' })).toHaveLength(
+      1,
+    );
   });
 
   it('refuses an email that is already registered, in any case', async () => {

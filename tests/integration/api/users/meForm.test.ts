@@ -7,6 +7,7 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { imageField, pngImage } from '../../../helpers/cloudinary.js';
 import { closeSessions, createUser } from '../../../helpers/factories.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
@@ -40,6 +41,12 @@ const patchForm = (cookie: string, parts: FormPart[]) => {
 
 const fields = (values: Record<string, string>): FormPart[] =>
   Object.entries(values).map(([name, value]) => ({ name, value }));
+
+// an avatar the row points to; the file is not at Cloudinary, the tests here look at the row
+const ownAvatar = () => ({
+  avatarUrl: 'https://res.cloudinary.com/demo/image/upload/v1/test/users/form/avatar.png',
+  publicId: 'test/users/form/avatar',
+});
 
 const textFile = (data: string | Buffer): FormPart => ({
   name: 'avatar',
@@ -174,6 +181,26 @@ describe('PATCH /api/users/me with a form', () => {
   });
 
   describe('avatar', () => {
+    // a browser sends a file input left empty as a part without a file name and without bytes:
+    // no file was chosen, the name of the same form has to be saved
+    it('takes a file field left empty for no file and saves the other fields', async () => {
+      const user = await newUser({ name: 'Anna', ...ownAvatar() });
+
+      const res = await patchForm(accessCookie(user), [
+        ...fields({ name: 'Hanna' }),
+        {
+          name: 'avatar',
+          filename: '',
+          contentType: 'application/octet-stream',
+          data: Buffer.alloc(0),
+        },
+      ]);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ name: 'Hanna', avatarIsDefault: false });
+      expect(await rowOf(user.id)).toMatchObject({ name: 'Hanna', ...ownAvatar() });
+    });
+
     it('refuses an empty file and changes nothing', async () => {
       const user = await newUser({ name: 'Anna' });
 
@@ -237,8 +264,48 @@ describe('PATCH /api/users/me with a form', () => {
       ]);
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ name: 'Anna' });
-      expect(res.json()).not.toHaveProperty('avatarUrls');
+      // no picture was taken: the avatar is the letter of the name
+      expect(res.json()).toMatchObject({ name: 'Anna', avatarIsDefault: true });
+    });
+
+    // an empty value removes a field of the profile, the avatar too
+    it('removes the picture with an empty avatar field', async () => {
+      const user = await newUser({ name: 'Anna', ...ownAvatar() });
+
+      const res = await patchForm(accessCookie(user), fields({ name: 'Hanna', avatar: '' }));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ name: 'Hanna', avatarIsDefault: true });
+      expect(await rowOf(user.id)).toMatchObject({ avatarUrl: null, publicId: null });
+    });
+
+    it('refuses an avatar field of text that is not empty and changes nothing', async () => {
+      const user = await newUser({ name: 'Anna', ...ownAvatar() });
+
+      const res = await patchForm(
+        accessCookie(user),
+        fields({ name: 'Hanna', avatar: 'https://images.example.com/me.png' }),
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'AVATAR_NOT_A_FILE' });
+      expect(await rowOf(user.id)).toMatchObject({
+        name: 'Anna',
+        avatarUrl: ownAvatar().avatarUrl,
+      });
+    });
+
+    it('refuses an empty avatar field next to an avatar file', async () => {
+      const user = await newUser({ name: 'Anna', ...ownAvatar() });
+
+      const res = await patchForm(accessCookie(user), [
+        ...fields({ avatar: '' }),
+        imageField('avatar', pngImage(20, 20)),
+      ]);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'AVATAR_MULTIPLE' });
+      expect(await rowOf(user.id)).toMatchObject({ avatarUrl: ownAvatar().avatarUrl });
     });
   });
 });

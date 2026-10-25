@@ -14,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       parts:
-        description: 'test parts, for example: unit api:orders (empty runs all)'
+        description: 'test parts and real services, for example: unit api:users service:sendgrid service:cloudinary service:stripe service:openai (empty runs all parts, services from their mocks)'
         required: false
         type: string
         default: ''
@@ -33,9 +33,9 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # the cloudinary tests upload to the real account (its test/ folder); the repo is public and
-      # so are its logs, github hides only the whole secret: its parts are masked before anything
-      # runs. Without the secret the cloudinary tests are skipped
+      # with service:cloudinary in parts the cloudinary tests upload to the real account (its test/
+      # folder); the repo is public and so are its logs, github hides only the whole secret: its
+      # parts are masked before anything runs. Without the secret service:cloudinary stops the run
       - name: Mask Cloudinary key parts
         env:
           CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
@@ -62,6 +62,31 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # the tests only transpile (isolatedModules), a type error would reach main and break only
+      # the build on railway
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      # node runs the built server (npm start): an alias import the build left would not resolve.
+      # Under tsx such an import loaded a second copy of the module from src/
+      - name: Check the build has no alias imports
+        run: |
+          if grep -rElq "(from|import\()\s*['\"](@(services|middlewares|config|utils|routes|schemas|helpers|redis|db)/|types/)" dist; then
+            grep -rEl "(from|import\()\s*['\"](@(services|middlewares|config|utils|routes|schemas|helpers|redis|db)/|types/)" dist
+            echo "the build left alias imports in dist"
+            exit 1
+          fi
+
+      # the packages the server runs with; development tools stay out (npm audit --omit=dev)
+      - name: Audit server dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       # the files jest transformed in an earlier run (jest.config.js, cacheDirectory); npm ci
       # empties node_modules, so it comes back after the install. A file that changed is
       # transformed again, jest checks the content of each one
@@ -73,14 +98,23 @@ jobs:
           restore-keys: |
             jest-${{ runner.os }}-${{ hashFiles('package-lock.json', 'jest.config.js', 'tsconfig*.json') }}-
 
-      # no terminal here, so the launcher runs every part unless parts are given. The payment tests
-      # take the key of the Stripe test sandbox, one value that github masks whole; without the
-      # secret they are skipped
+      # no terminal here, so the launcher runs every part unless parts are given, and the services
+      # of tests/run.mjs (sendgrid, cloudinary, stripe, openai) answer from their mocks unless parts
+      # name them (service:sendgrid, service:cloudinary, service:stripe, service:openai).
+      # Real Stripe takes the key of its test sandbox, real OpenAI its test key, one value each that
+      # github masks whole; a real service without its secret stops the run. Real SendGrid takes its
+      # test key and the addresses of the authenticated domain, each a secret github masks whole;
+      # every mail goes in sandbox mode, none is delivered
       - name: Run tests
         env:
           PARTS: ${{ inputs.parts }}
           CLOUDINARY_URL: ${{ secrets.CLOUDINARY_URL }}
           STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+          OPENAI_API_TEST_KEY: ${{ secrets.OPENAI_API_TEST_KEY }}
+          SENDGRID_API_TEST_KEY: ${{ secrets.SENDGRID_API_TEST_KEY }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
+          EMAIL_REPLY_TO: ${{ secrets.EMAIL_REPLY_TO }}
         run: npm test -- $PARTS
 
       - name: Upload coverage report

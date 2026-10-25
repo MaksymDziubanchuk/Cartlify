@@ -86,7 +86,7 @@ export function shouldClearRefreshCookieOnRefreshError(err: unknown): boolean {
 
     // detect refresh invalid errors
     const isAuthStatus = status === 400 || status === 401 || status === 403;
-    const looksLikeRefreshInvalid = code.startsWith('refresh:') || code.includes('REFRESH');
+    const looksLikeRefreshInvalid = code.includes('REFRESH');
 
     // clear cookie on match
     if (isAuthStatus && looksLikeRefreshInvalid) return true;

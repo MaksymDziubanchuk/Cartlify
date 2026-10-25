@@ -5,13 +5,26 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import rateLimit from '@fastify/rate-limit';
 
-import { AppError, BadRequestError, InternalError, NotFoundError } from '@utils/errors.js';
+import {
+  AppError,
+  BadRequestError,
+  InternalError,
+  NotFoundError,
+  ResourceBusyError,
+} from '@utils/errors.js';
+
+// what tx() gives a busy error after its retries: for the log only
+const BUSY_LOG_DETAILS = { attempts: 4, maxRetries: 3, pgCode: '40P01', prismaCode: 'P2010' };
 
 // a bare fastify instance with one route per kind of error, nothing else is loaded
 const app = fastify({ logger: false });
 
 beforeAll(async () => {
   errorNormalizer(app);
+
+  app.get('/busy', async () => {
+    throw new ResourceBusyError(BUSY_LOG_DETAILS);
+  });
 
   app.get('/bad', async () => {
     throw new BadRequestError('PRICE_INVALID', { field: 'price' });
@@ -87,6 +100,17 @@ describe('errorNormalizer', () => {
       message: 'Bad Request',
       details: { field: 'price' },
     });
+  });
+
+  // the client only learns to try again; which database code and how many attempts is for us
+  it('tells a busy client to try again without the codes of the database', async () => {
+    const res = await app.inject({ method: 'GET', url: '/busy' });
+    const body = res.json();
+
+    expect(res.statusCode).toBe(409);
+    expect(body).toMatchObject({ code: 409, errorCode: 'RESOURCE_BUSY', message: 'Conflict' });
+    expect(body.details).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain('40P01');
   });
 
   it('adds the request id so a client error can be found in the logs', async () => {
@@ -325,6 +349,9 @@ describe('errorNormalizer logging', () => {
     logged.get('/missing', async () => {
       throw new NotFoundError('PRODUCT_NOT_FOUND');
     });
+    logged.get('/busy', async () => {
+      throw new ResourceBusyError(BUSY_LOG_DETAILS);
+    });
     logged.get('/internal', async () => {
       throw new InternalError({ reason: 'X' }, new Error('db down'));
     });
@@ -357,6 +384,18 @@ describe('errorNormalizer logging', () => {
     });
     expect(record.err).toBeUndefined();
     expect(JSON.stringify(record)).not.toContain('stack');
+  });
+
+  it('logs the details a client error keeps from the client', async () => {
+    await logged.inject({ method: 'GET', url: '/busy' });
+
+    expect(lastRecord()).toMatchObject({
+      level: 30,
+      msg: 'request rejected',
+      statusCode: 409,
+      errorCode: 'RESOURCE_BUSY',
+      details: BUSY_LOG_DETAILS,
+    });
   });
 
   it('hides tokens in the query, keeps the other parameters', async () => {

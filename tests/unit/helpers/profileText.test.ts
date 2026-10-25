@@ -87,3 +87,15 @@ describe('PHONE_PATTERN', () => {
     expect(optional.test('+38 050')).toBe(false);
   });
 });
+
+describe('cutProfileText at the limit', () => {
+  it('gives back no text as none', () => {
+    expect(cutProfileText(null)).toBeNull();
+  });
+
+  it('keeps a text of exactly the longest length as it is', () => {
+    const text = 'n'.repeat(PROFILE_TEXT_MAX_LENGTH);
+
+    expect(cutProfileText(text)).toBe(text);
+  });
+});

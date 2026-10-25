@@ -28,6 +28,7 @@ const APP_FUNCTIONS = [
   'cartlify.auth_resend_verify(text, text, timestamp with time zone)',
   'cartlify.auth_verify_email(text)',
   'cartlify.users_get_public_profile(integer)',
+  'cartlify.remove_user_avatar(integer)',
   'cartlify.migrate_guest_data_to_user(uuid, integer)',
   'cartlify.confirm_order(integer, interval)',
   'cartlify.unconfirm_order(integer)',
@@ -36,9 +37,19 @@ const APP_FUNCTIONS = [
   'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
   'cartlify.expire_order_reservation(integer)',
   'cartlify.anonymize_login_logs(integer)',
+  // maintenance the periodic tasks run as the system
+  'cartlify.cleanup_user_tokens(integer)',
+  'cartlify.cleanup_login_log_addresses(integer)',
+  'cartlify.cleanup_guest_data(integer)',
+  'cartlify.cleanup_deleted_accounts_chats(integer)',
   'cartlify.refresh_order_prices(integer)',
+  'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)',
-  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric)',
+  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
+  'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
+  'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
+  'cartlify.shop_today()',
+  'cartlify.product_expired_units(integer)',
 ];
 
 // the context readers rls policies call and the search helpers, all readonly may run
@@ -201,6 +212,19 @@ describe.each([APP, READONLY])('role %s', (role) => {
 });
 
 describe(`role ${APP}`, () => {
+  // the timeout of a prisma transaction only stops the waiting of the app, the statement went on
+  // in the database; a statement or an open transaction left behind ends on its own
+  it('stops a statement after 15 s and a transaction left idle after 30 s', async () => {
+    const settings = await inRolledBackTx((db) =>
+      db.rows<{ statement: string; idle: string }>(
+        `select current_setting('statement_timeout') as statement,
+                current_setting('idle_in_transaction_session_timeout') as idle`,
+      ),
+    );
+
+    expect(settings).toEqual([{ statement: '15s', idle: '30s' }]);
+  });
+
   it('runs only the functions db/schema/01 opens for it, besides the extension functions', async () => {
     const { expected, actual } = await inRolledBackTx(async (db) => ({
       expected: await listed(db, APP_FUNCTIONS),
@@ -228,8 +252,9 @@ describe(`role ${APP}`, () => {
   });
 
   it.each([
-    ['add_product_stock', 'select cartlify.add_product_stock(1, 1)'],
-    ['consume_product_stock', 'select cartlify.consume_product_stock(1, 1)'],
+    ['take_from_batches', 'select * from cartlify.take_from_batches(1, 1, true)'],
+    ['return_order_stock', 'select cartlify.return_order_stock(1)'],
+    ['consume_product_stock', 'select cartlify.consume_product_stock(1, 1, 1)'],
     ['reserve_product_stock', 'select cartlify.reserve_product_stock(1, 1)'],
     ['release_product_stock', 'select cartlify.release_product_stock(1, 1)'],
     ['recalc_order_total', 'select cartlify.recalc_order_total(1)'],

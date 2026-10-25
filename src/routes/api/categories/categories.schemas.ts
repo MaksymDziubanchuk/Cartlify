@@ -68,7 +68,8 @@ const getCategoriesSchema = {
     },
 
     400: {
-      description: 'Invalid category query parameters.',
+      description:
+        'Invalid category query parameters: a cursor this route did not give (CURSOR_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -86,11 +87,59 @@ const getCategoriesSchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for the whole tree of the categories
+const getCategoryTreeSchema = {
+  operationId: 'getCategoryTree',
+  summary: 'Get the category tree',
+  description:
+    'The whole tree of the categories for the menu of the catalog: each category with the ones ' +
+    'right below it, by name, and the products of the catalog of its whole branch ' +
+    '(`productCount`, the products taken out of the catalog are not counted). ' +
+    '`GET /api/products?categoryIds=<id>` lists the products of a branch.',
+
+  response: {
+    200: {
+      description: 'The tree was returned, the categories at the top in items.',
+      $ref: 'categoryTreeResponseSchema#',
+      examples: [
+        {
+          items: [
+            {
+              id: 1,
+              name: 'Phones',
+              slug: 'phones',
+              productCount: 12,
+              children: [
+                { id: 2, name: 'Smartphones', slug: 'smartphones', productCount: 12, children: [] },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    401: {
+      description: 'Authentication or guest session is required to read categories.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not allowed to read categories.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while loading the tree.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for admin category creation
 const postCategorySchema = {
   operationId: 'createCategory',
   summary: 'Create category',
-  description: 'Creates a new product category. This operation is restricted to privileged users.',
+  description:
+    'Creates a new product category. This operation is restricted to privileged users. ' +
+    'The name and the slug are required; the category takes no children, they come to it one ' +
+    'PATCH each.',
 
   body: {
     $ref: 'categoriesCreateBodySchema#',
@@ -105,7 +154,10 @@ const postCategorySchema = {
     },
 
     400: {
-      description: 'Invalid category creation request.',
+      description:
+        'Invalid category creation request: no name or slug (VALIDATION_ERROR), an empty name ' +
+        '(CATEGORY_NAME_INVALID), a slug of no latin letter or digit (CATEGORY_SLUG_INVALID), a ' +
+        'parentId that is not a whole number from 1 to 2147483647 (VALIDATION_ERROR).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -117,7 +169,9 @@ const postCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Category conflicts with an existing category.',
+      description:
+        'Category conflicts with an existing category: its slug is taken (CATEGORY_SLUG_TAKEN), or the ' +
+        'parent named is the new category itself (CATEGORY_PARENT_CYCLE).',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -136,7 +190,10 @@ const patchCategorySchema = {
   operationId: 'updateCategory',
   summary: 'Update category',
   description:
-    'Updates category data by category id. This operation is restricted to privileged users.',
+    'Updates category data by category id. This operation is restricted to privileged users. ' +
+    'A new parentId moves the category with its whole branch, null moves it to the top; the tree ' +
+    'goes from the top down, so a category never goes inside its own branch (409 ' +
+    'CATEGORY_PARENT_CYCLE), and the children of a new parent category come to it one PATCH each.',
 
   params: {
     $ref: 'categoriesUpdateParamsSchema#',
@@ -164,7 +221,8 @@ const patchCategorySchema = {
     },
 
     400: {
-      description: 'Invalid category update request.',
+      description:
+        'Invalid category update request: the category made a parent of itself (CATEGORY_PARENT_ID_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -180,7 +238,9 @@ const patchCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Category update conflicts with an existing category.',
+      description:
+        'The slug is taken (CATEGORY_SLUG_TAKEN), or the new parent is inside the branch of the ' +
+        'category, under one of its subcategories (CATEGORY_PARENT_CYCLE).',
       $ref: 'errorResponseSchema#',
     },
     422: {
@@ -199,7 +259,9 @@ const deleteCategorySchema = {
   operationId: 'deleteCategory',
   summary: 'Delete category',
   description:
-    'Deletes a category by category id. This operation is restricted to privileged users.',
+    'Deletes a category by category id. This operation is restricted to privileged users. ' +
+    'Its direct children go to its parent, or to the top for a top category, with their ' +
+    'branches; each move goes to the journal of the admins. A category with products stays.',
 
   params: {
     $ref: 'categoriesDeleteParamsSchema#',
@@ -229,6 +291,10 @@ const deleteCategorySchema = {
       description: 'Category was not found.',
       $ref: 'errorResponseSchema#',
     },
+    409: {
+      description: 'The category has products (CATEGORY_HAS_PRODUCTS), it stays.',
+      $ref: 'errorResponseSchema#',
+    },
     500: {
       description: 'Unexpected server error while deleting category.',
       $ref: 'errorResponseSchema#',
@@ -240,6 +306,7 @@ const deleteCategorySchema = {
 const taggedCategoriesSchemas = withOpenApiTag(
   {
     getCategoriesSchema,
+    getCategoryTreeSchema,
     postCategorySchema,
     patchCategorySchema,
     deleteCategorySchema,
@@ -251,7 +318,7 @@ const taggedCategoriesSchemas = withOpenApiTag(
 const categoriesSchemasWithReadSecurity = withOpenApiSecurityFor(
   taggedCategoriesSchemas,
   openApiSecurity.userOrGuestCookie,
-  ['getCategoriesSchema'],
+  ['getCategoriesSchema', 'getCategoryTreeSchema'],
 );
 
 // Add access token security to category mutations

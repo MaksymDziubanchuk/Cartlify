@@ -27,6 +27,16 @@ declare global {
 
       BCRYPT_ROUNDS: string;
 
+      AVATAR_REMOVALS_LIMIT?: string;
+
+      RATE_LIMIT_MAX?: string;
+      REQUEST_LIMITS_SCALE?: string;
+      TRUST_PROXY_HOPS?: string;
+      LOG_REQUEST_ADDRESSES?: string;
+
+      SHOP_TIME_ZONE?: string;
+      SHOP_NAME?: string;
+
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
       CLOUDINARY_API_SECRET: string;
@@ -36,6 +46,8 @@ declare global {
       OPENAI_MODEL?: string;
       OPENAI_TIMEOUT_MS?: string;
       OPENAI_MAX_OUTPUT_TOKENS?: string;
+      CHAT_BOT_GUEST_DAILY_TURNS?: string;
+      CHAT_BOT_USER_DAILY_TURNS?: string;
 
       SENDGRID_API_KEY: string;
 
@@ -93,9 +105,104 @@ function positiveInt(name: string, fallback: number): number {
   return value;
 }
 
+const NODE_ENV_MODES = ['development', 'test', 'production'] as const;
+
+// fail fast on a mode the app does not know: any other value used to switch on the development
+// behaviour without a word (cookies without Secure, stacks in the answers of a 500); unset is
+// development, as npm run dev starts it
+function nodeEnv(): (typeof NODE_ENV_MODES)[number] {
+  const raw = process.env.NODE_ENV?.trim();
+  if (!raw) return 'development';
+
+  const mode = NODE_ENV_MODES.find((known) => known === raw);
+  if (!mode) {
+    throw new Error('Invalid env variable: NODE_ENV must be development, test or production');
+  }
+
+  return mode;
+}
+
+const NODE_ENV = nodeEnv();
+
+// currencies stripe counts without cents or with three digits after the point
+// (stripe.com/docs/currencies); the prices of the catalog and every amount of the app are in cents
+const CURRENCIES_WITHOUT_CENTS = new Set([
+  'bif',
+  'clp',
+  'djf',
+  'gnf',
+  'isk',
+  'jpy',
+  'kmf',
+  'krw',
+  'mga',
+  'pyg',
+  'rwf',
+  'ugx',
+  'vnd',
+  'vuv',
+  'xaf',
+  'xof',
+  'xpf',
+  'bhd',
+  'jod',
+  'kwd',
+  'omr',
+  'tnd',
+]);
+
+// fail fast on a currency of the shop that is not a code with cents: such a currency would be
+// charged a hundred times off; read in lower case, as stripe names it
+function currencyWithCents(name: string, fallback: string): string {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+
+  if (!/^[a-z]{3}$/.test(raw) || CURRENCIES_WITHOUT_CENTS.has(raw)) {
+    throw new Error(
+      `Invalid env variable: ${name} must be a three letter code of a currency with cents`,
+    );
+  }
+
+  return raw;
+}
+
+// fail fast on a count that is not a whole number from 0; unset gives the default
+function wholeNumber(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const value = /^d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`Invalid env variable: ${name} must be a whole number from 0`);
+  }
+
+  return value;
+}
+
+// fail fast on a time zone that is not a name of the iana list, as the database knows them too
+// (Europe/Madrid, UTC); an offset like +03:00 or UTC+3 reads the other way round in postgres
+function timeZone(name: string, fallback: string): string {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  let known = /^(UTC|[A-Z][A-Za-z]+(\/[A-Za-z0-9_+-]+)+)$/.test(raw);
+  if (known) {
+    try {
+      new Intl.DateTimeFormat('en', { timeZone: raw });
+    } catch {
+      known = false;
+    }
+  }
+  if (!known) {
+    throw new Error(`Invalid env variable: ${name} must be a time zone like Europe/Madrid`);
+  }
+
+  return raw;
+}
+
 export default {
   // runtime mode and server bind
-  NODE_ENV: process.env.NODE_ENV || 'development',
+  NODE_ENV,
   PORT: positiveInt('PORT', 3000),
 
   // host bind and db url
@@ -108,23 +215,49 @@ export default {
   // access token config
   JWT_ACCESS_SECRET: required('JWT_ACCESS_SECRET'),
 
-  // access ttl presets
-  JWT_ACCESS_TTL_SHORT: process.env.JWT_ACCESS_TTL_SHORT || '1200',
-  JWT_ACCESS_TTL_LONG: process.env.JWT_ACCESS_TTL_LONG || '3600',
+  // access ttl presets, seconds
+  JWT_ACCESS_TTL_SHORT: positiveInt('JWT_ACCESS_TTL_SHORT', 1200),
+  JWT_ACCESS_TTL_LONG: positiveInt('JWT_ACCESS_TTL_LONG', 3600),
 
-  // refresh token config
+  // refresh token config, seconds
   JWT_REFRESH_SECRET: required('JWT_REFRESH_SECRET'),
-  JWT_REFRESH_TTL_SHORT: process.env.JWT_REFRESH_TTL_SHORT || '86400',
-  JWT_REFRESH_TTL_LONG: process.env.JWT_REFRESH_TTL_LONG || '2592000',
+  JWT_REFRESH_TTL_SHORT: positiveInt('JWT_REFRESH_TTL_SHORT', 86400),
+  JWT_REFRESH_TTL_LONG: positiveInt('JWT_REFRESH_TTL_LONG', 2592000),
 
-  // guest cookie lifetime
-  GUEST_ID_TTL: process.env.GUEST_ID_TTL || '157680000',
+  // guest cookie lifetime, seconds
+  GUEST_ID_TTL: positiveInt('GUEST_ID_TTL', 157680000),
 
   // password reset ttl
   RESET_TTL_MS: positiveInt('RESET_TTL_MS', 3600000),
 
   // bcrypt cost factor
   BCRYPT_ROUNDS: process.env.BCRYPT_ROUNDS ? Number(process.env.BCRYPT_ROUNDS) : 12,
+
+  // the avatar removals by a moderator the rules allow an account; past them the page tells the
+  // admin to ask root about the account
+  AVATAR_REMOVALS_LIMIT: positiveInt('AVATAR_REMOVALS_LIMIT', 5),
+
+  // the requests a minute one address may make (@fastify/rate-limit)
+  RATE_LIMIT_MAX: positiveInt('RATE_LIMIT_MAX', 100),
+
+  // multiplies the limits of the login, the registration, the mails and the payment page
+  // (src/plugins/requestLimits.ts); the integration tests raise them, all their requests come
+  // from one address
+  REQUEST_LIMITS_SCALE: positiveInt('REQUEST_LIMITS_SCALE', 1),
+
+  // the proxies in front of the server whose x-forwarded-for is trusted: railway puts one, so the
+  // address of a client is the one it names (0 trusts none, the address of the connection counts)
+  TRUST_PROXY_HOPS: wholeNumber('TRUST_PROXY_HOPS', 1),
+
+  // a line for each request with the addresses the server reads from it, to see on a new host how
+  // many proxies stand in front of it; off unless true
+  LOG_REQUEST_ADDRESSES: process.env.LOG_REQUEST_ADDRESSES?.trim() === 'true',
+
+  // the days, weeks and months of the reports are the ones of the shop
+  SHOP_TIME_ZONE: timeZone('SHOP_TIME_ZONE', 'Europe/Madrid'),
+
+  // the name of the shop on a payment and in the mails, Cartlify unless given
+  SHOP_NAME: process.env.SHOP_NAME?.trim() || 'Cartlify',
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
@@ -139,6 +272,11 @@ export default {
   OPENAI_MAX_OUTPUT_TOKENS: process.env.OPENAI_MAX_OUTPUT_TOKENS
     ? Number(process.env.OPENAI_MAX_OUTPUT_TOKENS)
     : 450,
+
+  // the answers of the chat bot one guest or one user gets in 24 hours, each one a paid call of
+  // the model; past them the bot answers with a text of its own and asks the model nothing
+  CHAT_BOT_GUEST_DAILY_TURNS: positiveInt('CHAT_BOT_GUEST_DAILY_TURNS', 30),
+  CHAT_BOT_USER_DAILY_TURNS: positiveInt('CHAT_BOT_USER_DAILY_TURNS', 100),
 
   // sendgrid variables
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
@@ -170,6 +308,11 @@ export default {
 
   // stripe
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
-  STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET || '',
-  STRIPE_CURRENCY: process.env.STRIPE_CURRENCY || 'eur',
+  // without it every stripe event is refused and no order becomes paid: production does not
+  // start, elsewhere the start only warns (startupWarnings)
+  STRIPE_WEBHOOK_SECRET:
+    NODE_ENV === 'production'
+      ? required('STRIPE_WEBHOOK_SECRET')
+      : process.env.STRIPE_WEBHOOK_SECRET || '',
+  STRIPE_CURRENCY: currencyWithCents('STRIPE_CURRENCY', 'eur'),
 };

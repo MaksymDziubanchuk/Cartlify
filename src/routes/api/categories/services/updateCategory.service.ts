@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { prisma } from '@db/client.js';
+import { getPgMessage, prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -14,6 +14,7 @@ import {
 } from '@utils/errors.js';
 
 import { normalizeFindCategoryByIdInput, normalizeUpdateCategoryInput } from './helpers/index.js';
+import { assertOutsideOwnBranch } from './helpers/categoryTree.helper.js';
 
 import type { UpdateCategoryDto, UpdateCategoryResponseDto } from 'types/dto/categories.dto.js';
 
@@ -64,6 +65,9 @@ export async function updateCategory({
         select: { id: true, name: true, slug: true, description: true, parentId: true },
       });
       if (!before) throw new NotFoundError('CATEGORY_NOT_FOUND');
+
+      // the category moves with its whole branch, never inside it
+      if (parentIdNorm != null) await assertOutsideOwnBranch(tx, categoryIdRaw, parentIdNorm);
 
       // build update payload only for provided fields
       const data: Prisma.CategoryUpdateInput = {
@@ -131,6 +135,11 @@ export async function updateCategory({
       updatedAt: updated.updatedAt,
     };
   } catch (err) {
+    // the database saw a loop this request alone could not: a move at the same time
+    if (getPgMessage(err) === 'CATEGORY_PARENT_CYCLE') {
+      throw new ConflictError('CATEGORY_PARENT_CYCLE');
+    }
+
     // map unique slug conflict
     if (typeof err === 'object' && err !== null && 'code' in err && (err as any).code === 'P2002') {
       throw new ConflictError('CATEGORY_SLUG_TAKEN', { field: 'slug' });

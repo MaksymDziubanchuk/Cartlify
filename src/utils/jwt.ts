@@ -2,12 +2,7 @@ import jwt from 'jsonwebtoken';
 import type { Secret, SignOptions } from 'jsonwebtoken';
 import type { Role } from '@prisma/client';
 import env from '@config/env.js';
-import {
-  AccessTokenExpiredError,
-  InternalError,
-  UnauthorizedError,
-  isErrorNamed,
-} from '@utils/errors.js';
+import { AccessTokenExpiredError, UnauthorizedError, isErrorNamed } from '@utils/errors.js';
 
 export type AccessTokenPayload = {
   userId: number;
@@ -31,42 +26,11 @@ export type ExpiresIn = Exclude<SignOptions['expiresIn'], undefined>;
 
 type TokenType = 'access' | 'refresh';
 
-// pick ttl from env by type
-export function getTtl(rememberMe: boolean, type: TokenType): ExpiresIn | number {
-  const envKey =
-    type === 'access'
-      ? rememberMe
-        ? 'JWT_ACCESS_TTL_LONG'
-        : 'JWT_ACCESS_TTL_SHORT'
-      : rememberMe
-        ? 'JWT_REFRESH_TTL_LONG'
-        : 'JWT_REFRESH_TTL_SHORT';
+// the lifetime of a token in seconds; env.ts checks all four at the start
+export function getTtl(rememberMe: boolean, type: TokenType): number {
+  if (type === 'access') return rememberMe ? env.JWT_ACCESS_TTL_LONG : env.JWT_ACCESS_TTL_SHORT;
 
-  // read ttl string from env
-  const raw = (env as Record<string, unknown>)[envKey];
-
-  if (typeof raw !== 'string') {
-    throw new InternalError({ reason: 'JWT_TTL_ENV_MISSING', envKey });
-  }
-
-  const compact = raw.trim();
-
-  if (!compact) {
-    throw new InternalError({ reason: 'JWT_TTL_ENV_EMPTY', envKey });
-  }
-
-  // validate ttl format and range
-  if (!/^\d+$/.test(compact)) {
-    throw new InternalError({ reason: 'JWT_TTL_ENV_FORMAT_INVALID', envKey });
-  }
-
-  const seconds = Number(compact);
-
-  if (!Number.isSafeInteger(seconds) || seconds <= 0) {
-    throw new InternalError({ reason: 'JWT_TTL_ENV_VALUE_INVALID', envKey });
-  }
-
-  return seconds;
+  return rememberMe ? env.JWT_REFRESH_TTL_LONG : env.JWT_REFRESH_TTL_SHORT;
 }
 
 export function signAccessToken(payload: AccessTokenPayload, rememberMe: boolean): string {

@@ -15,6 +15,7 @@ import {
 } from '../../../helpers/factories.js';
 import {
   loseReservation,
+  payOrder,
   placeOrder,
   placeUnconfirmedOrder,
   shippingData,
@@ -52,6 +53,7 @@ type ListedOrder = {
   id: number;
   status: string;
   total: number;
+  paidAt?: string;
   items: { productId: number; unitPrice: number }[];
 };
 
@@ -178,6 +180,95 @@ describe('GET /api/orders', () => {
     const second = await list(user, `?limit=2&cursor=${first.json().nextCursor}`);
     expect(idsOf(second)).toEqual([oldest]);
     expect(second.json().nextCursor).toBeNull();
+  });
+
+  it('lists by the time of creation by default, also when an older order changed later', async () => {
+    const user = await newUser();
+    const product = await newProduct();
+    const older = await placeOrder(app, csrf, user, product, 'waiting');
+    const newer = await placeOrder(app, csrf, user, product, 'waiting');
+    // the older order changes last
+    await payOrder(older);
+
+    expect(idsOf(await list(user))).toEqual([newer, older]);
+  });
+
+  describe('the time of the payment', () => {
+    // two orders paid the other way round to how they were made, one not paid
+    async function paidTheOtherWayRound(user: TestUser) {
+      const product = await newProduct();
+      const paidLast = await placeOrder(app, csrf, user, product, 'waiting');
+      const paidFirst = await placeOrder(app, csrf, user, product, 'waiting');
+      const notPaid = await placeUnconfirmedOrder(app, csrf, user, product);
+      await payOrder(paidFirst);
+      await payOrder(paidLast);
+      return { paidFirst, paidLast, notPaid };
+    }
+
+    it('sorts the paid orders by the time of their payment and leaves out the ones not paid', async () => {
+      const user = await newUser();
+      const { paidFirst, paidLast } = await paidTheOtherWayRound(user);
+
+      const newest = await list(user, '?sortBy=paidAt');
+      const oldest = await list(user, '?sortBy=paidAt&sortDir=asc');
+
+      expect(newest.statusCode).toBe(200);
+      expect(idsOf(newest)).toEqual([paidLast, paidFirst]);
+      expect(newest.json().total).toBe(2);
+      expect(idsOf(oldest)).toEqual([paidFirst, paidLast]);
+      const [last, first] = newest.json().items as ListedOrder[];
+      expect(Date.parse(last!.paidAt!)).toBeGreaterThan(Date.parse(first!.paidAt!));
+    });
+
+    it('pages by the time of the payment with the cursor, each order once', async () => {
+      const user = await newUser();
+      const { paidFirst, paidLast } = await paidTheOtherWayRound(user);
+
+      const first = await list(user, '?sortBy=paidAt&limit=1');
+      const second = await list(user, `?sortBy=paidAt&limit=1&cursor=${first.json().nextCursor}`);
+
+      expect(idsOf(first)).toEqual([paidLast]);
+      expect(idsOf(second)).toEqual([paidFirst]);
+      expect(second.json().nextCursor).toBeNull();
+    });
+
+    it('lists the orders paid in a period, from its start and before its end', async () => {
+      const user = await newUser();
+      const { paidFirst, paidLast } = await paidTheOtherWayRound(user);
+      const byPayment = (await list(user, '?sortBy=paidAt&sortDir=asc')).json().items;
+      const [firstAt, lastAt] = byPayment.map((order: ListedOrder) => order.paidAt);
+      expect(Date.parse(lastAt)).toBeGreaterThan(Date.parse(firstAt));
+
+      const fromLast = await list(user, `?paidFrom=${lastAt}`);
+      const beforeLast = await list(user, `?paidTo=${lastAt}`);
+      const justAfterLast = new Date(Date.parse(lastAt) + 1).toISOString();
+      const both = await list(user, `?paidFrom=${firstAt}&paidTo=${justAfterLast}`);
+
+      expect(idsOf(fromLast)).toEqual([paidLast]);
+      expect(idsOf(beforeLast)).toEqual([paidFirst]);
+      expect(idsOf(both).sort()).toEqual([paidFirst, paidLast].sort());
+      expect(both.json().total).toBe(2);
+    });
+
+    it.each([
+      ['ends before it starts', '2026-10-02T00:00:00.000Z', '2026-10-01T00:00:00.000Z'],
+      ['ends where it starts', '2026-10-01T00:00:00.000Z', '2026-10-01T00:00:00.000Z'],
+    ])('refuses a period of the payment that %s', async (_case, from, to) => {
+      const res = await list(await newUser(), `?paidFrom=${from}&paidTo=${to}`);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'PAID_PERIOD_INVALID' });
+    });
+
+    it.each(['paidFrom=yesterday', 'paidTo=2026-13-01'])(
+      'refuses %s as the time of the payment',
+      async (query) => {
+        const res = await list(await newUser(), `?${query}`);
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+      },
+    );
   });
 
   it('sorts by the total when asked', async () => {

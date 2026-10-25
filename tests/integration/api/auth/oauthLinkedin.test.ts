@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import { getMe, sessionCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createUser, uniqueEmail, uniqueTag } from '../../../helpers/factories.js';
@@ -245,5 +246,23 @@ describe('GET /api/auth/linkedin/callback', () => {
     const res = await callback(app, 'linkedin', { error: 'server_error' });
 
     expectRefused(res, 'OAUTH_CALLBACK_ERROR');
+  });
+
+  // LinkedIn out of reach, or silent for 5 seconds: the page says to try again, not that it failed
+  it('sends the browser back with OAUTH_PROVIDER_UNAVAILABLE when LinkedIn cannot be reached', async () => {
+    jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
+    const { guestId, state } = await startLogin(app, 'linkedin');
+
+    const res = await callback(
+      app,
+      'linkedin',
+      { code: 'any-code', state },
+      cookieHeader({ guestId }),
+    );
+
+    expectRefused(res, 'OAUTH_PROVIDER_UNAVAILABLE');
+    expect(takeLogs({ msg: 'oauth provider unavailable' })).toEqual([
+      expect.objectContaining({ errorCode: 'OAUTH_PROVIDER_UNAVAILABLE' }),
+    ]);
   });
 });

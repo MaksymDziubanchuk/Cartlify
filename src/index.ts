@@ -2,6 +2,9 @@ import { app } from './app.js';
 import env from '@config/env.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
+import { ensureAvatarBase } from '@utils/avatar.util.js';
+import { startupWarnings } from '@config/startupWarnings.js';
+import { createShutdown } from '@helpers/shutdown.js';
 
 // pick protocol for log url
 const protocol = env.NODE_ENV === 'production' ? 'https' : 'http';
@@ -9,8 +12,14 @@ const protocol = env.NODE_ENV === 'production' ? 'https' : 'http';
 // how long startup waits for redis before continuing without it
 const REDIS_STARTUP_WAIT_MS = 5000;
 
+// how long the shutdown may take before the process exits anyway
+const SHUTDOWN_DEADLINE_MS = 10_000;
+
 // initialize external dependencies and start background workers before app listen
 async function bootstrap() {
+  // settings that switch a feature off; production does not start with them at all
+  for (const warning of startupWarnings(env)) app.log.warn(warning);
+
   // wait for redis only for a limited time, the client keeps reconnecting in the background
   const redisReady = await Promise.race([
     connectRedis(app.log).then(
@@ -32,6 +41,10 @@ async function bootstrap() {
   startOrderTimeoutWorker(app.log);
   app.log.info('order timeout worker started');
 
+  // the plain picture the drawn avatars go on; the start does not wait for cloudinary, a failure
+  // goes to the log and the next start tries again
+  void ensureAvatarBase(app.log);
+
   // start http server
   await app.listen({ port: env.PORT, host: env.HOST });
 
@@ -46,31 +59,26 @@ bootstrap().catch((error: unknown) => {
 });
 
 // handle shutdown signals
-['SIGINT', 'SIGTERM'].forEach((sig) => {
-  process.on(sig, async () => {
-    // close server gracefully
-    try {
-      app.log.info(`received ${sig}, shutting down...`);
-
-      // stop background jobs first so they do not start new work during shutdown
-      stopOrderTimeoutWorker();
-
-      // stop accepting requests and wait for active ones to finish
+const shutdown = createShutdown({
+  steps: [
+    // stop background jobs first so they do not start new work during shutdown
+    () => stopOrderTimeoutWorker(),
+    // stop accepting requests and wait for active ones to finish
+    async () => {
       await app.close();
+    },
+    // close redis after the app and workers are already stopped
+    () => closeRedis(),
+    // flush logs before exit
+    () => {
+      if (typeof (app.log as any).flush === 'function') (app.log as any).flush();
+    },
+  ],
+  deadlineMs: SHUTDOWN_DEADLINE_MS,
+  log: app.log,
+  exit: (code) => process.exit(code),
+});
 
-      // close redis after the app and workers are already stopped
-      await closeRedis();
-
-      // flush logs before exit
-      if (typeof (app.log as any).flush === 'function') {
-        (app.log as any).flush();
-      }
-
-      process.exit(0);
-      // exit with failure on error
-    } catch (err) {
-      app.log.error(err);
-      process.exit(1);
-    }
-  });
+['SIGINT', 'SIGTERM'].forEach((sig) => {
+  process.on(sig, () => void shutdown(sig));
 });

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import {
   ConflictError,
   ForbiddenError,
@@ -10,7 +11,7 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse, orderResponseSelect } from './helpers/index.js';
+import { mapOrderRowToResponse, expiredOfOrders, orderResponseSelect } from './helpers/index.js';
 import {
   sendOrderStatusEmail,
   type OrderStatusMailLogger,
@@ -29,7 +30,9 @@ const ALLOWED_FROM: Record<ShippingStatus, OrderStatus[]> = {
 const isShippingStatus = (status: OrderStatus): status is ShippingStatus =>
   Object.hasOwn(ALLOWED_FROM, status);
 
-// a shipped or delivered order mails the buyer after the commit, unless the account is deleted
+// a shipped or delivered order mails the buyer after the commit, unless the account is deleted.
+// The step goes to the admin log in the name of the admin; a second request of the same step (a
+// double click) finds the order moved on and is 409 with no second mail
 export async function updateOrderStatus(
   { actorId, actorRole, orderId, status }: UpdateOrderStatusDto,
   log: OrderStatusMailLogger,
@@ -66,20 +69,25 @@ export async function updateOrderStatus(
           });
         }
 
-        // rls holds the same rule: an order changed by another request meanwhile is hidden from
-        // the update, it was there a moment ago, so it is a conflict too
-        try {
-          await db.order.update({
-            where: { id: orderIdRaw },
-            data: { status },
-            select: { id: true },
-          });
-        } catch (err) {
-          if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2025') {
-            throw new ConflictError('ORDER_STATUS_CHANGED', { orderId: orderIdRaw });
-          }
-          throw err;
+        // the step only from the status it was read in: a request that read the order before
+        // another one moved it changes nothing (the update waits for the row, then finds the new
+        // status); rls holds the same rule
+        const moved = await db.order.updateMany({
+          where: { id: orderIdRaw, status: current.status },
+          data: { status },
+        });
+        if (moved.count !== 1) {
+          throw new ConflictError('ORDER_STATUS_CHANGED', { orderId: orderIdRaw });
         }
+
+        await writeAdminAuditLog(db, {
+          actorId,
+          actorRole,
+          entityType: 'order',
+          entityId: orderIdRaw,
+          action: 'ORDER_STATUS_CHANGE',
+          changes: [{ field: 'status', old: current.status, new: status }],
+        });
 
         const order = await db.order.findUnique({
           where: { id: orderIdRaw },
@@ -88,7 +96,7 @@ export async function updateOrderStatus(
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_STATUS_UPDATE' });
 
-        return mapOrderRowToResponse(order);
+        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
@@ -107,7 +115,7 @@ export async function updateOrderStatus(
     if (isAppError(err)) throw err;
 
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     throw new InternalError({ reason: 'ORDERS_UPDATE_STATUS_UNEXPECTED' }, err);

@@ -28,6 +28,7 @@ const order = (
   shippingAddress: string | null,
   createdDay: number,
   updatedDay: number,
+  paidDay: number | null,
 ) => ({
   id,
   userId,
@@ -36,24 +37,26 @@ const order = (
   shippingAddress,
   createdAt: at(createdDay),
   updatedAt: at(updatedDay),
+  paidAt: paidDay === null ? null : at(paidDay),
 });
 
-// ties on every sort field, so the id has to break them; the carts (pending) are never listed
+// ties on every sort field, so the id has to break them; the carts (pending) are never listed,
+// the orders that are not paid have no time of payment
 const orders = [
-  order(1, 3, 'paid', '10.00', 'Kyiv', 1, 1),
-  order(2, 3, 'unconfirmed', '25.50', null, 1, 2),
-  order(3, 4, 'waiting', '10.00', 'Lviv', 2, 2),
-  order(4, 3, 'shipped', '99.99', 'Kyiv', 2, 2),
-  order(5, 4, 'delivered', '25.50', 'Odesa', 2, 5),
-  order(6, 3, 'unconfirmed', '0.00', null, 5, 5),
-  order(7, 5, 'cancelled', '10.00', 'Kyiv', 6, 7),
-  order(8, 5, 'paid', '99.99', 'Lviv', 1, 1),
-  order(9, 3, 'paid', '25.50', 'Odesa', 9, 9),
-  order(10, 3, 'pending', '25.50', 'Kyiv', 9, 9),
-  order(11, 4, 'pending', '0.00', null, 3, 3),
+  order(1, 3, 'paid', '10.00', 'Kyiv', 1, 1, 1),
+  order(2, 3, 'unconfirmed', '25.50', null, 1, 2, null),
+  order(3, 4, 'waiting', '10.00', 'Lviv', 2, 2, null),
+  order(4, 3, 'shipped', '99.99', 'Kyiv', 2, 2, 2),
+  order(5, 4, 'delivered', '25.50', 'Odesa', 2, 5, 2),
+  order(6, 3, 'unconfirmed', '0.00', null, 5, 5, null),
+  order(7, 5, 'cancelled', '10.00', 'Kyiv', 6, 7, 6),
+  order(8, 5, 'paid', '99.99', 'Lviv', 1, 1, 1),
+  order(9, 3, 'paid', '25.50', 'Odesa', 9, 9, 9),
+  order(10, 3, 'pending', '25.50', 'Kyiv', 9, 9, null),
+  order(11, 4, 'pending', '0.00', null, 3, 3, null),
 ];
 
-const SORTS: OrdersSortBy[] = ['createdAt', 'updatedAt', 'total', 'shippingAddress'];
+const SORTS: OrdersSortBy[] = ['createdAt', 'updatedAt', 'total', 'shippingAddress', 'paidAt'];
 const DIRS: OrdersSortDir[] = ['asc', 'desc'];
 
 describe('normalizeFindOrdersInput', () => {
@@ -110,6 +113,52 @@ describe('normalizeFindOrdersInput', () => {
     expect(normalizeFindOrdersInput(dto({ cursor: '  abc  ' })).cursor).toBe('abc');
     expect(normalizeFindOrdersInput(dto({ cursor: '   ' })).cursor).toBeUndefined();
   });
+
+  it('keeps the period of the payment, either end alone too', () => {
+    expect(normalizeFindOrdersInput(dto({ paidFrom: at(1), paidTo: at(5) }))).toMatchObject({
+      paidFrom: at(1),
+      paidTo: at(5),
+    });
+    expect(normalizeFindOrdersInput(dto({ paidFrom: at(1) }))).toMatchObject({
+      paidFrom: at(1),
+      paidTo: undefined,
+    });
+    expect(normalizeFindOrdersInput(dto({ paidTo: at(5) }))).toMatchObject({
+      paidFrom: undefined,
+      paidTo: at(5),
+    });
+  });
+
+  // the period takes its start and stops before its end, so an end at its start holds nothing
+  it.each([
+    ['ends before it starts', at(5), at(1)],
+    ['ends where it starts', at(5), at(5)],
+  ])('rejects a period of the payment that %s', (_case, paidFrom, paidTo) => {
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ paidFrom, paidTo })))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'PAID_PERIOD_INVALID',
+    });
+  });
+
+  it('keeps the period of the last change, either end alone too', () => {
+    expect(normalizeFindOrdersInput(dto({ updatedFrom: at(1), updatedTo: at(5) }))).toMatchObject({
+      updatedFrom: at(1),
+      updatedTo: at(5),
+    });
+    expect(normalizeFindOrdersInput(dto({ updatedTo: at(5) }))).toMatchObject({
+      updatedFrom: undefined,
+      updatedTo: at(5),
+    });
+  });
+
+  it.each([
+    ['ends before it starts', at(5), at(1)],
+    ['ends where it starts', at(5), at(5)],
+  ])('rejects a period of the last change that %s', (_case, updatedFrom, updatedTo) => {
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ updatedFrom, updatedTo })))).toMatchObject(
+      { statusCode: 400, errorCode: 'UPDATED_PERIOD_INVALID' },
+    );
+  });
 });
 
 const NOT_A_CART = { status: { not: 'pending' } };
@@ -152,6 +201,60 @@ describe('buildOrdersWhere', () => {
       { ...NOT_A_CART, shippingAddress: { not: null } },
     );
   });
+
+  it('leaves out the orders that are not paid when they are sorted by the time of payment', () => {
+    expect(buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', sortBy: 'paidAt' })).toEqual({
+      ...NOT_A_CART,
+      paidAt: { not: null },
+    });
+  });
+
+  it('keeps the orders paid from the start of the period and before its end', () => {
+    expect(
+      buildOrdersWhere({
+        actorId: 3,
+        actorRole: 'USER',
+        sortBy: 'createdAt',
+        paidFrom: at(1),
+        paidTo: at(5),
+      }),
+    ).toEqual({ userId: 3, ...NOT_A_CART, paidAt: { gte: at(1), lt: at(5) } });
+  });
+
+  it('keeps the orders changed from the start of the period and before its end', () => {
+    expect(
+      buildOrdersWhere({
+        actorId: 3,
+        actorRole: 'USER',
+        sortBy: 'createdAt',
+        updatedFrom: at(1),
+        updatedTo: at(5),
+      }),
+    ).toEqual({ userId: 3, ...NOT_A_CART, updatedAt: { gte: at(1), lt: at(5) } });
+    expect(
+      buildOrdersWhere({ actorId: 3, actorRole: 'USER', sortBy: 'createdAt', updatedTo: at(5) }),
+    ).toEqual({ userId: 3, ...NOT_A_CART, updatedAt: { lt: at(5) } });
+  });
+
+  it('lists the orders paid in the period by the time of payment', () => {
+    const where = buildOrdersWhere({
+      actorId: 1,
+      actorRole: 'ADMIN',
+      sortBy: 'paidAt',
+      paidFrom: at(2),
+      paidTo: at(9),
+    });
+    const visited = walkPages({
+      rows: orders,
+      where,
+      orderBy: buildOrdersOrderBy('paidAt', 'asc'),
+      limit: 2,
+      cursorWhere: (cursor) => buildOrdersCursorWhere({ sortBy: 'paidAt', sortDir: 'asc', cursor }),
+      nextCursor: (last) => makeNextOrdersCursor('paidAt', last, 'asc'),
+    });
+
+    expect(visited).toEqual([4, 5, 7]);
+  });
 });
 
 describe('order list pagination', () => {
@@ -166,14 +269,15 @@ describe('order list pagination', () => {
         orderBy,
         limit: 2,
         cursorWhere: (cursor) => buildOrdersCursorWhere({ sortBy, sortDir, cursor }),
-        nextCursor: (last) => makeNextOrdersCursor(sortBy, last),
+        nextCursor: (last) => makeNextOrdersCursor(sortBy, last, sortDir),
       });
 
       const expected = sortRows(
         orders.filter(
           (row) =>
             row.status !== 'pending' &&
-            (sortBy !== 'shippingAddress' || row.shippingAddress !== null),
+            (sortBy !== 'shippingAddress' || row.shippingAddress !== null) &&
+            (sortBy !== 'paidAt' || row.paidAt !== null),
         ),
         orderBy,
       ).map((row) => row.id);
@@ -207,11 +311,13 @@ describe('buildOrdersCursorWhere', () => {
     ['a date sort gets a word', 'updatedAt', 'yesterday'],
     ['a date sort gets null', 'updatedAt', null],
     ['the creation date sort gets a word', 'createdAt', 'yesterday'],
+    ['the payment date sort gets a word', 'paidAt', 'yesterday'],
+    ['the payment date sort gets null', 'paidAt', null],
     ['an amount sort gets a word', 'total', 'cheap'],
     ['an amount sort gets null', 'total', null],
     ['an amount sort gets a date from another sort', 'total', '2026-03-01T10:00:00.000Z'],
   ] as const)('rejects the cursor when %s', (_case, sortBy, v) => {
-    const cursor = encodeCursor({ id: 4, v });
+    const cursor = encodeCursor({ id: 4, v, s: `${sortBy}:desc` } as never);
 
     expect(
       thrownBy(() => buildOrdersCursorWhere({ sortBy, sortDir: 'desc', cursor })),
@@ -225,9 +331,151 @@ describe('makeNextOrdersCursor', () => {
   it.each([
     ['createdAt', '2026-03-02T10:00:00.000Z'],
     ['updatedAt', '2026-03-02T10:00:00.000Z'],
+    ['paidAt', '2026-03-02T10:00:00.000Z'],
     ['total', 99.99],
     ['shippingAddress', 'Kyiv'],
-  ] as const)('puts the %s of the last row next to its id', (sortBy, v) => {
-    expect(decodeCursor(makeNextOrdersCursor(sortBy, last))).toEqual({ id: 4, v });
+  ] as const)('puts the %s of the last row next to its id, with the sort', (sortBy, v) => {
+    expect(decodeCursor(makeNextOrdersCursor(sortBy, last, 'desc'))).toEqual({
+      id: 4,
+      v,
+      s: `${sortBy}:desc`,
+    });
+  });
+});
+
+// a cursor names its sort and direction: one of another, or one without them, starts the page
+// from an order of another order
+describe('buildOrdersCursorWhere and the sort of a cursor', () => {
+  const cursorOf = (s?: string) =>
+    encodeCursor({ id: 4, v: '2026-03-02T10:00:00.000Z', ...(s ? { s } : {}) } as never);
+
+  it.each([
+    ['another direction', 'createdAt:asc'],
+    ['another sort', 'updatedAt:desc'],
+    ['no sort', undefined],
+  ])('rejects the cursor of %s', (_case, s) => {
+    expect(
+      thrownBy(() =>
+        buildOrdersCursorWhere({ sortBy: 'createdAt', sortDir: 'desc', cursor: cursorOf(s) }),
+      ),
+    ).toMatchObject({ statusCode: 400, errorCode: 'CURSOR_INVALID' });
+  });
+
+  it('takes the cursor of its own sort and direction', () => {
+    expect(
+      buildOrdersCursorWhere({
+        sortBy: 'createdAt',
+        sortDir: 'desc',
+        cursor: cursorOf('createdAt:desc'),
+      }),
+    ).toBeDefined();
+  });
+});
+
+// the desk of an admin: the filters a buyer may not send
+describe('normalizeFindOrdersInput and the desk', () => {
+  it.each(['userId', 'q', 'format'] as const)('refuses %s to a buyer', (filter) => {
+    expect(
+      thrownBy(() => normalizeFindOrdersInput(dto({ [filter]: filter === 'format' ? 'csv' : 1 }))),
+    ).toMatchObject({ statusCode: 403, errorCode: 'FILTER_FORBIDDEN', details: { filter } });
+  });
+
+  it.each(['ADMIN', 'ROOT'] as const)('lets %s use the filters of the desk', (actorRole) => {
+    expect(
+      normalizeFindOrdersInput(dto({ actorRole, userId: 5, q: '  Koval ', format: 'csv' })),
+    ).toMatchObject({ userId: 5, q: 'Koval' });
+  });
+
+  it('drops a text of spaces, and orders as asked', () => {
+    expect(normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', q: '   ' })).q).toBeUndefined();
+    expect(normalizeFindOrdersInput(dto({ sortDir: 'asc' })).sortDir).toBe('asc');
+  });
+
+  it('takes statuses with spaces around them, and refuses a list with one unknown status', () => {
+    expect(normalizeFindOrdersInput(dto({ statuses: ' paid , shipped ' })).statuses).toEqual([
+      'paid',
+      'shipped',
+    ]);
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ statuses: 'paid,lost' })))).toMatchObject({
+      errorCode: 'STATUS_INVALID',
+    });
+  });
+
+  it('takes a few statuses and refuses one the list has not', () => {
+    expect(
+      normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', statuses: 'paid,shipped,paid' })).statuses,
+    ).toEqual(['paid', 'shipped']);
+    expect(
+      thrownBy(() => normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', statuses: 'pending' }))),
+    ).toMatchObject({ errorCode: 'STATUS_INVALID' });
+  });
+});
+
+describe('buildOrdersWhere and the desk', () => {
+  const base = { actorId: 1, actorRole: 'ADMIN', sortBy: 'createdAt' } as const;
+
+  it('finds an order by its number, and by a part of the buyer or the recipient otherwise', () => {
+    expect(buildOrdersWhere({ ...base, q: '42' })).toMatchObject({ id: 42 });
+    expect(buildOrdersWhere({ ...base, q: 'koval' })).toMatchObject({
+      OR: [
+        { user: { email: { contains: 'koval', mode: 'insensitive' } } },
+        { recipientFirstName: { contains: 'koval', mode: 'insensitive' } },
+        { recipientLastName: { contains: 'koval', mode: 'insensitive' } },
+        { recipientPhone: { contains: 'koval', mode: 'insensitive' } },
+      ],
+    });
+  });
+
+  // a number is a number of an order only as a whole number from 1 the ids of the database hold
+  it.each([
+    ['a number of one digit', '4', { id: 4 }],
+    ['a number of three digits', '123', { id: 123 }],
+    ['the last id', '2147483647', { id: 2_147_483_647 }],
+  ])('finds an order by %s', (_case, q, where) => {
+    expect(buildOrdersWhere({ ...base, q })).toMatchObject(where);
+  });
+
+  it.each([
+    ['a number past the last id', '2147483648'],
+    ['a number with a zero in front', '042'],
+    ['a letter before the number', 'a42'],
+    ['a letter after the number', '42a'],
+  ])('looks for %s as a text', (_case, q) => {
+    const where = buildOrdersWhere({ ...base, q });
+
+    expect(where).not.toHaveProperty('id');
+    expect(where.OR).toHaveLength(4);
+  });
+
+  it('keeps one status within a few statuses', () => {
+    expect(
+      buildOrdersWhere({ ...base, statuses: ['paid', 'shipped'], status: 'paid' }),
+    ).toMatchObject({ status: { in: ['paid', 'shipped'] }, AND: [{ status: 'paid' }] });
+  });
+
+  // prisma puts the text into a LIKE pattern as it is
+  it('takes the wildcards of a pattern in the text as they are', () => {
+    expect(buildOrdersWhere({ ...base, q: '50%_a\\b' })).toMatchObject({
+      OR: expect.arrayContaining([
+        { recipientPhone: { contains: '50\\%\\_a\\\\b', mode: 'insensitive' } },
+      ]),
+    });
+  });
+
+  it('keeps the orders of a buyer, of a few statuses and with a product', () => {
+    expect(
+      buildOrdersWhere({ ...base, userId: 7, statuses: ['paid', 'shipped'], productId: 9 }),
+    ).toMatchObject({
+      userId: 7,
+      status: { in: ['paid', 'shipped'] },
+      items: { some: { productId: 9 } },
+    });
+  });
+
+  // a buyer sees only their own orders, whatever the request names
+  it('keeps a buyer to their own orders', () => {
+    expect(buildOrdersWhere({ ...base, actorRole: 'USER', actorId: 3, userId: 7 })).toMatchObject({
+      userId: 3,
+    });
   });
 });

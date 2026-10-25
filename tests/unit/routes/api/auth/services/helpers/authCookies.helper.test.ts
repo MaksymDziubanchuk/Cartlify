@@ -84,7 +84,7 @@ describe('shouldClearRefreshCookieOnRefreshError', () => {
 
   it.each([
     ['the refresh row is gone', new UnauthorizedError('REFRESH_TOKEN_ROW_NOT_FOUND')],
-    ['the token expired in the database', new UnauthorizedError('refresh: token expired (db)')],
+    ['the token expired in the database', new UnauthorizedError('REFRESH_TOKEN_EXPIRED')],
     ['the token was reused', new ForbiddenError('REFRESH_TOKEN_REUSE_DETECTED')],
     ['the cookie is empty', new BadRequestError('REFRESH_TOKEN_REQUIRED')],
   ])('clears the cookie when %s', (_case, err) => {

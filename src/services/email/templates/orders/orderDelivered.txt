@@ -8,6 +8,10 @@ Total: {{total}}
 {{/recipient}}
 See your order:
 {{orderUrl}}
+{{#hasRatings}}
+How is it? Rate what you bought, it helps other buyers choose:
+{{#ratings}}- {{name}}: {{reviewUrl}}
+{{/ratings}}{{/hasRatings}}
 
 This mailbox is not monitored.
 The order did not reach you, or a question about it? Ask us in the chat on our site.

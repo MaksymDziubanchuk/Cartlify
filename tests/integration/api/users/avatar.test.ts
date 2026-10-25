@@ -1,13 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { accessCookie } from '../../../helpers/actors.js';
+import { AVATAR_BASE_PUBLIC_ID, ensureAvatarBase } from '@utils/avatar.util.js';
+
+import { accessCookie, getMe } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import {
   bodyOf,
+  brokenPng,
   deliveryUrl,
-  describeWithCloudinary,
+  fixtureImage,
   gifImage,
+  IMAGE_FIXTURES,
   imageField,
   pngImage,
   removeUploads,
@@ -21,10 +25,11 @@ import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createUser, uniqueTag, type TestUser } from '../../../helpers/factories.js';
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
+import { watchMail } from '../../../helpers/mail.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
-// the avatar of PATCH /api/users/me goes to Cloudinary for real: it waits at a waiting id until the
+// the avatar of PATCH /api/users/me goes to Cloudinary (its mock, or the real account with
+// service:cloudinary, tests/helpers/cloudinary.ts): it waits at a waiting id until the
 // profile is written and then moves to test/users/<id>/avatar; a refused request deletes it.
 // What the app refuses before any upload (an empty file, a declared type that is not an image,
 // a file over the size limit) is in meForm.test.ts
@@ -93,7 +98,7 @@ const urlPattern = (transforms: string, path: string) =>
 
 const versionOf = (url: string) => /\/v(\d+)\//.exec(url)?.[1];
 
-describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => {
+describe('PATCH /api/users/me with an avatar (Cloudinary)', () => {
   beforeAll(async () => {
     app = await startApp();
     csrf = await getCsrf(app);
@@ -101,10 +106,6 @@ describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => 
     const root = await createUser({ role: 'ROOT', password: `root-${uniqueTag()}` });
     userIds.push(root.id);
     rootCookie = accessCookie(root);
-
-    // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
-    // 'removes the avatar at Cloudinary when the account is deleted' checks that line
-    allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
   });
 
   // deletes every file the tests uploaded, a request to Cloudinary each: more time than a test
@@ -254,21 +255,156 @@ describeWithCloudinary('PATCH /api/users/me with an avatar (Cloudinary)', () => 
         format: 'png',
       });
     });
+
+    it('refuses a png that Cloudinary cannot read and keeps the avatar the account has', async () => {
+      const user = await newUser();
+      const before = await giveAvatar(user, pngImage(40, 30));
+      const mark = uploadMark();
+
+      const res = await patchForm(user, [avatar(brokenPng())]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_INVALID' });
+      // its first bytes are a png, so it went to Cloudinary, and Cloudinary kept nothing
+      expect(uploadsSince(mark)).toHaveLength(1);
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(await storedImage(avatarPath(user))).toMatchObject({
+        version: before.stored.version,
+        width: 40,
+        height: 30,
+      });
+    });
+  });
+
+  // every form of jpeg and webp header there is a real file of, made by Cloudinary
+  describe('a jpeg or a webp avatar', () => {
+    it.each(IMAGE_FIXTURES.map((fixture) => [fixture.file, fixture] as const))(
+      'keeps a %s avatar in its format and size',
+      async (_file, fixture) => {
+        const user = await newUser();
+
+        const res = await patchForm(user, [
+          avatar(fixtureImage(fixture.file), {
+            contentType: fixture.contentType,
+            filename: fixture.file,
+          }),
+        ]);
+
+        expect(res.statusCode).toBe(200);
+        expect(bodyOf(res).avatarUrls.url64).toMatch(
+          new RegExp(`/${avatarPath(user)}\\.${fixture.format}$`),
+        );
+        expect(await storedImage(avatarPath(user))).toMatchObject({
+          format: fixture.format,
+          width: fixture.width,
+          height: fixture.height,
+        });
+      },
+    );
+
+    // the first bytes are a jpeg or a webp, so the app takes it; Cloudinary cannot read the rest
+    const share = (part: number) => (length: number) => Math.floor(length * part);
+    it.each([
+      ['a jpeg cut in its image data', 'jpeg-baseline.jpg', share(0.7), 'image/jpeg'],
+      ['a jpeg cut in its headers', 'jpeg-baseline.jpg', () => 60, 'image/jpeg'],
+      ['a lossy webp cut short', 'webp-lossy.webp', share(0.7), 'image/webp'],
+      ['a lossless webp cut short', 'webp-lossless.webp', share(0.7), 'image/webp'],
+      ['an extended webp cut short', 'webp-extended.webp', share(0.7), 'image/webp'],
+    ] as const)(
+      'refuses %s and keeps the avatar the account has',
+      async (_case, file, kept, contentType) => {
+        const user = await newUser();
+        const before = await giveAvatar(user, pngImage(40, 30));
+        const data = fixtureImage(file);
+
+        const res = await patchForm(user, [
+          avatar(data.subarray(0, kept(data.length)), { contentType, filename: file }),
+        ]);
+
+        expect(res.statusCode).toBe(400);
+        expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_INVALID' });
+        expect(await storedImage(avatarPath(user))).toMatchObject({
+          version: before.stored.version,
+          width: 40,
+          height: 30,
+        });
+      },
+    );
+  });
+
+  // the letters go on a plain picture of the folder of the environment; the server puts it there
+  // when it starts, if it is not there yet
+  describe('the drawn avatar', () => {
+    it('puts the plain picture the letters go on into the folder once', async () => {
+      await ensureAvatarBase(app.log);
+      const mark = uploadMark();
+
+      await ensureAvatarBase(app.log);
+
+      expect(uploadsSince(mark)).toEqual([]);
+      expect(await storedImage(AVATAR_BASE_PUBLIC_ID)).toMatchObject({ format: 'png' });
+    });
+
+    it('serves the drawn avatar at the urls it gives', async () => {
+      await ensureAvatarBase(app.log);
+      const user = await newUser();
+
+      const me = await getMe(app, accessCookie(user));
+      expect(me.json().avatarIsDefault).toBe(true);
+      const image = await fetch(me.json().avatarUrls.url64);
+
+      expect(image.status).toBe(200);
+      expect(image.headers.get('content-type')).toMatch(/^image\//);
+    });
+  });
+
+  // the file goes from Cloudinary after the row is written; the other cases of the removal are in
+  // me.test.ts, meForm.test.ts and avatarModeration.test.ts
+  describe('a removed avatar', () => {
+    it('removes the own avatar and its file through PATCH with an empty avatar', async () => {
+      const user = await newUser();
+      await giveAvatar(user, pngImage(40, 30));
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: '/api/users/me',
+        headers: withCsrf(csrf, accessCookie(user)),
+        payload: { avatar: '' },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(bodyOf(res)).toMatchObject({ avatarIsDefault: true });
+      expect(await storedImage(avatarPath(user))).toBeNull();
+    });
+
+    it('lets a moderator remove the avatar and its file', async () => {
+      const user = await newUser();
+      await giveAvatar(user, pngImage(40, 30));
+
+      const res = await app.inject({
+        method: 'DELETE',
+        url: `/api/users/${user.id}/avatar`,
+        headers: withCsrf(csrf, rootCookie),
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(bodyOf(res)).toMatchObject({ removed: true, avatarRemovals: 1 });
+      expect(await storedImage(avatarPath(user))).toBeNull();
+    });
   });
 
   describe('a deleted account', () => {
     it('removes the avatar at Cloudinary when the account is deleted', async () => {
       const user = await newUser();
       await giveAvatar(user, pngImage(40, 30));
+      const mails = watchMail();
 
       const res = await deleteAsRoot(user);
 
       expect(res.statusCode).toBe(200);
       expect(await storedImage(avatarPath(user))).toBeNull();
       // the deletion went on to its last step, the mail, after the avatar
-      expect(
-        takeLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' }),
-      ).toHaveLength(1);
+      expect(mails.map((mail) => mail.subject)).toEqual(['Cartlify — Your account is deleted']);
     });
 
     // its access token still works for a few minutes after the deletion

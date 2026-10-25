@@ -4,6 +4,7 @@ import type { MessageResponseDto } from 'types/common.js';
 import type {
   GetAllCategoriesQueryDto,
   CategoriesListResponseDto,
+  CategoryTreeResponseDto,
   FindAllCategoriesDto,
   CreateCategoryBodyDto,
   CreateCategoryDto,
@@ -94,8 +95,18 @@ const deleteCategory: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// the whole tree with the products of each branch
+const getCategoryTree: ControllerRouter<{}, {}, {}, CategoryTreeResponseDto> = async (
+  _req,
+  reply,
+) => {
+  const result = await categoriesServices.getCategoryTree();
+  return reply.code(200).send(result);
+};
+
 export const categoriesController = {
   getCategories,
+  getCategoryTree,
   postCategory,
   patchCategory,
   deleteCategory,

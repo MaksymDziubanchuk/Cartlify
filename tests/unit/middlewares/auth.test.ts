@@ -33,15 +33,18 @@ beforeEach(() => {
 });
 
 describe('authGuard', () => {
-  it('does nothing outside /api', async () => {
-    const req = fakeRequest({ url: '/documentation' });
-    const http = fakeReply();
+  // the guard hangs only on api routes; a raw address the router still matches to one of them
+  // (/%61pi/..., an absolute form) used to leave the request without a user
+  it.each(['/%61pi/products', 'http://shop.example.com/api/products', '/api/products'])(
+    'gives the request a user whatever its raw address looks like (%s)',
+    async (url) => {
+      const req = fakeRequest({ url, cookies: {} });
 
-    await run(req, http.reply);
+      await run(req, fakeReply().reply);
 
-    expect(req.user).toBeUndefined();
-    expect(http.cookies).toEqual({});
-  });
+      expect(req.user).toEqual({ id: expect.stringMatching(UUID), role: 'GUEST' });
+    },
+  );
 
   it('takes the user from a valid access token', async () => {
     const token = signAccessToken({ userId: 5, role: 'ADMIN', type: 'access' }, false);

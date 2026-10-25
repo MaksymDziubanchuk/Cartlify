@@ -44,6 +44,8 @@ export type UploadImageArgs = {
   publicId?: string;
   tags?: string[];
   invalidate?: boolean;
+  // how long the upload may take, in ms; without it the sdk waits as long as it waits
+  timeout?: number;
 };
 
 export type UploadImageResult = {
@@ -278,7 +280,8 @@ async function uploadViaStream(
 }
 
 // cloudinary refuses a file it cannot read as an image, or of a format it was not let keep:
-// that is the file of the client, not a failure of the server
+// that is the file of the client, not a failure of the server. A webp it cannot read has an
+// answer of its own, "Invalid webp file" (checked 21.10.2026)
 function refusedImage(err: unknown): BadRequestError | null {
   const e = err as { http_code?: unknown; message?: unknown } | null;
   if (e?.http_code !== 400 || typeof e.message !== 'string') return null;
@@ -286,7 +289,7 @@ function refusedImage(err: unknown): BadRequestError | null {
   if (/format .* not allowed/i.test(e.message)) {
     return new BadRequestError('IMAGE_TYPE_NOT_ALLOWED', undefined, err);
   }
-  if (/invalid image file/i.test(e.message)) {
+  if (/invalid (image|webp) file/i.test(e.message)) {
     return new BadRequestError('IMAGE_INVALID', undefined, err);
   }
   return null;
@@ -300,6 +303,7 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
 
   if (args.tags?.length) options.tags = args.tags;
   if (typeof args.invalidate === 'boolean') options.invalidate = args.invalidate;
+  if (args.timeout) options.timeout = args.timeout;
 
   if (args.publicId) {
     // allow deterministic ids for overwrite and cleanup

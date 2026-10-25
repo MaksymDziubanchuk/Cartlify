@@ -9,7 +9,7 @@ import {
   verifyAccessToken,
   verifyRefreshToken,
 } from '@utils/jwt.js';
-import { AccessTokenExpiredError, InternalError, UnauthorizedError } from '@utils/errors.js';
+import { AccessTokenExpiredError, UnauthorizedError } from '@utils/errors.js';
 
 import { thrownBy } from '../../helpers/errors.js';
 
@@ -48,28 +48,18 @@ describe('getTtl', () => {
     expect(getTtl(true, 'refresh')).toBe(2592000);
   });
 
-  it('reads the lifetime from env and ignores surrounding spaces', () => {
-    envRecord.JWT_ACCESS_TTL_SHORT = ' 900 ';
+  // env.ts checks the four lifetimes at the start (tests/unit/config/env.test.ts), a wrong one
+  // stops the server; here only which of them a token takes
+  it('takes the lifetime env read at the start', () => {
+    envRecord.JWT_ACCESS_TTL_SHORT = 900;
+    envRecord.JWT_ACCESS_TTL_LONG = 1800;
+    envRecord.JWT_REFRESH_TTL_SHORT = 43200;
+    envRecord.JWT_REFRESH_TTL_LONG = 604800;
 
     expect(getTtl(false, 'access')).toBe(900);
-  });
-
-  it.each([
-    ['empty', '   '],
-    ['zero', '0'],
-    ['with a unit', '15m'],
-    ['negative', '-60'],
-    ['a fraction', '1.5'],
-  ])('throws an internal error when the env lifetime is %s', (_case, value) => {
-    envRecord.JWT_REFRESH_TTL_LONG = value;
-
-    expect(thrownBy(() => getTtl(true, 'refresh'))).toBeInstanceOf(InternalError);
-  });
-
-  it('throws an internal error when the env lifetime is not set at all', () => {
-    envRecord.JWT_ACCESS_TTL_SHORT = undefined;
-
-    expect(thrownBy(() => getTtl(false, 'access'))).toBeInstanceOf(InternalError);
+    expect(getTtl(true, 'access')).toBe(1800);
+    expect(getTtl(false, 'refresh')).toBe(43200);
+    expect(getTtl(true, 'refresh')).toBe(604800);
   });
 });
 

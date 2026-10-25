@@ -6,6 +6,7 @@ import { connectRedis, closeRedis } from '@redis/client.js';
 import { prisma } from '@db/client.js';
 
 import { captureLogs } from './logs.js';
+import { installContractCheck } from './contract.js';
 
 // the server builds a serializer for every answer of every route when it starts, about 3 s of
 // every test file; a file calls a few routes, so here each one is built on its first use. It is
@@ -39,6 +40,9 @@ export async function startApp(
   captureLogs(app.log);
 
   if ((opts.serializers ?? 'on-first-use') === 'on-first-use') buildSerializersOnFirstUse(app);
+
+  // every answer is held against the swagger document (tests/helpers/contract.ts)
+  installContractCheck(app);
 
   await connectRedis(app.log);
   await app.ready();

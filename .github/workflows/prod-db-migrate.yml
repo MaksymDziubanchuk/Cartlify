@@ -14,22 +14,22 @@ jobs:
 
     if: github.ref == 'refs/heads/develop'
 
-    steps:
-      # the repo is public and so are its logs: prisma prints the database host,
-      # github hides only whole secrets, so the host is masked before anything connects
-      - name: Mask database host
-        env:
-          DB_URLS: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
-        run: |
-          for url in $DB_URLS; do
-            host="${url#*://}"; host="${host##*@}"; host="${host%%[:/?]*}"
-            if [ -n "$host" ]; then echo "::add-mask::$host"; fi
-          done
+    # a reviewer approves every change of prod (Settings -> Environments -> prod)
+    environment: prod
 
+    steps:
+      # nothing connects before the masking below
       - name: Checkout develop
         uses: actions/checkout@v7
         with:
           ref: develop
+
+      # the repo is public and so are its logs: prisma prints parts of the database address,
+      # github hides only whole secrets; every part is masked before anything connects
+      - name: Mask database address
+        env:
+          DB_URLS: ${{ secrets.PROD_MIGRATION_DATABASE_URL }}
+        run: bash .github/scripts/mask-db-urls.sh
 
       - name: Setup Node
         uses: actions/setup-node@v7

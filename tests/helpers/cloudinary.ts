@@ -1,32 +1,30 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
-import { describe } from '@jest/globals';
 
 import cloudinary from '@config/cloudinary.js';
 
 import { CLOUDINARY_PLACEHOLDERS } from '../setup/isolateEnv.js';
+import { installCloudinaryMock } from './cloudinaryMock.js';
 import { hideSecrets } from './hideSecrets.js';
+import { isRealService } from './services.js';
 import type { FormPart } from './multipart.js';
 
-// Cloudinary has no test mode: with real keys the uploads of the tests go to the account, into its
-// test/ folder. tests/setup/integration.cloudinary.ts stops any upload, move or delete outside it
-// and keeps the public id of every file the app made, removeUploads deletes them after the file.
-// The app uploads to a waiting id (test/uploads/<uuid>) and moves the file to its place only for
-// a request it takes: after every request no waiting upload is left (waitingUploadsSince).
-// The test database numbers users and products from 1 on every run, so a file of an earlier run
-// can sit at the same path: a test compares the file before and after a request, by its version
-// and its size (the version counts seconds)
+// Cloudinary in the integration tests (tests/setup/integration.cloudinary.ts puts it in place):
+// - a mock by default (tests/helpers/cloudinaryMock.ts), its files live in memory for the test file;
+// - the real account when the run names it (npm test -- service:cloudinary): Cloudinary has no
+//   test mode, the uploads go into the test/ folder of the account.
+// In both a call outside test/ is stopped, the public id of every file the app made is kept, and
+// removeUploads deletes them after the file. The app uploads to a waiting id (test/uploads/<uuid>)
+// and moves the file to its place only for a request it takes: after every request no waiting
+// upload is left (waitingUploadsSince). The test database numbers users and products from 1 on
+// every run, so at the real account a file of an earlier run can sit at the same path: a test
+// compares the file before and after a request, by its version and its size (the version counts
+// seconds)
 
 export const TEST_FOLDER = 'test/';
 
-export const hasCloudinary =
-  Boolean(process.env.CLOUDINARY_URL?.trim()) ||
-  Object.entries(CLOUDINARY_PLACEHOLDERS).every(([key, placeholder]) => {
-    const value = process.env[key]?.trim();
-    return Boolean(value) && value !== placeholder;
-  });
-
-// without the keys (a ci run without the secret) these tests are skipped
-export const describeWithCloudinary = hasCloudinary ? describe : describe.skip;
+export const realCloudinary = isRealService('cloudinary');
 
 // public ids the app uploaded during this test file, in their order
 export const uploadedPublicIds = new Set<string>();
@@ -60,7 +58,7 @@ function assertTestFolder(publicId: unknown, call: string): asserts publicId is 
 
 // the calls of the app that change files pass through as they are, only the folder is checked;
 // assigned, not spied: jest.restoreAllMocks in a test file must not take the guard away
-export function holdCloudinaryInTestFolder(): void {
+function holdCloudinaryInTestFolder(): void {
   const uploader = cloudinary.uploader;
   const uploadStream = uploader.upload_stream;
   const rename = uploader.rename;
@@ -89,6 +87,12 @@ export function holdCloudinaryInTestFolder(): void {
 
     return (destroy as (...a: unknown[]) => ReturnType<typeof destroy>).apply(this, args);
   } as typeof destroy;
+}
+
+// the mock or the real account, held in the test folder either way
+export function installCloudinary(): void {
+  if (!realCloudinary) installCloudinaryMock();
+  holdCloudinaryInTestFolder();
 }
 
 export type StoredImage = {
@@ -164,9 +168,11 @@ export async function removeUploads(): Promise<void> {
 // prints the body
 export const bodyOf = (res: { body: string }) => JSON.parse(hideSecrets(res.body));
 
-// the start of an image url the app gives, as bodyOf shows it
+// the start of an image url the app gives, as bodyOf shows it: the real cloud name is hidden, the
+// made-up one of the mock is not a secret
 export const deliveryUrl = (transforms: string) =>
-  `https://res.cloudinary.com/[hidden]/image/upload/${transforms ? `${transforms}/` : ''}`;
+  `https://res.cloudinary.com/${realCloudinary ? '[hidden]' : CLOUDINARY_PLACEHOLDERS.CLOUDINARY_CLOUD_NAME}` +
+  `/image/upload/${transforms ? `${transforms}/` : ''}`;
 
 const pngChunk = (type: string, data: Buffer) => {
   const length = Buffer.alloc(4);
@@ -196,6 +202,27 @@ export function pngImage(width: number, height: number, rgb = [200, 60, 40]): Bu
     pngChunk('IEND', Buffer.alloc(0)),
   ]);
 }
+
+// real jpeg and webp files Cloudinary made from a png of the tests (21.10.2026), one for every form
+// of header: a baseline and a progressive jpeg, a lossy (VP8), a lossless (VP8L) and an extended
+// (VP8X) webp; the format and the size are the ones Cloudinary read in them
+export const IMAGE_FIXTURES = [
+  { file: 'jpeg-baseline.jpg', contentType: 'image/jpeg', format: 'jpg', width: 24, height: 16 },
+  { file: 'jpeg-progressive.jpg', contentType: 'image/jpeg', format: 'jpg', width: 24, height: 16 },
+  { file: 'webp-lossy.webp', contentType: 'image/webp', format: 'webp', width: 24, height: 16 },
+  { file: 'webp-lossless.webp', contentType: 'image/webp', format: 'webp', width: 24, height: 16 },
+  { file: 'webp-extended.webp', contentType: 'image/webp', format: 'webp', width: 20, height: 12 },
+] as const;
+
+export type ImageFixture = (typeof IMAGE_FIXTURES)[number];
+
+export const fixtureImage = (file: ImageFixture['file']) =>
+  readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'images', file));
+
+// the start of a png and then no image: the app takes it by its first bytes, Cloudinary cannot
+// read it
+export const brokenPng = () =>
+  Buffer.concat([pngImage(4, 4).subarray(0, 8), Buffer.from('the rest is not a png at all')]);
 
 // a real 1x1 gif and a real svg: images, but not of the jpeg, png or webp the app takes
 export const gifImage = () =>

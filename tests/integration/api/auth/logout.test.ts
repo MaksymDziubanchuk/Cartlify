@@ -84,6 +84,31 @@ describe('POST /api/auth/logout', () => {
     expect(await stillWorks(laptop)).toBe(false);
   });
 
+  // the laptop kept the cookie of a session the logout closed: no stolen token, the session the
+  // person opens next goes on
+  it('leaves a new session alone when a session the logout of all devices closed comes back', async () => {
+    const user = await newUser();
+    const laptop = await signIn(app, csrf, user);
+    await logout(sessionCookie(await signIn(app, csrf, user)), { allDevices: true });
+    const next = await signIn(app, csrf, user);
+
+    const closed = await refreshWith(app, csrf, laptop.refreshToken);
+
+    expect(closed.statusCode).toBe(401);
+    expect(closed.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_REVOKED' });
+    expect(await stillWorks(next)).toBe(true);
+  });
+
+  it('leaves the other sessions alone when the session it ended comes back', async () => {
+    const user = await newUser();
+    const phone = await signIn(app, csrf, user);
+    const laptop = await signIn(app, csrf, user);
+    await logout(sessionCookie(phone));
+
+    expect((await refreshWith(app, csrf, phone.refreshToken)).statusCode).toBe(401);
+    expect(await stillWorks(laptop)).toBe(true);
+  });
+
   it('clears the cookies even without a refresh cookie', async () => {
     const session = await signIn(app, csrf, await newUser());
 

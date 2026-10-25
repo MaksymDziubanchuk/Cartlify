@@ -17,7 +17,8 @@ export interface FindAdminsDto {
   search?: string;
 }
 
-export type AdminItemDto = UserResponseDto;
+// a deleted admin keeps the role, its deletedAt tells it apart
+export type AdminItemDto = UserResponseDto & { deletedAt: Date | null };
 
 export interface GetAdminsResponseDto {
   items: AdminItemDto[];
@@ -36,7 +37,7 @@ export interface AddAdminDto {
   userId: UserId;
 }
 
-export type AddAdminResponseDto = AdminItemDto;
+export type AddAdminResponseDto = UserResponseDto;
 
 export interface DeleteAdminParamsDto {
   adminId: IdParam;

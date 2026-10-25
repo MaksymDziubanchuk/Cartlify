@@ -7,6 +7,7 @@
 //   npm test -- --failed              rerun only the tests that failed in the last selection
 //   npm test -- api:orders --keep-db  leave the test database running after the tests
 //   npm test -- --workers=1           integration files one by one (up to 6 at a time by default)
+//   npm test -- api:auth service:sendgrid   a service of SERVICES for real instead of its mock
 //   npm test -- unit -- -t "cursor"   everything after a second -- goes to jest unchanged
 
 import { spawnSync } from 'node:child_process';
@@ -29,6 +30,17 @@ const WORKERS_FLAG = /^--workers=(\d+)$/;
 // so a few files run at once, one per core and at most 6: more wait for the same database
 // (measured 18.10.2026: 4 files at a time 93 s, 6 at a time 81 s; one by one on github 360 s)
 const DEFAULT_WORKERS = Math.min(6, availableParallelism());
+
+// external services the tests answer from a mock unless the run names them (a checkbox under
+// Services, service:<name> in the arguments); jest gets the named ones in TEST_REAL_SERVICES.
+// real: false means the real mode is not set up yet, the mock answers all the same
+const SERVICES = [
+  { name: 'sendgrid', real: true },
+  { name: 'cloudinary', real: true },
+  { name: 'stripe', real: true },
+  { name: 'openai', real: true },
+];
+const SERVICE_PREFIX = 'service:';
 
 // one part per test folder: unit, api:<module>, then every other integration folder
 function discoverParts() {
@@ -103,6 +115,8 @@ function resolveWords(words, parts) {
   const picked = new Set();
 
   for (const word of words) {
+    if (word.startsWith(SERVICE_PREFIX)) continue;
+
     const matched = groups[word]?.() ?? parts.filter((part) => part.name === word);
 
     if (!matched.length) {
@@ -120,6 +134,24 @@ function resolveWords(words, parts) {
   return parts.filter((part) => picked.has(part.name));
 }
 
+// the services named for real among the words, or among the names of a saved selection
+function resolveServices(words) {
+  const names = words
+    .filter((word) => word.startsWith(SERVICE_PREFIX))
+    .map((word) => word.slice(SERVICE_PREFIX.length));
+
+  for (const name of names) {
+    if (!SERVICES.some((service) => service.name === name)) {
+      fail(
+        `Unknown service "${name}".\n` +
+          `Services: ${SERVICES.map((service) => `${SERVICE_PREFIX}${service.name}`).join(', ')}`,
+      );
+    }
+  }
+
+  return SERVICES.filter((service) => names.includes(service.name));
+}
+
 function loadSelection() {
   try {
     return JSON.parse(readFileSync(selectionFile, 'utf8'));
@@ -129,9 +161,15 @@ function loadSelection() {
   }
 }
 
-function saveSelection(selected) {
+function saveSelection({ selected, services }) {
   mkdirSync(cacheDir, { recursive: true });
-  writeFileSync(selectionFile, JSON.stringify(selected.map((part) => part.name)));
+  writeFileSync(
+    selectionFile,
+    JSON.stringify([
+      ...selected.map((part) => part.name),
+      ...services.map((service) => `${SERVICE_PREFIX}${service.name}`),
+    ]),
+  );
 }
 
 async function promptSelection(parts) {
@@ -148,6 +186,12 @@ async function promptSelection(parts) {
     ...parts.filter((part) => !part.integration).map(toChoice),
     new Separator('-- integration (builds the docker test database, removes it after) --'),
     ...parts.filter((part) => part.integration).map(toChoice),
+    new Separator('-- services (checked: the real service, unchecked: its mock) --'),
+    ...SERVICES.map((service) => ({
+      name: service.name + (service.real ? '' : '  (real mode not set up yet)'),
+      value: `${SERVICE_PREFIX}${service.name}`,
+      checked: saved.includes(`${SERVICE_PREFIX}${service.name}`),
+    })),
   ];
 
   // a list taller than the terminal cannot be redrawn in place and leaves copies on screen,
@@ -174,7 +218,10 @@ async function promptSelection(parts) {
       },
     });
 
-    return parts.filter((part) => names.includes(part.name));
+    return {
+      selected: parts.filter((part) => names.includes(part.name)),
+      services: resolveServices(names),
+    };
   } catch (err) {
     // ctrl+c closes the prompt with this error
     if (err?.name === 'ExitPromptError') {
@@ -186,27 +233,44 @@ async function promptSelection(parts) {
   }
 }
 
+// the parts to run and the services to take for real
 async function chooseParts(parts, { words, failedOnly }) {
   if (words.length) {
-    const selected = resolveWords(words, parts);
-    saveSelection(selected);
-    return selected;
+    const choice = { selected: resolveWords(words, parts), services: resolveServices(words) };
+    saveSelection(choice);
+    return choice;
   }
 
   // --failed repeats the last selection, failed tests are taken from the jest cache
   if (failedOnly) {
     const saved = loadSelection();
-    return parts.filter((part) => saved.includes(part.name));
+    return {
+      selected: parts.filter((part) => saved.includes(part.name)),
+      services: resolveServices(saved),
+    };
   }
 
   if (process.stdin.isTTY && process.stdout.isTTY) {
-    const selected = await promptSelection(parts);
-    saveSelection(selected);
-    return selected;
+    const choice = await promptSelection(parts);
+    saveSelection(choice);
+    return choice;
   }
 
-  console.log('No interactive terminal, running all test parts (pass part names to choose).');
-  return parts;
+  console.log(
+    'No interactive terminal, running all test parts with mocked services ' +
+      '(pass part names and service:<name> to choose).',
+  );
+  return { selected: parts, services: [] };
+}
+
+// which services answer for real and which from a mock
+function describeServices(services) {
+  return SERVICES.map((service) => {
+    if (!services.includes(service)) return `${service.name}: mock`;
+    return service.real
+      ? `${service.name}: real`
+      : `${service.name}: mock (real asked for, its real mode is not set up yet)`;
+  }).join(', ');
 }
 
 function buildTestDatabase() {
@@ -238,7 +302,7 @@ function removeTestDatabase() {
   }
 }
 
-function runJest(selected, { failedOnly, jestFlags, workers }) {
+function runJest(selected, services, { failedOnly, jestFlags, workers }) {
   const needsDb = selected.some((part) => part.integration);
 
   rmSync(resultFile, { force: true });
@@ -263,9 +327,17 @@ function runJest(selected, { failedOnly, jestFlags, workers }) {
     ...selected.map((part) => `${part.dir}/`),
   ];
 
-  console.log(`\n> Running: ${selected.map((part) => part.name).join(', ')}\n`);
+  console.log(`\n> Running: ${selected.map((part) => part.name).join(', ')}`);
+  console.log(`> Services: ${describeServices(services)}\n`);
 
-  const result = spawnSync(process.execPath, args, { cwd: rootDir, stdio: 'inherit' });
+  // only the services with a real mode; set here and not left to the shell
+  const real = services.filter((service) => service.real).map((service) => service.name);
+
+  const result = spawnSync(process.execPath, args, {
+    cwd: rootDir,
+    stdio: 'inherit',
+    env: { ...process.env, TEST_REAL_SERVICES: real.join(',') },
+  });
 
   return result.status ?? 1;
 }
@@ -278,7 +350,7 @@ function readResults() {
   }
 }
 
-function printSummary(selected, parts, results, { failedOnly, jestFlags }) {
+function printSummary(selected, services, parts, results, { failedOnly, jestFlags }) {
   const rows = selected.map((part) => {
     const row = { part: part.name, files: 0, passed: 0, failed: 0, skipped: 0, note: '' };
 
@@ -319,6 +391,10 @@ function printSummary(selected, parts, results, { failedOnly, jestFlags }) {
     console.log(`  ${row.part.padEnd(width)}${counts}`);
   }
 
+  if (selected.some((part) => part.integration)) {
+    console.log(`\nServices: ${describeServices(services)}`);
+  }
+
   const partial = selected.length < parts.length || failedOnly || jestFlags.length > 0;
 
   console.log(
@@ -333,7 +409,7 @@ function printSummary(selected, parts, results, { failedOnly, jestFlags }) {
 
 const options = parseArgs(process.argv.slice(2));
 const parts = discoverParts();
-const selected = await chooseParts(parts, options);
+const { selected, services } = await chooseParts(parts, options);
 
 if (!selected.length) fail('No test parts selected.');
 
@@ -341,11 +417,11 @@ const needsDb = selected.some((part) => part.integration);
 
 if (needsDb) buildTestDatabase();
 
-const status = runJest(selected, options);
+const status = runJest(selected, services, options);
 
 if (needsDb && !options.keepDb) removeTestDatabase();
 
-printSummary(selected, parts, readResults(), options);
+printSummary(selected, services, parts, readResults(), options);
 
 if (needsDb && options.keepDb) {
   console.log('The test database is still running, remove it with: npm run db:test:down\n');

@@ -2,6 +2,7 @@ import type { CategoryId, IdParam, ProductId, ReviewId, UserId } from '../ids.js
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
 import type { FastifyBaseLogger } from 'fastify';
+import type { ProductSafety } from '@helpers/productDescription.js';
 
 export type ProductImagePart = {
   file: NodeJS.ReadableStream;
@@ -26,7 +27,11 @@ export type ProductImagesUrls = {
 
 //GET ALL PRODUCTS
 
+// a buyer sorts by createdAt, price (the price it sells at now), popularity, avgRating, name and
+// saleEndsAt (the products on sale first); an admin by every field (price: the usual one), the ones
+// only some products have with their flag
 export type ProductsSortField =
+  | 'relevance'
   | 'createdAt'
   | 'updatedAt'
   | 'deletedAt'
@@ -36,6 +41,13 @@ export type ProductsSortField =
   | 'avgRating'
   | 'reviewsCount'
   | 'stock'
+  | 'totalStock'
+  | 'reservedStock'
+  | 'expiredStock'
+  | 'popularityOverride'
+  | 'popularityOverrideUntil'
+  | 'saleEndsAt'
+  | 'salePrice'
   | 'name';
 
 export type SortOrder = 'asc' | 'desc';
@@ -48,6 +60,8 @@ export interface GetAllProductsQueryDto {
   // filters
   search?: string;
   categoryIds?: string | string[];
+  // the categories with their whole branch (default true) or only the products of each itself
+  branch?: boolean;
   minPrice?: number;
   maxPrice?: number;
 
@@ -56,6 +70,13 @@ export interface GetAllProductsQueryDto {
 
   // free units (stock - reservedStock): true -> some are free, false -> none are free
   inStock?: boolean;
+  // admin and root only, a flag: at most this many free units, any other mark
+  maxStock?: number;
+
+  // admin and root only: true -> only products with an active sale / with a popularity override;
+  // without it or false -> only products without one
+  onSale?: boolean;
+  popularityOverridden?: boolean;
 
   // sorting (default popularity desc)
   sort?: ProductsSortField;
@@ -70,32 +91,70 @@ export interface FindAllProductsDto {
 
   search?: string;
   categoryIds?: ProductId[];
+  branch?: boolean;
 
   minPrice?: number;
   maxPrice?: number;
 
   deleted?: boolean;
   inStock?: boolean;
+  maxStock?: number;
+  onSale?: boolean;
+  popularityOverridden?: boolean;
 
-  sort: ProductsSortField;
+  // without it: the best match of a search, or the popularity
+  sort?: ProductsSortField;
   order: SortOrder;
 }
 
+export interface ProductCategoryDto {
+  id: CategoryId;
+  name: string;
+  slug: string;
+}
+
+// the safety and origin data of a product (the EU GPSR) as a request gives them
+export interface ProductSafetyInputDto {
+  manufacturer: { name: string; address: string; email: string; country: string };
+  responsiblePerson?: { name: string; address: string; email: string } | null;
+  warnings?: string | null;
+}
+
+// a product as a buyer (guest, user) gets it; an admin (admin, root) gets the fields below the
+// line too. The list of a buyer has the popularity, the card of a buyer does not
 export interface ProductResponseDto {
   id: ProductId;
   name: string;
   description?: string;
+  // the article number, null without one
+  sku: string | null;
   price: number;
+  // the sale next to the price: a buyer gets it only while it lasts (the product sells at
+  // salePrice until saleEndsAt), an admin always, as the row keeps it, null without one
+  salePrice?: number | null;
+  saleEndsAt?: string | null;
+  // the lowest price of the 30 days before the sale, the way salePrice is shown
+  salePriorPrice?: number | null;
+  // free units: the stock that orders do not hold
   stock: number;
-  categoryId: CategoryId;
-  images: ProductImagesUrls;
-  createdAt: string;
-  updatedAt: string;
-  popularity: number;
-  views: number;
+  category: ProductCategoryDto;
+  // the primary image of a list item; null for a product without one, which only an admin lists
+  images: ProductImagesUrls | null;
   avgRating: number;
   reviewsCount: number;
-  deletedAt?: string;
+  createdAt: string;
+  popularity?: number;
+
+  // admin and root only
+  views?: number;
+  updatedAt?: string;
+  totalStock?: number;
+  reservedStock?: number;
+  // the units of batches that are over: not sold, the admin writes them off
+  expiredStock?: number;
+  popularityOverride?: number | null;
+  popularityOverrideUntil?: string | null;
+  deletedAt?: string | null;
 }
 
 export interface ProductsResponseDto {
@@ -115,23 +174,32 @@ export interface FindProductByIdDto {
   actorRole: Role;
 }
 
-export type FullProductResponseDto = Omit<ProductResponseDto, 'images'> & {
+// the card: every image, the way to its category from the top of the tree, and the safety and
+// origin data, null for a product from before them
+export type FullProductResponseDto = Omit<ProductResponseDto, 'images' | 'category'> & {
+  category: ProductCategoryDto & { path: ProductCategoryDto[] };
   images: ProductImagesUrls[];
+  safety: ProductSafety | null;
 };
 
 // GET PRODUCTS REVIEWS
 export interface GetProductReviewsParamsDto {
   productId: IdParam;
 }
+// newest (the default), helpful (the most votes up), ratingHigh, ratingLow (no rating last)
+export type ReviewSortName = 'newest' | 'helpful' | 'ratingHigh' | 'ratingLow';
+
 export interface GetProductReviewsQueryDto {
   cursor?: string;
   limit?: number;
+  sort?: ReviewSortName;
 }
 
 export interface FindProductReviewsDto {
   productId: ProductId;
   limit: number;
   cursor?: string;
+  sort?: ReviewSortName;
 
   actorId: UserId;
   actorRole: Role;
@@ -141,12 +209,14 @@ export interface FindProductReviewsDto {
 export interface ReviewAuthorDto {
   id: UserId;
   name?: string;
-  avatarUrls?: {
+  // the own picture, or the drawn letter of an author without one; G on grey for a deleted one
+  avatarUrls: {
     url32: string;
     url64: string;
     url128: string;
     url256: string;
   };
+  avatarIsDefault: boolean;
   deleted: boolean;
 }
 
@@ -159,6 +229,8 @@ export interface ReviewResponseDto {
   createdAt: Date;
   updatedAt: Date;
   comment?: string;
+  // the author bought the product: a paid order of it, not cancelled
+  verifiedPurchase: boolean;
 
   upVotes: number;
   downVotes: number;
@@ -176,8 +248,8 @@ export interface ReviewsResponseDto {
 export interface CreateProductBodyDto {
   name: string;
   description?: string;
+  sku?: string;
   price: number;
-  stock: number;
   categoryId: CategoryId;
   images: MultipartFile[];
 }
@@ -188,10 +260,16 @@ export interface CreateProductDto {
   productId: ProductId;
   name: string;
   description?: string;
+  // the article number, an empty one is none
+  sku?: string;
+  // the safety and origin data (GPSR), required: checked by the service
+  safety?: unknown;
   price: number;
-  stock: number;
+  // never taken: a new product has no stock, it comes with a delivery; one sent is refused
+  stock?: unknown;
   categoryId: CategoryId;
   images: UploadedProductImage[];
+  log: FastifyBaseLogger;
 }
 
 export type CreateProductResponseDto = FullProductResponseDto;
@@ -204,11 +282,19 @@ export interface UpdateProductParamsDto {
 export interface UpdateProductBodyDto {
   name?: string;
   description?: string;
+  // the article number; an empty one or null takes it away
+  sku?: string | null;
+  // the safety and origin data, whole: they replace the ones the product has
+  safety?: ProductSafetyInputDto;
   price?: number;
-  stock?: number;
+  // never taken: the stock changes only with a delivery or a write-off; one sent is refused
+  stock?: unknown;
   categoryId?: CategoryId;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
+  // with a price: what happens to the sale that is on. keep keeps it, null takes it off, a new
+  // sale takes the old one off and is put on from the new price
+  sale?: ProductSaleWord;
 }
 
 export interface UpdateProductDto extends UpdateProductBodyDto {
@@ -222,6 +308,34 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
 }
 
 export type UpdateProductResponseDto = FullProductResponseDto;
+
+// PRODUCT SALE
+// a percent of the price, or an amount of money off it
+export type ProductSaleDiscountDto = { percent: number } | { amount: number };
+
+export type ProductSaleDto = ProductSaleDiscountDto & { endsAt: string };
+
+// the word on the sale of a change of a price
+export type ProductSaleWord = 'keep' | ProductSaleDto | null;
+
+export type BulkSaleWord = 'keep' | 'remove';
+
+export interface SetProductSaleParamsDto {
+  productId: IdParam;
+}
+
+export interface SetProductSaleBodyDto {
+  // null takes the sale off
+  sale: ProductSaleDto | null;
+}
+
+export interface SetProductSaleDto extends SetProductSaleBodyDto {
+  productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export type SetProductSaleResponseDto = FullProductResponseDto;
 
 // BULK UPDATE PRODUCT PRICE
 
@@ -250,6 +364,9 @@ export interface BulkUpdateProductsPriceBodyDto {
   // optional flags
   dryRun?: boolean;
   reason?: string;
+
+  // the same for the sale that is on of every product: keep it, or take it off
+  sale?: BulkSaleWord;
 }
 
 export interface BulkUpdateProductsPriceDto extends BulkUpdateProductsPriceBodyDto {
@@ -333,3 +450,187 @@ export interface UpdateProductCategoryDto extends UpdateProductCategoryBodyDto {
 }
 
 export type UpdateProductCategoryResponseDto = FullProductResponseDto;
+
+// SALES OF MANY PRODUCTS: a sale for each product, or one sale for the products of a category
+export interface ProductSalesItemDto {
+  productId: ProductId;
+  sale: ProductSaleDto;
+}
+
+export type ProductSalesBodyDto =
+  | { items: ProductSalesItemDto[] }
+  | { categoryId: CategoryId; branch?: boolean; sale: ProductSaleDto };
+
+export type SetProductSalesDto = ProductSalesBodyDto & { actorId: UserId; actorRole: Role };
+
+export interface ProductSalesResultDto {
+  id: ProductId;
+  name: string;
+  price: number;
+  salePrice: number;
+  saleEndsAt: string;
+  salePriorPrice: number | null;
+  // set: the sale was put on; unchanged: the product had this sale already
+  status: 'set' | 'unchanged';
+}
+
+export interface ProductSalesResponseDto {
+  products: ProductSalesResultDto[];
+}
+
+// SUGGESTIONS: a few names of the catalog for what a person types
+export interface ProductSuggestionsQueryDto {
+  q: string;
+}
+
+export interface ProductSuggestionsDto {
+  text: string;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface ProductSuggestionsResponseDto {
+  items: Array<{ id: ProductId; name: string }>;
+}
+
+// PRICE HISTORY: the log of prices of a product, for admin and root
+export interface PriceHistoryParamsDto {
+  productId: IdParam;
+}
+
+export interface PriceHistoryQueryDto {
+  limit?: number;
+  cursor?: string;
+}
+
+export interface PriceHistoryDto extends PriceHistoryQueryDto {
+  productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface PriceHistoryItemDto {
+  id: number;
+  oldPrice: number;
+  newPrice: number;
+  // how the change was given: by a percent or by an amount
+  mode: 'percent' | 'fixed';
+  // its size in that mode, below 0 for a change down
+  value: number;
+  // a line with an end is the start of a sale
+  endsAt: string | null;
+  actor: { id: UserId; name: string | null; deleted: boolean };
+  createdAt: string;
+}
+
+export interface PriceHistoryResponseDto {
+  items: PriceHistoryItemDto[];
+  limit: number;
+  nextCursor: string | null;
+}
+
+// RESTORE: a product taken out of the catalog goes back
+export interface RestoreProductParamsDto {
+  productId: IdParam;
+}
+
+export interface RestoreProductDto {
+  productId: ProductId;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// STOCK: a delivery takes in a batch of each item, a write-off takes free units out
+// where a batch came from: a supplier, a surplus an inventory found, goods a buyer brought back
+export type StockSourceName = 'supplier' | 'surplus' | 'customer_return';
+
+// shortage: what an inventory did not find; returned_to_supplier: goods sent back to the supplier
+export type WriteOffReason =
+  'damaged' | 'defective' | 'expired' | 'shortage' | 'returned_to_supplier' | 'other';
+
+// an item names its product by its id or by its article number, never both (the schema); the
+// service turns an article number into the id of the product of the catalog that has it
+export type StockProductRefDto =
+  { productId: ProductId; sku?: never } | { sku: string; productId?: never };
+
+export interface DeliveryItemBodyDto {
+  productId: ProductId;
+  quantity: number;
+  // the cost of a unit in the currency of the shop, to the cent
+  unitCost: number;
+  // the last good day, yyyy-mm-dd
+  expiresAt?: string;
+  supplierBatchNumber?: string;
+}
+
+export interface DeliveryBodyDto {
+  source: StockSourceName;
+  supplier?: string;
+  document?: string;
+  note?: string;
+  items: DeliveryItemBodyDto[];
+}
+
+export interface ReceiveStockDto extends Omit<DeliveryBodyDto, 'items'> {
+  items: Array<Omit<DeliveryItemBodyDto, 'productId'> & StockProductRefDto>;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface ProductBatchDto {
+  id: number;
+  productId: ProductId;
+  source: StockSourceName;
+  supplierBatchNumber: string | null;
+  unitCost: number;
+  quantity: number;
+  remaining: number;
+  expiresAt: string | null;
+  createdAt: Date;
+}
+
+// the stock of a product after the request: free units, the whole stock and the reserve
+export interface StockProductSummaryDto {
+  id: ProductId;
+  stock: number;
+  totalStock: number;
+  reservedStock: number;
+  expiredStock: number;
+}
+
+export interface ReceiveStockResponseDto {
+  deliveryId: string;
+  batches: ProductBatchDto[];
+  products: StockProductSummaryDto[];
+}
+
+export interface WriteOffItemBodyDto {
+  productId: ProductId;
+  quantity: number;
+  // the batch to take the units from; without one they come in the order of a sale
+  batchId?: number;
+}
+
+export interface WriteOffBodyDto {
+  reason: WriteOffReason;
+  note?: string;
+  items: WriteOffItemBodyDto[];
+}
+
+export interface WriteOffStockDto extends Omit<WriteOffBodyDto, 'items'> {
+  items: Array<Omit<WriteOffItemBodyDto, 'productId'> & StockProductRefDto>;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface WriteOffTakenDto {
+  batchId: number;
+  quantity: number;
+  unitCost: number;
+}
+
+export interface WriteOffStockResponseDto {
+  writeOffId: string;
+  items: { productId: ProductId; quantity: number; batches: WriteOffTakenDto[] }[];
+  products: StockProductSummaryDto[];
+}

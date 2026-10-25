@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeAll, expect, it, jest } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { PAYMENT_WEBHOOK_GRACE_MS } from '@routes/api/orders/services/helpers/index.js';
 
@@ -25,7 +25,6 @@ import {
   closeOpenSessions,
   craftEvent,
   deliver,
-  describeWithStripe,
   expireSession,
   readSession,
   stripeEvent,
@@ -92,7 +91,7 @@ afterAll(async () => {
   }
 });
 
-describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.expired', () => {
+describe('POST /api/payments/stripe/webhook: checkout.session.expired', () => {
   it('keeps the reservation within the grace window, a payment may still be on its way', async () => {
     const { product, orderId, sessionId } = await orderWithPage();
     const event = await closePage(sessionId);
@@ -184,27 +183,24 @@ describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.expired'
   });
 });
 
-describeWithStripe(
-  'POST /api/payments/stripe/webhook: checkout.session.async_payment_failed',
-  () => {
-    // a failed bank payment is final, no money comes after it: the stock goes back at once.
-    // The shop pays only by card, the event is the page itself
-    it('releases the reservation at once', async () => {
-      const { product, orderId, sessionId } = await orderWithPage();
+describe('POST /api/payments/stripe/webhook: checkout.session.async_payment_failed', () => {
+  // a failed bank payment is final, no money comes after it: the stock goes back at once.
+  // The shop pays only by card, the event is the page itself
+  it('releases the reservation at once', async () => {
+    const { product, orderId, sessionId } = await orderWithPage();
 
-      const res = await deliver(
-        app,
-        craftEvent('checkout.session.async_payment_failed', await readSession(sessionId)),
-      );
+    const res = await deliver(
+      app,
+      craftEvent('checkout.session.async_payment_failed', await readSession(sessionId)),
+    );
 
-      expect(res.statusCode).toBe(200);
-      expect(await orderStateOf(orderId)).toMatchObject({
-        status: 'unconfirmed',
-        confirmed: false,
-        reservationExpiresAt: null,
-      });
-      expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
-      expect((await redisStateOf(orderId)).graceTimer).toBeNull();
+    expect(res.statusCode).toBe(200);
+    expect(await orderStateOf(orderId)).toMatchObject({
+      status: 'unconfirmed',
+      confirmed: false,
+      reservationExpiresAt: null,
     });
-  },
-);
+    expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
+    expect((await redisStateOf(orderId)).graceTimer).toBeNull();
+  });
+});

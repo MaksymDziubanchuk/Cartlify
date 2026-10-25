@@ -1,3 +1,7 @@
+-- on a live database a busy table makes the script wait for its lock, and every request of the
+-- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+SET lock_timeout = '5s';
+
 -- everything below is created and owned by cartlify_owner, whoever runs the script
 SET ROLE cartlify_owner;
 
@@ -60,6 +64,46 @@ BEGIN
     ALTER TABLE cartlify.products
       ADD CONSTRAINT products_pop_override_non_negative
       CHECK ("popularityOverride" IS NULL OR "popularityOverride" >= 0);
+  END IF;
+
+  -- a sale has a price and an end, or neither; its price is 0 (free) or more and below the price.
+  -- A price down to the sale price or below empties the sale before this check (db/05)
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_chk'
+  ) THEN
+    ALTER TABLE cartlify.products
+      ADD CONSTRAINT products_sale_chk
+      CHECK (
+        ("salePrice" IS NULL AND "saleEndsAt" IS NULL)
+        OR (
+          "salePrice" IS NOT NULL
+          AND "saleEndsAt" IS NOT NULL
+          AND "salePrice" >= 0
+          AND "salePrice" < price
+        )
+      );
+  END IF;
+
+  -- the lowest price of the 30 days before a sale goes only with a sale; a sale from before it
+  -- was written has none
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_prior_price_chk'
+  ) THEN
+    ALTER TABLE cartlify.products
+      ADD CONSTRAINT products_sale_prior_price_chk
+      CHECK (
+        "salePriorPrice" IS NULL
+        OR ("salePrice" IS NOT NULL AND "salePriorPrice" >= 0)
+      );
+  END IF;
+
+  -- an article number is written trimmed and not empty: the server takes an empty one as none
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_sku_chk'
+  ) THEN
+    ALTER TABLE cartlify.products
+      ADD CONSTRAINT products_sku_chk
+      CHECK (sku IS NULL OR (sku = btrim(sku) AND length(sku) > 0));
   END IF;
 END $$;
 
@@ -218,10 +262,47 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- ORDERS: the time of the payment and of the cancel
+----------------------------------------
+-- the time of the payment comes with the payment (pay_order sets them together); the time of the
+-- cancel comes with the cancel, and only a paid order is cancelled (cancel_paid_order), never
+-- before its payment. An order paid or cancelled before the columns came has no such time and
+-- fails the check: those rows are wiped before the script runs
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_paid_at_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_paid_at_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_paid_at_chk
+    CHECK (("paidAt" IS NULL) = ("paymentId" IS NULL));
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_cancelled_at_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_cancelled_at_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_cancelled_at_chk
+    CHECK (
+      ("cancelledAt" IS NULL) = (status <> 'cancelled')
+      AND ("cancelledAt" IS NULL OR ("paidAt" IS NOT NULL AND "cancelledAt" >= "paidAt"))
+    );
+END $$;
+
+----------------------------------------
 -- ORDERS: recipient fields keep the form the server writes
 ----------------------------------------
 -- names are trimmed, 1-100 characters, without digits; the server also needs a letter in them,
--- the database does not check letters: what is a letter depends on the database locale
+-- the database does not check letters: what is a letter depends on the database locale. The
+-- length is two comparisons, not BETWEEN first in the list: a dump writes such a check back with
+-- other brackets, and a database restored from it would differ from the structure snapshot
 -- the phone is a plus and 8-15 digits, the first is not zero, the same as the profile phone
 DO $$
 BEGIN
@@ -237,7 +318,8 @@ BEGIN
     CHECK (
       "recipientFirstName" IS NULL
       OR (
-        char_length("recipientFirstName") BETWEEN 1 AND 100
+        char_length("recipientFirstName") >= 1
+        AND char_length("recipientFirstName") <= 100
         AND "recipientFirstName" = btrim("recipientFirstName")
         AND "recipientFirstName" !~ '[0-9]'
       )
@@ -255,7 +337,8 @@ BEGIN
     CHECK (
       "recipientLastName" IS NULL
       OR (
-        char_length("recipientLastName") BETWEEN 1 AND 100
+        char_length("recipientLastName") >= 1
+        AND char_length("recipientLastName") <= 100
         AND "recipientLastName" = btrim("recipientLastName")
         AND "recipientLastName" !~ '[0-9]'
       )
@@ -319,16 +402,54 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- PRICE CHANGE LOG: prices/value >= 0
+-- USER_TOKENS: a session token has a session, no other link has one; a session is revoked at the
+-- moment it is closed. The sessions opened before 23.10.2026 have none, they get one at their next
+-- renewal: the session check is NOT VALID, a new or changed row is checked
 ----------------------------------------
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'price_change_non_negative'
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_tokens_session_chk'
+  ) THEN
+    ALTER TABLE cartlify.user_tokens
+      ADD CONSTRAINT user_tokens_session_chk
+      CHECK ((type = 'REFRESH_TOKEN') = ("sessionId" IS NOT NULL)) NOT VALID;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'user_tokens_revoked_closed_chk'
+  ) THEN
+    ALTER TABLE cartlify.user_tokens
+      ADD CONSTRAINT user_tokens_revoked_closed_chk
+      CHECK ("revokedAt" IS NULL OR ("usedAt" IS NOT NULL AND "revokedAt" = "usedAt"));
+  END IF;
+END $$;
+
+----------------------------------------
+-- PRICE CHANGE LOG: prices >= 0, the start of a sale goes down
+----------------------------------------
+DO $$
+BEGIN
+  -- the check that kept the value from going below 0 too (21.10.2026): a change down has a
+  -- negative value; a temporary line, it goes once dev and prod match the reference
+  ALTER TABLE cartlify.product_price_change_logs
+    DROP CONSTRAINT IF EXISTS price_change_non_negative;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'price_change_prices_non_negative'
   ) THEN
     ALTER TABLE cartlify.product_price_change_logs
-      ADD CONSTRAINT price_change_non_negative
-      CHECK ("oldPrice" >= 0 AND "newPrice" >= 0 AND value >= 0);
+      ADD CONSTRAINT price_change_prices_non_negative
+      CHECK ("oldPrice" >= 0 AND "newPrice" >= 0);
+  END IF;
+
+  -- a line with an end is the start of a sale: from the price down to the sale price
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'price_change_sale_below_price'
+  ) THEN
+    ALTER TABLE cartlify.product_price_change_logs
+      ADD CONSTRAINT price_change_sale_below_price
+      CHECK ("endsAt" IS NULL OR "newPrice" < "oldPrice");
   END IF;
 END $$;
 
@@ -383,6 +504,64 @@ BEGIN
 END $$;
 
 ----------------------------------------
+-- PRODUCT BATCHES: what came in, what is left, its cost and number
+----------------------------------------
+-- a batch has units; what it has left goes from all of them down to none; a cost of a unit in
+-- cents, 0 for a gift; the number of the supplier is trimmed, 1-100 characters
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_batches_quantity_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_batches
+      DROP CONSTRAINT product_batches_quantity_chk;
+  END IF;
+
+  ALTER TABLE cartlify.product_batches
+    ADD CONSTRAINT product_batches_quantity_chk
+    CHECK (quantity > 0 AND remaining >= 0 AND remaining <= quantity);
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_batches_unit_cost_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_batches
+      DROP CONSTRAINT product_batches_unit_cost_chk;
+  END IF;
+
+  ALTER TABLE cartlify.product_batches
+    ADD CONSTRAINT product_batches_unit_cost_chk
+    CHECK ("unitCost" >= 0);
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_batches_number_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_batches
+      DROP CONSTRAINT product_batches_number_chk;
+  END IF;
+
+  ALTER TABLE cartlify.product_batches
+    ADD CONSTRAINT product_batches_number_chk
+    CHECK (
+      "supplierBatchNumber" IS NULL
+      OR (
+        "supplierBatchNumber" = btrim("supplierBatchNumber")
+        AND char_length("supplierBatchNumber") BETWEEN 1 AND 100
+      )
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_batch_allocations_quantity_chk'
+  ) THEN
+    ALTER TABLE cartlify.order_batch_allocations
+      DROP CONSTRAINT order_batch_allocations_quantity_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_batch_allocations
+    ADD CONSTRAINT order_batch_allocations_quantity_chk
+    CHECK (quantity > 0);
+END $$;
+
+----------------------------------------
 -- CHAT_MESSAGES: sender consistency + content
 ----------------------------------------
 DO $$
@@ -428,6 +607,16 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS product_images_one_primary_idx ON cartlify.product_images ("productId")
 WHERE
   "isPrimary";
+
+----------------------------------------
+-- PRODUCTS: one product of the catalog per article number
+----------------------------------------
+-- the papers of a delivery name a product by its article number, whatever the case of its letters;
+-- a product taken out of the catalog lets its number go. The search finds a product by it too
+CREATE UNIQUE INDEX IF NOT EXISTS products_sku_catalog_uidx ON cartlify.products (lower(sku))
+WHERE
+  sku IS NOT NULL
+  AND "deletedAt" IS NULL;
 
 ----------------------------------------
 -- CHAT_THREADS: one open thread per actor
@@ -486,3 +675,29 @@ CREATE INDEX IF NOT EXISTS chat_messages_thread_created_idx ON cartlify.chat_mes
 CREATE INDEX IF NOT EXISTS chat_messages_unread_by_thread_sender_idx ON cartlify.chat_messages ("threadId", "senderType")
 WHERE
   "isRead" = false;
+
+----------------------------------------
+-- USERS: admin search by a part of the email
+----------------------------------------
+-- emails are stored in lower case (trg_users_before_write_email); the list of users looks for a
+-- part of an address with ILIKE, a trigram index serves it from 3 characters on
+CREATE INDEX IF NOT EXISTS users_email_trgm_idx ON cartlify.users USING gin (email cartlify.gin_trgm_ops);
+
+----------------------------------------
+-- ADMIN ALERT SETTINGS: the threshold of a kind
+----------------------------------------
+-- a threshold an admin set is a whole number from 1 (the bounds of each kind are the server's);
+-- none is the threshold the server gives
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'admin_alert_settings_threshold_chk'
+  ) THEN
+    ALTER TABLE cartlify.admin_alert_settings
+      DROP CONSTRAINT admin_alert_settings_threshold_chk;
+  END IF;
+
+  ALTER TABLE cartlify.admin_alert_settings
+    ADD CONSTRAINT admin_alert_settings_threshold_chk
+    CHECK (threshold IS NULL OR threshold >= 1);
+END $$;

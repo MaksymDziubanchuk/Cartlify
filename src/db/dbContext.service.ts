@@ -1,9 +1,21 @@
 import { Prisma } from '@prisma/client';
+import { currentRequest } from '@helpers/requestContext.js';
+import { shopToday } from '@helpers/shopDay.js';
 import { BadRequestError } from '@utils/errors.js';
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 
 type Tx = Prisma.TransactionClient;
+
+// every context carries the day of the shop for the transaction (cartlify.shop_today): it says
+// which batches are over, it is no right of anybody, the policies never read it
+
+// and the request it is done for: its address and its browser, the admin log keeps them with a
+// line (cartlify.log_admin_action); no right of anybody either, empty without a request
+const requestSettings = () => {
+  const request = currentRequest();
+  return Prisma.sql`, set_config('cartlify.request_ip', ${request?.ip ?? ''}, true), set_config('cartlify.request_user_agent', ${request?.userAgent ?? ''}, true)`;
+};
 
 // sets admin role without ids
 export async function setAdminContext(tx: Tx): Promise<void> {
@@ -11,7 +23,7 @@ export async function setAdminContext(tx: Tx): Promise<void> {
     'ADMIN'::cartlify."Role",
     NULL,
     NULL
-  )`;
+  ), set_config('cartlify.shop_today', ${shopToday()}, true)${requestSettings()}`;
 }
 
 // sets guest role with guestId (uuid)
@@ -22,7 +34,7 @@ export async function setGuestContext(tx: Tx, guestId: UserId): Promise<void> {
     'GUEST'::cartlify."Role",
     NULL,
     ${guestId}::uuid
-  )`;
+  ), set_config('cartlify.shop_today', ${shopToday()}, true)${requestSettings()}`;
 }
 
 // sets user context with numeric userId and explicit role (USER/ADMIN/ROOT)
@@ -45,7 +57,7 @@ export async function setUserContext(
     ${role}::cartlify."Role",
     ${idNum}::int,
     NULL
-  )`;
+  ), set_config('cartlify.shop_today', ${shopToday()}, true)${requestSettings()}`;
 }
 
 // sets guest role with null ids (public/anonymous read paths)
@@ -54,7 +66,7 @@ export async function setGuestNullContext(tx: Tx): Promise<void> {
     'GUEST'::cartlify."Role",
     NULL,
     NULL
-  )`;
+  ), set_config('cartlify.shop_today', ${shopToday()}, true)${requestSettings()}`;
 }
 
 // validates uuid guest ids coming from cookies/session
@@ -98,4 +110,10 @@ export async function setActorContext(
   if (userId === null) throw new BadRequestError('USER_ID_INVALID');
 
   await setUserContext(tx, { userId: userId as unknown as UserId, role });
+}
+
+// the day of the shop alone, for a read of the catalog without an actor: it says which batches
+// are over (cartlify.shop_today)
+export async function setShopDayContext(tx: Tx): Promise<void> {
+  await tx.$executeRaw`select set_config('cartlify.shop_today', ${shopToday()}, true)`;
 }

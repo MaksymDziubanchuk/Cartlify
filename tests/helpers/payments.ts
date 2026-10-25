@@ -132,6 +132,7 @@ export const orderStateOf = (orderId: number) =>
         confirmed: true,
         paymentProvider: true,
         paymentId: true,
+        paidAt: true,
         reservationExpiresAt: true,
         total: true,
       },

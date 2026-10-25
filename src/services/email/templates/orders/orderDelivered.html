@@ -57,6 +57,12 @@
                   {{recipient}}
                 </div>{{/recipient}}
 
+                {{#hasRatings}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:18px 0 0 0;">
+                  How is it? Rate what you bought, it helps other buyers choose:<br>
+                  {{#ratings}}<a href="{{reviewUrl}}" style="color:#6d28d9;font-weight:700;">Rate {{name}}</a><br>
+                  {{/ratings}}
+                </div>{{/hasRatings}}
+
                 <div style="padding:18px 0 18px 0;">
                   <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
                     <tr>

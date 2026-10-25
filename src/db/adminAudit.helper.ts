@@ -1,3 +1,6 @@
+import { parseProductDescription } from '@helpers/productDescription.js';
+import { isSaleOn } from '@helpers/productSale.js';
+
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { UserId } from 'types/ids.js';
 
@@ -5,12 +8,46 @@ export type AuditChange = { field: string; old: unknown; new: unknown };
 
 type DbClient = Prisma.TransactionClient | PrismaClient;
 
+type SaleState = { salePrice: { toString(): string } | null; saleEndsAt: Date | null };
+
+// what an admin did to a sale; the database writes its end by a price down to it, ended_by_price
+export type SaleAuditEvent = 'start' | 'change' | 'removed';
+
+// a line of the admin log of a sale (PRODUCT_SALE): what happened, the price, the sale before and
+// after it the way the answers show it (a sale that is over is no sale) and the discount the admin
+// gave. The same fields as the line of the database (db/05), prices the way Decimal writes them
+export function buildSaleAuditChanges(args: {
+  event: SaleAuditEvent;
+  price: { toString(): string };
+  before: SaleState;
+  after: SaleState;
+  discount?: { percent: number } | { amount: number };
+}): AuditChange[] {
+  const shown = (sale: SaleState) =>
+    isSaleOn(sale)
+      ? { salePrice: sale.salePrice!.toString(), saleEndsAt: sale.saleEndsAt!.toISOString() }
+      : { salePrice: null, saleEndsAt: null };
+  const old = shown(args.before);
+  const next = shown(args.after);
+  const price = args.price.toString();
+
+  return [
+    { field: 'event', old: null, new: args.event },
+    { field: 'price', old: price, new: price },
+    { field: 'salePrice', old: old.salePrice, new: next.salePrice },
+    { field: 'saleEndsAt', old: old.saleEndsAt, new: next.saleEndsAt },
+    ...(args.discount ? [{ field: 'discount', old: null, new: args.discount }] : []),
+  ];
+}
+
+// the sale and the stock are no fields here: lines of their own describe them (buildSaleAuditChanges;
+// STOCK_DELIVERY and STOCK_WRITE_OFF, written by the database, db/05)
 export function buildProductUpdateAuditChanges(
   before: {
     name: string;
     description: string | null;
+    sku?: string | null;
     price: { toString(): string };
-    stock: number;
     categoryId: number;
     popularityOverride: number | null;
     popularityOverrideUntil: Date | null;
@@ -20,8 +57,8 @@ export function buildProductUpdateAuditChanges(
     after: {
       name: string;
       description: string | null;
+      sku?: string | null;
       price: { toString(): string };
-      stock: number;
       categoryId: number;
       popularityOverride: number | null;
       popularityOverrideUntil: Date | null;
@@ -30,8 +67,9 @@ export function buildProductUpdateAuditChanges(
     input: {
       name?: unknown;
       description?: unknown;
+      safety?: unknown;
+      sku?: unknown;
       price?: unknown;
-      stock?: unknown;
       categoryId?: unknown;
       popularityOverride?: unknown;
       popularityOverrideUntil?: unknown;
@@ -46,8 +84,25 @@ export function buildProductUpdateAuditChanges(
     changes.push({ field: 'name', old: before.name, new: args.after.name });
   }
 
-  if (args.input.description != null && before.description !== args.after.description) {
-    changes.push({ field: 'description', old: before.description, new: args.after.description });
+  // the text of the description, without the safety data it keeps
+  const oldText = parseProductDescription(before.description).text;
+  const newText = parseProductDescription(args.after.description).text;
+  if (args.input.description != null && oldText !== newText) {
+    changes.push({ field: 'description', old: oldText, new: newText });
+  }
+
+  // the safety data the description keeps, whole: they are replaced whole
+  if (args.input.safety !== undefined) {
+    const old = parseProductDescription(before.description).safety;
+    const next = parseProductDescription(args.after.description).safety;
+    if (JSON.stringify(old) !== JSON.stringify(next)) {
+      changes.push({ field: 'safety', old, new: next });
+    }
+  }
+
+  // an empty article number takes it away: null is a change too
+  if (args.input.sku !== undefined && (before.sku ?? null) !== (args.after.sku ?? null)) {
+    changes.push({ field: 'sku', old: before.sku ?? null, new: args.after.sku ?? null });
   }
 
   if (args.input.categoryId != null && before.categoryId !== args.after.categoryId) {
@@ -60,10 +115,6 @@ export function buildProductUpdateAuditChanges(
       old: before.price.toString(),
       new: args.after.price.toString(),
     });
-  }
-
-  if (args.input.stock !== undefined && before.stock !== args.after.stock) {
-    changes.push({ field: 'stock', old: before.stock, new: args.after.stock });
   }
 
   if (
@@ -114,6 +165,7 @@ export async function writeAdminAuditLog(
       | 'PRODUCT_UPDATE'
       | 'PRODUCT_DELETE'
       | 'PRODUCT_PRICE_BULK_UPDATE'
+      | 'PRODUCT_SALE'
       | 'USER_ROLE_CHANGE'
       | 'ORDER_STATUS_CHANGE'
       | 'CATEGORY_UPDATE'

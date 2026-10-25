@@ -20,5 +20,7 @@ declare module 'fastify' {
     // the refresh token the guard issued in this request when it renewed the session;
     // the one in the cookie is spent then
     issuedRefreshToken?: string;
+    // when the access token of the request runs out (ms), for a socket that must not outlive it
+    accessTokenExpiresAt?: number;
   }
 }

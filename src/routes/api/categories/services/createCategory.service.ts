@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { prisma } from '@db/client.js';
+import { getPgMessage, prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { AppError, ConflictError, InternalError, isAppError } from '@utils/errors.js';
@@ -86,6 +86,12 @@ export async function createCategory({
       updatedAt: created.updatedAt,
     };
   } catch (err) {
+    // the parent named is the new category itself (the id it got): the trigger of the tree refuses
+    // the loop, the same 409 as a change of a category gives
+    if (String(getPgMessage(err) ?? '').includes('CATEGORY_PARENT_CYCLE')) {
+      throw new ConflictError('CATEGORY_PARENT_CYCLE');
+    }
+
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
       throw new ConflictError('CATEGORY_SLUG_TAKEN', { field: 'slug' });
     }

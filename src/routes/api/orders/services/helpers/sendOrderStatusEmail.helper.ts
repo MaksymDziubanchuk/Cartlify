@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { webUrl } from '@helpers/webOrigin.js';
@@ -25,6 +26,9 @@ const TEMPLATES = {
 // frontend page of an order, a placeholder until the frontend fixes its routes
 const orderPage = (orderId: number) => `/orders/${orderId}`;
 
+// the reviews of a product on its page, where a buyer rates it; a placeholder too
+const reviewsPage = (productId: number) => `/products/${productId}#reviews`;
+
 // the order with what the mail shows; it is sent after the status change, as the system
 function loadOrder(orderId: number) {
   return prisma.$transaction(async (tx) => {
@@ -43,7 +47,12 @@ function loadOrder(orderId: number) {
         user: { select: { email: true, name: true, deletedAt: true } },
         items: {
           orderBy: { id: 'asc' },
-          select: { quantity: true, totalPrice: true, product: { select: { name: true } } },
+          select: {
+            quantity: true,
+            totalPrice: true,
+            productName: true,
+            product: { select: { id: true, name: true } },
+          },
         },
       },
     });
@@ -68,12 +77,17 @@ export async function sendOrderStatusEmail(
     if (order.user.deletedAt) return;
 
     const { subject, text, html } = TEMPLATES[status]({
+      // the name of the shop the mail is from
+      appName: env.SHOP_NAME,
       orderId: order.id,
       orderUrl: webUrl(orderPage(order.id)),
+      // a delivered order asks the buyer to rate each product
       items: order.items.map((item) => ({
-        name: item.product.name,
+        // the name the product had when the order was confirmed
+        name: item.productName ?? item.product.name,
         quantity: item.quantity,
         totalPrice: item.totalPrice.toString(),
+        ...(status === 'delivered' ? { reviewUrl: webUrl(reviewsPage(item.product.id)) } : {}),
       })),
       total: order.total.toString(),
       // the money of the provider that took it

@@ -22,6 +22,8 @@ import type {
   OrderItemParamsDto,
   CancelOrderDto,
   CancelledOrderResponseDto,
+  UpdateOrdersStatusBodyDto,
+  UpdateOrdersStatusResponseDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
@@ -111,20 +113,77 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
 
-  const { limit, cursor, status, confirmed, sortBy, sortDir } = req.query;
+  const {
+    limit,
+    cursor,
+    status,
+    statuses,
+    confirmed,
+    paidFrom,
+    paidTo,
+    updatedFrom,
+    updatedTo,
+    productId,
+    userId,
+    q,
+    format,
+    sortBy,
+    sortDir,
+  } = req.query;
 
   const args = pickDefined<FindOrdersDto>(
     {
       actorId,
       actorRole,
       limit: limit ?? 20,
-      sortBy: sortBy ?? 'updatedAt',
+      // newest first by default, as the schema says
+      sortBy: sortBy ?? 'createdAt',
       sortDir: sortDir ?? 'desc',
     },
-    { cursor, status, confirmed },
+    {
+      cursor,
+      status,
+      statuses,
+      confirmed,
+      // the schema let through date-times only
+      paidFrom: paidFrom ? new Date(paidFrom) : undefined,
+      paidTo: paidTo ? new Date(paidTo) : undefined,
+      updatedFrom: updatedFrom ? new Date(updatedFrom) : undefined,
+      updatedTo: updatedTo ? new Date(updatedTo) : undefined,
+      productId,
+      userId,
+      q,
+      format,
+    },
   );
 
+  // every order of the filters as a file for the courier
+  if (format === 'csv') {
+    const file = await ordersServices.findOrdersCsv(args);
+    return reply
+      .code(200)
+      .header('content-type', 'text/csv; charset=utf-8')
+      .header('content-disposition', `attachment; filename="${file.fileName}"`)
+      .send(file.body as never);
+  }
+
   const result = await ordersServices.findOrders(args);
+  return reply.code(200).send(result);
+};
+
+// one step of shipping for many orders, each in a transaction of its own
+const postOrdersStatus: ControllerRouter<
+  {},
+  UpdateOrdersStatusBodyDto,
+  {},
+  UpdateOrdersStatusResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const result = await ordersServices.updateOrdersStatus(
+    { actorId, actorRole, orderIds: req.body.orderIds, status: req.body.status },
+    req.log,
+  );
   return reply.code(200).send(result);
 };
 
@@ -249,6 +308,7 @@ export const ordersController = {
   getOrders,
   getOrderById,
   putOrderStatus,
+  postOrdersStatus,
 
   postOrderItems,
   patchOrderItems,

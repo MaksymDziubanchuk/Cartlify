@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { webUrl } from '@helpers/webOrigin.js';
@@ -32,7 +33,7 @@ function loadOrder(orderId: number) {
         recipientFirstName: true,
         recipientLastName: true,
         recipientPhone: true,
-        updatedAt: true,
+        paidAt: true,
         user: { select: { email: true, name: true } },
         items: {
           orderBy: { id: 'asc' },
@@ -40,6 +41,7 @@ function loadOrder(orderId: number) {
             quantity: true,
             unitPrice: true,
             totalPrice: true,
+            productName: true,
             product: { select: { name: true } },
           },
         },
@@ -60,11 +62,21 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       return;
     }
 
+    // the mail names the time of the payment; an order without one was never paid
+    if (!order.paidAt) {
+      log.warn({ orderId }, 'order paid mail skipped: the order is not paid');
+      return;
+    }
+    const { paidAt } = order;
+
     const { subject, text, html } = buildOrderPaidTemplate({
+      // the name of the shop the mail is from
+      appName: env.SHOP_NAME,
       orderId: order.id,
       orderUrl: webUrl(orderPage(order.id)),
       items: order.items.map((item) => ({
-        name: item.product.name,
+        // the name the product had when the order was confirmed
+        name: item.productName ?? item.product.name,
         quantity: item.quantity,
         unitPrice: item.unitPrice.toString(),
         totalPrice: item.totalPrice.toString(),
@@ -72,8 +84,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       total: order.total.toString(),
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),
-      // the payment is the last change of the order at this moment
-      paidAt: order.updatedAt,
+      paidAt,
       ...(order.user.name ? { userName: order.user.name } : {}),
       shippingAddress: order.shippingAddress,
       recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),

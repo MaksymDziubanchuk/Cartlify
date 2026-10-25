@@ -37,7 +37,11 @@ function getStripeSecretKey(): string {
 const stripe = new Stripe(getStripeSecretKey(), {
   // pinned, so a new sdk version does not change the api version of every request by itself
   apiVersion: '2026-09-30.endive',
-  maxNetworkRetries: 2,
+  // a call inside a transaction must end before it does: by default the sdk waits 80 s and tries
+  // 3 times, and a refund that came after the 20 s of the cancel left the order paid with its money
+  // back. 10 s, one more try
+  timeout: 10_000,
+  maxNetworkRetries: 1,
 });
 
 export { stripe };

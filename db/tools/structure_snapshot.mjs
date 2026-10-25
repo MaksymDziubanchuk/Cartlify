@@ -22,6 +22,10 @@ const referenceFile = path.join(here, 'structure_snapshot.txt');
 const CONTAINER_URL =
   'postgresql://cartlify_app:cartlify_app@127.0.0.1:54329/cartlify_test?schema=cartlify';
 
+// the line of the exact server build, see QUERIES
+const SERVER_BUILD = 'server_build | ';
+const isServerBuild = (line) => line.startsWith(SERVER_BUILD);
+
 // print privileges in a stable order
 const acl = (column) =>
   `coalesce((select string_agg(a::text, ',' order by a::text) from unnest(${column}) a), '-')`;
@@ -31,7 +35,10 @@ const oneLine = (expr) => `regexp_replace(${expr}, '[[:space:]]+', ' ', 'g')`;
 
 // every query returns ready text lines, so the snapshot does not depend on the client
 const QUERIES = [
-  `select concat_ws(' | ', 'server', current_setting('server_version')) as line`,
+  // the major version is part of the structure; the exact build changes with every image update
+  // of the host, it is stored too but only compared with a note (SERVER_BUILD)
+  `select concat_ws(' | ', 'server', current_setting('server_version_num')::int / 10000) as line`,
+  `select concat_ws(' | ', 'server_build', current_setting('server_version')) as line`,
 
   `select concat_ws(' | ', 'database', current_setting('server_encoding'),
           coalesce(datcollate, '-'), coalesce(datctype, '-'), ${acl('datacl')}) as line
@@ -442,11 +449,22 @@ async function check(target) {
 
   const actual = await takeSnapshot(url);
 
-  const referenceSet = new Set(reference);
-  const actualSet = new Set(actual);
+  // another build of the same major version is not a difference of the structure
+  const referenceBuild = reference.find(isServerBuild);
+  const actualBuild = actual.find(isServerBuild);
+  if (referenceBuild && actualBuild && referenceBuild !== actualBuild) {
+    console.log(
+      `note: the server build differs from the reference (${referenceBuild.slice(SERVER_BUILD.length)} there, ` +
+        `${actualBuild.slice(SERVER_BUILD.length)} here), only the major version is compared`,
+    );
+  }
 
-  const missing = reference.filter((line) => !actualSet.has(line));
-  const extra = actual.filter((line) => !referenceSet.has(line));
+  const compared = (lines) => lines.filter((line) => !isServerBuild(line));
+  const referenceSet = new Set(compared(reference));
+  const actualSet = new Set(compared(actual));
+
+  const missing = compared(reference).filter((line) => !actualSet.has(line));
+  const extra = compared(actual).filter((line) => !referenceSet.has(line));
 
   if (!missing.length && !extra.length) {
     console.log(`structure matches the reference: ${actual.length} lines`);

@@ -51,6 +51,17 @@ function rawToString(raw: unknown): string {
     throw new ChatWsParseError('INVALID_RAW_MESSAGE');
 }
 
+// the type an event names, for its limit, before the event is checked; null when the frame is
+// not an event at all
+export function peekChatWsEventType(raw: unknown): string | null {
+    try {
+        const parsed: unknown = JSON.parse(rawToString(raw));
+        return isRecord(parsed) && typeof parsed.type === 'string' ? parsed.type : null;
+    } catch {
+        return null;
+    }
+}
+
 // check plain object
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null && !Array.isArray(value);

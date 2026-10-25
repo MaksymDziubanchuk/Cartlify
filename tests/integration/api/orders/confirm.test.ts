@@ -15,7 +15,6 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { takeLogs } from '../../../helpers/logs.js';
 import { loseReservation, placeOrder, shippingData } from '../../../helpers/orders.js';
 
 // the shipping data of an order: the address and the recipient come with the confirmation and
@@ -527,8 +526,5 @@ describe('the order answers after the confirmation', () => {
     expect(res.json()).toMatchObject({ status: 'shipped', ...shippingData });
     expect(res.json()).not.toHaveProperty('paymentId');
     expect(res.json()).not.toHaveProperty('paymentProvider');
-    // the test environment has no SendGrid key, the shipped mail only logs its failure
-    // (status.test.ts checks the mails)
-    expect(takeLogs({ msg: 'order shipped mail was not sent' })).toHaveLength(1);
   });
 });

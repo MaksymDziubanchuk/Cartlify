@@ -1,3 +1,4 @@
+import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
@@ -13,6 +14,7 @@ import {
   dropDeletedProductItems,
   isOrderNotEditable,
   mapOrderRowToResponse,
+  expiredOfOrders,
   orderResponseSelect,
   orderTargetSql,
 } from './helpers/index.js';
@@ -69,8 +71,13 @@ export async function updateCurrentItem({
         });
         if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND', { productId: item.productId });
 
-        // check availability (real stock = stock - reservedStock)
-        const available = product.stock - product.reservedStock;
+        // check availability: the stock less what the waiting orders hold and what is over
+        const expired = await expiredUnitsOf(db, [product.id]);
+        const available = freeUnits(
+          product.stock,
+          product.reservedStock,
+          expired.get(product.id) ?? 0,
+        );
         if (quantity > available) {
           throw new ConflictError('OUT_OF_STOCK', {
             productId: product.id,
@@ -100,7 +107,7 @@ export async function updateCurrentItem({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
 
-        return mapOrderRowToResponse(order);
+        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
@@ -116,7 +123,7 @@ export async function updateCurrentItem({
 
     // map lock/tx contention errors to a stable 409 for clients
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     // another request confirmed the cart while this one changed it

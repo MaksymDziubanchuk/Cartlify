@@ -29,8 +29,13 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
+import {
+  copyProviderAvatar,
+  type OAuthAvatarRole,
+  type OAuthLoginOutcome,
+} from './helpers/providerAvatar.helper.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 
 export async function githubStart({
   guestId,
@@ -56,6 +61,7 @@ export async function githubCallback({
   role,
   ip,
   userAgent,
+  log,
 }: GithubCallbackDto): Promise<{
   result: LoginResponseDto;
   refreshToken: string;
@@ -123,8 +129,10 @@ export async function githubCallback({
 
   const locale = null;
 
+  let login: OAuthLoginOutcome;
+
   try {
-    return await prisma.$transaction(async (tx) => {
+    login = await prisma.$transaction(async (tx) => {
       // try to create user
       const u = await upsertOAuthUserByEmail(tx, {
         email,
@@ -132,7 +140,6 @@ export async function githubCallback({
         providerSub: sub,
         emailVerified: true,
         name,
-        avatarUrl,
         locale,
         userNotFoundAfterConflictMsg: 'USER_NOT_FOUND_AFTER_CONFLICT',
         providerSubMismatchMsg: 'GITHUB_SUB_MISMATCH',
@@ -155,6 +162,7 @@ export async function githubCallback({
         userId: u.id,
         role: u.role as any,
         rememberMe,
+        ...(userAgent ? { userAgent } : {}),
       });
 
       assertEmail(u.email);
@@ -167,12 +175,12 @@ export async function githubCallback({
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
+        ...avatarOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
 
-      return { result, accessToken, refreshToken };
+      return { result, accessToken, refreshToken, created: u.created, role: u.role, userId: u.id };
     });
   } catch (err) {
     if (err instanceof AppError) throw err;
@@ -185,4 +193,28 @@ export async function githubCallback({
       err,
     );
   }
+
+  // a new account takes the picture of the provider; the login goes on whatever comes of it
+  if (login.created && avatarUrl) {
+    const copied = await copyProviderAvatar({
+      userId: login.userId,
+      role: login.role as OAuthAvatarRole,
+      provider: 'GITHUB',
+      pictureUrl: avatarUrl,
+      log,
+    });
+    if (copied) {
+      login.result = {
+        ...login.result,
+        ...avatarOf({
+          ...login.result,
+          id: login.userId,
+          name: login.result.name ?? null,
+          avatarUrl: copied,
+        }),
+      };
+    }
+  }
+
+  return { result: login.result, accessToken: login.accessToken, refreshToken: login.refreshToken };
 }

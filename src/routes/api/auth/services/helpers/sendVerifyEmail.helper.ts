@@ -1,3 +1,4 @@
+import env from '@config/env.js';
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
@@ -27,7 +28,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
   const { subject, text, html } = buildVerifyEmailTemplate({
     verifyUrl,
     userName: args.userName || '',
-    appName: 'Cartlify',
+    appName: env.SHOP_NAME,
     logoCid: 'cartlify-logo',
     expiresInText,
   });

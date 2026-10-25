@@ -30,6 +30,10 @@ pids
 
 # Coverage
 tests/coverage/
+
+# Mutation testing: our own check of the tests, the tool, its config and its reports stay on the
+# local machine
+mutation/
 .nyc_output/
 
 # IDE / Editors
@@ -48,6 +52,16 @@ docker-compose.override.yml
 # Build artifacts
 build/
 .cache/
+
+# Data scripts that wipe or reseed a database: they live only on a local machine and run by
+# hand from it, never through a workflow
+db/data/reseed.sql
+db/data/clear_all_tables.sql
+db/data/clear_orders_and_stock.sql
+
+# Anonymized dumps of prod for dev (db/tools/dev_restore_from_prod.mjs)
+db/restore/
+*.dump
 
 # Claude Code instructions
 CLAUDE.md

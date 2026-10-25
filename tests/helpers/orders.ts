@@ -56,7 +56,16 @@ export async function placeOrder(
   }
   if (stage === 'waiting') return orderId;
 
-  // the confirmation may refresh the prices, the payment has to match the items as they are now
+  await payOrder(orderId);
+  if (stage === 'paid') return orderId;
+
+  await asAdmin((tx) => tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } }));
+  return orderId;
+}
+
+// the payment the stripe webhook records for an order that waits for it, a made-up payment id;
+// the confirmation may refresh the prices, the payment has to match the items as they are now
+export async function payOrder(orderId: number): Promise<void> {
   const paid = await asAdmin(async (tx) => {
     const { total } = await tx.order.findUniqueOrThrow({
       where: { id: orderId },
@@ -68,10 +77,6 @@ export async function placeOrder(
     `;
   });
   if (paid[0]?.result !== 'PAID') throw new Error(`paying the order answered ${paid[0]?.result}`);
-  if (stage === 'paid') return orderId;
-
-  await asAdmin((tx) => tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } }));
-  return orderId;
 }
 
 // what the reservation timer does when the payment does not come in time: the order waiting for

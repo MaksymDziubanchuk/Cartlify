@@ -4,7 +4,8 @@ import type { Role } from 'types/user.js';
 export type ChatStatus = 'open' | 'closed';
 export type ChatType = 'bot' | 'admin';
 export type ChatSenderType = 'user' | 'admin' | 'bot' | 'guest';
-export type AdminChatQueue = 'waiting' | 'active';
+// waiting: no admin took it; active: an admin took it; unread: both, with a message unread
+export type AdminChatQueue = 'waiting' | 'active' | 'unread';
 
 // common
 
@@ -51,8 +52,27 @@ export interface CurrentChatWsDto {
 
 export interface CurrentChatResponseDto {
     thread: ChatThreadItemDto;
+    // the newest messages, oldest first; the cursor leads to the ones before, null at the start
     messages: ChatMessageItemDto[];
+    nextCursor: string | null;
     ws: CurrentChatWsDto;
+}
+
+// GET /threads/:threadId/messages
+
+export interface ChatThreadMessagesQueryDto {
+    cursor?: string;
+}
+
+export interface GetChatThreadMessagesDto extends ChatThreadIdParamsDto {
+    actorId: UserId;
+    actorRole: Role;
+    cursor?: string;
+}
+
+export interface ChatThreadMessagesResponseDto {
+    messages: ChatMessageItemDto[];
+    nextCursor: string | null;
 }
 
 // GET /admin/threads
@@ -87,6 +107,7 @@ export interface FindAdminChatThreadDto extends ChatThreadIdParamsDto {
 export interface AdminChatThreadResponseDto {
     thread: ChatThreadItemDto;
     messages: ChatMessageItemDto[];
+    nextCursor: string | null;
     previousThreads: ChatThreadItemDto[];
 }
 

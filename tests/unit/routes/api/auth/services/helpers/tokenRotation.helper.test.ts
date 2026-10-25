@@ -38,6 +38,9 @@ describe('assertRefreshRowBasicsOrThrow', () => {
     token: 'hash',
     expiresAt: later(1000),
     usedAt: null,
+    revokedAt: null,
+    sessionId: '33333333-3333-4333-8333-333333333333',
+    userAgent: null,
   };
 
   it('accepts a refresh token row of the same user', () => {

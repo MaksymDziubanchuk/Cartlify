@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import cloudinary from '@config/cloudinary.js';
 import env from '@config/env.js';
+import { DELETED_AVATAR_COLOR } from '@utils/avatar.util.js';
 
 import {
   accessCookie,
@@ -15,6 +16,7 @@ import {
   type Session,
 } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -30,8 +32,8 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
-import { itWithMail, watchMail } from '../../../helpers/mail.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { refuseMail, watchMail } from '../../../helpers/mail.js';
 import { placeOrder } from '../../../helpers/orders.js';
 
 // DELETE /api/users/:userId: only root, and it does not drop the row, it empties it: orders,
@@ -82,10 +84,6 @@ beforeAll(async () => {
   // the avatar file lives at Cloudinary and the test environment has only made-up Cloudinary keys:
   // the call that removes it is caught here and checked, it never leaves the test
   jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
-
-  // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
-  // 'deletes the account even when the mail cannot be sent' checks that line
-  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -135,6 +133,26 @@ describe('what is refused', () => {
 
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ errorCode: 'USER_NOT_FOUND' });
+  });
+
+  // a second click of root emptied the row once more, a longer address and a new date of the
+  // deletion, and mailed the person again
+  it('answers 404 for an account that is already deleted and changes nothing', async () => {
+    const target = await newUser();
+    expect((await deleteUser(target.id, rootCookie)).statusCode).toBe(200);
+    const before = await rowOf(target.id);
+    const mails = watchMail();
+
+    const res = await deleteUser(target.id, rootCookie);
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'USER_NOT_FOUND' });
+    const after = await rowOf(target.id);
+    expect({ email: after.email, deletedAt: after.deletedAt }).toEqual({
+      email: before.email,
+      deletedAt: before.deletedAt,
+    });
+    expect(mails).toHaveLength(0);
   });
 
   it.each([
@@ -193,6 +211,28 @@ describe('what the deletion does', () => {
   });
 
   // the log of logins stays, its lines take the email the account has now
+  // the deletion of an account is the heaviest step of root, it keeps a line in the admin log
+  it('writes the deletion to the admin log under the name of root', async () => {
+    const target = await newUser();
+
+    await deleteUser(target.id, rootCookie);
+
+    const lines = await asAdmin((tx) =>
+      tx.adminAuditLog.findMany({
+        where: { entityType: 'user', entityId: target.id },
+        select: { actorId: true, actorRole: true, action: true, meta: true },
+      }),
+    );
+    expect(lines).toEqual([
+      {
+        actorId: root.id,
+        actorRole: 'ROOT',
+        action: 'OTHER',
+        meta: [{ field: 'deletedAt', old: null, new: expect.any(String) }],
+      },
+    ]);
+  });
+
   it('gives the logins of the account its new email, the rest of the log stays', async () => {
     const target = await newUser();
     const times = [new Date(Date.now() - 2 * 86_400_000), new Date(Date.now() - 3_600_000)];
@@ -310,8 +350,16 @@ describe('what the deletion does', () => {
       headers: { cookie: rootCookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ name: 'Guest', deletedAt: expect.any(String) });
-    expect(res.json()).not.toHaveProperty('avatarUrls');
+    expect(res.json()).toMatchObject({
+      name: 'Guest',
+      deletedAt: expect.any(String),
+      avatarIsDefault: true,
+    });
+    // the picture is gone, the avatar is G on grey
+    expect(drawnAvatarOf(res.json().avatarUrls)).toEqual({
+      letter: 'G',
+      color: DELETED_AVATAR_COLOR,
+    });
   });
 });
 
@@ -459,11 +507,12 @@ describe('what happens around the account', () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  // the test environment has no SendGrid key, so every mail of a deletion fails here:
-  // the account is deleted all the same, the failure only goes to the log
+  // SendGrid refuses the mail of the deletion: the account is deleted all the same, the failure
+  // only goes to the log
   it('deletes the account even when the mail cannot be sent', async () => {
     const target = await newUser();
     await placeOrder(app, csrf, target, await newProduct(), 'paid');
+    refuseMail();
 
     const res = await deleteUser(target.id, rootCookie);
 
@@ -475,25 +524,22 @@ describe('what happens around the account', () => {
     expect(JSON.stringify(logged)).not.toContain(target.email);
   });
 
-  itWithMail(
-    'mails the old address with the orders still on their way and the cancelled ones',
-    async () => {
-      const mails = watchMail();
-      const target = await newUser({ name: 'Anna' });
-      const product = await newProduct();
-      const paidId = await placeOrder(app, csrf, target, product, 'paid');
-      const waitingId = await placeOrder(app, csrf, target, product, 'waiting');
+  it('mails the old address with the orders still on their way and the cancelled ones', async () => {
+    const mails = watchMail();
+    const target = await newUser({ name: 'Anna' });
+    const product = await newProduct();
+    const paidId = await placeOrder(app, csrf, target, product, 'paid');
+    const waitingId = await placeOrder(app, csrf, target, product, 'waiting');
 
-      await deleteUser(target.id, rootCookie);
+    await deleteUser(target.id, rootCookie);
 
-      expect(mails).toHaveLength(1);
-      expect(mails[0]).toMatchObject({ to: [target.email], sandbox: true });
-      expect(mails[0]!.subject).toBe('Cartlify — Your account is deleted');
-      expect(mails[0]!.text).toContain(`Order #${paidId}, €10.00: paid, it will be shipped`);
-      // no payment page was opened for it, so nothing is known for sure about a payment
-      expect(mails[0]!.text).toContain(
-        `Order #${waitingId}, €10.00: cancelled; if you paid for it, the payment is refunded`,
-      );
-    },
-  );
+    expect(mails).toHaveLength(1);
+    expect(mails[0]).toMatchObject({ to: [target.email], accepted: true });
+    expect(mails[0]!.subject).toBe('Cartlify — Your account is deleted');
+    expect(mails[0]!.text).toContain(`Order #${paidId}, €10.00: paid, it will be shipped`);
+    // no payment page was opened for it, so nothing is known for sure about a payment
+    expect(mails[0]!.text).toContain(
+      `Order #${waitingId}, €10.00: cancelled; if you paid for it, the payment is refunded`,
+    );
+  });
 });

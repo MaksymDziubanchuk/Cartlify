@@ -22,7 +22,6 @@ import {
   uniqueTag,
   type TestProduct,
 } from '../../../helpers/factories.js';
-import { allowLogs } from '../../../helpers/logs.js';
 import { placeOrder } from '../../../helpers/orders.js';
 
 // DELETE /api/users/me: a user deletes their own account. A local account confirms with the
@@ -76,10 +75,6 @@ beforeAll(async () => {
 
   // the avatar file lives at Cloudinary and the test environment has only made-up Cloudinary keys
   jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
-
-  // the test environment has no SendGrid key: every deletion logs that its mail was not sent;
-  // delete.test.ts checks that line
-  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -173,6 +168,23 @@ describe('a local account', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+});
+
+// the access token of a deleted account lives a few minutes on: a second request deleted the
+// emptied row once more, or failed with 500 on the password it no longer has
+describe('a deleted account', () => {
+  it('answers 404 to a second deletion and changes nothing', async () => {
+    const user = await newUser();
+    const cookie = accessCookie(user);
+    expect((await deleteMe(cookie, { password: user.password })).statusCode).toBe(204);
+    const before = await rowOf(user.id);
+
+    const res = await deleteMe(cookie, { password: user.password });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'USER_NOT_FOUND' });
+    expect((await rowOf(user.id)).email).toBe(before.email);
   });
 });
 

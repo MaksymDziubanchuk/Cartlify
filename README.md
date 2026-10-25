@@ -113,13 +113,22 @@ What is important to state honestly:
 - resend verification email: a new link each time, earlier links stop working; the links are stored only as hashes
 - login / logout: logout ends the session of this browser, `allDevices` ends every session of the user
 - refresh token rotation: `POST /api/auth/refresh` answers 204 and sets both tokens as cookies, no token in the body
+- a session ended on purpose (a logout, a reset or a change of the password, a role change by root, a closed session) is a plain `401 REFRESH_TOKEN_REVOKED` when its cookie comes back, the other sessions go on; a token already renewed coming back was copied and ends every session (`403 REFRESH_TOKEN_REUSE_DETECTED`)
+- sessions: `GET /api/auth/sessions` lists the open sessions of the user (the browser that opened each, its last renewal, its deadline, the current one), `DELETE /api/auth/sessions/:sessionId` ends one; a session keeps its id across its renewals
+- data export: `GET /api/users/me/export` gives the signed-in person everything the shop keeps of them as one JSON file (profile, orders, favorites, reviews and votes, chats, logins, sessions), once an hour; database functions of the system empty the network data of old logins and remove the data of idle guests and the chats of accounts deleted long ago, each with the days it keeps (run by the periodic tasks)
+- password change: `POST /api/auth/password/change` with the current password ends the other sessions, keeps this one, closes the reset links and mails the owner; a new reset link closes the ones mailed before, a reset closes them all
+- a role change by root ends the sessions of the person; an access token of the old role the database refuses answers `401 ACCESS_TOKEN_EXPIRED`, the page renews the session
 - forgot password / reset password
 - OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
-- guest chat continuity after login/OAuth
+- guest chat continuity: the cart, the favorites and the chats of the guest move to the account at a login (password or OAuth) and at the verification of the email in the browser of the guest, not at the registration; registering an address that was registered before and never verified sets the new password and mails a new link
+- the list of users for an admin or root (`GET /api/users`), root accounts included: every field of an account and its last login (`lastLoginAt`), an empty one is null; filters that go together — a part of the email in any case (`_` and `%` are plain characters), roles and providers (several through commas), the email confirmation, the deleted accounts (only with `deleted=true`); the order is the sign-up or the last login (`sortBy`, `sortOrder`), equal values go by id, accounts that never logged in come last; pages by cursor with the total of the filters
 - the profile of a user by id (`GET /api/users/:userId`) depends on who reads it, in the database function and in the API alike: a user gets the name, the avatar and the dates, no email; an admin or root gets the whole profile but the password, the provider id and the avatar file id, the open chat of the user with an admin, and the lists the `include` checkboxes name (`orders`, `reviews`, `favorites`, `votes`, `loginLogs`) of a period: the last 30 days unless `from`/`to` come, any dates, at most 60 days long (`400 PROFILE_PERIOD_TOO_LONG`, `400 PROFILE_PERIOD_INVALID`)
+- avatars: every answer that names an account gives `avatarUrls` in four sizes and `avatarIsDefault`: the own picture of the account, or, without one, the first letter of the name (of the email when there is no name) on a color of the account, the way a Google account shows it; a deleted account is G on grey. Cloudinary draws the letter at the url on a plain picture, nothing is stored per account; the server puts that picture into the Cloudinary folder of its environment when it starts, so a new Cloudinary account needs no step by hand
+- the picture of a Google, GitHub or LinkedIn account becomes the avatar of a new account: on the login that creates the account the server downloads it from the provider (https on the hosts of the provider only, no redirects, 256 px, jpeg, png or webp by its content, up to 5 MB) and keeps it at Cloudinary as the avatar; it waits at most 4 seconds, and whatever goes wrong the login goes on with the drawn letter. A later login, or a login that links an account we have, takes no picture, so a removed avatar never comes back
+- avatar removal: the owner removes the own avatar with an empty `avatar` in `PATCH /api/users/me` (JSON or a form field); a moderator removes the avatar of another account with `DELETE /api/users/:userId/avatar` — an admin from a user account, root from any account, through the database function `cartlify.remove_user_avatar`. The file goes from Cloudinary after the change. A removal by a moderator goes to the admin journal and mails the person which removal it is; the answer and the profile an admin reads give `avatarRemovals` and `avatarRemovalsLimit` (`AVATAR_REMOVALS_LIMIT`, 5 unless set), and past the limit the admin takes the account to root, who alone deletes accounts
 - user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp by its content, whatever type the form names, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`; it replaces the avatar only once the profile is written, a refused request changes nothing), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
-- account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones
+- account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones; an account already deleted answers `404 USER_NOT_FOUND`, a deletion by root keeps a line in the admin log, and the admin list of root names a deleted admin with its `deletedAt`
 - login logging
 
 ### Authorization and security
@@ -135,18 +144,27 @@ What is important to state honestly:
 
 ### Catalog and product management
 
-- category listing and admin CRUD
-- product listing with filtering / pagination helpers
-- product details endpoint
-- admin product CRUD
+- category listing and admin CRUD; the tree goes from the top down: a move takes the whole branch of a category, `parentId: null` moves it to the top, and a category never goes inside its own branch (`409 CATEGORY_PARENT_CYCLE`, refused by the database too, also for two moves at the same time); a new parent category gets its children one PATCH each; deleting a category gives its direct children to its parent
+- product listing with filtering, sorting and cursor pages, and the product details endpoint: a buyer (guest, user) gets what helps to buy (the price, the sale, the free units, the rating, the category; the list also the popularity) and sorts by date, price, popularity, rating, name or the sale (the products on sale first, then the rest by popularity); admin and root get the counters, the whole stock, the reserve and the popularity override too, sort by any field (the price by the usual one, the sale price in the list of the products on sale) and list the deleted products, the ones on sale, with a popularity override that is on or with no more free units than a number (`maxStock`) with their flags (an override goes with its end in the future, an end with an override) (without a flag only the plain products, with one every product of its condition). A visit of an admin is not counted as a view
+- admin product CRUD; a new product has no stock and a product update never changes it (`400 PRODUCT_STOCK_NOT_ALLOWED`): the stock comes with deliveries and goes with sales and write-offs
+- search that forgives a typo and another order of the words and finds a product by the name of its category and by its article number too, the best match first (`sort: relevance`, the default with a search); suggestions as one types (`GET /api/products/suggestions?q=`, up to 8 names)
+- category branches: a category in the filter takes the products of the categories below it (`branch=false` only its own), the card names the way to its category from the top (`category.path`), and `GET /api/categories/tree` gives the whole tree with the products of each branch
+- an article number (`sku`, optional, up to 64 signs): one product of the catalog has it at a time whatever the case of its letters (`409 PRODUCT_SKU_TAKEN`); a delivery and a write-off may name a product by it in place of its id
+- a product taken out of the catalog comes back with `POST /api/products/:productId/restore` (admin/root, kept in the admin log); the admin finds the products taken out with `deleted=true`
+- every sale names the lowest price of the 30 days before it (`salePriorPrice`, read from the log of prices), the price a reduction is compared with; `POST /api/products/sales` puts many products on sale at once, each with its own sale or one sale for a category and its branch, all or nothing
+- the safety and origin data an offer shows in the EU (GPSR): the manufacturer with its addresses and country, a person responsible in the EU for a manufacturer outside it, the warnings; a new product needs them, the card gives them as `safety`
+- stock in batches (admin/root): a delivery (`POST /api/products/stock/deliveries`) takes in a batch of each item at its cost of a unit in the money of the shop, with an optional last good day and the number the supplier gave it; `source` is a supplier, a surplus an inventory found or goods a buyer brought back. A write-off (`POST /api/products/stock/write-offs`) takes free units from the batch named or from the batches in the order of a sale, with a reason (damaged, defective, expired, a shortage an inventory found, returned to the supplier, other with a note); the units the waiting orders hold stay. A sale takes the batch that ends first, then the ones without an end, the oldest first, and keeps what it took from which batch: the cost of the goods it sold; a cancel of a paid order puts the units back into the same batches. A batch whose last good day is behind the day of the shop (`SHOP_TIME_ZONE`) is over: its units are no free units anywhere a buyer looks or buys (the catalog, the cart, the confirm, the reserve, the bot), a payment of units held for an order whose batch got over meanwhile is refused and the money goes back, and an admin sees them apart (`expiredStock`) to write them off. All of a request or nothing; every step is a database function that keeps a line in the admin log (`STOCK_DELIVERY`, `STOCK_WRITE_OFF`), and the database checks that the stock is what the batches have left
 - product image upload flow: images come only as files of a form (creating a product takes only a form, an update takes JSON or a form), jpeg, png or webp by their content, up to 5 MB per file; an upload waits at a temporary id and takes the place of the product images only once the product is written, a refused request leaves no files and the images as they were; the files a product no longer has after an update are deleted
+- a product without an image is no part of what a buyer or a guest browses (the catalog, the suggestions, the favorites, the counts of the category tree, the products the bot names); its card opens by its id with `images: []`, and a cart that holds it shows it with `images: null`. An admin lists it with `images: null`
 - product category reassignment
-- bulk price update endpoint for admin/root
+- sales (`PATCH /api/products/:productId/sale`, admin/root): a discount by a percent of the price or an amount off it until an end in the future, `sale: null` takes it off (the same sale again, or nothing to take off, is `409` and changes nothing); while the sale lasts the product sells at the sale price (the cart, the confirmation and its smallest payment, the price sort and the price filters of the catalog), and the product answers show `salePrice` and `saleEndsAt` next to the usual `price`; a sale past its end is left out. A new price of a product on sale says what happens to the sale (`sale`: keep it, take it off, or a new one, each step with its log lines; the bulk price update keeps or removes the sales of every product alike), without it the change is `409 PRODUCT_SALE_DECISION_REQUIRED`. The log of prices keeps the start of a sale (by its percent or amount, negative, with the end) and a sale taken off; the admin log keeps every sale as `PRODUCT_SALE` (started, changed, taken off, ended by a price down to it) with the price, the sale before and after and the discount. A free product (a sale price of 0) is bought together with something that makes the smallest payment
+- bulk price update endpoint for admin/root (the usual prices)
 - product view/popularity-related fields in the data model
 
 ### Reviews and favorites
 
 - product reviews, each with its author (`user: { id, name, avatarUrls, deleted }`); a deleted account stays the author, named Guest
+- each review says whether its author bought the product (`verifiedPurchase`); the list sorts by the newest, the most helpful or the rating, and the mail of a delivered order asks to rate each product
 - review deletion rules for user/admin/root
 - a product removed from the catalog takes no new review (`404 PRODUCT_NOT_FOUND`)
 - review voting endpoint: a vote is for the review of another user, the author gets `403 REVIEW_OWN_VOTE_FORBIDDEN`
@@ -162,11 +180,14 @@ What is important to state honestly:
 - the confirmation refuses a total no payment provider takes (below 0.50 with Stripe) before any stock is held (`400 ORDER_TOTAL_BELOW_MINIMUM` with `details: { minimum, currency }`)
 - the owner cancels the payment of an order waiting for it (`POST /api/orders/:orderId/cancel-payment`): the payment page is closed first by the provider that opened it, then the reservation goes and the order becomes `unconfirmed` with its items and shipping data; a payment that came first answers `409 ORDER_ALREADY_PAID`
 - an unconfirmed order (cancelled payment or expired reservation) is changed like the cart (`POST/PATCH/DELETE /api/orders/:orderId/items`), at current prices and without products deleted from the catalog, and confirmed again with only its id
-- order history endpoint: newest first by default, the cart is not listed; paid orders keep the prices they were paid with, unconfirmed ones show current prices
+- order history endpoint: newest first by default, the cart is not listed; paid orders keep the prices they were paid with, unconfirmed ones show current prices. `paidFrom`/`paidTo` keep the orders paid in a period (from its start, before its end, cancelled ones too; an end that is not after the start is `400 PAID_PERIOD_INVALID`), `sortBy=paidAt` lists the paid orders by the time of their payment; `updatedFrom`/`updatedTo` keep the orders changed last in a period (`400 UPDATED_PERIOD_INVALID` the same way)
 - order by id endpoint
-- every order answer (cart, confirmation, history, details, admin status update) gives the same fields: the shipping data, the note and, while the order waits for the payment, `reservationExpiresAt`; the payment id and the provider that took it stay internal
+- every order answer (cart, confirmation, history, details, admin status update) gives the same fields: the shipping data, the note, while the order waits for the payment `reservationExpiresAt`, once it is paid `paidAt` (it stays) and once an admin cancelled it `cancelledAt`; the database sets both times, the payment id and the provider that took it stay internal
 - admin/root order status update endpoint (shipped, delivered); each step mails the buyer (the items, the total, the address and the recipient) unless the account is deleted, a failed mail never undoes the status
 - admin/root cancel of a paid or shipped order (`POST /api/orders/:orderId/cancel`): full refund by the payment provider that took the money, in the same transaction, the stock comes back, the buyer gets a mail unless the account is deleted, the audit log keeps it; the answer gives how to reach the buyer, also a deleted one. A delivered order is not cancelled
+- the desk of the orders of an admin/root: the history filters by the buyer (`userId`), a few statuses (`statuses`), a product (`productId`) and a text (`q`: the number of an order, or a part of the email of the buyer, the name or the phone of the recipient); each row names its buyer, `format=csv` gives every order of the filters as a file for the courier; `POST /api/orders/status` moves many orders to shipped or delivered, each with its own answer. Each step goes to the admin log, and a double click mails once
+- an order keeps the name each product had when it was confirmed (`item.name`): the history, the mails and the payment page show what was bought after a rename; an order not paid yet shows the price and the sale of each product now
+- the payment page has a line for each item and the email of the buyer; the payment carries the name of the shop (`SHOP_NAME`), as the mails do
 - Redis-based timeout worker for order reservation expiry handling
 - the buyer gets an email when the order is paid, with the address and the recipient (sent when the payment event of the provider comes; a failed mail never fails it)
 
@@ -185,25 +206,33 @@ Stripe:
 
 ### Chat and AI assistant
 
-- current chat thread endpoint for guest/user sessions
-- WebSocket connection endpoint for realtime messaging
+- current chat thread endpoint for guest/user sessions: two tabs that open it at once get the same chat; it gives the newest 50 messages, the ones before come page by page from `GET /api/chat/threads/:threadId/messages` with `nextCursor` (a customer reads their own chats, an admin the chats given to the admins)
+- WebSocket connection endpoint for realtime messaging: the message of the customer reaches the chat as soon as it is written, the answer of the bot after it; one turn of the bot at a time in a chat, a message sent while the bot answers is refused with `CHAT_BOT_REPLYING` and not kept
 - thread join/read/message events
 - bot welcome message for newly created chat threads
 - guest and authenticated-user chat flows
 - OpenAI-powered chatbot responses
 - product-aware bot answers based on product context
 - automatic response language matching based on the latest customer message
-- bot fallback behavior when AI response generation fails
-- admin escalation flow for authenticated users
-- guest admin-support guard that asks guests to log in or create an account first
+- bot fallback behavior when AI response generation fails (an answer the model cut short is not asked again)
+- the bot knows the last 5 orders of a signed-in customer, read with the rights of that customer
+- the answers of the bot a guest and a user get in 24 hours are limited (`CHAT_BOT_GUEST_DAILY_TURNS`, `CHAT_BOT_USER_DAILY_TURNS`); past them the bot answers with a text of its own and the model is asked nothing
+- admin escalation flow: before the model only an explicit request for a person and a question said a third time (more than three words) are found; whether anything else needs a person the model decides by meaning. A customer with a confirmed email is asked to describe the issue, the chat goes to the admins with the same step as that answer, and the description is what enters the admin queue (`admin:requested`)
+- guest admin-support guard: only customers with a confirmed email talk to an admin, a guest or a customer without one is told so
 - admin queue state model based on `adminRequestedAt` and `adminUnreadSince`
 - message read-state handling for bot/user/admin chat scenarios
 
 ### Admin and root capabilities
 
-- admin stats endpoint
+- the admin log with filters (`GET /api/admin/audit-log`: the account and the role it wrote with, the thing, the actions, a field among the changes, a period, a csv): each line keeps the address and the browser of its request; the history of the price of a product (`GET /api/products/:productId/price-history`)
+- alerts in place of mails (`GET /api/admin/alerts`), the overview of the work of an admin: paid orders to ship, shipped ones not delivered for some days, products with no or few free units, batches near or past their last good day, chats with a message no admin has read, late payments given back in some last days, a reservation worker that stopped; root also the actions of the admins. Each kind comes with its count and the request to the list of the app with its cases (`list`: the orders, the catalog of an admin, the batches, the chat queue, the admin log), the most urgent first; the page of an admin shows a few rows of each, sorts them as that list sorts and leads to the list or to a case. `?subscribed=true` gives only the kinds the admin follows, for the notifications the frontend shows at the interval the admin chose when a count changed
+- the settings of the alerts, each admin and each root their own (`/api/admin/alerts/subscriptions`): follow a kind or not, set its threshold within its bounds (days, units, seconds, hours) or give it back to the one the server gives (`PUT`/`DELETE .../:kind/threshold`); single cases put aside (`/api/admin/alerts/dismissals`, kept in Redis) leave the count of their kind until taken back or over
+- admin stats endpoint (`GET /api/admin/stats`, admin/root): the users (the accounts of buyers, admins and root left out), the orders by status, the money paid in a period and in the last 7 and 30 days, the units sold and the average order of the period, the top products and categories of the money paid in it, the reviews and their average rating of the period; the period is `[from, to)`, all time until now unless given
+- accounting report (`GET /api/admin/reports/accounting`, admin/root): for a period (`from` taken in, `to` left out; all time until now without them) and the products asked for (`productIds`) or all: the sales of the orders paid in it with their cost at the batches they took and the margin, the paid orders cancelled in it, the net of both, the batches taken in by source, the units written off by reason at their costs, and what the batches have left now; `categoryId` keeps a category, with its whole branch unless `branch=false`
+- the batches of the stock and its journal (`GET /api/admin/stock/batches`, `/movements`, admin/root): each batch with what it came in with, what is left of it at its cost, what the paid orders took and what was written off, its delivery (supplier, invoice, note, the admin) and whether it is over, filtered by product, delivery, source, units left, over or ending by a day and sorted by when it came in, its last good day, what is left, its cost or its value; the journal puts the deliveries, the write-offs, the units the paid orders took and the units their cancels put back in one list by time, filtered by product, batch, order, delivery, write-off, kind and period, with the batches and the change of the stock and of its value
+- accounting by product, category and time (`GET /api/admin/reports/accounting/products`, `/categories`, `/timeline`, admin/root): the same money for each row, the margin of the sales and the write-offs apart; products sorted by revenue, margin, its percent, units, write-offs, purchases, stock or name with cursor pages and totals; categories with their whole branch or their own products only; the days, weeks from monday or months of the calendar of the shop (`SHOP_TIME_ZONE`, Europe/Madrid unless set), up to 400 steps. `format=csv` gives each as a file for the accountant
 - manual product popularity endpoint
-- admin chat queue endpoints
+- admin chat queue endpoints: the chats no admin took (`waiting`), the ones an admin took with a message unread (`active`), both (`unread`, the longest waiting first)
 - root-only admin management endpoints
 
 ### System endpoints
@@ -240,7 +269,7 @@ Current API documentation refinement work:
 ### In progress / partial
 
 - admin chat queue behavior is implemented, but still being refined through manual testing
-- seeding approach exists on the database side, but there is no finalized end-to-end local seed command in this snapshot
+- demo data goes through the routes of the shop (`db/tools/demo_data.mjs`); the old CSV reseed of `db/data` stays local and does not load the current tables
 - Swagger/OpenAPI documentation is implemented, but route metadata is still being refined
 
 ### Planned
@@ -260,9 +289,9 @@ Cartlify/
 ├── db/
 │   ├── schema/                 # raw SQL run in order: roles, extensions, RLS, views, functions, indexes
 │   ├── fixes/                  # one-time repair scripts
-│   ├── data/                   # reseed, clear and csv import scripts
+│   ├── data/                   # csv import; the reseed and clear scripts stay local, not in git
 │   ├── seeds/                  # csv seed data
-│   └── tools/                  # test database build, structure snapshot, restore helpers
+│   └── tools/                  # test database build, structure snapshot, anonymized copy of prod for dev, demo data
 ├── prisma/                     # Prisma schema and migrations
 ├── src/
 │   ├── config/                 # env and service configs
@@ -310,6 +339,7 @@ The repository contains `.env.example` with every variable read by `src/config/e
 A practical local example:
 
 ```env
+# development, test or production (development unless given); any other value stops the start
 NODE_ENV=development
 PORT=3000
 HOST=0.0.0.0
@@ -324,7 +354,7 @@ DATABASE_URL=postgresql://cartlify_app:your_password@localhost:5432/cartlify_dev
 MIGRATION_DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/cartlify_dev
 DEV_SHADOW_DATABASE_URL=postgresql://cartlify_owner:your_password@localhost:5432/cartlify_shadow
 
-# Auth / cookies
+# Auth / cookies (lifetimes in seconds: a value that is not a positive whole number stops the start)
 JWT_ACCESS_SECRET=replace_this_access_secret
 JWT_ACCESS_TTL_SHORT=1200
 JWT_ACCESS_TTL_LONG=3600
@@ -334,6 +364,20 @@ JWT_REFRESH_TTL_LONG=2592000
 GUEST_ID_TTL=157680000
 RESET_TTL_MS=3600000
 BCRYPT_ROUNDS=12
+# the avatar removals by a moderator the rules allow an account (5 unless given)
+AVATAR_REMOVALS_LIMIT=5
+# the requests a minute one address may make (100 unless given)
+RATE_LIMIT_MAX=100
+# multiplies the limits of the login, the registration, the mails and the payment page (1 unless given)
+REQUEST_LIMITS_SCALE=1
+# the proxies in front of the server whose x-forwarded-for is trusted (1 unless given: railway puts one)
+TRUST_PROXY_HOPS=1
+# true logs the addresses of each request, to check how many proxies a new host puts in front
+LOG_REQUEST_ADDRESSES=false
+# the time zone of the days and months of the reports (Europe/Madrid unless given)
+SHOP_TIME_ZONE=Europe/Madrid
+# the name of the shop on a payment and in the mails (Cartlify unless given)
+SHOP_NAME=Cartlify
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -344,6 +388,9 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=12000
 OPENAI_MAX_OUTPUT_TOKENS=450
+# the answers of the chat bot a guest and a user get in 24 hours (30 and 100 unless given)
+CHAT_BOT_GUEST_DAILY_TURNS=30
+CHAT_BOT_USER_DAILY_TURNS=100
 
 # Cloudinary (required: the app does not start without CLOUDINARY_URL or the three keys;
 # the upload tests use them too, see Run Commands)
@@ -378,7 +425,10 @@ LINKEDIN_STATE_SECRET=
 
 # Stripe (STRIPE_SECRET_KEY must be set and start with sk_, otherwise the app does not start)
 STRIPE_SECRET_KEY=sk_test_replace_this_key
+# the signing secret of the webhook endpoint: required in production, elsewhere the start warns
+# that every stripe event is refused without it
 STRIPE_WEBHOOK_SECRET=
+# a three letter code of a currency with cents (eur unless given); jpy, kwd and the like stop the start
 STRIPE_CURRENCY=eur
 
 # tests only, the app never reads it: the secret key of a Stripe test sandbox (sk_test_)
@@ -423,10 +473,14 @@ createdb cartlify_shadow
 
 ### 4. Initialize DB roles and schema
 
-Run the SQL bootstrap script before Prisma migrations so the `cartlify` schema and roles exist:
+The database is built in the same order as the test database (`db/tools/test_db_build.mjs`);
+the order differs from the file numbers. Run the bootstrap script as a superuser before the
+Prisma migrations, so the `cartlify` schema and the roles exist, then give the roles their
+passwords (as the superuser too):
 
 ```bash
-psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$SUPERUSER_DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -c "ALTER ROLE cartlify_owner PASSWORD '<owner password>'; ALTER ROLE cartlify_app PASSWORD '<app password>'; ALTER ROLE cartlify_readonly PASSWORD '<readonly password>';" "$SUPERUSER_DATABASE_URL"
 ```
 
 ### 5. Generate Prisma client
@@ -437,21 +491,26 @@ npm run prisma:generate
 
 ### 6. Run Prisma migrations
 
+The tables are created by the owner role, the way migrations run on the hosted databases:
+
 ```bash
-npm run prisma:migrate
+DATABASE_URL="$OWNER_DATABASE_URL" npm run migrate:deploy
 ```
 
 ### 7. Apply PostgreSQL hardening layer
 
-These scripts add extensions, RLS, functions, triggers, views, and additional indexes that go beyond basic Prisma migrations:
+These scripts add extensions, RLS, functions, triggers, views, and additional indexes that go beyond basic Prisma migrations. Run them in this order: `02` needs the tables, the policies of `03` call functions from `05`, and the second run of `01` grants rights on everything created after its first run:
 
 ```bash
-psql -v ON_ERROR_STOP=1 -f "db/schema/02_extensions.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/schema/03_policies_and_rls.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/schema/04_views.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/schema/05_fn_and_triggers.sql" "$DATABASE_URL"
-psql -v ON_ERROR_STOP=1 -f "db/schema/06_indexes_and_constraints.sql" "$DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/02_extensions.sql" "$SUPERUSER_DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/05_fn_and_triggers.sql" "$OWNER_DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/03_policies_and_rls.sql" "$OWNER_DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/04_views.sql" "$OWNER_DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/06_indexes_and_constraints.sql" "$OWNER_DATABASE_URL"
+psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$SUPERUSER_DATABASE_URL"
 ```
+
+Compare the result with the reference of the structure (read only): `DATABASE_URL="$APP_DATABASE_URL" npm run db:snapshot:check:db`.
 
 ### 8. Start Redis
 
@@ -495,10 +554,11 @@ http://localhost:3000/documentation/json
 # development
 npm run dev
 
-# build
+# build: tsc, then tsc-alias puts relative paths in place of the @… aliases in dist
 npm run build
 
-# start built app
+# start the built app with node (dist/index.js); the mail templates, the logo and /static
+# are read from src/ in the working directory, so src/ stays next to dist/
 npm start
 
 # generate prisma client
@@ -521,7 +581,9 @@ npm run typecheck
 
 # tests: pick test parts in a checkbox list (all parts without an interactive terminal);
 # integration parts rebuild the Docker test database first and remove it after the run,
-# Docker must be running
+# Docker must be running;
+# every answer of the app in the integration tests is held against the Swagger document: a status,
+# an error code or a field it does not describe fails the test (tests/helpers/contract.ts)
 npm test
 
 # keep the test database running after the tests to look inside
@@ -536,19 +598,51 @@ npm test -- --failed
 # integration files run at the same time, one per core and at most 6; one by one:
 npm test -- --workers=1
 
+# external services answer from mocks unless the run names them (the Services checkboxes,
+# or service:<name>). Real SendGrid takes SENDGRID_API_TEST_KEY and EMAIL_FROM, EMAIL_FROM_NAME,
+# EMAIL_REPLY_TO from .env (never SENDGRID_API_KEY); the tests send every mail in sandbox mode,
+# SendGrid checks it and delivers nothing. GitHub Actions takes the secrets of the same names
+npm test -- api:auth service:sendgrid
+
+# real Cloudinary takes CLOUDINARY_* from .env: Cloudinary has no test mode, the upload tests
+# upload into the test/ folder of the account and delete what they uploaded. GitHub Actions
+# takes the CLOUDINARY_URL secret
+npm test -- api:users api:products service:cloudinary
+
+# Stripe answers from a mock of the test sandbox unless the run takes it for real: then the
+# payment tests use Stripe in test mode with STRIPE_TEST_SECRET_KEY from .env (never
+# STRIPE_SECRET_KEY). Either way they open payment pages, pay them with a test card and deliver
+# the events to the webhook themselves, so the sandbox needs no webhook endpoint. Keep `stripe
+# listen` off during a real run, it would forward their events to a dev server. The answers the
+# mock gives are checked against the sandbox by tests/integration/api/payments/stripeAnswers.test.ts
+# in both modes. GitHub Actions takes the STRIPE_TEST_SECRET_KEY secret
+npm test -- api:payments api:orders service:stripe
+
+# the bot tests answer as the model themselves; the tests of the model itself
+# (api/chat/model.test.ts) ask OpenAI for real with OPENAI_API_TEST_KEY from .env (never
+# OPENAI_API_KEY), a few cents a run, and check the form of the answer, not its words. GitHub
+# Actions takes the OPENAI_API_TEST_KEY secret
+npm test -- api:chat service:openai
+
 # unit or integration tests only
 npm run test:unit
 npm run test:integration
 
-# the Cloudinary upload tests are the one part that reads keys from .env (CLOUDINARY_*):
-# Cloudinary has no test mode, they upload into the test/ folder of the account and delete
-# what they uploaded; GitHub Actions takes the CLOUDINARY_URL secret, without it they are skipped
+# demo data through the routes of a running api: a tree of categories, 16 products with images,
+# their stock by a delivery, sales, three buyers with carts, orders, reviews and favorites; what
+# is there stays, a run adds only what is missing. The shop lets a buyer in only with a confirmed
+# email: the first run registers the buyers, confirm the mails, the next run gives them their
+# orders. DEMO_EMAIL_DOMAIN is the domain of their addresses (example.com reaches nobody)
+DEMO_API_URL='<api url>' DEMO_ADMIN_EMAIL='<admin email>' DEMO_ADMIN_PASSWORD='<password>' \
+  DEMO_USERS_PASSWORD='<password of the buyers>' node db/tools/demo_data.mjs
 
-# the payment tests use Stripe in test mode with STRIPE_TEST_SECRET_KEY from .env (never
-# STRIPE_SECRET_KEY): they open payment pages, pay them with a test card and deliver the events
-# to the webhook themselves, so the sandbox needs no webhook endpoint. Keep `stripe listen` off
-# during a run, it would forward their events to a dev server. GitHub Actions takes the
-# STRIPE_TEST_SECRET_KEY secret, without it they are skipped
+# a copy of prod for dev with made-up people, not a backup: prod is read into a throwaway
+# postgres container, its buyers, orders, chats and logs are anonymized there, the dump goes to
+# db/restore/ (git ignores it) and into dev with the owners and rights of the scripts. Both urls
+# of a superuser, given on the command only; Docker must be running. --dump-only makes the dump
+# only, --from <dump> restores dev from one; DEV_USERS_PASSWORD gives the buyers of the copy a
+# password
+PROD_URL='<prod superuser url>' DEV_URL='<dev superuser url>' node db/tools/dev_restore_from_prod.mjs
 ```
 
 ---
@@ -576,8 +670,8 @@ Current REST modules exposed by the application:
 Examples of implemented business endpoints:
 
 - auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
-- users: get/update current user, get user by id, root delete user
-- products: list, details, reviews, create/update/delete, upload images, bulk price update
+- users: admin list of users, get/update current user (an empty avatar removes it), get user by id, moderator removal of an avatar, root delete user
+- products: list, details, reviews, create/update/delete, upload images, sale, bulk price update
 - categories: list, create, update, delete
 - favorites: get/add/remove
 - orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund
@@ -655,8 +749,8 @@ Implemented chat behavior:
 - bot welcome message for new threads
 - product-aware OpenAI chatbot responses
 - automatic response language matching based on the latest customer message
-- guest guard for admin support requests
-- authenticated-user admin escalation
+- only customers with a confirmed email talk to an admin
+- admin escalation: the bot asks to describe the issue, the description enters the admin queue
 - admin queue model using `adminRequestedAt` and `adminUnreadSince`
 - guest-to-user chat migration during authentication
 

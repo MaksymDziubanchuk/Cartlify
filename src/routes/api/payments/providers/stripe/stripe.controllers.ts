@@ -7,7 +7,7 @@ import { getStripeCheckoutSession } from './services/getStripeCheckoutSession.se
 import type { ControllerRouter } from 'types/controller.js';
 import type { UserEntity } from 'types/user.js';
 import type {
-  CheckoutSessionResponseDto,
+  CheckoutSessionReadResponseDto,
   GetCheckoutSessionByIdParamsDto,
   GetCheckoutSessionByIdDto,
   HandleStripeWebhookDto,
@@ -18,7 +18,7 @@ const getCheckoutSessionById: ControllerRouter<
   GetCheckoutSessionByIdParamsDto,
   {},
   {},
-  CheckoutSessionResponseDto
+  CheckoutSessionReadResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const { sessionId } = req.params;

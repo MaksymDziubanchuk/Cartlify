@@ -1,9 +1,13 @@
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 import { encodeCursor, decodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
-import { mapProductListRowToResponse } from '../products/services/helpers/getAllProducts.helper.js';
+import {
+  mapProductListRowToResponse,
+  productListSelect,
+} from '../products/services/helpers/getAllProducts.helper.js';
 
 import { BadRequestError, NotFoundError, InternalError, isAppError } from '@utils/errors.js';
 import type {
@@ -59,9 +63,11 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
           ? { guestId: dto.actorId as string }
           : { userId: Number(dto.actorId) };
 
+      // the list of a buyer: a product taken out of the catalog or without an image is left out,
+      // the favorite itself stays
       const baseWhere: any = {
         ...actorWhere,
-        product: { deletedAt: null },
+        product: { deletedAt: null, images: { some: { isPrimary: true } } },
       };
 
       // apply cursor window when provided
@@ -75,40 +81,25 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
         select: {
           id: true,
           createdAt: true,
-          product: {
-            select: {
-              id: true,
-              name: true,
-              description: true,
-              price: true,
-              stock: true,
-              // the card shows free units, stock minus the reserved ones
-              reservedStock: true,
-              categoryId: true,
-              views: true,
-              popularity: true,
-              avgRating: true,
-              reviewsCount: true,
-              createdAt: true,
-              updatedAt: true,
-              deletedAt: true,
-              images: {
-                where: { isPrimary: true },
-                select: { url: true, position: true, isPrimary: true },
-                orderBy: { position: 'asc' },
-                take: 1,
-              },
-            },
-          },
+          // the card of a list: free units, the sale while it lasts, the primary image
+          product: { select: productListSelect },
         },
       });
 
       const hasNext = rows.length > limit;
       const pageRows = hasNext ? rows.slice(0, limit) : rows;
 
-      // map favorites into product cards
+      // map favorites into product cards; the free units leave out the units that are over
+      const expired = await expiredUnitsOf(
+        tx,
+        pageRows.map((r) => r.product.id),
+      );
       const items = pageRows.map((r) => ({
-        product: mapProductListRowToResponse(r.product),
+        // a favorite is a product of a buyer list
+        product: mapProductListRowToResponse(
+          { ...r.product, expiredStock: expired.get(r.product.id) ?? 0 },
+          'buyer',
+        ),
         addedAt: r.createdAt,
       }));
 

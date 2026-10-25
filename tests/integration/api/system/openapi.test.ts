@@ -106,16 +106,15 @@ describe('GET /documentation/json', () => {
 });
 
 describe('the users routes', () => {
-  // an avatar is a file, it travels in a form and not in json
+  // an avatar is a file, it travels in a form; json has only the empty avatar that removes one
   it('lists the json body and the form of PATCH /api/users/me, the file only in the form', () => {
     const content = operation('patch', '/api/users/me').requestBody!.content;
 
     expect(Object.keys(content).sort()).toEqual(['application/json', 'multipart/form-data']);
-    expect(Object.keys(propertiesOf(content['application/json']!.schema)).sort()).toEqual([
-      'locale',
-      'name',
-      'phone',
-    ]);
+    const json = propertiesOf(content['application/json']!.schema);
+    expect(Object.keys(json).sort()).toEqual(['avatar', 'locale', 'name', 'phone']);
+    expect(json.avatar).toMatchObject({ type: 'string', maxLength: 0 });
+    expect(json.avatar).not.toHaveProperty('format');
     const form = propertiesOf(content['multipart/form-data']!.schema);
     expect(Object.keys(form).sort()).toEqual(['avatar', 'locale', 'name', 'phone']);
     expect(form.avatar).toMatchObject({ type: 'string', format: 'binary' });
@@ -129,11 +128,31 @@ describe('the users routes', () => {
 
   // a status a route never sends has no place in its answers
   it.each([
-    ['get', '/api/users/me', ['200', '401', '403', '500']],
-    ['patch', '/api/users/me', ['200', '400', '401', '403', '404', '413', '500']],
-    ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '500']],
-    ['delete', '/api/users/{userId}', ['200', '400', '401', '403', '404', '409', '500']],
-    ['delete', '/api/users/me', ['204', '400', '401', '403', '409', '500']],
+    // 429 is the rate limit and 503 the session check of every such route, 413 and 415 the
+    // json body, see 'the refusals every route shares' below
+    ['get', '/api/users/', ['200', '400', '401', '403', '429', '500', '503']],
+    ['get', '/api/users/me', ['200', '401', '403', '429', '500', '503']],
+    [
+      'patch',
+      '/api/users/me',
+      ['200', '400', '401', '403', '404', '413', '415', '429', '500', '503'],
+    ],
+    ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '429', '500', '503']],
+    [
+      'delete',
+      '/api/users/{userId}',
+      ['200', '400', '401', '403', '404', '409', '429', '500', '503'],
+    ],
+    [
+      'delete',
+      '/api/users/{userId}/avatar',
+      ['200', '400', '401', '403', '404', '429', '500', '503'],
+    ],
+    [
+      'delete',
+      '/api/users/me',
+      ['204', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503'],
+    ],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
   });
@@ -161,6 +180,26 @@ describe('the users routes', () => {
     expect(query.filter((parameter) => parameter.required)).toEqual([]);
   });
 
+  // the filters, the search and the order of the admin table of users
+  it('lists the optional query of GET /api/users/', () => {
+    const query = (operation('get', '/api/users/').parameters ?? []).filter(
+      (parameter) => parameter.in === 'query',
+    );
+
+    expect(query.map((parameter) => parameter.name).sort()).toEqual([
+      'authProvider',
+      'cursor',
+      'deleted',
+      'email',
+      'isVerified',
+      'limit',
+      'role',
+      'sortBy',
+      'sortOrder',
+    ]);
+    expect(query.filter((parameter) => parameter.required)).toEqual([]);
+  });
+
   it('shows the answer DELETE /api/users/{userId} really gives as its example', () => {
     const ok = operation('delete', '/api/users/{userId}').responses?.['200'];
 
@@ -181,7 +220,15 @@ describe('the product routes', () => {
       'images',
       'name',
       'price',
-      'stock',
+      'safety.manufacturer.address',
+      'safety.manufacturer.country',
+      'safety.manufacturer.email',
+      'safety.manufacturer.name',
+      'safety.responsiblePerson.address',
+      'safety.responsiblePerson.email',
+      'safety.responsiblePerson.name',
+      'safety.warnings',
+      'sku',
     ]);
     expect(form.images).toMatchObject({
       type: 'array',
@@ -201,14 +248,118 @@ describe('the product routes', () => {
   });
 
   it.each([
-    ['post', '/api/products/', ['201', '400', '401', '403', '413', '500']],
+    [
+      'post',
+      '/api/products/',
+      ['201', '400', '401', '403', '404', '409', '413', '429', '500', '503'],
+    ],
     [
       'patch',
       '/api/products/{productId}',
-      ['200', '400', '401', '403', '404', '409', '413', '500'],
+      ['200', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503'],
+    ],
+    [
+      'patch',
+      '/api/products/{productId}/sale',
+      ['200', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503'],
     ],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
+  });
+
+  // a discount by a percent or by an amount, or null to take the sale off
+  it('asks a sale or null in the body of PATCH /api/products/{productId}/sale', () => {
+    const body = resolve(
+      operation('patch', '/api/products/{productId}/sale').requestBody!.content['application/json']!
+        .schema,
+    );
+
+    expect(requiredOf(body)).toEqual(['sale']);
+    // openapi 3.0 has no null type: swagger shows the null shape as a nullable one
+    const sale = propertiesOf(body).sale as { anyOf?: (Schema & { nullable?: boolean })[] };
+    const shapes = (sale.anyOf ?? []).map((shape) =>
+      shape.nullable ? 'null' : Object.keys(propertiesOf(shape)).sort().join(','),
+    );
+    expect(shapes.sort()).toEqual(['amount,endsAt', 'endsAt,percent', 'null']);
+  });
+
+  it('shows the sale of a product next to its price, only while it lasts', () => {
+    const answerOf = (path: string) =>
+      resolve(
+        (
+          operation('get', path).responses?.['200']?.content?.['application/json'] as {
+            schema: Schema;
+          }
+        ).schema,
+      );
+    const card = answerOf('/api/products/{productId}');
+    const item = resolve(
+      (propertiesOf(answerOf('/api/products/')).items as { items: Schema }).items,
+    );
+
+    for (const schema of [card, item]) {
+      // a buyer gets them while the sale lasts, an admin always, null without a sale
+      expect(Object.keys(propertiesOf(schema))).toEqual(
+        expect.arrayContaining(['salePrice', 'saleEndsAt']),
+      );
+      expect(requiredOf(schema)).not.toContain('salePrice');
+      expect(requiredOf(schema)).not.toContain('saleEndsAt');
+    }
+  });
+
+  // a buyer and an admin get other fields of a product: the fields of an admin are optional, and
+  // the card of a buyer has no popularity
+  it('requires of a product only the fields every role gets, with its category', () => {
+    const answerOf = (path: string) =>
+      resolve(
+        (
+          operation('get', path).responses?.['200']?.content?.['application/json'] as {
+            schema: Schema;
+          }
+        ).schema,
+      );
+    const card = answerOf('/api/products/{productId}');
+    const item = resolve(
+      (propertiesOf(answerOf('/api/products/')).items as { items: Schema }).items,
+    );
+    const every = [
+      'avgRating',
+      'category',
+      'createdAt',
+      'id',
+      'images',
+      'name',
+      'price',
+      'reviewsCount',
+      'sku',
+      'stock',
+    ];
+
+    expect(requiredOf(card).sort()).toEqual(every);
+    expect(requiredOf(item).sort()).toEqual(every);
+    for (const schema of [card, item]) {
+      expect(propertiesOf(schema)).not.toHaveProperty('categoryId');
+      expect(Object.keys(propertiesOf(schema))).toEqual(
+        expect.arrayContaining([
+          'popularity',
+          'views',
+          'updatedAt',
+          'totalStock',
+          'reservedStock',
+          'popularityOverride',
+          'popularityOverrideUntil',
+          'deletedAt',
+        ]),
+      );
+    }
+  });
+
+  it('lists the flags of an admin among the query of GET /api/products/', () => {
+    const query = (operation('get', '/api/products/').parameters ?? [])
+      .filter((parameter) => parameter.in === 'query')
+      .map((parameter) => parameter.name);
+
+    expect(query).toEqual(expect.arrayContaining(['deleted', 'onSale', 'popularityOverridden']));
   });
 });
 
@@ -267,14 +418,14 @@ describe('the payments routes', () => {
     [
       'post',
       '/api/payments/checkout/sessions',
-      ['201', '400', '401', '403', '404', '409', '500', '503'],
+      ['201', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503'],
     ],
     [
       'get',
       '/api/payments/stripe/checkout/sessions/{sessionId}',
-      ['200', '400', '401', '403', '404', '500', '503'],
+      ['200', '400', '401', '403', '404', '429', '500', '503'],
     ],
-    ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '500']],
+    ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '409', '500']],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
   });
@@ -296,7 +447,86 @@ describe('every route', () => {
   it('lists only the answers the confirmation of an order can give', () => {
     expect(
       Object.keys(operation('post', '/api/orders/current/confirm').responses ?? {}).sort(),
-    ).toEqual(['200', '400', '401', '403', '404', '409', '500', '503']);
+    ).toEqual(['200', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503']);
+  });
+});
+
+// the refusals that come from the shared parts of a route (the schema, the guards, the rate limit,
+// the error handler) are written into the document in one place, src/plugins/openapi.plugin.ts
+describe('the refusals every route shares', () => {
+  const operations = () =>
+    Object.entries(doc.paths).flatMap(([path, byMethod]) =>
+      Object.entries(byMethod).map(([method, op]) => ({ method, path, op })),
+    );
+  const said = (op: Operation, status: string) =>
+    ((op.responses?.[status] as Description | undefined)?.description ?? '').toString();
+
+  it('names INTERNAL_ERROR among the answers of every route', () => {
+    const without = operations()
+      .filter(({ op }) => !said(op, '500').includes('INTERNAL_ERROR'))
+      .map(({ method, path }) => `${method} ${path}`);
+
+    expect(without).toEqual([]);
+  });
+
+  // the health checks, static files and the events of payment providers are outside the limit
+  it('names RATE_LIMITED for every route the rate limit counts', () => {
+    const free = ['/health/', '/ready/', '/api/payments/stripe/webhook'];
+    const counted = operations().filter(({ path }) => !free.includes(path));
+
+    expect(
+      counted
+        .filter(({ op }) => !said(op, '429').includes('RATE_LIMITED'))
+        .map(({ method, path }) => `${method} ${path}`),
+    ).toEqual([]);
+    for (const path of free) {
+      for (const op of Object.values(doc.paths[path] ?? {}))
+        expect(op.responses?.['429']).toBeUndefined();
+    }
+  });
+
+  it('names INSUFFICIENT_ROLE and the roles of a route that checks them', () => {
+    expect(said(operation('get', '/api/admin/stats'), '403')).toContain('INSUFFICIENT_ROLE');
+    expect(said(operation('get', '/api/admin/stats'), '403')).toContain('ADMIN, ROOT');
+    expect(said(operation('post', '/api/auth/login'), '403')).toContain('GUEST');
+  });
+
+  it('names INVALID_ID_PARAM for an id in the path', () => {
+    expect(said(operation('get', '/api/orders/{orderId}'), '400')).toContain('INVALID_ID_PARAM');
+    expect(said(operation('get', '/api/orders/{orderId}'), '400')).toContain('`orderId`');
+  });
+
+  it('names VALIDATION_ERROR for a route with a schema of its request', () => {
+    expect(said(operation('post', '/api/auth/login'), '400')).toContain('VALIDATION_ERROR');
+    expect(said(operation('get', '/api/admin/stats'), '400')).toContain('VALIDATION_ERROR');
+  });
+
+  it('names LOGIN_REQUIRED and AUTH_TEMPORARILY_UNAVAILABLE for a route that reads the session', () => {
+    expect(said(operation('get', '/api/orders/current'), '401')).toContain('LOGIN_REQUIRED');
+    expect(said(operation('get', '/api/orders/current'), '503')).toContain(
+      'AUTH_TEMPORARILY_UNAVAILABLE',
+    );
+  });
+
+  // a json body: not json, too big or of another type never reaches the route
+  it('names the refusals of a json body', () => {
+    const login = operation('post', '/api/auth/login');
+
+    expect(said(login, '400')).toContain('BAD_REQUEST');
+    expect(said(login, '413')).toContain('PAYLOAD_TOO_LARGE');
+    expect(said(login, '415')).toContain('UNSUPPORTED_MEDIA_TYPE');
+  });
+
+  it('gives a csv report as text/csv next to its json', () => {
+    for (const path of [
+      '/api/admin/reports/accounting/products',
+      '/api/admin/reports/accounting/categories',
+      '/api/admin/reports/accounting/timeline',
+    ]) {
+      const content = operation('get', path).responses?.['200']?.content ?? {};
+
+      expect(Object.keys(content).sort()).toEqual(['application/json', 'text/csv']);
+    }
   });
 });
 

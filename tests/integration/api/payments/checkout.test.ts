@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { closeRedis, connectRedis } from '@redis/client.js';
+import { markOrderPaymentPageClosed } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -24,7 +25,7 @@ import {
 } from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
-  describeWithStripe,
+  expireSession,
   readSession,
   rememberSession,
   stripeRequestsDuring,
@@ -33,8 +34,8 @@ import {
 
 // POST /api/payments/checkout/sessions: the buyer of an order waiting for its payment gets a payment
 // page for it at the provider the request names; there is no main provider. The server pays with
-// Stripe for now: its page is opened for real (the test sandbox); the refusals before Stripe run
-// without the key too. The payment itself and its webhook are in webhook*.test.ts
+// Stripe for now: its page is opened at Stripe (its mock, or the test sandbox with
+// service:stripe). The payment itself and its webhook are in webhook*.test.ts
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -309,7 +310,7 @@ describe('POST /api/payments/checkout/sessions', () => {
     });
   });
 
-  // a real failed connection, it needs no key: the page asks the buyer to try again a bit later,
+  // a real failed connection: the page asks the buyer to try again a bit later,
   // the answer the cancel of a payment gives
   it('answers PAYMENT_PROVIDER_UNAVAILABLE when Stripe cannot be reached', async () => {
     const { user, orderId } = await waitingOrder();
@@ -324,7 +325,7 @@ describe('POST /api/payments/checkout/sessions', () => {
     ).toHaveLength(1);
   });
 
-  describeWithStripe('at Stripe', () => {
+  describe('at Stripe', () => {
     it('opens a payment page for the order total that the reservation closes', async () => {
       const { user, orderId } = await waitingOrder({ quantity: 2 });
 
@@ -341,7 +342,7 @@ describe('POST /api/payments/checkout/sessions', () => {
         mode: 'payment',
         status: 'open',
         paymentStatus: 'unpaid',
-        // Stripe keeps a page open for a day, the reservation ends long before
+        // the page tells the end of the reservation; Stripe closes the page itself a bit later
         expiresAt: order!.reservationExpiresAt!.toISOString(),
       });
       expect(await readSession(page.sessionId)).toMatchObject({
@@ -351,6 +352,20 @@ describe('POST /api/payments/checkout/sessions', () => {
         client_reference_id: String(orderId),
         metadata: { entityType: 'order', entityId: String(orderId), userId: String(user.id) },
       });
+    });
+
+    // a page the reservation timer could not close (Stripe out of reach) stayed payable for a day:
+    // Stripe closes it itself half an hour after the reservation, the least it takes
+    it('has Stripe close the page half an hour after the end of the reservation', async () => {
+      const { user, orderId } = await waitingOrder();
+
+      const res = await checkout(app, csrf, user, orderId);
+
+      const session = await readSession(rememberSession(res.json().checkoutSession.sessionId));
+      const order = await orderStateOf(orderId);
+      expect(session.expires_at).toBe(
+        Math.floor(order!.reservationExpiresAt!.getTime() / 1000) + 30 * 60,
+      );
     });
 
     it('returns the buyer to the pages of the shop', async () => {
@@ -389,6 +404,26 @@ describe('POST /api/payments/checkout/sessions', () => {
       expect(second.json().checkoutSession.sessionId).toBe(
         rememberSession(first.json().checkoutSession.sessionId),
       );
+    });
+
+    // the buyer moved to another provider and the app closed this page (closePageOfOtherProvider),
+    // then the buyer came back to Stripe within the same reservation: the same key would give the
+    // closed page back from Stripe as if it were open
+    it('opens a new page when the buyer comes back after the app closed the page', async () => {
+      const { user, orderId } = await waitingOrder();
+      const first = rememberSession(
+        (await checkout(app, csrf, user, orderId)).json().checkoutSession.sessionId,
+      );
+      await expireSession(first);
+      await markOrderPaymentPageClosed(orderId);
+
+      const again = await checkout(app, csrf, user, orderId);
+
+      expect(again.statusCode).toBe(201);
+      const page = again.json().checkoutSession;
+      expect(rememberSession(page.sessionId)).not.toBe(first);
+      expect(page.status).toBe('open');
+      expect((await readSession(page.sessionId)).status).toBe('open');
     });
 
     it('opens a new page once the order is confirmed again', async () => {

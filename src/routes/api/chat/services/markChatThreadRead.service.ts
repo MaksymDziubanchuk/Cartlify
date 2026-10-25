@@ -32,6 +32,7 @@ interface LockedChatThreadDto {
     guestId: string | null;
     type: 'bot' | 'admin';
     status: 'open' | 'closed';
+    adminUnreadSince: Date | null;
 }
 
 // normalize user id
@@ -63,7 +64,7 @@ export async function markChatThreadReadService({
 
                 // lock target thread
                 const lockedThreads = await db.$queryRaw<LockedChatThreadDto[]>`
-                    SELECT id, "userId", "guestId", type, status
+                    SELECT id, "userId", "guestId", type, status, "adminUnreadSince"
                     FROM cartlify.chat_threads
                     WHERE id = ${threadId}::uuid
                     FOR UPDATE
@@ -149,6 +150,9 @@ export async function markChatThreadReadService({
                         data: {
                             unreadCount: 0,
                             adminRequestedAt: null,
+                            // a chat read before its customer described the problem goes to the
+                            // active queue: an open chat of an admin keeps one of the two marks
+                            adminUnreadSince: lockedThread.adminUnreadSince ?? new Date(),
                         },
                     });
 
@@ -183,7 +187,7 @@ export async function markChatThreadReadService({
         if (isAppError(err)) throw err;
 
         if (isRetryableTxError(err)) {
-            throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+            throw new ResourceBusyError();
         }
 
         throw new InternalError({ reason: 'CHAT_MARK_READ_UNEXPECTED' }, err);

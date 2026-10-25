@@ -95,6 +95,17 @@ describe('askAiForBotText', () => {
       () => jsonResponse({ error: { message: 'Server error' } }, 500),
       'AI_API_UNAVAILABLE',
     ],
+    // the same request is cut at the same limit again: a second paid call for the same piece
+    [
+      'an answer cut by the output limit',
+      () =>
+        jsonResponse({
+          status: 'incomplete',
+          incomplete_details: { reason: 'max_output_tokens' },
+          output_text: '{"reply":"We ha',
+        }),
+      'AI_INCOMPLETE_RESPONSE',
+    ],
   ])('does not ask again after %s', async (_case, response, code) => {
     const log = fakeLog();
     const calls = answers(response, good);

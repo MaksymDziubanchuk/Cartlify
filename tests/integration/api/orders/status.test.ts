@@ -12,8 +12,8 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
-import { itWithMail, watchMail, type SentMail } from '../../../helpers/mail.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { refuseMail, watchMail, type SentMail } from '../../../helpers/mail.js';
 import {
   orderRowOf,
   placeOrder,
@@ -56,8 +56,8 @@ const setStatus = (actor: TestUser, orderId: number | string, status: string) =>
 const markDelivered = (orderId: number) =>
   asAdmin((tx) => tx.order.update({ where: { id: orderId }, data: { status: 'delivered' } }));
 
-// a failed mail is logged for every shipped and delivered order without a SendGrid key; without
-// the key no request reaches SendGrid either, so no line and no request mean no mail was tried
+// a mail the app tries reaches the SendGrid mock, a failed one is logged: no mail and no line
+// mean no mail was tried
 const MAIL_FAILED = {
   shipped: 'order shipped mail was not sent',
   delivered: 'order delivered mail was not sent',
@@ -74,13 +74,6 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await newUser({ role: 'ADMIN' });
   root = await newUser({ role: 'ROOT' });
-
-  // the test environment has no SendGrid key: every shipped and delivered order logs that its mail
-  // was not sent, and so does the deletion of an account; 'keeps ... when its mail cannot be sent'
-  // checks the lines
-  allowLogs({ msg: MAIL_FAILED.shipped, reason: 'SENDGRID_API_KEY_REQUIRED' });
-  allowLogs({ msg: MAIL_FAILED.delivered, reason: 'SENDGRID_API_KEY_REQUIRED' });
-  allowLogs({ msg: 'account deleted mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterEach(() => {
@@ -226,6 +219,7 @@ describe('PATCH /api/orders/:orderId/status', () => {
       async (stage, status, other) => {
         const buyer = await newUser();
         const orderId = await placeOrder(app, csrf, buyer, await newProduct(), stage);
+        refuseMail();
 
         const res = await setStatus(admin, orderId, status);
 
@@ -292,7 +286,7 @@ describe('PATCH /api/orders/:orderId/status', () => {
       },
     );
 
-    itWithMail('mails the buyer that the order is shipped, where and to whom', async () => {
+    it('mails the buyer that the order is shipped, where and to whom', async () => {
       const buyer = await newUser({ name: 'Anna' });
       const orderId = await placeOrder(app, csrf, buyer, await newProduct(), 'paid');
       const mails = watchMail();
@@ -300,7 +294,7 @@ describe('PATCH /api/orders/:orderId/status', () => {
       await setStatus(admin, orderId, 'shipped');
 
       expect(mails).toHaveLength(1);
-      expect(mails[0]).toMatchObject({ to: [buyer.email], sandbox: true });
+      expect(mails[0]).toMatchObject({ to: [buyer.email], accepted: true });
       expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is shipped`);
       expect(mails[0]!.text).toContain(`Shipping to: ${shippingData.shippingAddress}`);
       expect(mails[0]!.text).toContain('Recipient: Anna Koval, +380501234567');
@@ -308,7 +302,7 @@ describe('PATCH /api/orders/:orderId/status', () => {
       expect(mails[0]!.html).toContain('Hi Anna,');
     });
 
-    itWithMail('mails the buyer that the order is delivered, where and to whom', async () => {
+    it('mails the buyer that the order is delivered, where and to whom', async () => {
       const buyer = await newUser({ name: 'Anna' });
       const orderId = await placeOrder(app, csrf, buyer, await newProduct(), 'shipped');
       const mails = watchMail();
@@ -316,7 +310,7 @@ describe('PATCH /api/orders/:orderId/status', () => {
       await setStatus(admin, orderId, 'delivered');
 
       expect(mails).toHaveLength(1);
-      expect(mails[0]).toMatchObject({ to: [buyer.email], sandbox: true });
+      expect(mails[0]).toMatchObject({ to: [buyer.email], accepted: true });
       expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is delivered`);
       expect(mails[0]!.text).toContain(`Delivered to: ${shippingData.shippingAddress}`);
       expect(mails[0]!.text).toContain('Recipient: Anna Koval, +380501234567');

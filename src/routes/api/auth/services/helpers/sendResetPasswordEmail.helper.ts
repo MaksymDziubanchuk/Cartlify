@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 import { webUrl } from '@helpers/webOrigin.js';
@@ -30,7 +31,7 @@ export async function sendResetPasswordEmail(
   const { subject, text, html } = buildResetPasswordTemplate({
     resetUrl,
     userName: args.userName || '',
-    appName: 'Cartlify',
+    appName: env.SHOP_NAME,
     logoCid: 'cartlify-logo',
     expiresInText,
   });

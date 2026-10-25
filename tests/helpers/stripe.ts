@@ -1,31 +1,81 @@
 import Stripe from 'stripe';
 import type { FastifyInstance } from 'fastify';
-import { describe, jest } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, jest } from '@jest/globals';
 
 import appStripe from '@config/stripe.js';
 
 import { STRIPE_PLACEHOLDER_KEY } from '../setup/isolateEnv.js';
 import { uniqueTag } from './factories.js';
 import { hideSecrets } from './hideSecrets.js';
+import { isRealService } from './services.js';
+import { startStripeMock } from './stripeMock.js';
 
-// Stripe has a test mode: the payment tests use the key of a test sandbox (STRIPE_TEST_SECRET_KEY,
-// tests/setup/integration.setup.ts) and pay with a test card. The sandbox has no webhook endpoint,
-// so Stripe delivers nothing by itself: a test takes the event Stripe recorded for its payment page
-// from the events api and delivers it to the webhook route, signed with the test webhook secret
-// the way Stripe signs it. No answer of Stripe is made up: Stripe out of reach is a real failed
-// connection of the client of the app (withStripeOutOfReach); the helpers here use a client of
-// their own, so they still reach Stripe meanwhile
+// Stripe answers from a mock (tests/helpers/stripeMock.ts) unless the run takes it for real
+// (service:stripe): then the payment tests use the key of a test sandbox (STRIPE_TEST_SECRET_KEY,
+// tests/setup/integration.setup.ts) and pay with a test card. Either way the client of the app
+// and the one of the helpers are the real sdk, only where they send their requests differs. The
+// sandbox has no webhook endpoint and the mock sends nothing: a test takes the event Stripe recorded
+// for its payment page from the events api and delivers it to the webhook route, signed with the
+// test webhook secret the way Stripe signs it. Stripe out of reach is a real failed connection of
+// the client of the app (withStripeOutOfReach); the helpers use a client of their own, so they
+// still reach Stripe meanwhile. tests/integration/api/payments/stripeAnswers.test.ts holds the mock
+// to the answers of the sandbox: it runs in both modes
 
-export const hasStripe = (process.env.STRIPE_SECRET_KEY ?? '') !== STRIPE_PLACEHOLDER_KEY;
-
-// without the key (a ci run without the secret) these tests are skipped
-export const describeWithStripe = hasStripe ? describe : describe.skip;
+export const realStripe = isRealService('stripe');
 
 export const WEBHOOK_URL = '/api/payments/stripe/webhook';
 
 const testStripe = new Stripe(process.env.STRIPE_SECRET_KEY ?? STRIPE_PLACEHOLDER_KEY, {
   maxNetworkRetries: 2,
 });
+
+// the client of the helpers, for a test of the answers of Stripe themselves
+export const stripeOfTests = testStripe;
+
+// the clients of the app and of the helpers send their requests to the mock
+function aimAt(client: Stripe, port: number) {
+  client._setApiField('host', '127.0.0.1');
+  client._setApiField('port', port);
+  client._setApiField('protocol', 'http');
+}
+
+// a client with another key, sent where the client of the helpers goes
+export function stripeWithKey(key: string): Stripe {
+  const client = new Stripe(key);
+  for (const field of ['host', 'port', 'protocol'] as const) {
+    client._setApiField(field, testStripe.getApiField(field));
+  }
+  return client;
+}
+
+// every integration test file: the mock starts before the file and stops after it, unless the run
+// takes Stripe for real. A request the mock does not answer fails the test that sent it: the mock
+// would only guess, so it gets the answer of the sandbox first
+export function installStripe(): void {
+  if (realStripe) return;
+
+  const mock = startStripeMock(process.env.STRIPE_SECRET_KEY ?? STRIPE_PLACEHOLDER_KEY);
+  const failUnanswered = () => {
+    const unanswered = mock.takeUnanswered();
+    if (unanswered.length) {
+      throw new Error(
+        `the Stripe mock does not answer ${unanswered.join('; ')}: add the answer of the ` +
+          'sandbox to tests/helpers/stripeMock.ts and to stripeAnswers.test.ts',
+      );
+    }
+  };
+
+  beforeAll(async () => {
+    const port = await mock.listen();
+    aimAt(appStripe, port);
+    aimAt(testStripe, port);
+  });
+  afterEach(failUnanswered);
+  afterAll(async () => {
+    await mock.close();
+    failUnanswered();
+  });
+}
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -50,7 +100,8 @@ async function call<T>(what: string, fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// the payment pages a test file opened, closed after it so none stays open in the sandbox
+// the payment pages a test file opened, closed after it so none stays open in the sandbox; the
+// pages of the mock go with it
 const openedSessions = new Set<string>();
 
 export function rememberSession(sessionId: string): string {
@@ -59,6 +110,11 @@ export function rememberSession(sessionId: string): string {
 }
 
 export async function closeOpenSessions(): Promise<void> {
+  if (!realStripe) {
+    openedSessions.clear();
+    return;
+  }
+
   await Promise.allSettled(
     [...openedSessions].map(async (id) => {
       const session = await testStripe.checkout.sessions.retrieve(id);
@@ -70,6 +126,19 @@ export async function closeOpenSessions(): Promise<void> {
 
 export const readSession = (sessionId: string) =>
   call('read the payment page', () => testStripe.checkout.sessions.retrieve(sessionId));
+
+// the lines of a payment page, as Stripe shows them to the buyer
+export const lineItemsOf = (sessionId: string) =>
+  call('read the lines of the payment page', async () =>
+    (await testStripe.checkout.sessions.listLineItems(sessionId, { limit: 100 })).data.map(
+      (line) => ({
+        description: line.description,
+        quantity: line.quantity,
+        unitAmount: line.price?.unit_amount ?? null,
+        amountTotal: line.amount_total,
+      }),
+    ),
+  );
 
 export const expireSession = (sessionId: string) =>
   call('close the payment page', () => testStripe.checkout.sessions.expire(sessionId));
@@ -113,7 +182,8 @@ export async function payCheckoutSession(sessionId: string): Promise<string> {
     testStripe.paymentMethods.create({
       type: 'card',
       card: { token: 'tok_visa' },
-      billing_details: { email: 'buyer@example.com', name: 'Test Buyer' },
+      // the page knows the email of the buyer: the card has the same one
+      billing_details: { email: session.customer_email ?? 'buyer@example.com', name: 'Test Buyer' },
     }),
   );
   const paid = await call('pay the page', () =>

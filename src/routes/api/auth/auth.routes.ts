@@ -1,6 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
+import { requestLimits } from '../../../plugins/requestLimits.js';
 import { authSchema } from './auth.schemas.js';
 import { authController } from './auth.controllers.js';
 
@@ -8,7 +9,7 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/register',
     {
-      preHandler: [authGuard, requireRole(['GUEST'])],
+      preHandler: [authGuard, requireRole(['GUEST']), ...requestLimits.register],
       schema: authSchema.setRegisterSchema,
     },
     authController.postRegister,
@@ -68,7 +69,7 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/login',
     {
-      preHandler: [authGuard, requireRole(['GUEST'])],
+      preHandler: [authGuard, requireRole(['GUEST']), ...requestLimits.login],
       schema: authSchema.setLoginSchema,
     },
     authController.postLogin,
@@ -76,7 +77,7 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/verify/resend',
     {
-      preHandler: [authGuard, requireRole(['GUEST'])],
+      preHandler: [authGuard, requireRole(['GUEST']), ...requestLimits.mail],
       schema: authSchema.setVerifyResendSchema,
     },
     authController.postVerifyResend,
@@ -87,7 +88,7 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/password/forgot',
     {
-      preHandler: [authGuard],
+      preHandler: [authGuard, ...requestLimits.mail],
       schema: authSchema.setPasswordForgotSchema,
     },
     authController.postPasswordForgot,
@@ -107,6 +108,34 @@ export default async function authRouter(app: FastifyInstance) {
       schema: authSchema.setLogoutSchema,
     },
     authController.postLogout,
+  );
+  app.get(
+    '/sessions',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      schema: authSchema.getSessionsSchema,
+    },
+    authController.getSessions,
+  );
+  app.delete(
+    '/sessions/:sessionId',
+    {
+      preHandler: [authGuard, requireRole(['USER', 'ADMIN', 'ROOT'])],
+      schema: authSchema.deleteSessionSchema,
+    },
+    authController.deleteSession,
+  );
+  app.post(
+    '/password/change',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['USER', 'ADMIN', 'ROOT']),
+        ...requestLimits.passwordChange,
+      ],
+      schema: authSchema.setPasswordChangeSchema,
+    },
+    authController.postPasswordChange,
   );
   app.post(
     '/refresh',

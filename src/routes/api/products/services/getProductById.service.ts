@@ -1,17 +1,26 @@
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 
 import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
-import { mapProductRowToResponse, normalizeFindProductByIdInput } from './helpers/index.js';
+import {
+  mapProductRowToResponse,
+  normalizeFindProductByIdInput,
+  productResponseSelect,
+  productViewOf,
+  readCategoryPath,
+} from './helpers/index.js';
 
 import type { FullProductResponseDto, FindProductByIdDto } from 'types/dto/products.dto.js';
 
+// the card of a product page, as a buyer or as an admin sees it (productViewOf)
 export async function findById(dto: FindProductByIdDto): Promise<FullProductResponseDto> {
   const { productId } = normalizeFindProductByIdInput(dto);
+  const view = productViewOf(dto.actorRole);
 
   try {
-    const { product, images } = await prisma.$transaction(async (tx) => {
+    const { product, images, categoryPath } = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setActorContext(tx, { actorId: dto.actorId, role: dto.actorRole });
 
@@ -20,46 +29,44 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
         where: { id: productId },
         select: { id: true, deletedAt: true },
       });
-      const isAdmin = dto.actorRole === 'ADMIN' || dto.actorRole === 'ROOT';
-      if (!exists || (exists.deletedAt && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      if (!exists || (exists.deletedAt && view !== 'admin')) {
+        throw new NotFoundError('PRODUCT_NOT_FOUND');
+      }
 
-      // increment views and return updated row
-      const product = await tx.product.update({
+      // a visit of a buyer is a view of the product, the one of an admin is not. A plain update of
+      // the counter: prisma would set updatedAt too, and the last change of a product is a change
+      // an admin made
+      if (view !== 'admin') {
+        await tx.$executeRaw`
+          update cartlify.products set views = views + 1 where id = ${productId}::int
+        `;
+      }
+
+      const product = await tx.product.findUniqueOrThrow({
         where: { id: productId },
-        data: { views: { increment: 1 } },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          reservedStock: true,
-          categoryId: true,
-          views: true,
-          popularity: true,
-          avgRating: true,
-          reviewsCount: true,
-          deletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: productResponseSelect,
       });
 
-      // load images for response mapping
+      // load images for response mapping; a product without one opens by its id with none, the
+      // lists of a buyer leave it out
       const imageRows = await tx.productImage.findMany({
         where: { productId: productId },
         select: { url: true, position: true },
         orderBy: { position: 'asc' },
       });
 
-      // reject invalid db state (product has no images)
-      if (!imageRows.length) throw new InternalError({ reason: 'PRODUCT_IMAGES_NOT_FOUND' });
+      // the free units leave out the units of batches that are over
+      const expired = await expiredUnitsOf(tx, [productId]);
 
-      return { product, images: imageRows };
+      return {
+        product: { ...product, expiredStock: expired.get(productId) ?? 0 },
+        images: imageRows,
+        categoryPath: await readCategoryPath(product.category.id, tx),
+      };
     });
 
     // map db row into api dto
-    return mapProductRowToResponse({ product, images });
+    return mapProductRowToResponse({ product, images, categoryPath, view });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;

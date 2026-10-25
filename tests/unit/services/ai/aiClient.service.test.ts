@@ -92,7 +92,18 @@ describe('generateText', () => {
       instructions: request.instructions,
       input: request.messages,
       max_output_tokens: 450,
+      store: false,
     });
+  });
+
+  // the responses api keeps every request and answer in the openai account unless told not to;
+  // the chat carries names, addresses and phones, and the bot sends the whole history each time
+  it('asks openai not to store the conversation', async () => {
+    const calls = stubFetch(() => answer('ok'));
+
+    await ai.generateText(request);
+
+    expect(sentBody(calls[0]!.body).store).toBe(false);
   });
 
   it('sends only the role and the text of each message', async () => {
@@ -209,6 +220,44 @@ describe('generateText', () => {
       expect(await rejectedBy(() => ai.generateText(request))).toMatchObject({
         code: 'AI_EMPTY_RESPONSE',
         retryable: true,
+      });
+    });
+
+    // the text of an answer cut by the output limit is a piece: json of a structured answer
+    // breaks off, and asking the same again gets the same piece
+    it.each(['max_output_tokens', 'content_filter'])(
+      'fails on an answer openai cut short (%s) and never gives its piece of text',
+      async (reason) => {
+        stubFetch(() =>
+          jsonResponse({
+            id: 'resp_3',
+            status: 'incomplete',
+            incomplete_details: { reason },
+            output: [
+              { type: 'message', content: [{ type: 'output_text', text: '{"reply":"We ha' }] },
+            ],
+          }),
+        );
+
+        expect(await rejectedBy(() => ai.generateText(request))).toMatchObject({
+          code: 'AI_INCOMPLETE_RESPONSE',
+          retryable: false,
+          message: `AI provider cut the answer short: ${reason}.`,
+        });
+      },
+    );
+
+    it('takes an answer openai marks completed', async () => {
+      stubFetch(() => jsonResponse({ id: 'resp_4', status: 'completed', output_text: 'ok' }));
+
+      expect((await ai.generateText(request)).text).toBe('ok');
+    });
+
+    it('reports an answer whose status is not a string as an invalid format', async () => {
+      stubFetch(() => jsonResponse({ id: 'resp_5', status: 1, output_text: 'ok' }));
+
+      expect(await rejectedBy(() => ai.generateText(request))).toMatchObject({
+        code: 'AI_INVALID_RESPONSE_FORMAT',
       });
     });
 
@@ -354,6 +403,30 @@ describe('generateText', () => {
 
       await jest.advanceTimersByTimeAsync(500);
       expect(await rejectedBy(() => pending)).toMatchObject({ code: 'AI_TIMEOUT' });
+    });
+
+    // the headers came in time, the body did not: the same timeout, not a broken answer that
+    // the bot would ask once more
+    it('reports a timeout while the answer is read as a timeout', async () => {
+      jest.useFakeTimers();
+      jest.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            init?.signal?.addEventListener('abort', () => controller.error(abortError()));
+          },
+        });
+
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      });
+
+      const pending = ai.generateText({ ...request, options: { timeoutMs: 500 } });
+      pending.catch(() => undefined);
+
+      await jest.advanceTimersByTimeAsync(500);
+      expect(await rejectedBy(() => pending)).toMatchObject({
+        code: 'AI_TIMEOUT',
+        message: 'AI provider request timed out after 500 ms.',
+      });
     });
 
     it('leaves no timer behind after an answer', async () => {

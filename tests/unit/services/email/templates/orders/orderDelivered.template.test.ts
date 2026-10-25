@@ -26,6 +26,36 @@ afterEach(() => {
 });
 
 describe('buildOrderDeliveredTemplate', () => {
+  // a delivered order asks the buyer to rate what came, each product with the page of its reviews
+  it('asks to rate each product that has the page of its reviews', () => {
+    const { text, html } = buildOrderDeliveredTemplate(
+      order({
+        items: [
+          {
+            name: 'Desk lamp',
+            quantity: 2,
+            totalPrice: '51.00',
+            reviewUrl: 'https://shop.example.com/products/7#reviews',
+          },
+          { name: 'Notebook', quantity: 1, totalPrice: 3 },
+        ],
+      }),
+    );
+
+    expect(text).toContain('Rate what you bought');
+    expect(text).toContain('- Desk lamp: https://shop.example.com/products/7#reviews');
+    expect(text).not.toContain('- Notebook:');
+    expect(html).toContain('href="https://shop.example.com/products/7#reviews"');
+    expect(html).toContain('Rate Desk lamp');
+  });
+
+  it('asks nothing when no product has the page of its reviews', () => {
+    const { text, html } = buildOrderDeliveredTemplate(order());
+
+    expect(text).not.toContain('Rate what you bought');
+    expect(html).not.toContain('Rate what you bought');
+  });
+
   it('names the shop and the order in the subject', () => {
     const { subject } = buildOrderDeliveredTemplate(order());
 

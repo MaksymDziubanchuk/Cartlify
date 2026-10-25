@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { prisma } from '@db/client.js';
 
 import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js';
-import { changedRows } from '../../helpers/dbOrders.js';
+import { cartOf, changedRows, pay, waitingOrderOf } from '../../helpers/dbOrders.js';
 import {
   closeSessions,
   createProduct,
@@ -59,7 +59,7 @@ async function freshProduct(db: DbSession, price = 10) {
     `db-category-${tag}`,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.products (name, price, stock, "categoryId") values ($1, $2, 5, $3) returning id`,
+    `insert into cartlify.products (name, price, "categoryId") values ($1, $2, $3) returning id`,
     `Db product ${tag}`,
     price,
     category!.id,
@@ -193,10 +193,11 @@ describe('products', () => {
     expect(outcomes.map(changedRows)).toEqual([false, false, false, false, false]);
   });
 
-  it('let an admin create a product and change its price, stock and description', async () => {
+  // the stock comes with the batches (stock.test.ts)
+  it('let an admin create a product and change its price and description', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       const fresh = await freshProduct(db);
-      return updateProduct(db, `price = 12, stock = 9, description = 'New'`, fresh.id);
+      return updateProduct(db, `price = 12, description = 'New'`, fresh.id);
     });
 
     expect(changedRows(outcome)).toBe(true);
@@ -230,7 +231,7 @@ describe('products', () => {
       await db.as(asAdmin());
       return db.attempt(
         `insert into cartlify.products (name, price, stock, "categoryId", ${column})
-         values ('Forged', 1, 5, $1, $2) returning id`,
+         values ('Forged', 1, 0, $1, $2) returning id`,
         product.categoryId,
         value,
       );
@@ -345,6 +346,75 @@ describe('the popularity of a product', () => {
     });
 
     expect(popularity).toBe(500);
+  });
+
+  // the row of a product is written, and stays locked to the end of the transaction, only when its
+  // popularity has something to count again; every write of a row gives it a new ctid
+  const rowVersionOf = async (db: DbSession, productId: number) => {
+    await db.as(asAdmin());
+    const [row] = await db.rows<{ ctid: string }>(
+      'select ctid::text as ctid from cartlify.products where id = $1',
+      productId,
+    );
+    return row!.ctid;
+  };
+
+  // the popularity counts the items in carts, not their quantity
+  it('leaves the product row alone when the quantity of an item in a cart changes', async () => {
+    const versions = await inRolledBackTx(async (db) => {
+      const fresh = await freshProduct(db);
+      const orderId = await cartOf(db, user.id, [[fresh.id, 1]]);
+      const before = await rowVersionOf(db, fresh.id);
+      await db.as(asUser());
+      await db.rows(
+        'update cartlify.order_items set quantity = 3 where "orderId" = $1 returning id',
+        orderId,
+      );
+      return { before, after: await rowVersionOf(db, fresh.id) };
+    });
+
+    expect(versions.after).toBe(versions.before);
+  });
+
+  // the popularity counts the reviews, not the votes on them
+  it('leaves the product row alone when somebody votes on one of its reviews', async () => {
+    const versions = await inRolledBackTx(async (db) => {
+      const fresh = await freshProduct(db);
+      await db.as(asUser(other));
+      const [review] = await db.rows<{ id: number }>(
+        'insert into cartlify.reviews ("userId", "productId", rating) values ($1, $2, 5) returning id',
+        other.id,
+        fresh.id,
+      );
+      const before = await rowVersionOf(db, fresh.id);
+      await db.as(asUser());
+      await db.rows(
+        `insert into cartlify.review_votes ("userId", "reviewId", action) values ($1, $2, 'UP') returning id`,
+        user.id,
+        review!.id,
+      );
+      return { before, after: await rowVersionOf(db, fresh.id) };
+    });
+
+    expect(versions.after).toBe(versions.before);
+  });
+
+  // a purchase counts once the order is confirmed; shipping it changes nothing the score counts
+  it('leaves the product row alone when a paid order is shipped', async () => {
+    const versions = await inRolledBackTx(async (db) => {
+      const orderId = await waitingOrderOf(db, user.id, [[product.id, 1]]);
+      const result = await pay(db, admin.id, orderId);
+      if (result !== 'PAID') throw new Error(`pay_order answered ${result}`);
+      const before = await rowVersionOf(db, product.id);
+      await db.as(asAdmin());
+      await db.rows(
+        `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+        orderId,
+      );
+      return { before, after: await rowVersionOf(db, product.id) };
+    });
+
+    expect(versions.after).toBe(versions.before);
   });
 
   it('keeps the popularity an admin set when people act meanwhile', async () => {

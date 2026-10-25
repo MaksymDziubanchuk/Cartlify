@@ -17,6 +17,7 @@ const authRegisterResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
 };
 
@@ -34,6 +35,7 @@ const authLoginResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
   phone: '+10000000000',
 };
@@ -84,6 +86,12 @@ const messageResponseExample = {
 };
 
 // Schema for user registration
+// the mails of a reset and of a verification share their limits (src/plugins/requestLimits.ts)
+const MAIL_LIMIT_TEXT =
+  '`RATE_LIMITED` with `details.limit: mail`: one mail to an address in 3 minutes (a reset and a verification count together), ' +
+  'or more than 10 from one address in 15 minutes; the same answer for an address with an account or without one. ' +
+  '`retry-after` and `details.retryAfterSeconds` tell the wait.';
+
 const setRegisterSchema = {
   operationId: 'registerUser',
   summary: 'Register user',
@@ -112,11 +120,22 @@ const setRegisterSchema = {
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'User with this email already exists.',
+      description: '`EMAIL_ALREADY_IN_USE`: an account with this email exists.',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description:
+        '`RATE_LIMITED` with `details.limit: register`: more than 10 registrations from one address in an hour; `retry-after` and `details.retryAfterSeconds` tell the wait.',
       $ref: 'errorResponseSchema#',
     },
     500: {
       description: 'Unexpected server error while registering user.',
+      $ref: 'errorResponseSchema#',
+    },
+    502: {
+      description:
+        '`VERIFY_EMAIL_SEND_FAILED`: the account is created, but the mail with the link did not go; ' +
+        'POST /api/auth/verify/resend sends a new one.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -145,7 +164,20 @@ const setLoginSchema = {
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Login credentials are invalid or the account cannot be authenticated.',
+      description: '`INVALID_CREDENTIALS`: the email or the password is wrong.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        '`EMAIL_NOT_VERIFIED`: the email is not verified yet, POST /api/auth/verify/resend sends the link again. ' +
+        '`AUTH_PROVIDER_MISMATCH`: the account signs in through its OAuth provider, not with a password.',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description:
+        '`LOGIN_PAUSED`: 5 wrong passwords paused the login of the account, the right password too: for a minute, doubling with each next wrong password up to 15 minutes. ' +
+        '`RATE_LIMITED` with `details.limit: login`: more than 30 logins from one address or 10 of one email in 10 minutes. ' +
+        'Both give the wait in `retry-after` and `details.retryAfterSeconds`.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -167,12 +199,12 @@ const setGoogleStartSchema = {
       type: 'null',
     },
 
-    400: {
-      description: 'Invalid Google OAuth start request.',
-      $ref: 'errorResponseSchema#',
-    },
     401: {
       description: 'Google OAuth start request is not authorized.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -197,7 +229,8 @@ const setGoogleCallbackSchema = {
     'OAUTH_CALLBACK_ERROR (Google reported another error), ALREADY_AUTHENTICATED, ' +
     'GOOGLE_EMAIL_NOT_VERIFIED, GOOGLE_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
     'the callback has to reach the browser whose guestId cookie is in the state), other GOOGLE_OAUTH_* codes ' +
-    'for a broken or expired state or a failed token exchange, OAUTH_LOGIN_FAILED for a server failure.',
+    'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
+    'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
 
   querystring: {
     $ref: 'authGoogleCallbackQuerySchema#',
@@ -240,12 +273,12 @@ const setGithubStartSchema = {
       type: 'null',
     },
 
-    400: {
-      description: 'Invalid GitHub OAuth start request.',
-      $ref: 'errorResponseSchema#',
-    },
     401: {
       description: 'GitHub OAuth start request is not authorized.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -270,7 +303,8 @@ const setGithubCallbackSchema = {
     'OAUTH_CALLBACK_ERROR (GitHub reported another error), ALREADY_AUTHENTICATED, ' +
     'GITHUB_EMAIL_NOT_VERIFIED, GITHUB_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
     'the callback has to reach the browser whose guestId cookie is in the state), other GITHUB_OAUTH_* codes ' +
-    'for a broken or expired state or a failed token exchange, OAUTH_LOGIN_FAILED for a server failure.',
+    'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
+    'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
 
   querystring: {
     $ref: 'authGithubCallbackQuerySchema#',
@@ -313,12 +347,12 @@ const setLinkedInStartSchema = {
       type: 'null',
     },
 
-    400: {
-      description: 'Invalid LinkedIn OAuth start request.',
-      $ref: 'errorResponseSchema#',
-    },
     401: {
       description: 'LinkedIn OAuth start request is not authorized.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -343,7 +377,8 @@ const setLinkedInCallbackSchema = {
     'OAUTH_CALLBACK_ERROR (LinkedIn reported another error), ALREADY_AUTHENTICATED, ' +
     'LINKEDIN_EMAIL_NOT_VERIFIED, LINKEDIN_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
     'the callback has to reach the browser whose guestId cookie is in the state), other LINKEDIN_OAUTH_* codes ' +
-    'for a broken or expired state or a failed token exchange, OAUTH_LOGIN_FAILED for a server failure.',
+    'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
+    'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
 
   querystring: {
     $ref: 'authLinkedInCallbackQuerySchema#',
@@ -394,16 +429,20 @@ const setVerifyResendSchema = {
       description: 'Invalid resend verification request.',
       $ref: 'errorResponseSchema#',
     },
+    429: {
+      description: MAIL_LIMIT_TEXT,
+      $ref: 'errorResponseSchema#',
+    },
     401: {
       description: 'Resend verification request is not authorized.',
       $ref: 'errorResponseSchema#',
     },
-    409: {
-      description: 'Email is already verified or verification cannot be resent.',
-      $ref: 'errorResponseSchema#',
-    },
     500: {
       description: 'Unexpected server error while resending verification email.',
+      $ref: 'errorResponseSchema#',
+    },
+    502: {
+      description: '`VERIFY_EMAIL_SEND_FAILED`: the mail with the new link did not go, try again.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -429,7 +468,9 @@ const authVerifyEmailSchema = {
     },
 
     400: {
-      description: 'Invalid email verification token.',
+      description:
+        '`VERIFY_TOKEN_INVALID_OR_EXPIRED`: the link is wrong, used, expired or not the newest one. ' +
+        '`TOKEN_REQUIRED`: the link has no token.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -467,8 +508,17 @@ const setPasswordForgotSchema = {
       description: 'Invalid password reset request.',
       $ref: 'errorResponseSchema#',
     },
+    429: {
+      description: MAIL_LIMIT_TEXT,
+      $ref: 'errorResponseSchema#',
+    },
     500: {
       description: 'Unexpected server error while requesting password reset.',
+      $ref: 'errorResponseSchema#',
+    },
+    502: {
+      description:
+        '`PASSWORD_FORGOT_EMAIL_SEND_FAILED`: the mail with the link did not go, try again.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -503,11 +553,9 @@ const setPasswordResetSchema = {
       description:
         'Invalid password reset request. VALIDATION_ERROR with field newPassword ' +
         'when the password is shorter than 6 or longer than 64 characters or has non-ASCII characters; ' +
-        'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces.',
-      $ref: 'errorResponseSchema#',
-    },
-    401: {
-      description: 'Password reset token is invalid or expired.',
+        'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces; ' +
+        '`RESET_TOKEN_INVALID_OR_EXPIRED`: the link is wrong, used or expired; ' +
+        '`TOKEN_REQUIRED`, `NEW_PASSWORD_REQUIRED`: the token or the password is missing.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -574,17 +622,125 @@ const setRefreshSchema = {
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Refresh token is invalid or expired; both auth cookies are cleared.',
+      description:
+        'The refresh cookie opens no session; both auth cookies are cleared, the page logs in again. ' +
+        '`REFRESH_TOKEN_INVALID`: not a refresh token of this server, or its time is over. ' +
+        '`REFRESH_TOKEN_EXPIRED`: the session reached its deadline. ' +
+        '`REFRESH_TOKEN_REVOKED`: the session was ended on purpose (a logout, a reset or a change of the password, ' +
+        'a role change, a closed session); the other sessions go on. ' +
+        '`REFRESH_TOKEN_ROW_NOT_FOUND`, `REFRESH_USER_NOT_FOUND`: the session or the account is gone. ' +
+        '`REFRESH_TOKEN_USER_MISMATCH`, `REFRESH_TOKEN_WRONG_TYPE`, `REFRESH_PAYLOAD_USER_ID_INVALID`, ' +
+        '`REFRESH_PAYLOAD_JWT_ID_INVALID`, `REFRESH_GUEST_TOKEN_FORBIDDEN`, `REFRESH_GUEST_USER_FORBIDDEN`: ' +
+        'the token does not belong to a session of an account.',
       $ref: 'errorResponseSchema#',
     },
     403: {
       description:
-        'Refresh token was already used (REFRESH_TOKEN_REUSE_DETECTED) or does not match ' +
-        'the stored one (REFRESH_TOKEN_HASH_MISMATCH); both auth cookies are cleared.',
+        'Refresh token was already used by a renewal (REFRESH_TOKEN_REUSE_DETECTED: it was copied, every ' +
+        'session of the account ends) or does not match the stored one (REFRESH_TOKEN_HASH_MISMATCH); ' +
+        'both auth cookies are cleared.',
       $ref: 'errorResponseSchema#',
     },
     500: {
       description: 'Unexpected server error while refreshing authentication tokens.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const sessionsResponseExample = {
+  items: [
+    {
+      id: '33333333-3333-4333-8333-333333333333',
+      device: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      lastUsedAt: '2026-10-23T09:00:00.000Z',
+      expiresAt: '2026-11-22T09:00:00.000Z',
+      current: true,
+    },
+  ],
+};
+
+// Schema for the sessions of the signed-in user
+const getSessionsSchema = {
+  operationId: 'getSessions',
+  summary: 'List sessions',
+  description:
+    'The open sessions of the signed-in user, the newest renewal first: the browser that opened each, ' +
+    'when it was renewed last, its deadline, and which one is this browser. A session keeps its id ' +
+    'across its renewals.',
+  security: openApiSecurity.authCookies,
+
+  response: {
+    200: {
+      description: 'The open sessions.',
+      $ref: 'authSessionsResponseSchema#',
+      examples: [sessionsResponseExample],
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for ending one session
+const deleteSessionSchema = {
+  operationId: 'closeSession',
+  summary: 'End a session',
+  description:
+    'Ends one session of the signed-in user: its refresh cookie gives 401 REFRESH_TOKEN_REVOKED, the other ' +
+    'sessions go on. Ending the session of this browser clears its cookies, like a logout.',
+  security: openApiSecurity.authCookies,
+
+  params: { $ref: 'authSessionIdParamsSchema#' },
+
+  response: {
+    204: {
+      description: 'The session ended.',
+      $ref: 'authLogoutResponseSchema#',
+    },
+    404: {
+      description: 'No open session of this user has the id (SESSION_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for changing the password
+const setPasswordChangeSchema = {
+  operationId: 'changePassword',
+  summary: 'Change password',
+  description:
+    'Changes the password of a local account, the current one given. The other sessions end ' +
+    '(REFRESH_TOKEN_REVOKED), the session of this browser goes on, open reset links close, and the owner ' +
+    'gets a mail about the change. At most 10 requests a user in 15 minutes.',
+  security: openApiSecurity.authCookies,
+
+  body: { $ref: 'authPasswordChangeBodySchema#' },
+
+  response: {
+    204: {
+      description: 'The password changed.',
+      $ref: 'authLogoutResponseSchema#',
+    },
+    400: {
+      description:
+        'The new password is shorter than 6 signs without its edge spaces (PASSWORD_TOO_SHORT), or empty ' +
+        '(NEW_PASSWORD_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current password is wrong (PASSWORD_INVALID); nothing changes.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'The account was deleted (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'The account signs in through Google, GitHub or LinkedIn and has no password here (PASSWORD_NOT_SET).',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description:
+        'Too many changes of the password in 15 minutes (RATE_LIMITED, `details.limit` passwordChange).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -640,6 +796,9 @@ export const authSchema = withOpenApiTag(
     setPasswordResetSchema,
     setLogoutSchema,
     setRefreshSchema,
+    getSessionsSchema,
+    deleteSessionSchema,
+    setPasswordChangeSchema,
     setCsrfTokenSchema,
   },
   'auth',

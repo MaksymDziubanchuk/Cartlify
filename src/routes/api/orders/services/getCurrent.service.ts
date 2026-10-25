@@ -11,6 +11,7 @@ import {
 import {
   dropDeletedProductItems,
   mapOrderRowToResponse,
+  expiredOfOrders,
   orderResponseSelect,
 } from './helpers/index.js';
 
@@ -54,7 +55,7 @@ export async function getCurrent({
 
         if (!order) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');
 
-        return mapOrderRowToResponse(order);
+        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors
@@ -69,7 +70,7 @@ export async function getCurrent({
 
     // map lock/tx contention errors to a stable 409 for clients
     if (isRetryableTxError(err)) {
-      throw new ResourceBusyError('RESOURCE_BUSY_TRY_AGAIN');
+      throw new ResourceBusyError();
     }
 
     throw new InternalError({ reason: 'ORDERS_CURRENT_GET_UNEXPECTED' }, err);

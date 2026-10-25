@@ -1,5 +1,9 @@
 BEGIN;
 
+-- on a live database a busy table makes the script wait for its lock, and every request of the
+-- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+SET LOCAL lock_timeout = '5s';
+
 -- everything below is created and owned by cartlify_owner, whoever runs the script
 SET LOCAL ROLE cartlify_owner;
 
@@ -12,18 +16,30 @@ CREATE VIEW cartlify.admin_stats_view
 WITH
     (security_invoker = true) AS
 WITH
-    params AS (
+    -- the period as instants (from_at, to_at) for the answer; the columns keep utc without a
+    -- zone, so they are compared with the same times in utc (from_ts, to_ts and the last days),
+    -- whatever the time zone of the session
+    period_bounds AS (
         SELECT
             COALESCE(
                 NULLIF(current_setting('cartlify.stats_from', true), '')::timestamptz,
                 now() - INTERVAL '7 days'
-            ) AS from_ts,
+            ) AS from_at,
             COALESCE(
                 NULLIF(current_setting('cartlify.stats_to', true), '')::timestamptz,
                 now()
-            ) AS to_ts,
-            now() - INTERVAL '7 days' AS last_7d_from,
-            now() - INTERVAL '30 days' AS last_30d_from
+            ) AS to_at
+    ),
+    params AS (
+        SELECT
+            pr.from_at,
+            pr.to_at,
+            pr.from_at AT TIME ZONE 'UTC' AS from_ts,
+            pr.to_at AT TIME ZONE 'UTC' AS to_ts,
+            (now() - INTERVAL '7 days') AT TIME ZONE 'UTC' AS last_7d_from,
+            (now() - INTERVAL '30 days') AT TIME ZONE 'UTC' AS last_30d_from
+        FROM
+            period_bounds pr
     ),
     users_stats AS (
         SELECT
@@ -58,6 +74,9 @@ WITH
         FROM
             cartlify.users u
             CROSS JOIN params p
+        -- the accounts of buyers: an admin and root are none of the users of the shop
+        WHERE
+            u.role NOT IN ('ADMIN'::cartlify."Role", 'ROOT'::cartlify."Role")
     ),
     orders_stats AS (
         SELECT
@@ -120,8 +139,8 @@ WITH
                             'shipped'::cartlify."OrderStatus",
                             'delivered'::cartlify."OrderStatus"
                         )
-                        AND o."createdAt" >= p.from_ts
-                        AND o."createdAt" < p.to_ts
+                        AND o."paidAt" >= p.from_ts
+                        AND o."paidAt" < p.to_ts
                 ),
                 0
             )::numeric AS revenue_in_period,
@@ -134,7 +153,7 @@ WITH
                             'shipped'::cartlify."OrderStatus",
                             'delivered'::cartlify."OrderStatus"
                         )
-                        AND o."createdAt" >= p.last_7d_from
+                        AND o."paidAt" >= p.last_7d_from
                 ),
                 0
             )::numeric AS revenue_last_7d,
@@ -147,7 +166,7 @@ WITH
                             'shipped'::cartlify."OrderStatus",
                             'delivered'::cartlify."OrderStatus"
                         )
-                        AND o."createdAt" >= p.last_30d_from
+                        AND o."paidAt" >= p.last_30d_from
                 ),
                 0
             )::numeric AS revenue_last_30d,
@@ -161,6 +180,8 @@ WITH
                                 'shipped'::cartlify."OrderStatus",
                                 'delivered'::cartlify."OrderStatus"
                             )
+                            AND o."paidAt" >= p.from_ts
+                            AND o."paidAt" < p.to_ts
                     ) / NULLIF(
                         COUNT(*) FILTER (
                             WHERE
@@ -170,6 +191,8 @@ WITH
                                     'shipped'::cartlify."OrderStatus",
                                     'delivered'::cartlify."OrderStatus"
                                 )
+                                AND o."paidAt" >= p.from_ts
+                                AND o."paidAt" < p.to_ts
                         ),
                         0
                     ),
@@ -187,6 +210,7 @@ WITH
         FROM
             cartlify.order_items oi
             JOIN cartlify.orders o ON o.id = oi."orderId"
+            CROSS JOIN params prm
         WHERE
             o.confirmed IS TRUE
             AND o.status IN (
@@ -194,6 +218,8 @@ WITH
                 'shipped'::cartlify."OrderStatus",
                 'delivered'::cartlify."OrderStatus"
             )
+            AND o."paidAt" >= prm.from_ts
+            AND o."paidAt" < prm.to_ts
     ),
     products_stats AS (
         SELECT
@@ -209,7 +235,8 @@ WITH
             COUNT(*) FILTER (
                 WHERE
                     p."deletedAt" IS NULL
-                    AND (p.stock - p."reservedStock") <= 0
+                    -- the units of batches that are over are not for sale
+                    AND (p.stock - p."reservedStock" - cartlify.product_expired_units(p.id)) <= 0
             )::int AS out_of_stock_total
         FROM
             cartlify.products p
@@ -232,8 +259,8 @@ WITH
                 'shipped'::cartlify."OrderStatus",
                 'delivered'::cartlify."OrderStatus"
             )
-            AND o."createdAt" >= prm.from_ts
-            AND o."createdAt" < prm.to_ts
+            AND o."paidAt" >= prm.from_ts
+            AND o."paidAt" < prm.to_ts
         GROUP BY
             p.id,
             p.name
@@ -287,8 +314,8 @@ WITH
                 'shipped'::cartlify."OrderStatus",
                 'delivered'::cartlify."OrderStatus"
             )
-            AND o."createdAt" >= prm.from_ts
-            AND o."createdAt" < prm.to_ts
+            AND o."paidAt" >= prm.from_ts
+            AND o."paidAt" < prm.to_ts
         GROUP BY
             c.id,
             c.name
@@ -340,6 +367,8 @@ WITH
                     AVG(r.rating) FILTER (
                         WHERE
                             r.rating IS NOT NULL
+                            AND r."createdAt" >= p.from_ts
+                            AND r."createdAt" < p.to_ts
                     ),
                     2
                 ),
@@ -355,7 +384,7 @@ WITH
             CROSS JOIN params p
     )
 SELECT
-    jsonb_build_object('from', prm.from_ts, 'to', prm.to_ts) AS period,
+    jsonb_build_object('from', prm.from_at, 'to', prm.to_at) AS period,
     jsonb_build_object(
         'total',
         us.total,

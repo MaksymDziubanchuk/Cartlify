@@ -12,6 +12,11 @@ import type {
   DeleteUserByIdDto,
   DeleteMeBodyDto,
   DeleteMeDto,
+  FindUsersDto,
+  GetUsersQueryDto,
+  UsersListResponseDto,
+  RemoveUserAvatarDto,
+  RemoveUserAvatarResponseDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import { discardUploads, type UploadImageResult } from '@utils/cloudinary.util.js';
@@ -20,13 +25,40 @@ import { BadRequestError } from '@utils/errors.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { clearAuthCookies } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 import { usersServices } from './users.services.js';
+import type { ExportMeResponseDto } from './services/exportMe.service.js';
 import { UserId } from 'types/ids.js';
+
+const getUsers: ControllerRouter<{}, {}, GetUsersQueryDto, UsersListResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const { limit, cursor, email, role, authProvider, isVerified, deleted, sortBy, sortOrder } =
+    req.query;
+
+  const args = pickDefined<FindUsersDto>(
+    { actorId, actorRole },
+    { limit, cursor, email, role, authProvider, isVerified, deleted, sortBy, sortOrder },
+  );
+  const result = await usersServices.findUsers(args);
+  return reply.code(200).send(result);
+};
 
 const getMe: ControllerRouter<{}, {}, {}, UserResponseDto> = async (req, reply) => {
   const { id } = req.user as UserEntity;
 
   const args = pickDefined<FindMeByIdDto>({ userId: id }, {});
   const result = await usersServices.findMe(args);
+  return reply.code(200).send(result);
+};
+
+// the data of the person as a file the browser saves
+const getMeExport: ControllerRouter<{}, {}, {}, ExportMeResponseDto> = async (req, reply) => {
+  const { id, role } = req.user as UserEntity;
+
+  const result = await usersServices.exportMe({ userId: Number(id), role });
+
+  reply.header('content-disposition', `attachment; filename="cartlify-data-${Number(id)}.json"`);
   return reply.code(200).send(result);
 };
 
@@ -41,15 +73,24 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
 
   // start avatar upload as soon as we see the file part to avoid hanging multipart parsing
   let avatarUpload: Promise<UploadImageResult> | null = null;
+  // an empty avatar field removes the avatar, the way an empty value removes any field
+  let removeAvatar = false;
 
   try {
     if (req.isMultipart()) {
       // parse multipart parts manually because file streams must be consumed during parsing
       for await (const part of req.parts()) {
         if (part.type === 'file') {
+          // a file input left empty: the browser sends the part without a file name and without
+          // bytes. No file was chosen, the other fields of the form are saved
+          if (part.filename === '') {
+            part.file.resume();
+            continue;
+          }
+
           if (part.fieldname === 'avatar') {
-            // prevent sending multiple avatar files in one request
-            if (avatarUpload) {
+            // prevent sending multiple avatar files in one request, or a file and a removal
+            if (avatarUpload || removeAvatar) {
               // always drain extra streams to avoid request hanging
               part.file.resume();
               throw new BadRequestError('AVATAR_MULTIPLE');
@@ -75,6 +116,17 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
         // multipart field values are typed loosely, normalize to string
         const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
 
+        // a NUL sign is no text postgres keeps, the same refusal as for a json body
+        if (v.includes('\u0000')) throw new BadRequestError('TEXT_NUL_FORBIDDEN');
+
+        // an avatar of text can only be the empty value that removes it; a picture is a file
+        if (part.fieldname === 'avatar') {
+          if (v !== '') throw new BadRequestError('AVATAR_NOT_A_FILE');
+          if (avatarUpload || removeAvatar) throw new BadRequestError('AVATAR_MULTIPLE');
+          removeAvatar = true;
+          continue;
+        }
+
         // map allowed fields only
         if (part.fieldname === 'name') name = v;
         else if (part.fieldname === 'locale') locale = v;
@@ -86,6 +138,8 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
       name = b.name;
       locale = b.locale;
       phone = b.phone;
+      // the schema lets only the empty value through: json cannot carry a picture
+      removeAvatar = b.avatar === '';
     }
 
     // wait for avatar upload if it was requested, otherwise keep it null
@@ -94,7 +148,7 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
     // build service dto with only provided fields
     const args = pickDefined<UpdateMeDto>(
       { userId: id, userRole: role },
-      { name, locale, phone, avatarUploaded: uploaded },
+      { name, locale, phone, avatarUploaded: uploaded, removeAvatar, log: req.log },
     );
 
     // persist changes and return the updated user dto
@@ -135,6 +189,22 @@ const deleteUserById: ControllerRouter<GetUserByIdParamsDto, {}, {}, MessageResp
   return reply.code(200).send(result);
 };
 
+// a moderator takes the avatar of another account away; the answer counts the removals of the
+// account against the limit the rules set
+const deleteUserAvatar: ControllerRouter<
+  GetUserByIdParamsDto,
+  {},
+  {},
+  RemoveUserAvatarResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const userId = Number(req.params.userId);
+
+  const args = pickDefined<RemoveUserAvatarDto>({ actorId, actorRole, userId, log: req.log }, {});
+  const result = await usersServices.removeUserAvatar(args);
+  return reply.code(200).send(result);
+};
+
 // the account is gone with this answer: the cookies of this browser go with it, other devices
 // keep their access only until their access token runs out
 const deleteMe: ControllerRouter<{}, DeleteMeBodyDto, {}, void> = async (req, reply) => {
@@ -152,9 +222,12 @@ const deleteMe: ControllerRouter<{}, DeleteMeBodyDto, {}, void> = async (req, re
 };
 
 export const usersController = {
+  getUsers,
   getMe,
+  getMeExport,
   patchMe,
   getUserById,
   deleteUserById,
+  deleteUserAvatar,
   deleteMe,
 };

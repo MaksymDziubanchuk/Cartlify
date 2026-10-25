@@ -12,6 +12,14 @@ export type PaymentPageOrder = {
   // in the currency of the provider
   total: number;
   reservationExpiresAt: Date;
+  // when the app last closed a page of the order to open one at another provider, null when it
+  // never did; a page opened after it is a new page, never the closed one again
+  pageClosedAt: Date | null;
+  // what is bought, the way the page shows it: the name each item was confirmed with, its price
+  // and units; together they are the total
+  items: { name: string; unitPrice: number; quantity: number }[];
+  // the email of the buyer, the page fills it in; none for an account without one
+  customerEmail: string | null;
 };
 
 // what became of an unpaid payment page the app asked to close:

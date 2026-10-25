@@ -375,10 +375,12 @@ describe('user tokens', () => {
       )
     ).map((row) => row.userId);
 
+  // a session gets the id it keeps across its renewals, the way a login opens one
   const insertToken = (db: DbSession, userId: number, type: string, expiresIn = '1 day') =>
     db.attempt(
-      `insert into cartlify.user_tokens ("userId", type, token, "expiresAt")
-       values ($1, $2::cartlify."UserTokenType", $3, now() + $4::interval) returning id`,
+      `insert into cartlify.user_tokens ("userId", type, token, "expiresAt", "sessionId")
+       values ($1, $2::cartlify."UserTokenType", $3, now() + $4::interval,
+               case when $2 = 'REFRESH_TOKEN' then gen_random_uuid() end) returning id`,
       userId,
       type,
       `db-token-${uniqueTag()}`,
@@ -626,6 +628,98 @@ describe('user tokens', () => {
     expect(changedRows(reopened)).toBe(false);
   });
 
+  // a session closed on purpose (a logout, a reset, a role change) is revoked at the moment it is
+  // closed; one closed by its renewal is not, and that one coming back is a stolen token
+  it('lets a user close an own session as revoked, both at the same moment', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const id = await sessionOf(db, owner);
+      return db.attempt(
+        `update cartlify.user_tokens set "usedAt" = now(), "revokedAt" = now()
+         where id = $1 returning id`,
+        id,
+      );
+    });
+
+    expect(changedRows(outcome)).toBe(true);
+  });
+
+  it.each([
+    ['revoked and still open', `"revokedAt" = now()`],
+    [
+      'revoked at another moment than closed',
+      `"usedAt" = now(), "revokedAt" = now() - interval '1 minute'`,
+    ],
+  ])('does not let a session be %s', async (_case, set) => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const id = await sessionOf(db, owner);
+      return db.attempt(`update cartlify.user_tokens set ${set} where id = $1 returning id`, id);
+    });
+
+    expect(changedRows(outcome)).toBe(false);
+  });
+
+  // a renewed token coming back is the sign of theft; revoked later, it would pass for a plain one
+  it('does not let a session closed by its renewal be revoked later, nor a revoked one unrevoked', async () => {
+    const { renewed, unrevoked } = await inRolledBackTx(async (db) => {
+      const rotated = await sessionOf(db, owner);
+      await db.rows('update cartlify.user_tokens set "usedAt" = now() where id = $1', rotated);
+      const revoked = await sessionOf(db, owner);
+      await db.rows(
+        'update cartlify.user_tokens set "usedAt" = now(), "revokedAt" = now() where id = $1',
+        revoked,
+      );
+      return {
+        renewed: await db.attempt(
+          'update cartlify.user_tokens set "revokedAt" = "usedAt" where id = $1 returning id',
+          rotated,
+        ),
+        unrevoked: await db.attempt(
+          'update cartlify.user_tokens set "revokedAt" = null where id = $1 returning id',
+          revoked,
+        ),
+      };
+    });
+
+    expect(changedRows(renewed)).toBe(false);
+    expect(changedRows(unrevoked)).toBe(false);
+  });
+
+  it.each([
+    ['the session', `"sessionId" = gen_random_uuid()`],
+    ['the browser', `"userAgent" = 'Another browser'`],
+  ])('keeps %s of a token as it was made', async (_case, set) => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const id = await sessionOf(db, owner);
+      return db.attempt(`update cartlify.user_tokens set ${set} where id = $1 returning id`, id);
+    });
+
+    expect(changedRows(outcome)).toBe(false);
+  });
+
+  it('gives a session an id of its own and no other link one', async () => {
+    const { sessionWithout, linkWith } = await inRolledBackTx(async (db) => {
+      await db.as(asUser(owner));
+      return {
+        sessionWithout: await db.attempt(
+          `insert into cartlify.user_tokens ("userId", type, token, "expiresAt")
+           values ($1, 'REFRESH_TOKEN', $2, now() + interval '1 day') returning id`,
+          owner.id,
+          `db-token-${uniqueTag()}`,
+        ),
+        linkWith: await db.attempt(
+          `insert into cartlify.user_tokens ("userId", type, token, "expiresAt", "sessionId")
+           values ($1, 'VERIFY_EMAIL', $2, now() + interval '1 day', gen_random_uuid())
+           returning id`,
+          owner.id,
+          `db-token-${uniqueTag()}`,
+        ),
+      };
+    });
+
+    expect(sessionWithout.ok).toBe(false);
+    expect(linkWith.ok).toBe(false);
+  });
+
   it('lets a user delete an own token', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       const id = await sessionOf(db, owner);
@@ -647,6 +741,81 @@ describe('user tokens', () => {
     });
 
     expect(seen).toEqual([]);
+  });
+});
+
+// the tokens used or ended long ago are no use: a renewal adds a row each time. The periodic
+// tasks of Railway run the cleanup as the system
+describe('the cleanup of old tokens', () => {
+  // a link of the owner, as the system writes it: closed some days ago, or ending in some days
+  // (a minus is days ago); made 60 days ago
+  const oldLink = async (db: DbSession, opts: { usedDaysAgo?: number; endsInDays: number }) => {
+    const [row] = await db.rows<{ id: number }>(
+      `insert into cartlify.user_tokens ("userId", type, token, "expiresAt", "usedAt", "createdAt")
+       values ($1, 'RESET_PASSWORD', $2, now() + make_interval(days => $3::int),
+               case when $4::int is null then null else now() - make_interval(days => $4::int) end,
+               now() - interval '60 days')
+       returning id`,
+      owner.id,
+      `db-token-${uniqueTag()}`,
+      opts.endsInDays,
+      opts.usedDaysAgo ?? null,
+    );
+    return row!.id;
+  };
+
+  const cleanup = (db: DbSession, keepDays: number) =>
+    db.attempt('select cartlify.cleanup_user_tokens($1::int) as removed', keepDays);
+
+  it('removes the tokens used or ended more days ago than it keeps, and nothing else', async () => {
+    const { removed, kept, gone } = await inRolledBackTx(async (db) => {
+      await db.as(asSystem());
+      const old = [
+        await oldLink(db, { usedDaysAgo: 31, endsInDays: 10 }),
+        await oldLink(db, { endsInDays: -31 }),
+      ];
+      const recent = [
+        await oldLink(db, { usedDaysAgo: 29, endsInDays: 10 }),
+        await oldLink(db, { endsInDays: -29 }),
+        await oldLink(db, { endsInDays: 10 }),
+      ];
+
+      const removed = await cleanup(db, 30);
+      const left = async (ids: number[]) =>
+        (
+          await db.rows<{ id: number }>(
+            'select id from cartlify.user_tokens where id = any($1::int[])',
+            ids,
+          )
+        ).length;
+      return { removed, kept: await left(recent), gone: await left(old) };
+    });
+
+    expect(removed.ok).toBe(true);
+    expect(kept).toBe(3);
+    expect(gone).toBe(0);
+  });
+
+  it.each([
+    ['a signed-in admin', () => asAdmin()],
+    ['root', () => asRoot()],
+    ['a user', () => asUser(owner)],
+  ])('is the work of the system, %s gets a refusal', async (_who, actor) => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await db.as(actor());
+      return cleanup(db, 30);
+    });
+
+    expect(outcome).toMatchObject({ ok: false, message: 'USER_TOKENS_CLEANUP_FORBIDDEN' });
+  });
+
+  it('refuses to keep less than a day', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await db.as(asSystem());
+      return cleanup(db, 0);
+    });
+
+    expect(outcome).toMatchObject({ ok: false, message: 'USER_TOKENS_CLEANUP_KEEP_DAYS_INVALID' });
   });
 });
 

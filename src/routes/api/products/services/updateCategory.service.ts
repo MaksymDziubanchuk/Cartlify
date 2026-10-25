@@ -1,3 +1,4 @@
+import { expiredUnitsNow } from '@db/expiredStock.helper.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -8,8 +9,11 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
   mapProductRowToResponse,
+  productResponseSelect,
+  readCategoryPath,
   readProductImageUrls,
   normalizeFindProductByIdInput,
+  assertCategoryExists,
 } from './helpers/index.js';
 
 import type {
@@ -47,26 +51,12 @@ export async function updateProductCategory({
         select: { id: true, categoryId: true },
       });
       if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      await assertCategoryExists(tx, categoryIdRaw);
 
       const product = await tx.product.update({
         where: { id: productIdRaw },
         data: { categoryId: categoryIdRaw },
-        select: {
-          id: true,
-          name: true,
-          description: true,
-          price: true,
-          stock: true,
-          reservedStock: true,
-          categoryId: true,
-          views: true,
-          popularity: true,
-          avgRating: true,
-          reviewsCount: true,
-          deletedAt: true,
-          createdAt: true,
-          updatedAt: true,
-        },
+        select: productResponseSelect,
       });
 
       // build audit changes only for category update
@@ -90,11 +80,14 @@ export async function updateProductCategory({
 
     // fetch all product images and map urls
     const images = await readProductImageUrls(updated.id);
+    const expired = await expiredUnitsNow([updated.id]);
 
     // map db row into api dto
     return mapProductRowToResponse({
-      product: updated,
+      product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
       images,
+      categoryPath: await readCategoryPath(updated.category.id),
+      view: 'admin',
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500

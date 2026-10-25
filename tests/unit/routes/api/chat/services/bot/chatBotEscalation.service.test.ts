@@ -13,12 +13,11 @@ const said = (
   createdAt: new Date('2026-05-01T10:00:00Z'),
 });
 
-const evaluate = (
-  userMessage: string,
-  botMessage = 'Here is what I found.',
-  history: ChatBotHistoryMessageDto[] = [],
-) => evaluateChatBotEscalation({ userMessage, botMessage, history });
+const evaluate = (userMessage: string, history: ChatBotHistoryMessageDto[] = []) =>
+  evaluateChatBotEscalation({ userMessage, history });
 
+// before the model only an explicit request for a person and a loop are found by the code:
+// whether a matter needs a human, the model decides by meaning in any language
 describe('evaluateChatBotEscalation', () => {
   it('does not escalate an ordinary shopping question', () => {
     expect(evaluate('Do you have red mugs?')).toEqual({
@@ -53,15 +52,9 @@ describe('evaluateChatBotEscalation', () => {
   it.each([
     ['admin inside badminton', 'Do you sell badminton rackets?'],
     ['transfer me inside transfer methods', 'Which bank transfer methods do you accept?'],
+    ['connect me inside connect meeting', 'How do I connect meeting rooms to the app?'],
   ])('does not escalate on %s', (_case, message) => {
     expect(evaluate(message)).toMatchObject({ shouldEscalate: false, reason: 'NONE' });
-  });
-
-  it.each([
-    ['connect me inside connect meeting', 'How do I connect meeting rooms to the app?'],
-    ['refund inside a word that only starts the same', 'Is this a prefund offer?'],
-  ])('does not escalate on %s either', (_case, message) => {
-    expect(evaluate(message).shouldEscalate).toBe(false);
   });
 
   // a single word like admin or manager also names a product feature: the model decides it
@@ -74,38 +67,22 @@ describe('evaluateChatBotEscalation', () => {
     expect(evaluate(message)).toMatchObject({ shouldEscalate: false, reason: 'NONE' });
   });
 
-  // one word may go on with an ending, the way people write it
+  // "refund" also comes in "how long does a refund take", which the bot answers itself
   it.each([
-    ['refunded', 'I want my order refunded', 'HUMAN_REQUIRED'],
-    ['complaints', 'Where do I send complaints?', 'HUMAN_REQUIRED'],
-  ])('still escalates on %s', (_case, message, reason) => {
-    expect(evaluate(message)).toMatchObject({ shouldEscalate: true, reason });
+    'I want a refund',
+    'I want my order refunded',
+    'Where do I send complaints?',
+    'There was a payment problem',
+    'Please delete account data',
+    'How long does a refund take?',
+  ])('leaves a matter that may need a human to the model: %s', (message) => {
+    expect(evaluate(message)).toMatchObject({ shouldEscalate: false, reason: 'NONE' });
   });
 
   it('finds a phrase next to punctuation', () => {
     expect(evaluate('(real person) please!').reason).toBe('DIRECT_ADMIN_REQUEST');
     expect(evaluate('Talk to a human, now.').reason).toBe('DIRECT_ADMIN_REQUEST');
   });
-
-  it('escalates when the bot itself says it cannot help', () => {
-    expect(evaluate('Where is my parcel?', 'Sorry, I cannot help with this.')).toMatchObject({
-      shouldEscalate: true,
-      reason: 'BOT_CANNOT_HELP',
-      confidence: 0.9,
-      matchedPhrase: 'i cannot help with this',
-    });
-  });
-
-  it.each(['I want a refund', 'There was a payment problem', 'Please delete account data'])(
-    'escalates a matter that needs a human decision: %s',
-    (message) => {
-      expect(evaluate(message)).toMatchObject({
-        shouldEscalate: true,
-        reason: 'HUMAN_REQUIRED',
-        confidence: 0.75,
-      });
-    },
-  );
 
   describe('a customer who keeps asking the same', () => {
     const question = 'Where is my order?';
@@ -115,8 +92,8 @@ describe('evaluateChatBotEscalation', () => {
       said('user', question),
     ];
 
-    it('escalates the third time a question comes, the two earlier ones in the history', () => {
-      expect(evaluate(question, 'It is on its way.', twice)).toMatchObject({
+    it('finds a loop the third time a question comes, the two earlier ones in the history', () => {
+      expect(evaluate(question, twice)).toMatchObject({
         shouldEscalate: true,
         reason: 'LOOP_DETECTED',
         confidence: 0.8,
@@ -124,55 +101,56 @@ describe('evaluateChatBotEscalation', () => {
       });
     });
 
-    it('does not escalate the second time', () => {
-      expect(evaluate(question, 'It is on its way.', twice.slice(0, 2))).toMatchObject({
-        reason: 'NONE',
-      });
+    it('does not find one the second time', () => {
+      expect(evaluate(question, twice.slice(0, 2))).toMatchObject({ reason: 'NONE' });
     });
 
     it('treats a repeat in another case or spacing as the same question', () => {
       const history = [said('guest', 'WHERE is my   order?'), said('guest', 'where is my order?')];
 
-      expect(evaluate(question, 'It is on its way.', history).reason).toBe('LOOP_DETECTED');
+      expect(evaluate(question, history).reason).toBe('LOOP_DETECTED');
     });
 
     it('does not count the bot repeating the same words', () => {
       const history = [said('bot', question), said('bot', question)];
 
-      expect(evaluate(question, 'It is on its way.', history).reason).toBe('NONE');
+      expect(evaluate(question, history).reason).toBe('NONE');
     });
 
     it('looks only at the last 8 customer messages', () => {
       const others = Array.from({ length: 8 }, (_, n) => said('user', `question number ${n}`));
       const history = [said('user', question), said('user', question), ...others];
 
-      expect(evaluate(question, 'It is on its way.', history).reason).toBe('NONE');
+      expect(evaluate(question, history).reason).toBe('NONE');
     });
 
     it('does not treat a blank message as a repeat', () => {
-      expect(evaluate('   ', 'Hello!', [said('user', ' '), said('user', '')]).reason).toBe('NONE');
+      expect(evaluate('   ', [said('user', ' '), said('user', '')]).reason).toBe('NONE');
+    });
+
+    // "yes", "ok, thanks" or "the red one" come again and again in a good conversation
+    it.each(['yes', 'ok thanks', 'the red one', 'no ,  not that'])(
+      'does not take a short answer of up to 3 words said again for a loop: %s',
+      (message) => {
+        expect(evaluate(message, [said('user', message), said('user', message)]).reason).toBe(
+          'NONE',
+        );
+      },
+    );
+
+    it('takes a message of 4 words said again for a loop', () => {
+      const message = 'is it in stock';
+
+      expect(evaluate(message, [said('user', message), said('user', message)]).reason).toBe(
+        'LOOP_DETECTED',
+      );
     });
   });
 
-  describe('priority of the signals', () => {
-    it('puts a direct request first, before the bot admitting it cannot help', () => {
-      expect(evaluate('I need admin', 'I cannot help with this.').reason).toBe(
-        'DIRECT_ADMIN_REQUEST',
-      );
-    });
+  it('puts a direct request before a loop', () => {
+    const message = 'I need admin right now';
+    const history = [said('user', message), said('user', message)];
 
-    it('puts the bot admitting it cannot help before a loop', () => {
-      const history = [said('user', 'refund?'), said('user', 'refund?')];
-
-      expect(evaluate('refund?', 'I cannot help with this.', history).reason).toBe(
-        'BOT_CANNOT_HELP',
-      );
-    });
-
-    it('puts a loop before a matter that needs a human', () => {
-      const history = [said('user', 'refund?'), said('user', 'refund?')];
-
-      expect(evaluate('refund?', 'Refunds take 5 days.', history).reason).toBe('LOOP_DETECTED');
-    });
+    expect(evaluate(message, history).reason).toBe('DIRECT_ADMIN_REQUEST');
   });
 });

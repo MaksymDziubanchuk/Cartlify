@@ -1,7 +1,6 @@
 import { Prisma, Role } from '@prisma/client';
 import { getPgCode, prisma } from '@db/client.js';
 import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
-import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashToken } from '@helpers/tokenHash.js';
 import { hashPass } from '@helpers/safePass.js';
@@ -9,14 +8,19 @@ import { assertEmail } from '@helpers/validateEmail.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
-import { setGuestContext } from '@db/dbContext.service.js';
+import { setAdminContext, setGuestContext, setUserContext } from '@db/dbContext.service.js';
 
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { avatarOf } from '@utils/avatar.util.js';
 
 import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
 
 // local register flow
-// create user + verify token
+// create user + verify token. The data of the guest stays with the guest: nobody proved the
+// email yet, a mistyped address would take the chats and favorites of the browser into the
+// account of somebody else; they move with the verification of the email or with a login.
+// An address registered before and never verified is taken by the new registration: somebody may
+// have registered the address of someone else with a password of their own, the owner sets the
+// password now, and the new link goes to the owner
 export async function register({
   email,
   password,
@@ -45,28 +49,61 @@ export async function register({
 
   try {
     result = await prisma.$transaction(async (tx) => {
-      await setGuestContext(tx, guestId);
-
-      // create user row
-      await tx.$executeRaw`
-        insert into cartlify.users (email, "passwordHash", role, "isVerified", name)
-        values (
-          ${cleanEmail},
-          ${passwordHash},
-          'USER'::cartlify."Role",
-          false,
-          ${cleanName ?? null}
-        )
+      // an account of the address already there: the system reads it, a guest sees no users
+      await setAdminContext(tx);
+      const [existing] = await tx.$queryRaw<
+        { id: number; isVerified: boolean; authProvider: string; role: Role }[]
+      >`
+        select id, "isVerified", "authProvider", role
+        from cartlify.users
+        where email = ${cleanEmail}
       `;
 
-      // read new user id
-      const [{ id }] = await tx.$queryRaw<{ id: number }[]>`
-        select currval(pg_get_serial_sequence('cartlify.users', 'id'))::int as id
-      `;
+      let id: number;
 
-      // switches the transaction to the user context, everything below runs as this user;
-      // the insert above lets a guest create only a USER
-      await migrateGuestDataToUser(tx, guestId, { id, role: 'USER' });
+      if (existing) {
+        // a verified account, one of a provider or of an admin belongs to someone
+        if (existing.isVerified || existing.authProvider !== 'LOCAL' || existing.role !== 'USER') {
+          throw new ConflictError('EMAIL_ALREADY_IN_USE');
+        }
+
+        id = existing.id;
+        await setUserContext(tx, { userId: id, role: 'USER' });
+
+        await tx.user.update({
+          where: { id },
+          data: { passwordHash, ...(cleanName ? { name: cleanName } : {}), updatedAt: new Date() },
+          select: { id: true },
+        });
+
+        // the links mailed for the account before end, the new one is the only way in
+        await tx.userToken.updateMany({
+          where: { userId: id, type: 'VERIFY_EMAIL', usedAt: null },
+          data: { usedAt: new Date() },
+        });
+      } else {
+        await setGuestContext(tx, guestId);
+
+        // create user row; a guest may create only a USER
+        await tx.$executeRaw`
+          insert into cartlify.users (email, "passwordHash", role, "isVerified", name)
+          values (
+            ${cleanEmail},
+            ${passwordHash},
+            'USER'::cartlify."Role",
+            false,
+            ${cleanName ?? null}
+          )
+        `;
+
+        // read new user id
+        [{ id }] = await tx.$queryRaw<{ id: number }[]>`
+          select currval(pg_get_serial_sequence('cartlify.users', 'id'))::int as id
+        `;
+
+        // everything below runs as this user
+        await setUserContext(tx, { userId: id, role: 'USER' });
+      }
 
       // store the hash of the verify link, the link itself goes only to the mail:
       // a copy of the database is not enough to verify someone else's email
@@ -107,7 +144,7 @@ export async function register({
         createdAt: u.createdAt,
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
-        ...(u.avatarUrl ? { avatarUrls: buildImageUrls(u.avatarUrl, 'avatar') } : {}),
+        ...avatarOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };

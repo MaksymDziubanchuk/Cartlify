@@ -41,10 +41,14 @@ const logAction = (db: DbSession, actorId: number, actorRole: string, changes = 
     changes,
   );
 
+// the line this test wrote, not the last line of the log: other files write their own lines
+// (a delivery of every product they create) at the same time
 const lastLineOf = async (db: DbSession) => {
   await db.as({ role: 'ROOT', userId: root.id });
   const [row] = await db.rows<{ actorId: number; actorRole: string }>(
-    `select "actorId", "actorRole"::text as "actorRole" from cartlify.admin_audit_log order by id desc limit 1`,
+    `select "actorId", "actorRole"::text as "actorRole" from cartlify.admin_audit_log
+     where "entityType" = 'order' and "entityId" = 1 and action = 'OTHER'
+     order by id desc limit 1`,
   );
   return row;
 };

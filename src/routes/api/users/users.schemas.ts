@@ -36,6 +36,7 @@ const userResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
   phone: '+10000000000',
   reviews: [userReviewExample],
@@ -52,6 +53,7 @@ const publicUserResponseExample = {
     url128: 'https://example.com/avatars/user-128.webp',
     url256: 'https://example.com/avatars/user-256.webp',
   },
+  avatarIsDefault: false,
 };
 
 const updateMeBodyExample = {
@@ -104,6 +106,116 @@ const deleteUserResponseExample = {
   message: 'user deleted',
 };
 
+// the users who confirmed no email yet, the ones longest away first
+const usersListQueryExample = {
+  isVerified: 'false',
+  role: 'USER',
+  sortBy: 'lastLoginAt',
+  sortOrder: 'asc',
+  limit: '20',
+};
+
+// the letter an account without a picture gets, the way Cloudinary draws it at the url
+const drawnAvatarUrl = (size: number) =>
+  'https://res.cloudinary.com/demo/image/upload/' +
+  `c_scale,w_${size},h_${size}/e_colorize:100,co_rgb:EF6C00` +
+  `/l_text:Roboto_${size / 2}_bold:B,co_white/fl_layer_apply,g_center` +
+  '/f_auto,q_auto/v1/prod/common/avatar-base.png';
+
+const usersListResponseExample = {
+  items: [
+    {
+      id: 7,
+      email: 'anna@example.com',
+      name: 'Anna',
+      role: 'USER',
+      authProvider: 'LOCAL',
+      isVerified: false,
+      locale: 'uk',
+      avatarUrls: userResponseExample.avatarUrls,
+      avatarIsDefault: false,
+      createdAt: '2025-11-02T10:00:00.000Z',
+      updatedAt: '2025-11-02T10:00:00.000Z',
+      lastLoginAt: '2025-11-03T08:30:00.000Z',
+      deletedAt: null,
+    },
+    {
+      id: 9,
+      email: 'bohdan@example.com',
+      name: null,
+      role: 'USER',
+      authProvider: 'LOCAL',
+      isVerified: false,
+      locale: null,
+      avatarUrls: {
+        url32: drawnAvatarUrl(32),
+        url64: drawnAvatarUrl(64),
+        url128: drawnAvatarUrl(128),
+        url256: drawnAvatarUrl(256),
+      },
+      avatarIsDefault: true,
+      createdAt: '2025-12-01T10:00:00.000Z',
+      updatedAt: '2025-12-01T10:00:00.000Z',
+      lastLoginAt: null,
+      deletedAt: null,
+    },
+  ],
+  limit: 20,
+  nextCursor: null,
+  total: 2,
+};
+
+// Schema for the admin table of users
+const getUsersSchema = {
+  operationId: 'getUsers',
+  summary: 'List users',
+  description:
+    'Admin or root only: the accounts of every role, root accounts too, a page at a time. ' +
+    'Every field of a row is there, null when the account has none; `lastLoginAt` is the last ' +
+    'login, null for an account that never logged in, `total` counts the accounts of the filters ' +
+    'on all pages. The filters go together: a part of the email (`email`), roles, providers, ' +
+    'the email confirmation and the deleted accounts (left out unless `deleted=true`, which lists ' +
+    'only them). The order is the sign-up (`sortBy=createdAt`, unless given) or the last login ' +
+    '(`sortBy=lastLoginAt`), the newest first unless `sortOrder=asc`; equal values go by id, ' +
+    'accounts that never logged in come last in either order. The whole profile of one account ' +
+    'is GET /api/users/{userId}.',
+
+  querystring: {
+    $ref: 'usersListQuerySchema#',
+    examples: [usersListQueryExample],
+  },
+
+  response: {
+    200: {
+      description: 'A page of the accounts the filters find.',
+      $ref: 'usersListResponseSchema#',
+      examples: [usersListResponseExample],
+    },
+
+    400: {
+      description:
+        'Invalid query: a limit outside 1-100, an unknown role, provider or order, an email check ' +
+        'that is not true or false (VALIDATION_ERROR); a cursor the list did not give, or one of ' +
+        'another order (CURSOR_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'Only an admin or root reads the list of users, a guest or a user cannot (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while loading users.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for current authenticated user lookup
 const getMeSchema = {
   operationId: 'getCurrentUser',
@@ -128,6 +240,31 @@ const getMeSchema = {
     },
     500: {
       description: 'Unexpected server error while loading current user.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the export of the data of the signed-in person
+const getMeExportSchema = {
+  operationId: 'exportCurrentUser',
+  summary: 'Export my data',
+  description:
+    'Everything the shop keeps of the signed-in person, read with the rights of the person, as one JSON file ' +
+    '(content-disposition attachment): the profile, the orders, the favorites, the reviews and votes, the ' +
+    'chats, the logins and the open sessions. Once an hour.',
+
+  response: {
+    200: {
+      description: 'The data of the person.',
+      $ref: 'usersExportResponseSchema#',
+    },
+    404: {
+      description: 'The account was deleted (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description: 'The data was exported in the last hour (RATE_LIMITED, `details.limit` export).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -169,7 +306,8 @@ const patchMeSchema = {
         'Invalid current user update request: nothing to change (NO_FIELDS_TO_UPDATE), a name or ' +
         'locale over 100 characters (VALIDATION_ERROR, NAME_TOO_LONG, LOCALE_TOO_LONG), a wrong ' +
         'phone (PHONE_INVALID), two avatar files (AVATAR_MULTIPLE), an empty avatar ' +
-        '(AVATAR_STREAM_ERROR), a file that is not a jpeg, png or webp image by its content, ' +
+        '(AVATAR_STREAM_ERROR), a text field avatar that is not empty (AVATAR_NOT_A_FILE: only an ' +
+        'empty one removes the avatar), a file that is not a jpeg, png or webp image by its content, ' +
         'whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot ' +
         'read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
@@ -278,6 +416,67 @@ const ACCOUNT_DELETION =
   'logged. ACCOUNT_ORDERS_CHANGED (409): a payment or the end of a reservation changed a waiting ' +
   'order at that moment, nothing was changed, repeat the request.';
 
+const avatarRemovalResponseExample = {
+  removed: true,
+  avatarRemovals: 3,
+  avatarRemovalsLimit: 5,
+};
+
+// Schema for the removal of the avatar of another account by a moderator
+const deleteUserAvatarSchema = {
+  operationId: 'deleteUserAvatar',
+  summary: 'Remove the avatar of a user (moderation)',
+  description:
+    'Admin or root only: takes the avatar of another account away, for a picture that breaks ' +
+    'the rules. An admin takes it from a user account, root from any account; the own avatar goes ' +
+    'through PATCH /api/users/me with an empty avatar. The profile shows the drawn letter again, ' +
+    'the file of this environment goes from Cloudinary after the change, the removal goes to the ' +
+    'journal of the admins, and the person gets a mail with the number of the removal and the ' +
+    'limit the rules allow. `avatarRemovals` counts the removals by a moderator of the account, ' +
+    'this one included; past `avatarRemovalsLimit` the page tells the admin to take the account ' +
+    'to root, who alone deletes accounts (DELETE /api/users/{userId}). An account without an ' +
+    'avatar answers `removed: false` and nothing is counted or mailed. A failed file deletion or ' +
+    'mail is only logged.',
+
+  params: {
+    $ref: 'usersGetByIdParamsSchema#',
+    examples: [userIdParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The avatar is removed, or the account had none.',
+      $ref: 'usersAvatarRemovalResponseSchema#',
+      examples: [avatarRemovalResponseExample],
+    },
+
+    400: {
+      description:
+        'The user id is not a whole number from 1 to 2147483647 (VALIDATION_ERROR, USER_ID_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'A guest or a user (INSUFFICIENT_ROLE); an admin and the avatar of an admin or root ' +
+        '(USER_AVATAR_REMOVE_FORBIDDEN); no csrf token (CSRF_TOKEN_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'There is no user with this id (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while removing the avatar.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for privileged user deletion
 const deleteUserByIdSchema = {
   operationId: 'deleteUserById',
@@ -311,7 +510,7 @@ const deleteUserByIdSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'User was not found.',
+      description: '`USER_NOT_FOUND`: there is no user with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -375,6 +574,11 @@ const deleteMeSchema = {
         '(RECENT_LOGIN_REQUIRED).',
       $ref: 'errorResponseSchema#',
     },
+    404: {
+      description:
+        'The account is already deleted: its access cookie lives a few minutes on (USER_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
     409: {
       description:
         'The account has orders waiting for payment, paid or shipped (ACCOUNT_HAS_OPEN_ORDERS, ' +
@@ -394,10 +598,13 @@ const deleteMeSchema = {
 // Group user routes under the users Swagger tag
 const taggedUsersSchema = withOpenApiTag(
   {
+    getUsersSchema,
     getMeSchema,
+    getMeExportSchema,
     patchMeSchema,
     getUserByIdSchema,
     deleteUserByIdSchema,
+    deleteUserAvatarSchema,
     deleteMeSchema,
   },
   'users',

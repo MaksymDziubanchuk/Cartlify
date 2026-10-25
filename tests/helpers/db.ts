@@ -62,6 +62,11 @@ function sessionOf(tx: Prisma.TransactionClient): DbSession {
   };
 }
 
+// the same statements in a transaction that commits: rows a later transaction has to find made
+// before it, at an earlier time of the database (a cart created before it is paid)
+export const inCommittedTx = <T>(fn: (db: DbSession) => Promise<T>): Promise<T> =>
+  prisma.$transaction((tx) => fn(sessionOf(tx)), { maxWait: 10_000, timeout: 30_000 });
+
 // the rules of the database checked straight under cartlify_app, the role the app connects as:
 // everything runs in one transaction that is always rolled back, nothing the test does stays.
 // A test that compares what several statements see of shared tables takes repeatable read: the

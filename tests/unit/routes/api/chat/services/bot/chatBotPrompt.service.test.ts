@@ -4,6 +4,7 @@ import {
   buildChatBotPrompt,
   type BuildChatBotPromptDto,
   type ChatBotHistoryMessageDto,
+  type ChatBotOrderContextItemDto,
   type ChatBotProductContextItemDto,
 } from '@routes/api/chat/services/bot/chatBotPrompt.service.js';
 
@@ -25,32 +26,58 @@ const product = (
   categoryName: 'Kitchen',
   description: 'Holds 300 ml',
   popularity: 12,
+  sale: null,
+  stock: 5,
+  ...patch,
+});
+
+const order = (patch: Partial<ChatBotOrderContextItemDto> = {}): ChatBotOrderContextItemDto => ({
+  id: 12,
+  status: 'shipped',
+  total: 25.5,
+  createdAt: '2026-10-20T10:00:00.000Z',
+  paidAt: '2026-10-20T10:05:00.000Z',
+  items: [{ name: 'Mug', quantity: 2 }],
   ...patch,
 });
 
 const build = (patch: Partial<BuildChatBotPromptDto> = {}) =>
   buildChatBotPrompt({
     actorRole: 'USER',
+    emailConfirmed: true,
     userMessage: 'Do you have mugs?',
     history: [],
     productContext: [],
+    orders: [],
     currency: 'eur',
     paymentProviders: ['Stripe'],
     ...patch,
   });
 
 describe('buildChatBotPrompt', () => {
-  it('tells the model a logged in customer can be transferred to an admin', () => {
-    const { instructions } = build({ actorRole: 'USER' });
+  it('tells the model a customer with a confirmed email can be transferred to an admin', () => {
+    const { instructions } = build({ actorRole: 'USER', emailConfirmed: true });
 
-    expect(instructions).toContain('The current customer is logged in');
+    expect(instructions).toContain(
+      'The current customer is logged in with a confirmed email. If admin help is needed, tell the customer that you can transfer the chat to an admin.',
+    );
     expect(instructions).not.toContain('The current customer is a guest');
   });
 
-  it('tells the model a guest has to log in before an admin can help', () => {
-    const { instructions } = build({ actorRole: 'GUEST' });
+  // only a person who proved the email talks to an admin: a mistyped address is somebody else
+  it('tells the model a customer without a confirmed email has to confirm it before an admin', () => {
+    const { instructions } = build({ actorRole: 'USER', emailConfirmed: false });
 
-    expect(instructions).toContain('Guests cannot be transferred to an admin chat');
+    expect(instructions).toContain('has not confirmed their email');
+    expect(instructions).toContain('Only customers with a confirmed email can talk to an admin');
+    expect(instructions).not.toContain('you can transfer the chat to an admin');
+  });
+
+  it('tells the model a guest has to log in with a confirmed email before an admin can help', () => {
+    const { instructions } = build({ actorRole: 'GUEST', emailConfirmed: false });
+
+    expect(instructions).toContain('The current customer is a guest');
+    expect(instructions).toContain('Only customers with a confirmed email can talk to an admin');
     expect(instructions).not.toContain('The current customer is logged in');
   });
 
@@ -142,7 +169,7 @@ describe('buildChatBotPrompt', () => {
 
       expect(first?.role).toBe('developer');
       expect(first?.content).toContain(
-        '- id: 4; name: Mug; price: 9.99 EUR; category: Kitchen; description: Holds 300 ml; popularity: 12',
+        '- id: 4; name: Mug; price: 9.99 EUR; in stock: 5; category: Kitchen; description: Holds 300 ml; popularity: 12',
       );
     });
 
@@ -158,7 +185,9 @@ describe('buildChatBotPrompt', () => {
         productContext: [product({ categoryName: null, description: '   ', popularity: null })],
       }).messages[0]?.content;
 
-      expect(content).toContain('- id: 4; name: Mug; price: 9.99 EUR; category: unknown\n');
+      expect(content).toContain(
+        '- id: 4; name: Mug; price: 9.99 EUR; in stock: 5; category: unknown\n',
+      );
     });
 
     it('keeps a popularity of zero', () => {
@@ -169,6 +198,114 @@ describe('buildChatBotPrompt', () => {
 
     it('sends no product message when there are no products', () => {
       expect(build().messages.some((message) => message.role === 'developer')).toBe(false);
+    });
+
+    // the buyer pays the sale price; the usual price stays next to it, as the catalog shows it
+    it('names the sale price and its end next to the price of a product on sale', () => {
+      const content = build({
+        productContext: [product({ sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z' } })],
+      }).messages[0]?.content;
+
+      expect(content).toContain(
+        '- id: 4; name: Mug; price: 9.99 EUR; sale price: 7.5 EUR until 2026-11-01T10:00:00.000Z (UTC); in stock: 5; category: Kitchen',
+      );
+    });
+
+    // the price a reduction is compared with, the way the card shows it
+    it('names the lowest price of the 30 days before a sale', () => {
+      const content = build({
+        productContext: [
+          product({ sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z', priorPrice: 8.99 } }),
+        ],
+      }).messages[0]?.content;
+
+      expect(content).toContain(
+        'sale price: 7.5 EUR until 2026-11-01T10:00:00.000Z (UTC); lowest price of the 30 days before the sale: 8.99 EUR; in stock: 5',
+      );
+    });
+
+    // the units free to buy now: the stock that confirmed orders do not hold
+    it('names the free units of a product, none too', () => {
+      expect(build({ productContext: [product({ stock: 0 })] }).messages[0]?.content).toContain(
+        'in stock: 0;',
+      );
+    });
+
+    it('tells the model to promise no more units than are free', () => {
+      expect(build().instructions).toContain(
+        'in stock is the number of units free to buy now; never promise more of a product',
+      );
+    });
+
+    it('tells the model a product on sale sells at its sale price until the end of the sale', () => {
+      const { instructions } = build();
+
+      expect(instructions).toContain(
+        'A product with a sale price sells at the sale price until the end of the sale',
+      );
+    });
+  });
+
+  // where is my order: the bot answered from nothing and invented a status
+  describe('orders of the customer', () => {
+    it('come after the products as a developer message, one line per order in the given order', () => {
+      const { messages } = build({
+        productContext: [product()],
+        orders: [order(), order({ id: 9, status: 'delivered', items: [] })],
+      });
+
+      expect(messages[1]).toEqual({
+        role: 'developer',
+        content: [
+          'Orders of the customer, newest first:',
+          '- order 12: shipped (sent, on its way to the customer); total 25.5 EUR; placed 2026-10-20T10:00:00.000Z (UTC); paid 2026-10-20T10:05:00.000Z (UTC); items: Mug x 2',
+          '- order 9: delivered (delivered to the customer); total 25.5 EUR; placed 2026-10-20T10:00:00.000Z (UTC); paid 2026-10-20T10:05:00.000Z (UTC); items: none',
+          'Use only these orders when the customer asks about an order; never invent an order, a status or a date.',
+        ].join('\n'),
+      });
+    });
+
+    it.each([
+      ['unconfirmed', 'not confirmed: the customer has to confirm it again before paying'],
+      ['waiting', 'confirmed, waiting for the payment'],
+      ['paid', 'paid, being prepared for shipping'],
+      ['shipped', 'sent, on its way to the customer'],
+      ['delivered', 'delivered to the customer'],
+      ['cancelled', 'cancelled by the shop, the payment is refunded'],
+    ] as const)('say what the status %s means', (status, meaning) => {
+      const line = build({ orders: [order({ status, paidAt: null })] }).messages[0]!.content;
+
+      expect(line).toContain(`- order 12: ${status} (${meaning}); total 25.5 EUR; placed`);
+      expect(line).not.toContain('; paid ');
+    });
+
+    it('name several items of an order', () => {
+      const { messages } = build({
+        orders: [
+          order({
+            items: [
+              { name: 'Mug', quantity: 2 },
+              { name: 'Lamp', quantity: 1 },
+            ],
+          }),
+        ],
+      });
+
+      expect(messages[0]!.content).toContain('items: Mug x 2, Lamp x 1');
+    });
+
+    it('tell the model a customer without orders has none', () => {
+      const { instructions, messages } = build({ orders: [] });
+
+      expect(instructions).toContain('The customer has no orders yet.');
+      expect(messages).toHaveLength(1);
+    });
+
+    it('tell the model a guest has no orders to look up', () => {
+      const { instructions } = build({ actorRole: 'GUEST', emailConfirmed: false, orders: [] });
+
+      expect(instructions).toContain('A guest has no orders; the customer logs in to see them.');
+      expect(instructions).not.toContain('The customer has no orders yet.');
     });
   });
 });

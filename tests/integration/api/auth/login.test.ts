@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { getMe, logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { drawnAvatarOf } from '../../../helpers/avatar.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -72,7 +73,9 @@ describe('POST /api/auth/login', () => {
       role: 'USER',
       isVerified: true,
       name: 'Login Test',
+      avatarIsDefault: true,
     });
+    expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'L' });
     expect(JSON.stringify(res.json())).not.toMatch(/password/i);
 
     const cookies = setCookies(res);

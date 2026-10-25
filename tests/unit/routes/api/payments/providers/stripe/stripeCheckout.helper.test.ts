@@ -64,25 +64,65 @@ describe('buildCheckoutIdempotencyKey', () => {
       helper.buildCheckoutIdempotencyKey(13, reservation),
     );
   });
+
+  // the buyer moved to another provider, the app closed this page, then came back: the same key
+  // would give the closed page back from stripe as if it were open
+  it('gives a new key once the app closed a page of the order for another provider', () => {
+    const closedAt = new Date('2026-06-01T10:05:00.000Z');
+
+    expect(helper.buildCheckoutIdempotencyKey(12, reservation, closedAt)).not.toBe(
+      helper.buildCheckoutIdempotencyKey(12, reservation),
+    );
+    expect(helper.buildCheckoutIdempotencyKey(12, reservation, closedAt)).toBe(
+      helper.buildCheckoutIdempotencyKey(12, reservation, new Date(closedAt)),
+    );
+  });
 });
 
 describe('buildCheckoutSessionPayload', () => {
-  const payload = () =>
-    helper.buildCheckoutSessionPayload({ orderId: 12, userId: 3, total: 19.99 });
+  const reservationExpiresAt = new Date('2026-06-01T10:15:00.000Z');
+  // an order of one item, the way the payment page is opened for one
+  const order = (
+    total: number,
+    items = [{ name: 'Desk lamp', unitPrice: total, quantity: 1 }],
+  ) => ({
+    orderId: 12,
+    userId: 3,
+    total,
+    reservationExpiresAt,
+    items,
+    customerEmail: 'anna@example.com',
+  });
+  const payload = () => helper.buildCheckoutSessionPayload(order(19.99));
 
-  it('asks for a one time card payment of the order total in cents', () => {
-    expect(payload()).toMatchObject({
+  // without it stripe keeps a page open for 24 hours, and a page the timer could not close stayed
+  // payable long after the reservation; 30 minutes is the least stripe takes. It comes from the
+  // reservation, not from the clock: a repeated request with the same key sends the same values
+  it('closes the page at stripe 30 minutes after the end of the reservation', () => {
+    expect(payload().expires_at).toBe(Math.floor(reservationExpiresAt.getTime() / 1000) + 30 * 60);
+  });
+
+  // the buyer sees what is bought: a line for each item, its name, units and price in cents
+  it('asks for a one time card payment with a line for each item', () => {
+    const out = helper.buildCheckoutSessionPayload(
+      order(34.3, [
+        { name: 'Desk lamp', unitPrice: 12.5, quantity: 2 },
+        { name: 'Mug', unitPrice: 3.1, quantity: 3 },
+      ]),
+    );
+
+    expect(out).toMatchObject({
       mode: 'payment',
       allowed_payment_method_types: ['card'],
       client_reference_id: '12',
       line_items: [
         {
-          quantity: 1,
-          price_data: {
-            currency: 'eur',
-            unit_amount: 1999,
-            product_data: { name: 'Cartlify order #12' },
-          },
+          quantity: 2,
+          price_data: { currency: 'eur', unit_amount: 1250, product_data: { name: 'Desk lamp' } },
+        },
+        {
+          quantity: 3,
+          price_data: { currency: 'eur', unit_amount: 310, product_data: { name: 'Mug' } },
         },
       ],
     });
@@ -95,10 +135,42 @@ describe('buildCheckoutSessionPayload', () => {
     [4.35, 435],
     [1234567.89, 123456789],
     [0, 0],
-  ])('turns a total of %d into %d cents without losing a cent', (total, cents) => {
-    const out = helper.buildCheckoutSessionPayload({ orderId: 1, userId: 1, total });
+  ])('turns a price of %d into %d cents without losing a cent', (total, cents) => {
+    const out = helper.buildCheckoutSessionPayload({ ...order(total), orderId: 1, userId: 1 });
 
     expect(out.line_items?.[0]?.price_data?.unit_amount).toBe(cents);
+  });
+
+  // the webhook takes the paid amount for the total of the order: lines that differ from it are a
+  // mistake of the server, never a page
+  it('refuses lines that do not add up to the total of the order', () => {
+    expect(
+      thrownBy(() =>
+        helper.buildCheckoutSessionPayload(
+          order(20, [{ name: 'Desk lamp', unitPrice: 9.99, quantity: 2 }]),
+        ),
+      ),
+    ).toMatchObject({ statusCode: 500, details: { reason: 'STRIPE_LINES_TOTAL_MISMATCH' } });
+  });
+
+  it('gives the page the email of the buyer, and none for an account without one', () => {
+    expect(payload().customer_email).toBe('anna@example.com');
+    expect(
+      helper.buildCheckoutSessionPayload({ ...order(19.99), customerEmail: null }),
+    ).not.toHaveProperty('customer_email');
+  });
+
+  // the payment carries the name of the shop, the bank statement and the stripe dashboard show it
+  it('names the order with the name of the shop', async () => {
+    expect(payload().payment_intent_data).toEqual({ description: 'Cartlify order #12' });
+
+    const other = await importWithEnv<Helper>(
+      '@routes/api/payments/providers/stripe/stripeCheckout.helper.js',
+      { ...CONFIG, SHOP_NAME: 'Lamp shop' },
+    );
+    expect(other.buildCheckoutSessionPayload(order(19.99)).payment_intent_data).toEqual({
+      description: 'Lamp shop order #12',
+    });
   });
 
   it('keeps the order and its owner in the metadata the webhook reads', () => {
@@ -125,7 +197,7 @@ describe('buildCheckoutSessionPayload', () => {
         { ...CONFIG, WEB_ORIGIN: origin },
       );
 
-      const out = other.buildCheckoutSessionPayload({ orderId: 1, userId: 1, total: 1 });
+      const out = other.buildCheckoutSessionPayload({ ...order(1), orderId: 1, userId: 1 });
       expect(out.success_url).toBe(
         'https://shop.example.com/checkout/success?session_id={CHECKOUT_SESSION_ID}',
       );
@@ -148,7 +220,7 @@ describe('buildCheckoutSessionPayload', () => {
     );
 
     expect(
-      thrownBy(() => other.buildCheckoutSessionPayload({ orderId: 1, userId: 1, total: 1 })),
+      thrownBy(() => other.buildCheckoutSessionPayload({ ...order(1), orderId: 1, userId: 1 })),
     ).toMatchObject({ statusCode: 500, details: { reason: 'WEB_ORIGIN_REQUIRED' } });
   });
 });

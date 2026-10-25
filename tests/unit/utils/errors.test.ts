@@ -52,6 +52,14 @@ describe('error classes', () => {
     expect(new InternalError({ secret: 'x' }).expose).toBe(false);
   });
 
+  // the attempts and the database codes of a busy error are for the log, the client retries
+  it('keeps the details of a busy error from the client', () => {
+    const err = new ResourceBusyError({ attempts: 4, pgCode: '40P01' });
+
+    expect(err.expose).toBe(false);
+    expect(err.details).toEqual({ attempts: 4, pgCode: '40P01' });
+  });
+
   it('gives every internal error the same code, whatever the details', () => {
     const err = new InternalError({ reason: 'SOMETHING' });
 

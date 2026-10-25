@@ -47,9 +47,19 @@ enum PaymentProvider {
   liqpay
 }
 
+// how a change of a price is given: a percent of the price or an amount of money; a line of the
+// log with endsAt is the start of a sale
 enum PriceChangeMode {
   percent
   fixed
+}
+
+// where a batch of a product came from: a delivery of a supplier, a surplus an inventory found,
+// the goods a buyer brought back
+enum StockSource {
+  supplier
+  surplus
+  customer_return
 }
 
 enum AdminAuditEntityType {
@@ -67,6 +77,11 @@ enum AdminAuditAction {
   PRODUCT_UPDATE
   PRODUCT_DELETE
   PRODUCT_PRICE_BULK_UPDATE
+  // a sale set, changed or taken off by an admin, or ended by a price down to it (db/05)
+  PRODUCT_SALE
+  // a batch taken in and the units written off, a line for each product (db/05)
+  STOCK_DELIVERY
+  STOCK_WRITE_OFF
   ORDER_STATUS_CHANGE
   CATEGORY_UPDATE
   REVIEW_DELETE
@@ -118,6 +133,7 @@ model User {
   orders                 Order[]
   productPriceChangeLogs ProductPriceChangeLog[]
   adminAuditLogs         AdminAuditLog[]
+  alertSettings          AdminAlertSetting[]
   chatThreads            ChatThread[]
   chatMessages           ChatMessage[]
 
@@ -137,9 +153,18 @@ model UserToken {
   usedAt    DateTime?
   createdAt DateTime      @default(now())
 
+  // a session token: the session it belongs to, kept across its renewals, and the browser that
+  // opened it (db/06: a session token has a session, no other link has one)
+  sessionId String?   @db.Uuid
+  userAgent String?
+  // a session closed on purpose (a logout, a reset of the password, a role change), at the moment
+  // it was closed; a token closed by its renewal has none, and that one coming back is theft
+  revokedAt DateTime?
+
   user User @relation(fields: [userId], references: [id])
 
   @@index([userId, type, createdAt])
+  @@index([sessionId])
   @@map("user_tokens")
 }
 
@@ -183,10 +208,20 @@ model Product {
   id          Int     @id @default(autoincrement())
   name        String
   description String?
+  // the article number: optional, one product of the catalog has it at a time, whatever the case
+  // of its letters (db/06)
+  sku         String? @db.VarChar(64)
 
   price         Decimal @db.Decimal(10, 2)
   stock         Int     @default(0)
   reservedStock Int     @default(0)
+
+  // the sale: its price is the price of the product while saleEndsAt is ahead; both empty or both
+  // set (db/06), a price down to the sale price or below empties them (db/05)
+  salePrice      Decimal?  @db.Decimal(10, 2)
+  saleEndsAt     DateTime?
+  // the lowest price of the 30 days before the sale, written with it and gone with it (db/06)
+  salePriorPrice Decimal?  @db.Decimal(10, 2)
 
   categoryId Int
   category   Category @relation(fields: [categoryId], references: [id])
@@ -210,6 +245,8 @@ model Product {
   orderItems      OrderItem[]
   priceChangeLogs ProductPriceChangeLog[]
   images          ProductImage[]
+  batches         ProductBatch[]
+  allocations     OrderBatchAllocation[]
 
   @@index([categoryId])
   @@index([price, id])
@@ -325,6 +362,11 @@ model Order {
   paymentProvider PaymentProvider?
   paymentId       String?          @unique
 
+  // when the payment was recorded (pay_order, with the payment) and when an admin cancelled the
+  // paid order (cancel_paid_order); utc, only those functions set them (db/03, db/06)
+  paidAt      DateTime?
+  cancelledAt DateTime?
+
   shippingAddress    String?
   recipientFirstName String?
   recipientLastName  String?
@@ -334,7 +376,8 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  items OrderItem[]
+  items       OrderItem[]
+  allocations OrderBatchAllocation[]
 
   @@index([userId, createdAt])
   @@index([userId, updatedAt])
@@ -342,7 +385,69 @@ model Order {
   @@index([status, createdAt])
   @@index([status, updatedAt])
   @@index([confirmed, reservationExpiresAt])
+  @@index([paidAt, id])
+  @@index([cancelledAt])
   @@map("orders")
+}
+
+// a batch of a product: what came in at once at one cost of a unit, in the currency of the shop.
+// The stock of the product is what its batches have left (db/05); only the functions of the
+// database take a batch in and take units out of it. Who took it in, the supplier, the invoice
+// and the note are in the admin log (STOCK_DELIVERY)
+model ProductBatch {
+  id Int @id @default(autoincrement())
+
+  // a product removed for good takes its batches with it; a batch a paid order took units from
+  // stays, so does its product
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // the delivery it came with: one delivery takes in batches of several products
+  deliveryId String @db.Uuid
+
+  source              StockSource
+  // the number the supplier gave the batch, when there is one
+  supplierBatchNumber String?
+
+  unitCost  Decimal   @db.Decimal(10, 2)
+  quantity  Int
+  remaining Int
+  // the last day the goods are good for; a sale takes the batch that ends first, a batch without
+  // an end after them, the oldest first
+  expiresAt DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+
+  allocations OrderBatchAllocation[]
+
+  @@index([productId, expiresAt, createdAt, id])
+  @@index([createdAt, id])
+  @@index([deliveryId])
+  @@map("product_batches")
+}
+
+// the units a paid order took from each batch: the cost of the goods it sold. A cancel of the
+// order puts them back into the same batches and keeps the line for the reports
+model OrderBatchAllocation {
+  id Int @id @default(autoincrement())
+
+  orderId Int
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  batchId Int
+  batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
+
+  quantity Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([orderId, batchId])
+  @@index([batchId])
+  @@index([productId])
+  @@map("order_batch_allocations")
 }
 
 model OrderItem {
@@ -354,9 +459,12 @@ model OrderItem {
   productId Int
   product   Product @relation(fields: [productId], references: [id])
 
-  quantity   Int
-  unitPrice  Decimal @db.Decimal(10, 2)
-  totalPrice Decimal @db.Decimal(10, 2)
+  quantity    Int
+  unitPrice   Decimal @db.Decimal(10, 2)
+  totalPrice  Decimal @db.Decimal(10, 2)
+  // the name of the product: it follows the product while the order is a cart, the confirm keeps
+  // the name of that moment (db/05); empty for an item from before it was kept
+  productName String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
@@ -429,11 +537,31 @@ model ProductPriceChangeLog {
   mode  PriceChangeMode
   value Decimal         @db.Decimal(10, 2)
 
+  // the end of the sale a line starts: a line with an end is the start of a sale, from the price
+  // down to the sale price (db/06); empty for any other line
+  endsAt DateTime?
+
   createdAt DateTime @default(now())
 
   @@index([productId, createdAt])
   @@index([actorId, createdAt])
   @@map("product_price_change_logs")
+}
+
+// the settings of a kind of alerts of an admin or root, each of their own: whether it is on and
+// its threshold; a kind without a row is on with the threshold the server gives, and a threshold
+// left empty is that one too
+model AdminAlertSetting {
+  userId     Int
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind       String  @db.VarChar(64)
+  subscribed Boolean @default(true)
+  threshold  Int?
+
+  createdAt DateTime @default(now())
+
+  @@id([userId, kind])
+  @@map("admin_alert_settings")
 }
 
 model AdminAuditLog {
@@ -457,5 +585,7 @@ model AdminAuditLog {
 
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
+  // the reports read the lines of an action in a period: the write-offs of a month
+  @@index([action, createdAt])
   @@map("admin_audit_log")
 }

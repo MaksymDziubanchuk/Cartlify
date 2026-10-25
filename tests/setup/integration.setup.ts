@@ -1,20 +1,47 @@
-import { isolateEnv, STRIPE_PLACEHOLDER_KEY } from './isolateEnv.js';
+import { CLOUDINARY_PLACEHOLDERS, isolateEnv, STRIPE_PLACEHOLDER_KEY } from './isolateEnv.js';
 import { assertTestServices } from '../helpers/guard.js';
+import { isRealService } from '../helpers/services.js';
 
-// cloudinary has no test mode: the uploads go to the real account, into its test/ folder
-// (tests/setup/integration.cloudinary.ts holds them there). Locally the keys come from .env,
-// in ci from the CLOUDINARY_URL secret; without them the upload tests are skipped
+// cloudinary: a mock unless the run takes it for real (service:cloudinary). Cloudinary has no test
+// mode, for real the uploads go to the account, into its test/ folder (tests/helpers/cloudinary.ts
+// holds them there), with the keys from .env locally and the CLOUDINARY_URL secret in ci. The mock
+// takes no key: the made-up ones, and no CLOUDINARY_URL of the shell
+const realCloudinary = isRealService('cloudinary');
 const CLOUDINARY_KEYS = [
   'CLOUDINARY_URL',
   'CLOUDINARY_CLOUD_NAME',
   'CLOUDINARY_API_KEY',
   'CLOUDINARY_API_SECRET',
 ];
+const MOCK_CLOUDINARY = { CLOUDINARY_URL: '', ...CLOUDINARY_PLACEHOLDERS };
 
-// stripe has a test mode: the payment tests take the key of a test sandbox from
-// STRIPE_TEST_SECRET_KEY (.env locally, the secret of the same name in ci), never
-// STRIPE_SECRET_KEY, which one day holds the live key; without it they are skipped
+// stripe: a mock unless the run takes it for real (service:stripe). For real the payment tests take
+// the key of a test sandbox from STRIPE_TEST_SECRET_KEY (.env locally, the secret of the same name
+// in ci), never STRIPE_SECRET_KEY, which one day holds the live key. The mock takes the placeholder
+const realStripe = isRealService('stripe');
 const STRIPE_TEST_KEY = 'STRIPE_TEST_SECRET_KEY';
+
+// openai: the model of the bot is the test's (tests/helpers/openai.ts) unless the run takes it for
+// real (service:openai); then the tests that run with either model ask openai itself with the key
+// of OPENAI_API_TEST_KEY, never OPENAI_API_KEY, the key of the app. Every other test keeps the app
+// without a model, so the key goes to the app only for the time of such a test
+const realOpenAi = isRealService('openai');
+const OPENAI_TEST_KEY = 'OPENAI_API_TEST_KEY';
+
+// sendgrid: a mock unless the run takes it for real (service:sendgrid). For real the tests take the
+// key of SENDGRID_API_TEST_KEY (never SENDGRID_API_KEY, the key of dev) and the addresses of the
+// authenticated domain from .env locally, from the secrets of the same names in ci; every mail
+// goes to SendGrid in sandbox mode (tests/helpers/mail.ts), so none reaches a mailbox
+const realSendGrid = isRealService('sendgrid');
+const SENDGRID_TEST_KEY = 'SENDGRID_API_TEST_KEY';
+const MAIL_ADDRESS_KEYS = ['EMAIL_FROM', 'EMAIL_FROM_NAME', 'EMAIL_REPLY_TO'];
+const MOCK_SENDGRID = {
+  // a made-up key and the addresses of the made-up site, the mock takes any key
+  SENDGRID_API_KEY: 'SG.cartlify-tests-mock',
+  EMAIL_FROM: 'no-reply@shop.example.com',
+  EMAIL_FROM_NAME: 'Cartlify',
+  EMAIL_REPLY_TO: 'support@shop.example.com',
+};
 
 // docker test stack from docker-compose.test.yml, built by npm run db:test:up
 isolateEnv(
@@ -46,12 +73,68 @@ isolateEnv(
     // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
+    // a short limit of avatar removals: a test passes it in three removals
+    AVATAR_REMOVALS_LIMIT: '2',
+    // every request of the tests comes from 127.0.0.1; each test file has an app and a count of its
+    // own, a file of many requests would hit the 100 a minute of the app
+    RATE_LIMIT_MAX: '1000',
+    // the same for the limits of the login, the registration, the mails and the payment page;
+    // tests/integration/api/auth/limits.test.ts checks them as the server has them
+    REQUEST_LIMITS_SCALE: '1000',
+    ...(realSendGrid ? {} : MOCK_SENDGRID),
+    ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },
-  { fromLocalEnv: [...CLOUDINARY_KEYS, STRIPE_TEST_KEY] },
+  {
+    fromLocalEnv: [
+      ...(realCloudinary ? CLOUDINARY_KEYS : []),
+      ...(realStripe ? [STRIPE_TEST_KEY] : []),
+      ...(realSendGrid ? [SENDGRID_TEST_KEY, ...MAIL_ADDRESS_KEYS] : []),
+      ...(realOpenAi ? [OPENAI_TEST_KEY] : []),
+    ],
+  },
 );
 
-// set here and not left to the environment: a STRIPE_SECRET_KEY of the shell may be a live key
-process.env.STRIPE_SECRET_KEY = process.env[STRIPE_TEST_KEY]?.trim() || STRIPE_PLACEHOLDER_KEY;
+// set here and not left to the environment: a STRIPE_SECRET_KEY of the shell may be a live key;
+// the mock takes the placeholder only, a test key of the shell does not reach it
+if (realStripe) {
+  if (!process.env[STRIPE_TEST_KEY]?.trim()) {
+    throw new Error(`service:stripe takes ${STRIPE_TEST_KEY} from .env or the environment`);
+  }
+  process.env.STRIPE_SECRET_KEY = process.env[STRIPE_TEST_KEY]!.trim();
+} else {
+  process.env.STRIPE_SECRET_KEY = STRIPE_PLACEHOLDER_KEY;
+}
+
+if (realOpenAi && !process.env[OPENAI_TEST_KEY]?.trim()) {
+  throw new Error(`service:openai takes ${OPENAI_TEST_KEY} from .env or the environment`);
+}
+
+// the same for sendgrid: the key of the app in the tests is the test key, never one of the shell
+if (realSendGrid) {
+  const missing = [SENDGRID_TEST_KEY, ...MAIL_ADDRESS_KEYS].filter(
+    (key) => !process.env[key]?.trim(),
+  );
+  if (missing.length) {
+    throw new Error(
+      `service:sendgrid takes these from .env or the environment: ${missing.join(', ')}`,
+    );
+  }
+  process.env.SENDGRID_API_KEY = process.env[SENDGRID_TEST_KEY]!.trim();
+}
+
+// the real account needs its url, or all three of its parts; the placeholders isolateEnv puts in
+// for the import do not count
+if (realCloudinary) {
+  const hasUrl = Boolean(process.env.CLOUDINARY_URL?.trim());
+  const missing = Object.entries(CLOUDINARY_PLACEHOLDERS)
+    .filter(([key, placeholder]) => [undefined, '', placeholder].includes(process.env[key]?.trim()))
+    .map(([key]) => key);
+  if (!hasUrl && missing.length) {
+    throw new Error(
+      `service:cloudinary takes CLOUDINARY_URL, or ${missing.join(', ')}, from .env or the environment`,
+    );
+  }
+}
 
 // stop before any test file imports the app
 assertTestServices();

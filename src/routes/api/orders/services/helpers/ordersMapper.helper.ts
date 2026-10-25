@@ -1,7 +1,9 @@
 import type { Prisma } from '@prisma/client';
 
+import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
+
+import { saleFieldsOf } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
-import { InternalError } from '@utils/errors.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 
 import type { OrderResponseDto } from 'types/dto/orders.dto.js';
@@ -20,6 +22,8 @@ export const orderResponseSelect = {
   recipientLastName: true,
   recipientPhone: true,
   note: true,
+  paidAt: true,
+  cancelledAt: true,
   createdAt: true,
   updatedAt: true,
   items: {
@@ -29,12 +33,17 @@ export const orderResponseSelect = {
       quantity: true,
       unitPrice: true,
       totalPrice: true,
+      productName: true,
 
       // include minimal product snapshot for order ui
       product: {
         select: {
           id: true,
           name: true,
+          price: true,
+          salePrice: true,
+          saleEndsAt: true,
+          salePriorPrice: true,
           categoryId: true,
           stock: true,
           reservedStock: true,
@@ -53,7 +62,23 @@ export const orderResponseSelect = {
 
 export type OrderResponseRow = Prisma.OrderGetPayload<{ select: typeof orderResponseSelect }>;
 
-export function mapOrderRowToResponse(row: OrderResponseRow): OrderResponseDto {
+// the units of batches that are over of the products of the orders, by the day of the shop the
+// transaction carries: the free units of an item leave them out
+export const expiredOfOrders = (db: Prisma.TransactionClient, rows: OrderResponseRow[]) =>
+  expiredUnitsOf(
+    db,
+    rows.flatMap((row) => row.items.map((item) => item.productId)),
+  );
+
+// the orders the buyer has not paid yet: the price of their products is still the one of now
+const UNPAID_STATUSES = new Set(['pending', 'unconfirmed', 'waiting']);
+
+export function mapOrderRowToResponse(
+  row: OrderResponseRow,
+  expired: Map<number, number>,
+): OrderResponseDto {
+  const unpaid = UNPAID_STATUSES.has(row.status);
+
   return {
     id: row.id as any,
     userId: row.userId as any,
@@ -62,22 +87,34 @@ export function mapOrderRowToResponse(row: OrderResponseRow): OrderResponseDto {
     total: decimalToNumber(row.total),
     shippingAddress: row.shippingAddress ?? '',
     items: row.items.map((it) => {
+      // a product without an image opens by its id and goes into a cart: no images then
       const primaryUrl = it.product.images?.[0]?.url;
-      if (!primaryUrl) throw new InternalError({ reason: 'PRODUCT_PRIMARY_IMAGE_NOT_FOUND' });
 
-      const availableStock = Math.max(0, it.product.stock - it.product.reservedStock);
+      // the free units: the stock less what the waiting orders hold and what is over
+      const availableStock = freeUnits(
+        it.product.stock,
+        it.product.reservedStock,
+        expired.get(it.productId) ?? 0,
+      );
 
       return {
         // order item id, cart item routes take it as itemId
         id: it.id,
         productId: it.productId as any,
+        // the name kept at the confirm; a cart and an unconfirmed order follow the product, an
+        // item from before the name was kept shows the name of now
+        name: (row.confirmed && it.productName) || it.product.name,
         product: {
           id: it.product.id as any,
           name: it.product.name,
           categoryId: it.product.categoryId as any,
-          images: buildImageUrls(primaryUrl, 'product'),
+          images: primaryUrl ? buildImageUrls(primaryUrl, 'product') : null,
           availableStock,
           deletedAt: it.product.deletedAt,
+          // what the product sells at now, for an order still to pay: the sale while it lasts
+          ...(unpaid
+            ? { price: decimalToNumber(it.product.price), ...saleFieldsOf(it.product) }
+            : {}),
         },
         quantity: it.quantity,
         unitPrice: decimalToNumber(it.unitPrice),
@@ -92,5 +129,7 @@ export function mapOrderRowToResponse(row: OrderResponseRow): OrderResponseDto {
     ...(row.recipientLastName ? { recipientLastName: row.recipientLastName } : {}),
     ...(row.recipientPhone ? { recipientPhone: row.recipientPhone } : {}),
     ...(row.note ? { note: row.note } : {}),
+    ...(row.paidAt ? { paidAt: row.paidAt } : {}),
+    ...(row.cancelledAt ? { cancelledAt: row.cancelledAt } : {}),
   };
 }

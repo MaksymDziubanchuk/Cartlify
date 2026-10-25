@@ -27,9 +27,16 @@ const adminChatThreadsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    page: { type: 'number', minimum: 1 },
+    page: { type: 'integer', minimum: 1 },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
-    queue: { type: 'string', enum: ['waiting', 'active'] },
+    queue: {
+      type: 'string',
+      enum: ['waiting', 'active', 'unread'],
+      description:
+        'waiting (default): the chats no admin took yet, the longest waiting first; active: the ' +
+        'chats an admin took with a message unread, the latest first; unread: every chat with ' +
+        'a message no admin has read, the longest waiting first.',
+    },
   },
 } as const;
 
@@ -104,9 +111,45 @@ const currentChatResponseSchema = {
       type: 'array',
       items: { $ref: 'chatMessageItemSchema#' },
     },
+    nextCursor: {
+      type: ['string', 'null'],
+      description:
+        'Cursor of the messages before these, for GET /api/chat/threads/{threadId}/messages; null at the start of the chat.',
+    },
     ws: { $ref: 'chatWsInfoSchema#' },
   },
-  required: ['thread', 'messages', 'ws'],
+  required: ['thread', 'messages', 'nextCursor', 'ws'],
+} as const;
+
+const chatThreadMessagesQuerySchema = {
+  $id: 'chatThreadMessagesQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    cursor: {
+      type: 'string',
+      description:
+        'nextCursor of the page after this one (CURSOR_INVALID); without it the newest messages.',
+    },
+  },
+} as const;
+
+const chatThreadMessagesResponseSchema = {
+  $id: 'chatThreadMessagesResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    messages: {
+      type: 'array',
+      description: 'Up to 50 messages, oldest first.',
+      items: { $ref: 'chatMessageItemSchema#' },
+    },
+    nextCursor: {
+      type: ['string', 'null'],
+      description: 'Cursor of the messages before these; null at the start of the chat.',
+    },
+  },
+  required: ['messages', 'nextCursor'],
 } as const;
 
 const adminChatThreadsResponseSchema = {
@@ -133,14 +176,20 @@ const adminChatThreadResponseSchema = {
     thread: { $ref: 'chatThreadItemSchema#' },
     messages: {
       type: 'array',
+      description: 'The newest 50 messages, oldest first.',
       items: { $ref: 'chatMessageItemSchema#' },
+    },
+    nextCursor: {
+      type: ['string', 'null'],
+      description:
+        'Cursor of the messages before these, for GET /api/chat/threads/{threadId}/messages; null at the start of the chat.',
     },
     previousThreads: {
       type: 'array',
       items: { $ref: 'chatThreadItemSchema#' },
     },
   },
-  required: ['thread', 'messages', 'previousThreads'],
+  required: ['thread', 'messages', 'nextCursor', 'previousThreads'],
 } as const;
 
 const closeChatThreadResponseSchema = {
@@ -161,6 +210,8 @@ export const chatsDtoSchemas = [
   chatMessageItemSchema,
   chatWsInfoSchema,
   currentChatResponseSchema,
+  chatThreadMessagesQuerySchema,
+  chatThreadMessagesResponseSchema,
   adminChatThreadsResponseSchema,
   adminChatThreadResponseSchema,
   closeChatThreadResponseSchema,

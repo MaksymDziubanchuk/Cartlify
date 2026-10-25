@@ -1,5 +1,13 @@
+import type { FastifyBaseLogger } from 'fastify';
+
 import { prisma } from '@db/client.js';
-import { makePublicId, moveImage, type UploadImageResult } from '@utils/cloudinary.util.js';
+import {
+  deleteImage,
+  isOwnFile,
+  makePublicId,
+  moveImage,
+  type UploadImageResult,
+} from '@utils/cloudinary.util.js';
 import { InternalError } from '@utils/errors.js';
 
 import type { Prisma } from '@prisma/client';
@@ -27,9 +35,11 @@ export async function persistProductImages(args: {
 }
 
 // the uploads of a request wait under ids of their own until the product rows are written; then
-// each takes its place at <env>/products/<id>/<position from 1> and its row gets the url of the file
-// there. It runs last in the transaction, so a refused request never touches the files of the
-// product. A retried transaction finds the files it moved already in `moved`.
+// each takes its place at <env>/products/<id>/<the key of its upload> and its row gets the url of
+// the file there. The key is new for every upload: a move never lands on a file the product shows,
+// so a move that fails in the middle leaves every image of the product as it was, and the files
+// the product no longer has go after the commit. It runs last in the transaction. A retried
+// transaction finds the files it moved already in `moved`.
 // Gives the public ids the images have now
 export async function placeProductImages(args: {
   tx: Prisma.TransactionClient;
@@ -40,7 +50,11 @@ export async function placeProductImages(args: {
   const { tx, productId } = args;
   const placed = args.uploads.map((upload) => ({
     upload,
-    publicId: makePublicId({ kind: 'product', productId, imageKey: upload.position + 1 }),
+    publicId: makePublicId({
+      kind: 'product',
+      productId,
+      imageKey: upload.publicId.split('/').pop()!,
+    }),
   }));
 
   await persistProductImages({
@@ -60,6 +74,26 @@ export async function placeProductImages(args: {
   }
 
   return placed.map(({ publicId }) => publicId);
+}
+
+// a request that failed after some uploads moved to the paths of the product: no row points at
+// them, they go; a file that stays only takes space, so a failure goes to the log
+export async function discardMovedImages(
+  moved: Map<string, UploadImageResult>,
+  log: Pick<FastifyBaseLogger, 'warn'>,
+): Promise<void> {
+  await Promise.all(
+    [...moved.values()]
+      .map((file) => file.publicId)
+      .filter((publicId) => isOwnFile(publicId))
+      .map(async (publicId) => {
+        try {
+          await deleteImage(publicId);
+        } catch (err) {
+          log.warn({ err, publicId }, 'moved product image was not removed');
+        }
+      }),
+  );
 }
 
 export async function readProductImageUrls(

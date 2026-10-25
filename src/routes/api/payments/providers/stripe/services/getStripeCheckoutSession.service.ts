@@ -19,16 +19,18 @@ import {
 } from '../stripeCheckout.helper.js';
 
 import type Stripe from 'stripe';
+import { isPaymentRefunded } from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
+
 import type {
   GetCheckoutSessionByIdDto,
-  CheckoutSessionResponseDto,
+  CheckoutSessionReadResponseDto,
 } from 'types/dto/payments.dto.js';
 
 export async function getStripeCheckoutSession({
   actorId,
   actorRole,
   sessionId,
-}: GetCheckoutSessionByIdDto): Promise<CheckoutSessionResponseDto> {
+}: GetCheckoutSessionByIdDto): Promise<CheckoutSessionReadResponseDto> {
   // enforce user-only checkout read
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
@@ -69,6 +71,7 @@ export async function getStripeCheckoutSession({
         where: { id: orderId },
         select: {
           id: true,
+          status: true,
           reservationExpiresAt: true,
         },
       });
@@ -78,9 +81,20 @@ export async function getStripeCheckoutSession({
       throw new NotFoundError('ORDER_NOT_FOUND', { orderId });
     }
 
+    // the payment of the page, when it has one: its money may have gone back already
+    const paymentIntent = session.payment_intent;
+    const paymentId =
+      typeof paymentIntent === 'string' ? paymentIntent : (paymentIntent?.id ?? null);
+    const paymentRefunded = paymentId
+      ? await isPaymentRefunded({ provider: 'stripe', paymentId, orderId })
+      : false;
+
     // map stripe session into api dto
     // reservation time is empty once the order is paid or unconfirmed, stripe own expiry is used then
-    return mapCreatedCheckoutSession(session, orderId, order.reservationExpiresAt);
+    return {
+      ...mapCreatedCheckoutSession(session, orderId, order.reservationExpiresAt),
+      order: { id: order.id, status: order.status, paymentRefunded },
+    };
   } catch (err) {
     // preserve known app errors
     if (isAppError(err)) throw err;

@@ -18,6 +18,7 @@ const rootAdminExample = {
     url128: 'https://example.com/avatars/admin-128.webp',
     url256: 'https://example.com/avatars/admin-256.webp',
   },
+  avatarIsDefault: false,
   locale: 'en',
   phone: '+10000000000',
 };
@@ -115,8 +116,13 @@ const postRootAdminSchema = {
       description: 'Only root users can promote admins.',
       $ref: 'errorResponseSchema#',
     },
+    404: {
+      description: '`USER_NOT_FOUND`: there is no user with this id.',
+      $ref: 'errorResponseSchema#',
+    },
     409: {
-      description: 'User is already admin, root, or cannot be promoted.',
+      description:
+        'The user is an admin already (USER_ALREADY_ADMIN) or is root (USER_IS_ROOT).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -158,11 +164,12 @@ const deleteRootAdminSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Target user was not found.',
+      description: '`USER_NOT_FOUND`: there is no user with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: 'Target user is not admin, is root, or cannot be demoted.',
+      description:
+        'The user is not an admin (USER_NOT_ADMIN), or is root, who cannot be demoted (ROOT_CANNOT_BE_DEMOTED).',
       $ref: 'errorResponseSchema#',
     },
     500: {

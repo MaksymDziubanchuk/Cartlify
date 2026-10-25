@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, expect, it } from '@jest/globals';
+import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import { closeRedis, connectRedis } from '@redis/client.js';
+import { closeRedis, connectRedis, getRedis } from '@redis/client.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
@@ -13,7 +13,8 @@ import {
   stockOf,
   type TestProduct,
 } from '../../../helpers/factories.js';
-import { allowLogs, takeLogs } from '../../../helpers/logs.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { watchMail } from '../../../helpers/mail.js';
 import { loseReservation, placeOrder } from '../../../helpers/orders.js';
 import {
   openPaymentPage,
@@ -26,7 +27,6 @@ import {
   closeOpenSessions,
   craftEvent,
   deliver,
-  describeWithStripe,
   readSession,
   refundsOf,
 } from '../../../helpers/stripe.js';
@@ -67,10 +67,6 @@ const moveOrderTo = (orderId: number, stage: 'shipped' | 'delivered' | 'cancelle
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
-
-  // the test environment has no SendGrid key: every paid order logs that its mail was not sent;
-  // 'mails the buyer once' checks the line
-  allowLogs({ msg: 'order paid mail was not sent', reason: 'SENDGRID_API_KEY_REQUIRED' });
 });
 
 afterAll(async () => {
@@ -82,22 +78,26 @@ afterAll(async () => {
   }
 });
 
-describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.completed', () => {
+describe('POST /api/payments/stripe/webhook: checkout.session.completed', () => {
   it('marks the order paid with the payment of its page and sells the reserved stock', async () => {
     const { product, orderId, sessionId } = await orderWithPage();
     const { paymentId, event } = await payPage(sessionId);
+    const delivered = Date.now();
 
     const res = await deliver(app, event);
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ received: true });
-    expect(await orderStateOf(orderId)).toMatchObject({
+    const state = await orderStateOf(orderId);
+    expect(state).toMatchObject({
       status: 'paid',
       confirmed: true,
       paymentProvider: 'stripe',
       paymentId,
       reservationExpiresAt: null,
     });
+    // the time the payment is recorded; the clock of the database may run a little apart
+    expect(state!.paidAt!.getTime()).toBeGreaterThan(delivered - 5_000);
     expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
   });
 
@@ -119,14 +119,12 @@ describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.complete
   it('mails the buyer once, also when Stripe delivers the event again', async () => {
     const { orderId, sessionId } = await orderWithPage();
     const { event } = await payPage(sessionId);
+    const mails = watchMail();
 
     await deliver(app, event);
     await deliver(app, event);
 
-    // the mail is tried and fails without a SendGrid key; the order stays paid
-    const tried = takeLogs({ msg: 'order paid mail was not sent' });
-    expect(tried).toHaveLength(1);
-    expect(tried[0]).toMatchObject({ orderId });
+    expect(mails.map((mail) => mail.subject)).toEqual([`Cartlify — Order #${orderId} is paid`]);
   });
 
   it('changes nothing when Stripe delivers the event again', async () => {
@@ -227,6 +225,39 @@ describeWithStripe('POST /api/payments/stripe/webhook: checkout.session.complete
       paymentId,
     });
     expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
+  });
+
+  // redis is up but drops the connection in the middle of the cleanup: the payment is committed,
+  // the answer used to be an error, Stripe delivered the event again, that delivery was a repeated
+  // one and the buyer never got the mail
+  it('mails the buyer when Redis fails while the timers of the paid order are taken off', async () => {
+    const { orderId, sessionId } = await orderWithPage();
+    const { event } = await payPage(sessionId);
+    const mails = watchMail();
+    const redis = await getRedis();
+    const failOnce = jest
+      .spyOn(redis, 'zRem')
+      .mockRejectedValueOnce(new Error('Socket closed unexpectedly'));
+
+    try {
+      const res = await deliver(app, event);
+
+      expect(res.statusCode).toBe(200);
+      expect(mails.map((mail) => mail.subject)).toEqual([`Cartlify — Order #${orderId} is paid`]);
+      expect(
+        takeLogs({ msg: 'paid order cleanup in redis failed, its timers stay until they run out' }),
+      ).toHaveLength(1);
+    } finally {
+      failOnce.mockRestore();
+    }
+
+    // the next delivery of the same payment takes off what the first one left
+    expect((await deliver(app, event)).statusCode).toBe(200);
+    expect(await redisStateOf(orderId)).toEqual({
+      pageLink: null,
+      reservationTimer: null,
+      graceTimer: null,
+    });
   });
 
   // the payment is in the database before redis is asked: a redis outage must not lose it

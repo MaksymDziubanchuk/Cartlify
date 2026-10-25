@@ -59,7 +59,15 @@ describe('stripeProvider', () => {
 
   describe('openPaymentPage', () => {
     const reservationExpiresAt = new Date('2026-06-01T10:15:00.000Z');
-    const order = { orderId: 12, userId: 3, total: 19.99, reservationExpiresAt };
+    const order = {
+      orderId: 12,
+      userId: 3,
+      total: 19.99,
+      reservationExpiresAt,
+      pageClosedAt: null,
+      items: [{ name: 'Desk lamp', unitPrice: 19.99, quantity: 1 }],
+      customerEmail: 'anna@example.com',
+    };
 
     it('opens a session with one key per order and reservation and names the provider', async () => {
       const create = jest
@@ -172,6 +180,38 @@ describe('stripeProvider', () => {
         { idempotencyKey: 'refund:pi_test_1' },
       );
     });
+
+    // a refund that is on its way counts as made: the bank of the card takes a few days
+    it.each(['succeeded', 'pending'])('takes a refund stripe answers as %s', async (status) => {
+      jest.spyOn(stripe.refunds, 'create').mockResolvedValue({ id: 're_test_2', status } as never);
+
+      expect(
+        await module.stripeProvider.refundPayment({ orderId: 12, paymentId: 'pi_test_2' }),
+      ).toEqual({ refundId: 're_test_2' });
+    });
+
+    // the money did not go back: the order must not become cancelled as if it had
+    it.each(['failed', 'canceled'])(
+      'fails with STRIPE_REFUND_FAILED when stripe answers the refund as %s',
+      async (status) => {
+        jest
+          .spyOn(stripe.refunds, 'create')
+          .mockResolvedValue({ id: 're_test_3', status } as never);
+
+        expect(
+          await rejectedBy(() =>
+            module.stripeProvider.refundPayment({ orderId: 12, paymentId: 'pi_test_3' }),
+          ),
+        ).toMatchObject({
+          details: {
+            reason: 'STRIPE_REFUND_FAILED',
+            paymentIntentId: 'pi_test_3',
+            refundId: 're_test_3',
+            refundStatus: status,
+          },
+        });
+      },
+    );
 
     it('answers no refund for a payment stripe has refunded already', async () => {
       jest

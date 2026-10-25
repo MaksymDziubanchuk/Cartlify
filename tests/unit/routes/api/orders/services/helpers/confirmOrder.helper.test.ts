@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   buildConfirmOrderData,
+  findUnavailableItems,
   isRecipientName,
 } from '@routes/api/orders/services/helpers/confirmOrder.helper.js';
 import { BadRequestError } from '@utils/errors.js';
@@ -97,5 +98,60 @@ describe('buildConfirmOrderData', () => {
         recipientPhone: 'not a phone',
       }),
     ).toBe('RECIPIENT_PHONE_INVALID');
+  });
+});
+
+// the items an order cannot be confirmed with: a product removed from the catalog, or more than its
+// free units, the stock less what the waiting orders hold and the units of batches that are over
+describe('findUnavailableItems', () => {
+  const item = (
+    patch: Partial<{
+      quantity: number;
+      stock: number;
+      reservedStock: number;
+      deletedAt: Date | null;
+    }> = {},
+  ) => ({
+    id: 31,
+    productId: 4,
+    quantity: patch.quantity ?? 2,
+    product: {
+      deletedAt: patch.deletedAt ?? null,
+      stock: patch.stock ?? 5,
+      reservedStock: patch.reservedStock ?? 1,
+    },
+  });
+
+  it('lets through what the free units hold', () => {
+    expect(findUnavailableItems([item()], new Map())).toEqual([]);
+  });
+
+  it('names an item of more than the free units, the units that are over left out', () => {
+    expect(findUnavailableItems([item({ quantity: 2 })], new Map([[4, 3]]))).toEqual([
+      { itemId: 31, productId: 4, reason: 'out_of_stock', available: 1, requested: 2 },
+    ]);
+  });
+
+  it('never gives fewer than no free units', () => {
+    expect(findUnavailableItems([item()], new Map([[4, 9]]))[0]).toMatchObject({ available: 0 });
+  });
+
+  it('names an item of a product removed from the catalog', () => {
+    expect(findUnavailableItems([item({ deletedAt: new Date() })], new Map())).toEqual([
+      { itemId: 31, productId: 4, reason: 'deleted', available: 0, requested: 2 },
+    ]);
+  });
+});
+
+describe('findUnavailableItems at the free units', () => {
+  it('lets through an item of exactly the free units', () => {
+    const item = {
+      id: 41,
+      productId: 6,
+      quantity: 3,
+      product: { deletedAt: null, stock: 5, reservedStock: 2 },
+    };
+
+    expect(findUnavailableItems([item], new Map())).toEqual([]);
   });
 });

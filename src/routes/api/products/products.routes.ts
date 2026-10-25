@@ -16,6 +16,15 @@ export default async function productsRouter(app: FastifyInstance) {
   );
 
   app.get(
+    '/suggestions',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
+      schema: productSchemas.getProductSuggestionsRouterSchema,
+    },
+    productController.getProductSuggestions,
+  );
+
+  app.get(
     '/:productId',
     {
       preHandler: [
@@ -26,6 +35,15 @@ export default async function productsRouter(app: FastifyInstance) {
       schema: productSchemas.getProductByIdRouterSchema,
     },
     productController.getProductById,
+  );
+
+  app.get(
+    '/:productId/price-history',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.getPriceHistoryRouterSchema,
+    },
+    productController.getPriceHistory,
   );
 
   app.get(
@@ -77,6 +95,24 @@ export default async function productsRouter(app: FastifyInstance) {
   );
 
   app.patch(
+    '/:productId/sale',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.patchProductSaleRouterSchema,
+    },
+    productController.patchProductSale,
+  );
+
+  app.post(
+    '/sales',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.postProductSalesRouterSchema,
+    },
+    productController.postProductSales,
+  );
+
+  app.patch(
     '/:productId/category',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
@@ -92,6 +128,33 @@ export default async function productsRouter(app: FastifyInstance) {
       schema: productSchemas.patchProductsBulkPriceRouterSchema,
     },
     productController.updateProductsBulkPrice,
+  );
+
+  app.post(
+    '/stock/deliveries',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.postStockDeliveryRouterSchema,
+    },
+    productController.postStockDelivery,
+  );
+
+  app.post(
+    '/stock/write-offs',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.postStockWriteOffRouterSchema,
+    },
+    productController.postStockWriteOff,
+  );
+
+  app.post(
+    '/:productId/restore',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: productSchemas.restoreProductRouterSchema,
+    },
+    productController.restoreProduct,
   );
 
   app.delete(

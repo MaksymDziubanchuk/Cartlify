@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 
+import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { getPgMessage, tx } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { requireSiteDomain } from '@helpers/siteDomain.js';
@@ -44,7 +45,7 @@ type OpenOrder = {
   id: number;
   status: 'waiting' | 'paid' | 'shipped';
   total: Prisma.Decimal;
-  items: { quantity: number; product: { name: string } }[];
+  items: { quantity: number; productName: string | null; product: { name: string } }[];
 };
 
 type ErasedAccount = {
@@ -55,7 +56,11 @@ type ErasedAccount = {
 };
 
 const itemsOf = (order: OpenOrder): AccountDeletedItem[] =>
-  order.items.map((item) => ({ name: item.product.name, quantity: item.quantity }));
+  // the open orders are confirmed: each item has the name it was confirmed with
+  order.items.map((item) => ({
+    name: item.productName ?? item.product.name,
+    quantity: item.quantity,
+  }));
 
 // the address a deleted account gets: on the domain of the site, so a mail that still goes to it
 // never leaves for a domain of someone else; the old address stays readable in it, cut and
@@ -85,15 +90,23 @@ async function eraseAccount(
       await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
       const users = await db.$queryRaw<
-        { id: number; email: string; name: string | null; publicId: string | null }[]
+        {
+          id: number;
+          email: string;
+          name: string | null;
+          publicId: string | null;
+          deletedAt: Date | null;
+        }[]
       >`
-        select id, email, name, "publicId" as "publicId"
+        select id, email, name, "publicId" as "publicId", "deletedAt" as "deletedAt"
         from cartlify.users
         where id = ${userId}::int
         for update
       `;
       const user = users[0];
-      if (!user) throw new NotFoundError('USER_NOT_FOUND');
+      // a deleted account is no account: a second click would empty the row once more and mail
+      // the person again
+      if (!user || user.deletedAt) throw new NotFoundError('USER_NOT_FOUND');
 
       // the orders the person has to know about before the account goes
       const open = (await db.order.findMany({
@@ -108,7 +121,7 @@ async function eraseAccount(
           total: true,
           items: {
             orderBy: { id: 'asc' },
-            select: { quantity: true, product: { select: { name: true } } },
+            select: { quantity: true, productName: true, product: { select: { name: true } } },
           },
         },
       })) as OpenOrder[];
@@ -151,6 +164,7 @@ async function eraseAccount(
 
       // empty the row of everything personal; the name Guest is what reviews and chats show
       // for the account, deletedAt is what marks it deleted
+      const deletedAt = new Date();
       await db.user.update({
         where: { id: userId },
         data: {
@@ -159,7 +173,7 @@ async function eraseAccount(
           authProvider: 'LOCAL',
           providerSub: null,
           isVerified: false,
-          deletedAt: new Date(),
+          deletedAt,
           name: DELETED_USER_NAME,
           avatarUrl: null,
           publicId: null,
@@ -171,6 +185,19 @@ async function eraseAccount(
 
       // the logins of the account take the email it has now; the rest of the log stays as it is
       await db.$executeRaw`select cartlify.anonymize_login_logs(${userId}::int)`;
+
+      // the heaviest step of root keeps a line in the admin log, with nothing of the person in
+      // it; the user who deletes their own account is no admin and writes none
+      if (systemActorId !== userId) {
+        await writeAdminAuditLog(db, {
+          actorId: systemActorId,
+          actorRole: 'ROOT',
+          entityType: 'user',
+          entityId: userId,
+          action: 'OTHER',
+          changes: [{ field: 'deletedAt', old: null, new: deletedAt.toISOString() }],
+        });
+      }
 
       return { email: user.email, name: user.name, publicId: user.publicId, open };
     },

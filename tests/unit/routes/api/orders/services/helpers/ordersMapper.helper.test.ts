@@ -5,9 +5,6 @@ import {
   mapOrderRowToResponse,
   orderResponseSelect,
 } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
-import { InternalError } from '@utils/errors.js';
-
-import { thrownBy } from '../../../../../../helpers/errors.js';
 
 const primaryUrl = 'https://res.cloudinary.com/demo/image/upload/v1/products/4/0.jpg';
 
@@ -42,6 +39,8 @@ const row = (patch: Record<string, unknown> = {}) => ({
   recipientLastName: null,
   recipientPhone: null,
   note: null,
+  paidAt: null,
+  cancelledAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
   items: [item()],
@@ -49,7 +48,8 @@ const row = (patch: Record<string, unknown> = {}) => ({
 });
 
 type Row = Parameters<typeof mapOrderRowToResponse>[0];
-const map = (patch: Record<string, unknown> = {}) => mapOrderRowToResponse(row(patch) as Row);
+const map = (patch: Record<string, unknown> = {}, expired = new Map<number, number>()) =>
+  mapOrderRowToResponse(row(patch) as Row, expired);
 
 describe('mapOrderRowToResponse', () => {
   it('turns money decimals into numbers', () => {
@@ -67,6 +67,13 @@ describe('mapOrderRowToResponse', () => {
     expect(map().items[0]?.product.availableStock).toBe(3);
   });
 
+  // the units of batches whose last good day is over are not sold
+  it('leaves the units that are over out of the free units of an item', () => {
+    expect(map({}, new Map([[4, 2]])).items[0]?.product.availableStock).toBe(1);
+    expect(map({}, new Map([[4, 9]])).items[0]?.product.availableStock).toBe(0);
+    expect(map({}, new Map([[5, 2]])).items[0]?.product.availableStock).toBe(3);
+  });
+
   it('never shows a negative free stock', () => {
     const out = map({
       items: [item({ product: { ...item().product, stock: 1, reservedStock: 4 } })],
@@ -76,7 +83,7 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('builds the product image urls from the primary image', () => {
-    expect(map().items[0]?.product.images.url200).toContain('/upload/c_fit,w_200');
+    expect(map().items[0]?.product.images?.url200).toContain('/upload/c_fit,w_200');
   });
 
   it('sends an empty shipping address instead of null and leaves out an empty note', () => {
@@ -125,6 +132,24 @@ describe('mapOrderRowToResponse', () => {
     }
   });
 
+  it('gives the times of the payment and of the cancel of an order that has them', () => {
+    const paidAt = new Date('2026-01-01T00:10:00Z');
+    const cancelledAt = new Date('2026-01-02T08:00:00Z');
+
+    expect(orderResponseSelect).toMatchObject({ paidAt: true, cancelledAt: true });
+    expect(map({ status: 'cancelled', confirmed: true, paidAt, cancelledAt })).toMatchObject({
+      paidAt,
+      cancelledAt,
+    });
+  });
+
+  it('leaves out the times of the payment and of the cancel while the order has none', () => {
+    const out = map();
+
+    expect(out).not.toHaveProperty('paidAt');
+    expect(out).not.toHaveProperty('cancelledAt');
+  });
+
   it('never reads or gives the payment id', () => {
     expect(orderResponseSelect).not.toHaveProperty('paymentId');
     expect(orderResponseSelect).not.toHaveProperty('paymentProvider');
@@ -137,9 +162,10 @@ describe('mapOrderRowToResponse', () => {
     expect(map({ items: [], total: new Prisma.Decimal(0) })).toMatchObject({ items: [], total: 0 });
   });
 
-  it('throws an internal error when a product has no image, which every product must have', () => {
+  // a product without an image opens by its id and goes into a cart: the item shows no images
+  it('gives the product of an item without an image no images', () => {
     const noImage = item({ product: { ...item().product, images: [] } });
 
-    expect(thrownBy(() => map({ items: [noImage] }))).toBeInstanceOf(InternalError);
+    expect(map({ items: [noImage] }).items[0]?.product.images).toBeNull();
   });
 });

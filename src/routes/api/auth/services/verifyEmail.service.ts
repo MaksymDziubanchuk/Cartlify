@@ -9,7 +9,11 @@ import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 import type { ResendVerifyDto, VerifyEmailDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
-import { setGuestNullContext } from '@db/dbContext.service.js';
+import { setAdminContext, setGuestNullContext } from '@db/dbContext.service.js';
+
+import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
+
+import type { Role } from 'types/user.js';
 
 // resend verify email flow
 // create new verify token
@@ -53,20 +57,37 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
   return { message: 'If the email exists, a verification link was sent.' };
 }
 
-export async function verifyEmail({ token }: VerifyEmailDto): Promise<MessageResponseDto> {
+// the link proves the email: the favorites, the chats and the cart of the guest of the browser
+// that opens it move to the account, the same as at a login
+export async function verifyEmail({ token, guestId }: VerifyEmailDto): Promise<MessageResponseDto> {
   const cleanToken = token?.trim();
   if (!cleanToken) throw new BadRequestError('TOKEN_REQUIRED');
 
+  // the database keeps only the hash of the link
+  const tokenHash = hashToken(cleanToken);
+
   try {
     const ok = await prisma.$transaction(async (tx) => {
+      // the account of the link, read by the system: a guest sees neither links nor users
+      await setAdminContext(tx);
+      const [link] = await tx.$queryRaw<{ userId: number; role: Role }[]>`
+        select t."userId" as "userId", u.role
+        from cartlify.user_tokens as t
+        join cartlify.users as u on u.id = t."userId"
+        where t.type = 'VERIFY_EMAIL'::cartlify."UserTokenType" and t.token = ${tokenHash}
+      `;
+
       await setGuestNullContext(tx);
-
-      // the database keeps only the hash of the link
       const rows = await tx.$queryRaw<{ ok: boolean }[]>`
-      select cartlify.auth_verify_email(${hashToken(cleanToken)}::text) as ok
-    `;
+        select cartlify.auth_verify_email(${tokenHash}::text) as ok
+      `;
+      const verified = Boolean(rows[0]?.ok);
 
-      return Boolean(rows[0]?.ok);
+      if (verified && link && guestId) {
+        await migrateGuestDataToUser(tx, guestId, { id: link.userId, role: link.role });
+      }
+
+      return verified;
     });
 
     // reject invalid token

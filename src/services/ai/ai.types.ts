@@ -50,6 +50,7 @@ export interface AiGenerateTextResultDto {
 export type AiErrorCode =
     | 'AI_API_UNAVAILABLE'
     | 'AI_EMPTY_RESPONSE'
+    | 'AI_INCOMPLETE_RESPONSE'
     | 'AI_INVALID_RESPONSE_FORMAT'
     | 'AI_TIMEOUT'
     | 'AI_RATE_LIMIT'
@@ -80,6 +81,9 @@ export interface OpenAiOutputItemDto {
 export interface OpenAiResponseDto {
     id?: string;
     model?: string;
+    // "completed", or "incomplete" for an answer cut short, with the reason in incomplete_details
+    status?: string;
+    incomplete_details?: { reason?: string } | null;
     output_text?: string;
     output?: OpenAiOutputItemDto[];
 }

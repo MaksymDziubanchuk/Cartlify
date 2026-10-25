@@ -2,10 +2,19 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { requestLimits } from '../../../plugins/requestLimits.js';
 import { usersSchema } from './users.schemas.js';
 import { usersController } from './users.controllers.js';
 
 export default async function usersRouter(app: FastifyInstance) {
+  app.get(
+    '/',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: usersSchema.getUsersSchema,
+    },
+    usersController.getUsers,
+  );
   app.get(
     '/me',
     {
@@ -13,6 +22,14 @@ export default async function usersRouter(app: FastifyInstance) {
       schema: usersSchema.getMeSchema,
     },
     usersController.getMe,
+  );
+  app.get(
+    '/me/export',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT', 'USER']), ...requestLimits.export],
+      schema: usersSchema.getMeExportSchema,
+    },
+    usersController.getMeExport,
   );
   app.patch(
     '/me',
@@ -47,6 +64,15 @@ export default async function usersRouter(app: FastifyInstance) {
       schema: usersSchema.getUserByIdSchema,
     },
     usersController.getUserById,
+  );
+  // a moderator takes the avatar of another account away; the database decides who may
+  app.delete(
+    '/:userId/avatar',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('userId')],
+      schema: usersSchema.deleteUserAvatarSchema,
+    },
+    usersController.deleteUserAvatar,
   );
   app.delete(
     '/:userId',

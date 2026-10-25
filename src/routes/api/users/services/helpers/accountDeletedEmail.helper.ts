@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import {
   buildAccountDeletedTemplate,
   type AccountDeletedCancelled,
@@ -32,6 +33,8 @@ export async function sendAccountDeletedEmail(
 ): Promise<void> {
   try {
     const { subject, text, html } = buildAccountDeletedTemplate({
+      // the name of the shop the mail is from
+      appName: env.SHOP_NAME,
       deliveries: args.deliveries,
       cancelled: args.cancelled,
       // the orders of the mail are paid or waited for in the money of the shop

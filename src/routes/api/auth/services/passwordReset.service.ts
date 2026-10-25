@@ -10,6 +10,7 @@ import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
 import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendResetPasswordEmail.helper.js';
+import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';
@@ -52,6 +53,13 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
       if (u.authProvider !== 'LOCAL') {
         return genericOk;
       }
+
+      // the newest link is the one the person waits for: the links mailed before are closed, an
+      // old one lying in a mailbox would be a way in
+      await tx.userToken.updateMany({
+        where: { userId: u.id, type: 'RESET_PASSWORD', usedAt: null },
+        data: { usedAt: new Date() },
+      });
 
       // issue reset token row
       const rawToken = createPlaceholder();
@@ -165,9 +173,13 @@ export async function passwordReset({
         select: { id: true },
       });
 
-      // revoke active refresh tokens
+      // revoke active refresh tokens: the old cookie of a phone is then a plain refusal, the
+      // session opened after the reset goes on
+      await revokeAllActiveRefreshTokens(tx, { userId, at: now });
+
+      // the other links of the account end with this one
       await tx.userToken.updateMany({
-        where: { userId, type: 'REFRESH_TOKEN', usedAt: null },
+        where: { userId, type: 'RESET_PASSWORD', usedAt: null },
         data: { usedAt: now },
       });
 

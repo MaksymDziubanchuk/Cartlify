@@ -39,6 +39,20 @@ SET
   search_path = 'cartlify';
 
 ------------------------------------------------------------
+-- 1a2. TIMEOUTS of the app
+------------------------------------------------------------
+-- the timeout of a prisma transaction only stops the waiting of the app, the statement goes on
+-- in the database: a statement of the app ends after 15 s (the reports take 15 s for their whole
+-- transaction too), a transaction left open and idle after 30 s. New sessions take them
+ALTER ROLE cartlify_app
+SET
+  statement_timeout = '15s';
+
+ALTER ROLE cartlify_app
+SET
+  idle_in_transaction_session_timeout = '30s';
+
+------------------------------------------------------------
 -- 1b. owner role extras (were set by hand on railway)
 ------------------------------------------------------------
 -- may create databases
@@ -233,6 +247,7 @@ BEGIN
     'cartlify.auth_resend_verify(text, text, timestamp with time zone)',
     'cartlify.auth_verify_email(text)',
     'cartlify.users_get_public_profile(integer)',
+    'cartlify.remove_user_avatar(integer)',
     'cartlify.migrate_guest_data_to_user(uuid, integer)',
     'cartlify.confirm_order(integer, interval)',
     'cartlify.unconfirm_order(integer)',
@@ -241,9 +256,19 @@ BEGIN
     'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
     'cartlify.expire_order_reservation(integer)',
     'cartlify.anonymize_login_logs(integer)',
-    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric)',
+    -- maintenance the periodic tasks run as the system, each checks it is the system
+    'cartlify.cleanup_user_tokens(integer)',
+    'cartlify.cleanup_login_log_addresses(integer)',
+    'cartlify.cleanup_guest_data(integer)',
+    'cartlify.cleanup_deleted_accounts_chats(integer)',
+    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
+    'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
+    'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
     -- functions that run with the app rights, under its rls
     'cartlify.refresh_order_prices(integer)',
+    'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
+    'cartlify.shop_today()',
+    'cartlify.product_expired_units(integer)',
     'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)'
   ]
   LOOP

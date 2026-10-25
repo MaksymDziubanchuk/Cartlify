@@ -14,6 +14,14 @@ export default async function categoriesRouter(app: FastifyInstance) {
     },
     categoriesController.getCategories,
   );
+  app.get(
+    '/tree',
+    {
+      preHandler: [authGuard, requireRole(['GUEST', 'ADMIN', 'ROOT', 'USER'])],
+      schema: categoriesSchema.getCategoryTreeSchema,
+    },
+    categoriesController.getCategoryTree,
+  );
   app.post(
     '/',
     {

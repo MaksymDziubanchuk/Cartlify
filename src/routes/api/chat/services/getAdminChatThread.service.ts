@@ -7,6 +7,8 @@ import {
     NotFoundError,
 } from '@utils/errors.js';
 
+import { readChatHistoryPage } from './helpers/chatHistory.helper.js';
+
 import type {
     AdminChatThreadResponseDto,
     FindAdminChatThreadDto,
@@ -92,38 +94,29 @@ export async function getAdminChatThreadService({
                     data: {
                         unreadCount: 0,
                         adminRequestedAt: null,
+                        // an admin took a chat whose customer has not described the problem yet:
+                        // it goes to the active queue now; an open chat of an admin always has one
+                        // of the two marks (chat_threads_admin_state_chk)
+                        adminUnreadSince: thread.adminUnreadSince ?? new Date(),
                     },
                 });
 
-                const messages = await tx.chatMessage.findMany({
-                    where: {
-                        threadId,
-                    },
-                    orderBy: {
-                        createdAt: 'asc',
-                    },
-                });
+                // the newest messages, the ones before come page by page
+                const page = await readChatHistoryPage(tx, threadId);
 
                 return {
                     thread: updatedThread,
-                    messages,
+                    ...page,
                     previousThreads,
                 };
             }
 
-            // load closed thread history
-            const messages = await tx.chatMessage.findMany({
-                where: {
-                    threadId,
-                },
-                orderBy: {
-                    createdAt: 'asc',
-                },
-            });
+            // load closed thread history, the newest messages first
+            const page = await readChatHistoryPage(tx, threadId);
 
             return {
                 thread,
-                messages,
+                ...page,
                 previousThreads,
             };
         });

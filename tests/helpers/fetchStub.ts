@@ -5,6 +5,9 @@ export type FetchCall = {
   method: string;
   headers: Record<string, string>;
   body: string;
+  // the signal of the call, an answer that waits for it ends the way an aborted request ends
+  signal?: AbortSignal;
+  redirect?: RequestRedirect;
 };
 
 // replace the global fetch for one test; every call is recorded, the handler gives the answer
@@ -17,6 +20,8 @@ export function stubFetch(handler: (call: FetchCall) => Response | Promise<Respo
       method: init?.method ?? 'GET',
       headers: Object.fromEntries(new Headers(init?.headers).entries()),
       body: init?.body == null ? '' : String(init.body),
+      ...(init?.signal ? { signal: init.signal } : {}),
+      ...(init?.redirect ? { redirect: init.redirect } : {}),
     };
 
     calls.push(call);

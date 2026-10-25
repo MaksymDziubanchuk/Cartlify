@@ -3,11 +3,12 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { prisma } from '@db/client.js';
 
-import { inRolledBackTx, type DbSession, type Actor } from '../../helpers/db.js';
+import { inCommittedTx, inRolledBackTx, type DbSession, type Actor } from '../../helpers/db.js';
 import {
   cartOf,
   confirm,
   itemsTotalOf,
+  orderDatesOf,
   orderStateOf,
   paidOrderOf,
   pay,
@@ -83,7 +84,122 @@ const setStatus = async (db: DbSession, orderId: number, status: string) => {
   );
 };
 
+describe('an update of a product while a payment holds its row', () => {
+  // the update waits for the row and then changes the version the payment left. A policy that
+  // read the old row again saw the version from the start of the statement: the stock the payment
+  // took looked changed by the update, and it failed with 42501. A view of the card and a cart
+  // that counts the popularity again write the row with a single statement like that
+  async function whilePaymentHoldsTheRow(update: (db: DbSession, productId: number) => Promise<unknown>) {
+    const own = await createProduct({ price: 10, stock: 5 });
+    const paying = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.id, 1]]));
+    const amount = await inCommittedTx((db) => itemsTotalOf(db, admin.id, paying));
+
+    let paid!: () => void;
+    let release!: () => void;
+    const paidNow = new Promise<void>((resolve) => (paid = resolve));
+    const mayCommit = new Promise<void>((resolve) => (release = resolve));
+
+    const payment = inCommittedTx(async (db) => {
+      const result = await pay(db, admin.id, paying, { amount });
+      paid();
+      await mayCommit;
+      return result;
+    });
+    await paidNow;
+
+    const other = inCommittedTx((db) => update(db, own.id));
+
+    for (let tries = 0; tries < 100; tries += 1) {
+      const [waiting] = await prisma.$queryRaw<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+        where wait_event_type = 'Lock' and query like '%cartlify.%' and query not like '%pg_stat_activity%'
+      `;
+      if (waiting!.n > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    release();
+
+    return { payment: await payment, other: await other, productId: own.id };
+  }
+
+  it('counts the view of a buyer', async () => {
+    const outcome = await whilePaymentHoldsTheRow(async (db, productId) => {
+      await db.as({ role: 'GUEST', guestId: randomUUID() });
+      return db.attempt(
+        'update cartlify.products set views = views + 1 where id = $1 returning views',
+        productId,
+      );
+    });
+
+    expect(outcome.payment).toBe('PAID');
+    expect(outcome.other).toMatchObject({ ok: true, rows: [{ views: 1 }] });
+  });
+
+  it('takes an item into a cart, counting the popularity again', async () => {
+    const outcome = await whilePaymentHoldsTheRow(async (db, productId) => {
+      await db.as({ role: 'USER', userId: other.id });
+      const [order] = await db.rows<{ id: number }>(
+        'insert into cartlify.orders ("userId", total) values ($1, 0) returning id',
+        other.id,
+      );
+      return db.attempt(
+        `insert into cartlify.order_items ("orderId", "productId", quantity, "unitPrice", "totalPrice")
+         values ($1, $2, 1, 0, 0) returning id`,
+        order!.id,
+        productId,
+      );
+    });
+
+    expect(outcome.payment).toBe('PAID');
+    expect(outcome.other).toMatchObject({ ok: true });
+  });
+});
+
 describe('cartlify.confirm_order', () => {
+  // a payment and a confirmation of the same product at the same moment: the confirmation waits
+  // for the row of the product and then changes the version the payment left. A rule of the
+  // policies that read the old row again saw the version from the start of the statement, the
+  // popularity looked changed by the confirmation and it failed with 42501
+  it('reserves a product while a payment of the same product holds its row', async () => {
+    const own = await createProduct({ price: 10, stock: 5 });
+    const paying = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.id, 1]]));
+    const amount = await inCommittedTx((db) => itemsTotalOf(db, admin.id, paying));
+    const cart = await inCommittedTx((db) => cartOf(db, other.id, [[own.id, 1]]));
+
+    let paid!: () => void;
+    let release!: () => void;
+    const paidNow = new Promise<void>((resolve) => (paid = resolve));
+    const mayCommit = new Promise<void>((resolve) => (release = resolve));
+
+    const payment = inCommittedTx(async (db) => {
+      const result = await pay(db, admin.id, paying, { amount });
+      paid();
+      await mayCommit;
+      return result;
+    });
+    await paidNow;
+
+    const confirmation = inCommittedTx((db) => confirm(db, other.id, cart));
+
+    // the confirmation waits for the row of the product
+    for (let tries = 0; tries < 100; tries += 1) {
+      const [waiting] = await prisma.$queryRaw<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+        where wait_event_type = 'Lock' and query like '%confirm_order%'
+      `;
+      if (waiting!.n > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    release();
+
+    expect(await payment).toBe('PAID');
+    expect(await confirmation).toMatchObject({ ok: true });
+    expect(await inCommittedTx((db) => stockOf(db, admin.id, own.id))).toEqual({
+      stock: 4,
+      reserved: 1,
+    });
+  });
+
   it('confirms an own cart: it waits for its payment for the time asked, the stock is reserved', async () => {
     const { outcome, state, left, stock } = await inRolledBackTx(async (db) => {
       const orderId = await cartOf(db, owner.id, [
@@ -489,6 +605,16 @@ describe('cartlify.expire_order_reservation', () => {
     expect(state).toMatchObject({ status: 'paid' });
   });
 
+  // the timer of an order its owner deleted runs later: a stale job like any other, not an error
+  // the worker would repeat
+  it('answers false for an order that is gone', async () => {
+    const outcome = await inRolledBackTx((db) =>
+      call(db, asSystem(), 'select cartlify.expire_order_reservation($1::int) as expired', 2_147_483_647),
+    );
+
+    expect(outcome).toEqual({ ok: true, row: { expired: false } });
+  });
+
   it('refuses a user', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
@@ -545,19 +671,38 @@ describe('cartlify.pay_order', () => {
     expect(stock).toEqual({ stock: 8, reserved: 0 });
   });
 
+  // the reports of a period count a sale from the time it was paid
+  it('stamps the time of the payment, the time of its transaction in utc', async () => {
+    const dates = await inRolledBackTx(async (db) => {
+      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const before = await orderDatesOf(db, admin.id, orderId);
+      await pay(db, admin.id, orderId);
+      return { before, after: await orderDatesOf(db, admin.id, orderId) };
+    });
+
+    expect(dates.before).toMatchObject({ paidAt: null, cancelledAt: null });
+    expect(dates.after).toEqual({
+      paidAt: dates.after.now,
+      cancelledAt: null,
+      now: dates.after.now,
+    });
+  });
+
   it('refuses an amount other than the one of the items, and changes nothing', async () => {
-    const { result, state, stock } = await inRolledBackTx(async (db) => {
+    const { result, state, dates, stock } = await inRolledBackTx(async (db) => {
       const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
       const result = await pay(db, admin.id, orderId, { amount: '19.99' });
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
+        dates: await orderDatesOf(db, admin.id, orderId),
         stock: await stockOf(db, admin.id, product.id),
       };
     });
 
     expect(result).toBe('AMOUNT_MISMATCH');
     expect(state).toMatchObject({ status: 'waiting', paymentId: null });
+    expect(dates.paidAt).toBeNull();
     expect(stock).toEqual({ stock: 10, reserved: 2 });
   });
 
@@ -587,35 +732,39 @@ describe('cartlify.pay_order', () => {
   });
 
   it('takes a late payment of an order that lost its reservation while the stock is there', async () => {
-    const { result, state, stock } = await inRolledBackTx(async (db) => {
+    const { result, state, dates, stock } = await inRolledBackTx(async (db) => {
       const orderId = await unconfirmedOrderOf(db, [[product.id, 2]]);
       const result = await pay(db, admin.id, orderId);
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
+        dates: await orderDatesOf(db, admin.id, orderId),
         stock: await stockOf(db, admin.id, product.id),
       };
     });
 
     expect(result).toBe('PAID');
     expect(state).toMatchObject({ status: 'paid', confirmed: true, reserved: false });
+    expect(dates.paidAt).toBe(dates.now);
     expect(stock).toEqual({ stock: 8, reserved: 0 });
   });
 
   it('refuses a late payment when the stock is gone, and changes nothing', async () => {
-    const { result, state, stock } = await inRolledBackTx(async (db) => {
+    const { result, state, dates, stock } = await inRolledBackTx(async (db) => {
       const orderId = await unconfirmedOrderOf(db, [[scarce.id, 2]]);
       await waitingOrderOf(db, other.id, [[scarce.id, 2]]);
       const result = await pay(db, admin.id, orderId);
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
+        dates: await orderDatesOf(db, admin.id, orderId),
         stock: await stockOf(db, admin.id, scarce.id),
       };
     });
 
     expect(result).toBe('OUT_OF_STOCK');
     expect(state).toMatchObject({ status: 'unconfirmed', paymentId: null });
+    expect(dates.paidAt).toBeNull();
     expect(stock).toEqual({ stock: 2, reserved: 2 });
   });
 
@@ -674,6 +823,57 @@ describe('cartlify.pay_order', () => {
     expect(result).toBe('ORDER_NOT_FOUND');
   });
 
+  // a provider delivers the same event twice at the same moment (stripe sends duplicates, the
+  // callback of liqpay meets the status check of the return page): the second delivery waits for
+  // the lock of the first and finds the order paid by the same payment. Taken as not payable, it
+  // made the webhook refund a payment the order had just taken
+  it('answers a delivery of the same payment at the same moment as a repeated one', async () => {
+    // the payment is committed: a product of its own, the others of the file keep their stock
+    const own = await createProduct({ price: 10, stock: 3 });
+    const orderId = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.id, 1]]));
+    const amount = await inCommittedTx((db) => itemsTotalOf(db, admin.id, orderId));
+    const before = await inCommittedTx((db) => stockOf(db, admin.id, own.id));
+    const paymentId = `pi_db_twice_${orderId}`;
+
+    let paidFirst!: () => void;
+    let releaseFirst!: () => void;
+    const firstPaid = new Promise<void>((resolve) => (paidFirst = resolve));
+    const firstMayCommit = new Promise<void>((resolve) => (releaseFirst = resolve));
+
+    // the first delivery pays and keeps its transaction open, the order row stays locked
+    const first = inCommittedTx(async (db) => {
+      const result = await pay(db, admin.id, orderId, { paymentId, amount });
+      paidFirst();
+      await firstMayCommit;
+      return result;
+    });
+    await firstPaid;
+
+    const second = inCommittedTx((db) => pay(db, admin.id, orderId, { paymentId, amount }));
+
+    // the second one waits for the lock of the first before the first commits
+    for (let tries = 0; tries < 100; tries += 1) {
+      const [waiting] = await prisma.$queryRaw<{ n: number }[]>`
+        select count(*)::int as n from pg_stat_activity
+        where wait_event_type = 'Lock' and query like '%pay_order%'
+      `;
+      if (waiting!.n > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    releaseFirst();
+
+    expect(await first).toBe('PAID');
+    expect(await second).toBe('ALREADY_PAID_SAME_PAYMENT');
+
+    const after = await inCommittedTx(async (db) => ({
+      state: await orderStateOf(db, admin.id, orderId),
+      stock: await stockOf(db, admin.id, own.id),
+    }));
+    expect(after.state).toMatchObject({ status: 'paid', paymentId });
+    // the unit is sold once
+    expect(after.stock.stock).toBe(before.stock - 1);
+  });
+
   // a payment comes only from a provider, through the webhook that acts as the system
   it.each([
     ['the owner', () => asOwner()],
@@ -704,7 +904,7 @@ describe('cartlify.cancel_paid_order', () => {
   it.each(['paid', 'shipped'] as const)(
     'cancels a %s order and puts its stock back',
     async (stage) => {
-      const { outcome, state, stock } = await inRolledBackTx(async (db) => {
+      const { outcome, state, dates, stock } = await inRolledBackTx(async (db) => {
         const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 2]]);
         if (stage === 'shipped') await setStatus(db, orderId, 'shipped');
         const outcome = await call(
@@ -716,12 +916,15 @@ describe('cartlify.cancel_paid_order', () => {
         return {
           outcome,
           state: await orderStateOf(db, admin.id, orderId),
+          dates: await orderDatesOf(db, admin.id, orderId),
           stock: await stockOf(db, admin.id, product.id),
         };
       });
 
       expect(outcome.ok).toBe(true);
       expect(state).toMatchObject({ status: 'cancelled', paymentId: expect.any(String) });
+      // the time of the cancel next to the time of the payment, which stays
+      expect(dates).toEqual({ paidAt: dates.now, cancelledAt: dates.now, now: dates.now });
       expect(stock).toEqual({ stock: 10, reserved: 0 });
     },
   );
@@ -731,7 +934,7 @@ describe('cartlify.cancel_paid_order', () => {
     ['a cancelled order', 'cancelled', 'ORDER_ALREADY_CANCELLED'],
     ['an order that waits for its payment', 'waiting', 'ORDER_NOT_PAID'],
   ])('refuses %s', async (_case, stage, error) => {
-    const { outcome, stock } = await inRolledBackTx(async (db) => {
+    const { outcome, stock, dates } = await inRolledBackTx(async (db) => {
       let orderId: number;
       if (stage === 'waiting') {
         orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
@@ -747,6 +950,7 @@ describe('cartlify.cancel_paid_order', () => {
           );
       }
       const before = await stockOf(db, admin.id, product.id);
+      const datesBefore = await orderDatesOf(db, admin.id, orderId);
       const outcome = await call(
         db,
         asAdmin(),
@@ -754,11 +958,16 @@ describe('cartlify.cancel_paid_order', () => {
         orderId,
       );
       const after = await stockOf(db, admin.id, product.id);
-      return { outcome, stock: { before, after } };
+      return {
+        outcome,
+        stock: { before, after },
+        dates: { before: datesBefore, after: await orderDatesOf(db, admin.id, orderId) },
+      };
     });
 
     expect(outcome).toMatchObject({ ok: false, error: expect.stringContaining(error) });
     expect(stock.after).toEqual(stock.before);
+    expect(dates.after).toEqual(dates.before);
   });
 
   it('refuses a user, also the owner', async () => {

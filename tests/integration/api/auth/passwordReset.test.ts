@@ -3,7 +3,6 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jes
 
 import { logIn, refreshWith, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { takeLogs } from '../../../helpers/logs.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
   closeSessions,
@@ -11,10 +10,10 @@ import {
   createUser,
   uniqueEmail,
 } from '../../../helpers/factories.js';
-import { itWithMail, linkToken, watchMail } from '../../../helpers/mail.js';
+import { linkToken, watchMail } from '../../../helpers/mail.js';
 
-// the mail itself goes to SendGrid in sandbox mode, that test waits for a working account;
-// the reset tests take a link made the way /password/forgot stores one (createResetToken)
+// the mail goes to the SendGrid mock (tests/helpers/mail.ts); the reset tests take a link made
+// the way /password/forgot stores one (createResetToken)
 
 const GENERIC_FORGOT = 'If account exists, reset email will be sent';
 
@@ -62,7 +61,7 @@ afterAll(async () => {
 });
 
 describe('POST /api/auth/password/forgot', () => {
-  itWithMail('mails a reset link to the owner of a local account (SendGrid sandbox)', async () => {
+  it('mails a reset link to the owner of a local account', async () => {
     const user = await newUser();
     const mails = watchMail();
 
@@ -71,7 +70,7 @@ describe('POST /api/auth/password/forgot', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ message: GENERIC_FORGOT });
     expect(mails).toHaveLength(1);
-    expect(mails[0]).toMatchObject({ to: [user.email], sandbox: true });
+    expect(mails[0]).toMatchObject({ to: [user.email], accepted: true });
     expect(mails[0]!.subject).toContain('Reset your password');
     expect(linkToken(mails[0]!, '/web/auth/reset')).toEqual(expect.any(String));
   });
@@ -102,15 +101,27 @@ describe('POST /api/auth/password/forgot', () => {
   it('leaves the sessions of the account alone', async () => {
     const user = await newUser();
     const session = await signIn(app, csrf, user);
-    watchMail();
+    const mails = watchMail();
 
-    // without a working SendGrid the mail fails with a server error, the sessions are the point here
     await forgot(user.email);
 
+    expect(mails).toHaveLength(1);
     expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).toBe(204);
-    expect(takeLogs({ msg: 'request failed', reason: 'SENDGRID_API_KEY_REQUIRED' })).toHaveLength(
-      1,
-    );
+  });
+
+  // the newest link is the one the person waits for: an older one in a mailbox is a way in
+  it('closes the links it mailed before', async () => {
+    const user = await newUser();
+    const mails = watchMail();
+
+    await forgot(user.email);
+    await forgot(user.email);
+    const [first, second] = mails.map((mail) => linkToken(mail, '/web/auth/reset')!);
+
+    const old = await reset(first!, 'new-password-7');
+    expect(old.statusCode).toBe(400);
+    expect(old.json()).toMatchObject({ errorCode: 'RESET_TOKEN_INVALID_OR_EXPIRED' });
+    expect((await reset(second!, 'new-password-7')).statusCode).toBe(200);
   });
 
   it('refuses an email that is not an email', async () => {
@@ -145,7 +156,33 @@ describe('POST /api/auth/password/reset', () => {
 
     await reset(token, 'new-password-2');
 
-    expect((await refreshWith(app, csrf, session.refreshToken)).statusCode).not.toBe(204);
+    const res = await refreshWith(app, csrf, session.refreshToken);
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toMatchObject({ errorCode: 'REFRESH_TOKEN_REVOKED' });
+  });
+
+  // the phone kept the cookie of a session the reset closed: it is no stolen token, the session
+  // the person just opened on the laptop goes on
+  it('leaves the session after the reset alone when a session it closed comes back', async () => {
+    const user = await newUser();
+    const phone = await signIn(app, csrf, user);
+    await reset(await createResetToken(user.id), 'new-password-3');
+    const laptop = await signIn(app, csrf, { ...user, password: 'new-password-3' });
+
+    expect((await refreshWith(app, csrf, phone.refreshToken)).statusCode).toBe(401);
+    expect((await refreshWith(app, csrf, laptop.refreshToken)).statusCode).toBe(204);
+  });
+
+  it('closes every other reset link of the account', async () => {
+    const user = await newUser();
+    const older = await createResetToken(user.id);
+    const newer = await createResetToken(user.id);
+
+    expect((await reset(newer, 'new-password-8')).statusCode).toBe(200);
+
+    const res = await reset(older, 'new-password-9');
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'RESET_TOKEN_INVALID_OR_EXPIRED' });
   });
 
   it('takes a link only once', async () => {

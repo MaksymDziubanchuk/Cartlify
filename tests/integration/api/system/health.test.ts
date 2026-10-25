@@ -29,6 +29,13 @@ describe('GET /health', () => {
       },
     });
   });
+
+  // the pulse of the reservation worker: an old time means it stopped; the tests do not start it
+  it('tells when the reservation worker last ran and how many jobs wait', async () => {
+    const res = await app.inject({ method: 'GET', url: '/health' });
+
+    expect(res.json().orderTimeoutWorker).toEqual({ lastRunAt: null, queued: expect.any(Number) });
+  });
 });
 
 describe('GET /ready', () => {

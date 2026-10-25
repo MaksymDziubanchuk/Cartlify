@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import type { AuthProvider } from '@prisma/client';
 
+import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import {
   UnauthorizedError,
@@ -11,7 +12,7 @@ import {
   ForbiddenError,
   InternalError,
 } from '@utils/errors.js';
-import { setUserContext } from '@db/dbContext.service.js';
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import { verifyPass } from '@helpers/safePass.js';
@@ -22,8 +23,8 @@ import {
   requireImageStream,
   uploadImage,
   UploadImageResult,
-  buildImageUrls,
 } from '@utils/cloudinary.util.js';
+import { avatarOf, nameGivesLetter } from '@utils/avatar.util.js';
 
 import type {
   AvatarPart,
@@ -47,6 +48,10 @@ import {
   resolveProfilePeriod,
 } from './services/helpers/adminProfile.helper.js';
 import { deleteAccount } from './services/helpers/deleteAccount.helper.js';
+import { findUsers } from './services/findUsers.service.js';
+import { removeUserAvatar } from './services/removeUserAvatar.service.js';
+import { exportMe } from './services/exportMe.service.js';
+import { countAvatarRemovals, deleteAvatarFile } from './services/helpers/avatarRemovals.helper.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
   // normalize user id from dto
@@ -147,8 +152,8 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),
-        // convert stored avatar base url to sized urls for client usage
-        ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
+        // the own picture in its sizes, or the drawn letter
+        ...avatarOf(user),
         ...(user.locale ? { locale: user.locale } : {}),
         ...(user.phone ? { phone: user.phone } : {}),
         reviews,
@@ -213,6 +218,8 @@ async function updateMe({
   locale,
   phone,
   avatarUploaded,
+  removeAvatar,
+  log,
 }: UpdateMeDto): Promise<UserResponseDto> {
   // normalize user id from dto
   const id = typeof userId === 'string' ? Number(userId) : userId;
@@ -281,14 +288,29 @@ async function updateMe({
     data.avatarUrl = avatarUploaded.urlBase;
   }
 
+  // an empty avatar removes it: the profile draws the letter, the file goes after the commit
+  if (removeAvatar) {
+    data.publicId = null;
+    data.avatarUrl = null;
+  }
+
   // reject empty updates to avoid silent no-op
   if (!Object.keys(data).length) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
+  // the file of the removed avatar, read before the row forgets it
+  let removedPublicId: string | null = null;
+  let profile: UserResponseDto;
+
   try {
-    return await prisma.$transaction(
+    profile = await prisma.$transaction(
       async (tx) => {
         // set db session context for rls policies
         await setUserContext(tx, { userId: id, role });
+
+        if (removeAvatar) {
+          const before = await tx.user.findUnique({ where: { id }, select: { publicId: true } });
+          removedPublicId = before?.publicId ?? null;
+        }
 
         // update profile fields under rls
         let user = await tx.user.update({ where: { id }, data, select: profileSelect });
@@ -367,7 +389,7 @@ async function updateMe({
           createdAt: user.createdAt,
           updatedAt: user.updatedAt,
           ...(user.name ? { name: user.name } : {}),
-          ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
+          ...avatarOf(user),
           ...(user.locale ? { locale: user.locale } : {}),
           ...(user.phone ? { phone: user.phone } : {}),
           reviews,
@@ -387,6 +409,10 @@ async function updateMe({
 
     throw new InternalError({ reason: 'USERS_UPDATE_ME_UNEXPECTED' }, err);
   }
+
+  if (removedPublicId && log) await deleteAvatarFile(removedPublicId, log);
+
+  return profile;
 }
 
 // a row of cartlify.users_get_public_profile; the fields after avatarUrl are null for a user
@@ -404,6 +430,13 @@ type ProfileRow = {
   phone: string | null;
   deletedAt: Date | null;
 };
+
+// the email of an account for the letter of its drawn avatar; the transaction goes on as admin
+async function emailForAvatar(tx: Prisma.TransactionClient, id: number): Promise<string | null> {
+  await setAdminContext(tx);
+  const row = await tx.user.findUnique({ where: { id }, select: { email: true } });
+  return row?.email ?? null;
+}
 
 async function findById({
   actorId,
@@ -452,12 +485,20 @@ async function findById({
       const user = rows[0] ?? null;
       if (!user) throw new NotFoundError('USER_NOT_FOUND');
 
+      // the drawn avatar of an account without a name takes the first letter of the email, which
+      // the database function keeps from a user: it is read the way the authors of reviews are,
+      // under the admin context, and only its first letter leaves the server
+      const letterEmail =
+        nameGivesLetter(user.name) || user.email !== null
+          ? user.email
+          : await emailForAvatar(tx, id);
+
       const profile: PublicUserProfileDto = {
         id: user.id as UserId,
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),
-        ...(user.avatarUrl ? { avatarUrls: buildImageUrls(user.avatarUrl, 'avatar') } : {}),
+        ...avatarOf({ ...user, email: letterEmail, deleted: user.deletedAt !== null }),
       };
 
       if (!period) return profile;
@@ -486,6 +527,9 @@ async function findById({
         ...(user.phone ? { phone: user.phone } : {}),
         ...(user.deletedAt ? { deletedAt: user.deletedAt } : {}),
         openChatThreadId: chat?.id ?? null,
+        // past the limit the page tells the admin to take the account to root
+        avatarRemovals: await countAvatarRemovals(tx, id),
+        avatarRemovalsLimit: env.AVATAR_REMOVALS_LIMIT,
         period,
         ...(await loadProfileLists(tx, id, lists, period)),
       };
@@ -530,7 +574,7 @@ async function loadDeletionConfirmation(id: number) {
       return {
         account: await tx.user.findUnique({
           where: { id },
-          select: { authProvider: true, passwordHash: true },
+          select: { authProvider: true, passwordHash: true, deletedAt: true },
         }),
         lastLogin: await tx.loginLog.findFirst({
           where: { userId: id },
@@ -554,7 +598,8 @@ async function deleteMe({ userId, password, confirmOpenOrders, log }: DeleteMeDt
 
   const { account, lastLogin } = await loadDeletionConfirmation(id);
 
-  if (!account) throw new NotFoundError('USER_NOT_FOUND');
+  // the access token of a deleted account lives a few minutes on: the account is gone
+  if (!account || account.deletedAt) throw new NotFoundError('USER_NOT_FOUND');
 
   if (account.authProvider === 'LOCAL') {
     // spaces at the edges of a password are dropped, the same as at the login
@@ -590,10 +635,13 @@ async function deleteMe({ userId, password, confirmOpenOrders, log }: DeleteMeDt
 }
 
 export const usersServices = {
+  findUsers,
+  removeUserAvatar,
   findMe,
   beginAvatarUpload,
   updateMe,
   findById,
   deleteUserById,
   deleteMe,
+  exportMe,
 };
