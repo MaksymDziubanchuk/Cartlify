@@ -13,11 +13,15 @@ const realSendGrid = isRealService('sendgrid');
 // a key SendGrid does not know: with it SendGrid itself refuses the mail
 const REFUSED_KEY = 'SG.refused-by-the-test';
 
+// a file the mail carries; text is its content read as utf-8
+export type SentAttachment = { filename: string; type: string; disposition: string; text: string };
+
 export type SentMail = {
   to: string[];
   subject: string;
   text: string;
   html: string;
+  attachments: SentAttachment[];
   // the answer of SendGrid (or of the mock): 2xx means it took the mail
   status: number;
   accepted: boolean;
@@ -40,6 +44,12 @@ type SendGridPayload = {
   from?: { email?: string };
   subject?: string;
   content?: { type: string; value: string }[];
+  attachments?: {
+    content?: string;
+    filename?: string;
+    type?: string;
+    disposition?: string;
+  }[];
   mail_settings?: Record<string, unknown>;
 };
 
@@ -52,6 +62,12 @@ const mailOf = (payload: SendGridPayload): SentMail => {
     subject: payload.subject ?? '',
     text: content.find((c) => c.type === 'text/plain')?.value ?? '',
     html: content.find((c) => c.type === 'text/html')?.value ?? '',
+    attachments: (payload.attachments ?? []).map((file) => ({
+      filename: file.filename ?? '',
+      type: file.type ?? '',
+      disposition: file.disposition ?? 'attachment',
+      text: Buffer.from(file.content ?? '', 'base64').toString('utf8'),
+    })),
     status: 0,
     accepted: false,
   };
@@ -67,6 +83,11 @@ function mockAnswer(payload: SendGridPayload, init: RequestInit | undefined): Re
     ...(mail.to.length ? [] : ['The to array is required for all personalization objects.']),
     ...(mail.subject ? [] : ['The subject is required.']),
     ...((payload.content ?? []).some((c) => c.value) ? [] : ['The content parameter is required.']),
+    // what SendGrid asks of each file
+    ...(payload.attachments ?? []).flatMap((file) => [
+      ...(file.content ? [] : ['The attachment content is required.']),
+      ...(file.filename ? [] : ['The attachment filename is required.']),
+    ]),
   ];
 
   return !/^Bearer \S+$/.test(key)

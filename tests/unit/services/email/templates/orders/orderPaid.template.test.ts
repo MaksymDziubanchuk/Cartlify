@@ -60,6 +60,26 @@ describe('buildOrderPaidTemplate', () => {
     expect(html).toContain(`href="${orderUrl}"`);
   });
 
+  // the files are the versions of the terms and of the contract the order was made under
+  it('names the documents attached, only when the mail carries them', () => {
+    const line = 'The terms and the contract you accepted are attached to this mail.';
+    const both = buildOrderPaidTemplate(order({ attachedDocuments: ['terms', 'contract'] }));
+
+    expect(both.text).toContain(line);
+    expect(both.html).toContain(line);
+    expect(buildOrderPaidTemplate(order({ attachedDocuments: ['terms'] })).text).toContain(
+      'The terms you accepted are attached to this mail.',
+    );
+    expect(buildOrderPaidTemplate(order({ attachedDocuments: ['contract'] })).text).toContain(
+      'The contract you accepted is attached to this mail.',
+    );
+    for (const args of [order({ attachedDocuments: [] }), order()]) {
+      const mail = buildOrderPaidTemplate(args);
+      expect(mail.text).not.toContain('attached');
+      expect(mail.html).not.toContain('attached');
+    }
+  });
+
   it('keeps the plain text version free of html', () => {
     expect(buildOrderPaidTemplate(order()).text).not.toMatch(/<[a-z!/]/i);
   });

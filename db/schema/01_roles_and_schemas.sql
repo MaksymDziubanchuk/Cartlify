@@ -115,18 +115,6 @@ GRANT
 SELECT
   ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_readonly;
 
--- temporary: takes back what earlier versions of this file gave, remove once dev and prod
--- match the structure snapshot
-REVOKE
-UPDATE ON ALL SEQUENCES IN SCHEMA cartlify
-FROM
-  cartlify_app;
-
-REVOKE USAGE,
-UPDATE ON ALL SEQUENCES IN SCHEMA cartlify
-FROM
-  cartlify_readonly;
-
 ------------------------------------------------------------
 -- 4a. prisma migration history: owner only
 ------------------------------------------------------------
@@ -167,19 +155,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
 GRANT
 SELECT
   ON SEQUENCES TO cartlify_readonly;
-
--- temporary, as the revokes above: the default rights earlier versions of this file gave
-ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-REVOKE
-UPDATE ON SEQUENCES
-FROM
-  cartlify_app;
-
-ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
-REVOKE USAGE,
-UPDATE ON SEQUENCES
-FROM
-  cartlify_readonly;
 
 ------------------------------------------------------------
 -- 5a. FUNCTION EXECUTE RIGHTS

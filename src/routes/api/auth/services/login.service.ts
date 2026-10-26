@@ -14,6 +14,7 @@ import { verifyPass } from '@helpers/safePass.js';
 import type { LoginDto, LoginResponseDto } from 'types/dto/auth.dto.js';
 
 import { setGuestContext } from '@db/dbContext.service.js';
+import { takeConsentAtLogin } from '@routes/api/legal/services/helpers/legalDocuments.helper.js';
 import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
@@ -30,6 +31,7 @@ export async function login({
   ip,
   userAgent,
   userId: guestId,
+  acceptedDocumentIds = [],
 }: LoginDto): Promise<{ result: LoginResponseDto; refreshToken: string; accessToken: string }> {
   const cleanEmail = email.trim().toLowerCase();
 
@@ -88,6 +90,10 @@ export async function login({
 
       // switches the transaction to the user context, everything below runs as this user
       await migrateGuestDataToUser(tx, guestId, { id: u.id, role: u.role });
+
+      // a customer accepts the versions in force that came since the last consent before the
+      // login goes on (LEGAL_ACCEPTANCE_REQUIRED names them); an admin or root buys nothing
+      if (u.role === 'USER') await takeConsentAtLogin(tx, u.id, acceptedDocumentIds);
 
       await insertLoginLog(tx, {
         userId: u.id as any,

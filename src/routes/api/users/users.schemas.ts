@@ -252,7 +252,7 @@ const getMeExportSchema = {
   description:
     'Everything the shop keeps of the signed-in person, read with the rights of the person, as one JSON file ' +
     '(content-disposition attachment): the profile, the orders, the favorites, the reviews and votes, the ' +
-    'chats, the logins and the open sessions. Once an hour.',
+    'chats, the logins, the open sessions and the consents to the terms and the contract. Once an hour.',
 
   response: {
     200: {
@@ -349,7 +349,9 @@ const getUserByIdSchema = {
     '`include`, `from` and `to` are ignored for a user. ' +
     'An admin or root gets the whole profile but the password, the provider id and the id of the ' +
     'avatar file, the open chat of the user with an admin (`openChatThreadId`), the period of the ' +
-    'lists and the lists `include` names, of that period, newest first. ' +
+    'lists and the lists `include` names, of that period, newest first; `consents` are the ' +
+    'versions of the terms and of the contract the user accepted and the ones each order was ' +
+    'confirmed with, the text of each by GET /api/legal/documents/:documentId. ' +
     'The period is the last 30 days unless `from` or `to` comes, and at most 60 days long. ' +
     'A deleted account is USER_NOT_FOUND for a user; an admin or root reads it with `deletedAt`.',
 

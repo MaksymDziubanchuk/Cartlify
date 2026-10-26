@@ -1307,14 +1307,6 @@ ALTER TABLE cartlify.admin_alert_settings ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.admin_alert_settings FORCE ROW LEVEL SECURITY;
 
--- the policies the table had as admin_alert_mutes, kept by the rename of
--- 20261025120000_alert_mutes_to_alert_settings: temporary, until dev and prod have run this
-DROP POLICY IF EXISTS admin_alert_mutes_select ON cartlify.admin_alert_settings;
-
-DROP POLICY IF EXISTS admin_alert_mutes_insert ON cartlify.admin_alert_settings;
-
-DROP POLICY IF EXISTS admin_alert_mutes_delete ON cartlify.admin_alert_settings;
-
 DROP POLICY IF EXISTS admin_alert_settings_select ON cartlify.admin_alert_settings;
 
 DROP POLICY IF EXISTS admin_alert_settings_insert ON cartlify.admin_alert_settings;
@@ -1351,6 +1343,97 @@ CREATE POLICY admin_alert_settings_delete ON cartlify.admin_alert_settings FOR D
   cartlify.is_admin ()
   AND "userId" = cartlify.current_actor_id ()
 );
+
+----------------------------------------
+-- LEGAL_DOCUMENTS
+----------------------------------------
+-- the versions of the terms and of the contract: everybody reads them, a guest too, before
+-- accepting them; root publishes a version in their own name; nobody changes or takes one away
+-- (the version and the sha256 come from trg_legal_documents_before_insert, db/05)
+ALTER TABLE cartlify.legal_documents ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.legal_documents FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS legal_documents_select ON cartlify.legal_documents;
+
+DROP POLICY IF EXISTS legal_documents_insert ON cartlify.legal_documents;
+
+DROP POLICY IF EXISTS legal_documents_update_deny ON cartlify.legal_documents;
+
+DROP POLICY IF EXISTS legal_documents_delete_deny ON cartlify.legal_documents;
+
+CREATE POLICY legal_documents_select ON cartlify.legal_documents FOR
+SELECT
+  USING (true);
+
+CREATE POLICY legal_documents_insert ON cartlify.legal_documents FOR INSERT
+WITH
+  CHECK (
+    cartlify.is_root ()
+    AND "publishedById" = cartlify.current_actor_id ()
+  );
+
+-- UPDATE (deny for all)
+CREATE POLICY legal_documents_update_deny ON cartlify.legal_documents
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- DELETE (deny for all)
+CREATE POLICY legal_documents_delete_deny ON cartlify.legal_documents FOR DELETE USING (false);
+
+----------------------------------------
+-- LEGAL_ACCEPTANCES
+----------------------------------------
+-- the consents of the customers: a customer keeps one of their own, with an order of their own or
+-- none, and reads their own; an admin reads every one; nobody changes or takes one away (the
+-- version in force and the address of the request come from trg_legal_acceptances_before_insert,
+-- db/05)
+ALTER TABLE cartlify.legal_acceptances ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.legal_acceptances FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS legal_acceptances_select ON cartlify.legal_acceptances;
+
+DROP POLICY IF EXISTS legal_acceptances_insert ON cartlify.legal_acceptances;
+
+DROP POLICY IF EXISTS legal_acceptances_update_deny ON cartlify.legal_acceptances;
+
+DROP POLICY IF EXISTS legal_acceptances_delete_deny ON cartlify.legal_acceptances;
+
+CREATE POLICY legal_acceptances_select ON cartlify.legal_acceptances FOR
+SELECT
+  USING (cartlify.is_owner_or_admin ("userId"));
+
+CREATE POLICY legal_acceptances_insert ON cartlify.legal_acceptances FOR INSERT
+WITH
+  CHECK (
+    cartlify.is_owner ("userId")
+    AND cartlify.current_actor_role () = 'USER'
+    AND (
+      "orderId" IS NULL
+      OR EXISTS (
+        SELECT
+          1
+        FROM
+          cartlify.orders AS o
+        WHERE
+          o.id = "orderId"
+          AND o."userId" = legal_acceptances."userId"
+      )
+    )
+  );
+
+-- UPDATE (deny for all)
+CREATE POLICY legal_acceptances_update_deny ON cartlify.legal_acceptances
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- DELETE (deny for all)
+CREATE POLICY legal_acceptances_delete_deny ON cartlify.legal_acceptances FOR DELETE USING (false);
 
 ----------------------------------------
 -- ADMIN AUDIT LOG

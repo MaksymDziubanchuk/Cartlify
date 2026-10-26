@@ -159,12 +159,26 @@ export interface AdminProfileLoginLogDto {
   userAgent: string | null;
 }
 
+export interface AdminProfileConsentDto {
+  id: number;
+  documentId: number;
+  kind: 'terms' | 'contract';
+  version: number;
+  title: string;
+  // the order confirmed with this version; null for a consent of the user
+  orderId: number | null;
+  ip: string | null;
+  userAgent: string | null;
+  createdAt: Date;
+}
+
 export type AdminProfileListsDto = {
   orders: AdminProfileOrderDto[];
   reviews: AdminProfileReviewDto[];
   favorites: AdminProfileFavoriteDto[];
   votes: AdminProfileVoteDto[];
   loginLogs: AdminProfileLoginLogDto[];
+  consents: AdminProfileConsentDto[];
 };
 
 // the profile an admin or root reads: everything but the password, the provider id and the id of

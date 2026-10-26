@@ -120,6 +120,8 @@ describe('renderTemplate', () => {
     total: '€2.00',
     shippingAddress: 'Main st 1',
     recipient: 'Anna Koval, +380501234567',
+    // the files of the terms and of the contract a paid order carries
+    attachedLine: 'The terms and the contract you accepted are attached to this mail.',
     // the products a delivered order asks to rate
     hasRatings: 'yes',
     ratings: [{ name: 'Lamp', reviewUrl: 'https://shop.example.com/products/7#reviews' }],

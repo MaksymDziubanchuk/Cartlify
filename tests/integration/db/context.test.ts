@@ -296,13 +296,30 @@ describe('the context readers', () => {
 
 describe('without a context', () => {
   // the catalog the shop shows to every visitor; reviews name their author. A vote is what one
-  // user did, the review keeps the counts
-  const CATALOG = ['categories', 'product_images', 'products', 'reviews'];
+  // user did, the review keeps the counts. The versions of the terms and of the contract are
+  // public too: everybody reads them before accepting them
+  const CATALOG = ['categories', 'legal_documents', 'product_images', 'products', 'reviews'];
 
   // the counts of the four contexts are compared, so they come from one snapshot of the tables
   it('shows no row outside the catalog, and of the catalog no more than a visitor sees', async () => {
     const { hidden, visitor, seen } = await inRolledBackTx(
       async (db) => {
+        // a version of the terms and a consent to it, made in this transaction only: a version
+        // committed would be in force for every other file
+        await db.as({ role: 'ROOT', userId: admin.id });
+        const [terms] = await db.rows<{ id: number }>(
+          `insert into cartlify.legal_documents (kind, title, content, "publishedById")
+           values ('terms'::cartlify."LegalDocumentKind", 'Terms', 'Words.', $1) returning id`,
+          admin.id,
+        );
+        await db.as({ role: 'USER', userId: owner.id });
+        await db.rows(
+          'insert into cartlify.legal_acceptances ("userId", "documentId") values ($1, $2) returning id',
+          owner.id,
+          terms!.id,
+        );
+        await db.as(null);
+
         const tables = await tablesOf(db);
         const count = async () => {
           const counts: Record<string, number> = {};
@@ -328,7 +345,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(18);
+    expect(Object.keys(hidden)).toHaveLength(20);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

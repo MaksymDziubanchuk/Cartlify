@@ -387,7 +387,12 @@ const postCurrentConfirmSchema = {
         '`{ itemId, productId, reason: deleted | out_of_stock, available, requested }`; the owner removes or changes them and confirms again. ' +
         'The same code names the items when another buyer took the last free units at the same moment. ' +
         '`ORDER_PRICES_CHANGED`: reload the order and confirm again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
-        '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order.',
+        '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order. ' +
+        '`LEGAL_ACCEPTANCE_REQUIRED`: the customer did not accept a version in force of the terms ' +
+        'or of the contract; `details.kinds` the kinds missing, `details.current` the versions in ' +
+        'force `{ id, kind, version, title }`: the page shows a checkbox for each, opens its text ' +
+        'with GET /api/legal/documents/:documentId, the customer accepts with POST ' +
+        '/api/legal/acceptances and confirms again.',
       $ref: 'errorResponseSchema#',
     },
     500: {

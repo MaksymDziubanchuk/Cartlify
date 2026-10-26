@@ -430,11 +430,6 @@ END $$;
 ----------------------------------------
 DO $$
 BEGIN
-  -- the check that kept the value from going below 0 too (21.10.2026): a change down has a
-  -- negative value; a temporary line, it goes once dev and prod match the reference
-  ALTER TABLE cartlify.product_price_change_logs
-    DROP CONSTRAINT IF EXISTS price_change_non_negative;
-
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'price_change_prices_non_negative'
   ) THEN
@@ -700,4 +695,49 @@ BEGIN
   ALTER TABLE cartlify.admin_alert_settings
     ADD CONSTRAINT admin_alert_settings_threshold_chk
     CHECK (threshold IS NULL OR threshold >= 1);
+END $$;
+
+----------------------------------------
+-- LEGAL DOCUMENTS: the title, the text, the number and the sha256 of a version
+----------------------------------------
+-- a title without spaces at its edges, 1-200 characters; a text of 1-200 000 characters; the
+-- number from 1; the sha256 in hex (the database sets both, db/05)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'legal_documents_title_chk'
+  ) THEN
+    ALTER TABLE cartlify.legal_documents
+      DROP CONSTRAINT legal_documents_title_chk;
+  END IF;
+
+  ALTER TABLE cartlify.legal_documents
+    ADD CONSTRAINT legal_documents_title_chk
+    CHECK (
+      title = btrim(title)
+      AND char_length(title) >= 1
+      AND char_length(title) <= 200
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'legal_documents_content_chk'
+  ) THEN
+    ALTER TABLE cartlify.legal_documents
+      DROP CONSTRAINT legal_documents_content_chk;
+  END IF;
+
+  ALTER TABLE cartlify.legal_documents
+    ADD CONSTRAINT legal_documents_content_chk
+    CHECK (char_length(content) >= 1 AND char_length(content) <= 200000);
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'legal_documents_version_chk'
+  ) THEN
+    ALTER TABLE cartlify.legal_documents
+      DROP CONSTRAINT legal_documents_version_chk;
+  END IF;
+
+  ALTER TABLE cartlify.legal_documents
+    ADD CONSTRAINT legal_documents_version_chk
+    CHECK (version >= 1 AND sha256 ~ '^[0-9a-f]{64}$');
 END $$;

@@ -147,6 +147,39 @@ const usersAdminProfileListsSchema = {
       required: ['id', 'createdAt', 'ipAddress', 'userAgent'],
     },
   },
+  consents: {
+    type: 'array',
+    description:
+      'The versions of the terms and of the contract the user accepted in the period (orderId ' +
+      'null) and the ones each order of the period was confirmed with, with the address and the ' +
+      'browser of the request; the text of a version: GET /api/legal/documents/:documentId.',
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        id: { type: 'number' },
+        documentId: { type: 'number' },
+        kind: { type: 'string', enum: ['terms', 'contract'] },
+        version: { type: 'number' },
+        title: { type: 'string' },
+        orderId: { anyOf: [{ type: 'number' }, { type: 'null' }] },
+        ip: nullableString,
+        userAgent: nullableString,
+        createdAt: dateTime,
+      },
+      required: [
+        'id',
+        'documentId',
+        'kind',
+        'version',
+        'title',
+        'orderId',
+        'ip',
+        'userAgent',
+        'createdAt',
+      ],
+    },
+  },
 } as const;
 
 const usersUserReviewResponseSchema = {
@@ -549,9 +582,15 @@ const usersExportResponseSchema = {
     favorites: exportRows('The favorite products: productId, name, createdAt.'),
     reviews: exportRows('The reviews: id, productId, rating, comment, createdAt, updatedAt.'),
     reviewVotes: exportRows('The votes on reviews of others: reviewId, action, createdAt.'),
-    chats: exportRows('The chats: id, type, status, createdAt, messages (senderType, content, createdAt).'),
+    chats: exportRows(
+      'The chats: id, type, status, createdAt, messages (senderType, content, createdAt).',
+    ),
     logins: exportRows('The logins, the newest first: createdAt, ipAddress, userAgent.'),
     sessions: exportRows('The open sessions: device, lastUsedAt, expiresAt.'),
+    legalAcceptances: exportRows(
+      'The consents to the terms and the contract: documentId, kind, version, title, orderId (the ' +
+        'versions an order was confirmed with), ip, userAgent, createdAt.',
+    ),
   },
   required: [
     'exportedAt',
@@ -563,6 +602,7 @@ const usersExportResponseSchema = {
     'chats',
     'logins',
     'sessions',
+    'legalAcceptances',
   ],
 } as const;
 

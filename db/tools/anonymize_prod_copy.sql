@@ -42,6 +42,10 @@ BEGIN
       ('login_logs', 'id'), ('login_logs', 'userId'), ('login_logs', 'email'),
       ('login_logs', 'role'), ('login_logs', 'ipAddress'), ('login_logs', 'userAgent'),
       ('login_logs', 'createdAt'),
+      ('legal_acceptances', 'id'), ('legal_acceptances', 'userId'),
+      ('legal_acceptances', 'documentId'), ('legal_acceptances', 'orderId'),
+      ('legal_acceptances', 'ip'), ('legal_acceptances', 'userAgent'),
+      ('legal_acceptances', 'createdAt'),
       ('orders', 'id'), ('orders', 'userId'), ('orders', 'status'), ('orders', 'total'),
       ('orders', 'shippingAddress'), ('orders', 'note'), ('orders', 'createdAt'),
       ('orders', 'updatedAt'), ('orders', 'confirmed'), ('orders', 'reservationExpiresAt'),
@@ -66,6 +70,7 @@ BEGIN
       ('reviews', 'upVotes'), ('reviews', 'updatedAt'),
       -- tables with no personal data: the catalog, the stock, the money, what links them
       ('_prisma_migrations', '*'), ('admin_alert_settings', '*'), ('categories', '*'),
+      ('legal_documents', '*'),
       ('favorites', '*'), ('order_batch_allocations', '*'), ('order_items', '*'),
       ('product_batches', '*'), ('product_images', '*'), ('product_price_change_logs', '*'),
       ('products', '*'), ('review_votes', '*')
@@ -134,6 +139,12 @@ SET
     WHERE u.id = l."userId"
   ),
   "ipAddress" = NULL,
+  "userAgent" = NULL;
+
+-- a consent keeps what was accepted and when, not where and from what browser
+UPDATE cartlify.legal_acceptances
+SET
+  ip = NULL,
   "userAgent" = NULL;
 
 ------------------------------------------------------------
@@ -253,6 +264,13 @@ BEGIN
       SELECT 1
       FROM cartlify.login_logs
       WHERE "ipAddress" IS NOT NULL OR "userAgent" IS NOT NULL
+    )
+    UNION ALL
+    SELECT 'legal_acceptances'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.legal_acceptances
+      WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
     )
     UNION ALL
     SELECT 'orders'

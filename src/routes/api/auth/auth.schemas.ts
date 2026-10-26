@@ -98,7 +98,9 @@ const setRegisterSchema = {
   description:
     'Creates a new user account and sets authentication cookies. ' +
     'The password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols. ' +
-    'The name is optional, up to 100 characters.',
+    'The name is optional, up to 100 characters. While a version of the terms or of the ' +
+    'contract is in force (GET /api/legal/documents/current), the person accepts every one of ' +
+    'them with the registration: `acceptedDocumentIds` names them.',
 
   body: {
     $ref: 'authRegisterBodySchema#',
@@ -116,11 +118,21 @@ const setRegisterSchema = {
       description:
         'Invalid registration request. VALIDATION_ERROR with field password ' +
         'when the password is shorter than 6 or longer than 64 characters or has non-ASCII characters; ' +
-        'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces.',
+        'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces; ' +
+        'LEGAL_ACCEPTANCE_REQUIRED when a version in force is not named (`details.kinds` the ' +
+        'kinds missing, `details.current` the versions in force `{ id, kind, version, title }`).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`LEGAL_DOCUMENT_NOT_FOUND`: a version named is not there (`details.documentIds`).',
       $ref: 'errorResponseSchema#',
     },
     409: {
-      description: '`EMAIL_ALREADY_IN_USE`: an account with this email exists.',
+      description:
+        '`EMAIL_ALREADY_IN_USE`: an account with this email exists. `LEGAL_VERSION_OUTDATED`: a ' +
+        'version named is no longer in force (`details.current` the versions in force ' +
+        '`{ id, kind, version, title }`).',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -145,7 +157,12 @@ const setRegisterSchema = {
 const setLoginSchema = {
   operationId: 'loginUser',
   summary: 'Login user',
-  description: 'Authenticates user by email and password and sets authentication cookies.',
+  description:
+    'Authenticates user by email and password and sets authentication cookies. A customer who ' +
+    'did not accept a version of the terms or of the contract in force (one root published ' +
+    'since the last consent) is not let in: the answer names the versions, the page shows a ' +
+    'checkbox for each and logs in again with their ids in acceptedDocumentIds. An admin or root ' +
+    'is asked nothing. The confirmation of an order checks the same for a session that stays open.',
 
   body: {
     $ref: 'authLoginBodySchema#',
@@ -165,6 +182,20 @@ const setLoginSchema = {
     },
     401: {
       description: '`INVALID_CREDENTIALS`: the email or the password is wrong.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`LEGAL_DOCUMENT_NOT_FOUND`: a version in acceptedDocumentIds is not there (`details.documentIds`).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`LEGAL_ACCEPTANCE_REQUIRED`: the customer did not accept a version in force; ' +
+        '`details.kinds` the kinds missing, `details.current` the versions in force ' +
+        '`{ id, kind, version, title }` (the text of each: GET /api/legal/documents/:documentId); ' +
+        'log in again with them in acceptedDocumentIds. `LEGAL_VERSION_OUTDATED`: a version sent ' +
+        'is no longer in force (`details.current`). Asked only after the password is right.',
       $ref: 'errorResponseSchema#',
     },
     403: {
@@ -187,11 +218,36 @@ const setLoginSchema = {
   },
 } satisfies FastifySchema;
 
+// the query of the start of a login by a provider: the versions of the terms and of the contract
+// the person accepted on the page of the shop, which an account the login makes takes
+const oauthStartQuerystring = {
+  type: 'object',
+  properties: {
+    acceptedDocumentIds: {
+      type: 'string',
+      pattern: '^[1-9][0-9]{0,9}(,[1-9][0-9]{0,9}){0,9}$',
+      description:
+        'Ids of the versions of the terms and of the contract in force the person accepted ' +
+        '(GET /api/legal/documents/current), through commas, at most 10.',
+      examples: ['17,12'],
+    },
+  },
+} as const;
+
+const oauthStartConsent =
+  ' A login that makes a new account needs the consent to every version of the terms and of the ' +
+  'contract in force, as a registration does: the page sends their ids in acceptedDocumentIds, ' +
+  'and the callback makes no account without them. A login to an account of a customer needs ' +
+  'the versions that came in force since its last consent, as a login with a password does; ' +
+  'an admin or root is asked nothing.';
+
 // Schema for Google OAuth start
 const setGoogleStartSchema = {
   operationId: 'startGoogleOAuth',
   summary: 'Start Google OAuth',
-  description: 'Redirects the user to the Google OAuth authorization page.',
+  description: 'Redirects the user to the Google OAuth authorization page.' + oauthStartConsent,
+
+  querystring: oauthStartQuerystring,
 
   response: {
     302: {
@@ -227,6 +283,10 @@ const setGoogleCallbackSchema = {
     'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
     'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
     'OAUTH_CALLBACK_ERROR (Google reported another error), ALREADY_AUTHENTICATED, ' +
+    'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
+    'name the versions of the terms and of the contract in force the account has to accept, all of ' +
+    'them for a new account: nobody is logged in and no account is made, the page shows the ' +
+    'versions in force and starts the login again with them), ' +
     'GOOGLE_EMAIL_NOT_VERIFIED, GOOGLE_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
     'the callback has to reach the browser whose guestId cookie is in the state), other GOOGLE_OAUTH_* codes ' +
     'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
@@ -265,7 +325,9 @@ const setGoogleCallbackSchema = {
 const setGithubStartSchema = {
   operationId: 'startGithubOAuth',
   summary: 'Start GitHub OAuth',
-  description: 'Redirects the user to the GitHub OAuth authorization page.',
+  description: 'Redirects the user to the GitHub OAuth authorization page.' + oauthStartConsent,
+
+  querystring: oauthStartQuerystring,
 
   response: {
     302: {
@@ -301,6 +363,10 @@ const setGithubCallbackSchema = {
     'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
     'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
     'OAUTH_CALLBACK_ERROR (GitHub reported another error), ALREADY_AUTHENTICATED, ' +
+    'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
+    'name the versions of the terms and of the contract in force the account has to accept, all of ' +
+    'them for a new account: nobody is logged in and no account is made, the page shows the ' +
+    'versions in force and starts the login again with them), ' +
     'GITHUB_EMAIL_NOT_VERIFIED, GITHUB_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
     'the callback has to reach the browser whose guestId cookie is in the state), other GITHUB_OAUTH_* codes ' +
     'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
@@ -339,7 +405,9 @@ const setGithubCallbackSchema = {
 const setLinkedInStartSchema = {
   operationId: 'startLinkedInOAuth',
   summary: 'Start LinkedIn OAuth',
-  description: 'Redirects the user to the LinkedIn OAuth authorization page.',
+  description: 'Redirects the user to the LinkedIn OAuth authorization page.' + oauthStartConsent,
+
+  querystring: oauthStartQuerystring,
 
   response: {
     302: {
@@ -375,6 +443,10 @@ const setLinkedInCallbackSchema = {
     'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
     'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
     'OAUTH_CALLBACK_ERROR (LinkedIn reported another error), ALREADY_AUTHENTICATED, ' +
+    'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
+    'name the versions of the terms and of the contract in force the account has to accept, all of ' +
+    'them for a new account: nobody is logged in and no account is made, the page shows the ' +
+    'versions in force and starts the login again with them), ' +
     'LINKEDIN_EMAIL_NOT_VERIFIED, LINKEDIN_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
     'the callback has to reach the browser whose guestId cookie is in the state), other LINKEDIN_OAUTH_* codes ' +
     'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +

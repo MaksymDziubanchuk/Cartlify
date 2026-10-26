@@ -17,6 +17,8 @@ table | categories | cartlify_owner | rls=true | force=true | cartlify_app=arwd/
 table | chat_messages | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | chat_threads | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | favorites | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | legal_acceptances | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | legal_documents | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | login_logs | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | order_batch_allocations | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | order_items | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -83,6 +85,21 @@ column | favorites | 2 | userId | integer | notnull=false | default=- | identity
 column | favorites | 3 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | favorites | 4 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | favorites | 5 | guestId | uuid | notnull=false | default=- | identity=- | generated=- | -
+column | legal_acceptances | 1 | id | integer | notnull=true | default=nextval('legal_acceptances_id_seq'::regclass) | identity=- | generated=- | -
+column | legal_acceptances | 2 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | legal_acceptances | 3 | documentId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | legal_acceptances | 4 | orderId | integer | notnull=false | default=- | identity=- | generated=- | -
+column | legal_acceptances | 5 | ip | text | notnull=false | default=- | identity=- | generated=- | -
+column | legal_acceptances | 6 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
+column | legal_acceptances | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | legal_documents | 1 | id | integer | notnull=true | default=nextval('legal_documents_id_seq'::regclass) | identity=- | generated=- | -
+column | legal_documents | 2 | kind | "LegalDocumentKind" | notnull=true | default=- | identity=- | generated=- | -
+column | legal_documents | 3 | version | integer | notnull=true | default=- | identity=- | generated=- | -
+column | legal_documents | 4 | title | character varying(200) | notnull=true | default=- | identity=- | generated=- | -
+column | legal_documents | 5 | content | text | notnull=true | default=- | identity=- | generated=- | -
+column | legal_documents | 6 | sha256 | character varying(64) | notnull=true | default=- | identity=- | generated=- | -
+column | legal_documents | 7 | publishedById | integer | notnull=true | default=- | identity=- | generated=- | -
+column | legal_documents | 8 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | login_logs | 1 | id | integer | notnull=true | default=nextval('login_logs_id_seq'::regclass) | identity=- | generated=- | -
 column | login_logs | 2 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | login_logs | 3 | email | text | notnull=true | default=- | identity=- | generated=- | -
@@ -232,6 +249,15 @@ constraint | favorites | favorites_actor_xor_chk | c | validated=true | CHECK ((
 constraint | favorites | favorites_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | favorites | favorites_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | favorites | favorites_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | legal_acceptances | legal_acceptances_documentId_fkey | f | validated=true | FOREIGN KEY ("documentId") REFERENCES legal_documents(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | legal_acceptances | legal_acceptances_orderId_fkey | f | validated=true | FOREIGN KEY ("orderId") REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | legal_acceptances | legal_acceptances_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | legal_acceptances | legal_acceptances_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | legal_documents | legal_documents_content_chk | c | validated=true | CHECK (((char_length(content) >= 1) AND (char_length(content) <= 200000)))
+constraint | legal_documents | legal_documents_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | legal_documents | legal_documents_publishedById_fkey | f | validated=true | FOREIGN KEY ("publishedById") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | legal_documents | legal_documents_title_chk | c | validated=true | CHECK ((((title)::text = btrim((title)::text)) AND (char_length((title)::text) >= 1) AND (char_length((title)::text) <= 200)))
+constraint | legal_documents | legal_documents_version_chk | c | validated=true | CHECK (((version >= 1) AND ((sha256)::text ~ '^[0-9a-f]{64}$'::text)))
 constraint | login_logs | login_logs_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | login_logs | login_logs_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | order_batch_allocations | order_batch_allocations_batchId_fkey | f | validated=true | FOREIGN KEY ("batchId") REFERENCES product_batches(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -322,6 +348,11 @@ index | favorites | favorites_guestId_productId_key | valid=true | ready=true | 
 index | favorites | favorites_pkey | valid=true | ready=true | CREATE UNIQUE INDEX favorites_pkey ON cartlify.favorites USING btree (id)
 index | favorites | favorites_productId_idx | valid=true | ready=true | CREATE INDEX "favorites_productId_idx" ON cartlify.favorites USING btree ("productId")
 index | favorites | favorites_userId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "favorites_userId_productId_key" ON cartlify.favorites USING btree ("userId", "productId")
+index | legal_acceptances | legal_acceptances_orderId_idx | valid=true | ready=true | CREATE INDEX "legal_acceptances_orderId_idx" ON cartlify.legal_acceptances USING btree ("orderId")
+index | legal_acceptances | legal_acceptances_pkey | valid=true | ready=true | CREATE UNIQUE INDEX legal_acceptances_pkey ON cartlify.legal_acceptances USING btree (id)
+index | legal_acceptances | legal_acceptances_userId_createdAt_idx | valid=true | ready=true | CREATE INDEX "legal_acceptances_userId_createdAt_idx" ON cartlify.legal_acceptances USING btree ("userId", "createdAt")
+index | legal_documents | legal_documents_kind_version_key | valid=true | ready=true | CREATE UNIQUE INDEX legal_documents_kind_version_key ON cartlify.legal_documents USING btree (kind, version)
+index | legal_documents | legal_documents_pkey | valid=true | ready=true | CREATE UNIQUE INDEX legal_documents_pkey ON cartlify.legal_documents USING btree (id)
 index | login_logs | login_logs_email_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_email_createdAt_idx" ON cartlify.login_logs USING btree (email, "createdAt")
 index | login_logs | login_logs_pkey | valid=true | ready=true | CREATE UNIQUE INDEX login_logs_pkey ON cartlify.login_logs USING btree (id)
 index | login_logs | login_logs_userId_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_userId_createdAt_idx" ON cartlify.login_logs USING btree ("userId", "createdAt")
@@ -387,6 +418,8 @@ sequence | admin_audit_log_id_seq | cartlify_owner | integer | increment=1 | sta
 sequence | categories_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | chat_messages_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | favorites_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
+sequence | legal_acceptances_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
+sequence | legal_documents_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | login_logs_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | order_batch_allocations_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | order_items_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -405,6 +438,7 @@ enum | AuthProvider | cartlify_owner | LOCAL,GOOGLE,GITHUB,LINKEDIN | -
 enum | ChatMessageSenderType | cartlify_owner | user,admin,bot,guest | -
 enum | ChatStatus | cartlify_owner | open,closed | -
 enum | ChatType | cartlify_owner | bot,admin | -
+enum | LegalDocumentKind | cartlify_owner | terms,contract | -
 enum | OrderStatus | cartlify_owner | pending,paid,shipped,delivered,cancelled,waiting,unconfirmed | -
 enum | PaymentProvider | cartlify_owner | stripe,liqpay | -
 enum | PriceChangeMode | cartlify_owner | percent,fixed | -
@@ -455,6 +489,8 @@ function | is_owner(p_user_id integer) | cartlify_owner | plpgsql | definer=fals
 function | is_owner_or_admin(p_user_id integer) | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=0591f617ac65110cad6fd57229f5b4de | extension=-
 function | is_root() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=54dc3c77ebc32655c7c693e006818395 | extension=-
 function | is_system() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=0f31ae4340622dfa377eb0e86910d8b4 | extension=-
+function | legal_acceptances_before_insert() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=6e83aa8c91a534e3ce82119e86610008 | extension=-
+function | legal_documents_before_insert() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=6bd11e59fc83779ede77c11e0f37e962 | extension=-
 function | log_admin_action(p_actor_id integer, p_actor_role "Role", p_entity_type "AdminAuditEntityType", p_entity_id integer, p_action "AdminAuditAction", p_changes jsonb) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=45ac3146802853121ecfae54df5dd3de | extension=-
 function | log_product_price_change(p_product_id integer, p_old_price numeric, p_new_price numeric, p_mode "PriceChangeMode", p_value numeric, p_ends_at timestamp without time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=7fe9770acf5373d84f8df044d848915c | extension=-
 function | login_logs_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=ac86c5411f0dcdae3190fdf34de68a56 | extension=-
@@ -526,6 +562,8 @@ trigger | chat_messages | trg_chat_messages_before_update | enabled=O | CREATE T
 trigger | chat_threads | trg_chat_threads_update_columns | enabled=O | CREATE TRIGGER trg_chat_threads_update_columns BEFORE UPDATE ON cartlify.chat_threads FOR EACH ROW EXECUTE FUNCTION chat_threads_update_columns()
 trigger | favorites | trg_favorites_after_mod_popularity | enabled=O | CREATE TRIGGER trg_favorites_after_mod_popularity AFTER INSERT OR DELETE ON cartlify.favorites FOR EACH ROW EXECUTE FUNCTION favorites_after_mod_popularity()
 trigger | favorites | trg_favorites_refuse_removed_product | enabled=O | CREATE TRIGGER trg_favorites_refuse_removed_product BEFORE INSERT ON cartlify.favorites FOR EACH ROW EXECUTE FUNCTION refuse_removed_product()
+trigger | legal_acceptances | trg_legal_acceptances_before_insert | enabled=O | CREATE TRIGGER trg_legal_acceptances_before_insert BEFORE INSERT ON cartlify.legal_acceptances FOR EACH ROW EXECUTE FUNCTION legal_acceptances_before_insert()
+trigger | legal_documents | trg_legal_documents_before_insert | enabled=O | CREATE TRIGGER trg_legal_documents_before_insert BEFORE INSERT ON cartlify.legal_documents FOR EACH ROW EXECUTE FUNCTION legal_documents_before_insert()
 trigger | login_logs | trg_login_logs_update_columns | enabled=O | CREATE TRIGGER trg_login_logs_update_columns BEFORE UPDATE ON cartlify.login_logs FOR EACH ROW EXECUTE FUNCTION login_logs_update_columns()
 trigger | order_items | trg_order_items_after_mod | enabled=O | CREATE TRIGGER trg_order_items_after_mod AFTER INSERT OR DELETE OR UPDATE ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_after_mod()
 trigger | order_items | trg_order_items_after_mod_popularity | enabled=O | CREATE TRIGGER trg_order_items_after_mod_popularity AFTER INSERT OR DELETE OR UPDATE OF "orderId", "productId" ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_after_mod_popularity()
@@ -578,6 +616,14 @@ policy | favorites | favorites_insert | PERMISSIVE | public | INSERT | using=- |
 policy | favorites | favorites_select | PERMISSIVE | public | SELECT | using=(is_owner_or_admin("userId") OR ((current_actor_role() = 'GUEST'::"Role") AND ("guestId" = current_guest_id()))) | check=-
 policy | favorites | favorites_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
 policy | favorites | favorites_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=("userId" IS NULL) | check=(("userId" IS NOT NULL) AND ("guestId" IS NULL))
+policy | legal_acceptances | legal_acceptances_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
+policy | legal_acceptances | legal_acceptances_insert | PERMISSIVE | public | INSERT | using=- | check=(is_owner("userId") AND (current_actor_role() = 'USER'::"Role") AND (("orderId" IS NULL) OR (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = legal_acceptances."orderId") AND (o."userId" = legal_acceptances."userId"))))))
+policy | legal_acceptances | legal_acceptances_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin("userId") | check=-
+policy | legal_acceptances | legal_acceptances_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
+policy | legal_documents | legal_documents_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
+policy | legal_documents | legal_documents_insert | PERMISSIVE | public | INSERT | using=- | check=(is_root() AND ("publishedById" = current_actor_id()))
+policy | legal_documents | legal_documents_select | PERMISSIVE | public | SELECT | using=true | check=-
+policy | legal_documents | legal_documents_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
 policy | login_logs | login_logs_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
 policy | login_logs | login_logs_insert | PERMISSIVE | public | INSERT | using=- | check=is_owner("userId")
 policy | login_logs | login_logs_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin("userId") | check=-

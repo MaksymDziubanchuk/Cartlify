@@ -8,6 +8,7 @@ import type {
   LoginResponseDto,
   GoogleStartDto,
   GoogleStartResponseDto,
+  OAuthStartQueryDto,
   GoogleCallbackQueryDto,
   GoogleCallbackDto,
   GoogleCallbackSuccessQueryDto,
@@ -41,6 +42,7 @@ import type {
 } from 'types/dto/auth.dto.js';
 
 import { authServices } from './auth.services.js';
+import { documentIdsOfQuery } from './services/helpers/oauthConsent.helper.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { isUuid } from '@db/dbContext.service.js';
 import {
@@ -67,7 +69,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
   req,
   reply,
 ) => {
-  const { email, password, name } = req.body;
+  const { email, password, name, acceptedDocumentIds } = req.body;
   const { id, role } = req.user as User;
   // build register dto
   const args = pickDefined<RegisterDto>(
@@ -77,7 +79,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
       userId: id,
       role,
     },
-    { name },
+    { name, acceptedDocumentIds },
   );
   // create user in service
   const result = await authServices.register(args);
@@ -85,7 +87,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
 };
 
 const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = async (req, reply) => {
-  const { email, password, rememberMe } = req.body;
+  const { email, password, rememberMe, acceptedDocumentIds } = req.body;
   const ip = req.ip;
   const userAgent = req.headers['user-agent'];
   const { id, role } = req.user as User;
@@ -101,6 +103,7 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
       rememberMe,
       ip,
       userAgent,
+      acceptedDocumentIds,
     },
   );
 
@@ -150,7 +153,10 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
   return reply.code(200).send(result);
 };
 
-const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = async (req, reply) => {
+const getGoogleStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GoogleStartResponseDto> = async (
+  req,
+  reply,
+) => {
   const { id, role } = req.user as User;
 
   // allow oauth start for guest
@@ -162,7 +168,12 @@ const getGoogleStart: ControllerRouter<{}, {}, {}, GoogleStartResponseDto> = asy
   const userAgent = req.headers['user-agent'];
 
   // build google start dto
-  const args = pickDefined<GoogleStartDto>({ guestId: id, role }, { ip, userAgent });
+  // the versions of the terms and of the contract the page sent: a new account takes them
+  const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
+  const args = pickDefined<GoogleStartDto>(
+    { guestId: id, role },
+    { ip, userAgent, acceptedDocumentIds },
+  );
 
   const { url } = await authServices.googleStart(args);
   // redirect to google oauth
@@ -248,7 +259,10 @@ const getGoogleCallback: ControllerRouter<{}, {}, GoogleCallbackQueryDto, void> 
   });
 };
 
-const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = async (req, reply) => {
+const getGithubStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GithubStartResponseDto> = async (
+  req,
+  reply,
+) => {
   const { id, role } = req.user as User;
 
   // allow oauth start for guest
@@ -260,7 +274,12 @@ const getGithubStart: ControllerRouter<{}, {}, {}, GithubStartResponseDto> = asy
   const userAgent = req.headers['user-agent'];
 
   // build github start dto
-  const args = pickDefined<GithubStartDto>({ guestId: id, role }, { ip, userAgent });
+  // the versions of the terms and of the contract the page sent: a new account takes them
+  const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
+  const args = pickDefined<GithubStartDto>(
+    { guestId: id, role },
+    { ip, userAgent, acceptedDocumentIds },
+  );
 
   const { url } = await authServices.githubStart(args);
   // redirect to github oauth
@@ -290,10 +309,12 @@ const getGithubCallback: ControllerRouter<{}, {}, GithubCallbackQueryDto, void> 
   });
 };
 
-const getLinkedInStart: ControllerRouter<{}, {}, {}, LinkedInStartResponseDto> = async (
-  req,
-  reply,
-) => {
+const getLinkedInStart: ControllerRouter<
+  {},
+  {},
+  OAuthStartQueryDto,
+  LinkedInStartResponseDto
+> = async (req, reply) => {
   const { id, role } = req.user as User;
 
   // allow oauth start for guest
@@ -305,7 +326,12 @@ const getLinkedInStart: ControllerRouter<{}, {}, {}, LinkedInStartResponseDto> =
   const userAgent = req.headers['user-agent'];
 
   // build linkedin start dto
-  const args = pickDefined<LinkedInStartDto>({ guestId: id, role }, { ip, userAgent });
+  // the versions of the terms and of the contract the page sent: a new account takes them
+  const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
+  const args = pickDefined<LinkedInStartDto>(
+    { guestId: id, role },
+    { ip, userAgent, acceptedDocumentIds },
+  );
 
   const { url } = await authServices.linkedInStart(args);
   // redirect to linkedin oauth

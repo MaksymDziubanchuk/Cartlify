@@ -2,6 +2,10 @@ import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { getPgMessage, prisma, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import {
+  assertAcceptedForOrder,
+  recordConsents,
+} from '@routes/api/legal/services/helpers/legalDocuments.helper.js';
 import { currentPrice } from '@helpers/productSale.js';
 import { assertRedisReady } from '@redis/client.js';
 import { lowestMinimumTotal, shopCurrency } from '@routes/api/payments/providers/index.js';
@@ -72,6 +76,10 @@ export async function confirmOrder({
       async (db) => {
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
+
+        // only a customer who accepted the versions of the terms and of the contract in force
+        // confirms an order; the order keeps them for the mail after the payment
+        const legalVersions = await assertAcceptedForOrder(db, Number(actorId));
 
         // store shipping data before confirm, db refuses to confirm an order without the address
         // and the recipient; rls lets the owner change only an own unconfirmed order, any other
@@ -148,6 +156,8 @@ export async function confirmOrder({
         });
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
+
+        await recordConsents(db, Number(actorId), legalVersions, order.id);
 
         const response = mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
 

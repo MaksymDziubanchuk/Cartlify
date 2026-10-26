@@ -16,12 +16,13 @@ export type ExportMeResponseDto = {
   chats: Record<string, unknown>[];
   logins: Record<string, unknown>[];
   sessions: Record<string, unknown>[];
+  legalAcceptances: Record<string, unknown>[];
 };
 
 // everything the shop keeps of the person, read with the rights of the person (rls shows them
 // their own rows only): the profile, the orders with what they held and where they went, the
-// favorites, the reviews and votes, the chats with their messages, the logins and the open
-// sessions. What is no data of the person stays out: the hash of the password, the id of the
+// favorites, the reviews and votes, the chats with their messages, the logins, the open sessions
+// and the consents to the terms and the contract. What is no data of the person stays out: the hash of the password, the id of the
 // provider account, the ids of payments and of files
 export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeResponseDto> {
   try {
@@ -127,6 +128,19 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
         select: { userAgent: true, createdAt: true, expiresAt: true },
       });
 
+      const legalAcceptances = await tx.legalAcceptance.findMany({
+        where: { userId },
+        orderBy: { id: 'asc' },
+        select: {
+          documentId: true,
+          orderId: true,
+          ip: true,
+          userAgent: true,
+          createdAt: true,
+          document: { select: { kind: true, version: true, title: true } },
+        },
+      });
+
       return {
         exportedAt: new Date(),
         profile,
@@ -153,6 +167,16 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
           device: session.userAgent,
           lastUsedAt: session.createdAt,
           expiresAt: session.expiresAt,
+        })),
+        legalAcceptances: legalAcceptances.map(({ document, ...consent }) => ({
+          documentId: consent.documentId,
+          kind: document.kind,
+          version: document.version,
+          title: document.title,
+          orderId: consent.orderId,
+          ip: consent.ip,
+          userAgent: consent.userAgent,
+          createdAt: consent.createdAt,
         })),
       };
     });

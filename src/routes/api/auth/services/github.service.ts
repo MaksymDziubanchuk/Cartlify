@@ -29,6 +29,7 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
+import { acceptedOfState, takeConsentAtOAuthLogin } from './helpers/oauthConsent.helper.js';
 import {
   copyProviderAvatar,
   type OAuthAvatarRole,
@@ -40,6 +41,7 @@ import { avatarOf } from '@utils/avatar.util.js';
 export async function githubStart({
   guestId,
   role,
+  acceptedDocumentIds = [],
 }: GithubStartDto): Promise<GithubStartResponseDto> {
   if (role !== 'GUEST') {
     throw new AlreadyAuthenticatedError({ flow: 'GITHUB_START' });
@@ -50,7 +52,7 @@ export async function githubStart({
     });
   }
   // build oauth redirect url
-  const url = buildGithubAuthUrl(String(guestId));
+  const url = buildGithubAuthUrl(String(guestId), acceptedDocumentIds);
   return { url };
 }
 
@@ -87,7 +89,7 @@ export async function githubCallback({
 
   // verify oauth state payload and that this guest started the login,
   // before the code is used: a code from someone else's login is never redeemed here
-  verifyGithubOAuthState(state, String(guestId));
+  const accepted = acceptedOfState(verifyGithubOAuthState(state, String(guestId)));
 
   // exchange code for oauth tokens
   const tokens = await exchangeGithubCodeForTokens(code, state);
@@ -163,6 +165,15 @@ export async function githubCallback({
         role: u.role as any,
         rememberMe,
         ...(userAgent ? { userAgent } : {}),
+      });
+
+      // the consent the login started with: every version in force for an account it makes,
+      // the ones that came in force since the last consent for an account the shop has
+      await takeConsentAtOAuthLogin(tx, {
+        userId: u.id,
+        role: u.role,
+        created: u.created,
+        accepted,
       });
 
       assertEmail(u.email);

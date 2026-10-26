@@ -146,11 +146,18 @@ export function answerAsGithub(account: GithubAccount, pictures: Pictures = {}) 
   });
 }
 
-// a browser starting a login: its guest cookie and the state the provider would send back
-export async function startLogin(app: FastifyInstance, provider: Provider, cookie = '') {
+// a browser starting a login: its guest cookie and the state the provider would send back; the
+// query is what the page of the shop adds to the start (the versions of the terms it accepted)
+export async function startLogin(
+  app: FastifyInstance,
+  provider: Provider,
+  cookie = '',
+  query: Record<string, string> = {},
+) {
+  const search = new URLSearchParams(query).toString();
   const res = await app.inject({
     method: 'GET',
-    url: `/api/auth/oauth/${provider}`,
+    url: `/api/auth/oauth/${provider}${search ? `?${search}` : ''}`,
     headers: cookie ? { cookie } : {},
   });
   if (res.statusCode !== 302) throw new Error(`login start answered ${res.statusCode}`);

@@ -151,7 +151,7 @@ describe('GET /api/users/:userId', () => {
     await createLoginLog(target, daysAgo(1));
 
     const res = await profileOf(target.id, accessCookie(viewer), {
-      include: 'orders,reviews,favorites,votes,loginLogs',
+      include: 'orders,reviews,favorites,votes,loginLogs,consents',
       from: daysAgo(10).toISOString(),
       to: daysAgo(20).toISOString(),
     });
@@ -321,11 +321,13 @@ describe('GET /api/users/:userId for an admin', () => {
     await createLoginLog(target, daysAgo(1));
 
     const res = await profileOf(target.id, accessCookie(await newUser({ role: 'ADMIN' })), {
-      include: 'orders,reviews,favorites,votes,loginLogs',
+      include: 'orders,reviews,favorites,votes,loginLogs,consents',
     });
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
+    // the shop of this file has no version of the terms in force, nobody accepted one
+    expect(body.consents).toEqual([]);
     expect(Date.parse(body.period.to) - Date.parse(body.period.from)).toBe(30 * DAY);
     expect(Math.abs(Date.parse(body.period.to) - Date.now())).toBeLessThan(60_000);
     expect(body.orders).toEqual([

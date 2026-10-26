@@ -15,6 +15,9 @@ type StatePayload = {
   nonce: string;
   iat: number;
   exp: number;
+  // the versions of the terms and of the contract the page of the shop sent with the start:
+  // an account this login makes takes the consent to them
+  accepted?: number[];
 };
 
 type GithubTokenError = {
@@ -65,7 +68,7 @@ function parseGithubJson<T extends object>(text: string, reason: string): T {
 }
 
 // build signed oauth state
-export function createGithubOAuthState(guestId: string) {
+export function createGithubOAuthState(guestId: string, accepted: readonly number[] = []) {
   const secret = GITHUB_STATE_SECRET;
   if (!secret) throw new InternalError({ reason: 'GITHUB_STATE_SECRET_MISSING' });
 
@@ -77,6 +80,7 @@ export function createGithubOAuthState(guestId: string) {
     nonce: createPlaceholder(16, 'base64url'),
     iat: now,
     exp: now + 10 * 60,
+    ...(accepted.length ? { accepted: [...accepted] } : {}),
   };
 
   // sign state for tamper check
@@ -87,7 +91,7 @@ export function createGithubOAuthState(guestId: string) {
 }
 
 // build github authorize url
-export function buildGithubAuthUrl(guestId: string) {
+export function buildGithubAuthUrl(guestId: string, accepted: readonly number[] = []) {
   const clientId = GITHUB_CLIENT_ID;
   const redirectUri = GITHUB_REDIRECT_URI;
 
@@ -95,7 +99,7 @@ export function buildGithubAuthUrl(guestId: string) {
   if (!redirectUri) throw new InternalError({ reason: 'GITHUB_REDIRECT_URI_MISSING' });
 
   // attach state to redirect
-  const state = createGithubOAuthState(guestId);
+  const state = createGithubOAuthState(guestId, accepted);
 
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);
