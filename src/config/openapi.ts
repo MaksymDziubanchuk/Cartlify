@@ -28,6 +28,10 @@ export const openApiTags = [
     { name: 'chat', description: 'Bot, user and admin chat operations' },
     { name: 'admin', description: 'Admin dashboard and management operations' },
     { name: 'root', description: 'Root-only administrator management' },
+    {
+      name: 'legal',
+      description: 'The terms and the contract of the shop and the consents of the customers',
+    },
 ] as const;
 
 // Cookie-based security schemes used by Swagger authorization UI

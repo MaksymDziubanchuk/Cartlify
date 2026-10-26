@@ -5,7 +5,9 @@
 // slug, products by sku, a buyer with orders gets no more; a run adds only what is missing.
 // The shop lets a buyer in only with a confirmed email, so the buyers take two runs: the first
 // registers them, each confirms the email by the link of the mail, the next run logs them in and
-// gives them their orders, reviews and favorites.
+// gives them their orders, reviews and favorites. A buyer accepts the versions of the terms and
+// of the contract in force the way the form of the shop asks: at the registration, and a version
+// put in force after it at the next login.
 // usage:
 //   DEMO_API_URL=<url of the api> DEMO_ADMIN_EMAIL=<email> DEMO_ADMIN_PASSWORD=<password> \
 //   DEMO_USERS_PASSWORD=<password of the demo buyers> node db/tools/demo_data.mjs
@@ -608,19 +610,42 @@ async function putOnSale(admin, bySku, made) {
   step(`sales: ${onSale.length} products on sale for 14 days`);
 }
 
+// the ids of the versions of the terms and of the contract in force; none while root published none
+async function versionsInForce(base) {
+  const res = expectStatus(
+    await new Session(base).send('GET', '/api/legal/documents/current'),
+    [200],
+    'the terms in force',
+  );
+  return res.body.items.map((doc) => doc.id);
+}
+
 // a buyer of the demo: logged in (ready), registered and waiting for the link of the mail to
 // confirm the email (the shop lets in only a confirmed email, the run cannot confirm it), or
 // registered now. A buyer who waits is not registered again: that would send a new link and
 // close the one sent before
-async function buyerSession(base, index, buyer) {
+async function buyerSession(base, index, buyer, inForce) {
   const session = new Session(base);
   const email = `demo.buyer${index + 1}@${EMAIL_DOMAIN}`;
   const what = `buyer ${index + 1}`;
 
-  const logged = await session.send('POST', '/api/auth/login', {
+  let logged = await session.send('POST', '/api/auth/login', {
     json: { email, password: USERS_PASSWORD },
   });
-  if (logged.status === 200) return { session, state: 'ready' };
+  // a version of the terms or of the contract came in force since the buyer accepted them: the
+  // login names the versions in force and the buyer logs in again accepting them
+  let consents = 0;
+  if (logged.status === 409 && errorCodeOf(logged) === 'LEGAL_ACCEPTANCE_REQUIRED') {
+    consents = logged.body.details.kinds.length;
+    logged = await session.send('POST', '/api/auth/login', {
+      json: {
+        email,
+        password: USERS_PASSWORD,
+        acceptedDocumentIds: logged.body.details.current.map((doc) => doc.id),
+      },
+    });
+  }
+  if (logged.status === 200) return { session, state: 'ready', consents };
   if (logged.status === 403 && errorCodeOf(logged) === 'EMAIL_NOT_VERIFIED') {
     return { session: null, state: 'waiting' };
   }
@@ -628,7 +653,12 @@ async function buyerSession(base, index, buyer) {
 
   // no account, or one nobody confirmed with another password (registering takes it over)
   const res = await session.send('POST', '/api/auth/register', {
-    json: { email, password: USERS_PASSWORD, name: buyer.name },
+    json: {
+      email,
+      password: USERS_PASSWORD,
+      name: buyer.name,
+      ...(inForce.length ? { acceptedDocumentIds: inForce } : {}),
+    },
   });
   if (res.status === 409 && errorCodeOf(res) === 'EMAIL_ALREADY_IN_USE') {
     stop(`${what}: the address belongs to a confirmed account with another password`);
@@ -740,13 +770,20 @@ async function main() {
   await deliverStock(admin, bySku, made);
   await putOnSale(admin, bySku, made);
 
+  const inForce = await versionsInForce(base);
   const states = { ready: 0, waiting: 0, registered: 0 };
+  let consents = 0;
   let orders = 0;
   let reviews = 0;
   let favorites = 0;
   for (const [index, buyer] of BUYERS.entries()) {
-    const { session, state } = await buyerSession(base, index, buyer);
+    const {
+      session,
+      state,
+      consents: accepted = 0,
+    } = await buyerSession(base, index, buyer, inForce);
     states[state]++;
+    consents += accepted;
     if (!session) continue;
     if (!(await hasOrders(session, index))) {
       orders += await placeOrders(session, index, buyer, bySku);
@@ -772,7 +809,10 @@ async function main() {
       );
     }
   }
-  step(`orders and carts: ${orders} made, reviews: ${reviews} made, favorites: ${favorites} made`);
+  step(
+    `terms in force: ${inForce.length}, consents to new ones: ${consents} given; ` +
+      `orders and carts: ${orders} made, reviews: ${reviews} made, favorites: ${favorites} made`,
+  );
   step('done');
 }
 

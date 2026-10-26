@@ -175,20 +175,6 @@ BEGIN
 END;
 $$;
 
--- temporary: the result of users_get_public_profile changed (20.10.2026, the fields of an admin),
--- create or replace cannot change a result, so the old version goes first; it takes the rights
--- with it until db/01 runs again. Remove once dev and prod match the structure snapshot
-DO $$
-BEGIN
-  IF to_regprocedure('cartlify.users_get_public_profile(integer)') IS NOT NULL
-     AND position('deleted_at' IN pg_get_function_result(
-       to_regprocedure('cartlify.users_get_public_profile(integer)'))) = 0
-  THEN
-    DROP FUNCTION cartlify.users_get_public_profile (integer);
-  END IF;
-END
-$$;
-
 -- AUTH AND USERS fetch the profile of a user by user id
 -- system function: runs as the owner, rls shows a user only their own row;
 -- callable only by a signed-in user, admin or root, never by a guest.
@@ -248,20 +234,6 @@ BEGIN
   LIMIT 1;
 
 END;
-$$;
-
--- temporary: the result of remove_user_avatar changed (23.10.2026, whether it took an avatar), create
--- or replace cannot change a result, so the old version goes first; it takes the rights with it
--- until db/01 runs again. Remove once dev and prod match the structure snapshot
-DO $$
-BEGIN
-  IF to_regprocedure('cartlify.remove_user_avatar(integer)') IS NOT NULL
-     AND position('removed' IN pg_get_function_result(
-       to_regprocedure('cartlify.remove_user_avatar(integer)'))) = 0
-  THEN
-    DROP FUNCTION cartlify.remove_user_avatar (integer);
-  END IF;
-END
 $$;
 
 -- AUTH AND USERS take the avatar of another account away (moderation)
@@ -558,10 +530,6 @@ $$;
 -- Only the functions below change them, the batches and the stock are closed for plain changes
 -- (db/03). Costs go into the admin log as the app writes them (trim_scale, 1.50 is 1.5)
 
--- the version that put units back without a batch; a temporary line, it goes once dev and prod
--- match the reference
-DROP FUNCTION IF EXISTS cartlify.add_product_stock (integer, integer);
-
 -- PRODUCTS the day of the shop: the server sets it with the context of every transaction
 -- (cartlify.shop_today, yyyy-mm-dd, by the time zone of the shop); without it the day of utc.
 -- It says which batches are over, it is no right of anybody: the policies never read it
@@ -593,10 +561,6 @@ $$;
 -- skips the batches that are over (p_skip_expired), a write-off takes them first
 -- internal step: runs with caller rights, only the system functions reach the batches (db/03);
 -- the app has no execute right (db/01). The caller holds the lock of the product row
-
--- the version that took the batches that are over in a sale too; a temporary line, it goes once
--- dev and prod match the reference
-DROP FUNCTION IF EXISTS cartlify.take_from_batches (integer, integer);
 
 CREATE OR REPLACE FUNCTION cartlify.take_from_batches (
   p_product_id integer,
@@ -1128,10 +1092,6 @@ $$;
 -- gave how many (order_batch_allocations), its cost of goods
 -- internal step: runs with caller rights, so only system functions pass rls on stock columns;
 -- the app has no execute right (db/01), pay_order calls it as the owner
-
--- the version before the batches (product, quantity); a temporary line, it goes once dev and prod
--- match the reference
-DROP FUNCTION IF EXISTS cartlify.consume_product_stock (integer, integer);
 
 CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_order_id integer, p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
 SET
@@ -1993,10 +1953,6 @@ END;
 $$;
 
 -- ORDERS AND ITEMS pay order from a verified payment webhook
--- the version before the payment provider (order, payment intent, amount); a temporary line,
--- it goes once dev and prod match the reference
-DROP FUNCTION IF EXISTS cartlify.pay_order (integer, text, numeric);
-
 -- the same payment is the same provider with the same payment id: a repeated delivery
 CREATE OR REPLACE FUNCTION cartlify.pay_order (
   p_order_id integer,
@@ -2611,14 +2567,6 @@ EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 -- PRICE CHANGE LOGS
 ------------------------------------------------------------
 -- PRICE CHANGE LOGS === system functions ===
--- PRICE CHANGE LOGS the version that took the actor as a parameter: anyone could be named in a line;
--- a temporary line, it goes once dev and prod match the reference
-DROP FUNCTION IF EXISTS cartlify.log_product_price_change (integer, integer, numeric, numeric, cartlify."PriceChangeMode", numeric);
-
--- PRICE CHANGE LOGS the version without the end of a sale (21.10.2026): a call of five arguments
--- would match both versions; a temporary line, it goes once dev and prod match the reference
-DROP FUNCTION IF EXISTS cartlify.log_product_price_change (integer, numeric, numeric, cartlify."PriceChangeMode", numeric);
-
 -- PRICE CHANGE LOGS insert product price change log entry
 -- system function: runs as the owner, the app writes no line straight into the table (db/03);
 -- the actor of a line is the admin of the context, a signed-in admin with an id is required.
@@ -3072,6 +3020,72 @@ WHERE
   t."guestId" = p_guest_id;
 END;
 $$;
+
+------------------------------------------------------------
+-- LEGAL DOCUMENTS AND CONSENTS
+------------------------------------------------------------
+-- LEGAL a new version of the terms or of the contract takes the next number of its kind and the
+-- sha256 of its text, whatever the row says; two versions published at once wait for each other,
+-- and a version waits for the consents being written to its kind. It is dated when it got that
+-- lock, not when its transaction began: every consent to the version before it comes earlier
+CREATE OR REPLACE FUNCTION cartlify.legal_documents_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.legal_documents:' || NEW.kind::text));
+
+  NEW.version := coalesce(
+    (SELECT max(d.version) FROM cartlify.legal_documents AS d WHERE d.kind = NEW.kind),
+    0
+  ) + 1;
+  NEW.sha256 := encode(sha256(convert_to(NEW.content, 'UTF8')), 'hex');
+  NEW."createdAt" := clock_timestamp() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_legal_documents_before_insert ON cartlify.legal_documents;
+
+CREATE TRIGGER trg_legal_documents_before_insert
+BEFORE INSERT ON cartlify.legal_documents FOR EACH ROW
+EXECUTE FUNCTION cartlify.legal_documents_before_insert ();
+
+-- LEGAL a consent is to the version in force of its kind; the address and the browser are the
+-- ones of the request (cartlify.request_ip, cartlify.request_user_agent, set with the context),
+-- not what the row says. It holds the lock of its kind shared until it commits: a version
+-- published meanwhile waits for it, and one published before it is seen here. It is dated when
+-- it is written
+CREATE OR REPLACE FUNCTION cartlify.legal_acceptances_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_kind cartlify."LegalDocumentKind";
+BEGIN
+  SELECT d.kind INTO v_kind FROM cartlify.legal_documents AS d WHERE d.id = NEW."documentId";
+
+  IF v_kind IS NOT NULL THEN
+    PERFORM pg_advisory_xact_lock_shared(hashtext('cartlify.legal_documents:' || v_kind::text));
+  END IF;
+
+  IF v_kind IS NOT NULL AND EXISTS (
+    SELECT 1 FROM cartlify.legal_documents AS d
+    WHERE d.kind = v_kind AND d.version > (
+      SELECT o.version FROM cartlify.legal_documents AS o WHERE o.id = NEW."documentId"
+    )
+  ) THEN
+    RAISE EXCEPTION 'LEGAL_DOCUMENT_NOT_CURRENT' USING ERRCODE = '23514';
+  END IF;
+
+  NEW.ip := nullif(current_setting('cartlify.request_ip', true), '');
+  NEW."userAgent" := nullif(current_setting('cartlify.request_user_agent', true), '');
+  NEW."createdAt" := clock_timestamp() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_legal_acceptances_before_insert ON cartlify.legal_acceptances;
+
+CREATE TRIGGER trg_legal_acceptances_before_insert
+BEFORE INSERT ON cartlify.legal_acceptances FOR EACH ROW
+EXECUTE FUNCTION cartlify.legal_acceptances_before_insert ();
 
 ------------------------------------------------------------
 -- UPDATE GUARDS: which columns an update may change

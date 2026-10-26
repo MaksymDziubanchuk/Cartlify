@@ -18,12 +18,15 @@ export type OrderMailLogger = {
 // frontend page of an order, a placeholder until the frontend fixes its routes
 const orderPage = (orderId: number) => `/orders/${orderId}`;
 
+// the kinds of the documents a mail carries, in the order it names them
+const DOCUMENT_KINDS = ['terms', 'contract'] as const;
+
 // the order with what the mail shows; the payment event runs as the system, so admin context
 function loadOrder(orderId: number) {
   return prisma.$transaction(async (tx) => {
     await setAdminContext(tx);
 
-    return tx.order.findUnique({
+    const order = await tx.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
@@ -47,12 +50,26 @@ function loadOrder(orderId: number) {
         },
       },
     });
+    if (!order) return null;
+
+    // the versions of the terms and of the contract the order was confirmed with, latest first:
+    // an order confirmed again keeps the ones of its last confirmation. A query of its own, one
+    // statement of a transaction runs at a time
+    const acceptances = await tx.legalAcceptance.findMany({
+      where: { orderId },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: { document: { select: { kind: true, content: true } } },
+    });
+
+    return { ...order, acceptances };
   });
 }
 
-// mails the buyer that the order is paid. The payment is recorded before this runs, so a mail
-// that fails is only logged: the webhook still answers the provider with success, or it would
-// deliver the event again. The log keeps the order id, not the address of the buyer
+// mails the buyer that the order is paid, with the texts of the terms and of the contract the order
+// was confirmed with as files: the copy of the contract the buyer keeps. The payment is recorded
+// before this runs, so a mail that fails is only logged: the webhook still answers the provider
+// with success, or it would deliver the event again. The log keeps the order id, not the address
+// of the buyer
 export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger): Promise<void> {
   try {
     const order = await loadOrder(orderId);
@@ -68,6 +85,13 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       return;
     }
     const { paidAt } = order;
+
+    // the latest version of each kind the order holds; none for an order confirmed while no
+    // version was in force
+    const documents = DOCUMENT_KINDS.flatMap((kind) => {
+      const row = order.acceptances.find((one) => one.document.kind === kind);
+      return row ? [{ kind, content: row.document.content }] : [];
+    });
 
     const { subject, text, html } = buildOrderPaidTemplate({
       // the name of the shop the mail is from
@@ -89,6 +113,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       shippingAddress: order.shippingAddress,
       recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),
       recipientPhone: order.recipientPhone,
+      attachedDocuments: documents.map((doc) => doc.kind),
       logoCid: 'cartlify-logo',
     });
 
@@ -108,6 +133,12 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
           disposition: 'inline',
           content_id: 'cartlify-logo',
         },
+        ...documents.map((doc) => ({
+          content: Buffer.from(doc.content, 'utf8').toString('base64'),
+          type: 'text/plain',
+          filename: `${doc.kind}.txt`,
+          disposition: 'attachment' as const,
+        })),
       ],
     });
   } catch (err) {

@@ -15,6 +15,9 @@ type StatePayload = {
   nonce: string;
   iat: number;
   exp: number;
+  // the versions of the terms and of the contract the page of the shop sent with the start:
+  // an account this login makes takes the consent to them
+  accepted?: number[];
 };
 
 type GoogleTokenResponse = {
@@ -47,7 +50,7 @@ const { GOOGLE_STATE_SECRET, GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI, GOOGLE_CLIEN
 const GOOGLE_SCOPE = 'openid email profile';
 
 // build signed oauth state
-export function createGoogleOAuthState(guestId: string) {
+export function createGoogleOAuthState(guestId: string, accepted: readonly number[] = []) {
   const secret = GOOGLE_STATE_SECRET;
   if (!secret) throw new InternalError({ reason: 'GOOGLE_STATE_SECRET_MISSING' });
 
@@ -59,6 +62,7 @@ export function createGoogleOAuthState(guestId: string) {
     nonce: createPlaceholder(16, 'base64url'),
     iat: now,
     exp: now + 10 * 60,
+    ...(accepted.length ? { accepted: [...accepted] } : {}),
   };
 
   // sign state for tamper check
@@ -69,7 +73,7 @@ export function createGoogleOAuthState(guestId: string) {
 }
 
 // build google authorize url
-export function buildGoogleAuthUrl(guestId: string) {
+export function buildGoogleAuthUrl(guestId: string, accepted: readonly number[] = []) {
   const clientId = GOOGLE_CLIENT_ID;
   const redirectUri = GOOGLE_REDIRECT_URI;
 
@@ -77,7 +81,7 @@ export function buildGoogleAuthUrl(guestId: string) {
   if (!redirectUri) throw new InternalError({ reason: 'GOOGLE_REDIRECT_URI_MISSING' });
 
   // attach state to redirect
-  const state = createGoogleOAuthState(guestId);
+  const state = createGoogleOAuthState(guestId, accepted);
 
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', clientId);

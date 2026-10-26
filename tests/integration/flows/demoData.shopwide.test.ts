@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
+import { accessCookie } from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { removeUploads, uploadMark, uploadsSince } from '../../helpers/cloudinary.js';
 import { getCsrf, withCsrf } from '../../helpers/csrf.js';
@@ -13,7 +14,10 @@ import { mailedToken, watchMail, type SentMail } from '../../helpers/mail.js';
 // the demo data of db/tools/demo_data.mjs: a catalog, its stock and a few buyers made through the
 // routes of the shop, by a process of its own against the app listening on a port, the way it runs
 // against dev. Its requests pass the checks real ones pass, and every answer is held against the
-// swagger document like any other of the tests
+// swagger document like any other of the tests. Root puts versions of the terms and of the contract
+// in force before the runs, and a new contract before the run that gives the orders: the buyers
+// accept them the way the form of the shop asks. A version in force is for the whole shop and
+// cannot be taken back, so this file runs last and alone (.shopwide.test.ts)
 const ADMIN_PASSWORD = 'demo-admin-password-1';
 const USERS_PASSWORD = 'demo-users-password-1';
 const DEMO_CATEGORIES: Record<string, string | null> = {
@@ -32,8 +36,21 @@ const DEMO_BUYERS = 3;
 let app: FastifyInstance;
 let baseUrl: string;
 let admin: TestUser;
+let root: TestUser;
 // the buyers of the demo get addresses of a domain of this run
 let emailDomain: string;
+
+// a version of the terms or of the contract root puts in force, its id
+async function putInForce(kind: 'terms' | 'contract'): Promise<number> {
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/root/legal-documents',
+    headers: withCsrf(await getCsrf(app), accessCookie(root)),
+    payload: { kind, title: `The ${kind} of the demo`, content: `The ${kind}, ${uniqueTag()}.` },
+  });
+  expect(res.statusCode).toBe(201);
+  return res.json().id;
+}
 
 type Run = { code: number | null; output: string };
 
@@ -130,7 +147,15 @@ async function demoState() {
     const orders = byOwner(
       await tx.order.findMany({
         where: { userId: { in: buyerIds } },
-        select: { userId: true, status: true, confirmed: true, shippingAddress: true },
+        select: { id: true, userId: true, status: true, confirmed: true, shippingAddress: true },
+      }),
+      (row) => row.userId,
+    );
+    const consents = byOwner(
+      await tx.legalAcceptance.findMany({
+        where: { userId: { in: buyerIds } },
+        select: { userId: true, documentId: true, orderId: true },
+        orderBy: { id: 'asc' },
       }),
       (row) => row.userId,
     );
@@ -153,6 +178,10 @@ async function demoState() {
       orders: orders.get(b.id) ?? [],
       reviews: reviews.get(b.id) ?? [],
       favorites: favorites.get(b.id) ?? [],
+      consents: (consents.get(b.id) ?? []).map(({ documentId, orderId }) => ({
+        documentId,
+        orderId,
+      })),
     }));
 
     return { categories, products, buyers };
@@ -168,6 +197,7 @@ const countsOf = (state: Awaited<ReturnType<typeof demoState>>) => ({
   orders: state.buyers.reduce((sum, b) => sum + b.orders.length, 0),
   reviews: state.buyers.reduce((sum, b) => sum + b.reviews.length, 0),
   favorites: state.buyers.reduce((sum, b) => sum + b.favorites.length, 0),
+  consents: state.buyers.reduce((sum, b) => sum + b.consents.length, 0),
 });
 
 beforeAll(async () => {
@@ -175,6 +205,7 @@ beforeAll(async () => {
   await app.listen({ port: 0, host: '127.0.0.1' });
   baseUrl = `http://127.0.0.1:${(app.server.address() as AddressInfo).port}`;
   admin = await createUser({ role: 'ADMIN', password: ADMIN_PASSWORD });
+  root = await createUser({ role: 'ROOT' });
   emailDomain = `demo-${uniqueTag()}.example.com`;
 
   // a product of the shop with no image, the way an import may leave one: the catalog of a guest
@@ -201,11 +232,17 @@ describe('db/tools/demo_data.mjs', () => {
   let mails: SentMail[];
   let mailsAfterFirst: number;
   let mailsAfterWaiting: number;
+  let terms: number;
+  let contract: number;
+  let newContract: number;
 
   // the first run makes the catalog and registers the buyers, a run before they confirm their
   // email changes nothing; the buyers confirm it by the link of the mail, the way a person does,
-  // and the next run gives them their orders
+  // and the next run gives them their orders, after a new contract came in force
   beforeAll(async () => {
+    terms = await putInForce('terms');
+    contract = await putInForce('contract');
+
     mails = watchMail();
     first = await runDemo();
     afterFirst = await demoState();
@@ -223,6 +260,7 @@ describe('db/tools/demo_data.mjs', () => {
       expect(verify.statusCode).toBe(200);
     }
 
+    newContract = await putInForce('contract');
     second = await runDemo();
     state = await demoState();
   }, 180_000);
@@ -245,6 +283,16 @@ describe('db/tools/demo_data.mjs', () => {
     expect(countsOf(afterFirst)).toMatchObject({ orders: 0, reviews: 0, favorites: 0 });
     expect(mailsAfterFirst).toBe(DEMO_BUYERS);
     expect(first.output).toContain(`${DEMO_BUYERS} registered now`);
+  });
+
+  it('registers the buyers with the consent to the versions of the terms and the contract in force', () => {
+    expect(first.output).toContain('terms in force: 2');
+    for (const b of afterFirst.buyers) {
+      expect(b.consents).toEqual([
+        { documentId: terms, orderId: null },
+        { documentId: contract, orderId: null },
+      ]);
+    }
   });
 
   // registering again would send a new link and close the one in the mail
@@ -343,6 +391,28 @@ describe('db/tools/demo_data.mjs', () => {
     for (const order of state.buyers.flatMap((b) => b.orders)) {
       expect(order.confirmed).toBe(order.status === 'waiting');
       if (order.confirmed) expect(order.shippingAddress).toEqual(expect.any(String));
+    }
+  });
+
+  // the shop confirms no order without the consent to the versions in force
+  it('accepts a version put in force after the registration before the orders, and the orders keep the versions they were confirmed with', () => {
+    expect(second.output).toContain(`consents to new ones: ${DEMO_BUYERS} given`);
+    for (const b of state.buyers) {
+      expect(b.consents.filter((c) => c.orderId === null).map((c) => c.documentId)).toEqual([
+        terms,
+        contract,
+        newContract,
+      ]);
+      for (const order of b.orders) {
+        const versions = b.consents
+          .filter((c) => c.orderId === order.id)
+          .map((c) => c.documentId)
+          .sort((x, y) => x - y);
+        expect({ order: order.id, versions }).toEqual({
+          order: order.id,
+          versions: order.confirmed ? [terms, newContract] : [],
+        });
+      }
     }
   });
 

@@ -125,17 +125,20 @@ model User {
   locale    String?
   phone     String?
 
-  userTokens             UserToken[]
-  loginLogs              LoginLog[]
-  reviews                Review[]
-  votes                  ReviewVote[]
-  favorites              Favorite[]
-  orders                 Order[]
-  productPriceChangeLogs ProductPriceChangeLog[]
-  adminAuditLogs         AdminAuditLog[]
-  alertSettings          AdminAlertSetting[]
-  chatThreads            ChatThread[]
-  chatMessages           ChatMessage[]
+  userTokens              UserToken[]
+  loginLogs               LoginLog[]
+  reviews                 Review[]
+  votes                   ReviewVote[]
+  favorites               Favorite[]
+  orders                  Order[]
+  productPriceChangeLogs  ProductPriceChangeLog[]
+  adminAuditLogs          AdminAuditLog[]
+  alertSettings           AdminAlertSetting[]
+  // root: the versions of the terms and of the contract they published
+  legalDocumentsPublished LegalDocument[]         @relation("LegalDocumentPublisher")
+  legalAcceptances        LegalAcceptance[]
+  chatThreads             ChatThread[]
+  chatMessages            ChatMessage[]
 
   @@unique([authProvider, providerSub])
   @@index([authProvider])
@@ -376,8 +379,10 @@ model Order {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  items       OrderItem[]
-  allocations OrderBatchAllocation[]
+  items            OrderItem[]
+  allocations      OrderBatchAllocation[]
+  // the versions of the terms and of the contract the order was confirmed with
+  legalAcceptances LegalAcceptance[]
 
   @@index([userId, createdAt])
   @@index([userId, updatedAt])
@@ -588,4 +593,51 @@ model AdminAuditLog {
   // the reports read the lines of an action in a period: the write-offs of a month
   @@index([action, createdAt])
   @@map("admin_audit_log")
+}
+
+// a kind of the legal texts of the shop the customers accept
+enum LegalDocumentKind {
+  terms
+  contract
+}
+
+// a version of the terms or of the contract of the shop. Root publishes it, nobody changes or takes
+// it away; the database numbers the versions of each kind and keeps the sha256 of the text (db/05)
+model LegalDocument {
+  id            Int               @id @default(autoincrement())
+  kind          LegalDocumentKind
+  version       Int
+  title         String            @db.VarChar(200)
+  content       String
+  sha256        String            @db.VarChar(64)
+  publishedById Int
+  publishedBy   User              @relation("LegalDocumentPublisher", fields: [publishedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  acceptances LegalAcceptance[]
+
+  @@unique([kind, version])
+  @@map("legal_documents")
+}
+
+// a consent of a customer to a version in force: at the registration or later (orderId empty),
+// and the versions an order was confirmed with (orderId). Only added; the address and the browser
+// are the ones of the request (db/05)
+model LegalAcceptance {
+  id         Int           @id @default(autoincrement())
+  userId     Int
+  user       User          @relation(fields: [userId], references: [id])
+  documentId Int
+  document   LegalDocument @relation(fields: [documentId], references: [id])
+  orderId    Int?
+  order      Order?        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  ip         String?
+  userAgent  String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([orderId])
+  @@map("legal_acceptances")
 }

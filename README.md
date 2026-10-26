@@ -109,13 +109,14 @@ What is important to state honestly:
 ### Authentication and user flows
 
 - user registration (the name is optional, up to 100 characters)
+- the terms and the contract of the shop: root publishes each new version (`POST /api/root/legal-documents`, `GET` lists them, the latest first); a version is never changed or removed, the database numbers it within its kind and keeps the sha256 of its text. Anybody reads the versions in force (`GET /api/legal/documents/current`) and any version by its id. The terms and the contract together have to give the right to withdraw within 14 days, how to withdraw and return the goods, who pays for the return and the model withdrawal form: their texts are the copy of the contract the buyer gets. While versions are in force, the registration takes the consent to all of them (`acceptedDocumentIds`: `400 LEGAL_ACCEPTANCE_REQUIRED` names the kinds missing, an old version is `409 LEGAL_VERSION_OUTDATED`; both name the versions in force with their titles). A login by Google, GitHub or LinkedIn that makes a new account takes the consent the same way: the page sends `acceptedDocumentIds` with the start of the login, the signed state carries them to the callback, and without them no account is made (the page gets `?error=LEGAL_ACCEPTANCE_REQUIRED`). A customer who comes back after a new version came in force accepts it at the login: a login with a password answers `409 LEGAL_ACCEPTANCE_REQUIRED` with the versions in force and the page logs in again with them in `acceptedDocumentIds`, a login by a provider gets the same code on its callback page and starts again with them; an admin or root is asked nothing. The confirmation of an order still checks it for a session that stayed open (`GET /api/legal/acceptances/me` names what is missing, `POST /api/legal/acceptances`). Each consent keeps the address and the browser of its request, the consents are only added
 - email verification flow
 - resend verification email: a new link each time, earlier links stop working; the links are stored only as hashes
 - login / logout: logout ends the session of this browser, `allDevices` ends every session of the user
 - refresh token rotation: `POST /api/auth/refresh` answers 204 and sets both tokens as cookies, no token in the body
 - a session ended on purpose (a logout, a reset or a change of the password, a role change by root, a closed session) is a plain `401 REFRESH_TOKEN_REVOKED` when its cookie comes back, the other sessions go on; a token already renewed coming back was copied and ends every session (`403 REFRESH_TOKEN_REUSE_DETECTED`)
 - sessions: `GET /api/auth/sessions` lists the open sessions of the user (the browser that opened each, its last renewal, its deadline, the current one), `DELETE /api/auth/sessions/:sessionId` ends one; a session keeps its id across its renewals
-- data export: `GET /api/users/me/export` gives the signed-in person everything the shop keeps of them as one JSON file (profile, orders, favorites, reviews and votes, chats, logins, sessions), once an hour; database functions of the system empty the network data of old logins and remove the data of idle guests and the chats of accounts deleted long ago, each with the days it keeps (run by the periodic tasks)
+- data export: `GET /api/users/me/export` gives the signed-in person everything the shop keeps of them as one JSON file (profile, orders, favorites, reviews and votes, chats, logins, sessions, the consents to the terms and the contract), once an hour; database functions of the system empty the network data of old logins and remove the data of idle guests and the chats of accounts deleted long ago, each with the days it keeps (run by the periodic tasks)
 - password change: `POST /api/auth/password/change` with the current password ends the other sessions, keeps this one, closes the reset links and mails the owner; a new reset link closes the ones mailed before, a reset closes them all
 - a role change by root ends the sessions of the person; an access token of the old role the database refuses answers `401 ACCESS_TOKEN_EXPIRED`, the page renews the session
 - forgot password / reset password
@@ -123,7 +124,7 @@ What is important to state honestly:
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity: the cart, the favorites and the chats of the guest move to the account at a login (password or OAuth) and at the verification of the email in the browser of the guest, not at the registration; registering an address that was registered before and never verified sets the new password and mails a new link
 - the list of users for an admin or root (`GET /api/users`), root accounts included: every field of an account and its last login (`lastLoginAt`), an empty one is null; filters that go together — a part of the email in any case (`_` and `%` are plain characters), roles and providers (several through commas), the email confirmation, the deleted accounts (only with `deleted=true`); the order is the sign-up or the last login (`sortBy`, `sortOrder`), equal values go by id, accounts that never logged in come last; pages by cursor with the total of the filters
-- the profile of a user by id (`GET /api/users/:userId`) depends on who reads it, in the database function and in the API alike: a user gets the name, the avatar and the dates, no email; an admin or root gets the whole profile but the password, the provider id and the avatar file id, the open chat of the user with an admin, and the lists the `include` checkboxes name (`orders`, `reviews`, `favorites`, `votes`, `loginLogs`) of a period: the last 30 days unless `from`/`to` come, any dates, at most 60 days long (`400 PROFILE_PERIOD_TOO_LONG`, `400 PROFILE_PERIOD_INVALID`)
+- the profile of a user by id (`GET /api/users/:userId`) depends on who reads it, in the database function and in the API alike: a user gets the name, the avatar and the dates, no email; an admin or root gets the whole profile but the password, the provider id and the avatar file id, the open chat of the user with an admin, and the lists the `include` checkboxes name (`orders`, `reviews`, `favorites`, `votes`, `loginLogs`, `consents` — the versions of the terms and of the contract the user accepted and the ones each order was confirmed with, with the address and the browser, the text of each by `GET /api/legal/documents/:documentId`) of a period: the last 30 days unless `from`/`to` come, any dates, at most 60 days long (`400 PROFILE_PERIOD_TOO_LONG`, `400 PROFILE_PERIOD_INVALID`)
 - avatars: every answer that names an account gives `avatarUrls` in four sizes and `avatarIsDefault`: the own picture of the account, or, without one, the first letter of the name (of the email when there is no name) on a color of the account, the way a Google account shows it; a deleted account is G on grey. Cloudinary draws the letter at the url on a plain picture, nothing is stored per account; the server puts that picture into the Cloudinary folder of its environment when it starts, so a new Cloudinary account needs no step by hand
 - the picture of a Google, GitHub or LinkedIn account becomes the avatar of a new account: on the login that creates the account the server downloads it from the provider (https on the hosts of the provider only, no redirects, 256 px, jpeg, png or webp by its content, up to 5 MB) and keeps it at Cloudinary as the avatar; it waits at most 4 seconds, and whatever goes wrong the login goes on with the drawn letter. A later login, or a login that links an account we have, takes no picture, so a removed avatar never comes back
 - avatar removal: the owner removes the own avatar with an empty `avatar` in `PATCH /api/users/me` (JSON or a form field); a moderator removes the avatar of another account with `DELETE /api/users/:userId/avatar` — an admin from a user account, root from any account, through the database function `cartlify.remove_user_avatar`. The file goes from Cloudinary after the change. A removal by a moderator goes to the admin journal and mails the person which removal it is; the answer and the profile an admin reads give `avatarRemovals` and `avatarRemovalsLimit` (`AVATAR_REMOVALS_LIMIT`, 5 unless set), and past the limit the admin takes the account to root, who alone deletes accounts
@@ -176,6 +177,7 @@ What is important to state honestly:
 - add/update/remove current order items
 - the cart shows current prices and loses the items of products deleted from the catalog for good, on every read and change; an order waiting for its payment keeps them, its payment page names them (`409 ORDER_ITEMS_UNAVAILABLE`)
 - confirm current order with the shipping data: the address and the recipient (first name, last name, phone) are required, a note is optional. Names are up to 100 characters with at least one letter and no digits, the phone is `+380501234567`-style like the profile phone. An order that lost its reservation keeps them for the next confirmation; a confirmed order keeps them as they were confirmed, the database refuses any change
+- the confirmation needs the consent to the versions of the terms and of the contract in force (`409 LEGAL_ACCEPTANCE_REQUIRED` with the kinds missing and the versions in force with their ids and titles: the page shows a checkbox for each and opens its text by id) and keeps the versions it was confirmed with
 - the confirmation names every item it cannot take (`409 ORDER_ITEMS_UNAVAILABLE` with `details.items`: deleted from the catalog or out of stock)
 - the confirmation refuses a total no payment provider takes (below 0.50 with Stripe) before any stock is held (`400 ORDER_TOTAL_BELOW_MINIMUM` with `details: { minimum, currency }`)
 - the owner cancels the payment of an order waiting for it (`POST /api/orders/:orderId/cancel-payment`): the payment page is closed first by the provider that opened it, then the reservation goes and the order becomes `unconfirmed` with its items and shipping data; a payment that came first answers `409 ORDER_ALREADY_PAID`
@@ -189,7 +191,7 @@ What is important to state honestly:
 - an order keeps the name each product had when it was confirmed (`item.name`): the history, the mails and the payment page show what was bought after a rename; an order not paid yet shows the price and the sale of each product now
 - the payment page has a line for each item and the email of the buyer; the payment carries the name of the shop (`SHOP_NAME`), as the mails do
 - Redis-based timeout worker for order reservation expiry handling
-- the buyer gets an email when the order is paid, with the address and the recipient (sent when the payment event of the provider comes; a failed mail never fails it)
+- the buyer gets an email when the order is paid, with the address and the recipient (sent when the payment event of the provider comes; a failed mail never fails it); the texts of the terms and of the contract the order was confirmed with are attached to it as `terms.txt` and `contract.txt`, the copy of the contract, and its last line says so
 
 ### Payments
 
@@ -234,6 +236,7 @@ Stripe:
 - manual product popularity endpoint
 - admin chat queue endpoints: the chats no admin took (`waiting`), the ones an admin took with a message unread (`active`), both (`unread`, the longest waiting first)
 - root-only admin management endpoints
+- root publishes the versions of the terms and of the contract
 
 ### System endpoints
 
@@ -310,7 +313,8 @@ Cartlify/
 │   │   ├── reviews/
 │   │   ├── admin/
 │   │   ├── root/
-│   │   └── chat/
+│   │   ├── chat/
+│   │   └── legal/
 │   ├── schemas/                # shared AJV schemas and DTO schemas
 │   ├── services/               # cross-module services
 │   │   └── email/templates/    # mails as .html and .txt files with {{marks}}: auth/, orders/, users/
@@ -597,6 +601,9 @@ npm test -- --failed
 
 # integration files run at the same time, one per core and at most 6; one by one:
 npm test -- --workers=1
+# a file that changes what the whole shop sees and cannot undo it (a version of the terms in
+# force) is named *.shopwide.test.ts: it runs after the others and alone
+# (tests/setup/sequencer.mjs, tests/setup/integration.shopState.ts)
 
 # external services answer from mocks unless the run names them (the Services checkboxes,
 # or service:<name>). Real SendGrid takes SENDGRID_API_TEST_KEY and EMAIL_FROM, EMAIL_FROM_NAME,
@@ -666,6 +673,7 @@ Current REST modules exposed by the application:
 - `api/admin/*`
 - `api/root/*`
 - `api/chat/*`
+- `api/legal/*`
 
 Examples of implemented business endpoints:
 
@@ -677,7 +685,8 @@ Examples of implemented business endpoints:
 - orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund
 - reviews: vote on review
 - admin: stats, product popularity, admin chat queues
-- root: manage admins
+- root: manage admins, publish the terms and the contract
+- legal: the versions in force, a version by id, the consents of the user
 
 ---
 

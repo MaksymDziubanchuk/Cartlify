@@ -26,6 +26,7 @@ import { rootAdminsDtoSchemas } from '@schemas/dto/root.dtoSchemas.js';
 import { chatsDtoSchemas } from '@schemas/dto/chat.dtoSchemas.js';
 import { paymentDtoSchemas } from '@schemas/dto/payment.dtoSchema.js';
 import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
+import { legalDtoSchemas } from '@schemas/dto/legal.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import { holdsNul } from '@helpers/nulText.js';
@@ -169,6 +170,7 @@ for (const schema of [
   ...rootAdminsDtoSchemas,
   ...chatsDtoSchemas,
   ...paymentDtoSchemas,
+  ...legalDtoSchemas,
 ]) {
   // add schemas to ajv
   app.addSchema(schema);

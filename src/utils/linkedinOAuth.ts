@@ -14,6 +14,9 @@ type StatePayload = {
   nonce: string;
   iat: number;
   exp: number;
+  // the versions of the terms and of the contract the page of the shop sent with the start:
+  // an account this login makes takes the consent to them
+  accepted?: number[];
 };
 
 export type LinkedInTokenResponse = {
@@ -66,7 +69,7 @@ const LINKEDIN_SCOPE = 'openid profile email';
 
 // build signed callback state
 // limits replay window
-export function createLinkedInOAuthState(guestId: string) {
+export function createLinkedInOAuthState(guestId: string, accepted: readonly number[] = []) {
   const secret = LINKEDIN_STATE_SECRET;
   if (!secret) throw new InternalError({ reason: 'LINKEDIN_STATE_SECRET_MISSING' });
 
@@ -78,6 +81,7 @@ export function createLinkedInOAuthState(guestId: string) {
     nonce: createPlaceholder(16, 'base64url'),
     iat: now,
     exp: now + 10 * 60,
+    ...(accepted.length ? { accepted: [...accepted] } : {}),
   };
 
   // make state tamper-evident
@@ -89,7 +93,7 @@ export function createLinkedInOAuthState(guestId: string) {
 
 // build provider redirect url
 // includes signed state
-export function buildLinkedInAuthUrl(guestId: string) {
+export function buildLinkedInAuthUrl(guestId: string, accepted: readonly number[] = []) {
   const clientId = LINKEDIN_CLIENT_ID;
   const redirectUri = LINKEDIN_REDIRECT_URI;
 
@@ -97,7 +101,7 @@ export function buildLinkedInAuthUrl(guestId: string) {
   if (!redirectUri) throw new InternalError({ reason: 'LINKEDIN_REDIRECT_URI_MISSING' });
 
   // bind auth start to callback
-  const state = createLinkedInOAuthState(guestId);
+  const state = createLinkedInOAuthState(guestId, accepted);
 
   const url = new URL('https://www.linkedin.com/oauth/v2/authorization');
   url.searchParams.set('response_type', 'code');

@@ -1,4 +1,5 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
+import { legalDocumentIdsSchema } from '@schemas/dto/legal.dtoSchemas.js';
 import { PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 
 // a password that is stored: printable ascii only, one byte per character,
@@ -27,6 +28,12 @@ const authLoginBodySchema = {
       description: 'Up to 256 characters. Spaces at the start and the end are dropped.',
     },
     rememberMe: { type: 'boolean' },
+    acceptedDocumentIds: {
+      ...legalDocumentIdsSchema,
+      description:
+        'The versions of the terms and of the contract in force the customer accepts at this ' +
+        'login: the ones the login asked for with LEGAL_ACCEPTANCE_REQUIRED.',
+    },
   },
   required: ['email', 'password'],
 } as const;
@@ -119,6 +126,12 @@ const authRegisterBodySchema = {
       type: 'string',
       maxLength: PROFILE_TEXT_MAX_LENGTH,
       description: `Display name, up to ${PROFILE_TEXT_MAX_LENGTH} characters. Spaces around it are cut.`,
+    },
+    acceptedDocumentIds: {
+      ...legalDocumentIdsSchema,
+      description:
+        'The versions of the terms and of the contract in force the person accepts, each kind ' +
+        'in force once; none while root has published none.',
     },
   },
   required: ['email', 'password'],

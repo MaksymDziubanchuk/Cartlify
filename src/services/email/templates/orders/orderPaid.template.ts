@@ -23,6 +23,24 @@ export type OrderPaidTemplateArgs = {
   recipientPhone?: string | null;
   appName?: string;
   logoCid?: string;
+  // the documents attached to the mail as files: the versions of the terms and of the contract the
+  // order was confirmed with (sendOrderPaidEmail); the mail names them in its last lines
+  attachedDocuments?: ('terms' | 'contract')[];
+};
+
+const ATTACHED_LINES = {
+  both: 'The terms and the contract you accepted are attached to this mail.',
+  terms: 'The terms you accepted are attached to this mail.',
+  contract: 'The contract you accepted is attached to this mail.',
+} as const;
+
+const attachedLineOf = (kinds: readonly ('terms' | 'contract')[] = []) => {
+  const terms = kinds.includes('terms');
+  const contract = kinds.includes('contract');
+  if (terms && contract) return ATTACHED_LINES.both;
+  if (terms) return ATTACHED_LINES.terms;
+  if (contract) return ATTACHED_LINES.contract;
+  return '';
 };
 
 // the mail itself is orderPaid.html and orderPaid.txt next to this file
@@ -67,6 +85,7 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
     // has neither, then the line is left out
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
+    attachedLine: attachedLineOf(args.attachedDocuments),
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
   };

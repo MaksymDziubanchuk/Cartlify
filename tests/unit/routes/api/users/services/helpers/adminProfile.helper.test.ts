@@ -120,9 +120,9 @@ describe('resolveProfilePeriod', () => {
 });
 
 describe('parseProfileLists', () => {
-  it('knows the five lists of the profile', () => {
+  it('knows the six lists of the profile', () => {
     expect([...PROFILE_LISTS].sort()).toEqual(
-      ['favorites', 'loginLogs', 'orders', 'reviews', 'votes'].sort(),
+      ['consents', 'favorites', 'loginLogs', 'orders', 'reviews', 'votes'].sort(),
     );
   });
 

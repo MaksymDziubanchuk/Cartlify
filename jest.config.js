@@ -53,6 +53,10 @@ export default {
   // this time and gets the warning
   workerGracefulExitTimeout: 5_000,
 
+  // the files that change what the whole shop does for everybody (*.shopwide.test.ts) run last,
+  // each alone (tests/setup/integration.shopState.ts)
+  testSequencer: '<rootDir>/tests/setup/sequencer.mjs',
+
   projects: [
     {
       ...shared,
@@ -65,10 +69,12 @@ export default {
       displayName: 'integration',
       testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
       setupFiles: ['<rootDir>/tests/setup/integration.setup.ts'],
-      // the app logs go to the tests, an unexpected warning or error fails its test;
+      // a file waits for the files that change the whole shop (and they for it); the app logs go
+      // to the tests, an unexpected warning or error fails its test;
       // cloudinary calls stay in its test/ folder; sendgrid and stripe answer from mocks unless
       // the run takes them for real; a longer timeout for real services
       setupFilesAfterEnv: [
+        '<rootDir>/tests/setup/integration.shopState.ts',
         '<rootDir>/tests/setup/integration.logs.ts',
         '<rootDir>/tests/setup/integration.contract.ts',
         '<rootDir>/tests/setup/integration.cloudinary.ts',

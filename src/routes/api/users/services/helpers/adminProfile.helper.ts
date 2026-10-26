@@ -6,7 +6,14 @@ import type { AdminProfileListsDto } from 'types/dto/users.dto.js';
 // what an admin asks for on the profile of a user (GET /api/users/:userId): the lists the
 // checkboxes of the page give in include, and the period the lists cover
 
-export const PROFILE_LISTS = ['orders', 'reviews', 'favorites', 'votes', 'loginLogs'] as const;
+export const PROFILE_LISTS = [
+  'orders',
+  'reviews',
+  'favorites',
+  'votes',
+  'loginLogs',
+  'consents',
+] as const;
 
 export type ProfileList = (typeof PROFILE_LISTS)[number];
 
@@ -119,6 +126,35 @@ export async function loadProfileLists(
           select: { id: true, createdAt: true, ipAddress: true, userAgent: true },
         });
         break;
+      // the versions of the terms and of the contract the user accepted (orderId null) and the
+      // ones each order was confirmed with; the text of a version is GET /api/legal/documents/:id
+      case 'consents': {
+        const consents = await tx.legalAcceptance.findMany({
+          where: { userId, createdAt },
+          orderBy: newestFirst,
+          select: {
+            id: true,
+            documentId: true,
+            orderId: true,
+            ip: true,
+            userAgent: true,
+            createdAt: true,
+            document: { select: { kind: true, version: true, title: true } },
+          },
+        });
+        result.consents = consents.map(({ document, ...consent }) => ({
+          id: consent.id,
+          documentId: consent.documentId,
+          kind: document.kind,
+          version: document.version,
+          title: document.title,
+          orderId: consent.orderId,
+          ip: consent.ip,
+          userAgent: consent.userAgent,
+          createdAt: consent.createdAt,
+        }));
+        break;
+      }
     }
   }
 

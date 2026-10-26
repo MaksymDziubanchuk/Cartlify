@@ -8,6 +8,7 @@ export interface LoginBodyDto {
   email: Email;
   password: string;
   rememberMe?: boolean;
+  acceptedDocumentIds?: number[];
 }
 
 export interface LoginDto {
@@ -18,6 +19,8 @@ export interface LoginDto {
   rememberMe?: boolean;
   ip?: string;
   userAgent?: string;
+  // the versions in force the customer accepts at this login
+  acceptedDocumentIds?: number[];
 }
 
 export type LoginResponseDto = UserResponseDto;
@@ -25,8 +28,14 @@ export type LoginResponseDto = UserResponseDto;
 export interface GoogleStartDto {
   guestId: UserId;
   role: Role;
+  // the versions of the terms and of the contract the page sent with the start of the login
+  acceptedDocumentIds?: number[];
   ip?: string;
   userAgent?: string;
+}
+
+export interface OAuthStartQueryDto {
+  acceptedDocumentIds?: string;
 }
 
 export interface GoogleStartResponseDto {
@@ -61,6 +70,8 @@ export interface GoogleCallbackDto {
 export interface GithubStartDto {
   guestId: UserId;
   role: Role;
+  // the versions of the terms and of the contract the page sent with the start of the login
+  acceptedDocumentIds?: number[];
   ip?: string;
   userAgent?: string;
 }
@@ -98,6 +109,8 @@ export interface GithubCallbackDto {
 export interface LinkedInStartDto {
   guestId: UserId;
   role: Role;
+  // the versions of the terms and of the contract the page sent with the start of the login
+  acceptedDocumentIds?: number[];
   ip?: string;
   userAgent?: string;
 }
@@ -139,6 +152,8 @@ export interface RegisterBodyDto {
   userId: UserId;
   role: Role;
   name?: string;
+  // the versions of the terms and of the contract in force the person accepts
+  acceptedDocumentIds?: number[];
 }
 export type RegisterDto = RegisterBodyDto;
 
