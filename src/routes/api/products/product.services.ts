@@ -5,6 +5,7 @@ import { restoreProduct } from './services/restoreProduct.service.js';
 import { findPriceHistory } from './services/priceHistory.service.js';
 import { createProduct } from './services/createProduct.service.js';
 import { updateProduct } from './services/updateProduct.service.js';
+import { updateProductsBatch } from './services/updateProductsBatch.service.js';
 import { setProductSale } from './services/setProductSale.service.js';
 import { setProductSales } from './services/setProductSales.service.js';
 import { updateProductsBulkPrice } from './services/updateProductsBulkPrice.service.js';
@@ -26,6 +27,7 @@ export const productServices = {
   createProduct,
   createReview,
   updateProduct,
+  updateProductsBatch,
   setProductSale,
   setProductSales,
   updateProductsBulkPrice,

@@ -1,4 +1,5 @@
 import { expiredUnitsNow } from '@db/expiredStock.helper.js';
+import { lastUnitCostsNow } from '@db/lastUnitCost.helper.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -57,9 +58,14 @@ export async function restoreProduct(dto: RestoreProductDto): Promise<FullProduc
 
     const images = await readProductImageUrls(restored.id);
     const expired = await expiredUnitsNow([restored.id]);
+    const costs = await lastUnitCostsNow({ actorId, actorRole }, [restored.id]);
 
     return mapProductRowToResponse({
-      product: { ...restored, expiredStock: expired.get(restored.id) ?? 0 },
+      product: {
+        ...restored,
+        expiredStock: expired.get(restored.id) ?? 0,
+        lastUnitCost: costs.get(restored.id) ?? null,
+      },
       images,
       categoryPath: await readCategoryPath(restored.category.id),
       view: 'admin',

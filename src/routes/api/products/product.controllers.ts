@@ -33,6 +33,8 @@ import type {
   BulkUpdateProductsPriceBodyDto,
   BulkUpdateProductsPriceResponseDto,
   BulkUpdateProductsPriceDto,
+  UpdateProductsBatchBodyDto,
+  UpdateProductsBatchResponseDto,
   DeleteProductByIdParamsDto,
   DeleteProductByIdDto,
   DeleteProductReviewParamsDto,
@@ -75,7 +77,7 @@ const getAllProducts: ControllerRouter<
   ProductsResponseDto
 > = async (req, reply) => {
   const q = req.query;
-  const { role: actorRole } = req.user as User;
+  const { id: actorId, role: actorRole } = req.user as User;
 
   const limitRaw = q.limit != null ? Number(q.limit) : 20;
   const limit = Number.isInteger(limitRaw) && limitRaw >= 1 && limitRaw <= 100 ? limitRaw : 20;
@@ -114,6 +116,7 @@ const getAllProducts: ControllerRouter<
   const args = pickDefined<FindAllProductsDto>(
     { actorRole, limit, order },
     {
+      actorId,
       sort,
       cursor,
       search,
@@ -461,6 +464,23 @@ const updateProductById: ControllerRouter<
   }
 };
 
+// many products at once, each with fields of its own, all of them or none
+const updateProductsBatch: ControllerRouter<
+  {},
+  UpdateProductsBatchBodyDto,
+  {},
+  UpdateProductsBatchResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.updateProductsBatch({
+    items: req.body.items,
+    actorId,
+    actorRole,
+  });
+  return reply.code(200).send(result);
+};
+
 const patchProductSale: ControllerRouter<
   SetProductSaleParamsDto,
   SetProductSaleBodyDto,
@@ -646,6 +666,7 @@ export const productController = {
   postProduct,
   postProductReview,
   updateProductById,
+  updateProductsBatch,
   patchProductSale,
   postProductSales,
   updateProductsBulkPrice,

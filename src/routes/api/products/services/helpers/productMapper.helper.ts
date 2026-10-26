@@ -57,6 +57,8 @@ export type ProductResponseRow = {
   reservedStock: number;
   // the units of batches that are over (expiredUnitsOf): not sold, so no free units
   expiredStock: number;
+  // the cost of a unit in the latest delivery of a supplier (lastUnitCostsOf), read for an admin
+  lastUnitCost?: unknown;
   category: { id: number; name: string; slug: string };
   views: number;
   popularity: number;
@@ -100,7 +102,7 @@ export function buyerFieldsOf(product: ProductResponseRow): Omit<ProductResponse
 }
 
 // what only an admin sees of a product: the counters, the whole stock, the reserve and the units
-// that are over, and the
+// that are over, the cost of the latest delivery of a supplier, and the
 // fields of the row as they are, null when empty: the sale and the override of the popularity, a
 // sale or an override past its end too, and the delete date
 export function adminFieldsOf(
@@ -113,6 +115,7 @@ export function adminFieldsOf(
   | 'totalStock'
   | 'reservedStock'
   | 'expiredStock'
+  | 'lastUnitCost'
   | 'popularityOverride'
   | 'popularityOverrideUntil'
   | 'salePrice'
@@ -127,6 +130,7 @@ export function adminFieldsOf(
     totalStock: product.stock,
     reservedStock: product.reservedStock,
     expiredStock: product.expiredStock,
+    lastUnitCost: product.lastUnitCost == null ? null : decimalToNumber(product.lastUnitCost),
     popularityOverride: product.popularityOverride,
     popularityOverrideUntil: product.popularityOverrideUntil
       ? product.popularityOverrideUntil.toISOString()
