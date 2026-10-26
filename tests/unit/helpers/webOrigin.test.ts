@@ -171,3 +171,37 @@ describe('webUrl', () => {
     );
   });
 });
+
+// a page of the frontend a WEB_PAGE_* setting names: the id of the order or the product in place
+// of {id}, the query before the fragment of the page
+describe('webPageUrl', () => {
+  const site = { NODE_ENV: 'production', WEB_ORIGIN: 'https://shop.example.com' };
+
+  it('puts the id in place of {id}', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(webPageUrl('/orders/{id}', { id: 7 })).toBe('https://shop.example.com/orders/7');
+    expect(webPageUrl('/products/{id}#reviews', { id: 3 })).toBe(
+      'https://shop.example.com/products/3#reviews',
+    );
+  });
+
+  it('keeps the query of the page and adds its own before the fragment', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(webPageUrl('/account?tab=orders#top', { query: { token: 'a+b' } })).toBe(
+      'https://shop.example.com/account?tab=orders&token=a%2Bb#top',
+    );
+    expect(webPageUrl('/p/{id}?tab=reviews#rate', { id: 5 })).toBe(
+      'https://shop.example.com/p/5?tab=reviews#rate',
+    );
+  });
+
+  it('gives a page without {id} as it is', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(webPageUrl('/web/login', { query: { token: 't' } })).toBe(
+      'https://shop.example.com/web/login?token=t',
+    );
+  });
+});

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
+import env from '@config/env.js';
+
 import { Prisma } from '@prisma/client';
 
 import { getPgCode, prisma } from '@db/client.js';
@@ -29,8 +31,9 @@ function toUserId(actorId: string | number): number {
     return id;
 }
 
-const CHAT_WELCOME_MESSAGE =
-    'Hi! I am Cartlify assistant. I can help you find products, answer store questions, or connect you with an admin if needed. How can I help?';
+// the greeting of a new chat names the shop (SHOP_NAME)
+const chatWelcomeMessage = (): string =>
+    `Hi! I am ${env.SHOP_NAME} assistant. I can help you find products, answer store questions, or connect you with an admin if needed. How can I help?`;
 
 const CHAT_MESSAGE_PREVIEW_LIMIT = 120;
 
@@ -106,6 +109,7 @@ function readCurrentChat({
         if (!thread) {
             const threadId = randomUUID();
             const welcomeCreatedAt = new Date();
+            const welcomeMessage = chatWelcomeMessage();
 
             thread = await tx.chatThread.create({
                 data:
@@ -117,7 +121,7 @@ function readCurrentChat({
                             status: 'open',
                             lastMessageAt: welcomeCreatedAt,
                             lastMessagePreview: buildChatMessagePreview(
-                                CHAT_WELCOME_MESSAGE,
+                                welcomeMessage,
                             ),
                         }
                         : {
@@ -127,7 +131,7 @@ function readCurrentChat({
                             status: 'open',
                             lastMessageAt: welcomeCreatedAt,
                             lastMessagePreview: buildChatMessagePreview(
-                                CHAT_WELCOME_MESSAGE,
+                                welcomeMessage,
                             ),
                         },
             });
@@ -137,7 +141,7 @@ function readCurrentChat({
                     threadId: thread.id,
                     senderId: null,
                     senderType: 'bot',
-                    content: CHAT_WELCOME_MESSAGE,
+                    content: welcomeMessage,
                     isRead: true,
                     createdAt: welcomeCreatedAt,
                 },

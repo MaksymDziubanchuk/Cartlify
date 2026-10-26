@@ -1,6 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import {
   buildAccountDeletedTemplate,
@@ -9,6 +6,7 @@ import {
 } from '@services/email/templates/users/accountDeleted.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { shopCurrency } from '@routes/api/payments/providers/index.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type AccountDeletionLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -40,26 +38,15 @@ export async function sendAccountDeletedEmail(
       // the orders of the mail are paid or waited for in the money of the shop
       currency: shopCurrency(),
       userName: args.userName,
-      logoCid: 'cartlify-logo',
+      logoCid: SHOP_LOGO_CID,
     });
-
-    const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-    const logoBase64 = (await readFile(logoPath)).toString('base64');
 
     await sendEmail({
       to: args.to,
       subject,
       text,
       html,
-      attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
-      ],
+      attachments: [await shopLogoAttachment()],
     });
   } catch (err) {
     log.error({ err, userId: args.userId }, 'account deleted mail was not sent');

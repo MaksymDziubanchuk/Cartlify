@@ -431,6 +431,8 @@ export interface CreateReviewDto extends CreateReviewBodyDto {
   productId: ProductId;
   userId: UserId;
   actorRole: Role;
+  // a check of the comment that failed goes here
+  log: FastifyBaseLogger;
 }
 
 export type CreateReviewResponseDto = ReviewResponseDto;
@@ -452,10 +454,15 @@ export interface DeleteProductReviewDto {
   reviewId: ReviewId;
   actorId: UserId;
   actorRole: Role;
+  // a mail to the author that failed goes here
+  log: FastifyBaseLogger;
 }
 
 export interface DeleteProductReviewResponseDto {
   message: string;
+  // a removal by a moderator: the removals of the reviews of the author and the limit of the rules
+  reviewRemovals?: number;
+  reviewRemovalsLimit?: number;
 }
 
 // UPDATE PRODUCT CATEGORY

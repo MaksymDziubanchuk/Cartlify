@@ -1,14 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderPaymentRefundedTemplate } from '@services/email/templates/orders/orderPaymentRefunded.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type PaymentRefundedMailLogger = {
   error: (obj: unknown, msg?: string) => void;
@@ -24,8 +22,8 @@ type SendPaymentRefundedEmailArgs = {
   reason: PayOrderRefundReason;
 };
 
-// frontend page of an order, a placeholder until the frontend fixes its routes
-const orderPage = (orderId: number) => `/orders/${orderId}`;
+// frontend page of an order (WEB_PAGE_ORDER)
+const orderPage = (orderId: number) => webPageUrl(env.WEB_PAGE_ORDER, { id: orderId });
 
 // mails the buyer that a payment the order could not take went back: the return page of the
 // provider says paid, without the mail the buyer waits for an order that never comes. The refund
@@ -50,31 +48,20 @@ export async function sendPaymentRefundedEmail(
       // the name of the shop the mail is from
       appName: env.SHOP_NAME,
       orderId: args.orderId,
-      orderUrl: webUrl(orderPage(args.orderId)),
+      orderUrl: orderPage(args.orderId),
       amount: args.amount,
       currency: args.currency,
       reason: args.reason,
       ...(user.name ? { userName: user.name } : {}),
-      logoCid: 'cartlify-logo',
+      logoCid: SHOP_LOGO_CID,
     });
-
-    const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-    const logoBase64 = (await readFile(logoPath)).toString('base64');
 
     await sendEmail({
       to: user.email,
       subject,
       text,
       html,
-      attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
-      ],
+      attachments: [await shopLogoAttachment()],
     });
   } catch (err) {
     log.error({ err, orderId: args.orderId }, 'payment refunded mail was not sent');

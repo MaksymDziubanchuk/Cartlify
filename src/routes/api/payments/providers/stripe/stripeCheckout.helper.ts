@@ -1,7 +1,7 @@
 import env from '@config/env.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 import stripe from '@config/stripe.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
 import type Stripe from 'stripe';
@@ -31,19 +31,15 @@ type BuildCheckoutSessionPayloadArgs = {
 // money in cents without float math: 10.15 * 100 is 1014.9999999999999
 const centsOf = (value: number) => Math.round(Math.round(value * 1000) / 10);
 
-// how long after the reservation stripe closes the page itself: 30 minutes is the least stripe
-// takes. The timer closes it at the end of the reservation; when it cannot (stripe out of reach),
-// this keeps a late payment within half an hour instead of a day
-const PAGE_EXPIRES_AFTER_RESERVATION_MS = 30 * 60 * 1000;
+// how long after the reservation stripe closes the page itself
+// (STRIPE_PAGE_AFTER_RESERVATION_MINUTES, 30 unless set, the least stripe takes). The timer closes
+// it at the end of the reservation; when it cannot (stripe out of reach), this keeps a late
+// payment within these minutes instead of a day
+const pageExpiresAfterReservationMs = () => env.STRIPE_PAGE_AFTER_RESERVATION_MINUTES * 60_000;
 
 type ExpireCheckoutSessionArgs = {
   sessionId: string;
 };
-
-// frontend pages the payment page returns the buyer to, placeholders until the frontend fixes its
-// routes; the address of the site is WEB_ORIGIN
-const CHECKOUT_SUCCESS_PAGE = '/checkout/success';
-const CHECKOUT_CANCEL_PAGE = '/checkout/cancel';
 
 // build stripe idempotency key for checkout session create
 // same order with the same reservation gets the same session back, so a double click does not open a second payment
@@ -87,12 +83,16 @@ function buildCheckoutSessionPayload({
 
   // build success return url; stripe replaces only the literal {CHECKOUT_SESSION_ID} with the
   // session id, while URLSearchParams encodes the braces, so they are put back after encoding
-  const successUrlText = webUrl(CHECKOUT_SUCCESS_PAGE, {
-    session_id: '{CHECKOUT_SESSION_ID}',
+  // the frontend pages the payment page returns the buyer to (WEB_PAGE_CHECKOUT_SUCCESS,
+  // WEB_PAGE_CHECKOUT_CANCEL) on WEB_ORIGIN
+  const successUrlText = webPageUrl(env.WEB_PAGE_CHECKOUT_SUCCESS, {
+    query: { session_id: '{CHECKOUT_SESSION_ID}' },
   }).replace('%7BCHECKOUT_SESSION_ID%7D', '{CHECKOUT_SESSION_ID}');
 
   // build cancel return url
-  const cancelUrlText = webUrl(CHECKOUT_CANCEL_PAGE, { orderId: String(orderId) });
+  const cancelUrlText = webPageUrl(env.WEB_PAGE_CHECKOUT_CANCEL, {
+    query: { orderId: String(orderId) },
+  });
 
   return {
     mode: 'payment',
@@ -113,7 +113,7 @@ function buildCheckoutSessionPayload({
     cancel_url: cancelUrlText,
     // from the reservation, not the clock: a repeated request with the same key sends the same values
     expires_at: Math.floor(
-      (reservationExpiresAt.getTime() + PAGE_EXPIRES_AFTER_RESERVATION_MS) / 1000,
+      (reservationExpiresAt.getTime() + pageExpiresAfterReservationMs()) / 1000,
     ),
   };
 }

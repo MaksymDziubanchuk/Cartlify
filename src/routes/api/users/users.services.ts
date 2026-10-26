@@ -52,6 +52,7 @@ import { findUsers } from './services/findUsers.service.js';
 import { removeUserAvatar } from './services/removeUserAvatar.service.js';
 import { exportMe } from './services/exportMe.service.js';
 import { countAvatarRemovals, deleteAvatarFile } from './services/helpers/avatarRemovals.helper.js';
+import { countReviewRemovals } from '@routes/api/products/services/helpers/reviewRemovals.helper.js';
 
 async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
   // normalize user id from dto
@@ -530,6 +531,8 @@ async function findById({
         // past the limit the page tells the admin to take the account to root
         avatarRemovals: await countAvatarRemovals(tx, id),
         avatarRemovalsLimit: env.AVATAR_REMOVALS_LIMIT,
+        reviewRemovals: await countReviewRemovals(tx, id),
+        reviewRemovalsLimit: env.REVIEW_REMOVALS_LIMIT,
         period,
         ...(await loadProfileLists(tx, id, lists, period)),
       };

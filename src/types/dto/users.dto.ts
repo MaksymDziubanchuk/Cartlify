@@ -192,6 +192,9 @@ export type AdminUserProfileDto = PublicUserProfileDto &
     // the removals of the avatar by a moderator and the limit the rules set for them
     avatarRemovals: number;
     avatarRemovalsLimit: number;
+    // the removals of the reviews of the account by a moderator and the limit for them
+    reviewRemovals: number;
+    reviewRemovalsLimit: number;
     period: { from: Date; to: Date };
   } & Partial<Pick<AdminProfileListsDto, ProfileList>>;
 

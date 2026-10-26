@@ -1,12 +1,10 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import type { Prisma } from '@prisma/client';
 
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { buildAvatarRemovedTemplate } from '@services/email/templates/users/avatarRemoved.template.js';
 import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 // the avatar of an account taken away: by its owner through PATCH /api/users/me, or by a moderator
 // through DELETE /api/users/:userId/avatar. A removal by a moderator is a line of the journal of the
@@ -65,26 +63,15 @@ export async function sendAvatarRemovedEmail(
       removals: args.removals,
       limit: args.limit,
       userName: args.userName,
-      logoCid: 'cartlify-logo',
+      logoCid: SHOP_LOGO_CID,
     });
-
-    const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-    const logoBase64 = (await readFile(logoPath)).toString('base64');
 
     await sendEmail({
       to: args.to,
       subject,
       text,
       html,
-      attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
-      ],
+      attachments: [await shopLogoAttachment()],
     });
   } catch (err) {
     log.warn({ err, userId: args.userId }, 'avatar removed mail was not sent');

@@ -21,3 +21,7 @@ export * from './stock.helper.js';
 export * from './productUpdate.helper.js';
 
 export * from './productsBatch.helper.js';
+
+export * from './reviewCheck.helper.js';
+
+export * from './reviewRemovals.helper.js';

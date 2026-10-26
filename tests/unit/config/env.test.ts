@@ -8,6 +8,37 @@ type Env = (typeof import('@config/env.js'))['default'];
 const loadEnv = async (values: Record<string, string> = {}) =>
   (await importWithEnv<typeof import('@config/env.js')>('@config/env.js', values)).default as Env;
 
+// the settings a shop tunes for itself, with the values the code had before they were settings
+const SHOP_DEFAULTS = {
+  REVIEW_REMOVALS_LIMIT: 5,
+  TRUST_PROXY_HOPS: 1,
+  LIMIT_LOGIN_PER_ADDRESS: 30,
+  LIMIT_LOGIN_PER_EMAIL: 10,
+  LIMIT_REGISTER_PER_ADDRESS: 10,
+  LIMIT_MAIL_PER_ADDRESS: 10,
+  LIMIT_MAIL_PER_EMAIL: 1,
+  LIMIT_CHECKOUT_PER_USER: 10,
+  LIMIT_PASSWORD_CHANGE_PER_USER: 10,
+  LIMIT_EXPORT_PER_USER: 1,
+  LIMIT_REVIEW_PER_USER: 30,
+  LOGIN_FAILURES_BEFORE_PAUSE: 5,
+  UPLOAD_MAX_BYTES: 5_000_000,
+  PRODUCT_IMAGES_MAX: 10,
+  VERIFY_TTL_MS: 86_400_000,
+  ORDER_RESERVATION_MINUTES: 15,
+  STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 30,
+  REVIEW_CHECK_ENABLED: true,
+  SHOP_LOGO_PATH: 'src/static/images/logo3.png',
+  WEB_PAGE_OAUTH_CALLBACK: '/auth/callback',
+  WEB_PAGE_LOGIN: '/web/login',
+  WEB_PAGE_VERIFY_EMAIL: '/web/login',
+  WEB_PAGE_PASSWORD_RESET: '/web/auth/reset',
+  WEB_PAGE_CHECKOUT_SUCCESS: '/checkout/success',
+  WEB_PAGE_CHECKOUT_CANCEL: '/checkout/cancel',
+  WEB_PAGE_ORDER: '/orders/{id}',
+  WEB_PAGE_PRODUCT_REVIEWS: '/products/{id}#reviews',
+};
+
 // every setting with a default, given as unset
 const UNSET = Object.fromEntries(
   [
@@ -31,6 +62,7 @@ const UNSET = Object.fromEntries(
     'STRIPE_CURRENCY',
     'WEB_ORIGIN',
     'SENDGRID_API_KEY',
+    ...Object.keys(SHOP_DEFAULTS),
   ].map((key) => [key, '']),
 );
 
@@ -66,6 +98,7 @@ describe('env', () => {
       STRIPE_CURRENCY: 'eur',
       WEB_ORIGIN: '',
       SENDGRID_API_KEY: '',
+      ...SHOP_DEFAULTS,
     });
   });
 
@@ -205,5 +238,188 @@ describe('env', () => {
     const loaded = await loadEnv({ NODE_ENV: 'development', STRIPE_WEBHOOK_SECRET: '' });
 
     expect(loaded.STRIPE_WEBHOOK_SECRET).toBe('');
+  });
+});
+
+// the settings a buyer of the shop tunes for it: each one unset keeps the value the code had
+describe('the settings of the shop', () => {
+  it('reads the values that are set', async () => {
+    expect(
+      await loadEnv({
+        LIMIT_LOGIN_PER_ADDRESS: '60',
+        LIMIT_LOGIN_PER_EMAIL: '20',
+        LIMIT_REGISTER_PER_ADDRESS: '5',
+        LIMIT_MAIL_PER_ADDRESS: '7',
+        LIMIT_MAIL_PER_EMAIL: '2',
+        LIMIT_CHECKOUT_PER_USER: '3',
+        LIMIT_PASSWORD_CHANGE_PER_USER: '4',
+        LIMIT_EXPORT_PER_USER: '6',
+        LIMIT_REVIEW_PER_USER: '50',
+        LOGIN_FAILURES_BEFORE_PAUSE: '8',
+        UPLOAD_MAX_BYTES: '10000000',
+        PRODUCT_IMAGES_MAX: '20',
+        VERIFY_TTL_MS: '7200000',
+        ORDER_RESERVATION_MINUTES: '20',
+        STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '45',
+        REVIEW_CHECK_ENABLED: 'false',
+        SHOP_LOGO_PATH: ' tests/fixtures/images/jpeg-baseline.jpg ',
+        WEB_PAGE_OAUTH_CALLBACK: '/login/done',
+        WEB_PAGE_LOGIN: '/sign-in',
+        WEB_PAGE_VERIFY_EMAIL: '/account/verify',
+        WEB_PAGE_PASSWORD_RESET: '/account/password?step=new',
+        WEB_PAGE_CHECKOUT_SUCCESS: '/pay/ok',
+        WEB_PAGE_CHECKOUT_CANCEL: '/pay/back',
+        WEB_PAGE_ORDER: '/account/orders/{id}',
+        WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}?tab=reviews#rate',
+      }),
+    ).toMatchObject({
+      LIMIT_LOGIN_PER_ADDRESS: 60,
+      LIMIT_LOGIN_PER_EMAIL: 20,
+      LIMIT_REGISTER_PER_ADDRESS: 5,
+      LIMIT_MAIL_PER_ADDRESS: 7,
+      LIMIT_MAIL_PER_EMAIL: 2,
+      LIMIT_CHECKOUT_PER_USER: 3,
+      LIMIT_PASSWORD_CHANGE_PER_USER: 4,
+      LIMIT_EXPORT_PER_USER: 6,
+      LIMIT_REVIEW_PER_USER: 50,
+      LOGIN_FAILURES_BEFORE_PAUSE: 8,
+      UPLOAD_MAX_BYTES: 10_000_000,
+      PRODUCT_IMAGES_MAX: 20,
+      VERIFY_TTL_MS: 7_200_000,
+      ORDER_RESERVATION_MINUTES: 20,
+      STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 45,
+      REVIEW_CHECK_ENABLED: false,
+      SHOP_LOGO_PATH: 'tests/fixtures/images/jpeg-baseline.jpg',
+      WEB_PAGE_OAUTH_CALLBACK: '/login/done',
+      WEB_PAGE_LOGIN: '/sign-in',
+      WEB_PAGE_VERIFY_EMAIL: '/account/verify',
+      WEB_PAGE_PASSWORD_RESET: '/account/password?step=new',
+      WEB_PAGE_CHECKOUT_SUCCESS: '/pay/ok',
+      WEB_PAGE_CHECKOUT_CANCEL: '/pay/back',
+      WEB_PAGE_ORDER: '/account/orders/{id}',
+      WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}?tab=reviews#rate',
+    });
+  });
+
+  // 0 trusts no proxy, the address of the connection counts; a host with two proxies sets 2
+  it.each([
+    ['0', 0],
+    ['2', 2],
+  ])('reads TRUST_PROXY_HOPS %p as %p', async (value, hops) => {
+    expect((await loadEnv({ TRUST_PROXY_HOPS: value })).TRUST_PROXY_HOPS).toBe(hops);
+  });
+
+  it.each([
+    ['TRUST_PROXY_HOPS', '-1'],
+    ['TRUST_PROXY_HOPS', 'one'],
+    ...[
+      'LIMIT_LOGIN_PER_ADDRESS',
+      'LIMIT_LOGIN_PER_EMAIL',
+      'LIMIT_REGISTER_PER_ADDRESS',
+      'LIMIT_MAIL_PER_ADDRESS',
+      'LIMIT_MAIL_PER_EMAIL',
+      'LIMIT_CHECKOUT_PER_USER',
+      'LIMIT_PASSWORD_CHANGE_PER_USER',
+      'LIMIT_EXPORT_PER_USER',
+      'LIMIT_REVIEW_PER_USER',
+      'LOGIN_FAILURES_BEFORE_PAUSE',
+      'UPLOAD_MAX_BYTES',
+      'PRODUCT_IMAGES_MAX',
+      'VERIFY_TTL_MS',
+      'ORDER_RESERVATION_MINUTES',
+      'STRIPE_PAGE_AFTER_RESERVATION_MINUTES',
+    ].flatMap((key) => [
+      [key, '0'],
+      [key, 'many'],
+    ]),
+  ])('stops the start when %s is %p', async (key, value) => {
+    const err = await rejectedBy(() => loadEnv({ [key]: value }));
+
+    expect((err as Error).message).toContain(key);
+    // the start error lands in the hosting logs, the value stays out of it
+    expect((err as Error).message).not.toContain(`: ${value}`);
+  });
+
+  // stripe keeps a page at least 30 minutes and at most 24 hours from its opening; the page is
+  // opened in the reservation and closes the minutes after its end
+  it('stops the start when stripe would refuse the time of the payment page', async () => {
+    const short = await rejectedBy(() => loadEnv({ STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '29' }));
+    const long = await rejectedBy(() =>
+      loadEnv({ ORDER_RESERVATION_MINUTES: '1400', STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '41' }),
+    );
+
+    expect((short as Error).message).toBe(
+      'Invalid env variable: STRIPE_PAGE_AFTER_RESERVATION_MINUTES must be at least 30',
+    );
+    expect((long as Error).message).toBe(
+      'Invalid env variable: ORDER_RESERVATION_MINUTES and STRIPE_PAGE_AFTER_RESERVATION_MINUTES ' +
+        'together must be at most 1440 (24 hours)',
+    );
+    expect(
+      await loadEnv({
+        ORDER_RESERVATION_MINUTES: '1400',
+        STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '40',
+      }),
+    ).toMatchObject({ ORDER_RESERVATION_MINUTES: 1400, STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 40 });
+  });
+
+  it.each([['TRUE'], ['yes'], ['0'], ['off']])(
+    'stops the start when REVIEW_CHECK_ENABLED is %p, not true or false',
+    async (value) => {
+      const err = await rejectedBy(() => loadEnv({ REVIEW_CHECK_ENABLED: value }));
+
+      expect((err as Error).message).toBe(
+        'Invalid env variable: REVIEW_CHECK_ENABLED must be true or false',
+      );
+    },
+  );
+
+  // every mail carries the logo: a file that is not there, or of a type the mails do not show,
+  // would break each one of them
+  it.each([
+    ['a file that is not there', 'src/static/images/no-such-logo.png'],
+    ['a file that is no png or jpeg', 'tests/fixtures/images/webp-lossy.webp'],
+    ['a folder', 'src/static/images'],
+  ])('stops the start when SHOP_LOGO_PATH names %s', async (_case, value) => {
+    const err = await rejectedBy(() => loadEnv({ SHOP_LOGO_PATH: value }));
+
+    expect((err as Error).message).toBe(
+      'Invalid env variable: SHOP_LOGO_PATH must be a png or jpeg file',
+    );
+  });
+
+  // the links of the mails and the redirect after a login go to these pages: a value that leaves
+  // the site would send the people and their tokens to another one
+  it.each([
+    ['WEB_PAGE_LOGIN', 'web/login'],
+    ['WEB_PAGE_LOGIN', '//evil.example/login'],
+    ['WEB_PAGE_LOGIN', '/\\evil.example/login'],
+    ['WEB_PAGE_LOGIN', 'https://evil.example/login'],
+    ['WEB_PAGE_LOGIN', '/sign in'],
+    ['WEB_PAGE_OAUTH_CALLBACK', '//evil.example'],
+    ['WEB_PAGE_VERIFY_EMAIL', 'javascript:alert(1)'],
+    ['WEB_PAGE_PASSWORD_RESET', '/reset/{id}'],
+    ['WEB_PAGE_CHECKOUT_SUCCESS', '/\tpay'],
+    ['WEB_PAGE_CHECKOUT_CANCEL', '//pay/back'],
+  ])('stops the start when %s is %p, not a path of the site', async (key, value) => {
+    const err = await rejectedBy(() => loadEnv({ [key]: value }));
+
+    expect((err as Error).message).toBe(
+      `Invalid env variable: ${key} must be a path of the site starting with /, without {id}`,
+    );
+  });
+
+  // the page of an order or of a product names it by its id
+  it.each([
+    ['WEB_PAGE_ORDER', '/orders'],
+    ['WEB_PAGE_ORDER', '/orders/{id}/{id}'],
+    ['WEB_PAGE_ORDER', '//evil.example/{id}'],
+    ['WEB_PAGE_PRODUCT_REVIEWS', '/products#reviews'],
+  ])('stops the start when %s is %p, not a path of the site with {id}', async (key, value) => {
+    const err = await rejectedBy(() => loadEnv({ [key]: value }));
+
+    expect((err as Error).message).toBe(
+      `Invalid env variable: ${key} must be a path of the site starting with /, with {id} once`,
+    );
   });
 });

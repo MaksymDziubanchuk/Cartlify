@@ -1,7 +1,9 @@
+import env from '@config/env.js';
+
 // OpenAPI general project information
 export const openApiInfo = {
-    title: 'Cartlify REST API',
-    description: 'REST API documentation for Cartlify.',
+    title: `${env.SHOP_NAME} REST API`,
+    description: `REST API documentation for ${env.SHOP_NAME}.`,
     version: '1.0.0',
 } as const;
 

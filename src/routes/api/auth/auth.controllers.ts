@@ -52,7 +52,8 @@ import {
   UnauthorizedError,
   isAppError,
 } from '@utils/errors.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import env from '@config/env.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 import { clearLoginFailures, recordLoginFailure } from '../../../plugins/requestLimits.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { getTtl, verifyRefreshToken } from '@utils/jwt.js';
@@ -181,9 +182,6 @@ const getGoogleStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GoogleStartRe
   return;
 };
 
-// frontend page that finishes an oauth login, a placeholder until the frontend fixes its routes
-const OAUTH_CALLBACK_PAGE = '/auth/callback';
-
 // the codes a provider sends when the user declines: google and github use the standard one,
 // linkedin its own for a cancelled login and for refused access
 const OAUTH_DECLINED_ERRORS = new Set([
@@ -234,7 +232,10 @@ async function finishOAuthLogin(
     }
   }
 
-  reply.code(302).redirect(webUrl(OAUTH_CALLBACK_PAGE, error ? { error } : {}));
+  // the frontend page that finishes an oauth login (WEB_PAGE_OAUTH_CALLBACK)
+  reply
+    .code(302)
+    .redirect(webPageUrl(env.WEB_PAGE_OAUTH_CALLBACK, error ? { query: { error } } : {}));
 }
 
 const getGoogleCallback: ControllerRouter<{}, {}, GoogleCallbackQueryDto, void> = async (

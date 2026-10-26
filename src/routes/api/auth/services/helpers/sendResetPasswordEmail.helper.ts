@@ -1,13 +1,11 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildResetPasswordTemplate } from '@services/email/templates/auth/resetPassword.template.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type SendResetPasswordEmailArgs = {
   to: string;
@@ -25,14 +23,11 @@ export async function sendResetPasswordEmail(
   const resetUrl = buildWebResetUrl(args.resetToken);
   const expiresInText = formatExpiresIn(args.expiresAt);
 
-  const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-  const logoBase64 = (await readFile(logoPath)).toString('base64');
-
   const { subject, text, html } = buildResetPasswordTemplate({
     resetUrl,
     userName: args.userName || '',
     appName: env.SHOP_NAME,
-    logoCid: 'cartlify-logo',
+    logoCid: SHOP_LOGO_CID,
     expiresInText,
   });
 
@@ -42,15 +37,7 @@ export async function sendResetPasswordEmail(
       subject,
       text,
       html,
-      attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
-      ],
+      attachments: [await shopLogoAttachment()],
     });
   } catch (err) {
     // only a failure of the mail provider is a bad gateway, our own error stays a server error
@@ -65,8 +52,8 @@ export async function sendResetPasswordEmail(
   }
 }
 
-// frontend reset entrypoint
+// frontend reset entrypoint (WEB_PAGE_PASSWORD_RESET)
 // a mail from production must link to the live site, a localhost link opens nothing there
 function buildWebResetUrl(token: string): string {
-  return webUrl('/web/auth/reset', { token });
+  return webPageUrl(env.WEB_PAGE_PASSWORD_RESET, { query: { token } });
 }

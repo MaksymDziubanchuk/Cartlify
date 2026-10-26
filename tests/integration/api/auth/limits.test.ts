@@ -10,7 +10,7 @@ import { closeSessions, createUser, type TestUser } from '../../../helpers/facto
 import { moveClock } from '../../../helpers/payments.js';
 
 // the limits of the routes a script would abuse: the login, the registration, the mails of a
-// password reset and of a verification, the payment page. The server sits behind the proxy of
+// password reset and of a verification, the payment page, a review. The server sits behind the proxy of
 // railway: the address of a client is the one the proxy names in x-forwarded-for, one hop
 // (TRUST_PROXY_HOPS). Each test comes from addresses of its own, so the counts do not mix. The
 // other integration files raise every limit a thousand times (their requests all come from
@@ -190,6 +190,43 @@ describe.each(['/api/auth/password/forgot', '/api/auth/verify/resend'])('POST %s
 
     expect(refused.statusCode).toBe(429);
     expect(refused.json()).toMatchObject({ errorCode: 'RATE_LIMITED', details: { limit: 'mail' } });
+  });
+});
+
+describe('POST /api/products/:productId/reviews', () => {
+  // a refused comment writes nothing and can come again, each one asks the model of openai
+  it('refuses the 31st review of a user in an hour', async () => {
+    const user: TestUser = await createUser();
+    userIds.push(user.id);
+    const review = () =>
+      post('/api/products/2147483000/reviews', { rating: 4 }, nextAddress(), accessCookie(user));
+    for (let i = 0; i < 30; i += 1) expect((await review()).statusCode).toBe(404);
+
+    const refused = await review();
+
+    expect(refused.statusCode).toBe(429);
+    expect(refused.json()).toMatchObject({
+      errorCode: 'RATE_LIMITED',
+      details: { limit: 'review' },
+    });
+  });
+
+  // a shop sets the most of each limit (LIMIT_*); the server reads it on each request
+  it('refuses the review past the limit the setting names', async () => {
+    const user: TestUser = await createUser();
+    userIds.push(user.id);
+    const before = env.LIMIT_REVIEW_PER_USER;
+    env.LIMIT_REVIEW_PER_USER = 2;
+
+    try {
+      const review = () =>
+        post('/api/products/2147483000/reviews', { rating: 4 }, nextAddress(), accessCookie(user));
+      for (let i = 0; i < 2; i += 1) expect((await review()).statusCode).toBe(404);
+
+      expect((await review()).statusCode).toBe(429);
+    } finally {
+      env.LIMIT_REVIEW_PER_USER = before;
+    }
   });
 });
 

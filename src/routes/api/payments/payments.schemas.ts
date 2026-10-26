@@ -1,5 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
+import env from '@config/env.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurityFor } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
@@ -26,7 +27,7 @@ const postCheckoutSessionSchema = {
   operationId: 'createCheckoutSession',
   summary: 'Create checkout session',
   description:
-    'Opens the payment page of a confirmed user order at the payment provider the buyer picked (`provider`, there is no default one). A repeated request for the same order, reservation and provider returns the same page; a page of another provider opened for the order before is closed first. `expiresAt` is the time after which the checkout can no longer be paid. A Stripe page returns the buyer to `WEB_ORIGIN/checkout/success?session_id=<id>` or `WEB_ORIGIN/checkout/cancel?orderId=<id>`.',
+    'Opens the payment page of a confirmed user order at the payment provider the buyer picked (`provider`, there is no default one). A repeated request for the same order, reservation and provider returns the same page; a page of another provider opened for the order before is closed first. `expiresAt` is the time after which the checkout can no longer be paid. A Stripe page returns the buyer to `WEB_ORIGIN` + `WEB_PAGE_CHECKOUT_SUCCESS` (`/checkout/success` unless set) `?session_id=<id>` or `WEB_PAGE_CHECKOUT_CANCEL` (`/checkout/cancel`) `?orderId=<id>`.',
 
   body: {
     $ref: 'paymentsCreateCheckoutSessionBodySchema#',
@@ -65,7 +66,9 @@ const postCheckoutSessionSchema = {
     },
     429: {
       description:
-        '`RATE_LIMITED` with `details.limit: checkout`: more than 10 payment pages of a user in a minute; `retry-after` and `details.retryAfterSeconds` tell the wait.',
+        '`RATE_LIMITED` with `details.limit: checkout`: more than ' +
+        env.LIMIT_CHECKOUT_PER_USER +
+        ' payment pages of a user in a minute; `retry-after` and `details.retryAfterSeconds` tell the wait.',
       $ref: 'errorResponseSchema#',
     },
     500: {

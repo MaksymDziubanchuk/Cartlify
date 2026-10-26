@@ -138,7 +138,7 @@ const generateLanguageMatchedBotText = async ({
     const text = await askAiForBotText(
         {
             instructions: [
-                'You are Cartlify assistant.',
+                `You are ${env.SHOP_NAME} assistant.`,
                 'Your task is to rewrite the provided response meaning as a customer-facing chat message.',
                 'The response language must be the same natural language as the text inside <latest_customer_message>.',
                 'Use only the latest customer message to choose the response language.',
@@ -614,7 +614,7 @@ const askModelForReply = (
     userMessage: string,
     log: ChatBotLogger,
 ) => {
-    // builds Cartlify-specific prompt outside the low-level OpenAI wrapper
+    // builds the prompt of the shop outside the low-level OpenAI wrapper
     const prompt = buildChatBotPrompt({
         actorRole,
         emailConfirmed: context.emailConfirmed,
