@@ -1,4 +1,5 @@
 import { expiredUnitsNow } from '@db/expiredStock.helper.js';
+import { lastUnitCostsNow } from '@db/lastUnitCost.helper.js';
 import { Prisma } from '@prisma/client';
 import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
@@ -85,9 +86,14 @@ export async function setProductSale({
 
     const images = await readProductImageUrls(updated.id as any);
     const expired = await expiredUnitsNow([updated.id]);
+    const costs = await lastUnitCostsNow({ actorId, actorRole }, [updated.id]);
 
     return mapProductRowToResponse({
-      product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
+      product: {
+        ...updated,
+        expiredStock: expired.get(updated.id) ?? 0,
+        lastUnitCost: costs.get(updated.id) ?? null,
+      },
       images,
       categoryPath: await readCategoryPath(updated.category.id),
       view: 'admin',

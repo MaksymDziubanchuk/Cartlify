@@ -8,7 +8,6 @@ import {
   moveImage,
   type UploadImageResult,
 } from '@utils/cloudinary.util.js';
-import { InternalError } from '@utils/errors.js';
 
 import type { Prisma } from '@prisma/client';
 import type { ProductId } from 'types/ids.js';
@@ -106,8 +105,6 @@ export async function readProductImageUrls(
     orderBy: { position: 'asc' },
   });
 
-  // reject invalid db state when product has no images
-  if (!rows.length) throw new InternalError({ reason: 'PRODUCT_IMAGES_NOT_FOUND' });
-
+  // a product without an image has none in its card, the way the card of its page has none
   return rows.map((r) => ({ url: r.url, position: r.position }));
 }

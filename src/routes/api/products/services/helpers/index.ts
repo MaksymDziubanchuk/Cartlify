@@ -17,3 +17,7 @@ export * from './products.helpers.js';
 export * from './getAllProducts.helper.js';
 
 export * from './stock.helper.js';
+
+export * from './productUpdate.helper.js';
+
+export * from './productsBatch.helper.js';

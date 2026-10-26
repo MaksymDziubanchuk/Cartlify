@@ -11,6 +11,7 @@ import {
   createCategory,
   createProduct,
   createUser,
+  deleteProductFromCatalog,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
@@ -187,5 +188,53 @@ describe('a product without an image', () => {
     const prompt = JSON.stringify(calls.find((call) => call.purpose === 'answer')?.request);
     expect(prompt).toContain(PICTURED_NAME);
     expect(prompt).not.toContain(BARE_NAME);
+  });
+});
+
+describe('a change of a product without an image', () => {
+  const change = (method: 'PATCH' | 'POST', url: string, payload?: Record<string, unknown>) =>
+    app.inject({
+      method,
+      url,
+      headers: withCsrf(csrf, accessCookie(admin)),
+      ...(payload ? { payload } : {}),
+    });
+
+  // an admin changes the product the way any other: the answer is its card, with no images
+  it.each([
+    [
+      'a change of the product',
+      (id: number) => change('PATCH', `/api/products/${id}`, { price: 12 }),
+    ],
+    [
+      'a sale',
+      (id: number) =>
+        change('PATCH', `/api/products/${id}/sale`, {
+          sale: { percent: 10, endsAt: new Date(Date.now() + 86_400_000).toISOString() },
+        }),
+    ],
+    [
+      'a move to another category',
+      async (id: number) =>
+        change('PATCH', `/api/products/${id}/category`, {
+          categoryId: (await createCategory()).id,
+        }),
+    ],
+    [
+      'a restore',
+      async (id: number) => {
+        await deleteProductFromCatalog(id);
+        return change('POST', `/api/products/${id}/restore`);
+      },
+    ],
+  ])('answers %s with the card and no images', async (_, send) => {
+    // a category of its own: the lists of the file count the products of theirs
+    const product = await createProduct({ stock: 0 });
+    await asAdmin((tx) => tx.productImage.deleteMany({ where: { productId: product.id } }));
+
+    const res = await send(product.id);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ id: product.id, images: [] });
   });
 });

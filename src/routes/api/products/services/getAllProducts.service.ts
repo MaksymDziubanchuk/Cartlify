@@ -1,6 +1,7 @@
 import { prisma } from '@db/client.js';
-import { setShopDayContext } from '@db/dbContext.service.js';
+import { setShopDayContext, setUserContext } from '@db/dbContext.service.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
+import { lastUnitCostsOf } from '@db/lastUnitCost.helper.js';
 
 import {
   mapProductListRowToResponse,
@@ -23,7 +24,12 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
 
   try {
     return await prisma.$transaction(async (tx) => {
-      await setShopDayContext(tx);
+      // an admin reads the cost of the latest delivery of each product: admins alone read batches
+      if (q.view === 'admin') {
+        await setUserContext(tx, { userId: dto.actorId!, role: dto.actorRole });
+      } else {
+        await setShopDayContext(tx);
+      }
 
       const keyRows = await tx.$queryRaw<ProductKeyRow[]>(buildProductIdsQuery(q));
 
@@ -44,10 +50,18 @@ export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponse
       });
       rows.sort((a, b) => position.get(a.id)! - position.get(b.id)!);
       const expired = await expiredUnitsOf(tx, ids);
+      const costs = q.view === 'admin' ? await lastUnitCostsOf(tx, ids) : new Map();
 
       return {
         items: rows.map((row) =>
-          mapProductListRowToResponse({ ...row, expiredStock: expired.get(row.id) ?? 0 }, q.view),
+          mapProductListRowToResponse(
+            {
+              ...row,
+              expiredStock: expired.get(row.id) ?? 0,
+              lastUnitCost: costs.get(row.id) ?? null,
+            },
+            q.view,
+          ),
         ),
         limit: q.limit,
         ...(hasNext ? { nextCursor: makeNextCursor(q, pageRows[pageRows.length - 1]!) } : {}),

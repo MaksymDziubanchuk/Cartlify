@@ -562,6 +562,88 @@ const updateProductByIdRouterSchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for a change of many products at once
+const patchProductsBatchRouterSchema = {
+  operationId: 'updateProductsBatch',
+  summary: 'Update many products at once',
+  description:
+    'Changes up to 100 products, each with fields of its own: the fields of the JSON body of ' +
+    'PATCH /api/products/{productId}, with the same checks, the same words on the sale and every ' +
+    'line of the logs; the fields left out stay, there are no images. All of them or none: the ' +
+    'fields of every product are checked first, then every product as it is, then the article ' +
+    'numbers of all of them, and nothing is written while one is refused. A refusal names in ' +
+    '`details.products` every product refused the same way, `{ productId }` with the details ' +
+    'PATCH of one product gives; a product refused another way shows once the request is fixed. ' +
+    'Two products of the request can swap their article numbers. The rows are locked by id, so ' +
+    'two such requests over the same products wait for each other. Answers the cards of an ' +
+    'admin in the order of the items.',
+
+  body: {
+    $ref: 'updateProductsBatchBodySchema#',
+    examples: [
+      {
+        items: [
+          { productId: 10, price: 519, sale: 'keep' },
+          { productId: 11, sku: 'CASE-11', categoryId: 4 },
+          { productId: 12, name: 'Wireless headphones Pro' },
+        ],
+      },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The products were changed, their cards in the order of the items.',
+      $ref: 'updateProductsBatchResponseSchema#',
+    },
+    400: {
+      description:
+        'Invalid request, nothing was changed: a product named twice (PRODUCTS_REPEATED, ' +
+        '`details.productIds`), or a product with nothing to change (NO_FIELDS_TO_UPDATE), a ' +
+        'wrong field (PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, CATEGORY_ID_INVALID, ' +
+        'POPULARITY_OVERRIDE_INVALID, POPULARITY_OVERRIDE_UNTIL_INVALID, PRODUCT_SKU_TOO_LONG, ' +
+        'safety data that are not whole or wrong: PRODUCT_SAFETY_REQUIRED, PRODUCT_SAFETY_INVALID ' +
+        'with `fields`, PRODUCT_EU_RESPONSIBLE_REQUIRED), a popularity override without its end ' +
+        'or an end without an override after the change (POPULARITY_OVERRIDE_UNTIL_REQUIRED, ' +
+        'POPULARITY_OVERRIDE_REQUIRED), a word on the sale without a price ' +
+        '(PRODUCT_SALE_REQUIRES_PRICE), a stock (PRODUCT_STOCK_NOT_ALLOWED), a new sale that does ' +
+        'not fit the new price (PRODUCT_SALE_AMOUNT_TOO_HIGH with `price`, PRODUCT_SALE_TOO_SMALL, ' +
+        'PRODUCT_SALE_ENDS_AT_INVALID): `details.products` names them.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to update products.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The authenticated user is not allowed to update products.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`PRODUCT_NOT_FOUND`: a product is not there, or a new sale goes on a product removed ' +
+        'from the catalog; `CATEGORY_NOT_FOUND`: the category named does not exist. ' +
+        '`details.products` names them, nothing was changed.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'A change conflicts with a product, nothing was changed: a new price of a product with a ' +
+        'sale that is on without a word on the sale (PRODUCT_SALE_DECISION_REQUIRED with ' +
+        '`salePrice` and `saleEndsAt`), keep for a price down to the sale price or below ' +
+        '(PRODUCT_SALE_NOT_BELOW_PRICE with `salePrice` and `price`), an article number another ' +
+        'product of the catalog has after the change or two products of the request take ' +
+        '(PRODUCT_SKU_TAKEN); `details.products` names them. The products are busy with another ' +
+        'change (RESOURCE_BUSY, try again).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while updating products.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for admin product sale
 const patchProductSaleRouterSchema = {
   operationId: 'setProductSale',
@@ -1247,6 +1329,7 @@ const taggedProductSchemas = withOpenApiTag(
     postProductRouterSchema,
     postProductReviewRouterSchema,
     updateProductByIdRouterSchema,
+    patchProductsBatchRouterSchema,
     patchProductSaleRouterSchema,
     postProductSalesRouterSchema,
     patchProductsBulkPriceRouterSchema,
@@ -1279,6 +1362,7 @@ export const productSchemas = withOpenApiSecurityFor(
     'postProductRouterSchema',
     'postProductReviewRouterSchema',
     'updateProductByIdRouterSchema',
+    'patchProductsBatchRouterSchema',
     'patchProductSaleRouterSchema',
     'postProductSalesRouterSchema',
     'patchProductsBulkPriceRouterSchema',

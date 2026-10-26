@@ -1,4 +1,5 @@
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
+import { lastUnitCostsOf } from '@db/lastUnitCost.helper.js';
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 
@@ -57,9 +58,15 @@ export async function findById(dto: FindProductByIdDto): Promise<FullProductResp
 
       // the free units leave out the units of batches that are over
       const expired = await expiredUnitsOf(tx, [productId]);
+      // an admin sets a price against the cost of the latest delivery
+      const costs = view === 'admin' ? await lastUnitCostsOf(tx, [productId]) : new Map();
 
       return {
-        product: { ...product, expiredStock: expired.get(productId) ?? 0 },
+        product: {
+          ...product,
+          expiredStock: expired.get(productId) ?? 0,
+          lastUnitCost: costs.get(productId) ?? null,
+        },
         images: imageRows,
         categoryPath: await readCategoryPath(product.category.id, tx),
       };

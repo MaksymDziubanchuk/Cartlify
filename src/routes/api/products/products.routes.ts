@@ -94,6 +94,16 @@ export default async function productsRouter(app: FastifyInstance) {
     productController.updateProductById,
   );
 
+  // many products at once, each with fields of its own; a path of its own wins over :productId
+  app.patch(
+    '/batch',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: productSchemas.patchProductsBatchRouterSchema,
+    },
+    productController.updateProductsBatch,
+  );
+
   app.patch(
     '/:productId/sale',
     {

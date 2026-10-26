@@ -277,6 +277,10 @@ const productFields = {
     type: 'integer',
     description: `${ADMIN_ONLY} The units of batches whose last good day is over: not sold, so not in stock; written off by the admin.`,
   },
+  lastUnitCost: {
+    anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
+    description: `${ADMIN_ONLY} The cost of a unit in the latest delivery of a supplier, in the currency of the shop: what a price or a sale is set against. A surplus an inventory found or goods a buyer brought back are no purchase; null for a product no supplier delivered.`,
+  },
   popularityOverride: {
     anyOf: [{ type: 'integer' }, { type: 'null' }],
     description: `${ADMIN_ONLY} The popularity the admin set, null when there is none; it overrides while its end is ahead.`,
@@ -695,6 +699,47 @@ const updateProductBodySchema = {
       anyOf: [{ type: 'null' }, { type: 'string', enum: ['keep'] }, ...saleDiscountShapes],
     },
   },
+} as const;
+
+// PATCH /api/products/batch: for each product the fields of the json body of PATCH
+// /api/products/:productId, the ones left out stay as they are
+const updateProductsBatchBodySchema = {
+  $id: 'updateProductsBatchBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      description:
+        'The products to change, each once (PRODUCTS_REPEATED), each with the fields it changes.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          productId: { type: 'integer', minimum: 1, maximum: MAX_ID },
+          ...updateProductBodySchema.properties,
+        },
+        required: ['productId'],
+      },
+    },
+  },
+  required: ['items'],
+} as const;
+
+const updateProductsBatchResponseSchema = {
+  $id: 'updateProductsBatchResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    products: {
+      type: 'array',
+      description: 'The cards of an admin of the products changed, in the order of the items.',
+      items: { $ref: 'productResponseSchema#' },
+    },
+  },
+  required: ['products'],
 } as const;
 
 // documentation only: the form of PATCH /api/products/:productId, the fields of the json body
@@ -1236,6 +1281,8 @@ export const productDtoSchemas = [
   productSuggestionsResponseSchema,
   productCreateFormSchema,
   updateProductBodySchema,
+  updateProductsBatchBodySchema,
+  updateProductsBatchResponseSchema,
   productUpdateFormSchema,
   productSaleBodySchema,
   bulkUpdateProductsPriceBodySchema,

@@ -1,45 +1,31 @@
 import { expiredUnitsNow } from '@db/expiredStock.helper.js';
+import { lastUnitCostsNow } from '@db/lastUnitCost.helper.js';
 import { Prisma } from '@prisma/client';
 import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
-import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
-import { isSaleOn } from '@helpers/productSale.js';
-import { decimalToNumber } from '@helpers/safeNormalizer.js';
-import {
-  normalizeProductSafety,
-  parseProductDescription,
-  serializeProductDescription,
-} from '@helpers/productDescription.js';
 import { deleteImage, isOwnFile, type UploadImageResult } from '@utils/cloudinary.util.js';
 
 import {
   BadRequestError,
   ConflictError,
   InternalError,
-  NotFoundError,
   isAppError,
   ResourceBusyError,
 } from '@utils/errors.js';
 
 import {
-  assertCategoryExists,
+  checkProductUpdate,
   discardMovedImages,
-  placeProductImages,
-  mapProductRowToResponse,
-  productResponseSelect,
-  readCategoryPath,
-  writeProductPriceChangeLog,
-  computeFixedDelta,
-  readProductImageUrls,
-  normalizeFindProductByIdInput,
-  normalizeUpdateProductInput,
-  normalizeSaleEnd,
-  normalizeSku,
   isSkuTaken,
-  assertPopularityOverridePair,
-  putSaleOn,
-  takeSaleOff,
+  mapProductRowToResponse,
+  normalizeFindProductByIdInput,
+  placeProductImages,
+  planProductUpdate,
+  productBeforeUpdateSelect,
+  readCategoryPath,
+  readProductImageUrls,
+  writeProductUpdate,
 } from './helpers/index.js';
 
 import type { UpdateProductDto, UpdateProductResponseDto } from 'types/dto/products.dto.js';
@@ -66,51 +52,24 @@ export async function updateProduct({
 
   // normalize and validate id
   const { productId: productIdRaw } = normalizeFindProductByIdInput({ productId });
-
-  // normalize and validate provided fields; a stock sent is refused, it changes only with a
-  // delivery or a write-off
-  const {
-    nameNorm,
-    descriptionNorm,
-    priceRaw,
-    categoryIdRaw,
-    popularityOverrideRaw,
-    popularityOverrideUntilDate,
-  } = normalizeUpdateProductInput({
-    name,
-    description,
-    price,
-    stock,
-    categoryId,
-    popularityOverride,
-    popularityOverrideUntil,
-  });
-  const skuNorm = normalizeSku(sku);
-  // the safety data come whole and replace the ones of the product
-  const safetyNorm = safety !== undefined ? normalizeProductSafety(safety) : undefined;
-
-  // the word on the sale goes with a price; the sale alone has a route of its own
-  if (sale !== undefined && price === undefined) {
-    throw new BadRequestError('PRODUCT_SALE_REQUIRES_PRICE');
-  }
-
-  // reject empty patch
   const hasImages = Array.isArray(images) && images.length > 0;
-  const hasAnyUpdates =
-    hasImages ||
-    name !== undefined ||
-    description !== undefined ||
-    safety !== undefined ||
-    sku !== undefined ||
-    price !== undefined ||
-    categoryId !== undefined ||
-    popularityOverride !== undefined ||
-    popularityOverrideUntil !== undefined;
 
-  if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
-
-  // a new sale starts right away, its end is in the future
-  const newSaleEndsAt = sale && sale !== 'keep' ? normalizeSaleEnd(sale.endsAt) : undefined;
+  // the fields sent, normalized and checked before the transaction
+  const plan = planProductUpdate(
+    {
+      name,
+      description,
+      sku,
+      safety,
+      price,
+      stock,
+      categoryId,
+      popularityOverride,
+      popularityOverrideUntil,
+      sale,
+    },
+    { hasImages },
+  );
 
   // a retried transaction must not move the same upload twice
   const moved = new Map<string, UploadImageResult>();
@@ -127,163 +86,14 @@ export async function updateProduct({
         // lock product row to serialize concurrent patches
         await db.$queryRaw`SELECT id FROM cartlify.products WHERE id = ${productIdRaw} FOR UPDATE`;
 
-        // load previous state for audit and price change log
-        const before = await db.product.findUnique({
+        // load previous state for the checks, the audit and the price change log
+        const found = await db.product.findUnique({
           where: { id: productIdRaw },
-          select: {
-            id: true,
-            name: true,
-            description: true,
-            sku: true,
-            price: true,
-            salePrice: true,
-            saleEndsAt: true,
-            categoryId: true,
-            popularityOverride: true,
-            popularityOverrideUntil: true,
-            popularity: true,
-            deletedAt: true,
-          },
+          select: productBeforeUpdateSelect,
         });
-        if (!before) throw new NotFoundError('PRODUCT_NOT_FOUND');
+        const before = await checkProductUpdate(db, plan, found);
 
-        // a new sale goes on a product of the catalog only, the same as on the route of the sale
-        if (sale && sale !== 'keep' && before.deletedAt)
-          throw new NotFoundError('PRODUCT_NOT_FOUND');
-        if (categoryId !== undefined) await assertCategoryExists(db, categoryIdRaw!);
-
-        // an override with its end, or neither: a change of one keeps the other one of the
-        // product. A change that leaves the override alone is not checked, old rows of dev may
-        // have an override without an end
-        if (popularityOverride !== undefined || popularityOverrideUntil !== undefined) {
-          assertPopularityOverridePair({
-            popularityOverride:
-              popularityOverride === undefined
-                ? before.popularityOverride
-                : (popularityOverrideRaw ?? null),
-            popularityOverrideUntil:
-              popularityOverrideUntil === undefined
-                ? before.popularityOverrideUntil
-                : (popularityOverrideUntilDate ?? null),
-          });
-        }
-
-        // a new price of a product with a sale that is on says what happens to the sale: keep it,
-        // take it off, or a new one. Each step writes every line of the logs: the old sale off,
-        // the price, the new sale from the new price
-        const saleOn = isSaleOn(before);
-        const newPrice = priceRaw !== undefined ? new Prisma.Decimal(priceRaw) : undefined;
-        if (saleOn && newPrice && !newPrice.equals(before.price)) {
-          if (sale === undefined) {
-            throw new ConflictError('PRODUCT_SALE_DECISION_REQUIRED', {
-              salePrice: decimalToNumber(before.salePrice),
-              saleEndsAt: before.saleEndsAt!.toISOString(),
-            });
-          }
-          // a sale stays below the price: a price down to it cannot keep it
-          if (sale === 'keep' && newPrice.lessThanOrEqualTo(before.salePrice!)) {
-            throw new ConflictError('PRODUCT_SALE_NOT_BELOW_PRICE', {
-              salePrice: decimalToNumber(before.salePrice),
-              price: decimalToNumber(newPrice),
-            });
-          }
-        }
-
-        const saleContext = { db, actorId, actorRole };
-        if (saleOn && sale !== undefined && sale !== 'keep') await takeSaleOff(saleContext, before);
-
-        // build update payload only for provided fields
-        // the description keeps the text and the safety data: a change of one keeps the other
-        const kept = parseProductDescription(before.description);
-        const data: Prisma.ProductUpdateInput = {
-          ...(name !== undefined ? { name: nameNorm! } : {}),
-          ...(description !== undefined || safetyNorm !== undefined
-            ? {
-                description: serializeProductDescription({
-                  text: description !== undefined ? descriptionNorm || null : kept.text,
-                  safety: safetyNorm ?? kept.safety,
-                }),
-              }
-            : {}),
-          ...(skuNorm !== undefined ? { sku: skuNorm } : {}),
-          ...(price !== undefined ? { price: new Prisma.Decimal(priceRaw!) } : {}),
-          ...(categoryId !== undefined ? { categoryId: categoryIdRaw! } : {}),
-        };
-
-        // apply explicit nulls only when client asked to clear values
-        if (popularityOverride === null) {
-          data.popularityOverride = null;
-        } else if (popularityOverride !== undefined) {
-          data.popularityOverride = popularityOverrideRaw as number;
-        }
-
-        if (popularityOverrideUntil === null) {
-          data.popularityOverrideUntil = null;
-        } else if (popularityOverrideUntil !== undefined) {
-          data.popularityOverrideUntil = popularityOverrideUntilDate as Date;
-        }
-
-        // touch when images-only update
-        if (!Object.keys(data).length) {
-          data.updatedAt = new Date();
-        }
-
-        // persist product update under row lock; a price down to the sale price or below ends the
-        // sale in the database (db/05), which writes its end in the admin log (PRODUCT_SALE)
-        const after = await db.product.update({
-          where: { id: productIdRaw },
-          data,
-          select: productResponseSelect,
-        });
-
-        // build diff list for admin audit log
-        const auditChanges = buildProductUpdateAuditChanges(before, {
-          after,
-          input: {
-            name,
-            description,
-            safety,
-            sku,
-            price,
-            categoryId,
-            popularityOverride,
-            popularityOverrideUntil,
-          },
-        });
-
-        // write admin audit log when something actually changed
-        if (auditChanges.length) {
-          await writeAdminAuditLog(db, {
-            actorId,
-            actorRole,
-            entityType: 'product',
-            entityId: after.id,
-            action: 'PRODUCT_UPDATE',
-            changes: auditChanges,
-          });
-        }
-
-        // write product price change log when price changed
-        if (price !== undefined && before.price.toString() !== after.price.toString()) {
-          await writeProductPriceChangeLog(db, {
-            productId: after.id,
-            beforePrice: before.price,
-            afterPrice: after.price,
-            mode: 'fixed',
-            value: computeFixedDelta(before.price, after.price),
-          });
-        }
-
-        // the new sale is counted from the new price, after the old one went and the price changed
-        const final =
-          sale && sale !== 'keep'
-            ? await putSaleOn(
-                saleContext,
-                { id: after.id, price: after.price, salePrice: null, saleEndsAt: null },
-                sale,
-                newSaleEndsAt!,
-              )
-            : after;
+        const final = await writeProductUpdate({ db, actorId, actorRole }, plan, before);
 
         // the new images replace the old ones last, once every other row is written: the uploads
         // move to the paths of the product only for a request that is taken
@@ -334,10 +144,15 @@ export async function updateProduct({
     // fetch images and map urls
     const imageRows = await readProductImageUrls(updated.id as any);
     const expired = await expiredUnitsNow([updated.id]);
+    const costs = await lastUnitCostsNow({ actorId, actorRole }, [updated.id]);
 
     // map db row into api dto
     return mapProductRowToResponse({
-      product: { ...updated, expiredStock: expired.get(updated.id) ?? 0 },
+      product: {
+        ...updated,
+        expiredStock: expired.get(updated.id) ?? 0,
+        lastUnitCost: costs.get(updated.id) ?? null,
+      },
       images: imageRows,
       categoryPath: await readCategoryPath(updated.category.id),
       view: 'admin',

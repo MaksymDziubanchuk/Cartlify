@@ -160,6 +160,8 @@ What is important to state honestly:
 - product category reassignment
 - sales (`PATCH /api/products/:productId/sale`, admin/root): a discount by a percent of the price or an amount off it until an end in the future, `sale: null` takes it off (the same sale again, or nothing to take off, is `409` and changes nothing); while the sale lasts the product sells at the sale price (the cart, the confirmation and its smallest payment, the price sort and the price filters of the catalog), and the product answers show `salePrice` and `saleEndsAt` next to the usual `price`; a sale past its end is left out. A new price of a product on sale says what happens to the sale (`sale`: keep it, take it off, or a new one, each step with its log lines; the bulk price update keeps or removes the sales of every product alike), without it the change is `409 PRODUCT_SALE_DECISION_REQUIRED`. The log of prices keeps the start of a sale (by its percent or amount, negative, with the end) and a sale taken off; the admin log keeps every sale as `PRODUCT_SALE` (started, changed, taken off, ended by a price down to it) with the price, the sale before and after and the discount. A free product (a sale price of 0) is bought together with something that makes the smallest payment
 - bulk price update endpoint for admin/root (the usual prices)
+- a change of many products at once (`PATCH /api/products/batch`, admin/root): up to 100 products, each with fields of its own, the ones of `PATCH /api/products/:productId` without images, with the same checks, words on the sale and log lines; all of them or none, a refusal names every product refused the same way in `details.products`; two products can swap their article numbers
+- an admin sees next to the price the cost of a unit in the latest delivery of a supplier (`lastUnitCost`, `null` without one; a surplus or goods a buyer brought back are no purchase) in the card, the list and the answers of the changes of a product
 - product view/popularity-related fields in the data model
 
 ### Reviews and favorites
@@ -679,7 +681,7 @@ Examples of implemented business endpoints:
 
 - auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
 - users: admin list of users, get/update current user (an empty avatar removes it), get user by id, moderator removal of an avatar, root delete user
-- products: list, details, reviews, create/update/delete, upload images, sale, bulk price update
+- products: list, details, reviews, create/update/delete, upload images, sale, bulk price update, a change of many products
 - categories: list, create, update, delete
 - favorites: get/add/remove
 - orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund

@@ -84,6 +84,8 @@ export interface GetAllProductsQueryDto {
 }
 
 export interface FindAllProductsDto {
+  // an admin list reads the batches (lastUnitCost) under the context of its admin
+  actorId?: UserId;
   actorRole: Role;
 
   limit: number;
@@ -152,6 +154,8 @@ export interface ProductResponseDto {
   reservedStock?: number;
   // the units of batches that are over: not sold, the admin writes them off
   expiredStock?: number;
+  // the cost of a unit in the latest delivery of a supplier, null without one
+  lastUnitCost?: number | null;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
   deletedAt?: string | null;
@@ -308,6 +312,26 @@ export interface UpdateProductDto extends UpdateProductBodyDto {
 }
 
 export type UpdateProductResponseDto = FullProductResponseDto;
+
+// A CHANGE OF MANY PRODUCTS: each with fields of its own, the ones of PATCH of one product
+// without images; all of them or none
+export interface UpdateProductsBatchItemDto extends UpdateProductBodyDto {
+  productId: ProductId;
+}
+
+export interface UpdateProductsBatchBodyDto {
+  items: UpdateProductsBatchItemDto[];
+}
+
+export interface UpdateProductsBatchDto extends UpdateProductsBatchBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+}
+
+export interface UpdateProductsBatchResponseDto {
+  // the cards of an admin, in the order of the items
+  products: FullProductResponseDto[];
+}
 
 // PRODUCT SALE
 // a percent of the price, or an amount of money off it
