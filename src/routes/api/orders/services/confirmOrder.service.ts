@@ -1,3 +1,4 @@
+import env from '@config/env.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { getPgMessage, prisma, tx, isRetryableTxError } from '@db/client.js';
@@ -29,8 +30,6 @@ import {
 
 import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 import type { UserId } from 'types/ids.js';
-
-const DEFAULT_RESERVE_FOR = '15 minutes';
 
 // the items of an unconfirmed order of the user the order cannot be confirmed with now
 async function unavailableItemsOf(actorId: UserId, orderId: number) {
@@ -144,10 +143,10 @@ export async function confirmOrder({
           });
         }
 
-        // confirm in db
+        // confirm in db; the order holds its units ORDER_RESERVATION_MINUTES (15 unless set)
         await db.$executeRaw`select cartlify.confirm_order(
           ${Number(orderId)}::int,
-          ${DEFAULT_RESERVE_FOR}::interval
+          ${`${env.ORDER_RESERVATION_MINUTES} minutes`}::interval
         )`;
 
         const order = await db.order.findUnique({

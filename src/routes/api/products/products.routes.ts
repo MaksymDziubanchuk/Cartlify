@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { requestLimits } from '../../../plugins/requestLimits.js';
 import { productController } from './product.controllers.js';
 import { productSchemas } from './product.schemas.js';
 
@@ -73,7 +74,12 @@ export default async function productsRouter(app: FastifyInstance) {
   app.post(
     '/:productId/reviews',
     {
-      preHandler: [authGuard, requireRole(['USER']), validateId('productId')],
+      preHandler: [
+        authGuard,
+        requireRole(['USER']),
+        validateId('productId'),
+        ...requestLimits.review,
+      ],
       schema: productSchemas.postProductReviewRouterSchema,
     },
     productController.postProductReview,

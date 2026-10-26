@@ -105,6 +105,12 @@ enum ChatMessageSenderType {
   guest
 }
 
+// a kind of the legal texts of the shop the customers accept
+enum LegalDocumentKind {
+  terms
+  contract
+}
+
 model User {
   id           Int     @id @default(autoincrement())
   email        String  @unique
@@ -593,12 +599,6 @@ model AdminAuditLog {
   // the reports read the lines of an action in a period: the write-offs of a month
   @@index([action, createdAt])
   @@map("admin_audit_log")
-}
-
-// a kind of the legal texts of the shop the customers accept
-enum LegalDocumentKind {
-  terms
-  contract
 }
 
 // a version of the terms or of the contract of the shop. Root publishes it, nobody changes or takes

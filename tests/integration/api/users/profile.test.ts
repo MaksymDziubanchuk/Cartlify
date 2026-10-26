@@ -255,6 +255,8 @@ describe('GET /api/users/:userId for an admin', () => {
         openChatThreadId: null,
         avatarRemovals: 0,
         avatarRemovalsLimit: 2,
+        reviewRemovals: 0,
+        reviewRemovalsLimit: 2,
         period: { from: expect.any(String), to: expect.any(String) },
       });
     },
@@ -282,6 +284,8 @@ describe('GET /api/users/:userId for an admin', () => {
       openChatThreadId: null,
       avatarRemovals: 0,
       avatarRemovalsLimit: 2,
+      reviewRemovals: 0,
+      reviewRemovalsLimit: 2,
       period: expect.any(Object),
     });
   });

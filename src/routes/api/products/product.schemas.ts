@@ -1,6 +1,7 @@
 import type { FastifySchema } from 'fastify';
 
-import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
+import env from '@config/env.js';
+import { MAX_PRODUCT_IMAGES, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurityFor } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
@@ -377,7 +378,9 @@ const postProductRouterSchema = {
         'stock (PRODUCT_STOCK_NOT_ALLOWED), an article number over 64 signs (PRODUCT_SKU_TOO_LONG), ' +
         'the safety data of the manufacturer missing (PRODUCT_SAFETY_REQUIRED, `details.fields`) ' +
         'or wrong (PRODUCT_SAFETY_INVALID, `details.fields`), a manufacturer outside the EU ' +
-        'without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than 10 images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), an image Cloudinary cannot read (IMAGE_INVALID), or a text of the form with a NUL sign (TEXT_NUL_FORBIDDEN).',
+        'without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than ' +
+        MAX_PRODUCT_IMAGES +
+        ' images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), an image Cloudinary cannot read (IMAGE_INVALID), or a text of the form with a NUL sign (TEXT_NUL_FORBIDDEN).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -418,7 +421,15 @@ const postProductReviewRouterSchema = {
     'A review has a rating, a comment or both; a comment of spaces counts as no comment. ' +
     'One review per user and product: sending again adds the missing part (200), ' +
     'a rating to a comment-only review or a comment to a rating-only review; ' +
-    'a rating or a comment that is already set never changes.',
+    'a rating or a comment that is already set never changes. ' +
+    'A comment is checked before anything is written, by a language model with the rules of ' +
+    'the shop and by the moderation of OpenAI: a negative opinion is never a reason; obscene ' +
+    'words in any form, insults, dangerous content, a text about another thing, ads and ' +
+    'personal data are. A refused comment writes nothing, not even the rating of the request. ' +
+    'A check that is unavailable lets the comment through, REVIEW_CHECK_ENABLED false turns it ' +
+    'off. At most ' +
+    env.LIMIT_REVIEW_PER_USER +
+    ' reviews a user an hour.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -443,7 +454,13 @@ const postProductReviewRouterSchema = {
     },
 
     400: {
-      description: 'Invalid product review request.',
+      description:
+        'Invalid product review request. `REVIEW_COMMENT_REJECTED`: the check refused the ' +
+        'comment, details.reasons lists each rule it breaks: profanity (obscene words in any ' +
+        'form), abuse (insults, threats, hate), dangerous (calls to violence or extremism, ' +
+        'crimes, sexual content, self-harm), off_topic (not about this product or buying it), ' +
+        'spam (ads, links, promo codes, contacts), personal_data (phones, addresses, emails, ' +
+        'cards).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -526,7 +543,9 @@ const updateProductByIdRouterSchema = {
         'without a price (PRODUCT_SALE_REQUIRES_PRICE), a stock (PRODUCT_STOCK_NOT_ALLOWED), ' +
         'another word on the sale in a form ' +
         '(PRODUCT_SALE_ACTION_INVALID), a new sale that does not fit the new price ' +
-        '(PRODUCT_SALE_AMOUNT_TOO_HIGH, PRODUCT_SALE_TOO_SMALL, PRODUCT_SALE_ENDS_AT_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than 10 images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
+        '(PRODUCT_SALE_AMOUNT_TOO_HIGH, PRODUCT_SALE_TOO_SMALL, PRODUCT_SALE_ENDS_AT_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than ' +
+        MAX_PRODUCT_IMAGES +
+        ' images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -1052,7 +1071,13 @@ const deleteProductReviewRouterSchema = {
   summary: 'Delete product review',
   description:
     'Deletes a product review by product id and review id. ' +
-    'An author deletes own reviews, an admin or root deletes any review.',
+    'An author deletes own reviews, an admin or root deletes any review. A removal by a ' +
+    'moderator goes to the journal of the admins, and the author gets a mail with the number of ' +
+    'the removal and the limit the rules allow; a mail that fails is only logged. ' +
+    '`reviewRemovals` counts the removals of the reviews of the author by a moderator, this one ' +
+    'included; past `reviewRemovalsLimit` the page tells the admin to take the account to root, ' +
+    'who alone deletes accounts (DELETE /api/users/{userId}). An author deleting an own review ' +
+    'is no removal: the answer has the message alone.',
 
   params: {
     $ref: 'deleteProductReviewParamsSchema#',
@@ -1062,8 +1087,11 @@ const deleteProductReviewRouterSchema = {
   response: {
     200: {
       description: 'Product review was deleted successfully.',
-      $ref: 'messageResponseSchema#',
-      examples: [messageResponseExample],
+      $ref: 'deleteProductReviewResponseSchema#',
+      examples: [
+        { message: 'REVIEW_DELETED' },
+        { message: 'REVIEW_DELETED', reviewRemovals: 3, reviewRemovalsLimit: 5 },
+      ],
     },
 
     400: {

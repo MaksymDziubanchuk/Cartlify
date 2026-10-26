@@ -36,6 +36,37 @@ describe('the limits of the routes', () => {
     expect(REQUEST_LIMITS.mailPerEmail).toEqual({ max: 1, windowMs: 180_000 });
     expect(REQUEST_LIMITS.loginPerAddress.max).toBe(30);
   });
+
+  // a shop sets the most requests of each limit (LIMIT_*), the windows stay; read on each request
+  it('take the most requests of each limit from its setting', () => {
+    const settings = {
+      LIMIT_LOGIN_PER_ADDRESS: ['loginPerAddress', 31],
+      LIMIT_LOGIN_PER_EMAIL: ['loginPerEmail', 11],
+      LIMIT_REGISTER_PER_ADDRESS: ['registerPerAddress', 12],
+      LIMIT_MAIL_PER_ADDRESS: ['mailPerAddress', 13],
+      LIMIT_MAIL_PER_EMAIL: ['mailPerEmail', 2],
+      LIMIT_CHECKOUT_PER_USER: ['checkoutPerUser', 14],
+      LIMIT_PASSWORD_CHANGE_PER_USER: ['passwordChangePerUser', 15],
+      LIMIT_EXPORT_PER_USER: ['exportPerUser', 3],
+      LIMIT_REVIEW_PER_USER: ['reviewPerUser', 40],
+    } as const;
+    const before = Object.fromEntries(
+      Object.keys(settings).map((key) => [key, env[key as keyof typeof settings]]),
+    );
+
+    try {
+      for (const [key, [, value]] of Object.entries(settings)) {
+        env[key as keyof typeof settings] = value;
+      }
+
+      for (const [limit, value] of Object.values(settings)) {
+        expect(REQUEST_LIMITS[limit].max).toBe(value);
+      }
+      expect(REQUEST_LIMITS.mailPerEmail.windowMs).toBe(180_000);
+    } finally {
+      Object.assign(env, before);
+    }
+  });
 });
 
 describe('the pause of a login', () => {
@@ -116,6 +147,23 @@ describe('the pause of a login', () => {
       expect(await pauseOf(email, 70_000_001)).toBe(60);
     } finally {
       env.REQUEST_LIMITS_SCALE = scale;
+    }
+  });
+
+  // a shop sets how many wrong passwords pause the login (LOGIN_FAILURES_BEFORE_PAUSE)
+  it('pauses after the wrong passwords the setting names', async () => {
+    const email = emailOf('setting');
+    const before = env.LOGIN_FAILURES_BEFORE_PAUSE;
+    env.LOGIN_FAILURES_BEFORE_PAUSE = 3;
+
+    try {
+      for (let i = 0; i < 2; i += 1) recordLoginFailure(email, 90_000_000);
+      expect(await pauseOf(email, 90_000_001)).toBe(0);
+
+      recordLoginFailure(email, 90_000_000);
+      expect(await pauseOf(email, 90_000_001)).toBe(60);
+    } finally {
+      env.LOGIN_FAILURES_BEFORE_PAUSE = before;
     }
   });
 

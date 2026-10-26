@@ -52,3 +52,13 @@ export function webUrl(path: string, params: Record<string, string> = {}): strin
 
   return url.toString();
 }
+
+// address of a page a WEB_PAGE_* setting names: the id of the order or the product in place of
+// {id}, the query of the call next to the one of the page and before its fragment
+export function webPageUrl(
+  page: string,
+  opts: { id?: number; query?: Record<string, string> } = {},
+): string {
+  const path = opts.id === undefined ? page : page.replace('{id}', String(opts.id));
+  return webUrl(path, opts.query);
+}

@@ -571,6 +571,27 @@ const deleteProductReviewParamsSchema = {
   required: ['productId', 'reviewId'],
 } as const;
 
+// the answer of a deletion; a removal by a moderator counts the removals of the author
+const deleteProductReviewResponseSchema = {
+  $id: 'deleteProductReviewResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    message: { type: 'string', enum: ['REVIEW_DELETED'] },
+    reviewRemovals: {
+      type: 'integer',
+      description:
+        'Admin or root only: how many reviews of the author a moderator removed, this one ' +
+        'included. Past reviewRemovalsLimit the page tells the admin to take the account to root.',
+    },
+    reviewRemovalsLimit: {
+      type: 'integer',
+      description: 'Admin or root only: the removals the rules allow (REVIEW_REMOVALS_LIMIT).',
+    },
+  },
+  required: ['message'],
+} as const;
+
 // the article number of a product: one product of the catalog has it at a time
 const skuField = {
   type: ['string', 'null'],
@@ -1293,6 +1314,7 @@ export const productDtoSchemas = [
   reviewResponseSchema,
   reviewsResponseSchema,
   deleteProductReviewParamsSchema,
+  deleteProductReviewResponseSchema,
   productsListResponseSchema,
   productItemResponseSchema,
   productsUpdateCategoryParamsSchema,

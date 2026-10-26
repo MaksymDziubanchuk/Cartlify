@@ -1,21 +1,19 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderCancelledTemplate } from '@services/email/templates/orders/orderCancelled.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type OrderCancelLogger = {
   warn: (obj: unknown, msg?: string) => void;
   error: (obj: unknown, msg?: string) => void;
 };
 
-// frontend page of an order, a placeholder until the frontend fixes its routes
-const orderPage = (orderId: number) => `/orders/${orderId}`;
+// frontend page of an order (WEB_PAGE_ORDER)
+const orderPage = (orderId: number) => webPageUrl(env.WEB_PAGE_ORDER, { id: orderId });
 
 // the order with what the mail shows; it is sent after the cancel, as the system
 function loadOrder(orderId: number) {
@@ -63,7 +61,7 @@ export async function sendOrderCancelledEmail(
       // the name of the shop the mail is from
       appName: env.SHOP_NAME,
       orderId: order.id,
-      orderUrl: webUrl(orderPage(order.id)),
+      orderUrl: orderPage(order.id),
       items: order.items.map((item) => ({
         // the name the product had when the order was confirmed
         name: item.productName ?? item.product.name,
@@ -74,26 +72,15 @@ export async function sendOrderCancelledEmail(
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),
       ...(order.user.name ? { userName: order.user.name } : {}),
-      logoCid: 'cartlify-logo',
+      logoCid: SHOP_LOGO_CID,
     });
-
-    const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-    const logoBase64 = (await readFile(logoPath)).toString('base64');
 
     await sendEmail({
       to: order.user.email,
       subject,
       text,
       html,
-      attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
-      ],
+      attachments: [await shopLogoAttachment()],
     });
   } catch (err) {
     log.error({ err, orderId }, 'order cancelled mail was not sent');

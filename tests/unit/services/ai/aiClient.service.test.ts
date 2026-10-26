@@ -440,6 +440,18 @@ describe('generateText', () => {
   });
 });
 
+describe('temperature', () => {
+  it('lets one request ask for a temperature, openai picks its own without it', async () => {
+    const calls = stubFetch(() => answer('ok'));
+
+    await ai.generateText({ ...request, options: { temperature: 0 } });
+    await ai.generateText(request);
+
+    expect(sentBody(calls[0]!.body).temperature).toBe(0);
+    expect(sentBody(calls[1]!.body)).not.toHaveProperty('temperature');
+  });
+});
+
 describe('structured output', () => {
   const schema = {
     name: 'answer',
@@ -463,5 +475,107 @@ describe('structured output', () => {
     await ai.generateText(request);
 
     expect(sentBody(calls[0]!.body)).not.toHaveProperty('text');
+  });
+});
+
+// the moderation of openai scores a text in its categories (harassment, hate, violence and the
+// others), free of charge; the check of the comments of reviews takes its scores
+describe('moderateText', () => {
+  const MODERATIONS = 'https://api.openai.com/v1/moderations';
+
+  const scored = (scores: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+    jsonResponse({
+      id: 'modr-1',
+      model: 'omni-moderation-latest',
+      results: [{ flagged: false, categories: {}, category_scores: scores, ...extra }],
+    });
+
+  it('fails without an api key and calls nobody', async () => {
+    const unconfigured = await importWithEnv<AiClient>(SPECIFIER, {
+      ...CONFIG,
+      OPENAI_API_KEY: '',
+    });
+    const calls = stubFetch(() => scored({}));
+
+    expect(await rejectedBy(() => unconfigured.moderateText({ text: 'hi' }))).toMatchObject({
+      code: 'AI_API_UNAVAILABLE',
+      provider: 'openai',
+    });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('posts the text to the moderation api of openai with its model and our key', async () => {
+    const calls = stubFetch(() => scored({ hate: 0.1 }));
+
+    await ai.moderateText({ text: 'The lamp broke in a week.' });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      url: MODERATIONS,
+      method: 'POST',
+      headers: { authorization: 'Bearer sk-test-openai-key', 'content-type': 'application/json' },
+    });
+    expect(sentBody(calls[0]!.body)).toEqual({
+      model: 'omni-moderation-latest',
+      input: 'The lamp broke in a week.',
+    });
+  });
+
+  it('gives the scores of the categories, whether openai flagged the text, and the model', async () => {
+    stubFetch(() => scored({ hate: 0.91, violence: 0.02 }, { flagged: true }));
+
+    expect(await ai.moderateText({ text: 'x' })).toEqual({
+      provider: 'openai',
+      model: 'omni-moderation-latest',
+      flagged: true,
+      scores: { hate: 0.91, violence: 0.02 },
+    });
+  });
+
+  it.each([
+    ['has no results', () => jsonResponse({ id: 'modr-1', results: [] })],
+    ['has no scores', () => jsonResponse({ results: [{ flagged: false }] })],
+    ['has a score that is not a number', () => scored({ hate: 'high' })],
+    ['has a flag that is not a boolean', () => scored({}, { flagged: 'no' })],
+    ['is not json', () => textResponse('<html>', 200)],
+  ])('reports an answer that %s as an invalid format', async (_case, response) => {
+    stubFetch(response);
+
+    expect(await rejectedBy(() => ai.moderateText({ text: 'x' }))).toMatchObject({
+      code: 'AI_INVALID_RESPONSE_FORMAT',
+    });
+  });
+
+  it('reports the failures of openai the way the model does', async () => {
+    stubFetch(() => jsonResponse({ error: { message: 'Rate limit reached' } }, 429));
+    expect(await rejectedBy(() => ai.moderateText({ text: 'x' }))).toMatchObject({
+      code: 'AI_RATE_LIMIT',
+      statusCode: 429,
+    });
+
+    jest.restoreAllMocks();
+    stubFetch(() => jsonResponse({ error: { message: 'The server had an error' } }, 500));
+    expect(await rejectedBy(() => ai.moderateText({ text: 'x' }))).toMatchObject({
+      code: 'AI_API_UNAVAILABLE',
+      statusCode: 500,
+    });
+  });
+
+  it('waits as long as the request asks, then gives up as a timeout', async () => {
+    jest.useFakeTimers();
+    hangingFetch();
+
+    let settled = false;
+    const pending = ai.moderateText({ text: 'x', options: { timeoutMs: 500 } }).finally(() => {
+      settled = true;
+    });
+    pending.catch(() => undefined);
+
+    await jest.advanceTimersByTimeAsync(499);
+    expect(settled).toBe(false);
+
+    await jest.advanceTimersByTimeAsync(1);
+    expect(await rejectedBy(() => pending)).toMatchObject({ code: 'AI_TIMEOUT' });
+    expect(jest.getTimerCount()).toBe(0);
   });
 });

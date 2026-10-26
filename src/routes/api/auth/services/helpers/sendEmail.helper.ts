@@ -58,8 +58,8 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
     // prepare provider payload
     const payload = {
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME || 'Cartlify' },
-      reply_to: { email: env.EMAIL_REPLY_TO, name: env.EMAIL_FROM_NAME || 'Cartlify' },
+      from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME || env.SHOP_NAME },
+      reply_to: { email: env.EMAIL_REPLY_TO, name: env.EMAIL_FROM_NAME || env.SHOP_NAME },
       subject,
       content: [
         { type: 'text/plain', value: text },

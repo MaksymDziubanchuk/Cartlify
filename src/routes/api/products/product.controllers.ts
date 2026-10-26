@@ -316,7 +316,10 @@ const postProductReview: ControllerRouter<
 
   const { rating, comment } = req.body;
 
-  const args = pickDefined<CreateReviewDto>({ productId, userId, actorRole }, { rating, comment });
+  const args = pickDefined<CreateReviewDto>(
+    { productId, userId, actorRole, log: req.log },
+    { rating, comment },
+  );
 
   // a new review answers 201, a review that got its missing part answers 200
   const { review, created } = await productServices.createReview(args);
@@ -545,7 +548,10 @@ const deleteProductReview: ControllerRouter<
   const productId = Number(pp);
   const reviewId = Number(pr);
 
-  const args = pickDefined<DeleteProductReviewDto>({ productId, reviewId, actorId, actorRole }, {});
+  const args = pickDefined<DeleteProductReviewDto>(
+    { productId, reviewId, actorId, actorRole, log: req.log },
+    {},
+  );
 
   const result = await productServices.deleteProductReview(args);
   return reply.code(200).send(result);

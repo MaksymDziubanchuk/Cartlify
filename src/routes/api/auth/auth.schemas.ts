@@ -1,5 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
+import env from '@config/env.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
@@ -88,8 +89,12 @@ const messageResponseExample = {
 // Schema for user registration
 // the mails of a reset and of a verification share their limits (src/plugins/requestLimits.ts)
 const MAIL_LIMIT_TEXT =
-  '`RATE_LIMITED` with `details.limit: mail`: one mail to an address in 3 minutes (a reset and a verification count together), ' +
-  'or more than 10 from one address in 15 minutes; the same answer for an address with an account or without one. ' +
+  '`RATE_LIMITED` with `details.limit: mail`: more than ' +
+  env.LIMIT_MAIL_PER_EMAIL +
+  ' to an address in 3 minutes (a reset and a verification count together), ' +
+  'or more than ' +
+  env.LIMIT_MAIL_PER_ADDRESS +
+  ' from one address in 15 minutes; the same answer for an address with an account or without one. ' +
   '`retry-after` and `details.retryAfterSeconds` tell the wait.';
 
 const setRegisterSchema = {
@@ -137,7 +142,9 @@ const setRegisterSchema = {
     },
     429: {
       description:
-        '`RATE_LIMITED` with `details.limit: register`: more than 10 registrations from one address in an hour; `retry-after` and `details.retryAfterSeconds` tell the wait.',
+        '`RATE_LIMITED` with `details.limit: register`: more than ' +
+        env.LIMIT_REGISTER_PER_ADDRESS +
+        ' registrations from one address in an hour; `retry-after` and `details.retryAfterSeconds` tell the wait.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -206,8 +213,14 @@ const setLoginSchema = {
     },
     429: {
       description:
-        '`LOGIN_PAUSED`: 5 wrong passwords paused the login of the account, the right password too: for a minute, doubling with each next wrong password up to 15 minutes. ' +
-        '`RATE_LIMITED` with `details.limit: login`: more than 30 logins from one address or 10 of one email in 10 minutes. ' +
+        '`LOGIN_PAUSED`: ' +
+        env.LOGIN_FAILURES_BEFORE_PAUSE +
+        ' wrong passwords paused the login of the account, the right password too: for a minute, doubling with each next wrong password up to 15 minutes. ' +
+        '`RATE_LIMITED` with `details.limit: login`: more than ' +
+        env.LIMIT_LOGIN_PER_ADDRESS +
+        ' logins from one address or ' +
+        env.LIMIT_LOGIN_PER_EMAIL +
+        ' of one email in 10 minutes. ' +
         'Both give the wait in `retry-after` and `details.retryAfterSeconds`.',
       $ref: 'errorResponseSchema#',
     },
@@ -781,7 +794,9 @@ const setPasswordChangeSchema = {
   description:
     'Changes the password of a local account, the current one given. The other sessions end ' +
     '(REFRESH_TOKEN_REVOKED), the session of this browser goes on, open reset links close, and the owner ' +
-    'gets a mail about the change. At most 10 requests a user in 15 minutes.',
+    'gets a mail about the change. At most ' +
+    env.LIMIT_PASSWORD_CHANGE_PER_USER +
+    ' requests a user in 15 minutes.',
   security: openApiSecurity.authCookies,
 
   body: { $ref: 'authPasswordChangeBodySchema#' },

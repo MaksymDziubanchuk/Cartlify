@@ -9,31 +9,78 @@ import { TooManyRequestsError } from '@utils/errors.js';
 // (@fastify/rate-limit, RATE_LIMIT_MAX a minute from one address): the login (by address and by
 // email, and a pause of an account after wrong passwords), the registration, the mails of a
 // password reset and of a verification (one to an address in 3 minutes, so a script cannot empty
-// the plan of the mail provider and stop the mails of orders), the payment page.
+// the plan of the mail provider and stop the mails of orders), the payment page, a review.
 // The counts live in the memory of this copy of the server; with several copies they move to
-// redis. REQUEST_LIMITS_SCALE multiplies every limit (the tests raise them a thousand times)
+// redis. The most requests of each limit is a setting (LIMIT_*, read on each request, the windows
+// stay here); REQUEST_LIMITS_SCALE multiplies every limit (the tests raise them a thousand times)
 
 const MINUTE = 60_000;
 
-type Limit = { max: number; windowMs: number };
+type Limit = { readonly max: number; windowMs: number };
 
 export const REQUEST_LIMITS = {
-  loginPerAddress: { max: 30, windowMs: 10 * MINUTE },
-  loginPerEmail: { max: 10, windowMs: 10 * MINUTE },
-  registerPerAddress: { max: 10, windowMs: 60 * MINUTE },
-  mailPerAddress: { max: 10, windowMs: 15 * MINUTE },
-  mailPerEmail: { max: 1, windowMs: 3 * MINUTE },
-  checkoutPerUser: { max: 10, windowMs: MINUTE },
+  loginPerAddress: {
+    get max() {
+      return env.LIMIT_LOGIN_PER_ADDRESS;
+    },
+    windowMs: 10 * MINUTE,
+  },
+  loginPerEmail: {
+    get max() {
+      return env.LIMIT_LOGIN_PER_EMAIL;
+    },
+    windowMs: 10 * MINUTE,
+  },
+  registerPerAddress: {
+    get max() {
+      return env.LIMIT_REGISTER_PER_ADDRESS;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  mailPerAddress: {
+    get max() {
+      return env.LIMIT_MAIL_PER_ADDRESS;
+    },
+    windowMs: 15 * MINUTE,
+  },
+  mailPerEmail: {
+    get max() {
+      return env.LIMIT_MAIL_PER_EMAIL;
+    },
+    windowMs: 3 * MINUTE,
+  },
+  checkoutPerUser: {
+    get max() {
+      return env.LIMIT_CHECKOUT_PER_USER;
+    },
+    windowMs: MINUTE,
+  },
   // a session that guesses the current password to change it
-  passwordChangePerUser: { max: 10, windowMs: 15 * MINUTE },
+  passwordChangePerUser: {
+    get max() {
+      return env.LIMIT_PASSWORD_CHANGE_PER_USER;
+    },
+    windowMs: 15 * MINUTE,
+  },
   // the export of the data of a person reads every table of the person
-  exportPerUser: { max: 1, windowMs: 60 * MINUTE },
+  exportPerUser: {
+    get max() {
+      return env.LIMIT_EXPORT_PER_USER;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  // a comment of a review asks the model of openai; a refused one writes nothing and comes again
+  reviewPerUser: {
+    get max() {
+      return env.LIMIT_REVIEW_PER_USER;
+    },
+    windowMs: 60 * MINUTE,
+  },
 } as const satisfies Record<string, Limit>;
 
-// the wrong passwords of an account before its login pauses; the pause starts at a minute and
-// doubles with each next wrong password, up to 15 minutes; the count is forgotten an hour after
-// the last wrong password, or at once by the right one
-const LOGIN_FAILURES_BEFORE_PAUSE = 5;
+// the wrong passwords of an account before its login pauses (LOGIN_FAILURES_BEFORE_PAUSE, 5
+// unless set); the pause starts at a minute and doubles with each next wrong password, up to 15
+// minutes; the count is forgotten an hour after the last wrong password, or at once by the right one
 const LOGIN_PAUSE_MS = MINUTE;
 const LOGIN_PAUSE_MAX_MS = 15 * MINUTE;
 const LOGIN_FAILURES_KEPT_MS = 60 * MINUTE;
@@ -133,7 +180,7 @@ export function recordLoginFailure(email: string, now = Date.now()): void {
   const failures = loginFailures.get(key);
   const count =
     (failures && failures.lastAt + LOGIN_FAILURES_KEPT_MS > now ? failures.count : 0) + 1;
-  const threshold = scaled(LOGIN_FAILURES_BEFORE_PAUSE);
+  const threshold = scaled(env.LOGIN_FAILURES_BEFORE_PAUSE);
 
   const pause =
     count >= threshold
@@ -163,4 +210,5 @@ export const requestLimits = {
   checkout: [limitBy('checkout', REQUEST_LIMITS.checkoutPerUser, byUser)],
   passwordChange: [limitBy('passwordChange', REQUEST_LIMITS.passwordChangePerUser, byUser)],
   export: [limitBy('export', REQUEST_LIMITS.exportPerUser, byUser)],
+  review: [limitBy('review', REQUEST_LIMITS.reviewPerUser, byUser)],
 };

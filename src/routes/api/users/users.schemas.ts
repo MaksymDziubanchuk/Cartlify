@@ -1,5 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
+import env from '@config/env.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
@@ -72,6 +73,10 @@ const adminUserResponseExample = {
   locale: 'en',
   phone: '+10000000000',
   openChatThreadId: '6f1c2a3e-8a0b-4c5d-9e7f-1a2b3c4d5e6f',
+  avatarRemovals: 0,
+  avatarRemovalsLimit: 5,
+  reviewRemovals: 1,
+  reviewRemovalsLimit: 5,
   period: { from: '2025-12-02T10:00:00.000Z', to: '2026-01-01T10:00:00.000Z' },
   orders: [
     {
@@ -252,7 +257,9 @@ const getMeExportSchema = {
   description:
     'Everything the shop keeps of the signed-in person, read with the rights of the person, as one JSON file ' +
     '(content-disposition attachment): the profile, the orders, the favorites, the reviews and votes, the ' +
-    'chats, the logins, the open sessions and the consents to the terms and the contract. Once an hour.',
+    'chats, the logins, the open sessions and the consents to the terms and the contract. At most ' +
+    env.LIMIT_EXPORT_PER_USER +
+    ' a user an hour.',
 
   response: {
     200: {
@@ -264,7 +271,7 @@ const getMeExportSchema = {
       $ref: 'errorResponseSchema#',
     },
     429: {
-      description: 'The data was exported in the last hour (RATE_LIMITED, `details.limit` export).',
+      description: 'Too many exports in the last hour (RATE_LIMITED, `details.limit` export).',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -348,7 +355,9 @@ const getUserByIdSchema = {
     'no email, role, phone or reviews (a user reads those for themselves in GET /api/users/me); ' +
     '`include`, `from` and `to` are ignored for a user. ' +
     'An admin or root gets the whole profile but the password, the provider id and the id of the ' +
-    'avatar file, the open chat of the user with an admin (`openChatThreadId`), the period of the ' +
+    'avatar file, the open chat of the user with an admin (`openChatThreadId`), how many times a ' +
+    'moderator removed the avatar and the reviews of the account against the limits of the rules ' +
+    '(`avatarRemovals`, `reviewRemovals` and their limits), the period of the ' +
     'lists and the lists `include` names, of that period, newest first; `consents` are the ' +
     'versions of the terms and of the contract the user accepted and the ones each order was ' +
     'confirmed with, the text of each by GET /api/legal/documents/:documentId. ' +

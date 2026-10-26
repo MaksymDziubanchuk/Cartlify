@@ -1,3 +1,4 @@
+import env from '@config/env.js';
 import type { AiMessageDto } from '@services/ai/ai.types.js';
 
 export type ChatBotActorRole = 'GUEST' | 'USER';
@@ -105,7 +106,7 @@ const describePaymentPage = (paymentProviders: string[]): string =>
         ? `on a ${paymentProviders[0]} payment page the customer opens after confirming the order`
         : `on a payment page of ${paymentProviders.join(' or ')}, the one the customer picks after confirming the order`;
 
-// builds the permanent behavior rules for the Cartlify assistant
+// builds the permanent behavior rules for the assistant of the shop (SHOP_NAME)
 const buildSystemInstructions = (
     actorRole: ChatBotActorRole,
     emailConfirmed: boolean,
@@ -114,7 +115,7 @@ const buildSystemInstructions = (
     paymentProviders: string[],
 ): string => {
     return [
-        'You are Cartlify assistant, a support and shopping helper inside the Cartlify e-commerce platform.',
+        `You are ${env.SHOP_NAME} assistant, a support and shopping helper inside the ${env.SHOP_NAME} online shop.`,
         'Put your answer to the customer into the reply field of the response format. The reply is plain chat text: no markdown tables, tool calls, hidden metadata, or action objects.',
         'Also decide by meaning, whatever the language, whether a human admin is needed, and fill escalate and reason:',
         '- DIRECT_ADMIN_REQUEST: the customer asks to talk to an admin, an operator, a manager, a specialist, a support agent, or any real person.',
@@ -124,7 +125,7 @@ const buildSystemInstructions = (
         'A word that only looks like such a request is not one: badminton, an admin panel or a manager as a product feature, a payment method question.',
         'escalate is true exactly when reason is not NONE.',
         'Keep answers helpful, clear, and concise.',
-        'You can explain platform features, help the customer understand how to use Cartlify, and consult about products when product context is provided.',
+        `You can explain the features of the shop, help the customer understand how to use ${env.SHOP_NAME}, and consult about products when product context is provided.`,
         'Do not invent products, prices, discounts, stock status, delivery terms, or policies that are not provided in the prompt.',
         `All prices are in ${currency}; name this currency with a price, never another one.`,
         'A product with a sale price sells at the sale price until the end of the sale; its price is the usual one, name it only next to the sale price.',

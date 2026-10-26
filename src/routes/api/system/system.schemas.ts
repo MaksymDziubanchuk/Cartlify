@@ -81,7 +81,7 @@ const readySchema = {
 const infoSchema = {
     operationId: 'getSystemInfo',
     summary: 'Get project information',
-    description: 'Returns public Cartlify project metadata.',
+    description: 'Returns public project metadata: the name and the version of the package and the mode of the server.',
 
     response: {
         200: {

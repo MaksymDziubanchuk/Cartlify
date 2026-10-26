@@ -1,3 +1,6 @@
+import { statSync } from 'node:fs';
+import path from 'node:path';
+
 import * as dotenv from 'dotenv';
 
 declare global {
@@ -28,14 +31,43 @@ declare global {
       BCRYPT_ROUNDS: string;
 
       AVATAR_REMOVALS_LIMIT?: string;
+      REVIEW_REMOVALS_LIMIT?: string;
 
       RATE_LIMIT_MAX?: string;
       REQUEST_LIMITS_SCALE?: string;
       TRUST_PROXY_HOPS?: string;
       LOG_REQUEST_ADDRESSES?: string;
 
+      LIMIT_LOGIN_PER_ADDRESS?: string;
+      LIMIT_LOGIN_PER_EMAIL?: string;
+      LIMIT_REGISTER_PER_ADDRESS?: string;
+      LIMIT_MAIL_PER_ADDRESS?: string;
+      LIMIT_MAIL_PER_EMAIL?: string;
+      LIMIT_CHECKOUT_PER_USER?: string;
+      LIMIT_PASSWORD_CHANGE_PER_USER?: string;
+      LIMIT_EXPORT_PER_USER?: string;
+      LIMIT_REVIEW_PER_USER?: string;
+      LOGIN_FAILURES_BEFORE_PAUSE?: string;
+
+      UPLOAD_MAX_BYTES?: string;
+      PRODUCT_IMAGES_MAX?: string;
+      VERIFY_TTL_MS?: string;
+      ORDER_RESERVATION_MINUTES?: string;
+      STRIPE_PAGE_AFTER_RESERVATION_MINUTES?: string;
+      REVIEW_CHECK_ENABLED?: string;
+
       SHOP_TIME_ZONE?: string;
       SHOP_NAME?: string;
+      SHOP_LOGO_PATH?: string;
+
+      WEB_PAGE_OAUTH_CALLBACK?: string;
+      WEB_PAGE_LOGIN?: string;
+      WEB_PAGE_VERIFY_EMAIL?: string;
+      WEB_PAGE_PASSWORD_RESET?: string;
+      WEB_PAGE_CHECKOUT_SUCCESS?: string;
+      WEB_PAGE_CHECKOUT_CANCEL?: string;
+      WEB_PAGE_ORDER?: string;
+      WEB_PAGE_PRODUCT_REVIEWS?: string;
 
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
@@ -171,7 +203,7 @@ function wholeNumber(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
 
-  const value = /^d+$/.test(raw) ? Number(raw) : Number.NaN;
+  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(value)) {
     throw new Error(`Invalid env variable: ${name} must be a whole number from 0`);
   }
@@ -200,6 +232,93 @@ function timeZone(name: string, fallback: string): string {
   return raw;
 }
 
+// fail fast on a switch that is not true or false; unset gives the default
+function flag(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw new Error(`Invalid env variable: ${name} must be true or false`);
+}
+
+// fail fast on a page of the frontend that is not a path of the site: the links of the mails and
+// the redirect after a login go there, a value like //evil.example would send the people and
+// their tokens to another site. A page of an order or a product names it once by {id}
+function webPage(name: string, fallback: string, takesId: boolean): string {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const site = 'https://shop.invalid';
+  let onSite = /^\/(?![/\\])\S*$/.test(raw);
+  if (onSite) {
+    try {
+      onSite = new URL(raw, site).origin === site;
+    } catch {
+      onSite = false;
+    }
+  }
+
+  if (!onSite || raw.split('{id}').length - 1 !== (takesId ? 1 : 0)) {
+    throw new Error(
+      `Invalid env variable: ${name} must be a path of the site starting with /, ` +
+        (takesId ? 'with {id} once' : 'without {id}'),
+    );
+  }
+
+  return raw;
+}
+
+// fail fast on a logo that is not a png or a jpeg file: every mail carries it, a missing one
+// would stop each of them. A path from the folder the server runs in
+function logoFile(name: string, fallback: string): string {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  let isFile: boolean;
+  try {
+    isFile = statSync(path.resolve(process.cwd(), raw)).isFile();
+  } catch {
+    isFile = false;
+  }
+
+  if (!isFile || !/\.(png|jpe?g)$/i.test(raw)) {
+    throw new Error(`Invalid env variable: ${name} must be a png or jpeg file`);
+  }
+
+  return raw;
+}
+
+// stripe keeps a payment page at least 30 minutes and at most 24 hours from its opening; a page is
+// opened while the order is reserved and closes the minutes after the end of the reservation
+const STRIPE_PAGE_MIN_MINUTES = 30;
+const STRIPE_PAGE_MAX_MINUTES = 24 * 60;
+
+function reservationMinutes(): {
+  ORDER_RESERVATION_MINUTES: number;
+  STRIPE_PAGE_AFTER_RESERVATION_MINUTES: number;
+} {
+  const reservation = positiveInt('ORDER_RESERVATION_MINUTES', 15);
+  const pageAfter = positiveInt('STRIPE_PAGE_AFTER_RESERVATION_MINUTES', 30);
+
+  if (pageAfter < STRIPE_PAGE_MIN_MINUTES) {
+    throw new Error(
+      `Invalid env variable: STRIPE_PAGE_AFTER_RESERVATION_MINUTES must be at least ${STRIPE_PAGE_MIN_MINUTES}`,
+    );
+  }
+  if (reservation + pageAfter > STRIPE_PAGE_MAX_MINUTES) {
+    throw new Error(
+      'Invalid env variable: ORDER_RESERVATION_MINUTES and STRIPE_PAGE_AFTER_RESERVATION_MINUTES ' +
+        `together must be at most ${STRIPE_PAGE_MAX_MINUTES} (24 hours)`,
+    );
+  }
+
+  return {
+    ORDER_RESERVATION_MINUTES: reservation,
+    STRIPE_PAGE_AFTER_RESERVATION_MINUTES: pageAfter,
+  };
+}
+
 export default {
   // runtime mode and server bind
   NODE_ENV,
@@ -211,6 +330,24 @@ export default {
   WEB_ORIGIN: process.env.WEB_ORIGIN || '',
   // domain the site lives on, the address of a deleted account is built on it
   SITE_DOMAIN: process.env.SITE_DOMAIN || '',
+
+  // the pages of the frontend (on WEB_ORIGIN) the server sends the browser back to and the mails
+  // link to; a page of an order or of a product names it by {id}
+  // the browser comes back from a login with google, github or linkedin
+  WEB_PAGE_OAUTH_CALLBACK: webPage('WEB_PAGE_OAUTH_CALLBACK', '/auth/callback', false),
+  // the mail after a change of the password links to the login
+  WEB_PAGE_LOGIN: webPage('WEB_PAGE_LOGIN', '/web/login', false),
+  // the link of the verification of an email, with ?token=
+  WEB_PAGE_VERIFY_EMAIL: webPage('WEB_PAGE_VERIFY_EMAIL', '/web/login', false),
+  // the link of a password reset, with ?token=
+  WEB_PAGE_PASSWORD_RESET: webPage('WEB_PAGE_PASSWORD_RESET', '/web/auth/reset', false),
+  // the stripe payment page sends the buyer back, with ?session_id= or ?orderId=
+  WEB_PAGE_CHECKOUT_SUCCESS: webPage('WEB_PAGE_CHECKOUT_SUCCESS', '/checkout/success', false),
+  WEB_PAGE_CHECKOUT_CANCEL: webPage('WEB_PAGE_CHECKOUT_CANCEL', '/checkout/cancel', false),
+  // the mails of an order link to it
+  WEB_PAGE_ORDER: webPage('WEB_PAGE_ORDER', '/orders/{id}', true),
+  // the mail of a delivered order asks to rate each product there
+  WEB_PAGE_PRODUCT_REVIEWS: webPage('WEB_PAGE_PRODUCT_REVIEWS', '/products/{id}#reviews', true),
 
   // access token config
   JWT_ACCESS_SECRET: required('JWT_ACCESS_SECRET'),
@@ -230,6 +367,9 @@ export default {
   // password reset ttl
   RESET_TTL_MS: positiveInt('RESET_TTL_MS', 3600000),
 
+  // the life of the link of an email verification, a day unless given
+  VERIFY_TTL_MS: positiveInt('VERIFY_TTL_MS', 86_400_000),
+
   // bcrypt cost factor
   BCRYPT_ROUNDS: process.env.BCRYPT_ROUNDS ? Number(process.env.BCRYPT_ROUNDS) : 12,
 
@@ -237,13 +377,47 @@ export default {
   // admin to ask root about the account
   AVATAR_REMOVALS_LIMIT: positiveInt('AVATAR_REMOVALS_LIMIT', 5),
 
+  // the removals of the reviews of an author by a moderator the rules allow; past them the page
+  // tells the admin to ask root about the account
+  REVIEW_REMOVALS_LIMIT: positiveInt('REVIEW_REMOVALS_LIMIT', 5),
+
   // the requests a minute one address may make (@fastify/rate-limit)
   RATE_LIMIT_MAX: positiveInt('RATE_LIMIT_MAX', 100),
 
-  // multiplies the limits of the login, the registration, the mails and the payment page
-  // (src/plugins/requestLimits.ts); the integration tests raise them, all their requests come
-  // from one address
+  // multiplies every limit of a route (src/plugins/requestLimits.ts); the integration tests raise
+  // them, all their requests come from one address
   REQUEST_LIMITS_SCALE: positiveInt('REQUEST_LIMITS_SCALE', 1),
+
+  // the most requests of each limit of a route in its window (src/plugins/requestLimits.ts): the
+  // logins from one address and of one email in 10 minutes, the registrations from one address in
+  // an hour, the mails of a reset or a verification from one address in 15 minutes and to one
+  // address in 3 minutes, the payment pages of a user in a minute, the changes of the password of
+  // a user in 15 minutes, the exports of the data of a user and the reviews of a user in an hour
+  LIMIT_LOGIN_PER_ADDRESS: positiveInt('LIMIT_LOGIN_PER_ADDRESS', 30),
+  LIMIT_LOGIN_PER_EMAIL: positiveInt('LIMIT_LOGIN_PER_EMAIL', 10),
+  LIMIT_REGISTER_PER_ADDRESS: positiveInt('LIMIT_REGISTER_PER_ADDRESS', 10),
+  LIMIT_MAIL_PER_ADDRESS: positiveInt('LIMIT_MAIL_PER_ADDRESS', 10),
+  LIMIT_MAIL_PER_EMAIL: positiveInt('LIMIT_MAIL_PER_EMAIL', 1),
+  LIMIT_CHECKOUT_PER_USER: positiveInt('LIMIT_CHECKOUT_PER_USER', 10),
+  LIMIT_PASSWORD_CHANGE_PER_USER: positiveInt('LIMIT_PASSWORD_CHANGE_PER_USER', 10),
+  LIMIT_EXPORT_PER_USER: positiveInt('LIMIT_EXPORT_PER_USER', 1),
+  LIMIT_REVIEW_PER_USER: positiveInt('LIMIT_REVIEW_PER_USER', 30),
+  // the wrong passwords of an account before its login pauses for a minute, doubling after
+  LOGIN_FAILURES_BEFORE_PAUSE: positiveInt('LOGIN_FAILURES_BEFORE_PAUSE', 5),
+
+  // the biggest file of a form (an avatar, a picture of a product) and the most pictures of a
+  // product; a bigger file is cut off with 413 before cloudinary
+  UPLOAD_MAX_BYTES: positiveInt('UPLOAD_MAX_BYTES', 5_000_000),
+  PRODUCT_IMAGES_MAX: positiveInt('PRODUCT_IMAGES_MAX', 10),
+
+  // the minutes a confirmed order holds its units for the payment, and the minutes stripe keeps
+  // its payment page open after them
+  ...reservationMinutes(),
+
+  // the comments of reviews are checked by the model and the moderation of openai before they are
+  // written (src/routes/api/products/services/helpers/reviewCheck.helper.ts); false publishes
+  // them unchecked
+  REVIEW_CHECK_ENABLED: flag('REVIEW_CHECK_ENABLED', true),
 
   // the proxies in front of the server whose x-forwarded-for is trusted: railway puts one, so the
   // address of a client is the one it names (0 trusts none, the address of the connection counts)
@@ -258,6 +432,9 @@ export default {
 
   // the name of the shop on a payment and in the mails, Cartlify unless given
   SHOP_NAME: process.env.SHOP_NAME?.trim() || 'Cartlify',
+
+  // the logo every mail shows, a png or jpeg file from the folder the server runs in
+  SHOP_LOGO_PATH: logoFile('SHOP_LOGO_PATH', 'src/static/images/logo3.png'),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',

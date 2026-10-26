@@ -1,22 +1,20 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPaid.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 import { currencyOf } from '../../providers/index.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type OrderMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
   error: (obj: unknown, msg?: string) => void;
 };
 
-// frontend page of an order, a placeholder until the frontend fixes its routes
-const orderPage = (orderId: number) => `/orders/${orderId}`;
+// frontend page of an order (WEB_PAGE_ORDER)
+const orderPage = (orderId: number) => webPageUrl(env.WEB_PAGE_ORDER, { id: orderId });
 
 // the kinds of the documents a mail carries, in the order it names them
 const DOCUMENT_KINDS = ['terms', 'contract'] as const;
@@ -97,7 +95,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       // the name of the shop the mail is from
       appName: env.SHOP_NAME,
       orderId: order.id,
-      orderUrl: webUrl(orderPage(order.id)),
+      orderUrl: orderPage(order.id),
       items: order.items.map((item) => ({
         // the name the product had when the order was confirmed
         name: item.productName ?? item.product.name,
@@ -114,11 +112,8 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),
       recipientPhone: order.recipientPhone,
       attachedDocuments: documents.map((doc) => doc.kind),
-      logoCid: 'cartlify-logo',
+      logoCid: SHOP_LOGO_CID,
     });
-
-    const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-    const logoBase64 = (await readFile(logoPath)).toString('base64');
 
     await sendEmail({
       to: order.user.email,
@@ -126,13 +121,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       text,
       html,
       attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
+        await shopLogoAttachment(),
         ...documents.map((doc) => ({
           content: Buffer.from(doc.content, 'utf8').toString('base64'),
           type: 'text/plain',

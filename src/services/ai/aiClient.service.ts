@@ -3,7 +3,10 @@ import env from '@config/env.js';
 import {
     AiGenerateTextRequestDto,
     AiGenerateTextResultDto,
+    AiModerateTextRequestDto,
+    AiModerationResultDto,
     OpenAiErrorBodyDto,
+    OpenAiModerationResponseDto,
     OpenAiResponseDto,
 } from './ai.types.js';
 
@@ -20,6 +23,10 @@ import {
 
 // base url for OpenAI Responses API
 const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
+
+// the moderation of openai: free of charge, many languages, scores a text in its categories
+const OPENAI_MODERATIONS_URL = 'https://api.openai.com/v1/moderations';
+const OPENAI_MODERATION_MODEL = 'omni-moderation-latest';
 
 // fallback settings used when config values are missing or invalid
 const DEFAULT_OPENAI_MODEL = 'gpt-4.1-mini';
@@ -39,6 +46,7 @@ type OpenAiResponsesPayloadDto = {
     input: OpenAiInputMessageDto[];
     max_output_tokens: number;
     store: false;
+    temperature?: number;
     text?: {
         format: {
             type: 'json_schema';
@@ -157,6 +165,30 @@ const isOpenAiResponse = (value: unknown): value is OpenAiResponseDto => {
     );
 };
 
+// checks the shape of a moderation answer: its first result, a flag and a number for each score
+const isOpenAiModerationResponse = (
+    value: unknown,
+): value is OpenAiModerationResponseDto => {
+    if (!isRecord(value) || Array.isArray(value) || !Array.isArray(value.results)) {
+        return false;
+    }
+
+    const [result] = value.results as unknown[];
+
+    if (!isRecord(result) || typeof result.flagged !== 'boolean') {
+        return false;
+    }
+
+    const scores = result.category_scores;
+
+    return (
+        (value.model === undefined || typeof value.model === 'string') &&
+        isRecord(scores) &&
+        !Array.isArray(scores) &&
+        Object.values(scores).every((score) => typeof score === 'number')
+    );
+};
+
 // reads OpenAI error response body and keeps it nullable if invalid
 const readOpenAiErrorBody = async (
     response: Response,
@@ -175,9 +207,10 @@ const readOpenAiErrorBody = async (
 };
 
 // reads OpenAI success response body and validates its shape
-const readOpenAiSuccessBody = async (
+const readOpenAiSuccessBody = async <T>(
     response: Response,
-): Promise<OpenAiResponseDto> => {
+    isValid: (value: unknown) => value is T,
+): Promise<T> => {
     let body: unknown;
 
     try {
@@ -189,7 +222,7 @@ const readOpenAiSuccessBody = async (
         throw createAiInvalidResponseFormatError('openai', error);
     }
 
-    if (!isOpenAiResponse(body)) {
+    if (!isValid(body)) {
         throw createAiInvalidResponseFormatError('openai', body);
     }
 
@@ -224,6 +257,7 @@ const buildOpenAiPayload = (
     request: AiGenerateTextRequestDto,
 ): OpenAiResponsesPayloadDto => {
     const jsonSchema = request.options?.jsonSchema;
+    const temperature = request.options?.temperature;
 
     return {
         model: getOpenAiModel(request.options?.model),
@@ -238,6 +272,7 @@ const buildOpenAiPayload = (
         // openai keeps every request and answer in the account unless told not to; the chat
         // carries names, addresses and phones, and each turn sends the whole history anyway
         store: false,
+        ...(temperature !== undefined ? { temperature } : {}),
         // structured output: the model answers with json that matches the schema
         ...(jsonSchema
             ? {
@@ -254,10 +289,15 @@ const buildOpenAiPayload = (
     };
 };
 
-// sends request to OpenAI and returns normalized text result
-export const generateText = async (
-    request: AiGenerateTextRequestDto,
-): Promise<AiGenerateTextResultDto> => {
+// posts one request to OpenAI with our key and gives what read makes of the successful answer;
+// no key, the network, an error status, the timeout (also while the body comes) and anything
+// unexpected end as normalized ai errors
+const postToOpenAi = async <T>(
+    url: string,
+    payload: unknown,
+    timeoutMs: number,
+    read: (response: Response) => Promise<T>,
+): Promise<T> => {
     // reads api key from app config
     const apiKey = env.OPENAI_API_KEY.trim();
 
@@ -270,10 +310,6 @@ export const generateText = async (
         );
     }
 
-    // prepares payload and timeout before starting the request
-    const payload = buildOpenAiPayload(request);
-    const timeoutMs = getOpenAiTimeoutMs(request.options?.timeoutMs);
-
     // creates abort controller for manual request timeout
     const controller = new AbortController();
 
@@ -285,7 +321,7 @@ export const generateText = async (
     try {
         // sends http request to OpenAI; a TypeError means a network failure only when fetch
         // itself throws it, one from reading the answer is not about the network
-        const response = await fetch(OPENAI_RESPONSES_URL, {
+        const response = await fetch(url, {
             method: 'POST',
             headers: {
                 Authorization: `Bearer ${apiKey}`,
@@ -313,8 +349,37 @@ export const generateText = async (
             throw createOpenAiHttpError(response.status, errorBody);
         }
 
+        return await read(response);
+    } catch (error) {
+        // keeps already normalized AI errors unchanged
+        if (isAiServiceError(error)) {
+            throw error;
+        }
+
+        // maps AbortController cancellation to AI_TIMEOUT, while waiting or while reading the answer
+        if (isAbortError(error)) {
+            throw createAiTimeoutError('openai', timeoutMs, error);
+        }
+
+        // maps unexpected failures to AI_UNKNOWN_ERROR
+        throw createAiUnknownError('openai', error);
+    } finally {
+        // clears timeout timer after request finishes or fails
+        clearTimeout(timeoutId);
+    }
+};
+
+// sends request to OpenAI and returns normalized text result
+export const generateText = async (
+    request: AiGenerateTextRequestDto,
+): Promise<AiGenerateTextResultDto> => {
+    // prepares payload and timeout before starting the request
+    const payload = buildOpenAiPayload(request);
+    const timeoutMs = getOpenAiTimeoutMs(request.options?.timeoutMs);
+
+    return postToOpenAi(OPENAI_RESPONSES_URL, payload, timeoutMs, async (response) => {
         // reads and validates successful OpenAI response
-        const body = await readOpenAiSuccessBody(response);
+        const body = await readOpenAiSuccessBody(response, isOpenAiResponse);
 
         // an answer cut short is never a text: the json of a structured answer breaks off
         if (body.status === 'incomplete') {
@@ -340,26 +405,31 @@ export const generateText = async (
             text,
             responseId: body.id ?? null,
         };
-    } catch (error) {
-        // keeps already normalized AI errors unchanged
-        if (isAiServiceError(error)) {
-            throw error;
-        }
+    });
+};
 
-        // maps AbortController cancellation to AI_TIMEOUT, while waiting or while reading the answer
-        if (isAbortError(error)) {
-            throw createAiTimeoutError('openai', timeoutMs, error);
-        }
+// asks the moderation of OpenAI to score a text and returns the scores of its categories
+export const moderateText = async (
+    request: AiModerateTextRequestDto,
+): Promise<AiModerationResultDto> => {
+    const payload = { model: OPENAI_MODERATION_MODEL, input: request.text };
+    const timeoutMs = getOpenAiTimeoutMs(request.options?.timeoutMs);
 
-        // maps unexpected failures to AI_UNKNOWN_ERROR
-        throw createAiUnknownError('openai', error);
-    } finally {
-        // clears timeout timer after request finishes or fails
-        clearTimeout(timeoutId);
-    }
+    return postToOpenAi(OPENAI_MODERATIONS_URL, payload, timeoutMs, async (response) => {
+        const body = await readOpenAiSuccessBody(response, isOpenAiModerationResponse);
+        const [result] = body.results;
+
+        return {
+            provider: 'openai',
+            model: body.model ?? OPENAI_MODERATION_MODEL,
+            flagged: result!.flagged,
+            scores: result!.category_scores,
+        };
+    });
 };
 
 // public service object for consistent imports
 export const aiClientService = {
     generateText,
+    moderateText,
 };

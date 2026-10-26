@@ -14,7 +14,14 @@ const realSendGrid = isRealService('sendgrid');
 const REFUSED_KEY = 'SG.refused-by-the-test';
 
 // a file the mail carries; text is its content read as utf-8
-export type SentAttachment = { filename: string; type: string; disposition: string; text: string };
+// an attachment with its content as sent (base64) and read as text
+export type SentAttachment = {
+  filename: string;
+  type: string;
+  disposition: string;
+  text: string;
+  content: string;
+};
 
 export type SentMail = {
   to: string[];
@@ -67,6 +74,7 @@ const mailOf = (payload: SendGridPayload): SentMail => {
       type: file.type ?? '',
       disposition: file.disposition ?? 'attachment',
       text: Buffer.from(file.content ?? '', 'base64').toString('utf8'),
+      content: file.content ?? '',
     })),
     status: 0,
     accepted: false,

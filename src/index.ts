@@ -17,7 +17,7 @@ const SHUTDOWN_DEADLINE_MS = 10_000;
 
 // initialize external dependencies and start background workers before app listen
 async function bootstrap() {
-  // settings that switch a feature off; production does not start with them at all
+  // settings that switch a feature off; production does not start without some of them
   for (const warning of startupWarnings(env)) app.log.warn(warning);
 
   // wait for redis only for a limited time, the client keeps reconnecting in the background

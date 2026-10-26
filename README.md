@@ -116,11 +116,11 @@ What is important to state honestly:
 - refresh token rotation: `POST /api/auth/refresh` answers 204 and sets both tokens as cookies, no token in the body
 - a session ended on purpose (a logout, a reset or a change of the password, a role change by root, a closed session) is a plain `401 REFRESH_TOKEN_REVOKED` when its cookie comes back, the other sessions go on; a token already renewed coming back was copied and ends every session (`403 REFRESH_TOKEN_REUSE_DETECTED`)
 - sessions: `GET /api/auth/sessions` lists the open sessions of the user (the browser that opened each, its last renewal, its deadline, the current one), `DELETE /api/auth/sessions/:sessionId` ends one; a session keeps its id across its renewals
-- data export: `GET /api/users/me/export` gives the signed-in person everything the shop keeps of them as one JSON file (profile, orders, favorites, reviews and votes, chats, logins, sessions, the consents to the terms and the contract), once an hour; database functions of the system empty the network data of old logins and remove the data of idle guests and the chats of accounts deleted long ago, each with the days it keeps (run by the periodic tasks)
+- data export: `GET /api/users/me/export` gives the signed-in person everything the shop keeps of them as one JSON file (profile, orders, favorites, reviews and votes, chats, logins, sessions, the consents to the terms and the contract), once an hour unless `LIMIT_EXPORT_PER_USER` says otherwise; database functions of the system empty the network data of old logins and remove the data of idle guests and the chats of accounts deleted long ago, each with the days it keeps (run by the periodic tasks)
 - password change: `POST /api/auth/password/change` with the current password ends the other sessions, keeps this one, closes the reset links and mails the owner; a new reset link closes the ones mailed before, a reset closes them all
 - a role change by root ends the sessions of the person; an access token of the old role the database refuses answers `401 ACCESS_TOKEN_EXPIRED`, the page renews the session
 - forgot password / reset password
-- OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback`, with `?error=<errorCode>` when the login failed
+- OAuth entry points and callbacks for Google, GitHub, and LinkedIn; a callback sends the browser back to the frontend page `WEB_ORIGIN/auth/callback` (`WEB_PAGE_OAUTH_CALLBACK`), with `?error=<errorCode>` when the login failed
 - guest-to-user data migration during login/OAuth flows
 - guest chat continuity: the cart, the favorites and the chats of the guest move to the account at a login (password or OAuth) and at the verification of the email in the browser of the guest, not at the registration; registering an address that was registered before and never verified sets the new password and mails a new link
 - the list of users for an admin or root (`GET /api/users`), root accounts included: every field of an account and its last login (`lastLoginAt`), an empty one is null; filters that go together — a part of the email in any case (`_` and `%` are plain characters), roles and providers (several through commas), the email confirmation, the deleted accounts (only with `deleted=true`); the order is the sign-up or the last login (`sortBy`, `sortOrder`), equal values go by id, accounts that never logged in come last; pages by cursor with the total of the filters
@@ -128,7 +128,7 @@ What is important to state honestly:
 - avatars: every answer that names an account gives `avatarUrls` in four sizes and `avatarIsDefault`: the own picture of the account, or, without one, the first letter of the name (of the email when there is no name) on a color of the account, the way a Google account shows it; a deleted account is G on grey. Cloudinary draws the letter at the url on a plain picture, nothing is stored per account; the server puts that picture into the Cloudinary folder of its environment when it starts, so a new Cloudinary account needs no step by hand
 - the picture of a Google, GitHub or LinkedIn account becomes the avatar of a new account: on the login that creates the account the server downloads it from the provider (https on the hosts of the provider only, no redirects, 256 px, jpeg, png or webp by its content, up to 5 MB) and keeps it at Cloudinary as the avatar; it waits at most 4 seconds, and whatever goes wrong the login goes on with the drawn letter. A later login, or a login that links an account we have, takes no picture, so a removed avatar never comes back
 - avatar removal: the owner removes the own avatar with an empty `avatar` in `PATCH /api/users/me` (JSON or a form field); a moderator removes the avatar of another account with `DELETE /api/users/:userId/avatar` — an admin from a user account, root from any account, through the database function `cartlify.remove_user_avatar`. The file goes from Cloudinary after the change. A removal by a moderator goes to the admin journal and mails the person which removal it is; the answer and the profile an admin reads give `avatarRemovals` and `avatarRemovalsLimit` (`AVATAR_REMOVALS_LIMIT`, 5 unless set), and past the limit the admin takes the account to root, who alone deletes accounts
-- user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp by its content, whatever type the form names, up to 5 MB, a bigger one gets `413 PAYLOAD_TOO_LARGE`; it replaces the avatar only once the profile is written, a refused request changes nothing), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
+- user profile read/update endpoints: the update takes JSON or a multipart form with an avatar file (jpeg, png or webp by its content, whatever type the form names, up to 5 MB (`UPLOAD_MAX_BYTES`), a bigger one gets `413 PAYLOAD_TOO_LARGE`; it replaces the avatar only once the profile is written, a refused request changes nothing), the name and the locale are up to 100 characters, the phone is empty (removes it) or exactly `+380501234567`-style, a plus and 8 to 15 digits, in JSON and in a form alike; ids in the path are whole numbers from 1 to 2147483647
 - account deletion: a user deletes their own account (`DELETE /api/users/me`: the password of a local account, or a login of the last 10 minutes for Google, GitHub and LinkedIn; orders waiting for payment, paid or shipped are shown first and deleted only on a confirmed second request), root deletes any user except themselves. The row stays, emptied of everything personal, named Guest and marked with `deletedAt`: its owner can no longer change it, other users get `404 USER_NOT_FOUND` for its profile, an admin still reads it; an order waiting for payment is cancelled with its stock returned and its payment page closed, a payment that still comes is refunded in full; paid and shipped orders are delivered; favorites, reviews and chat messages stay, open chats are closed. The person gets a mail with the orders still on their way and what happened to the cancelled ones; an account already deleted answers `404 USER_NOT_FOUND`, a deletion by root keeps a line in the admin log, and the admin list of root names a deleted admin with its `deletedAt`
 - login logging
 
@@ -155,7 +155,7 @@ What is important to state honestly:
 - every sale names the lowest price of the 30 days before it (`salePriorPrice`, read from the log of prices), the price a reduction is compared with; `POST /api/products/sales` puts many products on sale at once, each with its own sale or one sale for a category and its branch, all or nothing
 - the safety and origin data an offer shows in the EU (GPSR): the manufacturer with its addresses and country, a person responsible in the EU for a manufacturer outside it, the warnings; a new product needs them, the card gives them as `safety`
 - stock in batches (admin/root): a delivery (`POST /api/products/stock/deliveries`) takes in a batch of each item at its cost of a unit in the money of the shop, with an optional last good day and the number the supplier gave it; `source` is a supplier, a surplus an inventory found or goods a buyer brought back. A write-off (`POST /api/products/stock/write-offs`) takes free units from the batch named or from the batches in the order of a sale, with a reason (damaged, defective, expired, a shortage an inventory found, returned to the supplier, other with a note); the units the waiting orders hold stay. A sale takes the batch that ends first, then the ones without an end, the oldest first, and keeps what it took from which batch: the cost of the goods it sold; a cancel of a paid order puts the units back into the same batches. A batch whose last good day is behind the day of the shop (`SHOP_TIME_ZONE`) is over: its units are no free units anywhere a buyer looks or buys (the catalog, the cart, the confirm, the reserve, the bot), a payment of units held for an order whose batch got over meanwhile is refused and the money goes back, and an admin sees them apart (`expiredStock`) to write them off. All of a request or nothing; every step is a database function that keeps a line in the admin log (`STOCK_DELIVERY`, `STOCK_WRITE_OFF`), and the database checks that the stock is what the batches have left
-- product image upload flow: images come only as files of a form (creating a product takes only a form, an update takes JSON or a form), jpeg, png or webp by their content, up to 5 MB per file; an upload waits at a temporary id and takes the place of the product images only once the product is written, a refused request leaves no files and the images as they were; the files a product no longer has after an update are deleted
+- product image upload flow: images come only as files of a form (creating a product takes only a form, an update takes JSON or a form), jpeg, png or webp by their content, up to 5 MB per file (`UPLOAD_MAX_BYTES`) and 10 per product (`PRODUCT_IMAGES_MAX`); an upload waits at a temporary id and takes the place of the product images only once the product is written, a refused request leaves no files and the images as they were; the files a product no longer has after an update are deleted
 - a product without an image is no part of what a buyer or a guest browses (the catalog, the suggestions, the favorites, the counts of the category tree, the products the bot names); its card opens by its id with `images: []`, and a cart that holds it shows it with `images: null`. An admin lists it with `images: null`
 - product category reassignment
 - sales (`PATCH /api/products/:productId/sale`, admin/root): a discount by a percent of the price or an amount off it until an end in the future, `sale: null` takes it off (the same sale again, or nothing to take off, is `409` and changes nothing); while the sale lasts the product sells at the sale price (the cart, the confirmation and its smallest payment, the price sort and the price filters of the catalog), and the product answers show `salePrice` and `saleEndsAt` next to the usual `price`; a sale past its end is left out. A new price of a product on sale says what happens to the sale (`sale`: keep it, take it off, or a new one, each step with its log lines; the bulk price update keeps or removes the sales of every product alike), without it the change is `409 PRODUCT_SALE_DECISION_REQUIRED`. The log of prices keeps the start of a sale (by its percent or amount, negative, with the end) and a sale taken off; the admin log keeps every sale as `PRODUCT_SALE` (started, changed, taken off, ended by a price down to it) with the price, the sale before and after and the discount. A free product (a sale price of 0) is bought together with something that makes the smallest payment
@@ -168,7 +168,8 @@ What is important to state honestly:
 
 - product reviews, each with its author (`user: { id, name, avatarUrls, deleted }`); a deleted account stays the author, named Guest
 - each review says whether its author bought the product (`verifiedPurchase`); the list sorts by the newest, the most helpful or the rating, and the mail of a delivered order asks to rate each product
-- review deletion rules for user/admin/root
+- review deletion rules for user/admin/root; a review an admin or root removes goes to the admin journal and mails the author which removal it is, of which product; the answer and the profile an admin reads give `reviewRemovals` and `reviewRemovalsLimit` (`REVIEW_REMOVALS_LIMIT`, 5 unless set), and past the limit the admin takes the account to root. An author deleting an own review is no removal
+- the comment of a review is checked before anything is written, by two checks at once: a language model with the rules of the shop (obscene words in any language and form, insults, dangerous content, a text about another thing, ads, personal data; a negative opinion, rude words that are not obscene and questions about the product are published) and the free moderation of OpenAI (`omni-moderation-latest`) for the dangerous kinds alone, from a high score. A refused comment answers `400 REVIEW_COMMENT_REJECTED` with `details.reasons` and writes nothing, the rating of the request neither; a check that fails or is too slow lets the comment through and goes to the log without the text; without `OPENAI_API_KEY` or with `REVIEW_CHECK_ENABLED=false` nobody is asked and the start warns about it. 30 reviews a user an hour (`LIMIT_REVIEW_PER_USER`)
 - a product removed from the catalog takes no new review (`404 PRODUCT_NOT_FOUND`)
 - review voting endpoint: a vote is for the review of another user, the author gets `403 REVIEW_OWN_VOTE_FORBIDDEN`
 - favorites for guest/user flows
@@ -204,7 +205,7 @@ Payments go through payment providers, none of them is the main one: the buyer n
 
 Stripe:
 
-- a Stripe page returns the buyer to `WEB_ORIGIN/checkout/success?session_id=<id>` or `WEB_ORIGIN/checkout/cancel?orderId=<id>` (page paths agreed with the frontend, placeholders for now)
+- a Stripe page returns the buyer to `WEB_ORIGIN/checkout/success?session_id=<id>` or `WEB_ORIGIN/checkout/cancel?orderId=<id>`; the pages of the frontend the server links to and sends the browser back to are settings (`WEB_PAGE_*`, the paths above unless set), a path of the site from `/` (a value that leaves the site stops the start); a confirmed order holds its units 15 minutes (`ORDER_RESERVATION_MINUTES`), stripe keeps its page open 30 minutes after that (`STRIPE_PAGE_AFTER_RESERVATION_MINUTES`)
 - `GET /api/payments/stripe/checkout/sessions/:sessionId` tells the page the buyer comes back to how the payment stands; Stripe is asked directly, it knows about the payment before the webhook comes. An id that is not one of a Stripe checkout session is refused with `400 VALIDATION_ERROR` before Stripe, a session Stripe does not have or one not opened for an order answers `404 CHECKOUT_SESSION_NOT_FOUND`
 - `POST /api/payments/stripe/webhook` (Stripe signature, no CSRF token, outside the request rate limit; the webhook endpoint of the Stripe account points here) records the payment, returns a payment the order cannot take in full and releases the reservation of a closed page after the grace window; the same payment delivered again changes nothing, also after the order was shipped, delivered or cancelled; a page of another tool in the same Stripe account is acknowledged with `skipped: NOT_AN_ORDER` and its money is left alone
 
@@ -354,6 +355,24 @@ HOST=0.0.0.0
 WEB_ORIGIN=https://shop.example.com
 # domain the site lives on, without https:// (required in production): a deleted account gets an address on it
 SITE_DOMAIN=shop.example.com
+# the pages of the frontend on WEB_ORIGIN the server links to and sends the browser back to, a path from /;
+# the page of an order or of a product names it by {id}
+# the page a login with google, github or linkedin comes back to
+WEB_PAGE_OAUTH_CALLBACK=/auth/callback
+# the page the mail after a change of the password links to
+WEB_PAGE_LOGIN=/web/login
+# the page the link of an email verification opens, with ?token=
+WEB_PAGE_VERIFY_EMAIL=/web/login
+# the page the link of a password reset opens, with ?token=
+WEB_PAGE_PASSWORD_RESET=/web/auth/reset
+# the page the stripe payment page sends the buyer back to, with ?session_id=
+WEB_PAGE_CHECKOUT_SUCCESS=/checkout/success
+# the page the stripe payment page sends the buyer back to on cancel, with ?orderId=
+WEB_PAGE_CHECKOUT_CANCEL=/checkout/cancel
+# the page the mails of an order link to
+WEB_PAGE_ORDER=/orders/{id}
+# the page the mail of a delivered order asks to rate each product on
+WEB_PAGE_PRODUCT_REVIEWS=/products/{id}#reviews
 
 # PostgreSQL
 DATABASE_URL=postgresql://cartlify_app:your_password@localhost:5432/cartlify_dev
@@ -369,27 +388,62 @@ JWT_REFRESH_TTL_SHORT=86400
 JWT_REFRESH_TTL_LONG=2592000
 GUEST_ID_TTL=157680000
 RESET_TTL_MS=3600000
+# the life of the link of an email verification in ms (a day unless given)
+VERIFY_TTL_MS=86400000
 BCRYPT_ROUNDS=12
 # the avatar removals by a moderator the rules allow an account (5 unless given)
 AVATAR_REMOVALS_LIMIT=5
+# the removals of the reviews of an author by a moderator the rules allow (5 unless given)
+REVIEW_REMOVALS_LIMIT=5
 # the requests a minute one address may make (100 unless given)
 RATE_LIMIT_MAX=100
-# multiplies the limits of the login, the registration, the mails and the payment page (1 unless given)
+# multiplies every limit of a route (1 unless given)
 REQUEST_LIMITS_SCALE=1
 # the proxies in front of the server whose x-forwarded-for is trusted (1 unless given: railway puts one)
 TRUST_PROXY_HOPS=1
 # true logs the addresses of each request, to check how many proxies a new host puts in front
 LOG_REQUEST_ADDRESSES=false
+# the most requests of each limit of a route, the windows stay in the code
+# the logins from one address in 10 minutes
+LIMIT_LOGIN_PER_ADDRESS=30
+# the logins of one email in 10 minutes
+LIMIT_LOGIN_PER_EMAIL=10
+# the registrations from one address in an hour
+LIMIT_REGISTER_PER_ADDRESS=10
+# the mails of a reset or a verification from one address in 15 minutes
+LIMIT_MAIL_PER_ADDRESS=10
+# the mails of a reset or a verification to one address in 3 minutes
+LIMIT_MAIL_PER_EMAIL=1
+# the payment pages of a user in a minute
+LIMIT_CHECKOUT_PER_USER=10
+# the changes of the password of a user in 15 minutes
+LIMIT_PASSWORD_CHANGE_PER_USER=10
+# the exports of the data of a user in an hour
+LIMIT_EXPORT_PER_USER=1
+# the reviews of a user in an hour
+LIMIT_REVIEW_PER_USER=30
+# the wrong passwords of an account before its login pauses for a minute, doubling after
+LOGIN_FAILURES_BEFORE_PAUSE=5
+# the biggest file of a form in bytes and the most pictures of a product
+UPLOAD_MAX_BYTES=5000000
+PRODUCT_IMAGES_MAX=10
+# the minutes a confirmed order holds its units and the minutes stripe keeps its payment page open
+# after them (at least 30); both together at most 1440, the 24 hours stripe takes
+ORDER_RESERVATION_MINUTES=15
+STRIPE_PAGE_AFTER_RESERVATION_MINUTES=30
 # the time zone of the days and months of the reports (Europe/Madrid unless given)
 SHOP_TIME_ZONE=Europe/Madrid
-# the name of the shop on a payment and in the mails (Cartlify unless given)
+# the name of the shop on a payment, in the mails, in the chat bot and in the documentation (Cartlify unless given)
 SHOP_NAME=Cartlify
+# the logo of every mail, a png or jpeg file from the folder of the server
+SHOP_LOGO_PATH=src/static/images/logo3.png
 
 # Redis
 REDIS_URL=redis://localhost:6379
 REDIS_ORDER_TIMEOUT_WORKER_MS=3000
 
-# OpenAI / AI assistant
+# OpenAI / AI assistant and the check of the comments of reviews; the check asks the model for
+# temperature 0, a model that does not take it (a reasoning one) lets every comment through
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=12000
@@ -397,6 +451,8 @@ OPENAI_MAX_OUTPUT_TOKENS=450
 # the answers of the chat bot a guest and a user get in 24 hours (30 and 100 unless given)
 CHAT_BOT_GUEST_DAILY_TURNS=30
 CHAT_BOT_USER_DAILY_TURNS=100
+# the model and the moderation of openai check the comments of reviews; false publishes them unchecked
+REVIEW_CHECK_ENABLED=true
 
 # Cloudinary (required: the app does not start without CLOUDINARY_URL or the three keys;
 # the upload tests use them too, see Run Commands)
@@ -628,10 +684,11 @@ npm test -- api:users api:products service:cloudinary
 npm test -- api:payments api:orders service:stripe
 
 # the bot tests answer as the model themselves; the tests of the model itself
-# (api/chat/model.test.ts) ask OpenAI for real with OPENAI_API_TEST_KEY from .env (never
-# OPENAI_API_KEY), a few cents a run, and check the form of the answer, not its words. GitHub
-# Actions takes the OPENAI_API_TEST_KEY secret
-npm test -- api:chat service:openai
+# (api/chat/model.test.ts, and the check of a review comment in api/products/reviewCheck.test.ts)
+# ask OpenAI for real with OPENAI_API_TEST_KEY from .env (never OPENAI_API_KEY), a few cents a
+# run, and check the form of the answer, not its words. GitHub Actions takes the
+# OPENAI_API_TEST_KEY secret
+npm test -- api:chat api:products service:openai
 
 # unit or integration tests only
 npm run test:unit
@@ -681,7 +738,7 @@ Examples of implemented business endpoints:
 
 - auth: register, login, refresh, logout, verify, password reset, OAuth callbacks, CSRF token
 - users: admin list of users, get/update current user (an empty avatar removes it), get user by id, moderator removal of an avatar, root delete user
-- products: list, details, reviews, create/update/delete, upload images, sale, bulk price update, a change of many products
+- products: list, details, reviews (the check of a comment, the removals of a moderator), create/update/delete, upload images, sale, bulk price update, a change of many products
 - categories: list, create, update, delete
 - favorites: get/add/remove
 - orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund

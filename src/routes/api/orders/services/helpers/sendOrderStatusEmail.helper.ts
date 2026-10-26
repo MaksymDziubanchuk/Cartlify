@@ -1,14 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-
 import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { webUrl } from '@helpers/webOrigin.js';
+import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderShippedTemplate } from '@services/email/templates/orders/orderShipped.template.js';
 import { buildOrderDeliveredTemplate } from '@services/email/templates/orders/orderDelivered.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
+import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type OrderStatusMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -23,11 +21,12 @@ const TEMPLATES = {
   delivered: buildOrderDeliveredTemplate,
 } satisfies Record<ShippingStatus, unknown>;
 
-// frontend page of an order, a placeholder until the frontend fixes its routes
-const orderPage = (orderId: number) => `/orders/${orderId}`;
+// frontend page of an order (WEB_PAGE_ORDER)
+const orderPage = (orderId: number) => webPageUrl(env.WEB_PAGE_ORDER, { id: orderId });
 
-// the reviews of a product on its page, where a buyer rates it; a placeholder too
-const reviewsPage = (productId: number) => `/products/${productId}#reviews`;
+// the reviews of a product on its page, where a buyer rates it (WEB_PAGE_PRODUCT_REVIEWS)
+const reviewsPage = (productId: number) =>
+  webPageUrl(env.WEB_PAGE_PRODUCT_REVIEWS, { id: productId });
 
 // the order with what the mail shows; it is sent after the status change, as the system
 function loadOrder(orderId: number) {
@@ -80,14 +79,14 @@ export async function sendOrderStatusEmail(
       // the name of the shop the mail is from
       appName: env.SHOP_NAME,
       orderId: order.id,
-      orderUrl: webUrl(orderPage(order.id)),
+      orderUrl: orderPage(order.id),
       // a delivered order asks the buyer to rate each product
       items: order.items.map((item) => ({
         // the name the product had when the order was confirmed
         name: item.productName ?? item.product.name,
         quantity: item.quantity,
         totalPrice: item.totalPrice.toString(),
-        ...(status === 'delivered' ? { reviewUrl: webUrl(reviewsPage(item.product.id)) } : {}),
+        ...(status === 'delivered' ? { reviewUrl: reviewsPage(item.product.id) } : {}),
       })),
       total: order.total.toString(),
       // the money of the provider that took it
@@ -96,26 +95,15 @@ export async function sendOrderStatusEmail(
       shippingAddress: order.shippingAddress,
       recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),
       recipientPhone: order.recipientPhone,
-      logoCid: 'cartlify-logo',
+      logoCid: SHOP_LOGO_CID,
     });
-
-    const logoPath = path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png');
-    const logoBase64 = (await readFile(logoPath)).toString('base64');
 
     await sendEmail({
       to: order.user.email,
       subject,
       text,
       html,
-      attachments: [
-        {
-          content: logoBase64,
-          type: 'image/png',
-          filename: 'logo3.png',
-          disposition: 'inline',
-          content_id: 'cartlify-logo',
-        },
-      ],
+      attachments: [await shopLogoAttachment()],
     });
   } catch (err) {
     log.error({ err, orderId }, `order ${status} mail was not sent`);

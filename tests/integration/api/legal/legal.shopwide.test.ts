@@ -577,13 +577,18 @@ describe('the mail of the payment', () => {
     );
     // the files of the mail; the logo goes inline, as in every mail of the shop
     expect(own[0]!.attachments.filter((file) => file.disposition === 'attachment')).toEqual([
-      { filename: 'terms.txt', type: 'text/plain', disposition: 'attachment', text: terms.content },
-      {
+      expect.objectContaining({
+        filename: 'terms.txt',
+        type: 'text/plain',
+        disposition: 'attachment',
+        text: terms.content,
+      }),
+      expect.objectContaining({
         filename: 'contract.txt',
         type: 'text/plain',
         disposition: 'attachment',
         text: contract.content,
-      },
+      }),
     ]);
   });
 

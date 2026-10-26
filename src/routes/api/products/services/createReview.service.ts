@@ -1,12 +1,20 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
-import { ConflictError, NotFoundError, isAppError, InternalError } from '@utils/errors.js';
+import {
+  BadRequestError,
+  ConflictError,
+  NotFoundError,
+  isAppError,
+  InternalError,
+} from '@utils/errors.js';
 
 import {
   buyersOf,
+  checkReviewComment,
   normalizeCreateReviewInput,
   mapReviewRowToResponse,
+  readCategoryPath,
   reviewAuthorSelect,
 } from './helpers/index.js';
 
@@ -16,6 +24,36 @@ export async function createReview(dto: CreateReviewDto): Promise<CreateReviewRe
   const { productId, userId, rating, comment, actorRole } = normalizeCreateReviewInput(dto);
 
   try {
+    // a comment is checked before anything is written, outside the transaction: the checks take a
+    // second or two. Every request with a comment is checked, also one the transaction refuses
+    // later (the review has a comment already), so no comment is ever written unchecked
+    if (comment) {
+      const subject = await prisma.$transaction(async (tx) => {
+        await setUserContext(tx, { userId, role: actorRole });
+
+        const product = await tx.product.findFirst({
+          where: { id: productId, deletedAt: null },
+          select: { name: true, categoryId: true, category: { select: { name: true } } },
+        });
+        if (!product) return null;
+
+        const path = await readCategoryPath(product.categoryId, tx);
+        return {
+          productName: product.name,
+          categoryPath: [...path.map((category) => category.name), product.category.name],
+        };
+      });
+      if (!subject) throw new NotFoundError('PRODUCT_NOT_FOUND');
+
+      // the reasons go to the person, the text is fixed and sent again; the rating of the same
+      // request is not written either
+      const reasons = await checkReviewComment({ comment, ...subject }, dto.log);
+      if (reasons.length > 0) {
+        dto.log.info({ productId, userId, reasons }, 'review comment rejected');
+        throw new BadRequestError('REVIEW_COMMENT_REJECTED', { reasons });
+      }
+    }
+
     const { row, created, author, bought } = await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId, role: actorRole });

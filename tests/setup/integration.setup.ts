@@ -73,8 +73,9 @@ isolateEnv(
     // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
-    // a short limit of avatar removals: a test passes it in three removals
+    // short limits of avatar and review removals: a test passes each in three removals
     AVATAR_REMOVALS_LIMIT: '2',
+    REVIEW_REMOVALS_LIMIT: '2',
     // every request of the tests comes from 127.0.0.1; each test file has an app and a count of its
     // own, a file of many requests would hit the 100 a minute of the app
     RATE_LIMIT_MAX: '1000',

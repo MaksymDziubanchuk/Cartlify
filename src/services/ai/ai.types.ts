@@ -16,6 +16,10 @@ export interface AiGenerateTextOptionsDto {
     timeoutMs?: number;
     maxOutputTokens?: number;
 
+    // how freely the model picks its words; 0 gives the same answer to the same request, as a
+    // check needs; the model of openai takes 1 without it
+    temperature?: number;
+
     // asks for json of this schema instead of plain text; the result text is then that json
     jsonSchema?: AiJsonSchemaDto;
 }
@@ -44,6 +48,24 @@ export interface AiGenerateTextResultDto {
     model: string;
     text: string;
     responseId: string | null;
+}
+
+// a text for the moderation of the provider, the scores of its categories come back
+export interface AiModerateTextRequestDto {
+    text: string;
+
+    options?: {
+        timeoutMs?: number;
+    };
+}
+
+// the scores of the text in each category of the moderation (0 to 1), and whether the provider
+// itself flags it
+export interface AiModerationResultDto {
+    provider: AiProviderName;
+    model: string;
+    flagged: boolean;
+    scores: Record<string, number>;
 }
 
 // supported normalized ai error codes
@@ -86,6 +108,16 @@ export interface OpenAiResponseDto {
     incomplete_details?: { reason?: string } | null;
     output_text?: string;
     output?: OpenAiOutputItemDto[];
+}
+
+// minimal OpenAI moderation response shape used by our wrapper
+export interface OpenAiModerationResponseDto {
+    id?: string;
+    model?: string;
+    results: Array<{
+        flagged: boolean;
+        category_scores: Record<string, number>;
+    }>;
 }
 
 // minimal OpenAI error body shape

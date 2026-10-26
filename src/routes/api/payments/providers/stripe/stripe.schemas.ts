@@ -34,7 +34,7 @@ const getCheckoutSessionByIdSchema = {
   operationId: 'getStripeCheckoutSessionById',
   summary: 'Get Stripe checkout session by id',
   description:
-    'Returns a Stripe checkout session by session id for the authenticated user: the page the buyer comes back to from a Stripe payment page (`WEB_ORIGIN/checkout/success?session_id=<id>`) asks how the payment stands. Stripe is asked directly, it knows about the payment before the webhook comes, so `paymentStatus: paid` may come while the order still waits for it. `order` tells the status of the order and whether the money of this payment went back (`paymentRefunded`): a payment after the end of the reservation that the order could not take is paid at Stripe and refunded at once.',
+    'Returns a Stripe checkout session by session id for the authenticated user: the page the buyer comes back to from a Stripe payment page (`WEB_ORIGIN` + `WEB_PAGE_CHECKOUT_SUCCESS`, `?session_id=<id>`) asks how the payment stands. Stripe is asked directly, it knows about the payment before the webhook comes, so `paymentStatus: paid` may come while the order still waits for it. `order` tells the status of the order and whether the money of this payment went back (`paymentRefunded`): a payment after the end of the reservation that the order could not take is paid at Stripe and refunded at once.',
 
   params: {
     $ref: 'paymentsGetCheckoutSessionByIdParamsSchema#',
