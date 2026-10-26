@@ -72,7 +72,7 @@
     "@jest/test-sequencer": "^30.5.2",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
     "@types/ws": "^8.18.2",
     "ajv": "^8.20.0",
