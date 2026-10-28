@@ -1,10 +1,12 @@
-Your {{appName}} order #{{orderId}} is delivered.
+Your {{appName}} order #{{orderId}} {{statement}}.
 
 {{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
 {{/items}}
-Total: {{total}}
+{{#deliveryLine}}Delivery: {{deliveryLine}}
+{{/deliveryLine}}Total: {{total}}
 {{#shippingAddress}}Delivered to: {{shippingAddress}}
-{{/shippingAddress}}{{#recipient}}Recipient: {{recipient}}
+{{/shippingAddress}}{{#pickup}}Collected at: {{pickup}}
+{{/pickup}}{{#recipient}}Recipient: {{recipient}}
 {{/recipient}}
 See your order:
 {{orderUrl}}

@@ -1,13 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { AuthProvider, Role } from '@prisma/client';
 
-import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { createPlaceholder } from '@helpers/placeholder.js';
 import { hashPass } from '@helpers/safePass.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
-import { asAdmin } from './db.js';
+import { asAdmin, testTx } from './db.js';
 
 let counter = 0;
 
@@ -64,7 +63,7 @@ export async function createUser(
   );
 
   if (role !== 'USER') {
-    await prisma.$transaction(async (tx) => {
+    await testTx(async (tx) => {
       await setUserContext(tx, { userId: id, role: 'ROOT' });
       await tx.user.update({ where: { id }, data: { role } });
     });
@@ -82,7 +81,7 @@ export function createReview(
   productId: number,
   opts: { rating?: number | null; comment?: string | null; updatedAt?: Date } = {},
 ): Promise<TestReview> {
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
 
     return tx.review.create({
@@ -100,7 +99,7 @@ export function createReview(
 
 // a vote of a user on a review; the database counts it into the review
 export function createReviewVote(userId: number, reviewId: number, action: 'UP' | 'DOWN') {
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
     await tx.reviewVote.create({ data: { userId, reviewId, action } });
   });
@@ -115,7 +114,7 @@ export function createChatThread(
 ): Promise<{ id: string }> {
   const type = opts.type ?? 'admin';
 
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
 
     const id = randomUUID();
@@ -146,17 +145,23 @@ export function createChatThread(
 
 // a favorite of the user, added the way the user adds one
 export const createFavorite = (userId: number, productId: number) =>
-  prisma.$transaction(async (tx) => {
+  testTx(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
     await tx.favorite.create({ data: { userId, productId } });
   });
 
 // a line of the login log the way a login writes it, at the given time
 export function createLoginLog(user: { id: number; email: string }, createdAt: Date) {
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId: user.id, role: 'USER' });
     await tx.loginLog.create({
-      data: { userId: user.id, email: user.email, role: 'USER', createdAt },
+      data: {
+        userId: user.id,
+        email: user.email,
+        role: 'USER',
+        event: 'login.password',
+        createdAt,
+      },
     });
   });
 }
@@ -187,7 +192,7 @@ export type BatchOpts = {
 export async function receiveBatch(productId: number, opts: BatchOpts): Promise<number> {
   const keeper = await stockKeeperOf();
 
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId: keeper.id, role: 'ADMIN' });
     const [row] = await tx.$queryRaw<{ id: number }[]>`
       select cartlify.receive_product_batch(
@@ -214,7 +219,7 @@ export async function writeOffStock(
 ): Promise<void> {
   const keeper = await stockKeeperOf();
 
-  await prisma.$transaction(async (tx) => {
+  await testTx(async (tx) => {
     await setUserContext(tx, { userId: keeper.id, role: 'ADMIN' });
     await tx.$queryRaw`
       select cartlify.write_off_product_stock(
@@ -244,7 +249,15 @@ export const createCategory = (opts: { parentId?: number; name?: string } = {}) 
 // a product in a category of its own, or in the category named, its stock in one batch of a
 // supplier at a cost of 1; removeProducts deletes both, the batches and favorites go with them
 export async function createProduct(
-  opts: { stock?: number; price?: number; categoryId?: number; name?: string } = {},
+  opts: {
+    stock?: number;
+    price?: number;
+    categoryId?: number;
+    name?: string;
+    // what it weighs and measures packed; a product made without them is one from before they were asked
+    weightGrams?: number;
+    sizesMm?: { length: number; width: number; height: number };
+  } = {},
 ) {
   const tag = uniqueTag();
 
@@ -262,6 +275,14 @@ export async function createProduct(
         name: opts.name ?? `Test product ${tag}`,
         price: opts.price ?? 10,
         categoryId: category.id,
+        ...(opts.weightGrams !== undefined ? { weightGrams: opts.weightGrams } : {}),
+        ...(opts.sizesMm
+          ? {
+              lengthMm: opts.sizesMm.length,
+              widthMm: opts.sizesMm.width,
+              heightMm: opts.sizesMm.height,
+            }
+          : {}),
         images: {
           create: {
             url: 'https://res.cloudinary.com/demo/image/upload/v1/products/test/0.jpg',

@@ -35,7 +35,12 @@ describe('computeFixedDelta', () => {
 
 describe('writeProductPriceChangeLog', () => {
   // no actor: the database function takes it from the context of the transaction
-  const change = { productId: 4, mode: 'fixed' as const, value: 2.5 };
+  const change = {
+    productId: 4,
+    mode: 'fixed' as const,
+    value: 2.5,
+    event: 'price.set' as const,
+  };
 
   it.each([
     ['a change', undefined],
@@ -64,7 +69,7 @@ describe('writeProductPriceChangeLog', () => {
 
     const [strings, ...values] = $executeRaw.mock.calls[0]!;
     expect(strings.join('?')).toContain('cartlify.log_product_price_change(');
-    expect(values).toEqual([4, 10, 12.5, 'fixed', 2.5, null]);
+    expect(values).toEqual([4, 10, 12.5, 'fixed', 2.5, 'price.set', null]);
   });
 
   it('passes a change down with its negative value', async () => {
@@ -74,12 +79,13 @@ describe('writeProductPriceChangeLog', () => {
       productId: 4,
       mode: 'percent',
       value: -10,
+      event: 'price.bulk',
       beforePrice: new Prisma.Decimal('20.00'),
       afterPrice: new Prisma.Decimal('18.00'),
     });
 
     const [, ...values] = $executeRaw.mock.calls[0]!;
-    expect(values).toEqual([4, 20, 18, 'percent', -10, null]);
+    expect(values).toEqual([4, 20, 18, 'percent', -10, 'price.bulk', null]);
   });
 
   // a line with an end is the start of a sale; the end lands in utc like every date prisma keeps
@@ -90,6 +96,7 @@ describe('writeProductPriceChangeLog', () => {
       productId: 4,
       mode: 'percent',
       value: -25,
+      event: 'price.sale_start',
       beforePrice: new Prisma.Decimal('20.00'),
       afterPrice: new Prisma.Decimal('15.00'),
       endsAt: new Date('2026-11-01T10:00:00.000Z'),
@@ -97,6 +104,14 @@ describe('writeProductPriceChangeLog', () => {
 
     const [strings, ...values] = $executeRaw.mock.calls[0]!;
     expect(strings.join('?')).toContain(`::timestamptz at time zone 'UTC'`);
-    expect(values).toEqual([4, 20, 15, 'percent', -25, '2026-11-01T10:00:00.000Z']);
+    expect(values).toEqual([
+      4,
+      20,
+      15,
+      'percent',
+      -25,
+      'price.sale_start',
+      '2026-11-01T10:00:00.000Z',
+    ]);
   });
 });

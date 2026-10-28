@@ -165,6 +165,18 @@ describe('GET /api/auth/github/callback', () => {
     expect(me.json().name).toBe('N'.repeat(100));
   });
 
+  // the log of logins names how the person came in
+  it('writes the login to the login log as a login with GitHub', async () => {
+    const gh = account();
+    await loginWith(gh);
+    const user = await userByEmail(gh.email);
+
+    const logs = await asAdmin((tx) =>
+      tx.loginLog.findMany({ where: { userId: user!.id }, select: { event: true } }),
+    );
+    expect(logs).toEqual([{ event: 'login.github' }]);
+  });
+
   it('signs a returning user into the same account', async () => {
     const gh = account();
     await loginWith(gh);

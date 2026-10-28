@@ -34,6 +34,10 @@ export const openApiTags = [
       name: 'legal',
       description: 'The terms and the contract of the shop and the consents of the customers',
     },
+    {
+      name: 'delivery',
+      description: 'How the shop gets an order to its buyer: methods, prices, countries',
+    },
 ] as const;
 
 // Cookie-based security schemes used by Swagger authorization UI

@@ -236,15 +236,15 @@ async function createChatMessage({
 
                     ...(adminRequested && {
                         unreadCount: { increment: 1 },
-                        adminUnreadSince: message.createdAt,
+                        // the oldest message no admin has read: a later one does not move it
+                        adminUnreadSince: lockedThread.adminUnreadSince ?? message.createdAt,
                     }),
 
+                    // an answer is a read: the admin took the chat and saw what the customer wrote
                     ...(adminAnswered && {
                         unreadCount: 0,
                         adminRequestedAt: null,
-                        // an answer before the customer described the problem takes the chat to
-                        // the active queue: an open chat of an admin keeps one of the two marks
-                        adminUnreadSince: lockedThread.adminUnreadSince ?? message.createdAt,
+                        adminUnreadSince: null,
                     }),
                 },
             });

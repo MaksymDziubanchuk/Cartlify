@@ -15,10 +15,12 @@ import {
   removeUploads,
   storedImage,
   svgImage,
+  moveCallsSince,
   movesSince,
   uploadMark,
   uploadsSince,
   waitingUploadsSince,
+  withSilentCloudinaryMoves,
 } from '../../../helpers/cloudinary.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -35,7 +37,7 @@ import {
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
-import { safetyFormFields } from '../../../helpers/productSafety.js';
+import { safetyFormFields, shippingFormFields } from '../../../helpers/productSafety.js';
 
 // the images of POST /api/products and PATCH /api/products/:productId go to Cloudinary (its mock,
 // or the real account with service:cloudinary, tests/helpers/cloudinary.ts): each waits at a waiting id until the product is written and then moves to
@@ -71,6 +73,7 @@ const productFields = (overrides: Record<string, string | undefined> = {}) => [
     ...overrides,
   }),
   ...safetyFormFields(),
+  ...shippingFormFields(),
 ];
 
 const image = (data: Buffer, opts: Parameters<typeof imageField>[2] = {}) =>
@@ -342,6 +345,49 @@ describe('product images (Cloudinary)', () => {
       expect(res.statusCode).toBe(403);
       expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
       expect(uploadsSince(mark)).toEqual([]);
+    });
+
+    // a new place of an image never had a file, so there are no cached copies to drop; a move
+    // runs inside the transaction and has 8 s at most
+    it('moves each image to its new place without dropping cached copies, 8 s at most', async () => {
+      const mark = uploadMark();
+
+      const res = await createForm([
+        ...productFields(),
+        image(pngImage(30, 20)),
+        image(pngImage(31, 20)),
+      ]);
+
+      expect(res.statusCode).toBe(201);
+      const asked = moveCallsSince(mark);
+      expect(asked).toHaveLength(2);
+      for (const call of asked) {
+        expect(call.to).toMatch(imagePath(res.json().id));
+        expect(call.options).toMatchObject({ invalidate: false, timeout: 8_000 });
+      }
+    });
+
+    // Cloudinary takes the move and never answers: the move gives up after its 8 s, well before
+    // the transaction would run out, and the request is refused whole
+    it('refuses the product when Cloudinary does not answer a move in 8 s, and keeps nothing', async () => {
+      const name = `Silent move ${uniqueTag()}`;
+      const mark = uploadMark();
+      const startedAt = Date.now();
+
+      const res = await withSilentCloudinaryMoves(() =>
+        createForm([...productFields({ name }), image(pngImage(32, 20))]),
+      );
+      const took = Date.now() - startedAt;
+
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toMatchObject({ errorCode: 'IMAGE_STORAGE_UNAVAILABLE' });
+      expect(took).toBeGreaterThanOrEqual(8_000);
+      expect(took).toBeLessThan(20_000);
+      expect(await asAdmin((tx) => tx.product.count({ where: { name } }))).toBe(0);
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(
+        takeLogs({ msg: 'request failed', errorCode: 'IMAGE_STORAGE_UNAVAILABLE' }),
+      ).toHaveLength(1);
     });
   });
 

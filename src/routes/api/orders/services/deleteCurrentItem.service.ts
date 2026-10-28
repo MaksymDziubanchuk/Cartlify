@@ -12,7 +12,7 @@ import {
   dropDeletedProductItems,
   mapOrderRowToResponse,
   expiredOfOrders,
-  orderResponseSelect,
+  readOrderResponse,
   orderTargetSql,
 } from './helpers/index.js';
 
@@ -70,10 +70,7 @@ export async function deleteCurrentItem({
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // fetch current order after delete
-        const order = await db.order.findUnique({
-          where: { id: orderId },
-          select: orderResponseSelect,
-        });
+        const order = await readOrderResponse(db, orderId);
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_DELETE' });
 

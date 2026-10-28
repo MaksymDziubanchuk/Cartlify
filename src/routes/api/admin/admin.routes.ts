@@ -78,6 +78,42 @@ export default async function adminRouter(app: FastifyInstance) {
   );
 
   app.get(
+    '/price-log',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getPriceLogSchema,
+    },
+    adminController.getPriceLog,
+  );
+
+  app.get(
+    '/login-log',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getLoginLogSchema,
+    },
+    adminController.getLoginLog,
+  );
+
+  app.get(
+    '/consent-log',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getConsentLogSchema,
+    },
+    adminController.getConsentLog,
+  );
+
+  app.get(
+    '/log-events',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getLogEventsSchema,
+    },
+    adminController.getLogEvents,
+  );
+
+  app.get(
     '/alerts',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],

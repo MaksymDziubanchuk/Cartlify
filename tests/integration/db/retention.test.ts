@@ -80,8 +80,8 @@ describe('cartlify.cleanup_login_log_addresses', () => {
   const loginOf = async (db: DbSession, days: number) => {
     await db.as({ role: 'USER', userId: user.id });
     const [row] = await db.rows<{ id: number }>(
-      `insert into cartlify.login_logs ("userId", email, role, "ipAddress", "userAgent", "createdAt")
-       values ($1, $2, 'USER', '203.0.113.7', 'Test browser', ${daysAgo(days)})
+      `insert into cartlify.login_logs ("userId", email, role, "ipAddress", "userAgent", event, "createdAt")
+       values ($1, $2, 'USER', '203.0.113.7', 'Test browser', 'login.password', ${daysAgo(days)})
        returning id`,
       user.id,
       user.email,

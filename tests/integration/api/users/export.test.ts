@@ -17,7 +17,7 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { addShipment, placeOrder } from '../../../helpers/orders.js';
 
 // GET /api/users/me/export: everything the shop keeps of the person, read with the rights of the
 // person, as one file; once an hour
@@ -96,7 +96,15 @@ describe('GET /api/users/me/export', () => {
         expect.objectContaining({
           id: orderId,
           status: 'paid',
-          shippingAddress: expect.any(String),
+          delivery: expect.objectContaining({
+            method: 'manual',
+            recipientFirstName: 'Anna',
+            recipientLastName: 'Koval',
+            city: 'Kyiv',
+            street: 'Test street',
+            price: expect.any(String),
+          }),
+          shipments: [],
           items: [
             expect.objectContaining({ productId: product.id, name: productName, quantity: 1 }),
           ],
@@ -119,6 +127,37 @@ describe('GET /api/users/me/export', () => {
     expect(JSON.stringify(data)).not.toContain(other.user.email);
     // what is no data of the person stays out: the hash of the password, the id of the payment
     expect(JSON.stringify(data)).not.toMatch(/passwordHash|paymentId|pi_test_/);
+  });
+
+  it('gives the sends of an order with the carrier and the number, not what they cost the shop', async () => {
+    const user = await newUser();
+    const product = await createProduct({ stock: 5 });
+    products.push(product);
+    const orderId = await placeOrder(app, csrf, user, product, 'shipped');
+    await addShipment(orderId, { carrier: 'DHL', trackingNumber: 'JD0146', cost: 7.35 });
+    await addShipment(orderId, { carrier: 'UPS', cost: 9.1, rolledBack: true });
+
+    const res = await exportOf(accessCookie(user));
+
+    expect(res.json().orders[0].shipments).toEqual([
+      {
+        carrier: 'DHL',
+        trackingNumber: 'JD0146',
+        trackingUrl: null,
+        shippedAt: expect.any(String),
+        rolledBackAt: null,
+      },
+      {
+        carrier: 'UPS',
+        trackingNumber: null,
+        trackingUrl: null,
+        shippedAt: expect.any(String),
+        rolledBackAt: expect.any(String),
+      },
+    ]);
+    // what a send cost the shop is no data of the person: no key of it, whatever the amounts are
+    expect(JSON.stringify(res.json())).not.toContain('"cost"');
+    expect(JSON.stringify(res.json())).not.toContain('"expense"');
   });
 
   it('lists the sessions of the person with the browser of each', async () => {

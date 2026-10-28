@@ -822,7 +822,7 @@ describe('the cleanup of old tokens', () => {
 describe('login logs', () => {
   const insertLogin = (db: DbSession, user: TestUser) =>
     db.attempt(
-      `insert into cartlify.login_logs ("userId", email, role) values ($1, $2, 'USER') returning id`,
+      `insert into cartlify.login_logs ("userId", email, role, event) values ($1, $2, 'USER', 'login.password') returning id`,
       user.id,
       user.email,
     );

@@ -41,17 +41,28 @@ BEGIN
       ('user_tokens', 'userAgent'),
       ('login_logs', 'id'), ('login_logs', 'userId'), ('login_logs', 'email'),
       ('login_logs', 'role'), ('login_logs', 'ipAddress'), ('login_logs', 'userAgent'),
-      ('login_logs', 'createdAt'),
+      ('login_logs', 'event'), ('login_logs', 'createdAt'),
       ('legal_acceptances', 'id'), ('legal_acceptances', 'userId'),
       ('legal_acceptances', 'documentId'), ('legal_acceptances', 'orderId'),
       ('legal_acceptances', 'ip'), ('legal_acceptances', 'userAgent'),
-      ('legal_acceptances', 'createdAt'),
+      ('legal_acceptances', 'event'), ('legal_acceptances', 'createdAt'),
       ('orders', 'id'), ('orders', 'userId'), ('orders', 'status'), ('orders', 'total'),
-      ('orders', 'shippingAddress'), ('orders', 'note'), ('orders', 'createdAt'),
-      ('orders', 'updatedAt'), ('orders', 'confirmed'), ('orders', 'reservationExpiresAt'),
-      ('orders', 'recipientFirstName'), ('orders', 'recipientLastName'),
-      ('orders', 'recipientPhone'), ('orders', 'paymentId'), ('orders', 'paymentProvider'),
+      ('orders', 'createdAt'), ('orders', 'updatedAt'), ('orders', 'confirmed'),
+      ('orders', 'reservationExpiresAt'), ('orders', 'paymentId'), ('orders', 'paymentProvider'),
       ('orders', 'cancelledAt'), ('orders', 'paidAt'),
+      -- the number and the link of a parcel lead to the person it goes to, they change below
+      ('order_shipments', 'id'), ('order_shipments', 'orderId'), ('order_shipments', 'carrier'),
+      ('order_shipments', 'trackingNumber'), ('order_shipments', 'trackingUrl'),
+      ('order_shipments', 'cost'), ('order_shipments', 'expense'), ('order_shipments', 'shippedAt'),
+      ('order_shipments', 'rolledBackAt'), ('order_shipments', 'updatedAt'),
+      ('order_deliveries', 'orderId'), ('order_deliveries', 'method'),
+      ('order_deliveries', 'recipientFirstName'), ('order_deliveries', 'recipientLastName'),
+      ('order_deliveries', 'recipientPhone'), ('order_deliveries', 'country'),
+      ('order_deliveries', 'postalCode'), ('order_deliveries', 'city'),
+      ('order_deliveries', 'street'), ('order_deliveries', 'house'),
+      ('order_deliveries', 'apartment'), ('order_deliveries', 'note'),
+      ('order_deliveries', 'price'), ('order_deliveries', 'createdAt'),
+      ('order_deliveries', 'updatedAt'),
       ('chat_threads', 'id'), ('chat_threads', 'userId'), ('chat_threads', 'type'),
       ('chat_threads', 'status'), ('chat_threads', 'lastMessageAt'),
       ('chat_threads', 'unreadCount'), ('chat_threads', 'lastMessagePreview'),
@@ -62,7 +73,8 @@ BEGIN
       ('chat_messages', 'createdAt'),
       ('admin_audit_log', 'id'), ('admin_audit_log', 'actorId'), ('admin_audit_log', 'actorRole'),
       ('admin_audit_log', 'entityType'), ('admin_audit_log', 'entityId'),
-      ('admin_audit_log', 'action'), ('admin_audit_log', 'meta'), ('admin_audit_log', 'ip'),
+      ('admin_audit_log', 'action'), ('admin_audit_log', 'event'), ('admin_audit_log', 'meta'),
+      ('admin_audit_log', 'ip'),
       ('admin_audit_log', 'userAgent'), ('admin_audit_log', 'createdAt'),
       -- a review is public: the shop shows it with its author, whose name changes above
       ('reviews', 'id'), ('reviews', 'productId'), ('reviews', 'userId'), ('reviews', 'rating'),
@@ -150,29 +162,26 @@ SET
 ------------------------------------------------------------
 -- 3. ORDERS
 ------------------------------------------------------------
--- the address and the recipient of an order are made up, a confirmed order has all four
--- (orders_confirmed_shipping_chk); the note of the buyer goes
-UPDATE cartlify.orders
+-- the recipient and the address of an order are made up (the method and the country stay: they
+-- name no one; the check of the table needs the whole address of a manual delivery); the note of
+-- the buyer goes
+UPDATE cartlify.order_deliveries
 SET
-  "shippingAddress" = CASE
-    WHEN confirmed OR "shippingAddress" IS NOT NULL THEN 'Address of order ' || id
-  END,
-  "recipientFirstName" = CASE
-    WHEN confirmed OR "recipientFirstName" IS NOT NULL THEN 'Recipient'
-  END,
-  "recipientLastName" = CASE
-    WHEN confirmed OR "recipientLastName" IS NOT NULL THEN 'Customer'
-  END,
-  "recipientPhone" = CASE
-    WHEN confirmed OR "recipientPhone" IS NOT NULL THEN '+10000000000'
-  END,
-  note = NULL
-WHERE confirmed
-  OR "shippingAddress" IS NOT NULL
-  OR "recipientFirstName" IS NOT NULL
-  OR "recipientLastName" IS NOT NULL
-  OR "recipientPhone" IS NOT NULL
-  OR note IS NOT NULL;
+  "recipientFirstName" = 'Recipient',
+  "recipientLastName" = 'Customer',
+  "recipientPhone" = '+10000000000',
+  "postalCode" = CASE WHEN "postalCode" IS NOT NULL THEN '00000' END,
+  city = CASE WHEN city IS NOT NULL THEN 'City' END,
+  street = CASE WHEN street IS NOT NULL THEN 'Street of order ' || "orderId" END,
+  house = CASE WHEN house IS NOT NULL THEN '1' END,
+  apartment = NULL,
+  note = NULL;
+
+-- the number and the link of a parcel are made up: they lead to the person the parcel goes to
+UPDATE cartlify.order_shipments
+SET
+  "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'TRACK' || id END,
+  "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/' || id END;
 
 ------------------------------------------------------------
 -- 4. CHATS
@@ -211,10 +220,16 @@ SET
   ip = NULL,
   "userAgent" = NULL,
   meta = CASE
-    WHEN a."entityType" IN ('user', 'review') AND jsonb_typeof(a.meta) = 'array' THEN (
+    WHEN a."entityType" IN ('user', 'review', 'order') AND jsonb_typeof(a.meta) = 'array' THEN (
       SELECT jsonb_agg(
         CASE
-          WHEN x.change ->> 'field' IN ('avatar', 'comment', 'email', 'name', 'phone')
+          WHEN x.change ->> 'field' IN (
+            'avatar', 'comment', 'email', 'name', 'phone',
+            -- an order: the person and the address of the delivery, the note, the send with its
+            -- number and link
+            'recipientFirstName', 'recipientLastName', 'recipientPhone', 'postalCode', 'city',
+            'street', 'house', 'apartment', 'note', 'shipment', 'trackingNumber', 'trackingUrl'
+          )
             THEN pg_temp.anonymized(pg_temp.anonymized(x.change, 'old'), 'new')
           ELSE x.change
         END
@@ -227,7 +242,7 @@ SET
 WHERE a.ip IS NOT NULL
   OR a."userAgent" IS NOT NULL
   OR (
-    a."entityType" IN ('user', 'review')
+    a."entityType" IN ('user', 'review', 'order')
     AND jsonb_typeof(a.meta) = 'array'
     AND jsonb_array_length(a.meta) > 0
   );
@@ -273,13 +288,22 @@ BEGIN
       WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
     )
     UNION ALL
-    SELECT 'orders'
+    SELECT 'order_deliveries'
     WHERE EXISTS (
       SELECT 1
-      FROM cartlify.orders
+      FROM cartlify.order_deliveries
       WHERE note IS NOT NULL
-        OR "shippingAddress" <> 'Address of order ' || id
+        OR apartment IS NOT NULL
+        OR street <> 'Street of order ' || "orderId"
         OR "recipientPhone" <> '+10000000000'
+    )
+    UNION ALL
+    SELECT 'order_shipments'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.order_shipments
+      WHERE ("trackingNumber" IS NOT NULL AND "trackingNumber" <> 'TRACK' || id)
+        OR ("trackingUrl" IS NOT NULL AND "trackingUrl" <> 'https://example.com/track/' || id)
     )
     UNION ALL
     SELECT 'chat_messages'
@@ -294,6 +318,22 @@ BEGIN
       SELECT 1
       FROM cartlify.admin_audit_log
       WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
+    )
+    UNION ALL
+    SELECT 'admin_audit_log changes of orders'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.admin_audit_log AS a,
+        jsonb_array_elements(CASE WHEN jsonb_typeof(a.meta) = 'array' THEN a.meta ELSE '[]'::jsonb END) AS ch
+      WHERE a."entityType" = 'order'
+        AND ch ->> 'field' IN (
+          'recipientFirstName', 'recipientLastName', 'recipientPhone', 'postalCode', 'city',
+          'street', 'house', 'apartment', 'note', 'shipment', 'trackingNumber', 'trackingUrl'
+        )
+        AND (
+          coalesce(ch -> 'old', 'null'::jsonb) NOT IN ('null'::jsonb, '"anonymized"'::jsonb)
+          OR coalesce(ch -> 'new', 'null'::jsonb) NOT IN ('null'::jsonb, '"anonymized"'::jsonb)
+        )
     )
   ) AS missed;
 

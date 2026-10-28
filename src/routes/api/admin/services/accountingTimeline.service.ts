@@ -8,11 +8,22 @@ import { shopCurrency } from '@routes/api/payments/providers/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import { sortRows } from './helpers/accountingReport.helper.js';
-import { csvFileName, moneyCsvColumns } from './helpers/accountingCsv.helper.js';
 import {
+  csvFileName,
+  deliveryCsvColumns,
+  moneyCsvColumns,
+  summaryCsvColumns,
+} from './helpers/accountingCsv.helper.js';
+import {
+  NOT_CANCELLED,
   assertCategory,
+  deliveryMoneyOf,
+  deliveryOfStepsSql,
+  isWholeShop,
   moneyOf,
   scopeCtes,
+  summaryOf,
+  type DeliveryColumns,
   type MoneyColumns,
   type ReportScope,
 } from './helpers/accountingSql.helper.js';
@@ -99,13 +110,15 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
 
   const inStep = (column: Prisma.Sql) => Prisma.sql`${column} >= b.f and ${column} < b.t`;
 
+  // a sale is an order paid in the step and not cancelled, a cancel one cancelled in it
   const orderLines = (column: 'paidAt' | 'cancelledAt', name: string) => {
     const time = Prisma.raw(`o."${column}"`);
+    const sales = column === 'paidAt' ? Prisma.sql`and ${NOT_CANCELLED}` : Prisma.empty;
     return Prisma.sql`
       ${Prisma.raw(name)} as (
         select b.n, sum(oi.quantity)::bigint as units, sum(oi."totalPrice") as revenue
         from steps as b
-        join cartlify.orders as o on ${inStep(time)}
+        join cartlify.orders as o on ${inStep(time)} ${sales}
         join cartlify.order_items as oi on oi."orderId" = o.id
         where oi."productId" in (select id from scope)
         group by b.n
@@ -113,7 +126,7 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
       ${Prisma.raw(`${name}_cost`)} as (
         select b.n, sum(a.quantity * pb."unitCost") as cost
         from steps as b
-        join cartlify.orders as o on ${inStep(time)}
+        join cartlify.orders as o on ${inStep(time)} ${sales}
         join cartlify.order_batch_allocations as a on a."orderId" = o.id
         join cartlify.product_batches as pb on pb.id = a."batchId"
         where a."productId" in (select id from scope)
@@ -180,9 +193,11 @@ const SORT_VALUE: Record<
   (row: AdminReportStepRowDto & { id: number }) => number
 > = {
   period: (row) => row.id,
-  revenue: (row) => row.net.revenue,
-  margin: (row) => row.net.margin,
-  units: (row) => row.net.units,
+  revenue: (row) => row.sales.revenue,
+  margin: (row) => row.sales.margin,
+  units: (row) => row.sales.units,
+  marginAfterWriteOffs: (row) => row.afterWriteOffs.margin,
+  marginTotal: (row) => row.summary.margin.total,
   writeOffs: (row) => row.writeOffs.value,
   purchases: (row) => row.purchases.value,
 };
@@ -190,7 +205,7 @@ const SORT_VALUE: Record<
 export async function reportTimeline(
   args: AccountingTimelineArgs,
 ): Promise<GetAdminReportTimelineResponseDto> {
-  const { steps, money } = await tx(
+  const { steps, money, delivery } = await tx(
     async (db) => {
       await setUserContext(db, { userId: args.actorId, role: args.actorRole });
       await assertCategory(db, args.categoryId);
@@ -200,23 +215,39 @@ export async function reportTimeline(
         throw new BadRequestError('REPORT_PERIOD_TOO_LONG', { maxSteps: MAX_REPORT_STEPS });
       }
 
-      return { steps, money: steps.length ? await moneyOfSteps(db, args, steps) : [] };
+      const money = steps.length ? await moneyOfSteps(db, args, steps) : [];
+      // the delivery is of the whole shop: a report of some products or of a category has none
+      const delivery =
+        steps.length && isWholeShop(args)
+          ? await db.$queryRaw<(DeliveryColumns & { n: bigint })[]>(deliveryOfStepsSql(steps))
+          : [];
+
+      return { steps, money, delivery };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
   );
 
   // the step number keeps the order of time for the sorts that go by money
   const rows = steps.map((step, index) => {
-    const { sales, cancellations, net, writeOffs, purchases } = moneyOf(money[index]!);
+    const columns = money[index]!;
+    const { sales, cancellations, writeOffs, afterWriteOffs, purchases } = moneyOf(columns);
+    const stepDelivery = delivery[index] ?? null;
     return {
       id: index,
       label: step.label,
       period: { from: step.from, to: step.to },
       sales,
       cancellations,
-      net,
       writeOffs,
+      afterWriteOffs,
       purchases,
+      delivery: stepDelivery ? deliveryMoneyOf(stepDelivery) : null,
+      summary: summaryOf({
+        itemsRevenue: columns.sold_revenue,
+        itemsCost: columns.sold_cost,
+        writeOffs: columns.written_value,
+        delivery: stepDelivery,
+      }),
     };
   });
 
@@ -232,9 +263,11 @@ export async function reportTimeline(
       period: row.period,
       sales: row.sales,
       cancellations: row.cancellations,
-      net: row.net,
       writeOffs: row.writeOffs,
+      afterWriteOffs: row.afterWriteOffs,
       purchases: row.purchases,
+      delivery: row.delivery,
+      summary: row.summary,
     })),
   };
 }
@@ -246,6 +279,8 @@ const TIMELINE_CSV: CsvColumn<StepCsvRow>[] = [
   { header: 'from', kind: 'text', value: (row) => row.period.from.toISOString() },
   { header: 'to', kind: 'text', value: (row) => row.period.to.toISOString() },
   ...moneyCsvColumns<StepCsvRow>((row) => row, { stock: false }),
+  ...deliveryCsvColumns<StepCsvRow>((row) => row.delivery),
+  ...summaryCsvColumns<StepCsvRow>((row) => row.summary),
 ];
 
 export async function reportTimelineCsv(args: AccountingTimelineArgs) {

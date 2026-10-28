@@ -90,7 +90,18 @@ describe('PATCH /api/orders/:orderId/status', () => {
     await setStatus(orderId, 'delivered');
 
     expect(await statusLinesOf(orderId)).toEqual([
-      { actorId: admin.id, meta: [{ field: 'status', old: 'paid', new: 'shipped' }] },
+      {
+        actorId: admin.id,
+        // shipped by hand: the send is recorded, with nothing known of it
+        meta: [
+          { field: 'status', old: 'paid', new: 'shipped' },
+          {
+            field: 'shipment',
+            old: null,
+            new: expect.objectContaining({ carrier: null, cost: null }),
+          },
+        ],
+      },
       { actorId: admin.id, meta: [{ field: 'status', old: 'shipped', new: 'delivered' }] },
     ]);
   });
@@ -270,7 +281,9 @@ describe('GET /api/orders for an admin', () => {
       .replace(/^\uFEFF/, '')
       .trim()
       .split('\r\n');
-    expect(lines[0]).toBe('Order,Status,Paid at,Buyer email,Recipient,Phone,Address,Items,Total');
+    // the columns of the delivery are checked in deskDelivery.test.ts
+    expect(lines[0]).toMatch(/^Order,Status,Paid at,Buyer email,Recipient,Phone,Method,/);
+    expect(lines[0]).toContain(',Items,');
     expect(lines).toHaveLength(2);
     expect(lines[1]).toContain(`${paid},paid,`);
     expect(lines[1]).toContain(buyer.email);
@@ -295,7 +308,10 @@ describe('POST /api/orders/status', () => {
     const waiting = await placeOrder(app, csrf, buyer, product, 'waiting');
     const mails = watchMail();
 
-    const res = await bulk({ orderIds: [first, waiting, second], status: 'shipped' });
+    const res = await bulk({
+      orders: [{ orderId: first }, { orderId: waiting }, { orderId: second }],
+      status: 'shipped',
+    });
 
     expect(res.statusCode).toBe(200);
     expect(res.json().results).toEqual([
@@ -312,7 +328,7 @@ describe('POST /api/orders/status', () => {
   });
 
   it('names an order that does not exist', async () => {
-    const res = await bulk({ orderIds: [2_000_000_000], status: 'delivered' });
+    const res = await bulk({ orders: [{ orderId: 2_000_000_000 }], status: 'delivered' });
 
     expect(res.json().results).toEqual([
       expect.objectContaining({ orderId: 2_000_000_000, ok: false, errorCode: 'ORDER_NOT_FOUND' }),
@@ -320,9 +336,13 @@ describe('POST /api/orders/status', () => {
   });
 
   it.each([
-    ['no orders', { orderIds: [], status: 'shipped' }],
-    ['an order named twice', { orderIds: [5, 5], status: 'shipped' }],
-    ['a cancel', { orderIds: [5], status: 'cancelled' }],
+    ['no orders', { orders: [], status: 'shipped' }],
+    ['a cancel', { orders: [{ orderId: 5 }], status: 'cancelled' }],
+    ['the list of ids it had before', { orderIds: [5], status: 'shipped' }],
+    [
+      'an order with a send that breaks the schema',
+      { orders: [{ orderId: 5, shipment: { cost: -1 } }], status: 'shipped' },
+    ],
   ])('refuses %s', async (_case, payload) => {
     const res = await bulk(payload);
 
@@ -330,8 +350,110 @@ describe('POST /api/orders/status', () => {
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
   });
 
+  it('takes an order named twice once: the second time it is shipped already', async () => {
+    const orderId = await placeOrder(
+      app,
+      csrf,
+      await newUser(),
+      await createProduct({ price: 10, stock: 5 }),
+      'paid',
+    );
+
+    const res = await bulk({ orders: [{ orderId }, { orderId }], status: 'shipped' });
+
+    expect(res.json().results).toEqual([
+      { orderId, ok: true, status: 'shipped' },
+      expect.objectContaining({ orderId, ok: false, errorCode: 'ORDER_STATUS_TRANSITION_INVALID' }),
+    ]);
+  });
+
+  it('ships each order with its own send, a number, a link or nothing', async () => {
+    const buyer = await newUser();
+    const product = await createProduct({ price: 10, stock: 5 });
+    const named = await placeOrder(app, csrf, buyer, product, 'paid');
+    const bare = await placeOrder(app, csrf, buyer, product, 'paid');
+
+    const res = await bulk({
+      status: 'shipped',
+      orders: [
+        {
+          orderId: named,
+          shipment: {
+            carrier: 'DHL',
+            trackingNumber: 'A1',
+            trackingUrl: 'https://t.example.com/A1',
+            cost: 5,
+          },
+        },
+        { orderId: bare },
+      ],
+    });
+
+    expect(res.json().results.map((r: { ok: boolean }) => r.ok)).toEqual([true, true]);
+    const sends = await asAdmin((tx) =>
+      tx.orderShipment.findMany({
+        where: { orderId: { in: [named, bare] } },
+        orderBy: { orderId: 'asc' },
+      }),
+    );
+    expect(sends).toEqual([
+      expect.objectContaining({ orderId: named, carrier: 'DHL', trackingNumber: 'A1' }),
+      expect.objectContaining({ orderId: bare, carrier: null, trackingNumber: null }),
+    ]);
+  });
+
+  it('names an order whose send breaks a rule and ships the others', async () => {
+    const buyer = await newUser();
+    const product = await createProduct({ price: 10, stock: 5 });
+    const wrong = await placeOrder(app, csrf, buyer, product, 'paid');
+    const fine = await placeOrder(app, csrf, buyer, product, 'paid');
+
+    const res = await bulk({
+      status: 'shipped',
+      orders: [{ orderId: wrong, shipment: { trackingNumber: 'A1' } }, { orderId: fine }],
+    });
+
+    expect(res.json().results).toEqual([
+      expect.objectContaining({
+        orderId: wrong,
+        ok: false,
+        errorCode: 'SHIPMENT_CARRIER_REQUIRED',
+      }),
+      { orderId: fine, ok: true, status: 'shipped' },
+    ]);
+  });
+
+  it('takes many orders one step back, each with its own choice for the cost', async () => {
+    const buyer = await newUser();
+    const product = await createProduct({ price: 10, stock: 5 });
+    const kept = await placeOrder(app, csrf, buyer, product, 'paid');
+    const cleared = await placeOrder(app, csrf, buyer, product, 'paid');
+    await bulk({ status: 'shipped', orders: [{ orderId: kept }, { orderId: cleared }] });
+
+    const res = await bulk({
+      status: 'paid',
+      orders: [
+        { orderId: kept, keepShippingCost: true },
+        { orderId: cleared, keepShippingCost: false },
+      ],
+    });
+
+    expect(res.json().results).toEqual([
+      { orderId: kept, ok: true, status: 'paid' },
+      { orderId: cleared, ok: true, status: 'paid' },
+    ]);
+    const sends = await asAdmin((tx) =>
+      tx.orderShipment.findMany({
+        where: { orderId: { in: [kept, cleared] } },
+        orderBy: { orderId: 'asc' },
+      }),
+    );
+    expect(sends.map((s) => s.expense)).toEqual([true, false]);
+    expect(Number(sends[1]!.cost)).toBe(0);
+  });
+
   it('refuses a buyer', async () => {
-    const res = await bulk({ orderIds: [5], status: 'shipped' }, await newUser());
+    const res = await bulk({ orders: [{ orderId: 5 }], status: 'shipped' }, await newUser());
 
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });

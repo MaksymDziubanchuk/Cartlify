@@ -20,13 +20,17 @@ function loadOrder(orderId: number) {
   return prisma.$transaction(async (tx) => {
     await setAdminContext(tx);
 
-    return tx.order.findUnique({
+    // a query reads at most two relations side by side (the relations of one query run at once on
+    // the one connection of a transaction), so the buyer is read apart, one after
+    // the other
+    const order = await tx.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
+        userId: true,
         total: true,
         paymentProvider: true,
-        user: { select: { email: true, name: true, deletedAt: true } },
+        delivery: { select: { method: true, price: true } },
         items: {
           orderBy: { id: 'asc' },
           select: {
@@ -38,6 +42,14 @@ function loadOrder(orderId: number) {
         },
       },
     });
+    if (!order) return null;
+
+    const user = await tx.user.findUniqueOrThrow({
+      where: { id: order.userId },
+      select: { email: true, name: true, deletedAt: true },
+    });
+
+    return { ...order, user };
   });
 }
 
@@ -68,6 +80,8 @@ export async function sendOrderCancelledEmail(
         quantity: item.quantity,
         totalPrice: item.totalPrice.toString(),
       })),
+      // what the buyer paid for the delivery, none for a pickup
+      deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
       total: order.total.toString(),
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),

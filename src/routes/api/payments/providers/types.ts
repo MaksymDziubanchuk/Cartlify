@@ -18,8 +18,25 @@ export type PaymentPageOrder = {
   // what is bought, the way the page shows it: the name each item was confirmed with, its price
   // and units; together they are the total
   items: { name: string; unitPrice: number; quantity: number }[];
+  // what the buyer pays for the delivery, part of the total, 0 when it is free or a pickup: a line
+  // of its own on the page
+  deliveryPrice: number;
+  // where and to whom the order goes, the payment carries it; none for a pickup
+  shipping: PaymentPageShipping | null;
   // the email of the buyer, the page fills it in; none for an account without one
   customerEmail: string | null;
+};
+
+export type PaymentPageShipping = {
+  name: string;
+  phone: string;
+  address: {
+    line1: string;
+    line2: string | null;
+    city: string;
+    postalCode: string | null;
+    country: string;
+  };
 };
 
 // what became of an unpaid payment page the app asked to close:

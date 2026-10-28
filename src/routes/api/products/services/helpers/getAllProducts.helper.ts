@@ -11,6 +11,7 @@ import {
   encodeCursor,
 } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
+import { isDbYear } from '@helpers/dbDate.js';
 
 import type {
   ProductsSortField,
@@ -39,7 +40,8 @@ export const productListSelect = {
   },
 } as const;
 
-// the sorts of a buyer; saleEndsAt gives the products on sale first, the rest by popularity
+// the sorts of a buyer; saleEndsAt and discount give the products on sale first, the rest by
+// popularity; sales counts the units sold in a period
 export const BUYER_SORTS: ProductsSortField[] = [
   'createdAt',
   'price',
@@ -47,6 +49,8 @@ export const BUYER_SORTS: ProductsSortField[] = [
   'avgRating',
   'name',
   'saleEndsAt',
+  'discount',
+  'sales',
   'relevance',
 ];
 
@@ -65,6 +69,34 @@ const CURRENT_PRICE_SQL = Prisma.raw(
 const SALE_ON_SQL = Prisma.raw(
   `(p."salePrice" IS NOT NULL AND p."saleEndsAt" > (now() AT TIME ZONE 'UTC'))`,
 );
+
+// the part of the price a sale takes off, from 0 to 1 (a product on sale has a price above the sale
+// price, so the price is never 0 there)
+const DISCOUNT_SQL = Prisma.raw(
+  `round((p."price" - p."salePrice") / NULLIF(p."price", 0), 6)::float8`,
+);
+
+// the days the sort by sales counts when no period is asked for, up to the end of today (UTC)
+const SALES_DEFAULT_DAYS = 30;
+
+// the period of the sort by sales, [from, to): what is asked for, else the last days up to the end
+// of today; a period that is no period is a bad request
+function salesPeriodOf(from: Date | undefined, to: Date | undefined) {
+  const broken = (date: Date | undefined) =>
+    date !== undefined && (Number.isNaN(date.getTime()) || !isDbYear(date));
+  if (broken(from) || broken(to)) throw new BadRequestError('SALES_PERIOD_INVALID');
+
+  const endOfToday = new Date();
+  endOfToday.setUTCHours(24, 0, 0, 0);
+  const end = to ?? endOfToday;
+  const start = from ?? new Date(end.getTime() - SALES_DEFAULT_DAYS * 86_400_000);
+  if (start.getTime() >= end.getTime()) throw new BadRequestError('SALES_PERIOD_INVALID');
+
+  return { salesFrom: start, salesTo: end };
+}
+
+// a moment as the database reads a time without a zone (UTC)
+const utcStamp = (date: Date) => date.toISOString().replace('T', ' ').replace('Z', '');
 
 // an override of the popularity that is on: the database takes it while its end is ahead, an
 // override without an end or past it does nothing (recalc_product_popularity, db/05). The end is
@@ -104,6 +136,11 @@ export type ProductListQuery = {
   inStock?: boolean | undefined;
   // an admin, a flag: at most this many free units
   maxStock?: number | undefined;
+  // an admin, a flag: the products that lack the weight or the sizes
+  withoutShippingData?: boolean | undefined;
+  // the sort by sales counts the orders paid in [salesFrom, salesTo)
+  salesFrom?: Date | undefined;
+  salesTo?: Date | undefined;
   // an admin: true lists only the products with a sale / an override that is on, false only the
   // ones without, undefined does not filter; a buyer: undefined, every product of the catalog
   onSale?: boolean | undefined;
@@ -118,6 +155,7 @@ const SORT_FLAGS: Partial<
   deletedAt: { flag: 'deleted', code: 'SORT_DELETED_AT_REQUIRES_DELETED' },
   saleEndsAt: { flag: 'onSale', code: 'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE' },
   salePrice: { flag: 'onSale', code: 'SORT_SALE_PRICE_REQUIRES_ON_SALE' },
+  discount: { flag: 'onSale', code: 'SORT_DISCOUNT_REQUIRES_ON_SALE' },
   popularityOverride: {
     flag: 'popularityOverridden',
     code: 'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN',
@@ -174,6 +212,7 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
   const deleted = dto.deleted === true;
   const onSale = dto.onSale === true;
   const popularityOverridden = dto.popularityOverridden === true;
+  const withoutShippingData = dto.withoutShippingData === true;
 
   // normalize cursor
   const cursor = typeof dto.cursor === 'string' && dto.cursor ? dto.cursor : undefined;
@@ -191,6 +230,7 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
     minPrice,
     maxPrice,
     inStock,
+    ...(sort === 'sales' ? salesPeriodOf(dto.salesFrom, dto.salesTo) : {}),
   };
 
   if (view === 'buyer') {
@@ -202,6 +242,9 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
     }
     if (maxStock !== undefined)
       throw new ForbiddenError('FILTER_FORBIDDEN', { filter: 'maxStock' });
+    if (withoutShippingData) {
+      throw new ForbiddenError('FILTER_FORBIDDEN', { filter: 'withoutShippingData' });
+    }
     if (!BUYER_SORTS.includes(sort)) throw new ForbiddenError('SORT_FORBIDDEN', { sort });
 
     // a buyer sees every product of the catalog, on sale or not
@@ -218,11 +261,13 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
   // override that are on. With a flag only its condition counts, the other marks do not filter;
   // the deleted products stay out without their flag. Few free units are a flag too: the stock
   // of every product of the catalog
-  const anyFlag = deleted || onSale || popularityOverridden || maxStock !== undefined;
+  const anyFlag =
+    deleted || onSale || popularityOverridden || maxStock !== undefined || withoutShippingData;
 
   return {
     ...base,
     maxStock,
+    withoutShippingData: withoutShippingData || undefined,
     deleted,
     onSale: anyFlag ? onSale || undefined : false,
     popularityOverridden: anyFlag ? popularityOverridden || undefined : false,
@@ -253,6 +298,11 @@ function sortExpressionOf(
       return { sql: priceSqlOf(view), kind: 'number' };
     case 'salePrice':
       return { sql: Prisma.raw(`p."salePrice"`), kind: 'number' };
+    case 'discount':
+      return { sql: DISCOUNT_SQL, kind: 'number' };
+    case 'sales':
+      // the units sold in the period of the query (buildProductIdsQuery joins them)
+      return { sql: Prisma.raw(`COALESCE(s.units, 0)::float8`), kind: 'number' };
     case 'stock':
       return { sql: FREE_STOCK_SQL, kind: 'number' };
     case 'totalStock':
@@ -287,9 +337,14 @@ function cursorValueOf(kind: SortKind, v: unknown): string | number | Date {
   return cursorNumber(value);
 }
 
-// the products on sale first, then the rest by popularity: the sale sort of a buyer
+// the products on sale first, then the rest by popularity: the sale sorts of a buyer, by the end of
+// the sale or by the discount
 const isBuyerSaleSort = (q: Pick<ProductListQuery, 'view' | 'sort'>) =>
-  q.view === 'buyer' && q.sort === 'saleEndsAt';
+  q.view === 'buyer' && (q.sort === 'saleEndsAt' || q.sort === 'discount');
+
+// what the products on sale are ordered by in the sale sorts of a buyer
+const saleKeyOf = (sort: ProductsSortField) =>
+  sort === 'discount' ? DISCOUNT_SQL : Prisma.raw(`p."saleEndsAt"`);
 
 const sortKeyOf = (q: Pick<ProductListQuery, 'sort' | 'order'>) => `${q.sort}:${q.order}`;
 
@@ -316,10 +371,12 @@ function buildCursorSql(q: ProductListQuery): Prisma.Sql {
   // without a sale; after a product without a sale only the less popular ones
   if (isBuyerSaleSort(q)) {
     if (cursor.g === 1) {
-      const endsAt = cursorDate(cursor.v as string);
+      const key = saleKeyOf(q.sort);
+      const value =
+        q.sort === 'discount' ? cursorNumber(cursor.v as number) : cursorDate(cursor.v as string);
       return Prisma.sql`
         AND (
-          (${SALE_ON_SQL} AND (p."saleEndsAt" ${op} ${endsAt} OR (p."saleEndsAt" = ${endsAt} AND p."id" ${op} ${cursor.id})))
+          (${SALE_ON_SQL} AND (${key} ${op} ${value} OR (${key} = ${value} AND p."id" ${op} ${cursor.id})))
           OR NOT ${SALE_ON_SQL}
         )
       `;
@@ -364,6 +421,11 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
   if (q.onSale === false) whereParts.push(Prisma.sql`NOT ${SALE_ON_SQL}`);
   if (q.popularityOverridden === true) whereParts.push(OVERRIDE_ON_SQL);
   if (q.popularityOverridden === false) whereParts.push(Prisma.sql`NOT ${OVERRIDE_ON_SQL}`);
+
+  // the products that lack the weight or the sizes (the sizes come all three or none)
+  if (q.withoutShippingData === true) {
+    whereParts.push(Prisma.sql`(p."weightGrams" IS NULL OR p."lengthMm" IS NULL)`);
+  }
 
   // stock filter by free units, the same number the list shows as stock
   if (q.inStock === true) whereParts.push(Prisma.sql`${FREE_STOCK_SQL} > 0`);
@@ -461,19 +523,20 @@ export function buildProductIdsQuery(q: ProductListQuery): Prisma.Sql {
   const cursorSql = buildCursorSql(q);
   const dir = Prisma.raw(q.order === 'asc' ? 'ASC' : 'DESC');
 
-  // the products on sale first by the end of the sale in the direction asked for, then every
-  // other product by popularity, the most popular first
+  // the products on sale first by the end of the sale or by the discount in the direction asked
+  // for, then every other product by popularity, the most popular first
   if (isBuyerSaleSort(q)) {
     return Prisma.sql`
       SELECT p."id" AS id,
              CASE WHEN ${SALE_ON_SQL} THEN 1 ELSE 0 END AS g,
              p."saleEndsAt" AS "endsAt",
+             ${DISCOUNT_SQL} AS discount,
              p."popularity" AS popularity
       FROM "products" p
       WHERE ${whereSql}
       ${cursorSql}
       ORDER BY CASE WHEN ${SALE_ON_SQL} THEN 1 ELSE 0 END DESC,
-               CASE WHEN ${SALE_ON_SQL} THEN p."saleEndsAt" END ${dir},
+               CASE WHEN ${SALE_ON_SQL} THEN ${saleKeyOf(q.sort)} END ${dir},
                CASE WHEN ${SALE_ON_SQL} THEN p."id" END ${dir},
                p."popularity" DESC, p."id" DESC
       LIMIT ${q.limit + 1}
@@ -482,9 +545,17 @@ export function buildProductIdsQuery(q: ProductListQuery): Prisma.Sql {
 
   const { sql: col } = sortExpressionOf(q.sort, q.view, q.search);
 
+  // the units sold in the period come from a function of the database: a buyer reads no order of
+  // another buyer
+  const salesJoin =
+    q.sort === 'sales' && q.salesFrom && q.salesTo
+      ? Prisma.sql`LEFT JOIN cartlify.units_sold_in_period(${utcStamp(q.salesFrom)}::timestamp, ${utcStamp(q.salesTo)}::timestamp) s ON s.product_id = p."id"`
+      : Prisma.empty;
+
   return Prisma.sql`
     SELECT p."id" AS id, ${col} AS v
     FROM "products" p
+    ${salesJoin}
     WHERE ${whereSql}
     ${cursorSql}
     ORDER BY ${col} ${dir}, p."id" ${dir}
@@ -499,6 +570,7 @@ export type ProductKeyRow = {
   v?: unknown;
   g?: number;
   endsAt?: Date | null;
+  discount?: number | null;
   popularity?: number;
 };
 
@@ -519,7 +591,8 @@ export function makeNextCursor(
 
   if (isBuyerSaleSort(q)) {
     const g = Number(last.g) === 1 ? 1 : 0;
-    const v = g === 1 ? cursorValue(last.endsAt) : cursorValue(last.popularity);
+    const onSaleKey = q.sort === 'discount' ? last.discount : last.endsAt;
+    const v = g === 1 ? cursorValue(onSaleKey) : cursorValue(last.popularity);
     return encodeCursor({ id: last.id, v, s, g } as never);
   }
 

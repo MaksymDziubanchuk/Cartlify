@@ -74,7 +74,7 @@ const confirmAgain = (user: TestUser, orderId: number) =>
     method: 'POST',
     url: '/api/orders/current/confirm',
     headers: withCsrf(csrf, accessCookie(user)),
-    payload: { orderId },
+    payload: { orderId, expectedDeliveryPrice: 0 },
   });
 
 // the record of the refund, as the admin audit log keeps it for the buyer
@@ -85,6 +85,8 @@ const refundRecord = (
   expect.objectContaining({
     actorId: user.id,
     actorRole: 'USER',
+    // the refund of a payment that came late is its own event
+    event: 'order.refund_late',
     meta: [
       {
         field: 'refund',
@@ -152,9 +154,11 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     const second = await payPage(secondPage);
     expect((await deliver(app, second.event)).statusCode).toBe(200);
     if (stage === 'delivered') {
-      await asAdmin((tx) =>
-        tx.order.update({ where: { id: orderId }, data: { status: 'delivered' } }),
-      );
+      // the steps go one by one: shipped, then delivered
+      await asAdmin(async (tx) => {
+        await tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } });
+        await tx.order.update({ where: { id: orderId }, data: { status: 'delivered' } });
+      });
     }
     const first = await payPage(firstPage);
 

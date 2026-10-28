@@ -38,21 +38,20 @@ export async function getAdminChatThreadsService(
     const page = assertPage(dto.page);
     const limit = assertLimit(dto.limit);
 
-    // build queue filters: unread is both queues, every chat with a message no admin has read
+    // build queue filters: waiting is a chat the customer asked an admin for and wrote in, active is
+    // every chat an admin took, unread is any chat with a message no admin has read
     const where: Prisma.ChatThreadWhereInput = {
         status: 'open',
         type: 'admin',
-        adminUnreadSince: {
-            not: null,
-        },
         ...(dto.queue === 'waiting'
-            ? { adminRequestedAt: { not: null } }
+            ? { adminRequestedAt: { not: null }, adminUnreadSince: { not: null } }
             : dto.queue === 'active'
                 ? { adminRequestedAt: null }
-                : {}),
+                : { adminUnreadSince: { not: null } }),
     };
 
-    // build queue order: unread puts the message unread longest first
+    // build queue order: waiting puts the longest request first, unread the message unread longest,
+    // active the newest chat
     const orderBy: Prisma.ChatThreadOrderByWithRelationInput[] =
         dto.queue === 'unread'
             ? [
@@ -77,13 +76,10 @@ export async function getAdminChatThreadsService(
             ]
             : [
                 {
-                    adminUnreadSince: {
-                        sort: 'desc',
-                        nulls: 'last',
-                    },
+                    lastMessageAt: 'desc',
                 },
                 {
-                    lastMessageAt: 'desc',
+                    id: 'asc',
                 },
             ];
 

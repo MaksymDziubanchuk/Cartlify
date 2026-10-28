@@ -16,8 +16,11 @@ import type { Role } from 'types/user.js';
 export const ADMIN_ALERT_KINDS = [
   'paid_orders_waiting',
   'shipped_orders_waiting',
+  'pickup_not_collected',
+  'shipped_without_cost',
   'out_of_stock',
   'low_stock',
+  'products_without_shipping_data',
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
@@ -35,8 +38,12 @@ type ThresholdSpec = { unit: AdminAlertThresholdUnit; default: number; min: numb
 // the kinds an admin sets a threshold for, with the one the server gives until they do; the
 // other kinds have none: every paid order, every product with no free units waits
 const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
-  // shipped and not delivered for so many days
+  // sent by hand and not delivered for so many days
   shipped_orders_waiting: { unit: 'days', default: 14, min: 1, max: 365 },
+  // a pickup ready and not collected for so many days
+  pickup_not_collected: { unit: 'days', default: 7, min: 1, max: 365 },
+  // a send the shop owes something for, whose cost is not written for so many days
+  shipped_without_cost: { unit: 'days', default: 3, min: 1, max: 365 },
   // at most so many free units
   low_stock: { unit: 'units', default: 5, min: 1, max: 100_000 },
   // the last good day of a batch within so many days
@@ -103,6 +110,8 @@ export function alertWindowOf(
 
   switch (kind) {
     case 'shipped_orders_waiting':
+    case 'pickup_not_collected':
+    case 'shipped_without_cost':
       return { before: new Date(now - threshold * DAY) };
     case 'low_stock':
       return { units: threshold };
@@ -133,8 +142,30 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
         path: '/api/orders',
         query: {
           statuses: 'shipped',
+          deliveryMethod: 'manual',
           updatedTo: isoOf(window.before),
           sortBy: 'updatedAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'pickup_not_collected':
+      return {
+        path: '/api/orders',
+        query: {
+          statuses: 'shipped',
+          deliveryMethod: 'pickup',
+          updatedTo: isoOf(window.before),
+          sortBy: 'updatedAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'shipped_without_cost':
+      return {
+        path: '/api/orders',
+        query: {
+          shippingCostMissing: 'true',
+          shippedTo: isoOf(window.before),
+          sortBy: 'shippingCostMissingSince',
           sortDir: 'asc',
         },
       };
@@ -152,6 +183,11 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sort: 'stock',
           order: 'asc',
         },
+      };
+    case 'products_without_shipping_data':
+      return {
+        path: '/api/products',
+        query: { withoutShippingData: 'true', sort: 'popularity', order: 'desc' },
       };
     case 'expiring_batches':
       return {

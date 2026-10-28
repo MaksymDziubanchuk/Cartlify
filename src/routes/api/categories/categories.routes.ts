@@ -38,6 +38,24 @@ export default async function categoriesRouter(app: FastifyInstance) {
     },
     categoriesController.patchCategory,
   );
+  app.put(
+    '/:categoryId/image',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('categoryId')],
+      // a form only, with no json body to check: the controller reads and checks its part
+      schema: categoriesSchema.putCategoryImageSchema,
+      config: { formBodySchema: 'categoriesImageFormSchema' },
+    },
+    categoriesController.putCategoryImage,
+  );
+  app.delete(
+    '/:categoryId/image',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('categoryId')],
+      schema: categoriesSchema.deleteCategoryImageSchema,
+    },
+    categoriesController.deleteCategoryImage,
+  );
   app.delete(
     '/:categoryId',
     {

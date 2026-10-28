@@ -48,6 +48,8 @@ export type ProductsSortField =
   | 'popularityOverrideUntil'
   | 'saleEndsAt'
   | 'salePrice'
+  | 'discount'
+  | 'sales'
   | 'name';
 
 export type SortOrder = 'asc' | 'desc';
@@ -72,6 +74,11 @@ export interface GetAllProductsQueryDto {
   inStock?: boolean;
   // admin and root only, a flag: at most this many free units, any other mark
   maxStock?: number;
+  // admin and root only, a flag: the products that lack the weight or the sizes
+  withoutShippingData?: boolean;
+  // the period of the sort by sales: the orders paid in it count, [salesFrom, salesTo)
+  salesFrom?: string;
+  salesTo?: string;
 
   // admin and root only: true -> only products with an active sale / with a popularity override;
   // without it or false -> only products without one
@@ -101,6 +108,9 @@ export interface FindAllProductsDto {
   deleted?: boolean;
   inStock?: boolean;
   maxStock?: number;
+  withoutShippingData?: boolean;
+  salesFrom?: Date;
+  salesTo?: Date;
   onSale?: boolean;
   popularityOverridden?: boolean;
 
@@ -139,6 +149,12 @@ export interface ProductResponseDto {
   salePriorPrice?: number | null;
   // free units: the stock that orders do not hold
   stock: number;
+  // the weight in grams and the packed sizes in millimetres, null while they are not known. The
+  // card shows them to everybody, the list to an admin
+  weightGrams?: number | null;
+  lengthMm?: number | null;
+  widthMm?: number | null;
+  heightMm?: number | null;
   category: ProductCategoryDto;
   // the primary image of a list item; null for a product without one, which only an admin lists
   images: ProductImagesUrls | null;
@@ -255,6 +271,13 @@ export interface CreateProductBodyDto {
   sku?: string;
   price: number;
   categoryId: CategoryId;
+  // the weight and the sizes of the form, text; the service checks them
+  weightGrams?: string;
+  lengthMm?: string;
+  widthMm?: string;
+  heightMm?: string;
+  // true: the weight and the sizes come later (not kept)
+  withoutShippingData?: string;
   images: MultipartFile[];
 }
 
@@ -272,6 +295,12 @@ export interface CreateProductDto {
   // never taken: a new product has no stock, it comes with a delivery; one sent is refused
   stock?: unknown;
   categoryId: CategoryId;
+  // the weight and the sizes as they come (text of a form), required unless withoutShippingData
+  weightGrams?: unknown;
+  lengthMm?: unknown;
+  widthMm?: unknown;
+  heightMm?: unknown;
+  withoutShippingData?: unknown;
   images: UploadedProductImage[];
   log: FastifyBaseLogger;
 }
@@ -294,6 +323,13 @@ export interface UpdateProductBodyDto {
   // never taken: the stock changes only with a delivery or a write-off; one sent is refused
   stock?: unknown;
   categoryId?: CategoryId;
+  // the weight in grams and the packed sizes in millimetres; null clears them, which needs
+  // withoutShippingData; a form gives them as text
+  weightGrams?: number | string | null;
+  lengthMm?: number | string | null;
+  widthMm?: number | string | null;
+  heightMm?: number | string | null;
+  withoutShippingData?: boolean | string;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
   // with a price: what happens to the sale that is on. keep keeps it, null takes it off, a new
@@ -550,7 +586,10 @@ export interface PriceHistoryItemDto {
   value: number;
   // a line with an end is the start of a sale
   endsAt: string | null;
-  actor: { id: UserId; name: string | null; deleted: boolean };
+  // what made the line (price.set, price.bulk, price.sale_start, ...)
+  event: string;
+  // the account of root has no id and no name for an admin
+  actor: { id: UserId; name: string | null; role: Role; deleted: boolean };
   createdAt: string;
 }
 

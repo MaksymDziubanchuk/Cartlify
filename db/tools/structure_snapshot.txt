@@ -21,7 +21,9 @@ table | legal_acceptances | cartlify_owner | rls=true | force=true | cartlify_ap
 table | legal_documents | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | login_logs | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | order_batch_allocations | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | order_deliveries | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | order_items | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | order_shipments | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | orders | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | product_batches | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | product_images | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -54,6 +56,7 @@ column | admin_audit_log | 7 | meta | jsonb | notnull=false | default=- | identi
 column | admin_audit_log | 8 | ip | text | notnull=false | default=- | identity=- | generated=- | -
 column | admin_audit_log | 9 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
 column | admin_audit_log | 10 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | admin_audit_log | 11 | event | character varying(60) | notnull=true | default=- | identity=- | generated=- | -
 column | categories | 1 | id | integer | notnull=true | default=nextval('categories_id_seq'::regclass) | identity=- | generated=- | -
 column | categories | 2 | name | text | notnull=true | default=- | identity=- | generated=- | -
 column | categories | 3 | slug | text | notnull=true | default=- | identity=- | generated=- | -
@@ -61,6 +64,8 @@ column | categories | 4 | description | text | notnull=false | default=- | ident
 column | categories | 5 | parentId | integer | notnull=false | default=- | identity=- | generated=- | -
 column | categories | 6 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | categories | 7 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | categories | 8 | imagePublicId | text | notnull=false | default=- | identity=- | generated=- | -
+column | categories | 9 | imageUrl | text | notnull=false | default=- | identity=- | generated=- | -
 column | chat_messages | 1 | id | integer | notnull=true | default=nextval('chat_messages_id_seq'::regclass) | identity=- | generated=- | -
 column | chat_messages | 2 | threadId | uuid | notnull=true | default=- | identity=- | generated=- | -
 column | chat_messages | 3 | senderId | integer | notnull=false | default=- | identity=- | generated=- | -
@@ -92,6 +97,7 @@ column | legal_acceptances | 4 | orderId | integer | notnull=false | default=- |
 column | legal_acceptances | 5 | ip | text | notnull=false | default=- | identity=- | generated=- | -
 column | legal_acceptances | 6 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
 column | legal_acceptances | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | legal_acceptances | 8 | event | character varying(60) | notnull=true | default=- | identity=- | generated=- | -
 column | legal_documents | 1 | id | integer | notnull=true | default=nextval('legal_documents_id_seq'::regclass) | identity=- | generated=- | -
 column | legal_documents | 2 | kind | "LegalDocumentKind" | notnull=true | default=- | identity=- | generated=- | -
 column | legal_documents | 3 | version | integer | notnull=true | default=- | identity=- | generated=- | -
@@ -107,12 +113,28 @@ column | login_logs | 4 | role | "Role" | notnull=true | default=- | identity=- 
 column | login_logs | 5 | ipAddress | text | notnull=false | default=- | identity=- | generated=- | -
 column | login_logs | 6 | userAgent | text | notnull=false | default=- | identity=- | generated=- | -
 column | login_logs | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | login_logs | 8 | event | character varying(60) | notnull=true | default=- | identity=- | generated=- | -
 column | order_batch_allocations | 1 | id | integer | notnull=true | default=nextval('order_batch_allocations_id_seq'::regclass) | identity=- | generated=- | -
 column | order_batch_allocations | 2 | orderId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | order_batch_allocations | 3 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | order_batch_allocations | 4 | batchId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | order_batch_allocations | 5 | quantity | integer | notnull=true | default=- | identity=- | generated=- | -
 column | order_batch_allocations | 6 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | order_deliveries | 1 | orderId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | order_deliveries | 2 | method | "DeliveryMethod" | notnull=true | default=- | identity=- | generated=- | -
+column | order_deliveries | 3 | recipientFirstName | character varying(100) | notnull=true | default=- | identity=- | generated=- | -
+column | order_deliveries | 4 | recipientLastName | character varying(100) | notnull=true | default=- | identity=- | generated=- | -
+column | order_deliveries | 5 | recipientPhone | character varying(16) | notnull=true | default=- | identity=- | generated=- | -
+column | order_deliveries | 6 | country | character varying(2) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 7 | postalCode | character varying(16) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 8 | city | character varying(100) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 9 | street | character varying(150) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 10 | house | character varying(20) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 11 | apartment | character varying(40) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 12 | note | character varying(500) | notnull=false | default=- | identity=- | generated=- | -
+column | order_deliveries | 13 | price | numeric(10,2) | notnull=true | default=0 | identity=- | generated=- | -
+column | order_deliveries | 14 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | order_deliveries | 15 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | order_items | 1 | id | integer | notnull=true | default=nextval('order_items_id_seq'::regclass) | identity=- | generated=- | -
 column | order_items | 2 | orderId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | order_items | 3 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
@@ -122,23 +144,28 @@ column | order_items | 6 | totalPrice | numeric(10,2) | notnull=true | default=-
 column | order_items | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | order_items | 8 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | order_items | 9 | productName | text | notnull=false | default=- | identity=- | generated=- | -
+column | order_shipments | 1 | id | integer | notnull=true | default=nextval('order_shipments_id_seq'::regclass) | identity=- | generated=- | -
+column | order_shipments | 2 | orderId | integer | notnull=true | default=- | identity=- | generated=- | -
+column | order_shipments | 3 | carrier | character varying(100) | notnull=false | default=- | identity=- | generated=- | -
+column | order_shipments | 4 | trackingNumber | character varying(100) | notnull=false | default=- | identity=- | generated=- | -
+column | order_shipments | 5 | trackingUrl | character varying(500) | notnull=false | default=- | identity=- | generated=- | -
+column | order_shipments | 6 | cost | numeric(10,2) | notnull=false | default=- | identity=- | generated=- | -
+column | order_shipments | 7 | expense | boolean | notnull=true | default=true | identity=- | generated=- | -
+column | order_shipments | 8 | shippedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | order_shipments | 9 | rolledBackAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | order_shipments | 10 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | orders | 1 | id | integer | notnull=true | default=nextval('orders_id_seq'::regclass) | identity=- | generated=- | -
 column | orders | 2 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | orders | 3 | status | "OrderStatus" | notnull=true | default='pending'::"OrderStatus" | identity=- | generated=- | -
 column | orders | 4 | total | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
-column | orders | 5 | shippingAddress | text | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 6 | note | text | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 7 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
-column | orders | 8 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
-column | orders | 9 | confirmed | boolean | notnull=true | default=false | identity=- | generated=- | -
-column | orders | 10 | reservationExpiresAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 11 | recipientFirstName | text | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 12 | recipientLastName | text | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 13 | recipientPhone | text | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 14 | paymentId | text | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 15 | paymentProvider | "PaymentProvider" | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 16 | cancelledAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
-column | orders | 17 | paidAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 5 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | orders | 6 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | orders | 7 | confirmed | boolean | notnull=true | default=false | identity=- | generated=- | -
+column | orders | 8 | reservationExpiresAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 9 | paymentId | text | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 10 | paymentProvider | "PaymentProvider" | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 11 | cancelledAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | orders | 12 | paidAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
 column | product_batches | 1 | id | integer | notnull=true | default=nextval('product_batches_id_seq'::regclass) | identity=- | generated=- | -
 column | product_batches | 2 | productId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | product_batches | 3 | deliveryId | uuid | notnull=true | default=- | identity=- | generated=- | -
@@ -167,6 +194,7 @@ column | product_price_change_logs | 6 | mode | "PriceChangeMode" | notnull=true
 column | product_price_change_logs | 7 | value | numeric(10,2) | notnull=true | default=- | identity=- | generated=- | -
 column | product_price_change_logs | 8 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | product_price_change_logs | 9 | endsAt | timestamp(3) without time zone | notnull=false | default=- | identity=- | generated=- | -
+column | product_price_change_logs | 10 | event | character varying(60) | notnull=true | default=- | identity=- | generated=- | -
 column | products | 1 | id | integer | notnull=true | default=nextval('products_id_seq'::regclass) | identity=- | generated=- | -
 column | products | 2 | name | text | notnull=true | default=- | identity=- | generated=- | -
 column | products | 3 | description | text | notnull=false | default=- | identity=- | generated=- | -
@@ -187,6 +215,10 @@ column | products | 17 | saleEndsAt | timestamp(3) without time zone | notnull=f
 column | products | 18 | salePrice | numeric(10,2) | notnull=false | default=- | identity=- | generated=- | -
 column | products | 19 | sku | character varying(64) | notnull=false | default=- | identity=- | generated=- | -
 column | products | 20 | salePriorPrice | numeric(10,2) | notnull=false | default=- | identity=- | generated=- | -
+column | products | 21 | heightMm | integer | notnull=false | default=- | identity=- | generated=- | -
+column | products | 22 | lengthMm | integer | notnull=false | default=- | identity=- | generated=- | -
+column | products | 23 | weightGrams | integer | notnull=false | default=- | identity=- | generated=- | -
+column | products | 24 | widthMm | integer | notnull=false | default=- | identity=- | generated=- | -
 column | review_votes | 1 | id | integer | notnull=true | default=nextval('review_votes_id_seq'::regclass) | identity=- | generated=- | -
 column | review_votes | 2 | reviewId | integer | notnull=true | default=- | identity=- | generated=- | -
 column | review_votes | 3 | userId | integer | notnull=true | default=- | identity=- | generated=- | -
@@ -232,7 +264,9 @@ constraint | admin_alert_settings | admin_alert_settings_pkey | p | validated=tr
 constraint | admin_alert_settings | admin_alert_settings_threshold_chk | c | validated=true | CHECK (((threshold IS NULL) OR (threshold >= 1)))
 constraint | admin_alert_settings | admin_alert_settings_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | admin_audit_log | admin_audit_log_actorId_fkey | f | validated=true | FOREIGN KEY ("actorId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | admin_audit_log | admin_audit_log_event_chk | c | validated=true | CHECK (((event)::text ~ '^[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*$'::text))
 constraint | admin_audit_log | admin_audit_log_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | categories | categories_image_chk | c | validated=true | CHECK ((("imageUrl" IS NULL) = ("imagePublicId" IS NULL)))
 constraint | categories | categories_parentId_fkey | f | validated=true | FOREIGN KEY ("parentId") REFERENCES categories(id) ON UPDATE CASCADE ON DELETE SET NULL
 constraint | categories | categories_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | chat_messages | chat_messages_content_not_blank_chk | c | validated=true | CHECK ((length(btrim(content)) > 0))
@@ -241,7 +275,7 @@ constraint | chat_messages | chat_messages_senderId_fkey | f | validated=true | 
 constraint | chat_messages | chat_messages_sender_consistency_chk | c | validated=true | CHECK (((("senderType" = ANY (ARRAY['user'::"ChatMessageSenderType", 'admin'::"ChatMessageSenderType"])) AND ("senderId" IS NOT NULL)) OR (("senderType" = ANY (ARRAY['bot'::"ChatMessageSenderType", 'guest'::"ChatMessageSenderType"])) AND ("senderId" IS NULL))))
 constraint | chat_messages | chat_messages_threadId_fkey | f | validated=true | FOREIGN KEY ("threadId") REFERENCES chat_threads(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | chat_threads | chat_threads_actor_xor_chk | c | validated=true | CHECK ((("userId" IS NULL) <> ("guestId" IS NULL)))
-constraint | chat_threads | chat_threads_admin_state_chk | c | validated=true | CHECK ((((type = 'bot'::"ChatType") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NULL)) OR ((type = 'admin'::"ChatType") AND (((status = 'closed'::"ChatStatus") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NULL)) OR ((status = 'open'::"ChatStatus") AND (("adminRequestedAt" IS NOT NULL) OR ("adminUnreadSince" IS NOT NULL)))))))
+constraint | chat_threads | chat_threads_admin_state_chk | c | validated=true | CHECK ((((type = 'bot'::"ChatType") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NULL)) OR ((type = 'admin'::"ChatType") AND (((status = 'closed'::"ChatStatus") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NULL)) OR (status = 'open'::"ChatStatus")))))
 constraint | chat_threads | chat_threads_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | chat_threads | chat_threads_unread_non_negative | c | validated=true | CHECK (("unreadCount" >= 0))
 constraint | chat_threads | chat_threads_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
@@ -250,6 +284,7 @@ constraint | favorites | favorites_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | favorites | favorites_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | favorites | favorites_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | legal_acceptances | legal_acceptances_documentId_fkey | f | validated=true | FOREIGN KEY ("documentId") REFERENCES legal_documents(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | legal_acceptances | legal_acceptances_event_chk | c | validated=true | CHECK (((event)::text ~ '^[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*$'::text))
 constraint | legal_acceptances | legal_acceptances_orderId_fkey | f | validated=true | FOREIGN KEY ("orderId") REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | legal_acceptances | legal_acceptances_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | legal_acceptances | legal_acceptances_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -258,6 +293,7 @@ constraint | legal_documents | legal_documents_pkey | p | validated=true | PRIMA
 constraint | legal_documents | legal_documents_publishedById_fkey | f | validated=true | FOREIGN KEY ("publishedById") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | legal_documents | legal_documents_title_chk | c | validated=true | CHECK ((((title)::text = btrim((title)::text)) AND (char_length((title)::text) >= 1) AND (char_length((title)::text) <= 200)))
 constraint | legal_documents | legal_documents_version_chk | c | validated=true | CHECK (((version >= 1) AND ((sha256)::text ~ '^[0-9a-f]{64}$'::text)))
+constraint | login_logs | login_logs_event_chk | c | validated=true | CHECK (((event)::text ~ '^[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*$'::text))
 constraint | login_logs | login_logs_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | login_logs | login_logs_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | order_batch_allocations | order_batch_allocations_batchId_fkey | f | validated=true | FOREIGN KEY ("batchId") REFERENCES product_batches(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -265,19 +301,29 @@ constraint | order_batch_allocations | order_batch_allocations_orderId_fkey | f 
 constraint | order_batch_allocations | order_batch_allocations_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | order_batch_allocations | order_batch_allocations_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | order_batch_allocations | order_batch_allocations_quantity_chk | c | validated=true | CHECK ((quantity > 0))
+constraint | order_deliveries | order_deliveries_address_chk | c | validated=true | CHECK ((((method = 'manual'::"DeliveryMethod") AND (country IS NOT NULL) AND ((country)::text ~ '^[A-Z]{2}$'::text) AND (city IS NOT NULL) AND (char_length((city)::text) >= 1) AND ((city)::text = btrim((city)::text)) AND (street IS NOT NULL) AND (char_length((street)::text) >= 1) AND ((street)::text = btrim((street)::text)) AND (house IS NOT NULL) AND (char_length((house)::text) >= 1) AND ((house)::text = btrim((house)::text)) AND (("postalCode" IS NULL) OR ((char_length(("postalCode")::text) >= 1) AND (("postalCode")::text = btrim(("postalCode")::text)))) AND ((apartment IS NULL) OR ((char_length((apartment)::text) >= 1) AND ((apartment)::text = btrim((apartment)::text))))) OR ((method = 'pickup'::"DeliveryMethod") AND (country IS NULL) AND ("postalCode" IS NULL) AND (city IS NULL) AND (street IS NULL) AND (house IS NULL) AND (apartment IS NULL) AND (price = (0)::numeric))))
+constraint | order_deliveries | order_deliveries_note_chk | c | validated=true | CHECK (((note IS NULL) OR ((char_length((note)::text) >= 1) AND ((note)::text = btrim((note)::text)))))
+constraint | order_deliveries | order_deliveries_orderId_fkey | f | validated=true | FOREIGN KEY ("orderId") REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | order_deliveries | order_deliveries_pkey | p | validated=true | PRIMARY KEY ("orderId")
+constraint | order_deliveries | order_deliveries_price_non_negative | c | validated=true | CHECK ((price >= (0)::numeric))
+constraint | order_deliveries | order_deliveries_recipient_first_name_chk | c | validated=true | CHECK (((char_length(("recipientFirstName")::text) >= 1) AND (char_length(("recipientFirstName")::text) <= 100) AND (("recipientFirstName")::text = btrim(("recipientFirstName")::text)) AND (("recipientFirstName")::text !~ '[0-9]'::text)))
+constraint | order_deliveries | order_deliveries_recipient_last_name_chk | c | validated=true | CHECK (((char_length(("recipientLastName")::text) >= 1) AND (char_length(("recipientLastName")::text) <= 100) AND (("recipientLastName")::text = btrim(("recipientLastName")::text)) AND (("recipientLastName")::text !~ '[0-9]'::text)))
+constraint | order_deliveries | order_deliveries_recipient_phone_chk | c | validated=true | CHECK ((("recipientPhone")::text ~ '^\+[1-9][0-9]{7,14}$'::text))
 constraint | order_items | order_items_orderId_fkey | f | validated=true | FOREIGN KEY ("orderId") REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | order_items | order_items_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | order_items | order_items_prices_non_negative | c | validated=true | CHECK ((("unitPrice" >= (0)::numeric) AND ("totalPrice" >= (0)::numeric)))
 constraint | order_items | order_items_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | order_items | order_items_qty_positive | c | validated=true | CHECK ((quantity > 0))
+constraint | order_shipments | order_shipments_carrier_chk | c | validated=true | CHECK (((carrier IS NULL) OR ((char_length((carrier)::text) >= 1) AND ((carrier)::text = btrim((carrier)::text)))))
+constraint | order_shipments | order_shipments_cost_non_negative | c | validated=true | CHECK (((cost IS NULL) OR (cost >= (0)::numeric)))
+constraint | order_shipments | order_shipments_orderId_fkey | f | validated=true | FOREIGN KEY ("orderId") REFERENCES orders(id) ON UPDATE CASCADE ON DELETE CASCADE
+constraint | order_shipments | order_shipments_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | order_shipments | order_shipments_rolled_back_chk | c | validated=true | CHECK ((("rolledBackAt" IS NULL) OR ("rolledBackAt" >= "shippedAt")))
+constraint | order_shipments | order_shipments_tracking_chk | c | validated=true | CHECK (((("trackingNumber" IS NULL) OR ((carrier IS NOT NULL) AND (char_length(("trackingNumber")::text) >= 1) AND (("trackingNumber")::text = btrim(("trackingNumber")::text)))) AND (("trackingUrl" IS NULL) OR ((carrier IS NOT NULL) AND (("trackingUrl")::text ~ '^https://[^[:space:]]+$'::text)))))
 constraint | orders | orders_cancelled_at_chk | c | validated=true | CHECK (((("cancelledAt" IS NULL) = (status <> 'cancelled'::"OrderStatus")) AND (("cancelledAt" IS NULL) OR (("paidAt" IS NOT NULL) AND ("cancelledAt" >= "paidAt")))))
-constraint | orders | orders_confirmed_shipping_chk | c | validated=false | CHECK (((confirmed = false) OR (("shippingAddress" IS NOT NULL) AND (btrim("shippingAddress") <> ''::text) AND ("recipientFirstName" IS NOT NULL) AND ("recipientLastName" IS NOT NULL) AND ("recipientPhone" IS NOT NULL)))) NOT VALID
 constraint | orders | orders_paid_at_chk | c | validated=true | CHECK ((("paidAt" IS NULL) = ("paymentId" IS NULL)))
 constraint | orders | orders_payment_provider_chk | c | validated=true | CHECK ((("paymentId" IS NULL) = ("paymentProvider" IS NULL)))
 constraint | orders | orders_pkey | p | validated=true | PRIMARY KEY (id)
-constraint | orders | orders_recipient_first_name_chk | c | validated=true | CHECK ((("recipientFirstName" IS NULL) OR ((char_length("recipientFirstName") >= 1) AND (char_length("recipientFirstName") <= 100) AND ("recipientFirstName" = btrim("recipientFirstName")) AND ("recipientFirstName" !~ '[0-9]'::text))))
-constraint | orders | orders_recipient_last_name_chk | c | validated=true | CHECK ((("recipientLastName" IS NULL) OR ((char_length("recipientLastName") >= 1) AND (char_length("recipientLastName") <= 100) AND ("recipientLastName" = btrim("recipientLastName")) AND ("recipientLastName" !~ '[0-9]'::text))))
-constraint | orders | orders_recipient_phone_chk | c | validated=true | CHECK ((("recipientPhone" IS NULL) OR ("recipientPhone" ~ '^\+[1-9][0-9]{7,14}$'::text)))
 constraint | orders | orders_state_consistency_chk | c | validated=false | CHECK ((((status = ANY (ARRAY['pending'::"OrderStatus", 'unconfirmed'::"OrderStatus"])) AND (confirmed = false) AND ("reservationExpiresAt" IS NULL) AND ("paymentId" IS NULL)) OR ((status = 'waiting'::"OrderStatus") AND (confirmed = true) AND ("reservationExpiresAt" IS NOT NULL) AND ("paymentId" IS NULL)) OR ((status = 'paid'::"OrderStatus") AND (confirmed = true) AND ("reservationExpiresAt" IS NULL) AND ("paymentId" IS NOT NULL)) OR ((status = ANY (ARRAY['shipped'::"OrderStatus", 'delivered'::"OrderStatus", 'cancelled'::"OrderStatus"])) AND (confirmed = true)))) NOT VALID
 constraint | orders | orders_total_non_negative | c | validated=true | CHECK ((total >= (0)::numeric))
 constraint | orders | orders_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -292,6 +338,7 @@ constraint | product_images | product_images_productId_fkey | f | validated=true
 constraint | product_price_change_logs | price_change_prices_non_negative | c | validated=true | CHECK ((("oldPrice" >= (0)::numeric) AND ("newPrice" >= (0)::numeric)))
 constraint | product_price_change_logs | price_change_sale_below_price | c | validated=true | CHECK ((("endsAt" IS NULL) OR ("newPrice" < "oldPrice")))
 constraint | product_price_change_logs | product_price_change_logs_actorId_fkey | f | validated=true | FOREIGN KEY ("actorId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | product_price_change_logs | product_price_change_logs_event_chk | c | validated=true | CHECK (((event)::text ~ '^[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*$'::text))
 constraint | product_price_change_logs | product_price_change_logs_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | product_price_change_logs | product_price_change_logs_productId_fkey | f | validated=true | FOREIGN KEY ("productId") REFERENCES products(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | products | products_categoryId_fkey | f | validated=true | FOREIGN KEY ("categoryId") REFERENCES categories(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -302,6 +349,7 @@ constraint | products | products_price_non_negative | c | validated=true | CHECK
 constraint | products | products_reserved_stock_within_stock | c | validated=true | CHECK ((("reservedStock" >= 0) AND ("reservedStock" <= stock)))
 constraint | products | products_sale_chk | c | validated=true | CHECK (((("salePrice" IS NULL) AND ("saleEndsAt" IS NULL)) OR (("salePrice" IS NOT NULL) AND ("saleEndsAt" IS NOT NULL) AND ("salePrice" >= (0)::numeric) AND ("salePrice" < price))))
 constraint | products | products_sale_prior_price_chk | c | validated=true | CHECK ((("salePriorPrice" IS NULL) OR (("salePrice" IS NOT NULL) AND ("salePriorPrice" >= (0)::numeric))))
+constraint | products | products_shipping_data_chk | c | validated=true | CHECK (((("weightGrams" IS NULL) OR (("weightGrams" > 0) AND ("weightGrams" <= 1000000))) AND ((("lengthMm" IS NULL) AND ("widthMm" IS NULL) AND ("heightMm" IS NULL)) OR (("lengthMm" IS NOT NULL) AND ("lengthMm" > 0) AND ("lengthMm" <= 10000) AND ("widthMm" IS NOT NULL) AND ("widthMm" > 0) AND ("widthMm" <= 10000) AND ("heightMm" IS NOT NULL) AND ("heightMm" > 0) AND ("heightMm" <= 10000)))))
 constraint | products | products_sku_chk | c | validated=true | CHECK (((sku IS NULL) OR (((sku)::text = btrim((sku)::text)) AND (length((sku)::text) > 0))))
 constraint | products | products_stock_non_negative | c | validated=true | CHECK ((stock >= 0))
 constraint | products | trg_products_stock_batches | t | validated=true | TRIGGER DEFERRABLE INITIALLY DEFERRED
@@ -325,16 +373,15 @@ index | admin_alert_settings | admin_alert_settings_pkey | valid=true | ready=tr
 index | admin_audit_log | admin_audit_log_action_createdAt_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_action_createdAt_idx" ON cartlify.admin_audit_log USING btree (action, "createdAt")
 index | admin_audit_log | admin_audit_log_actorId_createdAt_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_actorId_createdAt_idx" ON cartlify.admin_audit_log USING btree ("actorId", "createdAt")
 index | admin_audit_log | admin_audit_log_entityType_entityId_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_entityType_entityId_idx" ON cartlify.admin_audit_log USING btree ("entityType", "entityId")
+index | admin_audit_log | admin_audit_log_event_createdAt_idx | valid=true | ready=true | CREATE INDEX "admin_audit_log_event_createdAt_idx" ON cartlify.admin_audit_log USING btree (event, "createdAt")
 index | admin_audit_log | admin_audit_log_pkey | valid=true | ready=true | CREATE UNIQUE INDEX admin_audit_log_pkey ON cartlify.admin_audit_log USING btree (id)
 index | categories | categories_parentId_idx | valid=true | ready=true | CREATE INDEX "categories_parentId_idx" ON cartlify.categories USING btree ("parentId")
 index | categories | categories_pkey | valid=true | ready=true | CREATE UNIQUE INDEX categories_pkey ON cartlify.categories USING btree (id)
-index | categories | categories_slug_idx | valid=true | ready=true | CREATE INDEX categories_slug_idx ON cartlify.categories USING btree (slug)
 index | categories | categories_slug_key | valid=true | ready=true | CREATE UNIQUE INDEX categories_slug_key ON cartlify.categories USING btree (slug)
 index | chat_messages | chat_messages_pkey | valid=true | ready=true | CREATE UNIQUE INDEX chat_messages_pkey ON cartlify.chat_messages USING btree (id)
 index | chat_messages | chat_messages_threadId_createdAt_idx | valid=true | ready=true | CREATE INDEX "chat_messages_threadId_createdAt_idx" ON cartlify.chat_messages USING btree ("threadId", "createdAt")
-index | chat_messages | chat_messages_thread_created_idx | valid=true | ready=true | CREATE INDEX chat_messages_thread_created_idx ON cartlify.chat_messages USING btree ("threadId", "createdAt")
 index | chat_messages | chat_messages_unread_by_thread_sender_idx | valid=true | ready=true | CREATE INDEX chat_messages_unread_by_thread_sender_idx ON cartlify.chat_messages USING btree ("threadId", "senderType") WHERE ("isRead" = false)
-index | chat_threads | chat_threads_admin_active_queue_idx | valid=true | ready=true | CREATE INDEX chat_threads_admin_active_queue_idx ON cartlify.chat_threads USING btree ("adminUnreadSince" DESC, "lastMessageAt" DESC) WHERE ((status = 'open'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("adminRequestedAt" IS NULL) AND ("adminUnreadSince" IS NOT NULL))
+index | chat_threads | chat_threads_admin_active_queue_idx | valid=true | ready=true | CREATE INDEX chat_threads_admin_active_queue_idx ON cartlify.chat_threads USING btree ("lastMessageAt" DESC, id) WHERE ((status = 'open'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("adminRequestedAt" IS NULL))
 index | chat_threads | chat_threads_admin_waiting_queue_idx | valid=true | ready=true | CREATE INDEX chat_threads_admin_waiting_queue_idx ON cartlify.chat_threads USING btree ("adminRequestedAt", "lastMessageAt" DESC) WHERE ((status = 'open'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("adminRequestedAt" IS NOT NULL) AND ("adminUnreadSince" IS NOT NULL))
 index | chat_threads | chat_threads_closed_admin_guest_history_idx | valid=true | ready=true | CREATE INDEX chat_threads_closed_admin_guest_history_idx ON cartlify.chat_threads USING btree ("guestId", "lastMessageAt" DESC) WHERE ((status = 'closed'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("guestId" IS NOT NULL))
 index | chat_threads | chat_threads_closed_admin_user_history_idx | valid=true | ready=true | CREATE INDEX chat_threads_closed_admin_user_history_idx ON cartlify.chat_threads USING btree ("userId", "lastMessageAt" DESC) WHERE ((status = 'closed'::"ChatStatus") AND (type = 'admin'::"ChatType") AND ("userId" IS NOT NULL))
@@ -348,21 +395,29 @@ index | favorites | favorites_guestId_productId_key | valid=true | ready=true | 
 index | favorites | favorites_pkey | valid=true | ready=true | CREATE UNIQUE INDEX favorites_pkey ON cartlify.favorites USING btree (id)
 index | favorites | favorites_productId_idx | valid=true | ready=true | CREATE INDEX "favorites_productId_idx" ON cartlify.favorites USING btree ("productId")
 index | favorites | favorites_userId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "favorites_userId_productId_key" ON cartlify.favorites USING btree ("userId", "productId")
+index | legal_acceptances | legal_acceptances_event_createdAt_idx | valid=true | ready=true | CREATE INDEX "legal_acceptances_event_createdAt_idx" ON cartlify.legal_acceptances USING btree (event, "createdAt")
 index | legal_acceptances | legal_acceptances_orderId_idx | valid=true | ready=true | CREATE INDEX "legal_acceptances_orderId_idx" ON cartlify.legal_acceptances USING btree ("orderId")
 index | legal_acceptances | legal_acceptances_pkey | valid=true | ready=true | CREATE UNIQUE INDEX legal_acceptances_pkey ON cartlify.legal_acceptances USING btree (id)
 index | legal_acceptances | legal_acceptances_userId_createdAt_idx | valid=true | ready=true | CREATE INDEX "legal_acceptances_userId_createdAt_idx" ON cartlify.legal_acceptances USING btree ("userId", "createdAt")
 index | legal_documents | legal_documents_kind_version_key | valid=true | ready=true | CREATE UNIQUE INDEX legal_documents_kind_version_key ON cartlify.legal_documents USING btree (kind, version)
 index | legal_documents | legal_documents_pkey | valid=true | ready=true | CREATE UNIQUE INDEX legal_documents_pkey ON cartlify.legal_documents USING btree (id)
 index | login_logs | login_logs_email_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_email_createdAt_idx" ON cartlify.login_logs USING btree (email, "createdAt")
+index | login_logs | login_logs_event_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_event_createdAt_idx" ON cartlify.login_logs USING btree (event, "createdAt")
 index | login_logs | login_logs_pkey | valid=true | ready=true | CREATE UNIQUE INDEX login_logs_pkey ON cartlify.login_logs USING btree (id)
 index | login_logs | login_logs_userId_createdAt_idx | valid=true | ready=true | CREATE INDEX "login_logs_userId_createdAt_idx" ON cartlify.login_logs USING btree ("userId", "createdAt")
 index | order_batch_allocations | order_batch_allocations_batchId_idx | valid=true | ready=true | CREATE INDEX "order_batch_allocations_batchId_idx" ON cartlify.order_batch_allocations USING btree ("batchId")
 index | order_batch_allocations | order_batch_allocations_orderId_batchId_key | valid=true | ready=true | CREATE UNIQUE INDEX "order_batch_allocations_orderId_batchId_key" ON cartlify.order_batch_allocations USING btree ("orderId", "batchId")
 index | order_batch_allocations | order_batch_allocations_pkey | valid=true | ready=true | CREATE UNIQUE INDEX order_batch_allocations_pkey ON cartlify.order_batch_allocations USING btree (id)
 index | order_batch_allocations | order_batch_allocations_productId_idx | valid=true | ready=true | CREATE INDEX "order_batch_allocations_productId_idx" ON cartlify.order_batch_allocations USING btree ("productId")
+index | order_deliveries | order_deliveries_country_city_idx | valid=true | ready=true | CREATE INDEX order_deliveries_country_city_idx ON cartlify.order_deliveries USING btree (country, city)
+index | order_deliveries | order_deliveries_method_idx | valid=true | ready=true | CREATE INDEX order_deliveries_method_idx ON cartlify.order_deliveries USING btree (method)
+index | order_deliveries | order_deliveries_pkey | valid=true | ready=true | CREATE UNIQUE INDEX order_deliveries_pkey ON cartlify.order_deliveries USING btree ("orderId")
 index | order_items | order_items_orderId_idx | valid=true | ready=true | CREATE INDEX "order_items_orderId_idx" ON cartlify.order_items USING btree ("orderId")
 index | order_items | order_items_pkey | valid=true | ready=true | CREATE UNIQUE INDEX order_items_pkey ON cartlify.order_items USING btree (id)
 index | order_items | order_items_productId_idx | valid=true | ready=true | CREATE INDEX "order_items_productId_idx" ON cartlify.order_items USING btree ("productId")
+index | order_shipments | order_shipments_orderId_shippedAt_idx | valid=true | ready=true | CREATE INDEX "order_shipments_orderId_shippedAt_idx" ON cartlify.order_shipments USING btree ("orderId", "shippedAt")
+index | order_shipments | order_shipments_pkey | valid=true | ready=true | CREATE UNIQUE INDEX order_shipments_pkey ON cartlify.order_shipments USING btree (id)
+index | order_shipments | order_shipments_shippedAt_idx | valid=true | ready=true | CREATE INDEX "order_shipments_shippedAt_idx" ON cartlify.order_shipments USING btree ("shippedAt")
 index | orders | orders_cancelledAt_idx | valid=true | ready=true | CREATE INDEX "orders_cancelledAt_idx" ON cartlify.orders USING btree ("cancelledAt")
 index | orders | orders_confirmed_reservationExpiresAt_idx | valid=true | ready=true | CREATE INDEX "orders_confirmed_reservationExpiresAt_idx" ON cartlify.orders USING btree (confirmed, "reservationExpiresAt")
 index | orders | orders_paidAt_id_idx | valid=true | ready=true | CREATE INDEX "orders_paidAt_id_idx" ON cartlify.orders USING btree ("paidAt", id)
@@ -381,6 +436,7 @@ index | product_images | product_images_one_primary_idx | valid=true | ready=tru
 index | product_images | product_images_pkey | valid=true | ready=true | CREATE UNIQUE INDEX product_images_pkey ON cartlify.product_images USING btree (id)
 index | product_images | product_images_productId_position_idx | valid=true | ready=true | CREATE INDEX "product_images_productId_position_idx" ON cartlify.product_images USING btree ("productId", "position")
 index | product_price_change_logs | product_price_change_logs_actorId_createdAt_idx | valid=true | ready=true | CREATE INDEX "product_price_change_logs_actorId_createdAt_idx" ON cartlify.product_price_change_logs USING btree ("actorId", "createdAt")
+index | product_price_change_logs | product_price_change_logs_event_createdAt_idx | valid=true | ready=true | CREATE INDEX "product_price_change_logs_event_createdAt_idx" ON cartlify.product_price_change_logs USING btree (event, "createdAt")
 index | product_price_change_logs | product_price_change_logs_pkey | valid=true | ready=true | CREATE UNIQUE INDEX product_price_change_logs_pkey ON cartlify.product_price_change_logs USING btree (id)
 index | product_price_change_logs | product_price_change_logs_productId_createdAt_idx | valid=true | ready=true | CREATE INDEX "product_price_change_logs_productId_createdAt_idx" ON cartlify.product_price_change_logs USING btree ("productId", "createdAt")
 index | products | products_avgRating_id_idx | valid=true | ready=true | CREATE INDEX "products_avgRating_id_idx" ON cartlify.products USING btree ("avgRating", id)
@@ -401,13 +457,11 @@ index | review_votes | review_votes_reviewId_idx | valid=true | ready=true | CRE
 index | review_votes | review_votes_userId_reviewId_key | valid=true | ready=true | CREATE UNIQUE INDEX "review_votes_userId_reviewId_key" ON cartlify.review_votes USING btree ("userId", "reviewId")
 index | reviews | reviews_pkey | valid=true | ready=true | CREATE UNIQUE INDEX reviews_pkey ON cartlify.reviews USING btree (id)
 index | reviews | reviews_productId_idx | valid=true | ready=true | CREATE INDEX "reviews_productId_idx" ON cartlify.reviews USING btree ("productId")
-index | reviews | reviews_userId_idx | valid=true | ready=true | CREATE INDEX "reviews_userId_idx" ON cartlify.reviews USING btree ("userId")
 index | reviews | reviews_userId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "reviews_userId_productId_key" ON cartlify.reviews USING btree ("userId", "productId")
 index | user_tokens | user_tokens_pkey | valid=true | ready=true | CREATE UNIQUE INDEX user_tokens_pkey ON cartlify.user_tokens USING btree (id)
 index | user_tokens | user_tokens_sessionId_idx | valid=true | ready=true | CREATE INDEX "user_tokens_sessionId_idx" ON cartlify.user_tokens USING btree ("sessionId")
 index | user_tokens | user_tokens_token_key | valid=true | ready=true | CREATE UNIQUE INDEX user_tokens_token_key ON cartlify.user_tokens USING btree (token)
 index | user_tokens | user_tokens_userId_type_createdAt_idx | valid=true | ready=true | CREATE INDEX "user_tokens_userId_type_createdAt_idx" ON cartlify.user_tokens USING btree ("userId", type, "createdAt")
-index | users | users_authProvider_idx | valid=true | ready=true | CREATE INDEX "users_authProvider_idx" ON cartlify.users USING btree ("authProvider")
 index | users | users_authProvider_providerSub_key | valid=true | ready=true | CREATE UNIQUE INDEX "users_authProvider_providerSub_key" ON cartlify.users USING btree ("authProvider", "providerSub")
 index | users | users_createdAt_idx | valid=true | ready=true | CREATE INDEX "users_createdAt_idx" ON cartlify.users USING btree ("createdAt")
 index | users | users_email_key | valid=true | ready=true | CREATE UNIQUE INDEX users_email_key ON cartlify.users USING btree (email)
@@ -423,6 +477,7 @@ sequence | legal_documents_id_seq | cartlify_owner | integer | increment=1 | sta
 sequence | login_logs_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | order_batch_allocations_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | order_items_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
+sequence | order_shipments_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | orders_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | product_batches_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | product_images_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -432,12 +487,13 @@ sequence | review_votes_id_seq | cartlify_owner | integer | increment=1 | start=
 sequence | reviews_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | user_tokens_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | users_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
-enum | AdminAuditAction | cartlify_owner | USER_ROLE_CHANGE,PRODUCT_UPDATE,PRODUCT_PRICE_BULK_UPDATE,ORDER_STATUS_CHANGE,CATEGORY_UPDATE,OTHER,PRODUCT_CREATE,PRODUCT_DELETE,REVIEW_DELETE,PRODUCT_SALE,STOCK_DELIVERY,STOCK_WRITE_OFF | -
+enum | AdminAuditAction | cartlify_owner | USER_ROLE_CHANGE,PRODUCT_UPDATE,PRODUCT_PRICE_BULK_UPDATE,ORDER_STATUS_CHANGE,CATEGORY_UPDATE,OTHER,PRODUCT_CREATE,PRODUCT_DELETE,REVIEW_DELETE,PRODUCT_SALE,STOCK_DELIVERY,STOCK_WRITE_OFF,ORDER_SHIPMENT_CHANGE,ORDER_DELIVERY_CHANGE | -
 enum | AdminAuditEntityType | cartlify_owner | user,product,category,order,review,other | -
 enum | AuthProvider | cartlify_owner | LOCAL,GOOGLE,GITHUB,LINKEDIN | -
 enum | ChatMessageSenderType | cartlify_owner | user,admin,bot,guest | -
 enum | ChatStatus | cartlify_owner | open,closed | -
 enum | ChatType | cartlify_owner | bot,admin | -
+enum | DeliveryMethod | cartlify_owner | manual,pickup | -
 enum | LegalDocumentKind | cartlify_owner | terms,contract | -
 enum | OrderStatus | cartlify_owner | pending,paid,shipped,delivered,cancelled,waiting,unconfirmed | -
 enum | PaymentProvider | cartlify_owner | stripe,liqpay | -
@@ -449,10 +505,10 @@ enum | UserTokenType | cartlify_owner | VERIFY_EMAIL,RESET_PASSWORD,REFRESH_TOKE
 function | admin_alert_settings_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=1184fbe0bc094ebaa712c0776e3c9e5c | extension=-
 function | anonymize_login_logs(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d0e020c851ae9e99aa0e4bfab21fd709 | extension=-
 function | auth_get_user_for_login(p_email text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(id integer, password_hash text, role "Role", is_verified boolean, auth_provider "AuthProvider") | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=e7b670bf5ab3577fee21d1169e8beb71 | extension=-
-function | auth_resend_verify(p_email text, p_token text, p_expires_at timestamp with time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(user_id integer, token text, expires_at timestamp with time zone) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=a912698d8aaa5ba214b7268fb7b36006 | extension=-
+function | auth_resend_verify(p_email text, p_token text, p_expires_at timestamp with time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(user_id integer, token text, expires_at timestamp with time zone) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=468559d98ed5abd4168f7092dfbeac4c | extension=-
 function | auth_verify_email(p_token text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=boolean | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=a58fa8a4d0513b3e7e15ff64d3bd3b59 | extension=-
 function | cancel_order_payment(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=42116944c867c0af350aea1701790b5d | extension=-
-function | cancel_paid_order(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=87950576be181719403bedf7fc7813b8 | extension=-
+function | cancel_paid_order(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d704095b588b19606515b311c3b32c20 | extension=-
 function | categories_before_parent_change() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=c7c8e457d1e23e93c2f50ef7f18a44ac | extension=-
 function | chat_messages_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=b9674297880f4b9679a333e029a718ad | extension=-
 function | chat_threads_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=dc895a1805c20b31acc199ce5553c97b | extension=-
@@ -461,12 +517,13 @@ function | cleanup_deleted_accounts_chats(p_keep_days integer) | cartlify_owner 
 function | cleanup_guest_data(p_keep_days integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(removed_favorites integer, removed_chats integer) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=025e140dc30b3bf5bb2ba2f3247fbe9c | extension=-
 function | cleanup_login_log_addresses(p_keep_days integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=682cdcaf1b53f876d3094dfb2feae797 | extension=-
 function | cleanup_user_tokens(p_keep_days integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=50f3ac3b7239aee34bd94e51ae7c1f94 | extension=-
-function | confirm_order(p_order_id integer, p_reserve_for interval) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=2378753ed58ccce03bfeb30fc8443b0b | extension=-
+function | confirm_order(p_order_id integer, p_reserve_for interval, p_delivery_flat numeric, p_delivery_free_from numeric, p_expected_delivery_price numeric) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=93d26ab1bfa86a4ef4b30f9dd8b5a1be | extension=-
 function | consume_product_stock(p_order_id integer, p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=5b9148deefc629f7b96066b962c337f7 | extension=-
 function | current_actor_id() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=integer | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=3ec0092e80af2290e10ab31e7e4b1c55 | extension=-
 function | current_actor_role() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns="Role" | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=4aa79b0b99df48b1895adc797376ce2e | extension=-
 function | current_guest_id() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=uuid | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner,cartlify_readonly=X/cartlify_owner | body=90517cefa847d8f6547cb591a04b2663 | extension=-
-function | expire_order_reservation(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=boolean | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=f982588b2be45a754ba625f92b59f987 | extension=-
+function | delivery_price(p_method "DeliveryMethod", p_items_total numeric, p_flat numeric, p_free_from numeric) | cartlify_owner | sql | definer=false | volatile=i | strict=false | leakproof=false | parallel=u | returns=numeric | config=- | acl=cartlify_owner=X/cartlify_owner | body=852a85d304086e1041dfab15f9cda84b | extension=-
+function | expire_order_reservation(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=boolean | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=e9fcdb02041f6f519d90b895b4375f89 | extension=-
 function | favorites_after_mod_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=3a05bf01d1efbc35a448b0f321379689 | extension=-
 function | gin_extract_query_trgm(text, internal, smallint, internal, internal, internal, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=bcc3d1b35e67c79fdd7743051b5bb54e | extension=pg_trgm
 function | gin_extract_value_trgm(text, internal) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=c75ed6efb95d6922885e652c3b1ae63f | extension=pg_trgm
@@ -491,22 +548,26 @@ function | is_root() | cartlify_owner | plpgsql | definer=false | volatile=s | s
 function | is_system() | cartlify_owner | plpgsql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=0f31ae4340622dfa377eb0e86910d8b4 | extension=-
 function | legal_acceptances_before_insert() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=6e83aa8c91a534e3ce82119e86610008 | extension=-
 function | legal_documents_before_insert() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=6bd11e59fc83779ede77c11e0f37e962 | extension=-
-function | log_admin_action(p_actor_id integer, p_actor_role "Role", p_entity_type "AdminAuditEntityType", p_entity_id integer, p_action "AdminAuditAction", p_changes jsonb) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=45ac3146802853121ecfae54df5dd3de | extension=-
-function | log_product_price_change(p_product_id integer, p_old_price numeric, p_new_price numeric, p_mode "PriceChangeMode", p_value numeric, p_ends_at timestamp without time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=7fe9770acf5373d84f8df044d848915c | extension=-
+function | log_admin_action(p_actor_id integer, p_actor_role "Role", p_entity_type "AdminAuditEntityType", p_entity_id integer, p_action "AdminAuditAction", p_event text, p_changes jsonb) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=89ce08c7be141ba1a2a47541fe8478ea | extension=-
+function | log_product_price_change(p_product_id integer, p_old_price numeric, p_new_price numeric, p_mode "PriceChangeMode", p_value numeric, p_event text, p_ends_at timestamp without time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=82978b51703c955131f651980407fdaa | extension=-
 function | login_logs_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=ac86c5411f0dcdae3190fdf34de68a56 | extension=-
-function | migrate_guest_data_to_user(p_guest_id uuid, p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=fea214bb10ba58771c3106f69927a75f | extension=-
+function | migrate_guest_data_to_user(p_guest_id uuid, p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=36b78abb6f5868884338620777e846f3 | extension=-
+function | order_deliveries_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=82149934a458626748d624be4b6bc2a6 | extension=-
+function | order_deliveries_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=593afa18aad561711a555178c0da0400 | extension=-
 function | order_items_after_mod() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=c464775b367b589b66a6efddfd5ed7c1 | extension=-
 function | order_items_after_mod_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=5e6967abb339fdaa79ae11fc4c2d5811 | extension=-
 function | order_items_before_ins_upd() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=0129f66492601fd1f66846344781cb4f | extension=-
-function | orders_after_update_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=9c8bd9d2b1bb8c1c0018040a41c30670 | extension=-
-function | orders_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=21bec2044af519d588d27c7c92a837b7 | extension=-
-function | orders_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=b0671b6d2589819b79f06e1e2f971ab3 | extension=-
-function | pay_order(p_order_id integer, p_payment_provider "PaymentProvider", p_payment_id text, p_paid_amount numeric) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=text | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=4ed0e249fc7d56f8d7b859a2b5b8f5c8 | extension=-
+function | order_shipments_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=6d9f05d4a38434228ed1aecdf8077b53 | extension=-
+function | order_shipments_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=4f84f3f3be0c8eb3f879968318307e2d | extension=-
+function | orders_after_update_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=0e14d94e3fc6ac86f976601643a7b588 | extension=-
+function | orders_before_update() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=15efd953c9bf049a7b1fc22cf9cbd4a5 | extension=-
+function | orders_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=ee89d20ec9fab39f09b7dd57d02838c4 | extension=-
+function | pay_order(p_order_id integer, p_payment_provider "PaymentProvider", p_payment_id text, p_paid_amount numeric) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=text | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=9d6cab2925af3dc52b388726692c7986 | extension=-
 function | product_batches_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=3ce87f3a794686f6466c4dd85067d0b2 | extension=-
 function | product_current_price(p_price numeric, p_sale_price numeric, p_sale_ends_at timestamp without time zone) | cartlify_owner | sql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=numeric | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=526b97aff51ee8eca2f726c42712a83b | extension=-
 function | product_expired_units(p_product_id integer) | cartlify_owner | sql | definer=true | volatile=s | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=3a6dbebe1184637ee51267f705ba38fe | extension=-
 function | products_after_views_change() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=c10e1db3faf79399d780d411395491ce | extension=-
-function | products_before_price_change() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=bfe7ddbc49ccec60b3fd7dd825878a73 | extension=-
+function | products_before_price_change() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=98ea8e05364ed6615d580bc979df7222 | extension=-
 function | products_before_views_change() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=4b951a33433388d0222d4666fd65c6d9 | extension=-
 function | products_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=e2df668bcee51d1c2783ff1bc5c14233 | extension=-
 function | recalc_all_products_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=199b2b63eb148f9520ddc458fb0e6360 | extension=-
@@ -514,19 +575,20 @@ function | recalc_order_total(p_order_id integer) | cartlify_owner | plpgsql | d
 function | recalc_product_popularity(p_product_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=36f576b44f6ade4b0308748a14894c45 | extension=-
 function | recalc_product_rating(p_product_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=7c706d37fa888c7211dbddbd4d0fb2d3 | extension=-
 function | recalc_review_votes(p_review_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=7dd6124a64aa057f14ca5122dea5b7b7 | extension=-
-function | receive_product_batch(p_delivery_id uuid, p_product_id integer, p_source "StockSource", p_quantity integer, p_unit_cost numeric, p_expires_at date, p_supplier_batch_number text, p_supplier text, p_document text, p_note text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d163030f65f40c9777e57965e88a2b9d | extension=-
+function | receive_product_batch(p_delivery_id uuid, p_product_id integer, p_source "StockSource", p_quantity integer, p_unit_cost numeric, p_expires_at date, p_supplier_batch_number text, p_supplier text, p_document text, p_note text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=08a71e0615a163255d5716481fa4088e | extension=-
 function | refresh_order_prices(p_order_id integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=a6004e5eb7ae65b8ae60645982980511 | extension=-
 function | refuse_removed_product() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=6995a87f2a01fd1cc9e366f5fd471cb3 | extension=-
-function | release_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=f5370d8e96333a529594bc484b29a238 | extension=-
+function | release_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=895bc1e61afa341a708d0f37e7ef3bdb | extension=-
 function | remove_user_avatar(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(removed boolean, public_id text, avatar_url text) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=9d71d5025c272294e556b860c42fa6aa | extension=-
-function | reserve_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=583905cd0dbe6bfcc3f3c181f56be71c | extension=-
+function | reserve_product_stock(p_product_id integer, p_qty integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=47aca8683b3537aed7c5b065ee80bd2f | extension=-
 function | retention_cutoff(p_keep_days integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=timestamp without time zone | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=cd0f865fa34d6c8de50762e4563529d4 | extension=-
 function | return_order_stock(p_order_id integer) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=f2dbe3926a84db78e2fb762f3c83e0e9 | extension=-
-function | review_votes_after_mod() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=f6c6bfcbbfc75da49882948c0b881e9c | extension=-
+function | review_votes_after_mod() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=612f75621ffcf30e93f64124ba3291f8 | extension=-
+function | review_votes_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=c6d0baaf555f2e51986c4b2abea13e87 | extension=-
 function | reviews_after_mod_popularity() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=5e6967abb339fdaa79ae11fc4c2d5811 | extension=-
 function | reviews_after_mod_rating() | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=ddc5bb40436ea01921dfe6dedfa4ee4f | extension=-
 function | reviews_lock_rating_and_keys() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=d8ac43311e76b2bd142351df279f3c73 | extension=-
-function | reviews_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=49f1654b84d8df92540c87d59aa7bc50 | extension=-
+function | reviews_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=32732244b25b71b24c1a7af4cb08eaca | extension=-
 function | set_current_context(p_role "Role", p_user_id integer, p_guest_id uuid) | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=461166c61080565773525bf26e3e0c3e | extension=-
 function | set_limit(real) | postgres | c | definer=false | volatile=v | strict=true | leakproof=false | parallel=u | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=79156a0336c67021d9428bff7da30542 | extension=pg_trgm
 function | shop_today() | cartlify_owner | sql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=date | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=7a01556ffe84be6aa134efb5ba2bfaa9 | extension=-
@@ -545,7 +607,8 @@ function | unaccent(regdictionary, text) | postgres | c | definer=false | volati
 function | unaccent(text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=text | config=- | acl=cartlify_app=X/postgres,cartlify_owner=X/postgres,cartlify_readonly=X/postgres,postgres=X/postgres | body=26018d65d186aaf6b4c5c0c20984ff03 | extension=unaccent
 function | unaccent_init(internal) | postgres | c | definer=false | volatile=v | strict=false | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=c6e36297e2acf527f1d99c82244c9033 | extension=unaccent
 function | unaccent_lexize(internal, internal, internal, internal) | postgres | c | definer=false | volatile=v | strict=false | leakproof=false | parallel=s | returns=internal | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=a2c719ce86175b3b995e7e18bf5edd89 | extension=unaccent
-function | unconfirm_order(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=09835bd68bc71c17235e8573127e44a5 | extension=-
+function | unconfirm_order(p_order_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=de65a52d89c171fadf3e7e563725021d | extension=-
+function | units_sold_in_period(p_from timestamp without time zone, p_to timestamp without time zone) | cartlify_owner | sql | definer=true | volatile=s | strict=false | leakproof=false | parallel=u | returns=TABLE(product_id integer, units bigint) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=febc5631072389caa4ab2c183d46a81a | extension=-
 function | user_tokens_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=d6208ca3c54d5c4a0fed98f9a6c1e16e | extension=-
 function | users_before_write_email() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=c56aec970d059293e8d5ee8f361d50f3 | extension=-
 function | users_get_public_profile(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=TABLE(id integer, created_at timestamp with time zone, updated_at timestamp with time zone, name text, avatar_url text, email text, role "Role", auth_provider "AuthProvider", is_verified boolean, locale text, phone text, deleted_at timestamp with time zone) | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=2334037c4d0dad30a95c116750d8b2e6 | extension=-
@@ -555,7 +618,7 @@ function | word_similarity_commutator_op(text, text) | postgres | c | definer=fa
 function | word_similarity_dist_commutator_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=d3dad69b1ecbf95b0cd4ad9d0b898eca | extension=pg_trgm
 function | word_similarity_dist_op(text, text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=ba8863f446eceb450a04b6c324db7419 | extension=pg_trgm
 function | word_similarity_op(text, text) | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=boolean | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=5412212962db1aa604d6b20bbcf89c75 | extension=pg_trgm
-function | write_off_product_stock(p_write_off_id uuid, p_product_id integer, p_batch_id integer, p_quantity integer, p_reason text, p_note text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=jsonb | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=bf7a67463b8ae7d75acb8821ee7d3c54 | extension=-
+function | write_off_product_stock(p_write_off_id uuid, p_product_id integer, p_batch_id integer, p_quantity integer, p_reason text, p_note text) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=jsonb | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=058186335ddafa3b352d066809384000 | extension=-
 trigger | admin_alert_settings | trg_admin_alert_settings_update_columns | enabled=O | CREATE TRIGGER trg_admin_alert_settings_update_columns BEFORE UPDATE ON cartlify.admin_alert_settings FOR EACH ROW EXECUTE FUNCTION admin_alert_settings_update_columns()
 trigger | categories | trg_categories_before_parent_change | enabled=O | CREATE TRIGGER trg_categories_before_parent_change BEFORE INSERT OR UPDATE OF "parentId" ON cartlify.categories FOR EACH ROW EXECUTE FUNCTION categories_before_parent_change()
 trigger | chat_messages | trg_chat_messages_before_update | enabled=O | CREATE TRIGGER trg_chat_messages_before_update BEFORE UPDATE ON cartlify.chat_messages FOR EACH ROW EXECUTE FUNCTION chat_messages_before_update()
@@ -565,9 +628,13 @@ trigger | favorites | trg_favorites_refuse_removed_product | enabled=O | CREATE 
 trigger | legal_acceptances | trg_legal_acceptances_before_insert | enabled=O | CREATE TRIGGER trg_legal_acceptances_before_insert BEFORE INSERT ON cartlify.legal_acceptances FOR EACH ROW EXECUTE FUNCTION legal_acceptances_before_insert()
 trigger | legal_documents | trg_legal_documents_before_insert | enabled=O | CREATE TRIGGER trg_legal_documents_before_insert BEFORE INSERT ON cartlify.legal_documents FOR EACH ROW EXECUTE FUNCTION legal_documents_before_insert()
 trigger | login_logs | trg_login_logs_update_columns | enabled=O | CREATE TRIGGER trg_login_logs_update_columns BEFORE UPDATE ON cartlify.login_logs FOR EACH ROW EXECUTE FUNCTION login_logs_update_columns()
+trigger | order_deliveries | trg_order_deliveries_before_update | enabled=O | CREATE TRIGGER trg_order_deliveries_before_update BEFORE UPDATE ON cartlify.order_deliveries FOR EACH ROW EXECUTE FUNCTION order_deliveries_before_update()
+trigger | order_deliveries | trg_order_deliveries_update_columns | enabled=O | CREATE TRIGGER trg_order_deliveries_update_columns BEFORE UPDATE ON cartlify.order_deliveries FOR EACH ROW EXECUTE FUNCTION order_deliveries_update_columns()
 trigger | order_items | trg_order_items_after_mod | enabled=O | CREATE TRIGGER trg_order_items_after_mod AFTER INSERT OR DELETE OR UPDATE ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_after_mod()
 trigger | order_items | trg_order_items_after_mod_popularity | enabled=O | CREATE TRIGGER trg_order_items_after_mod_popularity AFTER INSERT OR DELETE OR UPDATE OF "orderId", "productId" ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_after_mod_popularity()
 trigger | order_items | trg_order_items_before_ins_upd | enabled=O | CREATE TRIGGER trg_order_items_before_ins_upd BEFORE INSERT OR UPDATE ON cartlify.order_items FOR EACH ROW EXECUTE FUNCTION order_items_before_ins_upd()
+trigger | order_shipments | trg_order_shipments_before_update | enabled=O | CREATE TRIGGER trg_order_shipments_before_update BEFORE UPDATE ON cartlify.order_shipments FOR EACH ROW EXECUTE FUNCTION order_shipments_before_update()
+trigger | order_shipments | trg_order_shipments_update_columns | enabled=O | CREATE TRIGGER trg_order_shipments_update_columns BEFORE UPDATE ON cartlify.order_shipments FOR EACH ROW EXECUTE FUNCTION order_shipments_update_columns()
 trigger | orders | trg_orders_after_update_popularity | enabled=O | CREATE TRIGGER trg_orders_after_update_popularity AFTER UPDATE ON cartlify.orders FOR EACH ROW EXECUTE FUNCTION orders_after_update_popularity()
 trigger | orders | trg_orders_before_update | enabled=O | CREATE TRIGGER trg_orders_before_update BEFORE UPDATE ON cartlify.orders FOR EACH ROW EXECUTE FUNCTION orders_before_update()
 trigger | orders | trg_orders_update_columns | enabled=O | CREATE TRIGGER trg_orders_update_columns BEFORE UPDATE ON cartlify.orders FOR EACH ROW EXECUTE FUNCTION orders_update_columns()
@@ -579,6 +646,7 @@ trigger | products | trg_products_before_views_change | enabled=O | CREATE TRIGG
 trigger | products | trg_products_stock_batches | enabled=O | CREATE CONSTRAINT TRIGGER trg_products_stock_batches AFTER INSERT OR UPDATE OF stock ON cartlify.products DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_product_stock_batches()
 trigger | products | trg_products_update_columns | enabled=O | CREATE TRIGGER trg_products_update_columns BEFORE UPDATE ON cartlify.products FOR EACH ROW EXECUTE FUNCTION products_update_columns()
 trigger | review_votes | trg_review_votes_after_mod | enabled=O | CREATE TRIGGER trg_review_votes_after_mod AFTER INSERT OR DELETE OR UPDATE ON cartlify.review_votes FOR EACH ROW EXECUTE FUNCTION review_votes_after_mod()
+trigger | review_votes | trg_review_votes_update_columns | enabled=O | CREATE TRIGGER trg_review_votes_update_columns BEFORE UPDATE ON cartlify.review_votes FOR EACH ROW EXECUTE FUNCTION review_votes_update_columns()
 trigger | reviews | trg_reviews_after_mod_popularity | enabled=O | CREATE TRIGGER trg_reviews_after_mod_popularity AFTER INSERT OR DELETE ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_after_mod_popularity()
 trigger | reviews | trg_reviews_after_mod_rating | enabled=O | CREATE TRIGGER trg_reviews_after_mod_rating AFTER INSERT OR DELETE OR UPDATE OF rating, comment ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_after_mod_rating()
 trigger | reviews | trg_reviews_lock_rating_and_keys | enabled=O | CREATE TRIGGER trg_reviews_lock_rating_and_keys BEFORE UPDATE ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_lock_rating_and_keys()
@@ -635,18 +703,28 @@ policy | order_batch_allocations | order_batch_allocations_insert_owner | PERMIS
 policy | order_batch_allocations | order_batch_allocations_select | PERMISSIVE | public | SELECT | using=is_admin() | check=-
 policy | order_batch_allocations | order_batch_allocations_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
 policy | order_batch_allocations | order_batch_allocations_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
+policy | order_deliveries | order_deliveries_insert | PERMISSIVE | public | INSERT | using=- | check=((price = (0)::numeric) AND (current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_deliveries."orderId") AND is_owner(o."userId") AND (o.confirmed = false)))))
+policy | order_deliveries | order_deliveries_select | PERMISSIVE | public | SELECT | using=(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_deliveries."orderId") AND is_owner_or_admin(o."userId")))) | check=-
+policy | order_deliveries | order_deliveries_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
+policy | order_deliveries | order_deliveries_update | PERMISSIVE | public | UPDATE | using=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_deliveries."orderId") AND is_owner(o."userId") AND (o.confirmed = false))))) | check=true
+policy | order_deliveries | order_deliveries_update_admin | PERMISSIVE | public | UPDATE | using=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_deliveries."orderId") AND (o.status = 'paid'::"OrderStatus"))))) | check=true
+policy | order_deliveries | order_deliveries_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=true | check=true
 policy | order_items | order_items_delete | PERMISSIVE | public | DELETE | using=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false))))) | check=-
 policy | order_items | order_items_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false)))))
 policy | order_items | order_items_select | PERMISSIVE | public | SELECT | using=(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner_or_admin(o."userId")))) | check=-
 policy | order_items | order_items_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
 policy | order_items | order_items_update | PERMISSIVE | public | UPDATE | using=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false))))) | check=((current_actor_role() = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND is_owner(o."userId") AND (o.confirmed = false)))))
 policy | order_items | order_items_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_items."orderId") AND (((o.confirmed = true) AND (o.status = 'waiting'::"OrderStatus")) OR ((o.confirmed = false) AND (o.status = ANY (ARRAY['pending'::"OrderStatus", 'unconfirmed'::"OrderStatus"]))))))) | check=false
+policy | order_shipments | order_shipments_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND ("rolledBackAt" IS NULL) AND (expense = true) AND (EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_shipments."orderId") AND (o.status = 'shipped'::"OrderStatus")))))
+policy | order_shipments | order_shipments_select | PERMISSIVE | public | SELECT | using=(EXISTS ( SELECT 1 FROM orders o WHERE ((o.id = order_shipments."orderId") AND is_owner_or_admin(o."userId")))) | check=-
+policy | order_shipments | order_shipments_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
+policy | order_shipments | order_shipments_update | PERMISSIVE | public | UPDATE | using=(current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) | check=true
 policy | orders | orders_delete | PERMISSIVE | public | DELETE | using=((current_actor_role() = 'USER'::"Role") AND is_owner("userId") AND (confirmed = false)) | check=-
 policy | orders | orders_insert | PERMISSIVE | public | INSERT | using=- | check=((current_actor_role() = 'USER'::"Role") AND is_owner("userId") AND (confirmed = false) AND (status = 'pending'::"OrderStatus") AND ("reservationExpiresAt" IS NULL) AND ("paymentId" IS NULL) AND ("paymentProvider" IS NULL) AND ("paidAt" IS NULL) AND ("cancelledAt" IS NULL))
 policy | orders | orders_select | PERMISSIVE | public | SELECT | using=is_owner_or_admin("userId") | check=-
 policy | orders | orders_select_owner | PERMISSIVE | cartlify_owner | SELECT | using=true | check=-
 policy | orders | orders_update | PERMISSIVE | public | UPDATE | using=(is_owner("userId") AND (confirmed = false)) | check=true
-policy | orders | orders_update_admin_shipping_status | PERMISSIVE | public | UPDATE | using=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (status = ANY (ARRAY['paid'::"OrderStatus", 'shipped'::"OrderStatus"]))) | check=true
+policy | orders | orders_update_admin_shipping_status | PERMISSIVE | public | UPDATE | using=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (status = ANY (ARRAY['paid'::"OrderStatus", 'shipped'::"OrderStatus", 'delivered'::"OrderStatus"]))) | check=true
 policy | orders | orders_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=((confirmed = false) OR ((confirmed = true) AND (status = 'waiting'::"OrderStatus") AND ("reservationExpiresAt" IS NOT NULL))) | check=true
 policy | orders | orders_update_owner_cancel | PERMISSIVE | cartlify_owner | UPDATE | using=((current_actor_role() = ANY (ARRAY['ADMIN'::"Role", 'ROOT'::"Role"])) AND (status = ANY (ARRAY['paid'::"OrderStatus", 'shipped'::"OrderStatus"]))) | check=true
 policy | product_batches | product_batches_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
@@ -693,7 +771,7 @@ policy | users | users_select_owner | PERMISSIVE | cartlify_owner | SELECT | usi
 policy | users | users_update | PERMISSIVE | public | UPDATE | using=((is_owner(id) AND ("deletedAt" IS NULL)) OR is_root()) | check=true
 policy | users | users_update_owner | PERMISSIVE | cartlify_owner | UPDATE | using=("isVerified" = false) | check=true
 policy | users | users_update_owner_avatar | PERMISSIVE | cartlify_owner | UPDATE | using=true | check=true
-view | admin_stats_view | cartlify_owner | options=security_invoker=true | acl=cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner | body=9d47999379414662aec101365f669ff6
+view | admin_stats_view | cartlify_owner | options=security_invoker=true | acl=cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner | body=db597b219b1350f43f0c0899341c29c8
 default_acl | cartlify_owner | * | f | cartlify_owner=X/cartlify_owner
 default_acl | cartlify_owner | cartlify | S | cartlify_app=rU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 default_acl | cartlify_owner | cartlify | r | cartlify_app=arwd/cartlify_owner,cartlify_readonly=r/cartlify_owner

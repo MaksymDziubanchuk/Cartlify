@@ -49,9 +49,9 @@ export default {
 
   // how long a worker may take to exit after the run: jest gives 500 ms and then kills it with a
   // warning about leaking tests. On Windows a worker that ran integration files often needs more
-  // with nothing left open (--detectOpenHandles finds nothing); a real leak still holds it past
-  // this time and gets the warning
-  workerGracefulExitTimeout: 5_000,
+  // with nothing left open (--detectOpenHandles finds nothing), on a busy machine more than 5 s; a
+  // real leak still holds it past this time and gets the warning
+  workerGracefulExitTimeout: 15_000,
 
   // the files that change what the whole shop does for everybody (*.shopwide.test.ts) run last,
   // each alone (tests/setup/integration.shopState.ts)
@@ -63,6 +63,7 @@ export default {
       displayName: 'unit',
       testMatch: ['<rootDir>/tests/unit/**/*.test.ts'],
       setupFiles: ['<rootDir>/tests/setup/unit.setup.ts'],
+      setupFilesAfterEnv: ['<rootDir>/tests/setup/timeout.ts'],
     },
     {
       ...shared,
@@ -72,7 +73,7 @@ export default {
       // a file waits for the files that change the whole shop (and they for it); the app logs go
       // to the tests, an unexpected warning or error fails its test;
       // cloudinary calls stay in its test/ folder; sendgrid and stripe answer from mocks unless
-      // the run takes them for real; a longer timeout for real services
+      // the run takes them for real; the time of a test is the same as in the unit tests
       setupFilesAfterEnv: [
         '<rootDir>/tests/setup/integration.shopState.ts',
         '<rootDir>/tests/setup/integration.logs.ts',
@@ -80,7 +81,7 @@ export default {
         '<rootDir>/tests/setup/integration.cloudinary.ts',
         '<rootDir>/tests/setup/integration.mail.ts',
         '<rootDir>/tests/setup/integration.stripe.ts',
-        '<rootDir>/tests/setup/integration.timeout.ts',
+        '<rootDir>/tests/setup/timeout.ts',
       ],
     },
   ],

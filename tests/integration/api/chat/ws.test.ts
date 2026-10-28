@@ -3,13 +3,13 @@ import type WebSocket from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import env from '@config/env.js';
-import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
 import { accessCookie, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf } from '../../../helpers/csrf.js';
 import { closeSessions, createUser } from '../../../helpers/factories.js';
+import { testTx } from '../../../helpers/db.js';
 
 // WEB_ORIGIN from tests/setup/integration.setup.ts
 const WEB_ORIGIN = 'https://shop.example.com';
@@ -175,7 +175,7 @@ describe('the session of a socket', () => {
     userIds.push(admin.id);
     const { socket } = await connect({ cookie: accessCookie(admin) });
     // root takes the role, the way POST /api/root/admins/:id/demote does
-    await prisma.$transaction(async (tx) => {
+    await testTx(async (tx) => {
       await setUserContext(tx, { userId: admin.id, role: 'ROOT' });
       await tx.user.update({ where: { id: admin.id }, data: { role: 'USER' } });
     });

@@ -1,5 +1,7 @@
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
+import { deliveryLineOf } from './deliveryLine.js';
+
 export type OrderShippedItem = {
   name: string;
   quantity: number;
@@ -13,12 +15,18 @@ export type OrderShippedTemplateArgs = {
   orderUrl: string;
   items: OrderShippedItem[];
   total: number | string;
+  // what the buyer paid for the delivery, none for a pickup
+  deliveryPrice?: number | string | null;
   // the currency checkout charges in, for example "eur"
   currency: string;
   userName?: string;
   shippingAddress?: string | null;
   recipientName?: string | null;
   recipientPhone?: string | null;
+  // who carries the order and how to follow it, as the shop wrote them; each one only if it has it
+  carrier?: string | null;
+  trackingNumber?: string | null;
+  trackingUrl?: string | null;
   appName?: string;
   logoCid?: string;
 };
@@ -50,10 +58,13 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
       quantity: String(item.quantity),
       lineTotal: price(item.totalPrice),
     })),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
     shippingAddress: args.shippingAddress?.trim() || '',
-    // the name and the phone in one line; an order confirmed before the recipient fields existed
-    // has neither, then the line is left out
+    carrier: args.carrier?.trim() || '',
+    trackingNumber: args.trackingNumber?.trim() || '',
+    trackingUrl: args.trackingUrl?.trim() || '',
+    // the name and the phone in one line
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',

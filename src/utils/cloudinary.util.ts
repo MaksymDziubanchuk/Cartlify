@@ -3,7 +3,12 @@ import { Readable, PassThrough } from 'node:stream';
 
 import cloudinary from '@config/cloudinary.js';
 import env from '@config/env.js';
-import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
+import {
+  BadRequestError,
+  InternalError,
+  ServiceUnavailableError,
+  isAppError,
+} from '@utils/errors.js';
 
 import type { FastifyBaseLogger } from 'fastify';
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
@@ -24,9 +29,50 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 // a file that does not send its start in this time holds the request no longer
 const IMAGE_HEAD_TIMEOUT_MS = 8000;
 
+// a move or a delete at cloudinary waits this long at most, not the minute of the sdk: a move runs
+// inside the transaction of its request and must end before it does, a delete holds up the answer.
+// An upload sends a whole file and keeps the time of the sdk unless its call names one
+const CLOUDINARY_CALL_TIMEOUT_MS = 8_000;
+
+// the sdk takes a timeout on every call of the upload api (it sets it on the request), its types
+// name it for the uploads only
+const withCallTimeout = <T extends object>(options: T): T =>
+  ({ ...options, timeout: CLOUDINARY_CALL_TIMEOUT_MS }) as T;
+
+// the codes of node for a connection that could not be made or broke
+const NETWORK_ERROR_CODES = new Set([
+  'ECONNREFUSED',
+  'ECONNRESET',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ECONNABORTED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+]);
+
+// cloudinary did not answer in time, could not be reached or failed itself: nothing of the file
+// changed at it, the request can come again. The sdk gives a call that ran out of time and a broken
+// connection wrapped in error, a status it does not read as it is (node_modules/cloudinary/lib/uploader.js)
+function outOfReach(err: unknown): ServiceUnavailableError | null {
+  const wrapped = (err as { error?: unknown } | null)?.error;
+  const e = (wrapped ?? err) as { name?: unknown; http_code?: unknown; code?: unknown } | null;
+  if (!e || typeof e !== 'object') return null;
+
+  const timedOut = e.name === 'TimeoutError' || e.http_code === 499;
+  const failed = typeof e.http_code === 'number' && e.http_code >= 500;
+  const broken = typeof e.code === 'string' && NETWORK_ERROR_CODES.has(e.code);
+
+  return timedOut || failed || broken
+    ? new ServiceUnavailableError('IMAGE_STORAGE_UNAVAILABLE', undefined, err)
+    : null;
+}
+
 export type MakePublicIdOpts =
   | { kind: 'avatar'; userId: string | number }
-  | { kind: 'product'; productId: string | number; imageKey: string | number };
+  | { kind: 'product'; productId: string | number; imageKey: string | number }
+  | { kind: 'category'; categoryId: string | number; imageKey: string | number };
 
 export type ImageFileMeta = {
   mimetype?: string | null;
@@ -197,6 +243,16 @@ export function makePublicId(opts: MakePublicIdOpts): string {
     return `${ENV_FOLDER}/users/${userId}/avatar`;
   }
 
+  if (opts.kind === 'category') {
+    const categoryId = cleanSegment(opts.categoryId);
+    const key = cleanSegment(opts.imageKey);
+    if (!categoryId) throw new BadRequestError('PUBLIC_ID_CATEGORY_REQUIRED');
+    if (!key) throw new BadRequestError('PUBLIC_ID_IMAGEKEY_REQUIRED');
+
+    // a new path for each upload, so a move never replaces the picture the category shows
+    return `${ENV_FOLDER}/categories/${categoryId}/${key}`;
+  }
+
   const productId = cleanSegment(opts.productId);
   const imageKey = cleanSegment(opts.imageKey);
 
@@ -325,28 +381,34 @@ export async function uploadImage(args: UploadImageArgs): Promise<UploadImageRes
     const refused = refusedImage(err);
     if (refused) throw refused;
 
-    throw new InternalError({ reason: 'CLOUDINARY_UPLOAD_UNEXPECTED' }, err);
+    throw outOfReach(err) ?? new InternalError({ reason: 'CLOUDINARY_UPLOAD_UNEXPECTED' }, err);
   }
 }
 
-// puts an uploaded image at its place: a file already there is replaced and its cached copies are
-// dropped. The answer has the url of the image at the new place
+// puts an uploaded image at its place: a file already there is replaced. invalidate drops the
+// copies cached of the place, for a place a page may show already (the avatar of an account); a
+// new place has none. The answer has the url of the image at the new place
 export async function moveImage(
   fromPublicId: string,
   toPublicId: string,
+  opts: { invalidate: boolean },
 ): Promise<UploadImageResult> {
   if (!fromPublicId.trim() || !toPublicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
 
   try {
-    const res = await cloudinary.uploader.rename(fromPublicId, toPublicId, {
-      resource_type: 'image',
-      overwrite: true,
-      invalidate: true,
-    });
+    const res = await cloudinary.uploader.rename(
+      fromPublicId,
+      toPublicId,
+      withCallTimeout({
+        resource_type: 'image' as const,
+        overwrite: true,
+        invalidate: opts.invalidate,
+      }),
+    );
 
     return { publicId: res.public_id, urlBase: res.secure_url };
   } catch (err) {
-    throw new InternalError({ reason: 'CLOUDINARY_MOVE_UNEXPECTED' }, err);
+    throw outOfReach(err) ?? new InternalError({ reason: 'CLOUDINARY_MOVE_UNEXPECTED' }, err);
   }
 }
 
@@ -356,9 +418,12 @@ export async function deleteImage(publicId: string): Promise<void> {
   if (!publicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
 
   try {
-    await cloudinary.uploader.destroy(publicId, { resource_type: 'image', invalidate: true });
+    await cloudinary.uploader.destroy(
+      publicId,
+      withCallTimeout({ resource_type: 'image' as const, invalidate: true }),
+    );
   } catch (err) {
-    throw new InternalError({ reason: 'CLOUDINARY_DELETE_UNEXPECTED' }, err);
+    throw outOfReach(err) ?? new InternalError({ reason: 'CLOUDINARY_DELETE_UNEXPECTED' }, err);
   }
 }
 

@@ -1,5 +1,7 @@
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
+import { deliveryLineOf } from './deliveryLine.js';
+
 export type OrderCancelledItem = {
   name: string;
   quantity: number;
@@ -12,6 +14,9 @@ export type OrderCancelledTemplateArgs = {
   // the order page of the frontend
   orderUrl: string;
   items: OrderCancelledItem[];
+  // what the buyer paid for the delivery, part of the refunded amount: free when 0, no line for a
+  // pickup
+  deliveryPrice?: number | string | null;
   // the refunded amount, the whole payment
   total: number | string;
   // the currency checkout charges in, for example "eur"
@@ -48,6 +53,7 @@ export function buildOrderCancelledTemplate(args: OrderCancelledTemplateArgs): {
       quantity: String(item.quantity),
       lineTotal: price(item.totalPrice),
     })),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',

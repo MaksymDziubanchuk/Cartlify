@@ -15,8 +15,166 @@ const wholeNumberField = (description: string) =>
 // the statuses of the list, for the pattern of a list of them
 const LIST_STATUSES = 'waiting|unconfirmed|paid|shipped|delivered|cancelled';
 
-// the longest shipping address and note, in characters
+// the longest note for the courier, in characters
 const SHIPPING_TEXT_MAX_LENGTH = 500;
+
+// where the order goes, as an order answers with it
+const deliveryPersonSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    firstName: { type: 'string' },
+    lastName: { type: 'string' },
+    phone: { type: 'string', description: 'International form, +380501234567.' },
+  },
+  required: ['firstName', 'lastName', 'phone'],
+} as const;
+
+const deliveryAddressProperties = {
+  country: { type: 'string', description: 'ISO code of two capital letters.' },
+  postalCode: { type: ['string', 'null'], description: 'In the form its country writes it.' },
+  city: { type: 'string' },
+  street: { type: 'string' },
+  house: {
+    type: 'string',
+    description: 'The number of the house, its name or both; s/n for a house without a number.',
+  },
+  apartment: { type: ['string', 'null'], description: 'Apartment, office, entrance.' },
+} as const;
+
+const deliveryAddressRequired = [
+  'country',
+  'postalCode',
+  'city',
+  'street',
+  'house',
+  'apartment',
+] as const;
+
+const orderDeliverySchema = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  description:
+    'Where and to whom the order goes; empty while the order has none (a cart of a buyer who has ' +
+    'not chosen yet).',
+  properties: {
+    method: { type: 'string', enum: ['manual', 'pickup'] },
+    price: {
+      type: 'number',
+      description:
+        'What the buyer pays for the delivery: fixed when the order is confirmed, the price of ' +
+        'now before that.',
+    },
+    recipient: deliveryPersonSchema,
+    address: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      description: 'The address of the manual method, empty for a pickup.',
+      properties: deliveryAddressProperties,
+      required: deliveryAddressRequired,
+    },
+    note: { type: ['string', 'null'], description: 'A word for the courier.' },
+    pickup: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      description: 'Where and when to collect the order, the pickup only.',
+      properties: { address: { type: 'string' }, hours: { type: 'string' } },
+      required: ['address', 'hours'],
+    },
+    shipment: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      description: 'The send on its way, once the order is shipped.',
+      properties: {
+        carrier: { type: ['string', 'null'] },
+        trackingNumber: { type: ['string', 'null'] },
+        trackingUrl: { type: ['string', 'null'] },
+      },
+      required: ['carrier', 'trackingNumber', 'trackingUrl'],
+    },
+  },
+  required: ['method', 'price', 'recipient', 'address', 'note', 'pickup', 'shipment'],
+} as const;
+
+const orderDeliveryQuotesSchema = {
+  type: 'array',
+  description: 'An order that is not confirmed: what each method the shop has enabled costs now.',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      method: { type: 'string', enum: ['manual', 'pickup'] },
+      price: { type: 'number' },
+      freeFrom: {
+        type: ['number', 'null'],
+        description: 'The sum of the items from which it is free.',
+      },
+      remainingToFree: {
+        type: ['number', 'null'],
+        description: 'What the items still lack of it, 0 once the delivery is free.',
+      },
+    },
+    required: ['method', 'price', 'freeFrom', 'remainingToFree'],
+  },
+} as const;
+
+const orderDeliverySuggestionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'A cart: the delivery of the last order of the buyer, for the page to start from; the buyer ' +
+    'corrects it and confirms.',
+  properties: {
+    method: { type: 'string', enum: ['manual', 'pickup'] },
+    recipient: deliveryPersonSchema,
+    address: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: deliveryAddressProperties,
+      required: deliveryAddressRequired,
+    },
+  },
+  required: ['method', 'recipient', 'address'],
+} as const;
+
+const orderShipmentsSchema = {
+  type: 'array',
+  description: 'Admin and root: every send of the order, the latest first.',
+  items: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      id: { type: 'integer' },
+      carrier: { type: ['string', 'null'] },
+      trackingNumber: { type: ['string', 'null'] },
+      trackingUrl: { type: ['string', 'null'] },
+      cost: {
+        type: ['number', 'null'],
+        description: 'What the shop pays the carrier, empty until it is written.',
+      },
+      expense: {
+        type: 'boolean',
+        description: 'false when the shop owes the carrier nothing for this send.',
+      },
+      shippedAt: { type: 'string', format: 'date-time' },
+      rolledBackAt: {
+        type: ['string', 'null'],
+        format: 'date-time',
+        description: 'When the status went back from shipped; the send stays as history.',
+      },
+    },
+    required: [
+      'id',
+      'carrier',
+      'trackingNumber',
+      'trackingUrl',
+      'cost',
+      'expense',
+      'shippedAt',
+      'rolledBackAt',
+    ],
+  },
+} as const;
 
 const ordersOrderItemProductSchema = {
   $id: 'ordersOrderItemProductSchema',
@@ -100,7 +258,24 @@ const ordersOrderResponseSchema = {
       enum: ['pending', 'unconfirmed', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
     },
     items: { type: 'array', items: { $ref: 'ordersOrderItemSchema#' } },
-    total: { type: 'number' },
+    itemsTotal: { type: 'number', description: 'What the items cost.' },
+    total: {
+      type: 'number',
+      description: 'What the buyer pays: the items and the delivery.',
+    },
+    delivery: orderDeliverySchema,
+    deliveryQuotes: orderDeliveryQuotesSchema,
+    deliverySuggestion: orderDeliverySuggestionSchema,
+    shipments: orderShipmentsSchema,
+    weight: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'Admin and root: what the order weighs in grams (the items that have a weight), whole ' +
+        'only when every item has one.',
+      properties: { grams: { type: 'integer' }, complete: { type: 'boolean' } },
+      required: ['grams', 'complete'],
+    },
     // the list of an admin names the buyer of each order
     buyer: {
       type: 'object',
@@ -134,14 +309,6 @@ const ordersOrderResponseSchema = {
       format: 'date-time',
       description: 'When an admin cancelled the paid order, only for a cancelled order.',
     },
-    note: { type: 'string' },
-    shippingAddress: {
-      type: 'string',
-      description: 'Shipping address, an empty string while the order has none.',
-    },
-    recipientFirstName: { type: 'string' },
-    recipientLastName: { type: 'string' },
-    recipientPhone: { type: 'string' },
     confirmed: { type: 'boolean' },
   },
   required: [
@@ -149,10 +316,11 @@ const ordersOrderResponseSchema = {
     'userId',
     'status',
     'items',
+    'itemsTotal',
     'total',
+    'delivery',
     'createdAt',
     'updatedAt',
-    'shippingAddress',
     'confirmed',
   ],
 } as const;
@@ -205,22 +373,72 @@ const recipientNameField = (what: string) =>
     maxLength: PROFILE_TEXT_MAX_LENGTH,
     description:
       `${what} of the recipient, up to ${PROFILE_TEXT_MAX_LENGTH} characters, with at least one ` +
-      'letter and no digits. Spaces around it are cut. Required when the order has none yet.',
+      'letter and no digits. Spaces around it are cut.',
   }) as const;
 
-const ordersCurrentConfirmBodySchema = {
-  $id: 'ordersCurrentConfirmBodySchema',
+const confirmDeliveryAddressSchema = {
   type: 'object',
   additionalProperties: false,
+  description:
+    'The address of the manual method. A buyer is a person: no company. Spaces around the text ' +
+    'are cut.',
   properties: {
-    orderId: wholeNumberField('Id of the order to confirm'),
-    shippingAddress: {
+    country: {
+      type: 'string',
+      pattern: '^[A-Z]{2}$',
+      description:
+        'ISO code of two capital letters, one of the countries the shop delivers to ' +
+        '(GET /api/delivery/methods names them): DELIVERY_COUNTRY_NOT_ALLOWED otherwise.',
+    },
+    postalCode: {
       type: 'string',
       minLength: 1,
-      maxLength: SHIPPING_TEXT_MAX_LENGTH,
+      maxLength: 16,
       description:
-        `Shipping address, up to ${SHIPPING_TEXT_MAX_LENGTH} characters. Spaces around it are ` +
-        'cut. Required when the order has none yet.',
+        'The postal code in the form its country writes it, checked for it and kept in that form ' +
+        '(DELIVERY_POSTAL_CODE_INVALID).',
+    },
+    city: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description: 'With at least one letter.',
+    },
+    street: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 150,
+      description: 'With at least one letter.',
+    },
+    house: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 20,
+      description: 'The number of the house, its name or both; s/n for a house without a number.',
+    },
+    apartment: {
+      type: 'string',
+      maxLength: 40,
+      description: 'Optional: apartment, office, entrance; empty is none.',
+    },
+  },
+  required: ['country', 'postalCode', 'city', 'street', 'house'],
+} as const;
+
+const confirmDeliverySchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'Where and to whom the order goes. Whole when sent: it replaces the delivery of the order. ' +
+    'Required for an order that has no delivery yet (DELIVERY_REQUIRED), an order that lost its ' +
+    'reservation keeps the one it had.',
+  properties: {
+    method: {
+      type: 'string',
+      enum: ['manual', 'pickup'],
+      description:
+        'manual: the shop sends the order to an address; pickup: the buyer collects it at the ' +
+        'shop. A method the shop has not enabled is DELIVERY_METHOD_NOT_AVAILABLE.',
     },
     recipientFirstName: recipientNameField('First name'),
     recipientLastName: recipientNameField('Last name'),
@@ -230,18 +448,40 @@ const ordersCurrentConfirmBodySchema = {
       pattern: `^${PHONE_PATTERN}$`,
       description:
         'Phone of the recipient in the international format: a plus sign and 8 to 15 digits, ' +
-        'the first one not zero, for example +380501234567. No spaces, brackets or dashes. ' +
-        'Required when the order has none yet.',
+        'the first one not zero, for example +380501234567. No spaces, brackets or dashes.',
     },
+    address: confirmDeliveryAddressSchema,
     note: {
       type: 'string',
       maxLength: SHIPPING_TEXT_MAX_LENGTH,
       description:
-        `A note for the delivery, optional, up to ${SHIPPING_TEXT_MAX_LENGTH} characters. ` +
-        'Spaces around it are cut; an empty value removes the note.',
+        `A note for the courier, optional, up to ${SHIPPING_TEXT_MAX_LENGTH} characters. ` +
+        'Spaces around it are cut; an empty value is no note.',
     },
   },
-  required: ['orderId'],
+  required: ['method', 'recipientFirstName', 'recipientLastName', 'recipientPhone'],
+} as const;
+
+const ordersCurrentConfirmBodySchema = {
+  $id: 'ordersCurrentConfirmBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: wholeNumberField('Id of the order to confirm'),
+    delivery: confirmDeliverySchema,
+    expectedDeliveryPrice: {
+      type: 'number',
+      minimum: 0,
+      maximum: 99999999.99,
+      multipleOf: 0.01,
+      description:
+        'Required: the price of the delivery the page showed the buyer (the quote of the method ' +
+        'chosen, `deliveryQuotes` of the order). Another price now refuses the confirmation ' +
+        '(DELIVERY_PRICE_CHANGED, with the price now) and nothing is confirmed: the page shows the ' +
+        'price now and the buyer confirms again.',
+    },
+  },
+  required: ['orderId', 'expectedDeliveryPrice'],
 } as const;
 
 const ordersGetQuerySchema = {
@@ -288,7 +528,8 @@ const ordersGetQuerySchema = {
       description:
         'Admin and root only (FILTER_FORBIDDEN for a buyer): a whole number is the number of an ' +
         'order; any other text a part of the email of the buyer, of the name or the phone of ' +
-        'the recipient, whatever the case of its letters.',
+        'the recipient, of the city or the postal code of the address, or a tracking number, ' +
+        'whatever the case of its letters.',
     },
     format: {
       type: 'string',
@@ -325,12 +566,75 @@ const ordersGetQuerySchema = {
         'delivery longest.',
     },
 
+    // the delivery filters of the desk of an admin
+    deliveryMethod: {
+      type: 'string',
+      pattern: '^(manual|pickup)(,(manual|pickup))*$',
+      description: 'Admin and root: the orders of these methods, one or both through commas.',
+    },
+    country: {
+      type: 'string',
+      pattern: '^[A-Z]{2}(,[A-Z]{2})*$',
+      description:
+        'Admin and root: the orders that go to these countries (ISO codes through commas).',
+    },
+    carrier: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description:
+        'Admin and root: the orders whose send on its way names this carrier, a part of the name ' +
+        'without the case. A send that was rolled back does not count.',
+    },
+    shippedWithoutNumber: {
+      type: 'boolean',
+      description:
+        'Admin and root: true lists the shipped orders whose send on its way has no tracking number.',
+    },
+    deliveryCharged: {
+      type: 'boolean',
+      description:
+        'Admin and root: true lists the orders whose delivery the buyer pays for, false the ones ' +
+        'where the shop pays (a free delivery, a pickup).',
+    },
+    withoutWeight: {
+      type: 'boolean',
+      description: 'Admin and root: true lists the orders that hold a product without a weight.',
+    },
+    shippingCostMissing: {
+      type: 'boolean',
+      description:
+        'Admin and root: true lists the orders with a send the shop owes something for and has ' +
+        'not written the cost of. With shippedTo it is the same send that was sent before it.',
+    },
+    shippedTo: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Admin and root: only the orders with a send that was sent before this time (a send ' +
+        'taken back too); with shippingCostMissing, the send that lacks its cost.',
+    },
+
     // sorting
     sortBy: {
       type: 'string',
-      enum: ['createdAt', 'updatedAt', 'total', 'shippingAddress', 'paidAt'],
+      enum: [
+        'createdAt',
+        'updatedAt',
+        'total',
+        'paidAt',
+        'deliveryMethod',
+        'destination',
+        'deliveryPrice',
+        'shippingCostMissingSince',
+      ],
       description:
-        'createdAt by default, newest first. paidAt lists only the orders that are paid.',
+        'createdAt by default, newest first. paidAt lists only the orders that are paid. ' +
+        'destination sorts by the country and then the city and lists only the orders that go to ' +
+        'an address. shippingCostMissingSince sorts by the oldest send of each order the shop ' +
+        'owes the carrier for and has written no cost of, with shippingCostMissing only ' +
+        '(SORT_SHIPPING_COST_MISSING_REQUIRES_FILTER); it is the sort of that filter by default, ' +
+        'the oldest first.',
     },
     sortDir: {
       type: 'string',
@@ -364,22 +668,74 @@ const ordersGetByIdParamsSchema = {
   required: ['orderId'],
 } as const;
 
-// one step of shipping for many orders
+// the send of the shipped step: who carries the order, the number, the link, what the shop pays
+const shipmentInputSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The send, with the step to shipped of a manual order, each part only if known. A number and a ' +
+    'link each need the carrier (SHIPMENT_CARRIER_REQUIRED); a link may come without a number. A ' +
+    'pickup has none (SHIPMENT_NOT_ALLOWED).',
+  properties: {
+    carrier: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description: 'The carrier the shop sent it with, as the admin names it.',
+    },
+    trackingNumber: { type: 'string', minLength: 1, maxLength: 100 },
+    trackingUrl: {
+      type: 'string',
+      maxLength: 500,
+      pattern: '^https://\\S+$',
+      description: 'The page to follow the parcel on, https.',
+    },
+    cost: {
+      type: ['number', 'null'],
+      minimum: 0,
+      maximum: 99999999.99,
+      multipleOf: 0.01,
+      description:
+        'What the shop pays the carrier, 0 is possible; left out until the admin writes it ' +
+        '(PATCH /api/orders/{orderId}/shipments/{shipmentId}).',
+    },
+  },
+} as const;
+
+const keepShippingCostSchema = {
+  type: 'boolean',
+  description:
+    'With the step back to paid of a manual order that was shipped: true keeps the cost of the ' +
+    'send as owed (the carrier was used), false makes it 0 (the shipping was a mistake; the cost ' +
+    'it had stays in the admin log). Needed ' +
+    'then (KEEP_SHIPPING_COST_REQUIRED), not allowed otherwise (KEEP_SHIPPING_COST_NOT_ALLOWED).',
+} as const;
+
+// one step for many orders
 const ordersBulkStatusBodySchema = {
   $id: 'ordersBulkStatusBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    orderIds: {
+    status: { type: 'string', enum: ['paid', 'shipped', 'delivered'] },
+    orders: {
       type: 'array',
       minItems: 1,
       maxItems: 100,
-      uniqueItems: true,
-      items: { type: 'integer', minimum: 1, maximum: MAX_ID },
+      uniqueItems: false,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          orderId: { type: 'integer', minimum: 1, maximum: MAX_ID },
+          shipment: shipmentInputSchema,
+          keepShippingCost: keepShippingCostSchema,
+        },
+        required: ['orderId'],
+      },
     },
-    status: { type: 'string', enum: ['shipped', 'delivered'] },
   },
-  required: ['orderIds', 'status'],
+  required: ['orders', 'status'],
 } as const;
 
 const ordersBulkStatusResponseSchema = {
@@ -402,7 +758,10 @@ const ordersBulkStatusResponseSchema = {
             description:
               'Without ok: why the order did not take the step, the code PATCH ' +
               '/api/orders/{orderId}/status would answer (ORDER_NOT_FOUND, ' +
-              'ORDER_STATUS_TRANSITION_INVALID, ORDER_STATUS_CHANGED, RESOURCE_BUSY).',
+              'ORDER_STATUS_TRANSITION_INVALID, ORDER_STATUS_CHANGED, RESOURCE_BUSY, ' +
+              'SHIPMENT_NOT_ALLOWED, SHIPMENT_CARRIER_REQUIRED, ' +
+              'SHIPMENT_CARRIER_INVALID, SHIPMENT_NUMBER_INVALID, KEEP_SHIPPING_COST_REQUIRED, ' +
+              'KEEP_SHIPPING_COST_NOT_ALLOWED).',
           },
           details: { type: 'object', additionalProperties: true },
         },
@@ -420,12 +779,97 @@ const ordersUpdateStatusBodySchema = {
   properties: {
     status: {
       type: 'string',
-      enum: ['shipped', 'delivered'],
+      enum: ['paid', 'shipped', 'delivered'],
       description:
-        'A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel.',
+        'The steps go on from paid to shipped (a pickup: ready to be collected) and to delivered ' +
+        '(collected), and one step back: delivered to shipped, shipped to paid. A cancel returns ' +
+        'the money and the stock, it is POST /api/orders/{orderId}/cancel.',
     },
+    shipment: shipmentInputSchema,
+    keepShippingCost: keepShippingCostSchema,
   },
   required: ['status'],
+} as const;
+
+const ordersShipmentParamsSchema = {
+  $id: 'ordersShipmentParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: idPathParam('the order'),
+    shipmentId: idPathParam('the send'),
+  },
+  required: ['orderId', 'shipmentId'],
+} as const;
+
+const ordersShipmentUpdateBodySchema = {
+  $id: 'ordersShipmentUpdateBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  minProperties: 1,
+  description:
+    'What changes, each part only if it does. null clears a part; the send holds together: a ' +
+    'number and a link each need the carrier, a link may come without a number.',
+  properties: {
+    carrier: { type: ['string', 'null'], minLength: 1, maxLength: 100 },
+    trackingNumber: { type: ['string', 'null'], minLength: 1, maxLength: 100 },
+    trackingUrl: {
+      type: ['string', 'null'],
+      maxLength: 500,
+      pattern: '^https://\\S+$',
+      description: 'The page to follow the parcel on, https.',
+    },
+    cost: {
+      type: ['number', 'null'],
+      minimum: 0,
+      maximum: 99999999.99,
+      multipleOf: 0.01,
+      description: 'What the shop pays the carrier, 0 is possible.',
+    },
+  },
+} as const;
+
+const ordersDeliveryUpdateBodySchema = {
+  $id: 'ordersDeliveryUpdateBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  minProperties: 1,
+  description:
+    'What changes, each part only if it does. The person can be changed alone; an address is ' +
+    'sent whole and is checked the way the confirmation checks it. The method and the price stay.',
+  properties: {
+    recipientFirstName: recipientNameField('First name'),
+    recipientLastName: recipientNameField('Last name'),
+    recipientPhone: {
+      type: 'string',
+      maxLength: 16,
+      pattern: `^${PHONE_PATTERN}$`,
+      description: 'The phone in the international form, +380501234567.',
+    },
+    address: confirmDeliveryAddressSchema,
+    note: {
+      type: 'string',
+      maxLength: SHIPPING_TEXT_MAX_LENGTH,
+      description: 'A note for the courier; an empty one removes it.',
+    },
+  },
+} as const;
+
+const ordersCancelBodySchema = {
+  $id: 'ordersCancelBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    shippingPaid: {
+      type: 'boolean',
+      description:
+        'The cancel of a manual order that was shipped: true when the carrier was paid already (the ' +
+        'cost of the send stays owed, an expense of the shop), false when it was not (the cost of ' +
+        'the send becomes 0, the one it had stays in the admin log). Needed then ' +
+        '(SHIPPING_PAID_REQUIRED), not allowed otherwise ' +
+        '(SHIPPING_PAID_NOT_ALLOWED).',
+    },
+  },
 } as const;
 
 const ordersUpdateStatusResponseSchema = {
@@ -481,6 +925,10 @@ export const ordersDtoSchemas = [
   ordersBulkStatusBodySchema,
   ordersBulkStatusResponseSchema,
   ordersUpdateStatusBodySchema,
+  ordersShipmentParamsSchema,
+  ordersShipmentUpdateBodySchema,
+  ordersDeliveryUpdateBodySchema,
+  ordersCancelBodySchema,
   ordersUpdateStatusResponseSchema,
   ordersListResponseSchema,
   ordersOrderItemParamsSchema,

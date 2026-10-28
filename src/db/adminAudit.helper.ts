@@ -2,6 +2,7 @@ import { parseProductDescription } from '@helpers/productDescription.js';
 import { isSaleOn } from '@helpers/productSale.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
+import type { AuditEvent, WrittenEvent } from '@config/journalEvents.js';
 import type { UserId } from 'types/ids.js';
 
 export type AuditChange = { field: string; old: unknown; new: unknown };
@@ -49,6 +50,10 @@ export function buildProductUpdateAuditChanges(
     sku?: string | null;
     price: { toString(): string };
     categoryId: number;
+    weightGrams?: number | null;
+    lengthMm?: number | null;
+    widthMm?: number | null;
+    heightMm?: number | null;
     popularityOverride: number | null;
     popularityOverrideUntil: Date | null;
     deletedAt: Date | null;
@@ -60,6 +65,10 @@ export function buildProductUpdateAuditChanges(
       sku?: string | null;
       price: { toString(): string };
       categoryId: number;
+      weightGrams?: number | null;
+      lengthMm?: number | null;
+      widthMm?: number | null;
+      heightMm?: number | null;
       popularityOverride: number | null;
       popularityOverrideUntil: Date | null;
       deletedAt: Date | null;
@@ -71,6 +80,10 @@ export function buildProductUpdateAuditChanges(
       sku?: unknown;
       price?: unknown;
       categoryId?: unknown;
+      weightGrams?: unknown;
+      lengthMm?: unknown;
+      widthMm?: unknown;
+      heightMm?: unknown;
       popularityOverride?: unknown;
       popularityOverrideUntil?: unknown;
       deletedAt?: unknown;
@@ -107,6 +120,16 @@ export function buildProductUpdateAuditChanges(
 
   if (args.input.categoryId != null && before.categoryId !== args.after.categoryId) {
     changes.push({ field: 'categoryId', old: before.categoryId, new: args.after.categoryId });
+  }
+
+  // the weight and the sizes sent; null is a change too, it clears them
+  for (const field of ['weightGrams', 'lengthMm', 'widthMm', 'heightMm'] as const) {
+    if (
+      args.input[field] !== undefined &&
+      (before[field] ?? null) !== (args.after[field] ?? null)
+    ) {
+      changes.push({ field, old: before[field] ?? null, new: args.after[field] ?? null });
+    }
   }
 
   if (args.input.price != null && before.price.toString() !== args.after.price.toString()) {
@@ -160,6 +183,8 @@ export async function writeAdminAuditLog(
     actorRole: string;
     entityType: 'product' | 'user' | 'category' | 'order' | 'review' | 'other';
     entityId: number;
+    // what made the line, finer than the action (src/config/journalEvents.ts)
+    event: WrittenEvent<AuditEvent>;
     action:
       | 'PRODUCT_CREATE'
       | 'PRODUCT_UPDATE'
@@ -168,6 +193,8 @@ export async function writeAdminAuditLog(
       | 'PRODUCT_SALE'
       | 'USER_ROLE_CHANGE'
       | 'ORDER_STATUS_CHANGE'
+      | 'ORDER_SHIPMENT_CHANGE'
+      | 'ORDER_DELIVERY_CHANGE'
       | 'CATEGORY_UPDATE'
       | 'REVIEW_DELETE'
       | 'OTHER';
@@ -186,6 +213,7 @@ export async function writeAdminAuditLog(
       ${args.entityType}::cartlify."AdminAuditEntityType",
       ${args.entityId}::int,
       ${args.action}::cartlify."AdminAuditAction",
+      ${args.event},
       ${changesJson}::jsonb
     )
   `;

@@ -15,7 +15,7 @@ import {
 } from '../../../helpers/factories.js';
 import { imageField, pngImage } from '../../../helpers/cloudinary.js';
 import { multipartBody } from '../../../helpers/multipart.js';
-import { safetyFormFields } from '../../../helpers/productSafety.js';
+import { safetyFormFields, shippingFormFields } from '../../../helpers/productSafety.js';
 import { moveClock } from '../../../helpers/payments.js';
 
 // what the routes of products and categories refuse before the database fails on it: a category
@@ -67,6 +67,7 @@ describe('a category that does not exist', () => {
       { name: 'price', value: '10' },
       { name: 'categoryId', value: String(MISSING) },
       ...safetyFormFields(),
+      ...shippingFormFields(),
       imageField('images', pngImage(30, 20)),
     ]);
 

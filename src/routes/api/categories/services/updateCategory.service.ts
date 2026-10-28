@@ -14,6 +14,7 @@ import {
 } from '@utils/errors.js';
 
 import { normalizeFindCategoryByIdInput, normalizeUpdateCategoryInput } from './helpers/index.js';
+import { categoryImageUrlsOf } from './helpers/categories.helper.js';
 import { assertOutsideOwnBranch } from './helpers/categoryTree.helper.js';
 
 import type { UpdateCategoryDto, UpdateCategoryResponseDto } from 'types/dto/categories.dto.js';
@@ -86,6 +87,7 @@ export async function updateCategory({
           slug: true,
           description: true,
           parentId: true,
+          imageUrl: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -118,6 +120,7 @@ export async function updateCategory({
           entityType: 'category',
           entityId: after.id,
           action: 'CATEGORY_UPDATE',
+          event: 'category.update',
           changes,
         });
       }
@@ -131,6 +134,7 @@ export async function updateCategory({
       slug: updated.slug,
       ...(updated.description != null ? { description: updated.description } : {}),
       ...(updated.parentId != null ? { parentId: updated.parentId } : {}),
+      imageUrls: categoryImageUrlsOf(updated.imageUrl),
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     };

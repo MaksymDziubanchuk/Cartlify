@@ -1,10 +1,12 @@
 import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
+import { deliveryMailParts } from '@helpers/deliveryText.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderShippedTemplate } from '@services/email/templates/orders/orderShipped.template.js';
 import { buildOrderDeliveredTemplate } from '@services/email/templates/orders/orderDelivered.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
+import { sendOrderNoticeEmail } from './sendOrderNoticeEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
@@ -33,17 +35,31 @@ function loadOrder(orderId: number) {
   return prisma.$transaction(async (tx) => {
     await setAdminContext(tx);
 
-    return tx.order.findUnique({
+    // a query reads at most two relations side by side (the relations of one query run at once on
+    // the one connection of a transaction), so the buyer and the send are read apart, one after
+    // the other
+    const order = await tx.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
+        userId: true,
         total: true,
         paymentProvider: true,
-        shippingAddress: true,
-        recipientFirstName: true,
-        recipientLastName: true,
-        recipientPhone: true,
-        user: { select: { email: true, name: true, deletedAt: true } },
+        delivery: {
+          select: {
+            method: true,
+            recipientFirstName: true,
+            recipientLastName: true,
+            recipientPhone: true,
+            price: true,
+            country: true,
+            postalCode: true,
+            city: true,
+            street: true,
+            house: true,
+            apartment: true,
+          },
+        },
         items: {
           orderBy: { id: 'asc' },
           select: {
@@ -55,6 +71,21 @@ function loadOrder(orderId: number) {
         },
       },
     });
+    if (!order) return null;
+
+    const user = await tx.user.findUniqueOrThrow({
+      where: { id: order.userId },
+      select: { email: true, name: true, deletedAt: true },
+    });
+
+    // the send on its way: the latest that was not rolled back
+    const send = await tx.orderShipment.findFirst({
+      where: { orderId, rolledBackAt: null },
+      orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
+      select: { carrier: true, trackingNumber: true, trackingUrl: true },
+    });
+
+    return { ...order, user, shipments: send ? [send] : [] };
   });
 }
 
@@ -75,6 +106,12 @@ export async function sendOrderStatusEmail(
     }
     if (order.user.deletedAt) return;
 
+    // a pickup that is shipped is ready to be collected: its mail says where and when
+    if (status === 'shipped' && order.delivery?.method === 'pickup') {
+      await sendOrderNoticeEmail(orderId, 'pickup_ready', log);
+      return;
+    }
+
     const { subject, text, html } = TEMPLATES[status]({
       // the name of the shop the mail is from
       appName: env.SHOP_NAME,
@@ -89,12 +126,19 @@ export async function sendOrderStatusEmail(
         ...(status === 'delivered' ? { reviewUrl: reviewsPage(item.product.id) } : {}),
       })),
       total: order.total.toString(),
+      // what the buyer paid for the delivery, none for a pickup
+      deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),
       ...(order.user.name ? { userName: order.user.name } : {}),
-      shippingAddress: order.shippingAddress,
-      recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),
-      recipientPhone: order.recipientPhone,
+      ...deliveryMailParts(order.delivery),
+      ...(status === 'shipped' && order.shipments[0]
+        ? {
+            carrier: order.shipments[0].carrier,
+            trackingNumber: order.shipments[0].trackingNumber,
+            trackingUrl: order.shipments[0].trackingUrl,
+          }
+        : {}),
       logoCid: SHOP_LOGO_CID,
     });
 

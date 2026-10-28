@@ -6,6 +6,9 @@ name: cartlify-test
 services:
   postgres:
     image: postgres:17.11
+    # many test files run at once and each keeps a pool of connections open: the default of 100
+    # connections can run out, a file then fails to start a transaction
+    command: ['postgres', '-c', 'max_connections=500']
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

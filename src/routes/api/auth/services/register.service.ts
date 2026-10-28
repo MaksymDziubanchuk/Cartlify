@@ -126,7 +126,7 @@ export async function register({
           every: true,
         },
       );
-      await recordConsents(tx, id, acceptedDocumentIds);
+      await recordConsents(tx, id, acceptedDocumentIds, 'consent.register');
 
       // store the hash of the verify link, the link itself goes only to the mail:
       // a copy of the database is not enough to verify someone else's email

@@ -35,7 +35,7 @@ const asSystem = (): Actor => ({ role: 'ADMIN' });
 
 const logAction = (db: DbSession, actorId: number, actorRole: string, changes = '[]') =>
   db.attempt(
-    `select 1 as done from cartlify.log_admin_action($1::int, $2::cartlify."Role", 'order', 1, 'OTHER', $3::jsonb)`,
+    `select 1 as done from cartlify.log_admin_action($1::int, $2::cartlify."Role", 'order', 1, 'OTHER', 'order.refund_late', $3::jsonb)`,
     actorId,
     actorRole,
     changes,

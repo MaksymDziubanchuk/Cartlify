@@ -1,24 +1,29 @@
 BEGIN;
 
--- on a live database a busy table makes the script wait for its lock, and every request of the
--- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+-- On a live database a busy table makes the script wait for its lock, and every request of the
+-- app waits behind the script. After 5 s the script stops and is run again (db-run-sql.yml).
 SET LOCAL lock_timeout = '5s';
 
--- everything below is created and owned by cartlify_owner, whoever runs the script
+-- Everything below is created and owned by cartlify_owner, whoever runs the script.
 SET LOCAL ROLE cartlify_owner;
 
 ------------------------------------------------------------
--- admin stats view
+-- ADMIN STATS VIEW: the numbers of the admin dashboard (GET /api/admin/stats)
 ------------------------------------------------------------
+-- The view gives one row. The period comes from the settings cartlify.stats_from and
+-- cartlify.stats_to, which the server sets for its transaction; without them it is the last
+-- 7 days up to now. A period includes its start and excludes its end.
+-- The view is security_invoker: it reads with the rights and the row level security of the
+-- caller, so the server sets the context of the admin before it reads the view.
+-- The view is dropped and created again on every run, so the owner and the grant are set again
+-- at the end.
 DROP VIEW IF EXISTS cartlify.admin_stats_view;
 
 CREATE VIEW cartlify.admin_stats_view
 WITH
     (security_invoker = true) AS
 WITH
-    -- the period as instants (from_at, to_at) for the answer; the columns keep utc without a
-    -- zone, so they are compared with the same times in utc (from_ts, to_ts and the last days),
-    -- whatever the time zone of the session
+    -- The period as instants: from_at and to_at are shown in the answer.
     period_bounds AS (
         SELECT
             COALESCE(
@@ -30,6 +35,9 @@ WITH
                 now()
             ) AS to_at
     ),
+    -- The same bounds as utc times without a zone (from_ts, to_ts), and the starts of the last 7
+    -- and 30 days. The columns keep utc without a zone, so they are compared with these values,
+    -- whatever the time zone of the session.
     params AS (
         SELECT
             pr.from_at,
@@ -41,6 +49,8 @@ WITH
         FROM
             period_bounds pr
     ),
+    -- Buyers: the total, the new accounts in the period and in the last 7 and 30 days, and the
+    -- accounts with a verified email (how many, and their share in percent; 0 without buyers).
     users_stats AS (
         SELECT
             COUNT(*)::int AS total,
@@ -74,10 +84,16 @@ WITH
         FROM
             cartlify.users u
             CROSS JOIN params p
-        -- the accounts of buyers: an admin and root are none of the users of the shop
+        -- Admin and root accounts are not counted, deleted accounts are.
         WHERE
             u.role NOT IN ('ADMIN'::cartlify."Role", 'ROOT'::cartlify."Role")
     ),
+    -- Orders. The counts are for all time: every order (carts too), the confirmed ones and each
+    -- status. The money is of the orders that were paid (paid, shipped, delivered), counted by
+    -- the time of the payment (paidAt): for all time, in the period, in the last 7 and 30 days.
+    -- revenue_* sums orders.total, which holds the price of the delivery; delivery_revenue_* is
+    -- the part of it that buyers paid for delivery. An order has one delivery row at most, so the
+    -- join does not repeat an order.
     orders_stats AS (
         SELECT
             COUNT(*)::int AS total,
@@ -170,6 +186,61 @@ WITH
                 ),
                 0
             )::numeric AS revenue_last_30d,
+            -- delivery_revenue_*: what buyers paid for delivery in the same orders, same times
+            COALESCE(
+                SUM(d.price) FILTER (
+                    WHERE
+                        o.confirmed IS TRUE
+                        AND o.status IN (
+                            'paid'::cartlify."OrderStatus",
+                            'shipped'::cartlify."OrderStatus",
+                            'delivered'::cartlify."OrderStatus"
+                        )
+                ),
+                0
+            )::numeric AS delivery_revenue_total,
+            COALESCE(
+                SUM(d.price) FILTER (
+                    WHERE
+                        o.confirmed IS TRUE
+                        AND o.status IN (
+                            'paid'::cartlify."OrderStatus",
+                            'shipped'::cartlify."OrderStatus",
+                            'delivered'::cartlify."OrderStatus"
+                        )
+                        AND o."paidAt" >= p.from_ts
+                        AND o."paidAt" < p.to_ts
+                ),
+                0
+            )::numeric AS delivery_revenue_in_period,
+            COALESCE(
+                SUM(d.price) FILTER (
+                    WHERE
+                        o.confirmed IS TRUE
+                        AND o.status IN (
+                            'paid'::cartlify."OrderStatus",
+                            'shipped'::cartlify."OrderStatus",
+                            'delivered'::cartlify."OrderStatus"
+                        )
+                        AND o."paidAt" >= p.last_7d_from
+                ),
+                0
+            )::numeric AS delivery_revenue_last_7d,
+            COALESCE(
+                SUM(d.price) FILTER (
+                    WHERE
+                        o.confirmed IS TRUE
+                        AND o.status IN (
+                            'paid'::cartlify."OrderStatus",
+                            'shipped'::cartlify."OrderStatus",
+                            'delivered'::cartlify."OrderStatus"
+                        )
+                        AND o."paidAt" >= p.last_30d_from
+                ),
+                0
+            )::numeric AS delivery_revenue_last_30d,
+            -- The revenue of the period divided by the number of orders paid in it, 2 decimals,
+            -- 0 when there are none.
             COALESCE(
                 ROUND(
                     SUM(o.total) FILTER (
@@ -202,8 +273,10 @@ WITH
             )::numeric AS average_order_value
         FROM
             cartlify.orders o
+            LEFT JOIN cartlify.order_deliveries d ON d."orderId" = o.id
             CROSS JOIN params p
     ),
+    -- Units sold: the quantity of the items of the orders paid in the period.
     items_sold_stats AS (
         SELECT
             COALESCE(SUM(oi.quantity), 0)::int AS items_sold
@@ -221,6 +294,8 @@ WITH
             AND o."paidAt" >= prm.from_ts
             AND o."paidAt" < prm.to_ts
     ),
+    -- Products: all, in the catalog (not deleted), deleted, and catalog products with no free
+    -- unit.
     products_stats AS (
         SELECT
             COUNT(*)::int AS total,
@@ -235,12 +310,16 @@ WITH
             COUNT(*) FILTER (
                 WHERE
                     p."deletedAt" IS NULL
-                    -- the units of batches that are over are not for sale
+                    -- free units: stock minus reserved minus the units of batches that are over
+                    -- (those are not for sale)
                     AND (p.stock - p."reservedStock" - cartlify.product_expired_units(p.id)) <= 0
             )::int AS out_of_stock_total
         FROM
             cartlify.products p
     ),
+    -- The 5 products with the highest revenue from their items in the period (a tie goes to
+    -- more units sold, then to the lower id). Delivery is not part of it; deleted products are
+    -- counted.
     top_products AS (
         SELECT
             p.id,
@@ -271,6 +350,7 @@ WITH
         LIMIT
             5
     ),
+    -- The top as a JSON list in the same order, [] when there are no sales.
     top_products_json AS (
         SELECT
             COALESCE(
@@ -295,6 +375,8 @@ WITH
         FROM
             top_products tp
     ),
+    -- The same for categories: a sale counts for the category its product has now, and only for
+    -- that category, not for its parents.
     top_categories AS (
         SELECT
             c.id,
@@ -326,6 +408,7 @@ WITH
         LIMIT
             5
     ),
+    -- The top as a JSON list in the same order, [] when there are no sales.
     top_categories_json AS (
         SELECT
             COALESCE(
@@ -350,6 +433,9 @@ WITH
         FROM
             top_categories tc
     ),
+    -- Reviews: the total, the rated ones and the negative ones (rating 2 or less) are for all
+    -- time. The new ones and the average rating cover the reviews written in the period (the
+    -- average is of the rated ones, 0 when there are none).
     reviews_stats AS (
         SELECT
             COUNT(*)::int AS total,
@@ -383,6 +469,9 @@ WITH
             cartlify.reviews r
             CROSS JOIN params p
     )
+-- The columns of the answer: period, users, orders, products and reviews are JSON objects whose
+-- keys the server reads (admin.services.ts); createdAt is the time of the read. Each CTE joined
+-- here gives one row, so the view gives one row.
 SELECT
     jsonb_build_object('from', prm.from_at, 'to', prm.to_at) AS period,
     jsonb_build_object(
@@ -434,6 +523,17 @@ SELECT
             'last30d',
             os.revenue_last_30d
         ),
+        'deliveryRevenue',
+        jsonb_build_object(
+            'total',
+            os.delivery_revenue_total,
+            'inPeriod',
+            os.delivery_revenue_in_period,
+            'last7d',
+            os.delivery_revenue_last_7d,
+            'last30d',
+            os.delivery_revenue_last_30d
+        ),
         'averageOrderValue',
         os.average_order_value,
         'itemsSold',
@@ -478,6 +578,7 @@ FROM
 
 ALTER VIEW cartlify.admin_stats_view OWNER TO cartlify_owner;
 
+-- The app reads the view (with the context of an admin, see security_invoker above).
 GRANT
 SELECT
     ON cartlify.admin_stats_view TO cartlify_app;

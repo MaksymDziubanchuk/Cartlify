@@ -15,7 +15,7 @@ import {
 } from '../../../helpers/factories.js';
 import { imageField, pngImage } from '../../../helpers/cloudinary.js';
 import { multipartBody } from '../../../helpers/multipart.js';
-import { safetyFormFields } from '../../../helpers/productSafety.js';
+import { safetyFormFields, shippingFormFields } from '../../../helpers/productSafety.js';
 
 // the article number of a product (sku): optional, any signs up to 64, one product of the catalog
 // has it at a time; an admin finds a product by it and takes in or writes off goods by it, the way
@@ -67,6 +67,7 @@ describe('the article number of a product', () => {
       { name: 'categoryId', value: String(product.categoryId) },
       { name: 'sku', value: ` ${code} ` },
       ...safetyFormFields(),
+      ...shippingFormFields(),
       imageField('images', pngImage(30, 20)),
     ]);
 

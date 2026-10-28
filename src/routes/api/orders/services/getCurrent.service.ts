@@ -9,10 +9,11 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import {
+  deliverySuggestionOf,
   dropDeletedProductItems,
   mapOrderRowToResponse,
   expiredOfOrders,
-  orderResponseSelect,
+  readOrderResponse,
 } from './helpers/index.js';
 
 import type { GetCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
@@ -48,14 +49,15 @@ export async function getCurrent({
         await dropDeletedProductItems(db, Number(actorId), [current.id]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${current.id}::int)`;
 
-        const order = await db.order.findUnique({
-          where: { id: current.id },
-          select: orderResponseSelect,
-        });
+        const order = await readOrderResponse(db, current.id);
 
         if (!order) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');
 
-        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        const response = mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+
+        // the delivery of the last order of the buyer, to start from
+        const suggestion = await deliverySuggestionOf(db, Number(actorId));
+        return suggestion ? { ...response, deliverySuggestion: suggestion } : response;
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

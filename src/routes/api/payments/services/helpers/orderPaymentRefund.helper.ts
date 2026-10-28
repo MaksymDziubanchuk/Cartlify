@@ -125,6 +125,7 @@ async function writeOrderRefundAuditLog({
         entityType: 'order',
         entityId: orderId,
         action: 'OTHER',
+        event: 'order.refund_late',
         changes: [
           {
             field: 'refund',

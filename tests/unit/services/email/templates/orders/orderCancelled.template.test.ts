@@ -51,6 +51,23 @@ describe('buildOrderCancelledTemplate', () => {
     }
   });
 
+  // the refund is the whole payment, the delivery too: the lines add up to it
+  it('shows the delivery the buyer paid for as a line, free when it was', () => {
+    const paid = buildOrderCancelledTemplate(order({ deliveryPrice: '5.00', total: '59.00' }));
+    const free = buildOrderCancelledTemplate(order({ deliveryPrice: 0 }));
+    const pickup = buildOrderCancelledTemplate(order({ deliveryPrice: null }));
+    const none = buildOrderCancelledTemplate(order());
+
+    expect(paid.text).toContain('Delivery: €5.00');
+    expect(paid.html).toContain('>Delivery</td>');
+    expect(paid.html).toContain('€5.00');
+    expect(free.text).toContain('Delivery: free');
+    for (const mail of [pickup, none]) {
+      expect(mail.text).not.toContain('Delivery:');
+      expect(mail.html).not.toContain('>Delivery</td>');
+    }
+  });
+
   it('gives the refund in the currency checkout charges in', () => {
     expect(buildOrderCancelledTemplate(order({ currency: 'usd' })).text).toContain(
       'The payment of $54.00 is refunded in full',

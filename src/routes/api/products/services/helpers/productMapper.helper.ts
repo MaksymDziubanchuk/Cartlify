@@ -31,6 +31,10 @@ export const productResponseSelect = {
   salePriorPrice: true,
   stock: true,
   reservedStock: true,
+  weightGrams: true,
+  lengthMm: true,
+  widthMm: true,
+  heightMm: true,
   categoryId: true,
   category: { select: { id: true, name: true, slug: true } },
   views: true,
@@ -55,6 +59,10 @@ export type ProductResponseRow = {
   salePriorPrice: unknown;
   stock: number;
   reservedStock: number;
+  weightGrams: number | null;
+  lengthMm: number | null;
+  widthMm: number | null;
+  heightMm: number | null;
   // the units of batches that are over (expiredUnitsOf): not sold, so no free units
   expiredStock: number;
   // the cost of a unit in the latest delivery of a supplier (lastUnitCostsOf), read for an admin
@@ -70,6 +78,15 @@ export type ProductResponseRow = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+// the weight and the sizes of a product, null while they are not known: the card of everybody and
+// the list of an admin show them
+const shippingFieldsOf = (product: ProductResponseRow) => ({
+  weightGrams: product.weightGrams,
+  lengthMm: product.lengthMm,
+  widthMm: product.widthMm,
+  heightMm: product.heightMm,
+});
 
 const descriptionTextOf = (raw: string | null) => {
   const { text } = parseProductDescription(raw);
@@ -116,6 +133,10 @@ export function adminFieldsOf(
   | 'reservedStock'
   | 'expiredStock'
   | 'lastUnitCost'
+  | 'weightGrams'
+  | 'lengthMm'
+  | 'widthMm'
+  | 'heightMm'
   | 'popularityOverride'
   | 'popularityOverrideUntil'
   | 'salePrice'
@@ -131,6 +152,7 @@ export function adminFieldsOf(
     reservedStock: product.reservedStock,
     expiredStock: product.expiredStock,
     lastUnitCost: product.lastUnitCost == null ? null : decimalToNumber(product.lastUnitCost),
+    ...shippingFieldsOf(product),
     popularityOverride: product.popularityOverride,
     popularityOverrideUntil: product.popularityOverrideUntil
       ? product.popularityOverrideUntil.toISOString()
@@ -155,6 +177,7 @@ export function mapProductRowToResponse(args: {
 
   return {
     ...fields,
+    ...shippingFieldsOf(product),
     category: { ...fields.category, path: categoryPath },
     images: images.map((r) => buildImageUrls(r.url, 'product')),
     // the safety and origin data an offer shows (GPSR), null for a product from before them

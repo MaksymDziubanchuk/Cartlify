@@ -3,6 +3,13 @@ import path from 'node:path';
 
 import * as dotenv from 'dotenv';
 
+import {
+  DELIVERY_METHOD_NAMES,
+  isDeliveryMethodName,
+  type DeliveryMethodName,
+} from './deliveryMethods.js';
+import { SUPPORTED_DELIVERY_COUNTRIES, isSupportedDeliveryCountry } from './deliveryCountries.js';
+
 declare global {
   namespace NodeJS {
     // type process.env keys
@@ -55,6 +62,12 @@ declare global {
       ORDER_RESERVATION_MINUTES?: string;
       STRIPE_PAGE_AFTER_RESERVATION_MINUTES?: string;
       REVIEW_CHECK_ENABLED?: string;
+      DELIVERY_METHODS?: string;
+      DELIVERY_FLAT_PRICE?: string;
+      DELIVERY_FREE_FROM?: string;
+      DELIVERY_COUNTRIES?: string;
+      PICKUP_ADDRESS?: string;
+      PICKUP_HOURS?: string;
 
       SHOP_TIME_ZONE?: string;
       SHOP_NAME?: string;
@@ -289,6 +302,95 @@ function logoFile(name: string, fallback: string): string {
   return raw;
 }
 
+// the ways the shop gets an order to its buyer, written as a list: the ones it has enabled. A shop
+// that sets none sends by hand, as before
+function deliveryMethods(): DeliveryMethodName[] {
+  const raw = process.env.DELIVERY_METHODS?.trim();
+  if (!raw) return ['manual'];
+
+  const names = raw.split(',').map((name) => name.trim());
+  if (!names.every(isDeliveryMethodName) || new Set(names).size !== names.length) {
+    throw new Error(
+      `Invalid env variable: DELIVERY_METHODS must be a list of ${DELIVERY_METHOD_NAMES.join(' and ')}, each once`,
+    );
+  }
+
+  return names;
+}
+
+// an amount of money above zero to the cent, up to what the database holds: 99999999.99
+function money(name: string): number | null {
+  const raw = process.env[name]?.trim();
+  if (!raw) return null;
+
+  if (!/^\d{1,8}(\.\d{1,2})?$/.test(raw) || Number(raw) <= 0) {
+    throw new Error(
+      `Invalid env variable: ${name} must be an amount above zero, to the cent, at most 99999999.99`,
+    );
+  }
+
+  return Number(raw);
+}
+
+// the countries the manual method delivers to, the codes of the ones the app takes whole; a shop
+// with the manual method names them, in every environment: without a list nobody could confirm an
+// order, so the start stops
+function deliveryCountries(methods: DeliveryMethodName[]): string[] {
+  const raw = process.env.DELIVERY_COUNTRIES?.trim();
+  if (!raw) {
+    if (methods.includes('manual')) {
+      throw new Error('Missing required env variable: DELIVERY_COUNTRIES');
+    }
+
+    return [];
+  }
+
+  const codes = raw.split(',').map((code) => code.trim().toUpperCase());
+  if (!codes.every(isSupportedDeliveryCountry) || new Set(codes).size !== codes.length) {
+    throw new Error(
+      'Invalid env variable: DELIVERY_COUNTRIES must be a list of country codes the app delivers to ' +
+        `(${SUPPORTED_DELIVERY_COUNTRIES.join(', ')}), each once`,
+    );
+  }
+
+  return codes;
+}
+
+// where and when a buyer collects an order: text for the buyer, needed once the pickup is enabled
+function pickupText(name: string, methods: DeliveryMethodName[]): string {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    if (methods.includes('pickup')) throw new Error(`Missing required env variable: ${name}`);
+
+    return '';
+  }
+
+  if (raw.length > 300) {
+    throw new Error(`Invalid env variable: ${name} must be at most 300 characters`);
+  }
+
+  return raw;
+}
+
+function deliverySettings() {
+  const methods = deliveryMethods();
+  const flat = money('DELIVERY_FLAT_PRICE');
+  const freeFrom = money('DELIVERY_FREE_FROM');
+
+  if (freeFrom !== null && flat === null) {
+    throw new Error('Invalid env variable: DELIVERY_FREE_FROM needs DELIVERY_FLAT_PRICE');
+  }
+
+  return {
+    DELIVERY_METHODS: methods,
+    DELIVERY_FLAT_PRICE: flat,
+    DELIVERY_FREE_FROM: freeFrom,
+    DELIVERY_COUNTRIES: deliveryCountries(methods),
+    PICKUP_ADDRESS: pickupText('PICKUP_ADDRESS', methods),
+    PICKUP_HOURS: pickupText('PICKUP_HOURS', methods),
+  };
+}
+
 // stripe keeps a payment page at least 30 minutes and at most 24 hours from its opening; a page is
 // opened while the order is reserved and closes the minutes after the end of the reservation
 const STRIPE_PAGE_MIN_MINUTES = 30;
@@ -418,6 +520,11 @@ export default {
   // written (src/routes/api/products/services/helpers/reviewCheck.helper.ts); false publishes
   // them unchecked
   REVIEW_CHECK_ENABLED: flag('REVIEW_CHECK_ENABLED', true),
+
+  // how the shop gets an order to its buyer: the methods it has enabled, the flat price of the manual
+  // one and the sum of the items from which it is free, the countries it delivers to, and where and
+  // when a buyer collects an order at the shop
+  ...deliverySettings(),
 
   // the proxies in front of the server whose x-forwarded-for is trusted: railway puts one, so the
   // address of a client is the one it names (0 trusts none, the address of the connection counts)

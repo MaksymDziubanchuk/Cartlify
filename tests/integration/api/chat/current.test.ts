@@ -3,12 +3,11 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { asAdmin } from '../../../helpers/db.js';
+import { asAdmin, testTx } from '../../../helpers/db.js';
 import { closeSessions, createChatThread, createUser } from '../../../helpers/factories.js';
 
 let app: FastifyInstance;
@@ -50,7 +49,7 @@ async function signedInAdmin() {
 
 // messages of the user written into an open chat of theirs, the way the socket writes them
 const writeMessages = (userId: number, threadId: string, count: number) =>
-  prisma.$transaction(async (tx) => {
+  testTx(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
     await tx.chatMessage.createMany({
       data: Array.from({ length: count }, (_, n) => ({

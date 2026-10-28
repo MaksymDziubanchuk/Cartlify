@@ -128,16 +128,16 @@ describe('the users routes', () => {
 
   // a status a route never sends has no place in its answers
   it.each([
-    // 429 is the rate limit and 503 the session check of every such route, 413 and 415 the
-    // json body, see 'the refusals every route shares' below
-    ['get', '/api/users/', ['200', '400', '401', '403', '429', '500', '503']],
-    ['get', '/api/users/me', ['200', '401', '403', '429', '500', '503']],
+    // 429 is the rate limit and 503 the session check of every such route, 409 a busy
+    // database, 413 and 415 the json body, see 'the refusals every route shares' below
+    ['get', '/api/users/', ['200', '400', '401', '403', '409', '429', '500', '503']],
+    ['get', '/api/users/me', ['200', '401', '403', '409', '429', '500', '503']],
     [
       'patch',
       '/api/users/me',
-      ['200', '400', '401', '403', '404', '413', '415', '429', '500', '503'],
+      ['200', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503'],
     ],
-    ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '429', '500', '503']],
+    ['get', '/api/users/{userId}', ['200', '400', '401', '403', '404', '409', '429', '500', '503']],
     [
       'delete',
       '/api/users/{userId}',
@@ -146,7 +146,7 @@ describe('the users routes', () => {
     [
       'delete',
       '/api/users/{userId}/avatar',
-      ['200', '400', '401', '403', '404', '429', '500', '503'],
+      ['200', '400', '401', '403', '404', '409', '429', '500', '503'],
     ],
     [
       'delete',
@@ -217,7 +217,9 @@ describe('the product routes', () => {
     expect(Object.keys(form).sort()).toEqual([
       'categoryId',
       'description',
+      'heightMm',
       'images',
+      'lengthMm',
       'name',
       'price',
       'safety.manufacturer.address',
@@ -229,6 +231,9 @@ describe('the product routes', () => {
       'safety.responsiblePerson.name',
       'safety.warnings',
       'sku',
+      'weightGrams',
+      'widthMm',
+      'withoutShippingData',
     ]);
     expect(form.images).toMatchObject({
       type: 'array',
@@ -423,7 +428,7 @@ describe('the payments routes', () => {
     [
       'get',
       '/api/payments/stripe/checkout/sessions/{sessionId}',
-      ['200', '400', '401', '403', '404', '429', '500', '503'],
+      ['200', '400', '401', '403', '404', '409', '429', '500', '503'],
     ],
     ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '409', '500']],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
@@ -467,6 +472,30 @@ describe('the refusals every route shares', () => {
       .map(({ method, path }) => `${method} ${path}`);
 
     expect(without).toEqual([]);
+  });
+
+  // a transaction whose time ran out: the database was busy, the client repeats the request
+  it('names RESOURCE_BUSY among the answers of every route of the api', () => {
+    const without = operations()
+      .filter(({ path }) => path.startsWith('/api/'))
+      .filter(({ op }) => !said(op, '409').includes('RESOURCE_BUSY'))
+      .map(({ method, path }) => `${method} ${path}`);
+
+    expect(without).toEqual([]);
+  });
+
+  // the routes that take an image file put it at Cloudinary
+  it('names IMAGE_STORAGE_UNAVAILABLE for the routes that take an image file, and only for them', () => {
+    const naming = operations()
+      .filter(({ op }) => said(op, '503').includes('IMAGE_STORAGE_UNAVAILABLE'))
+      .map(({ method, path }) => `${method} ${path}`);
+
+    expect(naming.sort()).toEqual([
+      'patch /api/products/{productId}',
+      'patch /api/users/me',
+      'post /api/products/',
+      'put /api/categories/{categoryId}/image',
+    ]);
   });
 
   // the health checks, static files and the events of payment providers are outside the limit

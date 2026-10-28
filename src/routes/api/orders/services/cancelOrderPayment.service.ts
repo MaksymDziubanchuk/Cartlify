@@ -19,7 +19,7 @@ import {
   getOrderPaymentPageLink,
   mapOrderRowToResponse,
   expiredOfOrders,
-  orderResponseSelect,
+  readOrderResponse,
 } from './helpers/index.js';
 
 import type { OrderCancelLogger } from './helpers/sendOrderCancelledEmail.helper.js';
@@ -96,7 +96,7 @@ export async function cancelOrderPayment(
 
       await db.$executeRaw`select cartlify.cancel_order_payment(${id}::int)`;
 
-      const row = await db.order.findUnique({ where: { id }, select: orderResponseSelect });
+      const row = await readOrderResponse(db, id);
       if (!row) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CANCEL_PAYMENT' });
 
       return mapOrderRowToResponse(row, await expiredOfOrders(db, [row]));

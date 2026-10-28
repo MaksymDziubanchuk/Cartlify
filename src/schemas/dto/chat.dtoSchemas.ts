@@ -33,9 +33,10 @@ const adminChatThreadsQuerySchema = {
       type: 'string',
       enum: ['waiting', 'active', 'unread'],
       description:
-        'waiting (default): the chats no admin took yet, the longest waiting first; active: the ' +
-        'chats an admin took with a message unread, the latest first; unread: every chat with ' +
-        'a message no admin has read, the longest waiting first.',
+        'waiting (default): the chats no admin took yet whose customer described the problem, ' +
+        'the longest waiting first; active: every chat an admin took, read or not, the latest ' +
+        'first; unread: every chat with a message no admin has read, taken or not, the longest ' +
+        'unread first.',
     },
   },
 } as const;
@@ -53,7 +54,14 @@ const chatThreadItemSchema = {
     lastMessageAt: { type: 'string', format: 'date-time' },
     unreadCount: { type: 'number' },
     adminRequestedAt: { type: 'string', format: 'date-time', nullable: true },
-    adminUnreadSince: { type: 'string', format: 'date-time', nullable: true },
+    adminUnreadSince: {
+      type: 'string',
+      format: 'date-time',
+      nullable: true,
+      description:
+        'When the oldest message no admin has read was written; empty once an admin has read ' +
+        'or answered the chat.',
+    },
     lastMessagePreview: { type: 'string', nullable: true },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },

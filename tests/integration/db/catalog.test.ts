@@ -618,14 +618,14 @@ describe('favorites', () => {
 describe('the log of prices', () => {
   const logPrice = (db: DbSession) =>
     db.attempt(
-      `select 1 as done from cartlify.log_product_price_change($1::int, 10, 12, 'fixed', 2)`,
+      `select 1 as done from cartlify.log_product_price_change($1::int, 10, 12, 'fixed', 2, 'price.set')`,
       product.id,
     );
 
   const insertLine = (db: DbSession, actorId: number) =>
     db.attempt(
-      `insert into cartlify.product_price_change_logs ("productId", "actorId", "oldPrice", "newPrice", mode, value)
-       values ($1, $2, 10, 12, 'fixed', 2) returning id`,
+      `insert into cartlify.product_price_change_logs ("productId", "actorId", "oldPrice", "newPrice", mode, value, event)
+       values ($1, $2, 10, 12, 'fixed', 2, 'price.set') returning id`,
       product.id,
       actorId,
     );

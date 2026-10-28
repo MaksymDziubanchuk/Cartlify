@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { accessCookie } from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
+import { asAdmin } from '../../helpers/db.js';
 import { closeSessions, createProduct, createUser } from '../../helpers/factories.js';
 import { watchMail } from '../../helpers/mail.js';
 import { placeOrder } from '../../helpers/orders.js';
@@ -44,7 +45,12 @@ describe('a purchase from the cart to the review', () => {
     const admin = await createUser({ role: 'ADMIN' });
     userIds.push(buyer.id, admin.id);
     const mails = watchMail();
-    const paidFrom = new Date(Date.now() - 1000).toISOString();
+    // the database dates the payment by its own clock, so the period starts by that clock too:
+    // the clock of the test can be ahead of it by seconds
+    const [{ now }] = await asAdmin(
+      (tx) => tx.$queryRaw<[{ now: Date }]>`select clock_timestamp() at time zone 'utc' as now`,
+    );
+    const paidFrom = now.toISOString();
 
     // the cart and its confirmation hold 2 of the 3 units for the buyer
     const orderId = await placeOrder(app, csrf, buyer, product, 'waiting', 2);

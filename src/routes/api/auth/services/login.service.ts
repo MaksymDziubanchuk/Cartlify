@@ -99,6 +99,7 @@ export async function login({
         userId: u.id as any,
         email: cleanEmail,
         role: u.role as any,
+        event: 'login.password',
         ...(ip !== undefined ? { ip } : {}),
         ...(userAgent !== undefined ? { userAgent } : {}),
       });

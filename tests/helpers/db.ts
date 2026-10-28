@@ -3,10 +3,24 @@ import type { Prisma } from '@prisma/client';
 import { getPgCode, getPgMessage, prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 
+// the time a transaction of the tests may take. The 5 s prisma gives by default run out on a busy
+// machine, and prisma then runs the rest of a nested write outside the transaction, with no
+// context: the test fails with a refusal of rls instead of a timeout
+export const TEST_TX = { maxWait: 10_000, timeout: 30_000 } as const;
+
+export const testTx = <T>(
+  fn: (tx: Prisma.TransactionClient) => Promise<T>,
+  opts: {
+    maxWait?: number;
+    timeout?: number;
+    isolationLevel?: Prisma.TransactionIsolationLevel;
+  } = {},
+): Promise<T> => prisma.$transaction(fn, { ...TEST_TX, ...opts });
+
 // test data the app itself would not let a test make: users, products and tokens are
 // admin-only under rls, so a test creates and inspects its own rows as admin
 export const asAdmin = <T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> =>
-  prisma.$transaction(async (tx) => {
+  testTx(async (tx) => {
     await setAdminContext(tx);
     return fn(tx);
   });
@@ -65,7 +79,7 @@ function sessionOf(tx: Prisma.TransactionClient): DbSession {
 // the same statements in a transaction that commits: rows a later transaction has to find made
 // before it, at an earlier time of the database (a cart created before it is paid)
 export const inCommittedTx = <T>(fn: (db: DbSession) => Promise<T>): Promise<T> =>
-  prisma.$transaction((tx) => fn(sessionOf(tx)), { maxWait: 10_000, timeout: 30_000 });
+  testTx((tx) => fn(sessionOf(tx)));
 
 // the rules of the database checked straight under cartlify_app, the role the app connects as:
 // everything runs in one transaction that is always rolled back, nothing the test does stays.
@@ -84,8 +98,7 @@ export async function inRolledBackTx<T>(
         throw new RolledBack();
       },
       {
-        maxWait: 10_000,
-        timeout: 30_000,
+        ...TEST_TX,
         ...(opts.isolationLevel ? { isolationLevel: opts.isolationLevel } : {}),
       },
     );

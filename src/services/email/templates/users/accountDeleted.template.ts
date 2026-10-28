@@ -6,6 +6,8 @@ export type AccountDeletedItem = { name: string; quantity: number };
 export type AccountDeletedDelivery = {
   orderId: number;
   status: 'paid' | 'shipped';
+  // the buyer collects it at the shop, it is not sent
+  pickup?: boolean;
   // numbers or prisma decimals turned into strings
   total: number | string;
   items: AccountDeletedItem[];
@@ -36,6 +38,11 @@ export type AccountDeletedTemplateArgs = {
 const STATUS_TEXT: Record<AccountDeletedDelivery['status'], string> = {
   paid: 'paid, it will be shipped',
   shipped: 'shipped, it is on its way',
+};
+
+const PICKUP_STATUS_TEXT: Record<AccountDeletedDelivery['status'], string> = {
+  paid: 'paid, it will be prepared for pickup at the shop',
+  shipped: 'ready, it waits for you at the shop',
 };
 
 // only what is known goes into the mail: an unknown payment is told as a condition, not a guess
@@ -71,7 +78,7 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
     deliveries: args.deliveries.map((order) => ({
       orderId: String(order.orderId),
       total: price(order.total),
-      statusText: STATUS_TEXT[order.status],
+      statusText: (order.pickup ? PICKUP_STATUS_TEXT : STATUS_TEXT)[order.status],
       itemsText: itemsText(order.items),
     })),
     hasCancelled: args.cancelled.length ? 'yes' : '',

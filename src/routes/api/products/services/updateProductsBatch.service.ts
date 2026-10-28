@@ -93,7 +93,7 @@ export async function updateProductsBatch({
           const { productId } = items[index]!;
           try {
             const row = await writeProductUpdate(
-              { db, actorId, actorRole },
+              { db, actorId, actorRole, batch: true },
               plans[index]!,
               befores[index]!,
             );

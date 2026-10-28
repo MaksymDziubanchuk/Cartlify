@@ -66,6 +66,9 @@ describe('stripeProvider', () => {
       reservationExpiresAt,
       pageClosedAt: null,
       items: [{ name: 'Desk lamp', unitPrice: 19.99, quantity: 1 }],
+      // free delivery, to nowhere in particular: the line of the delivery is tested apart
+      deliveryPrice: 0,
+      shipping: null,
       customerEmail: 'anna@example.com',
     };
 

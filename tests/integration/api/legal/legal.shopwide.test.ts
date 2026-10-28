@@ -130,7 +130,7 @@ const consentsOf = (userId: number) =>
     tx.legalAcceptance.findMany({
       where: { userId },
       orderBy: { id: 'asc' },
-      select: { documentId: true, orderId: true, ip: true, userAgent: true },
+      select: { documentId: true, orderId: true, ip: true, userAgent: true, event: true },
     }),
   );
 
@@ -390,6 +390,7 @@ describe('the consent at the registration', () => {
         orderId: null,
         ip: '127.0.0.1',
         userAgent: 'lightMyRequest',
+        event: 'consent.register',
       })),
     );
     expect((await statusOf(user)).json()).toMatchObject({ required: [] });
@@ -427,7 +428,9 @@ describe('the consent later', () => {
     expect(first.json()).toMatchObject({ required: [] });
     expect(first.json().accepted.map((row: { documentId: number }) => row.documentId)).toEqual(ids);
     expect(again.statusCode).toBe(200);
-    expect(await consentsOf(user.id)).toHaveLength(2);
+    const consents = await consentsOf(user.id);
+    expect(consents).toHaveLength(2);
+    expect(consents.map((row) => row.event)).toEqual(['consent.accept', 'consent.accept']);
   });
 
   it('asks for the consent to a new version only', async () => {
@@ -535,6 +538,7 @@ describe('POST /api/orders/current/confirm and the consent', () => {
 
     const links = (await consentsOf(user.id)).filter((row) => row.orderId === orderId);
     expect(links.map((row) => row.documentId)).toEqual(ids);
+    expect(links.map((row) => row.event)).toEqual(ids.map(() => 'consent.order'));
   });
 });
 
@@ -621,6 +625,7 @@ describe('GET /api/users/me/export', () => {
         version: doc.version,
         title: doc.title,
         orderId: null,
+        event: 'consent.accept',
         ip: '127.0.0.1',
         userAgent: 'lightMyRequest',
         createdAt: expect.any(String),
@@ -732,8 +737,8 @@ describe('a version published while a consent is written', () => {
     const consent = await inCommittedTx(async (db) => {
       await db.as({ role: 'USER', userId: user.id });
       const [row] = await db.rows<{ createdAt: Date }>(
-        `insert into cartlify.legal_acceptances ("userId", "documentId")
-         values ($1, $2) returning "createdAt"`,
+        `insert into cartlify.legal_acceptances ("userId", "documentId", "event")
+         values ($1, $2, 'consent.accept') returning "createdAt"`,
         user.id,
         terms.id,
       );
@@ -831,6 +836,7 @@ describe('a login by Google, GitHub or LinkedIn and the consent', () => {
           orderId: null,
           ip: '127.0.0.1',
           userAgent: 'lightMyRequest',
+          event: 'consent.oauth_signup',
         })),
       );
     },
@@ -886,10 +892,13 @@ describe('a login by Google, GitHub or LinkedIn and the consent', () => {
     expect(setCookies(refused).accessToken).toBeUndefined();
     expect(landing(accepted).error).toBeNull();
     expect(setCookies(accepted).accessToken).toBeDefined();
-    expect((await consentsOf(account!.id)).map((row) => row.documentId)).toEqual([
+    const after = await consentsOf(account!.id);
+    expect(after.map((row) => row.documentId)).toEqual([
       ...before.map((row) => row.documentId),
       contract.id,
     ]);
+    // the version a login to an account the shop has accepted is a consent of that login
+    expect(after.at(-1)?.event).toBe('consent.oauth_login');
   });
 
   it.each(['one', '1,,2', '0', '1;2'])(
@@ -946,6 +955,7 @@ describe('POST /api/auth/login and the consent', () => {
         orderId: null,
         ip: '127.0.0.1',
         userAgent: 'lightMyRequest',
+        event: 'consent.login',
       })),
     );
   });
@@ -1050,6 +1060,7 @@ describe('the consents of a customer for an admin', () => {
       version: doc.version,
       title: doc.title,
       orderId: order,
+      event: order === null ? 'consent.accept' : 'consent.order',
       ip: '127.0.0.1',
       userAgent: 'lightMyRequest',
       createdAt: expect.any(String),

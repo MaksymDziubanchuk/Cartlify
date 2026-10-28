@@ -6,6 +6,7 @@ import {
   SAFETY_LIMITS,
 } from '@helpers/productDescription.js';
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
+import { PRODUCT_SIZE_MAX_MM, PRODUCT_WEIGHT_MAX_GRAMS } from '@helpers/productShipping.js';
 
 // money of a request: whole cents up to what numeric(10, 2) holds
 const moneyField = {
@@ -103,6 +104,13 @@ const getAllProductsQuerySchema = {
         'ahead (one without an end or past it overrides nothing). Without any flag an admin gets ' +
         'only the plain products; with another flag the override does not filter.',
     },
+    withoutShippingData: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: true lists every product of ' +
+        'the catalog that lacks the weight or the sizes, whatever else it has (a sale, an ' +
+        'override); the products whose data the shipping waits for.',
+    },
     inStock: {
       type: 'boolean',
       description:
@@ -117,6 +125,23 @@ const getAllProductsQuerySchema = {
         'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: lists every product of the ' +
         'catalog with no more free units than the number, whatever else it has (a sale, an ' +
         'override); 0 the products with none. With inStock=true the ones with some.',
+    },
+
+    // the period of the sort by sales
+    salesFrom: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'The start of the period the sort by sales counts (taken in): the orders paid from it on. ' +
+        'Without it the 30 days before salesTo. Used only with sort=sales.',
+    },
+    salesTo: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'The end of the period the sort by sales counts (left out). Without it the end of today ' +
+        '(UTC). A period that does not end after it starts is SALES_PERIOD_INVALID. Used only ' +
+        'with sort=sales; pass both to page through a fixed period.',
     },
 
     // sorting
@@ -140,21 +165,26 @@ const getAllProductsQuerySchema = {
         'popularityOverrideUntil',
         'saleEndsAt',
         'salePrice',
+        'discount',
+        'sales',
         'name',
       ],
       description:
         'relevance (the default with a search, the best match first; without a search ' +
         'SORT_RELEVANCE_REQUIRES_SEARCH) for every role. ' +
         'A buyer sorts by createdAt, price (the price a product sells at now), popularity ' +
-        '(the default without a search), avgRating, name and saleEndsAt: the products on sale first by the end of ' +
-        'their sale in the order asked for, then every other one by popularity, the most popular ' +
-        'first; any other sort is SORT_FORBIDDEN. An admin sorts by any field; price is the usual ' +
+        '(the default without a search), avgRating, name, saleEndsAt and discount: the products on sale first ' +
+        'by the end of their sale (saleEndsAt) or by the part of the price the sale takes off (discount, ' +
+        'the biggest discount first with order desc) in the order asked for, then every other one by ' +
+        'popularity, the most popular first; and sales: the units sold in the period (salesFrom, salesTo), ' +
+        'the best selling first with order desc; any other sort is SORT_FORBIDDEN. An admin sorts by any field; price is the usual ' +
         'price, salePrice the sale price, stock the free units, totalStock the whole stock, ' +
         'expiredStock the units of batches that are over. A ' +
         'field only some products have comes with its flag: deletedAt with deleted, saleEndsAt ' +
-        'and salePrice with onSale, popularityOverride and popularityOverrideUntil with ' +
+        'and salePrice and discount with onSale, popularityOverride and popularityOverrideUntil with ' +
         'popularityOverridden, otherwise SORT_DELETED_AT_REQUIRES_DELETED, ' +
         'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE, SORT_SALE_PRICE_REQUIRES_ON_SALE, ' +
+        'SORT_DISCOUNT_REQUIRES_ON_SALE, ' +
         'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN.',
     },
     order: { type: 'string', enum: ['asc', 'desc'] },
@@ -246,6 +276,26 @@ const productFields = {
     description:
       'Free units: the stock that confirmed orders do not hold, less the units of batches ' +
       'whose last good day is behind the day of the shop.',
+  },
+  weightGrams: {
+    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_WEIGHT_MAX_GRAMS }, { type: 'null' }],
+    description:
+      'The weight packed, in grams; null while it is not known. The card of every role has it, ' +
+      'the list of an admin and root.',
+  },
+  lengthMm: {
+    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_SIZE_MAX_MM }, { type: 'null' }],
+    description:
+      'The length packed, in millimetres; the three sizes are known together or not at all. The ' +
+      'card of every role has them, the list of an admin and root.',
+  },
+  widthMm: {
+    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_SIZE_MAX_MM }, { type: 'null' }],
+    description: 'The width packed, in millimetres, see lengthMm.',
+  },
+  heightMm: {
+    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_SIZE_MAX_MM }, { type: 'null' }],
+    description: 'The height packed, in millimetres, see lengthMm.',
   },
   category: {
     type: 'object',
@@ -603,6 +653,65 @@ const skuField = {
     'is PRODUCT_SKU_TOO_LONG.',
 } as const;
 
+// the weight and the sizes of a product in a json body: whole grams and whole millimetres, null
+// clears them (PRODUCT_SHIPPING_DATA_REQUIRED unless withoutShippingData is true). The three sizes
+// are known together or not at all (PRODUCT_SIZES_INCOMPLETE)
+const shippingBodyFields = {
+  weightGrams: {
+    type: ['integer', 'null'],
+    minimum: 1,
+    maximum: PRODUCT_WEIGHT_MAX_GRAMS,
+    description: `The weight packed, in grams, from 1 to ${PRODUCT_WEIGHT_MAX_GRAMS}. Null clears it, which needs withoutShippingData.`,
+  },
+  lengthMm: {
+    type: ['integer', 'null'],
+    minimum: 1,
+    maximum: PRODUCT_SIZE_MAX_MM,
+    description: `The length packed, in millimetres, from 1 to ${PRODUCT_SIZE_MAX_MM}. The three sizes are known together or not at all; null clears them, which needs withoutShippingData.`,
+  },
+  widthMm: {
+    type: ['integer', 'null'],
+    minimum: 1,
+    maximum: PRODUCT_SIZE_MAX_MM,
+    description: 'The width packed, in millimetres, see lengthMm.',
+  },
+  heightMm: {
+    type: ['integer', 'null'],
+    minimum: 1,
+    maximum: PRODUCT_SIZE_MAX_MM,
+    description: 'The height packed, in millimetres, see lengthMm.',
+  },
+  withoutShippingData: {
+    type: 'boolean',
+    description:
+      'True says that the weight and the sizes come later (or are cleared): the product is ' +
+      'changed without them. It is not kept; the products that lack them are listed with the ' +
+      'filter withoutShippingData and in an alert.',
+  },
+} as const;
+
+// the same fields in a form: text
+const shippingFormFields = {
+  weightGrams: {
+    type: 'string',
+    description: `The weight packed, in grams, a whole number from 1 to ${PRODUCT_WEIGHT_MAX_GRAMS} (PRODUCT_WEIGHT_INVALID). The word null clears it on a change.`,
+  },
+  lengthMm: {
+    type: 'string',
+    description: `The length packed, in millimetres, a whole number from 1 to ${PRODUCT_SIZE_MAX_MM} (PRODUCT_SIZES_INVALID). The three sizes come together (PRODUCT_SIZES_INCOMPLETE); the word null clears them on a change.`,
+  },
+  widthMm: { type: 'string', description: 'The width packed, in millimetres, see lengthMm.' },
+  heightMm: { type: 'string', description: 'The height packed, in millimetres, see lengthMm.' },
+  withoutShippingData: {
+    type: 'string',
+    enum: ['true', 'false'],
+    description:
+      'true says that the weight and the sizes come later: a new product is created without ' +
+      'them, a change may clear them (PRODUCT_WITHOUT_SHIPPING_DATA_INVALID for any other word). ' +
+      'Without it a new product needs the weight and the sizes (PRODUCT_SHIPPING_DATA_REQUIRED).',
+  },
+} as const;
+
 // documentation only: the form of POST /api/products. A form is not checked against a schema,
 // the controller and the service check its fields
 const productCreateFormSchema = {
@@ -616,6 +725,7 @@ const productCreateFormSchema = {
     ...safetyFormFields,
     price: moneyField,
     categoryId: { type: 'integer', minimum: 1 },
+    ...shippingFormFields,
     images: productImagesFormField,
   },
   required: [
@@ -692,6 +802,8 @@ const updateProductBodySchema = {
     },
 
     categoryId: { type: 'integer', minimum: 1 },
+
+    ...shippingBodyFields,
 
     // a type list, not anyOf: with coerceTypes ajv turns null into 0 in the integer shape of an
     // anyOf, and null would set an override of 0 instead of taking it off
@@ -777,6 +889,7 @@ const productUpdateFormSchema = {
     ...safetyFormFields,
     price: moneyField,
     categoryId: { type: 'integer', minimum: 1 },
+    ...shippingFormFields,
     popularityOverride: {
       type: 'string',
       description:
@@ -1271,19 +1384,40 @@ const priceHistoryResponseSchema = {
             anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
             description: 'A line with an end is the start of a sale until it.',
           },
+          event: {
+            type: 'string',
+            description:
+              'What made the line: price.set, price.set_batch, price.bulk, price.sale_start or ' +
+              'price.sale_end, or legacy.unknown for a line written before the events ' +
+              '(GET /api/admin/log-events lists them).',
+          },
           actor: {
             type: 'object',
             additionalProperties: false,
+            description:
+              'Who did it, with the role. For an admin the account of root has the id 0 and the ' +
+              'name hidden; the role stays.',
             properties: {
               id: { type: 'integer' },
               name: { type: ['string', 'null'] },
+              role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'] },
               deleted: { type: 'boolean' },
             },
-            required: ['id', 'name', 'deleted'],
+            required: ['id', 'name', 'role', 'deleted'],
           },
           createdAt: { type: 'string', format: 'date-time' },
         },
-        required: ['id', 'oldPrice', 'newPrice', 'mode', 'value', 'endsAt', 'actor', 'createdAt'],
+        required: [
+          'id',
+          'oldPrice',
+          'newPrice',
+          'mode',
+          'value',
+          'endsAt',
+          'event',
+          'actor',
+          'createdAt',
+        ],
       },
     },
     limit: { type: 'integer' },

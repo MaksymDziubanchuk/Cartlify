@@ -317,9 +317,12 @@ async function updateMe({
         let user = await tx.user.update({ where: { id }, data, select: profileSelect });
 
         // the row is written, so the request is taken: only now the upload replaces the avatar
-        // file of the account; a refused request never touched it
+        // file of the account; a refused request never touched it. The avatar keeps one path,
+        // the copies cached of the old file are dropped
         if (avatarUploaded && avatarPublicId) {
-          const placed = await moveImage(avatarUploaded.publicId, avatarPublicId);
+          const placed = await moveImage(avatarUploaded.publicId, avatarPublicId, {
+            invalidate: true,
+          });
           user = await tx.user.update({
             where: { id },
             data: { avatarUrl: placed.urlBase },

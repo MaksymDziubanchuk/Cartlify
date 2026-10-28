@@ -73,6 +73,7 @@ export async function updateProductCategory({
         entityType: 'product',
         entityId: product.id,
         action: 'PRODUCT_UPDATE',
+        event: 'product.category_change',
         changes,
       });
 

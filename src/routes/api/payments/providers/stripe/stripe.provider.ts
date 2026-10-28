@@ -37,6 +37,8 @@ export const stripeProvider: PaymentProvider = {
     reservationExpiresAt,
     pageClosedAt,
     items,
+    deliveryPrice,
+    shipping,
     customerEmail,
   }) {
     // a repeated request for the same order and reservation gets the same session, not a second payment
@@ -50,6 +52,8 @@ export const stripeProvider: PaymentProvider = {
           total,
           reservationExpiresAt,
           items,
+          deliveryPrice,
+          shipping,
           customerEmail,
         }),
         {

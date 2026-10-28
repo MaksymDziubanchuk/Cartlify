@@ -1,5 +1,7 @@
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 
+import type { PriceLogEvent, WrittenEvent } from '@config/journalEvents.js';
+
 import type { Prisma, PrismaClient } from '@prisma/client';
 import type { ProductId } from 'types/ids.js';
 
@@ -25,6 +27,8 @@ export async function writeProductPriceChangeLog(
     afterPrice: unknown;
     mode: 'fixed' | 'percent';
     value: number;
+    // what made the line (src/config/journalEvents.ts)
+    event: WrittenEvent<PriceLogEvent>;
     endsAt?: Date;
   },
 ): Promise<void> {
@@ -46,6 +50,7 @@ export async function writeProductPriceChangeLog(
       ${newPriceNum}::numeric,
       ${args.mode}::cartlify."PriceChangeMode",
       ${args.value}::numeric,
+      ${args.event},
       (${endsAt}::timestamptz at time zone 'UTC')
     )
   `;

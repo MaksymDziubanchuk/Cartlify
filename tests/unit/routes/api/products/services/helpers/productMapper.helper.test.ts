@@ -23,6 +23,10 @@ const product = {
   category: { id: 2, name: 'Lamps', slug: 'lamps' },
   views: 40,
   popularity: 7,
+  weightGrams: null as number | null,
+  lengthMm: null as number | null,
+  widthMm: null as number | null,
+  heightMm: null as number | null,
   popularityOverride: null as number | null,
   popularityOverrideUntil: null as Date | null,
   avgRating: new Prisma.Decimal('4.25') as unknown,
@@ -84,6 +88,21 @@ describe('mapProductRowToResponse', () => {
 
   it('never shows a negative stock, even if reservations exceed it', () => {
     expect(map({ stock: 2, reservedStock: 5 }).stock).toBe(0);
+  });
+
+  // what the product weighs and measures packed: the card of every role has it, null while unknown
+  it('shows the weight and the sizes on the card of a buyer and of an admin, null where unknown', () => {
+    const known = { weightGrams: 350, lengthMm: 200, widthMm: 100, heightMm: 50 };
+
+    for (const view of ['buyer', 'admin'] as const) {
+      expect(map(known, view)).toMatchObject(known);
+      expect(map({}, view)).toMatchObject({
+        weightGrams: null,
+        lengthMm: null,
+        widthMm: null,
+        heightMm: null,
+      });
+    }
   });
 
   // the card names the way to its category from the top of the tree

@@ -471,7 +471,7 @@ describe('the log of prices and a sale', () => {
     db.attempt(
       `select 1 as done from cartlify.log_product_price_change(
          $1::int, $2::numeric, $3::numeric, $4::cartlify."PriceChangeMode", $5::numeric,
-         (now() at time zone 'utc') + $6::interval
+         'price.sale_start', (now() at time zone 'utc') + $6::interval
        )`,
       productId,
       ...line,

@@ -17,7 +17,7 @@ import {
   orderRowOf,
   placeOrder,
   placeUnconfirmedOrder,
-  shippingData,
+  deliveryAnswer,
 } from '../../../helpers/orders.js';
 
 // the items of an order that lost its reservation (unconfirmed): the owner changes them the way
@@ -75,7 +75,7 @@ const confirm = (user: TestUser, orderId: number) =>
     method: 'POST',
     url: '/api/orders/current/confirm',
     headers: withCsrf(csrf, accessCookie(user)),
-    payload: { orderId },
+    payload: { orderId, expectedDeliveryPrice: 0 },
   });
 
 const firstItemOf = async (orderId: number) => (await orderRowOf(orderId)).items[0]!;
@@ -329,7 +329,7 @@ describe('confirming a changed unconfirmed order again', () => {
       id: orderId,
       status: 'waiting',
       total: 18,
-      ...shippingData,
+      delivery: deliveryAnswer,
       reservationExpiresAt: expect.any(String),
     });
   });

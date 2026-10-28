@@ -133,6 +133,7 @@ export async function googleCallback({
         userId: u.id as any,
         email,
         role: u.role as any,
+        event: 'login.google',
         ip: ip ?? null,
         userAgent: userAgent ?? null,
       });

@@ -147,7 +147,13 @@ async function demoState() {
     const orders = byOwner(
       await tx.order.findMany({
         where: { userId: { in: buyerIds } },
-        select: { id: true, userId: true, status: true, confirmed: true, shippingAddress: true },
+        select: {
+          id: true,
+          userId: true,
+          status: true,
+          confirmed: true,
+          delivery: { select: { method: true, country: true, recipientLastName: true } },
+        },
       }),
       (row) => row.userId,
     );
@@ -390,7 +396,14 @@ describe('db/tools/demo_data.mjs', () => {
 
     for (const order of state.buyers.flatMap((b) => b.orders)) {
       expect(order.confirmed).toBe(order.status === 'waiting');
-      if (order.confirmed) expect(order.shippingAddress).toEqual(expect.any(String));
+      // the first country of the manual method of the tests, the address whole
+      if (order.confirmed) {
+        expect(order.delivery).toEqual({
+          method: 'manual',
+          country: 'UA',
+          recipientLastName: 'Demo',
+        });
+      }
     }
   });
 

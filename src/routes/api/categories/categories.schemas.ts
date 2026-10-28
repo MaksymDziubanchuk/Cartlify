@@ -10,6 +10,7 @@ const categoryExample = {
   slug: 'smartphones',
   description: 'Smartphones and mobile devices.',
   parentId: 1,
+  imageUrls: null,
   createdAt: '2026-01-01T10:00:00.000Z',
   updatedAt: '2026-01-01T10:00:00.000Z',
 };
@@ -302,6 +303,94 @@ const deleteCategorySchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for the picture of a category
+const putCategoryImageSchema = {
+  operationId: 'setCategoryImage',
+  summary: 'Set the picture of a category',
+  description:
+    'Puts a picture on a category, or replaces the one it has (the old file is deleted). The picture ' +
+    'is optional: a category has none until it gets one. The body is a form with one file, `image`, ' +
+    'a jpeg, png or webp file by its content. Admin and root only; the change goes to the journal of ' +
+    'the admins.',
+
+  params: {
+    $ref: 'categoriesUpdateParamsSchema#',
+    examples: [categoryParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The category with its picture.',
+      $ref: 'categoriesUpdateResponseSchema#',
+    },
+    400: {
+      description:
+        '`MULTIPART_REQUIRED`: the body is not a form. `CATEGORY_IMAGE_REQUIRED`: the form has no ' +
+        '`image` file. `CATEGORY_IMAGE_MULTIPLE`: the form has more than one. `CATEGORY_IMAGE_EMPTY`, ' +
+        '`CATEGORY_IMAGE_STREAM_ERROR`: an empty file. `IMAGE_TYPE_NOT_ALLOWED`: not a jpeg, png or ' +
+        'webp file. `IMAGE_INVALID`: Cloudinary cannot read the file.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to set the picture of a category.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The authenticated user is not allowed to change categories.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: '`CATEGORY_NOT_FOUND`: there is no such category.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while setting the picture.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for taking the picture off a category
+const deleteCategoryImageSchema = {
+  operationId: 'deleteCategoryImage',
+  summary: 'Take the picture off a category',
+  description:
+    'Takes the picture off a category and deletes its file. Admin and root only; the change goes ' +
+    'to the journal of the admins.',
+
+  params: {
+    $ref: 'categoriesUpdateParamsSchema#',
+    examples: [categoryParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The category without its picture.',
+      $ref: 'categoriesUpdateResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to take the picture off a category.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The authenticated user is not allowed to change categories.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: '`CATEGORY_NOT_FOUND`: there is no such category.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: '`CATEGORY_IMAGE_NOT_SET`: the category has no picture.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while taking the picture off.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group category routes under the categories Swagger tag
 const taggedCategoriesSchemas = withOpenApiTag(
   {
@@ -310,6 +399,8 @@ const taggedCategoriesSchemas = withOpenApiTag(
     postCategorySchema,
     patchCategorySchema,
     deleteCategorySchema,
+    putCategoryImageSchema,
+    deleteCategoryImageSchema,
   },
   'categories',
 );
@@ -325,5 +416,11 @@ const categoriesSchemasWithReadSecurity = withOpenApiSecurityFor(
 export const categoriesSchema = withOpenApiSecurityFor(
   categoriesSchemasWithReadSecurity,
   openApiSecurity.accessTokenCookie,
-  ['postCategorySchema', 'patchCategorySchema', 'deleteCategorySchema'],
+  [
+    'postCategorySchema',
+    'patchCategorySchema',
+    'deleteCategorySchema',
+    'putCategoryImageSchema',
+    'deleteCategoryImageSchema',
+  ],
 );

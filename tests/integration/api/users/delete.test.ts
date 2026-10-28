@@ -34,7 +34,7 @@ import {
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { refuseMail, watchMail } from '../../../helpers/mail.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
 
 // DELETE /api/users/:userId: only root, and it does not drop the row, it empties it: orders,
 // reviews and logs keep pointing at an account that no longer holds anything personal.
@@ -401,11 +401,10 @@ describe('what happens around the account', () => {
 
     await deleteUser(target.id, rootCookie);
 
-    expect(await orderOf(paidId)).toMatchObject({
-      userId: target.id,
-      status: 'paid',
-      shippingAddress: 'Test street 1, Kyiv',
-    });
+    expect(await orderOf(paidId)).toMatchObject({ userId: target.id, status: 'paid' });
+    expect(
+      await asAdmin((tx) => tx.orderDelivery.findUniqueOrThrow({ where: { orderId: paidId } })),
+    ).toMatchObject({ street: 'Test street', city: 'Kyiv', house: '1' });
     expect(await orderOf(shippedId)).toMatchObject({ userId: target.id, status: 'shipped' });
     // the stock the payments took stays taken
     expect(await productOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
@@ -522,6 +521,23 @@ describe('what happens around the account', () => {
     const [logged] = takeLogs({ msg: 'account deleted mail was not sent' });
     expect(logged).toMatchObject({ userId: target.id });
     expect(JSON.stringify(logged)).not.toContain(target.email);
+  });
+
+  it('tells a pickup as a pickup in the mail of the deletion', async () => {
+    const mails = watchMail();
+    const target = await newUser({ name: 'Anna' });
+    const { address: _address, ...person } = deliveryBody;
+    const pickupId = await placeOrder(app, csrf, target, await newProduct(), 'paid', 1, {
+      ...person,
+      method: 'pickup',
+    });
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.text).toContain(
+      `Order #${pickupId}, €10.00: paid, it will be prepared for pickup at the shop`,
+    );
   });
 
   it('mails the old address with the orders still on their way and the cancelled ones', async () => {

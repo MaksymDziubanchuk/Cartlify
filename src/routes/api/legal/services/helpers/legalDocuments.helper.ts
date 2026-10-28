@@ -14,6 +14,7 @@ import {
   type CurrentVersion,
 } from './legalConsent.helper.js';
 
+import type { ConsentEvent, WrittenEvent } from '@config/journalEvents.js';
 import type {
   LegalAcceptanceStatusDto,
   LegalDocumentDto,
@@ -144,14 +145,16 @@ export async function recordConsents(
   db: Db,
   userId: number,
   documentIds: readonly number[],
+  // where the person agreed (src/config/journalEvents.ts)
+  event: WrittenEvent<ConsentEvent>,
   orderId: number | null = null,
 ): Promise<void> {
   if (!documentIds.length) return;
 
   try {
     await db.$executeRaw`
-      insert into cartlify.legal_acceptances ("userId", "documentId", "orderId")
-      select ${userId}::int, d.id, ${orderId}::int
+      insert into cartlify.legal_acceptances ("userId", "documentId", "orderId", "event")
+      select ${userId}::int, d.id, ${orderId}::int, ${event}
       from unnest(${[...documentIds]}::int[]) as d(id)
     `;
   } catch (err) {
@@ -182,6 +185,8 @@ export async function takeConsentAtLogin(
   db: Db,
   userId: number,
   chosen: readonly number[],
+  // a login with a password, or with a provider (consent.oauth_login)
+  event: WrittenEvent<ConsentEvent> = 'consent.login',
 ): Promise<void> {
   const status = await acceptanceStatusOf(db, userId);
   if (!status.required.length) return;
@@ -206,5 +211,6 @@ export async function takeConsentAtLogin(
     db,
     userId,
     chosen.filter((id) => !accepted.has(id)),
+    event,
   );
 }

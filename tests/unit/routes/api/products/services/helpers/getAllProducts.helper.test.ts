@@ -37,6 +37,10 @@ const row = {
   category: { id: 2, name: 'Lamps', slug: 'lamps' },
   views: 40,
   popularity: 7,
+  weightGrams: null as number | null,
+  lengthMm: null as number | null,
+  widthMm: null as number | null,
+  heightMm: null as number | null,
   popularityOverride: null as number | null,
   popularityOverrideUntil: null as Date | null,
   avgRating: new Prisma.Decimal('4.25') as unknown,
@@ -78,6 +82,17 @@ describe('mapProductListRowToResponse', () => {
   });
 
   // the product card shows the same, a list and a card must not disagree
+  // the list of an admin has what the product weighs and measures packed, the list of a buyer not
+  it('shows an admin the weight and the sizes in the list, and a buyer neither', () => {
+    const known = { weightGrams: 350, lengthMm: 200, widthMm: 100, heightMm: 50 };
+
+    expect(map(known, 'admin')).toMatchObject(known);
+    expect(map({}, 'admin')).toMatchObject({ weightGrams: null, lengthMm: null });
+    for (const field of Object.keys(known)) {
+      expect(map(known, 'buyer')).not.toHaveProperty(field);
+    }
+  });
+
   it('never shows a negative stock, even if reservations exceed it', () => {
     expect(map({ stock: 2, reservedStock: 5 }).stock).toBe(0);
   });
@@ -435,6 +450,7 @@ describe('normalizeFindAllProductsInput', () => {
       ],
       ['saleEndsAt', { onSale: true }, 'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE'],
       ['salePrice', { onSale: true }, 'SORT_SALE_PRICE_REQUIRES_ON_SALE'],
+      ['discount', { onSale: true }, 'SORT_DISCOUNT_REQUIRES_ON_SALE'],
     ] as const)('sorts by %s only with its flag', (sort, flag, errorCode) => {
       expect(asAdmin({ sort, ...flag }).sort).toBe(sort);
       expect(thrownBy(() => asAdmin({ sort }))).toMatchObject({ statusCode: 400, errorCode });
@@ -807,6 +823,75 @@ describe('buildProductIdsQuery', () => {
         errorCode: 'CURSOR_INVALID',
       });
     });
+  });
+});
+
+describe('the sorts by the discount and by the sales', () => {
+  const asGuest = (extra: Partial<FindAllProductsDto>) =>
+    normalizeFindAllProductsInput({ actorRole: 'GUEST', ...extra } as FindAllProductsDto);
+
+  it('lets a buyer sort by the discount and by the sales', () => {
+    expect(asGuest({ sort: 'discount' }).sort).toBe('discount');
+    expect(asGuest({ sort: 'sales' }).sort).toBe('sales');
+  });
+
+  it('asks the days before the end of today (UTC) when no period is given, 30 of them', () => {
+    const q = asGuest({ sort: 'sales' });
+
+    const endOfToday = new Date();
+    endOfToday.setUTCHours(24, 0, 0, 0);
+    expect(q.salesTo).toEqual(endOfToday);
+    expect(q.salesTo!.getTime() - q.salesFrom!.getTime()).toBe(30 * 86_400_000);
+  });
+
+  it('takes the period that is asked for, and only for the sort by sales', () => {
+    const salesFrom = new Date('2026-01-01T00:00:00Z');
+    const salesTo = new Date('2026-02-01T00:00:00Z');
+
+    expect(asGuest({ sort: 'sales', salesFrom, salesTo })).toMatchObject({ salesFrom, salesTo });
+    expect(asGuest({ sort: 'price', salesFrom, salesTo })).not.toHaveProperty('salesFrom');
+  });
+
+  it('takes the 30 days before the end that is asked for, and the end of today after the start', () => {
+    const salesTo = new Date('2026-02-01T00:00:00Z');
+
+    expect(asGuest({ sort: 'sales', salesTo }).salesFrom).toEqual(new Date('2026-01-02T00:00:00Z'));
+  });
+
+  it.each([
+    [
+      'ends before it starts',
+      { salesFrom: new Date('2026-02-01'), salesTo: new Date('2026-01-01') },
+    ],
+    ['has no length', { salesFrom: new Date('2026-01-01'), salesTo: new Date('2026-01-01') }],
+    ['starts at no date', { salesFrom: new Date('nonsense') }],
+    ['ends in a year the database has not', { salesTo: new Date('+012345-01-01T00:00:00Z') }],
+  ])('refuses a period that %s', (_case, extra) => {
+    expect(thrownBy(() => asGuest({ sort: 'sales', ...extra }))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'SALES_PERIOD_INVALID',
+    });
+  });
+
+  it('keeps the discount of the last row of the part on sale in the cursor, the popularity of the rest', () => {
+    const q = { view: 'buyer', sort: 'discount', order: 'desc' } as ProductListQuery;
+
+    expect(decodeCursor(makeNextCursor(q, { id: 4, g: 1, discount: 0.35, popularity: 3 }))).toEqual(
+      {
+        id: 4,
+        v: 0.35,
+        s: 'discount:desc',
+        g: 1,
+      },
+    );
+    expect(decodeCursor(makeNextCursor(q, { id: 4, g: 0, discount: null, popularity: 3 }))).toEqual(
+      {
+        id: 4,
+        v: 3,
+        s: 'discount:desc',
+        g: 0,
+      },
+    );
   });
 });
 

@@ -93,11 +93,9 @@ export async function getAdminChatThreadService({
                     },
                     data: {
                         unreadCount: 0,
+                        // an admin took the chat and read it: it waits in no queue, it is active
                         adminRequestedAt: null,
-                        // an admin took a chat whose customer has not described the problem yet:
-                        // it goes to the active queue now; an open chat of an admin always has one
-                        // of the two marks (chat_threads_admin_state_chk)
-                        adminUnreadSince: thread.adminUnreadSince ?? new Date(),
+                        adminUnreadSince: null,
                     },
                 });
 

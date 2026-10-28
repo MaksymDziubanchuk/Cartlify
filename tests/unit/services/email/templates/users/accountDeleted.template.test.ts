@@ -48,6 +48,22 @@ describe('buildAccountDeletedTemplate', () => {
     }
   });
 
+  // a pickup is not sent: it waits for the customer at the shop
+  it('tells a pickup as it is, prepared for a paid order and ready for a shipped one', () => {
+    const { text, html } = mail({
+      deliveries: [
+        { orderId: 3, status: 'paid', total: 10, items: [lamp], pickup: true },
+        { orderId: 4, status: 'shipped', total: 10, items: [lamp], pickup: true },
+      ],
+    });
+
+    expect(text).toContain('- Order #3, €10.00: paid, it will be prepared for pickup at the shop');
+    expect(text).toContain('- Order #4, €10.00: ready, it waits for you at the shop');
+    expect(text).toContain('or kept for you to collect at the shop');
+    expect(html).toContain('prepared for pickup at the shop');
+    expect(html).toContain('or keep them for you to collect at the shop');
+  });
+
   // only what stripe said goes in: an unknown payment is a condition, never a guess
   it.each([
     ['not_taken', 'cancelled, no payment was taken and none will be'],

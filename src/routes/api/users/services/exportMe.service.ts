@@ -22,8 +22,9 @@ export type ExportMeResponseDto = {
 // everything the shop keeps of the person, read with the rights of the person (rls shows them
 // their own rows only): the profile, the orders with what they held and where they went, the
 // favorites, the reviews and votes, the chats with their messages, the logins, the open sessions
-// and the consents to the terms and the contract. What is no data of the person stays out: the hash of the password, the id of the
-// provider account, the ids of payments and of files
+// and the consents to the terms and the contract. What is no data of the person stays out: the hash
+// of the password, the id of the provider account, the ids of payments and of files, and what a send
+// cost the shop
 export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeResponseDto> {
   try {
     return await prisma.$transaction(async (tx) => {
@@ -47,21 +48,32 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
       });
       if (!profile) throw new NotFoundError('USER_NOT_FOUND');
 
-      const orders = await tx.order.findMany({
+      const orderRows = await tx.order.findMany({
         where: { userId },
         orderBy: { id: 'asc' },
         select: {
           id: true,
           status: true,
           total: true,
-          shippingAddress: true,
-          recipientFirstName: true,
-          recipientLastName: true,
-          recipientPhone: true,
-          note: true,
           createdAt: true,
           paidAt: true,
           cancelledAt: true,
+          delivery: {
+            select: {
+              method: true,
+              recipientFirstName: true,
+              recipientLastName: true,
+              recipientPhone: true,
+              country: true,
+              postalCode: true,
+              city: true,
+              street: true,
+              house: true,
+              apartment: true,
+              note: true,
+              price: true,
+            },
+          },
           items: {
             orderBy: { id: 'asc' },
             select: {
@@ -75,6 +87,27 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
           },
         },
       });
+
+      // what the buyer is told of a send; what it cost the shop is no data of the person. A query
+      // reads at most two relations side by side, so the sends are read apart
+      const sends = await tx.orderShipment.findMany({
+        where: { orderId: { in: orderRows.map((order) => order.id) } },
+        orderBy: { id: 'asc' },
+        select: {
+          orderId: true,
+          carrier: true,
+          trackingNumber: true,
+          trackingUrl: true,
+          shippedAt: true,
+          rolledBackAt: true,
+        },
+      });
+      const orders = orderRows.map((order) => ({
+        ...order,
+        shipments: sends
+          .filter((send) => send.orderId === order.id)
+          .map(({ orderId: _orderId, ...send }) => send),
+      }));
 
       const favorites = await tx.favorite.findMany({
         where: { userId },
@@ -119,7 +152,7 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
       const logins = await tx.loginLog.findMany({
         where: { userId },
         orderBy: { id: 'desc' },
-        select: { createdAt: true, ipAddress: true, userAgent: true },
+        select: { createdAt: true, ipAddress: true, userAgent: true, event: true },
       });
 
       const sessions = await tx.userToken.findMany({
@@ -136,6 +169,7 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
           orderId: true,
           ip: true,
           userAgent: true,
+          event: true,
           createdAt: true,
           document: { select: { kind: true, version: true, title: true } },
         },
@@ -144,9 +178,10 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
       return {
         exportedAt: new Date(),
         profile,
-        orders: orders.map(({ total, items, ...order }) => ({
+        orders: orders.map(({ total, items, delivery, ...order }) => ({
           ...order,
           total: total.toString(),
+          delivery: delivery && { ...delivery, price: delivery.price.toString() },
           items: items.map(({ product, productName, unitPrice, totalPrice, ...item }) => ({
             ...item,
             // the name the item was confirmed with, the one of now for a cart
@@ -176,6 +211,7 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
           orderId: consent.orderId,
           ip: consent.ip,
           userAgent: consent.userAgent,
+          event: consent.event,
           createdAt: consent.createdAt,
         })),
       };

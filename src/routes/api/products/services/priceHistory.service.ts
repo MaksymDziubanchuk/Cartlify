@@ -2,6 +2,7 @@ import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
+import { HIDDEN_ID, hiddenText } from '@helpers/rootHidden.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
@@ -42,8 +43,9 @@ export async function findPriceHistory(dto: PriceHistoryDto): Promise<PriceHisto
           mode: true,
           value: true,
           endsAt: true,
+          event: true,
           createdAt: true,
-          actor: { select: { id: true, name: true, deletedAt: true } },
+          actor: { select: { id: true, name: true, role: true, deletedAt: true } },
         },
       });
     });
@@ -60,11 +62,23 @@ export async function findPriceHistory(dto: PriceHistoryDto): Promise<PriceHisto
         value: decimalToNumber(row.value),
         // the start of a sale names its end
         endsAt: row.endsAt ? row.endsAt.toISOString() : null,
-        actor: {
-          id: row.actor.id as UserId,
-          name: row.actor.name,
-          deleted: row.actor.deletedAt !== null,
-        },
+        // what made the line
+        event: row.event,
+        // who did it, with the role; an admin does not see who root is: its id is 0, its name hidden
+        actor:
+          row.actor.role === 'ROOT' && dto.actorRole !== 'ROOT'
+            ? {
+                id: HIDDEN_ID as UserId,
+                name: hiddenText(row.actor.name),
+                role: row.actor.role,
+                deleted: row.actor.deletedAt !== null,
+              }
+            : {
+                id: row.actor.id as UserId,
+                name: row.actor.name,
+                role: row.actor.role,
+                deleted: row.actor.deletedAt !== null,
+              },
         createdAt: row.createdAt.toISOString(),
       })),
       limit,

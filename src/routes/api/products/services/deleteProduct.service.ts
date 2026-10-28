@@ -49,6 +49,7 @@ export async function deleteProductById(
         entityType: 'product',
         entityId: after.id,
         action: 'PRODUCT_DELETE',
+        event: 'product.delete',
         changes: [{ field: 'deletedAt', old: null, new: afterIso }],
       });
     });

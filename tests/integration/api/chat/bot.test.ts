@@ -8,7 +8,7 @@ import env from '@config/env.js';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { closeChatSockets, openChatSocket, type ChatSocket } from '../../../helpers/chatSocket.js';
-import { getCsrf } from '../../../helpers/csrf.js';
+import { getCsrf, withCsrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createProduct, createUser } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
@@ -20,7 +20,8 @@ import {
   stopModel,
   type ModelCall,
 } from '../../../helpers/openai.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
+import { placePaidOrder } from '../../../helpers/payments.js';
 
 // the bot asks the model of the app; here the model is the test's (tests/helpers/openai.ts): the
 // decision whether a person is needed is the model's, so the test decides it
@@ -408,6 +409,162 @@ describe('what the bot knows of the customer', () => {
     expect(orders).toContain('waiting (confirmed, waiting for the payment)');
     expect(listed).not.toContain(cart);
     expect(listed).not.toContain(otherOrder);
+  });
+
+  // an admin moves the order of the customer the way the desk does
+  async function adminMoves(orderId: number, payload: Record<string, unknown>) {
+    const csrf = await getCsrf(app);
+    const admin = await createUser({ role: 'ADMIN' });
+    userIds.push(admin.id);
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/orders/${orderId}/status`,
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload,
+    });
+    expect(res.statusCode).toBe(200);
+  }
+
+  const customerWithOrder = async (
+    stage: 'waiting' | 'paid',
+    delivery?: Record<string, unknown>,
+  ) => {
+    const csrf = await getCsrf(app);
+    const chat = await openChat('user');
+    const user = { id: chat.userId!, role: 'USER' as const, email: '', password: '' };
+    const orderId = await placeOrder(
+      app,
+      csrf,
+      user,
+      await createProduct({ stock: 5 }),
+      stage,
+      1,
+      delivery,
+    );
+    return { chat, orderId };
+  };
+
+  it('tells the model how the delivery of the shop works', async () => {
+    const calls = answerAsModel();
+    const chat = await openChat('user');
+
+    await ask(chat, 'How do you deliver?');
+
+    const { instructions } = calls[0]!.request;
+    expect(instructions).toContain('the customer picks one when confirming the order');
+    expect(instructions).toMatch(
+      /- by hand: the shop sends the order to an address in UA, PL, DE or GB;/,
+    );
+    expect(instructions).toContain('- pickup: the customer collects the order at');
+    expect(instructions).toContain(
+      'Name no other delivery method, country, price, carrier or delivery time than these.',
+    );
+  });
+
+  it('tells the model how an order goes, by its country and price, never by the address or the phone', async () => {
+    const { chat } = await customerWithOrder('waiting');
+    const calls = answerAsModel();
+
+    await ask(chat, 'Where does my order go?');
+
+    const orders = ordersMessageOf(calls[0]!)!;
+    expect(orders).toMatch(/delivery: by hand to UA for \d+(\.\d+)? eur/i);
+    expect(orders).not.toContain('Test street');
+    expect(orders).not.toContain('Kyiv');
+    expect(orders).not.toContain(deliveryBody.recipientPhone);
+  });
+
+  it('tells the model the carrier and the number an admin wrote when the order was sent', async () => {
+    const { chat, orderId } = await customerWithOrder('paid');
+    await adminMoves(orderId, {
+      status: 'shipped',
+      shipment: {
+        carrier: 'DHL',
+        trackingNumber: 'JD0146',
+        trackingUrl: 'https://dhl.example.com/JD0146',
+      },
+    });
+    const calls = answerAsModel();
+
+    await ask(chat, 'Where is my order now?');
+
+    expect(ordersMessageOf(calls[0]!)).toContain(
+      `order ${orderId}: shipped (sent, on its way to the customer)`,
+    );
+    expect(ordersMessageOf(calls[0]!)).toContain(
+      'send: carrier DHL, tracking number JD0146, tracking link https://dhl.example.com/JD0146',
+    );
+  });
+
+  it('tells the model a pickup is ready to collect, not on its way', async () => {
+    const { address: _address, ...person } = deliveryBody;
+    const { chat, orderId } = await customerWithOrder('paid', { ...person, method: 'pickup' });
+    await adminMoves(orderId, { status: 'shipped' });
+    const calls = answerAsModel();
+
+    await ask(chat, 'Can I come for my order?');
+
+    expect(ordersMessageOf(calls[0]!)).toContain(
+      `order ${orderId}: shipped (ready, waiting for the customer to collect it)`,
+    );
+    expect(ordersMessageOf(calls[0]!)).toContain('delivery: pickup at the shop');
+  });
+
+  // an order with a send taken back or a cancellation: the bot says nothing and hands it to an admin
+  it.each([
+    [
+      'a send taken back',
+      async (orderId: number) => {
+        await adminMoves(orderId, { status: 'shipped', shipment: { carrier: 'DHL' } });
+        await adminMoves(orderId, { status: 'paid', keepShippingCost: false });
+      },
+    ],
+    [
+      // no send is taken back here, the order only lost a step: the journal of the admins knows
+      'a delivery taken back',
+      async (orderId: number) => {
+        await adminMoves(orderId, { status: 'shipped', shipment: { carrier: 'DHL' } });
+        await adminMoves(orderId, { status: 'delivered' });
+        await adminMoves(orderId, { status: 'shipped' });
+      },
+    ],
+  ])(
+    'leaves an order with %s to an admin and tells the model nothing of it',
+    async (_case, make) => {
+      const { chat, orderId } = await customerWithOrder('paid');
+      await make(orderId);
+      const calls = answerAsModel();
+
+      await ask(chat, 'What happened to my order?');
+
+      const orders = ordersMessageOf(calls[0]!)!;
+      expect(orders).toContain(`- order ${orderId}: HUMAN ONLY, an admin handles this order`);
+      expect(orders).not.toContain('DHL');
+      expect(orders).not.toContain('delivery:');
+      expect(orders).toContain('An order marked HUMAN ONLY is for an admin');
+    },
+  );
+
+  it('leaves a cancelled order to an admin and tells the model nothing of it', async () => {
+    const csrf = await getCsrf(app);
+    const chat = await openChat('user');
+    const user = { id: chat.userId!, role: 'USER' as const, email: '', password: '' };
+    const { orderId } = await placePaidOrder(app, csrf, user, await createProduct({ stock: 5 }));
+    const admin = await createUser({ role: 'ADMIN' });
+    userIds.push(admin.id);
+    const cancelled = await app.inject({
+      method: 'POST',
+      url: `/api/orders/${orderId}/cancel`,
+      headers: withCsrf(csrf, accessCookie(admin)),
+    });
+    expect(cancelled.statusCode).toBe(200);
+    const calls = answerAsModel();
+
+    await ask(chat, 'Why was my order cancelled?');
+
+    const orders = ordersMessageOf(calls[0]!)!;
+    expect(orders).toContain(`- order ${orderId}: HUMAN ONLY, an admin handles this order`);
+    expect(orders).not.toContain('cancelled');
   });
 
   it('tells the model a guest has no orders', async () => {

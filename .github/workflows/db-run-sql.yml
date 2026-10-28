@@ -23,7 +23,7 @@ on:
           - db/schema/04_views.sql
           - db/schema/05_fn_and_triggers.sql
           - db/schema/06_indexes_and_constraints.sql
-          # db/data/* (reseed, clear) wipe data: they are run only by hand from a local machine,
+          # db/data/* (the clear scripts) wipe data: they are run only by hand from a local machine,
           # never through this workflow, on dev neither
 
 concurrency:
@@ -89,7 +89,7 @@ jobs:
             *) echo "only scripts under db/ are allowed"; exit 1 ;;
           esac
 
-          # the data scripts wipe or reseed a database, they run only by hand from a local machine
+          # the data scripts wipe a database, they run only by hand from a local machine
           case "$SCRIPT" in
             db/data/*) echo "db/data scripts are not run by this workflow"; exit 1 ;;
           esac

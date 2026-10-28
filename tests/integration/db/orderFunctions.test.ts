@@ -274,16 +274,16 @@ describe('cartlify.confirm_order', () => {
     });
   });
 
-  it('refuses an order without the shipping data, and reserves nothing', async () => {
+  it('refuses an order without where it goes, and reserves nothing', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 2]], { shipping: false });
+      const orderId = await cartOf(db, owner.id, [[product.id, 2]], { delivery: false });
       const outcome = await confirm(db, owner.id, orderId);
       return { outcome, stock: await stockOf(db, admin.id, product.id) };
     });
 
     expect(outcome).toMatchObject({
       ok: false,
-      message: expect.stringContaining('ORDER_SHIPPING_ADDRESS_REQUIRED'),
+      message: expect.stringContaining('ORDER_DELIVERY_REQUIRED'),
     });
     expect(stock).toEqual({ stock: 10, reserved: 0 });
   });
@@ -768,9 +768,9 @@ describe('cartlify.pay_order', () => {
     expect(stock).toEqual({ stock: 2, reserved: 2 });
   });
 
-  it('refuses a cart without the shipping data', async () => {
+  it('refuses a cart without where it goes', async () => {
     const result = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { shipping: false });
+      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
       return pay(db, admin.id, orderId);
     });
 
@@ -940,7 +940,10 @@ describe('cartlify.cancel_paid_order', () => {
         orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
       } else {
         orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 2]]);
-        if (stage === 'delivered') await setStatus(db, orderId, 'delivered');
+        if (stage === 'delivered') {
+          await setStatus(db, orderId, 'shipped');
+          await setStatus(db, orderId, 'delivered');
+        }
         if (stage === 'cancelled')
           await call(
             db,

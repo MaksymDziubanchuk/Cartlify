@@ -77,6 +77,8 @@ describe('thresholdOf', () => {
   });
 
   it.each([
+    ['pickup_not_collected', 7, 'days'],
+    ['shipped_without_cost', 3, 'days'],
     ['expiring_batches', 7, 'days'],
     ['refunded_payments', 7, 'days'],
     ['worker_stalled', 180, 'seconds'],
@@ -85,12 +87,15 @@ describe('thresholdOf', () => {
     expect(thresholdOf(kind, null)).toMatchObject({ value, unit, custom: false });
   });
 
-  it.each(['paid_orders_waiting', 'out_of_stock', 'expired_batches', 'chats_waiting'] as const)(
-    'gives %s no threshold',
-    (kind) => {
-      expect(thresholdOf(kind, null)).toBeNull();
-    },
-  );
+  it.each([
+    'paid_orders_waiting',
+    'out_of_stock',
+    'products_without_shipping_data',
+    'expired_batches',
+    'chats_waiting',
+  ] as const)('gives %s no threshold', (kind) => {
+    expect(thresholdOf(kind, null)).toBeNull();
+  });
 });
 
 describe('assertThreshold', () => {
@@ -126,6 +131,12 @@ describe('alertWindowOf', () => {
   it('starts the time of a period the threshold back from now', () => {
     expect(alertWindowOf('shipped_orders_waiting', 14, NOW, '2026-10-25')).toEqual({
       before: new Date(NOW - 14 * DAY),
+    });
+    expect(alertWindowOf('pickup_not_collected', 7, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 7 * DAY),
+    });
+    expect(alertWindowOf('shipped_without_cost', 3, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 3 * DAY),
     });
     expect(alertWindowOf('refunded_payments', 7, NOW, '2026-10-25')).toEqual({
       since: new Date(NOW - 7 * DAY),
@@ -164,15 +175,48 @@ describe('alertListOf', () => {
     });
   });
 
-  it('sends to the shipped orders changed before the threshold, the oldest first', () => {
+  it('sends to the orders sent by hand and changed before the threshold, the oldest first', () => {
     expect(listOf('shipped_orders_waiting', 14)).toEqual({
       path: '/api/orders',
       query: {
         statuses: 'shipped',
+        deliveryMethod: 'manual',
         updatedTo: new Date(NOW - 14 * DAY).toISOString(),
         sortBy: 'updatedAt',
         sortDir: 'asc',
       },
+    });
+  });
+
+  it('sends to the pickups ready and changed before the threshold, the oldest first', () => {
+    expect(listOf('pickup_not_collected', 7)).toEqual({
+      path: '/api/orders',
+      query: {
+        statuses: 'shipped',
+        deliveryMethod: 'pickup',
+        updatedTo: new Date(NOW - 7 * DAY).toISOString(),
+        sortBy: 'updatedAt',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  it('sends to the orders with a send that lacks its cost, sent before the threshold', () => {
+    expect(listOf('shipped_without_cost', 3)).toEqual({
+      path: '/api/orders',
+      query: {
+        shippingCostMissing: 'true',
+        shippedTo: new Date(NOW - 3 * DAY).toISOString(),
+        sortBy: 'shippingCostMissingSince',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  it('sends to the products that lack the weight or the sizes, the most popular first', () => {
+    expect(listOf('products_without_shipping_data', null)).toEqual({
+      path: '/api/products',
+      query: { withoutShippingData: 'true', sort: 'popularity', order: 'desc' },
     });
   });
 

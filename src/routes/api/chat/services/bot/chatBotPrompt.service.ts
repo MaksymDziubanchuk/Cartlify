@@ -1,5 +1,6 @@
 import env from '@config/env.js';
 import type { AiMessageDto } from '@services/ai/ai.types.js';
+import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
 
 export type ChatBotActorRole = 'GUEST' | 'USER';
 
@@ -36,6 +37,17 @@ export interface ChatBotOrderContextItemDto {
     createdAt: string;
     paidAt: string | null;
     items: { name: string; quantity: number }[];
+    // the order had an event the bot does not talk about, a cancellation or a send taken back: it
+    // is for an admin
+    unusual: boolean;
+    // how it goes to the customer, without the address and the phone; none before the confirmation
+    delivery: { method: 'manual' | 'pickup'; price: number; country: string | null } | null;
+    // the send on its way, what the admin wrote of it
+    shipment: {
+        carrier: string | null;
+        trackingNumber: string | null;
+        trackingUrl: string | null;
+    } | null;
 }
 
 export interface BuildChatBotPromptDto {
@@ -51,6 +63,8 @@ export interface BuildChatBotPromptDto {
     currency: string;
     // how the payment providers the customer may pay with are named, e.g. ["Stripe"]
     paymentProviders: string[];
+    // the ways the shop delivers an order, as the list of the delivery methods gives them
+    delivery: DeliveryMethodInfoDto[];
 }
 
 export interface BuildChatBotPromptResultDto {
@@ -60,6 +74,13 @@ export interface BuildChatBotPromptResultDto {
 
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_PRODUCT_CONTEXT_ITEMS = 6;
+
+// what a status means to the customer of a pickup: the order waits at the shop, it is not on its way
+const PICKUP_STATUS_MEANINGS: Partial<Record<ChatBotOrderStatus, string>> = {
+    paid: 'paid, being prepared',
+    shipped: 'ready, waiting for the customer to collect it',
+    delivered: 'collected by the customer',
+};
 
 // what a status means to the customer, the words the model answers "where is my order" with
 const ORDER_STATUS_MEANINGS: Record<ChatBotOrderStatus, string> = {
@@ -106,6 +127,45 @@ const describePaymentPage = (paymentProviders: string[]): string =>
         ? `on a ${paymentProviders[0]} payment page the customer opens after confirming the order`
         : `on a payment page of ${paymentProviders.join(' or ')}, the one the customer picks after confirming the order`;
 
+// a list of words as a sentence: a, b or c
+const listWithOr = (words: string[]): string =>
+    words.length < 2
+        ? words.join('')
+        : `${words.slice(0, -1).join(', ')} or ${words.at(-1)}`;
+
+// the ways the shop delivers an order, the only facts of the delivery the model may name
+const describeDelivery = (
+    methods: DeliveryMethodInfoDto[],
+    currency: string,
+): string[] => {
+    if (methods.length === 0) return [];
+
+    const lines = methods.map((method) => {
+        if (method.method === 'pickup') {
+            const hours = method.hours ? ` (${method.hours})` : '';
+            return `- pickup: the customer collects the order at ${method.address ?? 'the shop'}${hours}; it costs nothing.`;
+        }
+
+        const price =
+            method.price > 0
+                ? `the delivery costs ${method.price} ${currency}${
+                      method.freeFrom !== null
+                          ? `, and nothing when the items cost ${method.freeFrom} ${currency} or more`
+                          : ''
+                  }.`
+                : 'the delivery costs nothing.';
+        return `- by hand: the shop sends the order to an address in ${listWithOr(method.countries)}; ${price}`;
+    });
+
+    return [
+        methods.length === 1
+            ? 'The shop delivers an order this way:'
+            : 'The shop delivers an order in these ways, the customer picks one when confirming the order:',
+        ...lines,
+        'Name no other delivery method, country, price, carrier or delivery time than these.',
+    ];
+};
+
 // builds the permanent behavior rules for the assistant of the shop (SHOP_NAME)
 const buildSystemInstructions = (
     actorRole: ChatBotActorRole,
@@ -113,6 +173,7 @@ const buildSystemInstructions = (
     orders: ChatBotOrderContextItemDto[],
     currency: string,
     paymentProviders: string[],
+    delivery: DeliveryMethodInfoDto[],
 ): string => {
     return [
         `You are ${env.SHOP_NAME} assistant, a support and shopping helper inside the ${env.SHOP_NAME} online shop.`,
@@ -131,6 +192,7 @@ const buildSystemInstructions = (
         'A product with a sale price sells at the sale price until the end of the sale; its price is the usual one, name it only next to the sale price.',
         'in stock is the number of units free to buy now; never promise more of a product than that.',
         `Payment is by card only, ${describePaymentPage(paymentProviders)}. There are no other payment methods: no PayPal, no cash, no bank transfer.`,
+        ...describeDelivery(delivery, currency),
         'If product context is missing or insufficient, say that you do not have enough product data and ask a focused follow-up question.',
         'Do not claim that you are an admin, human operator, manager, or specialist.',
         'If the customer clearly asks for an admin, operator, specialist, manager, or human support, acknowledge the request.',
@@ -243,13 +305,50 @@ const formatOrderContextItem = (
               .join(', ')
         : 'none';
 
+    // an order with an event the bot does not talk about is for an admin, nothing else is told
+    if (order.unusual) {
+        return `order ${order.id}: HUMAN ONLY, an admin handles this order`;
+    }
+
+    const meaning =
+        (order.delivery?.method === 'pickup' && PICKUP_STATUS_MEANINGS[order.status]) ||
+        ORDER_STATUS_MEANINGS[order.status];
+
     return [
-        `order ${order.id}: ${order.status} (${ORDER_STATUS_MEANINGS[order.status]})`,
+        `order ${order.id}: ${order.status} (${meaning})`,
         `total ${order.total} ${currency}`,
         `placed ${order.createdAt} (UTC)`,
         ...(order.paidAt ? [`paid ${order.paidAt} (UTC)`] : []),
+        ...(order.delivery ? [describeOrderDelivery(order.delivery, currency)] : []),
+        ...(order.shipment ? [describeShipment(order.shipment)] : []),
         `items: ${items}`,
     ].join('; ');
+};
+
+// how an order goes to the customer: the country and the price, not the address
+const describeOrderDelivery = (
+    delivery: NonNullable<ChatBotOrderContextItemDto['delivery']>,
+    currency: string,
+): string =>
+    delivery.method === 'pickup'
+        ? 'delivery: pickup at the shop'
+        : `delivery: by hand to ${delivery.country ?? 'the address given'} for ${delivery.price} ${currency}`;
+
+// what the admin wrote of the send: the carrier, the number, the link
+const describeShipment = (
+    shipment: NonNullable<ChatBotOrderContextItemDto['shipment']>,
+): string => {
+    const parts = [
+        ...(shipment.carrier ? [`carrier ${shipment.carrier}`] : []),
+        ...(shipment.trackingNumber
+            ? [`tracking number ${shipment.trackingNumber}`]
+            : []),
+        ...(shipment.trackingUrl
+            ? [`tracking link ${shipment.trackingUrl}`]
+            : []),
+    ];
+
+    return `send: ${parts.length ? parts.join(', ') : 'no carrier or tracking number was given'}`;
 };
 
 // builds the orders of the customer for the model, none without orders
@@ -267,6 +366,11 @@ const buildOrdersMessage = (
                 (order) => `- ${formatOrderContextItem(order, currency)}`,
             ),
             'Use only these orders when the customer asks about an order; never invent an order, a status or a date.',
+            ...(orders.some((order) => order.unusual)
+                ? [
+                      'An order marked HUMAN ONLY is for an admin: say nothing of its status, items, delivery or payment, tell the customer that an admin will look into it, and set escalate to true with the reason HUMAN_REQUIRED.',
+                  ]
+                : []),
         ].join('\n'),
     };
 };
@@ -303,6 +407,7 @@ export const buildChatBotPrompt = (
             dto.orders,
             currency,
             dto.paymentProviders,
+            dto.delivery,
         ),
         messages: [
             ...(productContextMessage ? [productContextMessage] : []),

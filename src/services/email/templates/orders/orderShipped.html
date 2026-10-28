@@ -41,6 +41,10 @@
                     <td align="center" style="padding:10px 8px;border-bottom:1px solid #ede9fe;">{{quantity}}</td>
                     <td align="right" style="padding:10px 0;border-bottom:1px solid #ede9fe;white-space:nowrap;">{{lineTotal}}</td>
                   </tr>{{/items}}
+                  {{#deliveryLine}}<tr>
+                    <td colspan="2" align="right" style="padding:10px 8px 0 0;">Delivery</td>
+                    <td align="right" style="padding:10px 0 0 0;white-space:nowrap;">{{deliveryLine}}</td>
+                  </tr>{{/deliveryLine}}
                   <tr>
                     <td colspan="2" align="right" style="padding:12px 8px 0 0;font-weight:800;">Total</td>
                     <td align="right" style="padding:12px 0 0 0;font-weight:800;white-space:nowrap;">{{total}}</td>
@@ -56,6 +60,20 @@
                   <span style="font-size:12px;color:#6b7280;">Recipient</span><br>
                   {{recipient}}
                 </div>{{/recipient}}
+
+                {{#carrier}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
+                  <span style="font-size:12px;color:#6b7280;">Carrier</span><br>
+                  {{carrier}}
+                </div>{{/carrier}}
+
+                {{#trackingNumber}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
+                  <span style="font-size:12px;color:#6b7280;">Tracking number</span><br>
+                  {{trackingNumber}}
+                </div>{{/trackingNumber}}
+
+                {{#trackingUrl}}<div style="font-size:14px;line-height:1.5;margin:12px 0 0 0;">
+                  <a href="{{trackingUrl}}" style="color:#6d28d9;font-weight:700;">Follow your parcel</a>
+                </div>{{/trackingUrl}}
 
                 <div style="padding:18px 0 18px 0;">
                   <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">

@@ -70,6 +70,16 @@ import {
   beginProductImageUpload,
 } from './services/uploadProductImages.service.js';
 
+// the fields of a product that tell its weight and its packed sizes, and the word that they come
+// later; a form gives them as text, the service checks them
+const SHIPPING_FORM_FIELDS = {
+  weightGrams: true,
+  lengthMm: true,
+  widthMm: true,
+  heightMm: true,
+  withoutShippingData: true,
+} as const;
+
 const getAllProducts: ControllerRouter<
   {},
   {},
@@ -92,7 +102,12 @@ const getAllProducts: ControllerRouter<
   const deleted = typeof q.deleted === 'boolean' ? q.deleted : undefined;
   const inStock = typeof q.inStock === 'boolean' ? q.inStock : undefined;
   const maxStock = typeof q.maxStock === 'number' ? q.maxStock : undefined;
+  const withoutShippingData =
+    typeof q.withoutShippingData === 'boolean' ? q.withoutShippingData : undefined;
   const onSale = typeof q.onSale === 'boolean' ? q.onSale : undefined;
+  // the period of the sort by sales, as dates; a text that is no date stays an invalid date
+  const salesFrom = typeof q.salesFrom === 'string' ? new Date(q.salesFrom) : undefined;
+  const salesTo = typeof q.salesTo === 'string' ? new Date(q.salesTo) : undefined;
   const popularityOverridden =
     typeof q.popularityOverridden === 'boolean' ? q.popularityOverridden : undefined;
 
@@ -127,6 +142,9 @@ const getAllProducts: ControllerRouter<
       deleted,
       inStock,
       maxStock,
+      withoutShippingData,
+      salesFrom,
+      salesTo,
       onSale,
       popularityOverridden,
     },
@@ -196,6 +214,8 @@ const postProduct: ControllerRouter<
   let priceRaw: string | undefined;
   let stockRaw: string | undefined;
   let categoryIdRaw: string | undefined;
+  // the weight, the sizes and the word that they come later, as text; the service checks them
+  const shippingFields: Partial<Record<keyof typeof SHIPPING_FORM_FIELDS, string>> = {};
   // the safety data as text fields: safety.manufacturer.name and so on
   const safetyFields = new Map<string, string>();
 
@@ -254,6 +274,10 @@ const postProduct: ControllerRouter<
       else if (part.fieldname === 'stock') stockRaw = v;
       else if (part.fieldname === 'categoryId') categoryIdRaw = v;
       else if (part.fieldname.startsWith('safety.')) safetyFields.set(part.fieldname, v);
+      // an empty input of a form is no value
+      else if (part.fieldname in SHIPPING_FORM_FIELDS && v !== '') {
+        shippingFields[part.fieldname as keyof typeof SHIPPING_FORM_FIELDS] = v;
+      }
     }
 
     // enforce required images
@@ -292,6 +316,11 @@ const postProduct: ControllerRouter<
         sku,
         safety: safetyFromFormFields(safetyFields),
         stock: stockRaw,
+        weightGrams: shippingFields.weightGrams,
+        lengthMm: shippingFields.lengthMm,
+        widthMm: shippingFields.widthMm,
+        heightMm: shippingFields.heightMm,
+        withoutShippingData: shippingFields.withoutShippingData,
       },
     );
 
@@ -350,6 +379,12 @@ const updateProductById: ControllerRouter<
   let stock: unknown;
   let categoryId: number | undefined;
 
+  // the weight and the sizes: numbers of a json body, text of a form; null clears them
+  const shippingFields: Pick<
+    UpdateProductDto,
+    'weightGrams' | 'lengthMm' | 'widthMm' | 'heightMm' | 'withoutShippingData'
+  > = {};
+
   let popularityOverride: number | null | undefined;
   let popularityOverrideUntil: string | null | undefined;
 
@@ -406,7 +441,9 @@ const updateProductById: ControllerRouter<
         else if (part.fieldname === 'price') price = t ? Number(t) : undefined;
         else if (part.fieldname === 'stock') stock = v;
         else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
-        else if (part.fieldname === 'popularityOverride') {
+        else if (part.fieldname in SHIPPING_FORM_FIELDS && v !== '') {
+          Object.assign(shippingFields, { [part.fieldname]: v });
+        } else if (part.fieldname === 'popularityOverride') {
           if (!t || t === 'null') popularityOverride = null;
           else popularityOverride = Number(t);
         } else if (part.fieldname === 'popularityOverrideUntil') {
@@ -435,6 +472,11 @@ const updateProductById: ControllerRouter<
       price = b.price;
       stock = b.stock;
       categoryId = b.categoryId;
+      for (const field of Object.keys(
+        SHIPPING_FORM_FIELDS,
+      ) as (keyof typeof SHIPPING_FORM_FIELDS)[]) {
+        if (b[field] !== undefined) Object.assign(shippingFields, { [field]: b[field] });
+      }
       popularityOverride = b.popularityOverride;
       popularityOverrideUntil = b.popularityOverrideUntil;
       sale = b.sale;
@@ -455,6 +497,11 @@ const updateProductById: ControllerRouter<
         popularityOverride,
         popularityOverrideUntil,
         sale,
+        weightGrams: shippingFields.weightGrams,
+        lengthMm: shippingFields.lengthMm,
+        widthMm: shippingFields.widthMm,
+        heightMm: shippingFields.heightMm,
+        withoutShippingData: shippingFields.withoutShippingData,
       },
     );
 

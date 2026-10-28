@@ -1,6 +1,7 @@
 import env from '@config/env.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
+import { deliveryMailParts } from '@helpers/deliveryText.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPaid.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -24,18 +25,32 @@ function loadOrder(orderId: number) {
   return prisma.$transaction(async (tx) => {
     await setAdminContext(tx);
 
+    // a query reads at most two relations side by side (the relations of one query run at once on
+    // the one connection of a transaction), so the buyer is read apart, one after
+    // the other
     const order = await tx.order.findUnique({
       where: { id: orderId },
       select: {
         id: true,
+        userId: true,
         total: true,
         paymentProvider: true,
-        shippingAddress: true,
-        recipientFirstName: true,
-        recipientLastName: true,
-        recipientPhone: true,
+        delivery: {
+          select: {
+            method: true,
+            price: true,
+            recipientFirstName: true,
+            recipientLastName: true,
+            recipientPhone: true,
+            country: true,
+            postalCode: true,
+            city: true,
+            street: true,
+            house: true,
+            apartment: true,
+          },
+        },
         paidAt: true,
-        user: { select: { email: true, name: true } },
         items: {
           orderBy: { id: 'asc' },
           select: {
@@ -50,6 +65,11 @@ function loadOrder(orderId: number) {
     });
     if (!order) return null;
 
+    const user = await tx.user.findUniqueOrThrow({
+      where: { id: order.userId },
+      select: { email: true, name: true },
+    });
+
     // the versions of the terms and of the contract the order was confirmed with, latest first:
     // an order confirmed again keeps the ones of its last confirmation. A query of its own, one
     // statement of a transaction runs at a time
@@ -59,7 +79,7 @@ function loadOrder(orderId: number) {
       select: { document: { select: { kind: true, content: true } } },
     });
 
-    return { ...order, acceptances };
+    return { ...order, user, acceptances };
   });
 }
 
@@ -108,9 +128,9 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       currency: currencyOf(order.paymentProvider),
       paidAt,
       ...(order.user.name ? { userName: order.user.name } : {}),
-      shippingAddress: order.shippingAddress,
-      recipientName: [order.recipientFirstName, order.recipientLastName].filter(Boolean).join(' '),
-      recipientPhone: order.recipientPhone,
+      ...deliveryMailParts(order.delivery),
+      // what the buyer pays for the delivery, none for a pickup
+      deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
       attachedDocuments: documents.map((doc) => doc.kind),
       logoCid: SHOP_LOGO_CID,
     });

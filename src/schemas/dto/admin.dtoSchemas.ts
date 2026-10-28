@@ -1,3 +1,9 @@
+import {
+  AUDIT_EVENTS,
+  CONSENT_EVENTS,
+  LOGIN_EVENTS,
+  PRICE_LOG_EVENTS,
+} from '@config/journalEvents.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
 const adminOrderStatusValues = [
@@ -102,7 +108,8 @@ const adminStatsOrdersRevenueSchema = {
   additionalProperties: false,
   description:
     'The totals of the orders paid and not cancelled (paid, shipped, delivered), by the time of ' +
-    'the payment.',
+    'the payment. In orders.revenue the delivery is part of the totals, orders.deliveryRevenue ' +
+    'is the delivery alone.',
   properties: {
     total: { ...nonNegativeNumberSchema, description: 'Of all time.' },
     inPeriod: { ...nonNegativeNumberSchema, description: 'Paid in the period.' },
@@ -125,6 +132,7 @@ const adminStatsOrdersSchema = {
 
     byStatus: { $ref: 'adminStatsOrdersByStatusSchema#' },
     revenue: { $ref: 'adminStatsOrdersRevenueSchema#' },
+    deliveryRevenue: { $ref: 'adminStatsOrdersRevenueSchema#' },
 
     averageOrderValue: {
       ...nonNegativeNumberSchema,
@@ -141,6 +149,7 @@ const adminStatsOrdersSchema = {
     'pendingCartsTotal',
     'byStatus',
     'revenue',
+    'deliveryRevenue',
     'averageOrderValue',
     'itemsSold',
   ],
@@ -223,6 +232,53 @@ const adminStatsReviewsSchema = {
   required: ['total', 'ratedTotal', 'newInPeriod', 'avgRating', 'negativeCount'],
 } as const;
 
+// the money of a period in three parts, the same in the statistics and in the reports of the
+// accounting; the delivery and the sends belong to no product, a report of some products or of a
+// category has none of them and its totals are of the items
+const nullableMoney = { type: ['number', 'null'] } as const;
+
+const moneySummarySchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The money of the period: what came in, what went out, what each income left. The orders ' +
+    'are the ones paid in the period and not cancelled; a cancel later takes the order out of ' +
+    'the period it was paid in.',
+  properties: {
+    income: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The items of the orders, their delivery, together.',
+      properties: { items: { type: 'number' }, delivery: nullableMoney, total: { type: 'number' } },
+      required: ['items', 'delivery', 'total'],
+    },
+    expenses: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'What the items sold cost (the batches they took), the units written off in the period, ' +
+        'the sends the shop owes the carriers for (by the time they were sent), together.',
+      properties: {
+        costOfGoods: { type: 'number' },
+        writeOffs: { type: 'number' },
+        shipping: nullableMoney,
+        total: { type: 'number' },
+      },
+      required: ['costOfGoods', 'writeOffs', 'shipping', 'total'],
+    },
+    margin: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The items less their cost, the delivery less the sends, all the income less all the ' +
+        'expenses (the write-offs too).',
+      properties: { items: { type: 'number' }, delivery: nullableMoney, total: { type: 'number' } },
+      required: ['items', 'delivery', 'total'],
+    },
+  },
+  required: ['income', 'expenses', 'margin'],
+} as const;
+
 const adminStatsResponseSchema = {
   $id: 'adminStatsResponseSchema',
   type: 'object',
@@ -233,9 +289,15 @@ const adminStatsResponseSchema = {
     orders: { $ref: 'adminStatsOrdersSchema#' },
     products: { $ref: 'adminStatsProductsSchema#' },
     reviews: { $ref: 'adminStatsReviewsSchema#' },
+    money: {
+      ...moneySummarySchema,
+      description:
+        'The money of the whole shop in the period, the same as summary of GET ' +
+        '/api/admin/reports/accounting for it.',
+    },
     createdAt: dateTimeSchema,
   },
-  required: ['period', 'users', 'orders', 'products', 'reviews', 'createdAt'],
+  required: ['period', 'users', 'orders', 'products', 'reviews', 'money', 'createdAt'],
 } as const;
 
 // GET /api/admin/reports/accounting
@@ -281,6 +343,55 @@ const adminUnitsValueSchema = {
   required: ['units', 'value'],
 } as const;
 
+// the delivery of the orders of a period, of no product: only a report of the whole shop has it
+const adminDeliveryMoneySchema = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  description:
+    'The delivery of all orders in the period, apart from the products. Null when the report ' +
+    'is of some products or of a category: the delivery belongs to no product.',
+  properties: {
+    income: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'What the orders paid in the period (by paidAt) and not cancelled paid for the delivery; ' +
+        'orders counts the ones that paid for it (a delivery that cost nothing is none).',
+      properties: { orders: nonNegativeIntegerSchema, revenue: { type: 'number' } },
+      required: ['orders', 'revenue'],
+    },
+    refunded: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'Told apart: the delivery of the paid orders cancelled in the period (by cancelledAt). ' +
+        'It went back with the payment, and the income of the period they were paid in has it ' +
+        'no more.',
+      properties: { orders: nonNegativeIntegerSchema, revenue: { type: 'number' } },
+      required: ['orders', 'revenue'],
+    },
+    shipping: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The sends the shop owes the carriers for, by the time they were sent (shippedAt): a ' +
+        'send taken back with its cost kept counts, one the carrier was not paid for does not. ' +
+        'withoutCost counts the sends of them whose cost is not written yet.',
+      properties: {
+        sends: nonNegativeIntegerSchema,
+        cost: { type: 'number', description: 'The costs written, to the cent.' },
+        withoutCost: nonNegativeIntegerSchema,
+      },
+      required: ['sends', 'cost', 'withoutCost'],
+    },
+    result: {
+      type: 'number',
+      description: 'The income less what the carriers cost: what the delivery earned.',
+    },
+  },
+  required: ['income', 'refunded', 'shipping', 'result'],
+} as const;
+
 const adminAccountingSalesSchema = {
   type: 'object',
   additionalProperties: false,
@@ -304,13 +415,15 @@ const adminAccountingResponseSchema = {
     sales: {
       ...adminAccountingSalesSchema,
       description:
-        'The orders paid in the period (by paidAt), the ones cancelled later among them.',
+        'The orders paid in the period (by paidAt) and not cancelled: an order cancelled later is ' +
+        'taken out of the period it was paid in.',
     },
     cancellations: {
       type: 'object',
       additionalProperties: false,
       description:
-        'The paid orders cancelled in the period (by cancelledAt): their money went back.',
+        'Told apart and in no margin: the paid orders cancelled in the period (by cancelledAt), ' +
+        'their money went back.',
       properties: {
         orders: nonNegativeIntegerSchema,
         units: nonNegativeIntegerSchema,
@@ -319,17 +432,7 @@ const adminAccountingResponseSchema = {
       },
       required: ['orders', 'units', 'revenue', 'cost'],
     },
-    net: {
-      type: 'object',
-      additionalProperties: false,
-      description: 'The sales less the cancellations.',
-      properties: {
-        revenue: { type: 'number' },
-        cost: { type: 'number' },
-        margin: { type: 'number' },
-      },
-      required: ['revenue', 'cost', 'margin'],
-    },
+    summary: moneySummarySchema,
     purchases: {
       type: 'object',
       additionalProperties: false,
@@ -384,16 +487,18 @@ const adminAccountingResponseSchema = {
       ...adminUnitsValueSchema,
       description: 'What the batches have left now, whatever the period.',
     },
+    delivery: adminDeliveryMoneySchema,
   },
   required: [
     'period',
     'currency',
     'sales',
     'cancellations',
-    'net',
+    'summary',
     'purchases',
     'writeOffs',
     'stock',
+    'delivery',
   ],
 } as const;
 
@@ -426,6 +531,7 @@ const reportSortByField = {
     'margin',
     'marginPercent',
     'units',
+    'marginAfterWriteOffs',
     'writeOffs',
     'purchases',
     'stockValue',
@@ -433,8 +539,9 @@ const reportSortByField = {
     'name',
   ],
   description:
-    'revenue (the default), margin, marginPercent and units are of the sales less the cancels; ' +
-    'writeOffs and purchases are their value; rows without a margin percent come last.',
+    'revenue (the default), margin, marginPercent and units are of the sales (paid and not ' +
+    'cancelled); marginAfterWriteOffs is the margin less the write-offs; writeOffs and ' +
+    'purchases are their value; rows without a margin percent come last.',
 } as const;
 
 const adminReportProductsQuerySchema = {
@@ -493,8 +600,19 @@ const adminReportTimelineQuerySchema = {
     },
     sortBy: {
       type: 'string',
-      enum: ['period', 'revenue', 'margin', 'units', 'writeOffs', 'purchases'],
-      description: 'period by default, the order of time.',
+      enum: [
+        'period',
+        'revenue',
+        'margin',
+        'units',
+        'marginAfterWriteOffs',
+        'marginTotal',
+        'writeOffs',
+        'purchases',
+      ],
+      description:
+        'period by default, the order of time; marginTotal is the total margin of the step ' +
+        '(summary.margin.total).',
     },
     sortOrder: { ...reportSortOrderField, description: 'asc by default.' },
   },
@@ -505,28 +623,9 @@ const moneyNumber = { type: 'number' } as const;
 const reportSalesSchema = {
   type: 'object',
   additionalProperties: false,
-  description: 'The items of the orders paid in the period, at their prices and their costs.',
-  properties: {
-    units: { type: 'integer' },
-    revenue: moneyNumber,
-    cost: moneyNumber,
-    margin: moneyNumber,
-  },
-  required: ['units', 'revenue', 'cost', 'margin'],
-} as const;
-
-const reportCancellationsSchema = {
-  type: 'object',
-  additionalProperties: false,
-  description: 'The items of the paid orders cancelled in the period.',
-  properties: { units: { type: 'integer' }, revenue: moneyNumber, cost: moneyNumber },
-  required: ['units', 'revenue', 'cost'],
-} as const;
-
-const reportNetSchema = {
-  type: 'object',
-  additionalProperties: false,
-  description: 'The sales less the cancellations; the percent of the margin is of the revenue.',
+  description:
+    'The items of the orders paid in the period and not cancelled, at their prices and their ' +
+    'costs; the percent of the margin is of the revenue.',
   properties: {
     units: { type: 'integer' },
     revenue: moneyNumber,
@@ -537,15 +636,42 @@ const reportNetSchema = {
   required: ['units', 'revenue', 'cost', 'margin', 'marginPercent'],
 } as const;
 
+const reportCancellationsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description: 'Told apart and in no margin: the items of the paid orders cancelled in the period.',
+  properties: { units: { type: 'integer' }, revenue: moneyNumber, cost: moneyNumber },
+  required: ['units', 'revenue', 'cost'],
+} as const;
+
+const reportAfterWriteOffsSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The margin of the sales less the write-offs of the period; the percent is of the revenue ' +
+    'of the sales.',
+  properties: {
+    margin: moneyNumber,
+    marginPercent: { type: ['number', 'null'], description: 'None without a revenue.' },
+  },
+  required: ['margin', 'marginPercent'],
+} as const;
+
 const reportMoneyProperties = {
   sales: reportSalesSchema,
   cancellations: reportCancellationsSchema,
-  net: reportNetSchema,
   writeOffs: { ...adminUnitsValueSchema, description: 'Written off in the period, at cost.' },
+  afterWriteOffs: reportAfterWriteOffsSchema,
   purchases: { ...adminUnitsValueSchema, description: 'Taken in during the period, at cost.' },
 } as const;
 
-const reportMoneyRequired = ['sales', 'cancellations', 'net', 'writeOffs', 'purchases'] as const;
+const reportMoneyRequired = [
+  'sales',
+  'cancellations',
+  'writeOffs',
+  'afterWriteOffs',
+  'purchases',
+] as const;
 
 const reportStockField = {
   ...adminUnitsValueSchema,
@@ -640,8 +766,10 @@ const adminReportTimelineResponseSchema = {
           },
           period: { $ref: 'adminStatsPeriodSchema#' },
           ...reportMoneyProperties,
+          delivery: adminDeliveryMoneySchema,
+          summary: moneySummarySchema,
         },
-        required: ['label', 'period', ...reportMoneyRequired],
+        required: ['label', 'period', ...reportMoneyRequired, 'delivery', 'summary'],
       },
     },
   },
@@ -935,6 +1063,112 @@ const adminStockMovementsResponseSchema = {
   required: ['currency', 'items', 'limit', 'nextCursor', 'total'],
 } as const;
 
+// the query every journal takes: a sort by one of its simple columns, a period, some events, some
+// columns, and the page; the filters of a journal come on top
+const journalQueryFields = (
+  sorts: readonly string[],
+  columns: readonly string[],
+  events: readonly string[],
+) =>
+  ({
+    sortBy: {
+      type: 'string',
+      enum: [...sorts],
+      description:
+        'The column the lines are sorted by, createdAt unless given. Lines without a value in ' +
+        'the column come last whichever way it goes, the id breaks ties.',
+    },
+    sortOrder: {
+      type: 'string',
+      enum: ['asc', 'desc'],
+      description: 'desc (the newest or the largest first) unless given.',
+    },
+    from: { ...dateTimeSchema, description: 'The start of the period, taken in.' },
+    to: { ...dateTimeSchema, description: 'The end of the period, left out.' },
+    events: {
+      type: 'string',
+      pattern: '^[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*(,[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*)*$',
+      description:
+        'Only the lines of these events, one or several through commas (LOG_EVENTS_INVALID for ' +
+        `one the journal has not): ${events.join(', ')}. The whole journal unless given.`,
+    },
+    columns: {
+      type: 'string',
+      pattern: '^[A-Za-z]+(,[A-Za-z]+)*$',
+      description:
+        'The columns of the answer and of the csv, one or several through commas ' +
+        `(LOG_COLUMNS_INVALID for one the journal has not): ${columns.join(', ')}. All unless given.`,
+    },
+    format: {
+      type: 'string',
+      enum: ['json', 'csv'],
+      description: 'csv gives every line of the filters as a file, without pages.',
+    },
+    ...stockPageQueryFields,
+  }) as const;
+
+// the account of a line; for an admin the data of root are hidden, the role stays
+const logAccountProperties = {
+  id: { type: ['integer', 'null'] },
+  name: { type: ['string', 'null'] },
+  email: { type: ['string', 'null'] },
+  role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'] },
+} as const;
+
+const logAccountSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The account; a deleted one keeps its lines, not its email. For an admin the account of root ' +
+    'has the id 0, its name and email are the word hidden; its role is there.',
+  properties: logAccountProperties,
+  required: ['id', 'name', 'email', 'role'],
+} as const;
+
+const logUserSchema = {
+  ...logAccountSchema,
+  properties: { ...logAccountProperties, deleted: { type: 'boolean' } },
+  required: ['id', 'name', 'email', 'role', 'deleted'],
+} as const;
+
+const logIpSchema = {
+  type: ['string', 'null'],
+  description:
+    'The address of the request, none for the work of the server alone; the word hidden for an ' +
+    'admin where it is root.',
+} as const;
+
+const logUserAgentSchema = {
+  type: ['string', 'null'],
+  description: 'The browser of the request; the word hidden for an admin where it is root.',
+} as const;
+
+const logEventSchema = (events: readonly string[], what: string) =>
+  ({ type: 'string', enum: [...events], description: what }) as const;
+
+// a page of a journal; the lines have the columns asked for
+const journalPageSchema = (id: string, properties: Record<string, unknown>, what: string) =>
+  ({
+    $id: id,
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          description: `${what} The columns asked for, all of them unless given (columns).`,
+          properties,
+        },
+      },
+      limit: { type: 'integer' },
+      total: { type: 'integer', description: 'The lines of the filters.' },
+      nextCursor: { type: ['string', 'null'] },
+    },
+    required: ['items', 'limit', 'total', 'nextCursor'],
+  }) as const;
+
 // the admin log: its filters and its lines
 const AUDIT_ACTIONS = [
   'USER_ROLE_CHANGE',
@@ -946,6 +1180,8 @@ const AUDIT_ACTIONS = [
   'STOCK_DELIVERY',
   'STOCK_WRITE_OFF',
   'ORDER_STATUS_CHANGE',
+  'ORDER_SHIPMENT_CHANGE',
+  'ORDER_DELIVERY_CHANGE',
   'CATEGORY_UPDATE',
   'REVIEW_DELETE',
   'OTHER',
@@ -953,12 +1189,42 @@ const AUDIT_ACTIONS = [
 const AUDIT_ENTITY_TYPES = ['product', 'user', 'category', 'order', 'review', 'other'] as const;
 const auditActionPattern = `(${AUDIT_ACTIONS.join('|')})`;
 
+const AUDIT_COLUMNS = [
+  'id',
+  'createdAt',
+  'actorId',
+  'actor',
+  'actorRole',
+  'action',
+  'event',
+  'entityType',
+  'entityId',
+  'ip',
+  'userAgent',
+  'changes',
+] as const;
+const AUDIT_SORTS = [
+  'id',
+  'createdAt',
+  'actorId',
+  'actorRole',
+  'action',
+  'event',
+  'entityType',
+  'entityId',
+  'ip',
+  'userAgent',
+] as const;
+
 const adminAuditLogQuerySchema = {
   $id: 'adminAuditLogQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    actorId: { ...positiveIntegerSchema, description: 'Only the lines of this account.' },
+    actorId: {
+      ...positiveIntegerSchema,
+      description: 'Only the lines of this account.',
+    },
     actorRole: {
       type: 'string',
       enum: ['USER', 'ADMIN', 'ROOT'],
@@ -982,92 +1248,295 @@ const adminAuditLogQuerySchema = {
         'Only the lines with a change of this field: refund names the refunds of late ' +
         'payments, price the changes of a price.',
     },
-    from: { ...dateTimeSchema, description: 'The start of the period, taken in.' },
-    to: { ...dateTimeSchema, description: 'The end of the period, left out.' },
-    format: {
-      type: 'string',
-      enum: ['json', 'csv'],
-      description: 'csv gives every line of the filters as a file, without pages.',
-    },
-    ...stockPageQueryFields,
+    ...journalQueryFields(AUDIT_SORTS, AUDIT_COLUMNS, AUDIT_EVENTS),
   },
 } as const;
 
-const adminAuditLogResponseSchema = {
-  $id: 'adminAuditLogResponseSchema',
+const adminAuditLogResponseSchema = journalPageSchema(
+  'adminAuditLogResponseSchema',
+  {
+    id: { type: 'integer' },
+    createdAt: dateTimeSchema,
+    actorId: {
+      type: ['integer', 'null'],
+      description: 'The id of the account that did it; 0 for an admin where it is root.',
+    },
+    actor: logAccountSchema,
+    actorRole: {
+      type: 'string',
+      enum: ['USER', 'ADMIN', 'ROOT'],
+      description: 'The role it had when it did it.',
+    },
+    action: { type: 'string', enum: AUDIT_ACTIONS },
+    event: logEventSchema(
+      AUDIT_EVENTS,
+      'What made the line, finer than the action: the route, or the condition it was written under.',
+    ),
+    entityType: { type: 'string', enum: AUDIT_ENTITY_TYPES },
+    entityId: {
+      type: ['integer', 'null'],
+      description: 'The thing; 0 for an admin where it is the account of root.',
+    },
+    ip: logIpSchema,
+    userAgent: logUserAgentSchema,
+    changes: {
+      type: 'array',
+      description:
+        'What changed: each field with its value before and after. For an admin, where the line ' +
+        'is about the account of root, the fields are named and their values hidden (a text is ' +
+        'the word hidden, a number 0).',
+      items: {
+        type: 'object',
+        properties: { field: { type: 'string' }, old: {}, new: {} },
+        required: ['field'],
+      },
+    },
+  },
+  'A line of the admin log.',
+);
+
+// the log of prices
+const PRICE_LOG_COLUMNS = [
+  'id',
+  'createdAt',
+  'productId',
+  'product',
+  'actorId',
+  'actor',
+  'event',
+  'oldPrice',
+  'newPrice',
+  'mode',
+  'value',
+  'endsAt',
+] as const;
+const PRICE_LOG_SORTS = [
+  'id',
+  'createdAt',
+  'productId',
+  'actorId',
+  'event',
+  'oldPrice',
+  'newPrice',
+  'mode',
+  'value',
+  'endsAt',
+] as const;
+
+const adminPriceLogQuerySchema = {
+  $id: 'adminPriceLogQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    items: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          id: { type: 'integer' },
-          actor: {
-            type: 'object',
-            additionalProperties: false,
-            description: 'The account that did it; a deleted one keeps its lines, not its email.',
-            properties: {
-              id: { type: 'integer' },
-              name: { type: ['string', 'null'] },
-              email: { type: ['string', 'null'] },
-              role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'] },
-            },
-            required: ['id', 'name', 'email', 'role'],
-          },
-          actorRole: {
-            type: 'string',
-            enum: ['USER', 'ADMIN', 'ROOT'],
-            description: 'The role it had when it did it.',
-          },
-          entityType: { type: 'string', enum: AUDIT_ENTITY_TYPES },
-          entityId: { type: ['integer', 'null'] },
-          action: { type: 'string', enum: AUDIT_ACTIONS },
-          changes: {
-            type: 'array',
-            description: 'What changed: each field with its value before and after.',
-            items: {
-              type: 'object',
-              properties: { field: { type: 'string' }, old: {}, new: {} },
-              required: ['field'],
-            },
-          },
-          ip: {
-            type: ['string', 'null'],
-            description: 'The address of the request, none for the work of the server alone.',
-          },
-          userAgent: { type: ['string', 'null'], description: 'The browser of the request.' },
-          createdAt: dateTimeSchema,
-        },
-        required: [
-          'id',
-          'actor',
-          'actorRole',
-          'entityType',
-          'entityId',
-          'action',
-          'changes',
-          'ip',
-          'userAgent',
-          'createdAt',
-        ],
-      },
+    productId: { ...positiveIntegerSchema, description: 'Only the changes of this product.' },
+    actorId: {
+      ...positiveIntegerSchema,
+      description: 'Only the changes of this account.',
     },
-    limit: { type: 'integer' },
-    total: { type: 'integer', description: 'The lines of the filters.' },
-    nextCursor: { type: ['string', 'null'] },
+    mode: {
+      type: 'string',
+      enum: ['fixed', 'percent'],
+      description: 'Only the changes given this way: by an amount of money or by a percent.',
+    },
+    ...journalQueryFields(PRICE_LOG_SORTS, PRICE_LOG_COLUMNS, PRICE_LOG_EVENTS),
   },
-  required: ['items', 'limit', 'total', 'nextCursor'],
+} as const;
+
+const adminPriceLogResponseSchema = journalPageSchema(
+  'adminPriceLogResponseSchema',
+  {
+    id: { type: 'integer' },
+    createdAt: dateTimeSchema,
+    productId: { type: 'integer' },
+    product: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { id: { type: 'integer' }, name: { type: 'string' } },
+      required: ['id', 'name'],
+    },
+    actorId: { type: ['integer', 'null'] },
+    actor: logAccountSchema,
+    event: logEventSchema(
+      PRICE_LOG_EVENTS,
+      'What made the line: a price of one product, of many, of a selection, the start of a sale, its end.',
+    ),
+    oldPrice: { type: 'number' },
+    newPrice: { type: 'number' },
+    mode: { type: 'string', enum: ['fixed', 'percent'], description: 'How the change was given.' },
+    value: {
+      type: 'number',
+      description: 'The size of the change in that mode, negative for a price that goes down.',
+    },
+    endsAt: {
+      anyOf: [dateTimeSchema, { type: 'null' }],
+      description: 'The end of the sale a line starts; a line with an end is the start of a sale.',
+    },
+  },
+  'A line of the log of prices.',
+);
+
+// the log of logins
+const LOGIN_LOG_COLUMNS = [
+  'id',
+  'createdAt',
+  'userId',
+  'user',
+  'email',
+  'role',
+  'ipAddress',
+  'userAgent',
+  'event',
+] as const;
+const LOGIN_LOG_SORTS = [
+  'id',
+  'createdAt',
+  'userId',
+  'email',
+  'role',
+  'ipAddress',
+  'userAgent',
+  'event',
+] as const;
+
+const adminLoginLogQuerySchema = {
+  $id: 'adminLoginLogQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    userId: {
+      ...positiveIntegerSchema,
+      description: 'Only the logins of this account.',
+    },
+    roles: {
+      type: 'string',
+      pattern: '^(USER|ADMIN|ROOT)(,(USER|ADMIN|ROOT))*$',
+      description: 'Only the logins of accounts with these roles, through commas.',
+    },
+    email: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description: 'A part of the email of the login, whatever the case.',
+    },
+    ...journalQueryFields(LOGIN_LOG_SORTS, LOGIN_LOG_COLUMNS, LOGIN_EVENTS),
+  },
+} as const;
+
+const adminLoginLogResponseSchema = journalPageSchema(
+  'adminLoginLogResponseSchema',
+  {
+    id: { type: 'integer' },
+    createdAt: dateTimeSchema,
+    userId: { type: ['integer', 'null'] },
+    user: logUserSchema,
+    email: {
+      type: ['string', 'null'],
+      description:
+        'The email the person came in with; the word hidden for an admin where it is root.',
+    },
+    role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'], description: 'The role it had then.' },
+    ipAddress: logIpSchema,
+    userAgent: logUserAgentSchema,
+    event: logEventSchema(LOGIN_EVENTS, 'How the person came in: a password or a provider.'),
+  },
+  'A login.',
+);
+
+// the log of consents
+const CONSENT_LOG_COLUMNS = [
+  'id',
+  'createdAt',
+  'userId',
+  'user',
+  'documentId',
+  'document',
+  'orderId',
+  'ip',
+  'userAgent',
+  'event',
+] as const;
+const CONSENT_LOG_SORTS = [
+  'id',
+  'createdAt',
+  'userId',
+  'documentId',
+  'orderId',
+  'ip',
+  'userAgent',
+  'event',
+] as const;
+
+const adminConsentLogQuerySchema = {
+  $id: 'adminConsentLogQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    userId: { ...positiveIntegerSchema, description: 'Only the consents of this account.' },
+    documentId: { ...positiveIntegerSchema, description: 'Only the consents to this version.' },
+    orderId: { ...positiveIntegerSchema, description: 'Only the consents of this order.' },
+    kind: {
+      type: 'string',
+      enum: ['terms', 'contract'],
+      description: 'Only the consents to the versions of the terms or of the contract.',
+    },
+    ...journalQueryFields(CONSENT_LOG_SORTS, CONSENT_LOG_COLUMNS, CONSENT_EVENTS),
+  },
+} as const;
+
+const adminConsentLogResponseSchema = journalPageSchema(
+  'adminConsentLogResponseSchema',
+  {
+    id: { type: 'integer' },
+    createdAt: dateTimeSchema,
+    userId: { type: ['integer', 'null'] },
+    user: logUserSchema,
+    documentId: { type: 'integer' },
+    document: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The version the person agreed to.',
+      properties: {
+        kind: { type: 'string', enum: ['terms', 'contract'] },
+        version: { type: 'integer' },
+        title: { type: 'string' },
+      },
+      required: ['kind', 'version', 'title'],
+    },
+    orderId: {
+      type: ['integer', 'null'],
+      description:
+        'The order the versions were confirmed with; none for the agreement of a person.',
+    },
+    ip: logIpSchema,
+    userAgent: logUserAgentSchema,
+    event: logEventSchema(CONSENT_EVENTS, 'Where the person agreed.'),
+  },
+  'A consent.',
+);
+
+// the events every journal writes, for the checkboxes of a page
+const adminLogEventsResponseSchema = {
+  $id: 'adminLogEventsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    auditLog: { type: 'array', items: { type: 'string', enum: [...AUDIT_EVENTS] } },
+    priceLog: { type: 'array', items: { type: 'string', enum: [...PRICE_LOG_EVENTS] } },
+    loginLog: { type: 'array', items: { type: 'string', enum: [...LOGIN_EVENTS] } },
+    consentLog: { type: 'array', items: { type: 'string', enum: [...CONSENT_EVENTS] } },
+  },
+  required: ['auditLog', 'priceLog', 'loginLog', 'consentLog'],
 } as const;
 
 // the alerts of an admin
 const ALERT_KINDS = [
   'paid_orders_waiting',
   'shipped_orders_waiting',
+  'pickup_not_collected',
+  'shipped_without_cost',
   'out_of_stock',
   'low_stock',
+  'products_without_shipping_data',
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
@@ -1302,6 +1771,13 @@ export const adminDtoSchemas = [
   adminStockMovementsResponseSchema,
   adminAuditLogQuerySchema,
   adminAuditLogResponseSchema,
+  adminPriceLogQuerySchema,
+  adminPriceLogResponseSchema,
+  adminLoginLogQuerySchema,
+  adminLoginLogResponseSchema,
+  adminConsentLogQuerySchema,
+  adminConsentLogResponseSchema,
+  adminLogEventsResponseSchema,
   adminAlertsQuerySchema,
   adminAlertsResponseSchema,
   adminAlertSubscriptionSchema,

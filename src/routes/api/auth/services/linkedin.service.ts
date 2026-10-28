@@ -137,6 +137,7 @@ export async function linkedInCallback({
         userId: u.id as any,
         email,
         role: u.role as any,
+        event: 'login.linkedin',
         ip: ip ?? null,
         userAgent: userAgent ?? null,
       });

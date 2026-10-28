@@ -1,16 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { jest } from '@jest/globals';
 
-import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 
 import { accessCookie } from './actors.js';
 import { withCsrf, type Csrf } from './csrf.js';
-import { asAdmin } from './db.js';
+import { asAdmin, testTx } from './db.js';
 import type { TestProduct, TestUser } from './factories.js';
-import { placeOrder, shippingData } from './orders.js';
+import { placeOrder } from './orders.js';
 import { payByCard, payCheckoutSession, rememberSession, stripeEvent } from './stripe.js';
 
 export const CHECKOUT_URL = '/api/payments/checkout/sessions';
@@ -57,9 +56,22 @@ export async function placePaidOrder(
   csrf: Csrf,
   user: TestUser,
   product: TestProduct,
-  opts: { quantity?: number; stage?: 'paid' | 'shipped' } = {},
+  opts: {
+    quantity?: number;
+    stage?: 'paid' | 'shipped';
+    // where the order goes, when a test needs it other than the usual one
+    delivery?: Record<string, unknown>;
+  } = {},
 ): Promise<{ orderId: number; paymentId: string }> {
-  const orderId = await placeOrder(app, csrf, user, product, 'waiting', opts.quantity ?? 1);
+  const orderId = await placeOrder(
+    app,
+    csrf,
+    user,
+    product,
+    'waiting',
+    opts.quantity ?? 1,
+    ...(opts.delivery ? [opts.delivery] : []),
+  );
 
   const { total } = await asAdmin((tx) =>
     tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { total: true } }),
@@ -87,6 +99,19 @@ export async function payPage(sessionId: string) {
   return { paymentId, event };
 }
 
+// where the order goes, written the way the confirmation writes it
+const deliveryRow = {
+  method: 'manual' as const,
+  recipientFirstName: 'Anna',
+  recipientLastName: 'Koval',
+  recipientPhone: '+380501234567',
+  country: 'UA',
+  postalCode: '01001',
+  city: 'Kyiv',
+  street: 'Test street',
+  house: '1',
+};
+
 // an order waiting for its payment, confirmed by the database function itself, past the checks of
 // the confirm route: an order confirmed before a rule of the route was there (a total below the
 // smallest payment), or with a reservation of a second that is over when this returns
@@ -97,9 +122,13 @@ export async function confirmInDatabase(
 ) {
   const reserveFor = opts.endedReservation ? '1 second' : '15 minutes';
 
-  await prisma.$transaction(async (tx) => {
+  await testTx(async (tx) => {
     await setUserContext(tx, { userId: user.id, role: 'USER' });
-    await tx.order.update({ where: { id: orderId }, data: shippingData });
+    await tx.orderDelivery.upsert({
+      where: { orderId },
+      create: { orderId, ...deliveryRow },
+      update: deliveryRow,
+    });
     await tx.$executeRaw`select cartlify.confirm_order(${orderId}::int, ${reserveFor}::interval)`;
   });
   if (opts.endedReservation) await new Promise((resolve) => setTimeout(resolve, 1_100));
@@ -107,7 +136,7 @@ export async function confirmInDatabase(
 
 // only the owner deletes an order that is not confirmed, its items go with it
 export const deleteOrderAsOwner = (user: TestUser, orderId: number) =>
-  prisma.$transaction(async (tx) => {
+  testTx(async (tx) => {
     await setUserContext(tx, { userId: user.id, role: 'USER' });
     await tx.order.deleteMany({ where: { id: orderId } });
   });

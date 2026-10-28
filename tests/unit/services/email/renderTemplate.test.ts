@@ -119,6 +119,14 @@ describe('renderTemplate', () => {
     items: [{ name: 'Lamp', quantity: '2', unitPrice: '€1.00', lineTotal: '€2.00' }],
     total: '€2.00',
     shippingAddress: 'Main st 1',
+    pickup: 'Main street 1, Mon-Fri 10:00-18:00',
+    deliveryLine: '€4.99',
+    carrier: 'DHL',
+    trackingNumber: 'JD0146',
+    trackingUrl: 'https://track.example.com/JD0146',
+    // how the mail of a delivered order says the order came to the buyer
+    statement: 'is delivered',
+    heading: 'Order delivered',
     recipient: 'Anna Koval, +380501234567',
     // the files of the terms and of the contract a paid order carries
     attachedLine: 'The terms and the contract you accepted are attached to this mail.',

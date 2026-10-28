@@ -1,6 +1,5 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
-import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
 import cloudinary from '@config/cloudinary.js';
@@ -8,7 +7,7 @@ import cloudinary from '@config/cloudinary.js';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { asAdmin } from '../../../helpers/db.js';
+import { asAdmin, testTx } from '../../../helpers/db.js';
 import { closeSessions, createUser, uniqueTag, type TestUser } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { refuseMail, watchMail } from '../../../helpers/mail.js';
@@ -49,7 +48,7 @@ async function userWithAvatar(opts: Parameters<typeof createUser>[0] = {}) {
 
 // the account puts a new avatar back, the way root writes a row
 const giveAvatarAgain = (id: number) =>
-  prisma.$transaction(async (tx) => {
+  testTx(async (tx) => {
     await setUserContext(tx, { userId: root.id, role: 'ROOT' });
     await tx.user.update({ where: { id }, data: avatarFile(uniqueTag()) });
   });

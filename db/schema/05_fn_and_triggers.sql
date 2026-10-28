@@ -1,17 +1,23 @@
 BEGIN;
 
--- on a live database a busy table makes the script wait for its lock, and every request of the
--- app waits behind the script: 5 s, then the script stops and is run again (db-run-sql.yml)
+-- A busy table makes the script wait for its lock, and every request of the app waits behind
+-- the script. After 5 s the script stops and is run again (db-run-sql.yml).
 SET LOCAL lock_timeout = '5s';
 
--- everything below is created and owned by cartlify_owner, whoever runs the script
+-- Everything below is created and owned by cartlify_owner, whoever runs the script.
 SET LOCAL ROLE cartlify_owner;
 
 ------------------------------------------------------------
 -- CONTEXT HELPERS
 ------------------------------------------------------------
--- CONTEXT HELPERS === user actions ===
--- CONTEXT HELPERS set current actor context for rls checks
+
+-- The actor context lives in three settings that last until the end of the transaction
+-- (cartlify.role, cartlify.user_id, cartlify.guest_id). The server sets them first in every
+-- transaction (src/db/dbContext.service.ts); the policies and the system functions only read
+-- them, through the helpers below.
+
+-- Sets the actor of the transaction. A GUEST context carries a guest id, any other role carries
+-- a user id. An ADMIN context without a user id is "the system" (see is_system).
 CREATE OR REPLACE FUNCTION cartlify.set_current_context (
   p_role cartlify."Role",
   p_user_id integer DEFAULT NULL,
@@ -31,8 +37,7 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS === system functions === 
--- CONTEXT HELPERS read current actor id from session context
+-- Returns the user id of the context, or NULL for a guest, the system or no context.
 CREATE OR REPLACE FUNCTION cartlify.current_actor_id () RETURNS integer LANGUAGE plpgsql STABLE AS $$
 DECLARE
   uid_text text;
@@ -51,7 +56,7 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS read current guest id from session context
+-- Returns the guest id of the context, or NULL when it is empty or not a uuid.
 CREATE OR REPLACE FUNCTION cartlify.current_guest_id () RETURNS uuid LANGUAGE plpgsql STABLE AS $$
 DECLARE gid_text text;
 BEGIN
@@ -63,7 +68,7 @@ EXCEPTION WHEN invalid_text_representation THEN
 END;
 $$;
 
--- CONTEXT HELPERS read current actor role from session context
+-- Returns the role of the context, or NULL when there is none or it is not a known role.
 CREATE OR REPLACE FUNCTION cartlify.current_actor_role () RETURNS cartlify."Role" LANGUAGE plpgsql STABLE AS $$
 DECLARE
   role_text text;
@@ -82,7 +87,7 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS check whether current actor is admin or root
+-- True for ADMIN and ROOT, the system included; false without a context.
 CREATE OR REPLACE FUNCTION cartlify.is_admin () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
   a_role cartlify."Role";
@@ -97,7 +102,7 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS check whether current actor is root
+-- True for ROOT only.
 CREATE OR REPLACE FUNCTION cartlify.is_root () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
   a_role cartlify."Role";
@@ -112,9 +117,9 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS check whether the server acts as the system: the admin role without a user id,
--- the way setAdminContext sets it (the payment webhook, the reservation worker, the password
--- reset); a signed-in admin always comes with an id
+-- True when the server acts as the system: the ADMIN role without a user id, as setAdminContext
+-- sets it (the payment webhook, the reservation worker, the password reset, periodic jobs). A
+-- signed-in admin always has an id.
 CREATE OR REPLACE FUNCTION cartlify.is_system () RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 BEGIN
   RETURN cartlify.current_actor_role() IS NOT DISTINCT FROM 'ADMIN'
@@ -122,7 +127,7 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS check whether current actor owns the target row
+-- True when the signed-in actor has this user id.
 CREATE OR REPLACE FUNCTION cartlify.is_owner (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 DECLARE
   a_id integer;
@@ -137,7 +142,7 @@ BEGIN
 END;
 $$;
 
--- CONTEXT HELPERS check whether current actor owns the target row or has admin access
+-- True for an admin or root, and for the owner of the row.
 CREATE OR REPLACE FUNCTION cartlify.is_owner_or_admin (p_user_id integer) RETURNS boolean LANGUAGE plpgsql STABLE AS $$
 BEGIN
   RETURN cartlify.is_admin() OR cartlify.is_owner(p_user_id);
@@ -147,10 +152,10 @@ $$;
 ------------------------------------------------------------
 -- AUTH AND USERS
 ------------------------------------------------------------
--- AUTH AND USERS === user actions ===
--- AUTH AND USERS fetch user credentials by email for login flow
--- system function: runs as the owner, a guest cannot read users;
--- callable only by a guest, a login always starts from the guest context
+
+-- Reads the login data of an account by email (trimmed, lower case); no row when there is no
+-- such account. System function: runs as the owner, a guest cannot read users. Only a guest may
+-- call it, a login always starts from the guest context (LOGIN_LOOKUP_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.auth_get_user_for_login (p_email text) RETURNS TABLE (
   id int,
   password_hash text,
@@ -175,13 +180,12 @@ BEGIN
 END;
 $$;
 
--- AUTH AND USERS fetch the profile of a user by user id
--- system function: runs as the owner, rls shows a user only their own row;
--- callable only by a signed-in user, admin or root, never by a guest.
--- A user gets the name, the avatar and the dates, the other fields are null, the own email too
--- (a user reads it in /users/me). An admin or root gets the whole profile. The password hash, the
--- provider id and the id of the avatar file are no field of it. A deleted account is no row for
--- anybody but an admin or root
+-- Reads the profile of an account by id. System function: runs as the owner, RLS shows a user
+-- only their own row. Callable by a signed-in user, admin or root, never by a guest
+-- (USER_PROFILE_READ_FORBIDDEN). A user gets the name, the avatar and the dates, the other
+-- fields are null (the own email too, a user reads it from /users/me). An admin or root gets the
+-- whole profile and also sees a deleted account; for everybody else it is no row. The password
+-- hash, the provider id and the id of the avatar file are not in the result.
 CREATE OR REPLACE FUNCTION cartlify.users_get_public_profile (p_user_id int) RETURNS TABLE (
   id int,
   created_at timestamptz,
@@ -236,13 +240,15 @@ BEGIN
 END;
 $$;
 
--- AUTH AND USERS take the avatar of another account away (moderation)
--- system function: runs as the owner, db/03 lets only root change the row of another account;
--- callable by a signed-in admin or root, with an id, never by the system. An admin takes the
--- avatar of a USER account only, root of any account; the own avatar goes through PATCH
--- /api/users/me. Only the avatar fields of the row change. The result says whether it took an
--- avatar, read under the lock of the row, with the id of its file (the server deletes it after
--- the commit) and its address; removed false when the account had none
+-- Takes the avatar of another account away (moderation). System function: runs as the owner,
+-- because only root may change the row of another account by plain SQL; the policy for the
+-- owner role lets this function update the row, and trg_users_update_columns limits the change to
+-- the avatar fields and the time of the change, nothing else. Callable by a signed-in admin or root with an id, never by the system
+-- (USER_AVATAR_REMOVE_FORBIDDEN, also when an admin aims at an account that is not a USER).
+-- An admin takes the avatar of a USER account only, root of any account; the own avatar goes
+-- through PATCH /api/users/me. The result says whether an avatar was taken, read under the lock
+-- of the row: the id of its file (the server deletes the file after the commit) and its address.
+-- removed is false when the account had none.
 CREATE OR REPLACE FUNCTION cartlify.remove_user_avatar (p_user_id integer) RETURNS TABLE (
   removed boolean,
   public_id text,
@@ -295,12 +301,13 @@ $$;
 ------------------------------------------------------------
 -- AUTH AND USER TOKENS
 ------------------------------------------------------------
--- AUTH AND USER TOKENS === system functions === 
--- AUTH AND USER TOKENS issue a new email verification link
--- system function: runs as the owner, a guest cannot read users or write tokens;
--- callable only by a guest, a user asks for a new link before the first login.
--- p_token is the hash of the new link, the database never keeps the link itself, so an earlier
--- link cannot be mailed again: every call closes the open links and stores the new one
+
+-- Issues a new email verification link for an unverified account and closes the open ones, so
+-- only the newest link works. p_token is the hash of the link: the database never keeps the
+-- link itself, so an earlier link cannot be mailed again. No row comes back when the email is
+-- unknown, the account is verified, or an input is empty or already expired. System function:
+-- runs as the owner, a guest cannot read users or write tokens. Callable only by a guest, a
+-- user asks for a new link before the first login (VERIFY_RESEND_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.auth_resend_verify (
   p_email text,
   p_token text,
@@ -317,7 +324,7 @@ BEGIN
     RAISE EXCEPTION 'VERIFY_RESEND_FORBIDDEN';
   END IF;
 
-  -- normalize + validate inputs
+  -- clean the inputs; an input that cannot work returns no row
   p_email := lower(btrim(p_email));
   p_token := btrim(p_token);
 
@@ -325,7 +332,6 @@ BEGIN
   IF p_token IS NULL OR p_token = '' THEN RETURN; END IF;
   IF p_expires_at IS NULL OR p_expires_at <= now() THEN RETURN; END IF;
 
-  -- find user
   SELECT u.id, u."isVerified"
     INTO v_user_id, v_is_verified
   FROM cartlify.users u
@@ -353,10 +359,11 @@ BEGIN
 END;
 $$;
 
--- AUTH AND USER TOKENS consume email verification token and mark user as verified
--- system function: runs as the owner, a guest cannot read tokens or verify a user;
--- callable only by a guest, the link from the email is opened before the first login;
--- p_token is the hash of the link, the same value the registration and the resend store
+-- Consumes an email verification link and marks the account verified. Returns true when the
+-- link was open and not expired, false for an empty, unknown, used or expired one. p_token is
+-- the hash of the link, the same value the registration and the resend store. System function:
+-- runs as the owner, a guest cannot read tokens or verify a user. Callable only by a guest, the
+-- link is opened before the first login (VERIFY_EMAIL_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.auth_verify_email (p_token text) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -410,10 +417,9 @@ BEGIN
 END;
 $$;
 
--- AUTH AND USERS === triggers ===
--- AUTH AND USERS keep the email in small letters without spaces around: the login and the
--- password reset look an account up in that form, and the unique email then holds one account
--- per address. An email that stays as it is is not touched, older rows keep theirs
+-- Keeps the email in lower case without spaces around it: the login and the password reset
+-- look an account up in that form, and the unique email then holds one account per address. An
+-- email that does not change is not touched, so older rows keep theirs.
 CREATE OR REPLACE FUNCTION cartlify.users_before_write_email () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'INSERT' OR NEW.email IS DISTINCT FROM OLD.email THEN
@@ -433,12 +439,13 @@ EXECUTE FUNCTION cartlify.users_before_write_email ();
 ------------------------------------------------------------
 -- CATEGORIES
 ------------------------------------------------------------
--- CATEGORIES === triggers ===
--- CATEGORIES the tree goes one way, from the top down: a category never goes inside its own
--- branch (under itself or under one of its subcategories), that would make a loop with no top.
--- The changes of the tree wait for each other (a lock for the transaction), so two moves at the
--- same time cannot make a loop that neither of them makes alone. The walk up stops at a row it
--- has seen, so a loop written before this rule cannot hold it forever
+
+-- Blocks a loop in the tree of categories (CATEGORY_PARENT_CYCLE). The tree goes one way, from
+-- the top down: a category never goes inside its own branch (under itself or under one of its
+-- subcategories), that would make a loop with no top. Changes of the tree wait for each other
+-- (an advisory lock for the transaction), so two moves at the same time cannot make a loop
+-- that neither of them makes alone. The walk up stops at a row it has seen, so a loop that
+-- already exists cannot hold it forever.
 CREATE OR REPLACE FUNCTION cartlify.categories_before_parent_change () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."parentId" IS NULL THEN
@@ -482,12 +489,13 @@ EXECUTE FUNCTION cartlify.categories_before_parent_change ();
 ------------------------------------------------------------
 -- PRODUCTS
 ------------------------------------------------------------
--- PRODUCTS === prices ===
--- PRODUCTS the price a product sells at now: the sale price while the sale is ahead of its end,
--- the price otherwise. A sale that is over keeps its fields until the next sale writes over them
--- or the price goes down to them (products_before_price_change), it is no price any more. The
--- order items, the reservation check of a confirm and the catalog (sort, filter) take this price.
--- Prisma keeps dates as utc in columns without a time zone, so the end is compared in utc
+
+-- Gives the price a product sells at now: the sale price while the end of the sale is ahead,
+-- the price otherwise. A sale that is over keeps its fields until the next sale writes over
+-- them or the price goes down to them (products_before_price_change), but it is no price any
+-- more. The order items, the price check of confirm_order and the catalog (sort, filters) take
+-- this price. Prisma keeps dates as utc in columns without a time zone, so the end is compared
+-- in utc.
 CREATE OR REPLACE FUNCTION cartlify.product_current_price (
   p_price numeric,
   p_sale_price numeric,
@@ -499,9 +507,8 @@ CREATE OR REPLACE FUNCTION cartlify.product_current_price (
   END
 $$;
 
--- PRODUCTS === system functions ===
--- PRODUCTS recalc product rating from reviews
--- internal: only the reviews rating trigger calls it, the app has no execute right (db/01)
+-- Recalculates the average rating and the number of reviews with a comment of a product.
+-- Internal: only the trigger of the reviews calls it, the app has no execute right (db/01).
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_rating (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -525,14 +532,16 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS the stock of a product is what its batches have left; every step that changes one
--- changes the other in the same transaction: a batch taken in, a sale, a write-off, a cancel.
--- Only the functions below change them, the batches and the stock are closed for plain changes
--- (db/03). Costs go into the admin log as the app writes them (trim_scale, 1.50 is 1.5)
+-- Stock and batches. The stock of a product is what its batches have left; every step that
+-- changes one changes the other in the same transaction: a batch taken in, a sale, a write-off,
+-- a cancel. Only the functions below change them, the batches and the stock are closed for plain
+-- changes (db/03). Costs go into the admin log as text without a trailing zero (trim_scale:
+-- 1.50 becomes 1.5).
 
--- PRODUCTS the day of the shop: the server sets it with the context of every transaction
--- (cartlify.shop_today, yyyy-mm-dd, by the time zone of the shop); without it the day of utc.
--- It says which batches are over, it is no right of anybody: the policies never read it
+-- Gives the day of the shop: the server sets it with the context of every transaction
+-- (cartlify.shop_today, yyyy-mm-dd, by the time zone of the shop), without it the day is the
+-- utc day. It tells which batches are over; it gives no right to anybody, the policies never
+-- read it.
 CREATE OR REPLACE FUNCTION cartlify.shop_today () RETURNS date LANGUAGE sql STABLE
 SET
   search_path = cartlify,
@@ -543,8 +552,9 @@ SET
   );
 $$;
 
--- PRODUCTS the units of a product in batches whose last good day is over: they are not sold, so
--- they are no free units; an admin writes them off. Runs as the owner: a buyer sees no batch
+-- Counts the units of a product that sit in batches whose last good day is over. They are not
+-- sold, so they are no free units; an admin writes them off. Runs as the owner: a buyer sees
+-- no batch.
 CREATE OR REPLACE FUNCTION cartlify.product_expired_units (p_product_id integer) RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -556,12 +566,29 @@ SET
     AND b."expiresAt" < cartlify.shop_today();
 $$;
 
--- PRODUCTS take units out of the batches of a product: the batch that ends first, then the ones
--- without an end, the oldest first; returns what each batch gave and its cost of a unit. A sale
--- skips the batches that are over (p_skip_expired), a write-off takes them first
--- internal step: runs with caller rights, only the system functions reach the batches (db/03);
--- the app has no execute right (db/01). The caller holds the lock of the product row
+-- Counts the units of every product sold in a period: the orders paid in [p_from, p_to) that were
+-- not cancelled. It holds no data of a person, only a product and a number. Runs as the owner: a
+-- buyer reads no order but the own ones, and the catalog sorts its products by it.
+CREATE OR REPLACE FUNCTION cartlify.units_sold_in_period (p_from timestamp, p_to timestamp) RETURNS TABLE (product_id integer, units bigint) LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT i."productId", SUM(i.quantity)::bigint
+  FROM cartlify.order_items AS i
+  JOIN cartlify.orders AS o ON o.id = i."orderId"
+  WHERE o."paidAt" >= p_from
+    AND o."paidAt" < p_to
+    AND o.status IN ('paid', 'shipped', 'delivered')
+  GROUP BY i."productId";
+$$;
 
+-- Takes units out of the batches of a product: first the batch that ends first, then the ones
+-- without an end, the oldest first. Returns what each batch gave and its cost of a unit. A sale
+-- skips the batches that are over (p_skip_expired), a write-off takes them first. Raises
+-- STOCK_QTY_INVALID for a quantity below 1 and PRODUCT_BATCHES_SHORT when the batches hold
+-- less than asked. Internal step: runs with the caller rights, only the system functions
+-- reach the batches (db/03); the app has no execute right (db/01). The caller holds the lock of
+-- the product row.
 CREATE OR REPLACE FUNCTION cartlify.take_from_batches (
   p_product_id integer,
   p_qty integer,
@@ -617,9 +644,10 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS put the units of a cancelled paid order back into the batches they came from
--- internal step: runs with caller rights; cancel_paid_order calls it as the owner. The lines of
--- the allocations stay: the reports take the cost back from the time of the cancel
+-- Puts the units of a cancelled paid order back into the batches they came from. Raises
+-- ORDER_ALLOCATIONS_MISSING when the allocations do not cover the items. Internal step: runs
+-- with the caller rights; cancel_paid_order calls it as the owner. The lines of the allocations
+-- stay: the reports take the cost back from the time of the cancel.
 CREATE OR REPLACE FUNCTION cartlify.return_order_stock (p_order_id integer) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -673,11 +701,12 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS take in a batch of a product: the stock grows by it, the admin log keeps the line
--- (STOCK_DELIVERY) with the delivery it came with, the supplier, the invoice and the note
--- system function: runs as the owner, the batches and the stock are closed for plain changes
--- (db/03); callable only by a signed-in admin or root, the line of the log is in their name.
--- A product removed from the catalog takes in nothing
+-- Takes in a batch of a product and returns its id: the stock grows by it, and the admin log
+-- keeps a line (STOCK_DELIVERY) with the delivery it came with, the supplier, the invoice and
+-- the note. System function: runs as the owner, the batches and the stock are closed for plain
+-- changes (db/03). Callable only by a signed-in admin or root, the line of the log is in their
+-- name (STOCK_RECEIVE_FORBIDDEN). A product removed from the catalog takes in nothing
+-- (PRODUCT_NOT_FOUND).
 CREATE OR REPLACE FUNCTION cartlify.receive_product_batch (
   p_delivery_id uuid,
   p_product_id integer,
@@ -774,6 +803,7 @@ BEGIN
     'product',
     p_product_id,
     'STOCK_DELIVERY',
+    'stock.delivery',
     jsonb_build_array(
       jsonb_build_object('field', 'stock', 'old', v_stock, 'new', v_stock + p_quantity),
       jsonb_build_object(
@@ -805,12 +835,13 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS write off free units of a product: from the batch an admin names, or from the batches
--- in the order a sale takes them (the one that ends first, then the oldest). The admin log keeps
--- the line (STOCK_WRITE_OFF) with the reason, the batches and their costs. A product removed
--- from the catalog keeps its units until they are written off, so it is written off too; the
--- units the waiting orders hold are not
--- system function: runs as the owner; callable only by a signed-in admin or root
+-- Writes off free units of a product: from the batch an admin names, or from the batches in the
+-- order a sale takes them (the one that ends first, then the oldest). The admin log keeps a line
+-- (STOCK_WRITE_OFF) with the reason, the batches and their costs; the batches also come back as
+-- the result. The units that waiting orders hold are never written off
+-- (INSUFFICIENT_AVAILABLE_STOCK). A product removed from the catalog keeps its units until they
+-- are written off, so it can be written off too. System function: runs as the owner; callable
+-- only by a signed-in admin or root (STOCK_WRITE_OFF_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.write_off_product_stock (
   p_write_off_id uuid,
   p_product_id integer,
@@ -889,9 +920,9 @@ BEGIN
       RAISE EXCEPTION 'BATCH_INSUFFICIENT';
     END IF;
 
-    -- the reserve of the waiting orders is of good units: a good batch named here gives only
-    -- the good units no order holds. A batch that is over, or units without a batch (those
-    -- that are over go first), leave the good units the reserve needs
+    -- The reserve of the waiting orders is made of good units. A good batch named here may give
+    -- only the good units that no order holds. A batch that is over, and units taken without a
+    -- named batch (the ones that are over go first), cannot cut into the reserve.
     IF (v_expires IS NULL OR v_expires >= cartlify.shop_today())
        AND v_stock - cartlify.product_expired_units(p_product_id) - v_reserved < p_quantity THEN
       RAISE EXCEPTION 'INSUFFICIENT_AVAILABLE_STOCK';
@@ -932,6 +963,7 @@ BEGIN
     'product',
     p_product_id,
     'STOCK_WRITE_OFF',
+    'stock.write_off',
     jsonb_build_array(
       jsonb_build_object('field', 'stock', 'old', v_stock, 'new', v_stock - p_quantity),
       jsonb_build_object('field', 'reason', 'old', NULL, 'new', p_reason),
@@ -947,9 +979,13 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS the stock is what the batches have left: checked at the end of the transaction, a step
--- changes the stock and the batches one after the other. Rows copied in without batches (dev
--- restored from a copy of prod, reseed) stop at their next change; their data are wiped
+-- Checks that the stock of a product equals what its batches have left. It runs at the end of
+-- the transaction (the triggers below are deferred), because a step changes the stock and the
+-- batches one after the other. Raises PRODUCT_STOCK_BATCHES_MISMATCH (check_violation). A
+-- product with stock and no batches (a copy of prod restored to dev, a reseed) fails at the
+-- next change of its stock; db/data/clear_orders_and_stock.sql wipes such data. A product
+-- removed for good in the same transaction has nothing to check. Runs as the owner: it reads
+-- the batches.
 CREATE OR REPLACE FUNCTION cartlify.check_product_stock_batches () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -987,6 +1023,7 @@ BEGIN
 END;
 $$;
 
+-- The check runs after a change of the stock and after a change of the batches.
 DROP TRIGGER IF EXISTS trg_products_stock_batches ON cartlify.products;
 
 CREATE CONSTRAINT TRIGGER trg_products_stock_batches
@@ -1003,15 +1040,17 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION cartlify.check_product_stock_batches ();
 
--- PRODUCTS reserve product stock for order confirmation
--- internal step: runs with caller rights, so only system functions pass rls on stock columns;
--- the app has no execute right (db/01), confirm_order and pay_order call it as the owner
+-- Reserves units of a product for an order that is being confirmed. Free units are the stock
+-- minus the reserve minus the units of batches that are over. Raises PRODUCT_NOT_FOUND (also
+-- for a product removed from the catalog) and INSUFFICIENT_AVAILABLE_STOCK. Internal step: runs
+-- with caller rights; trg_products_update_columns lets only the steps of the database change the
+-- stock columns, and the app has no execute right (db/01); confirm_order and pay_order call it as
+-- the owner.
 CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
 BEGIN
-  -- validate input
   IF p_product_id IS NULL OR p_product_id <= 0 THEN
     RAISE EXCEPTION 'PRODUCT_ID_INVALID';
   END IF;
@@ -1027,9 +1066,8 @@ BEGIN
     AND p."deletedAt" IS NULL
     AND (p.stock - p."reservedStock" - cartlify.product_expired_units(p.id)) >= p_qty;
 
-  -- nothing updated
+  -- no row changed: tell a missing product from a lack of free units
   IF NOT FOUND THEN
-    -- distinguish not found from insufficient stock
     IF NOT EXISTS (
       SELECT 1
       FROM cartlify.products p
@@ -1044,9 +1082,12 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS release stock after unconfirm or expiration
--- internal step: runs with caller rights, so only system functions pass rls on stock columns;
--- the app has no execute right (db/01), unconfirm_order and expire_order_reservation call it
+-- Releases the reserve of units after an unconfirm, a cancelled payment or an expired
+-- reservation. Returns the reserve that is left. Raises PRODUCT_NOT_FOUND and
+-- INSUFFICIENT_RESERVED_STOCK. Internal step: runs with caller rights; trg_products_update_columns
+-- lets only the steps of the database change the stock columns, and the app has no execute right
+-- (db/01); unconfirm_order,
+-- cancel_order_payment and expire_order_reservation call it.
 CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -1054,7 +1095,6 @@ SET
 DECLARE
   v_reserved_stock integer;
 BEGIN
-  -- validate input
   IF p_product_id IS NULL OR p_product_id <= 0 THEN
     RAISE EXCEPTION 'PRODUCT_ID_INVALID';
   END IF;
@@ -1088,11 +1128,13 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS consume reserved stock after payment, out of the batches: the order keeps which batch
--- gave how many (order_batch_allocations), its cost of goods
--- internal step: runs with caller rights, so only system functions pass rls on stock columns;
--- the app has no execute right (db/01), pay_order calls it as the owner
-
+-- Turns the reserve of a paid order into a sale: takes the units out of the batches that are
+-- still good (a sale skips the batches that are over) and keeps in order_batch_allocations which
+-- batch gave how many, which is the cost of goods of the order. Returns the stock that is left.
+-- Raises STOCK_CONSUME_FORBIDDEN unless the role is ADMIN or ROOT (the system is an admin
+-- context). Internal step: runs with caller rights; trg_products_update_columns lets only the steps of
+-- the database change the stock columns, and the app has no execute right (db/01); pay_order calls
+-- it as the owner.
 CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_order_id integer, p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -1150,9 +1192,12 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS recalc product popularity score
--- internal: only the popularity triggers and recalc_all_products_popularity call it,
--- the app has no execute right (db/01)
+-- Recalculates the popularity of a product. While a manual override is set and its end is ahead,
+-- the override is the popularity. Otherwise it is a weighted sum of ln(1 + count) of the views of
+-- all time and, for the last 30 days, the favorites, the cart adds (items of orders not
+-- confirmed yet), the purchases (items of confirmed orders) and the reviews. Internal: only the
+-- popularity triggers and recalc_all_products_popularity call it, the app has no execute right
+-- (db/01).
 CREATE OR REPLACE FUNCTION cartlify.recalc_product_popularity (p_product_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1245,11 +1290,10 @@ BEGIN
 END;
 $$;
 
--- ADD TO RAILWAY ONCE A WEEK!!!
---psql "$MIGRATION_DATABASE_URL" \
--- -c 'SELECT cartlify.recalc_all_products_popularity();'
--- PRODUCTS recalc popularity for all products
--- maintenance: run by hand as the owner (see above), the app has no execute right (db/01)
+-- Recalculates the popularity of every product. The counts of the last 30 days and the end of a
+-- manual override move with time, not with an event, so this has to run now and then. Maintenance: the app has no execute right (db/01); until a periodic job exists, run it
+-- by hand as the owner:
+--   psql "$MIGRATION_DATABASE_URL" -c 'SELECT cartlify.recalc_all_products_popularity();'
 CREATE OR REPLACE FUNCTION cartlify.recalc_all_products_popularity () RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1266,10 +1310,10 @@ BEGIN
 END;
 $$;
 
--- PRODUCTS === triggers & functions ===
--- PRODUCTS sync product rating and review count after review rating or comment change
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Keeps the average rating and the review count of a product in step with its reviews. Fires
+-- after a review is added or removed, or its rating or comment changes. Trigger function: runs
+-- as the owner, the recalc function it calls is internal and closed for the app; it cannot be
+-- called directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_rating () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1307,7 +1351,8 @@ CREATE TRIGGER trg_reviews_after_mod_rating
 AFTER INSERT OR DELETE OR UPDATE OF "rating", "comment" ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_rating ();
 
--- PRODUCTS guard product views before update: guest and user can add only one view
+-- Limits who changes the views of a product: a guest or a user may raise them by one only
+-- (PRODUCT_VIEWS_UPDATE_FORBIDDEN). Other roles are not limited here.
 CREATE OR REPLACE FUNCTION cartlify.products_before_views_change () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."views" IS DISTINCT FROM OLD."views"
@@ -1327,14 +1372,16 @@ CREATE TRIGGER trg_products_before_views_change
 BEFORE UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_before_views_change ();
 
--- PRODUCTS the sale of a product, whatever way the row changes: a sale set or changed ends in the
--- future; a price down to the sale price or below ends the sale and its fields go empty, the
--- lowest price of the 30 days before it too. A sale
--- that was still on gets the line of its end in the admin log (PRODUCT_SALE, event
--- ended_by_price) in the name of the admin who changed the price, the system has no id; the log
--- of prices has the change of the price itself. Prices go as the app writes them (trim_scale,
--- 15.50 is 15.5), dates as iso utc. Only an update: rows copied in (dev restored from a copy of
--- prod) keep their sales, ended ones too. Prisma keeps dates as utc in columns without a time zone
+-- Keeps the sale of a product valid, whatever way the row changes (before an update of the
+-- price, the sale price or the end of the sale). A sale that is set or changed must end in the
+-- future (PRODUCT_SALE_ENDS_AT_INVALID). A price changed down to the sale price or below ends
+-- the sale: its fields and the lowest price of the 30 days before it go empty. A sale that was
+-- still on gets a line of its end in the admin log (PRODUCT_SALE, event product.sale_end_by_price, with a change entry event = ended_by_price) in the
+-- name of the admin who changed the price; the system has no id, so it is refused
+-- (PRODUCT_SALE_ACTOR_REQUIRED). The log of prices has the change of the price itself. Prices go
+-- to the log as text without a trailing zero (trim_scale: 15.50 becomes 15.5), dates as iso utc.
+-- Only an update is checked: rows copied in (dev restored from a copy of prod) keep their sales,
+-- ended ones too. Prisma keeps dates as utc in columns without a time zone.
 CREATE OR REPLACE FUNCTION cartlify.products_before_price_change () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_now timestamp := now() AT TIME ZONE 'UTC';
@@ -1365,6 +1412,7 @@ BEGIN
         'product',
         NEW.id,
         'PRODUCT_SALE',
+        'product.sale_end_by_price',
         jsonb_build_array(
           jsonb_build_object('field', 'event', 'old', NULL, 'new', 'ended_by_price'),
           jsonb_build_object(
@@ -1401,11 +1449,11 @@ CREATE TRIGGER trg_products_before_price_change
 BEFORE UPDATE OF "price", "salePrice", "saleEndsAt" ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_before_price_change ();
 
--- PRODUCTS sync popularity after product views change
--- views enter the score through a logarithm, so one view rarely changes it:
--- recalc while the counter is small, on every tenth view and on any manual change
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the popularity after the views of a product change. Views enter the score through
+-- a logarithm, so one view rarely changes it: recalculate while the counter is small (up to 20),
+-- on every tenth view and on any change that is not a single view. Trigger function: runs as the
+-- owner, the recalc function it calls is internal and closed for the app; it cannot be called
+-- directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.products_after_views_change () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1431,9 +1479,9 @@ CREATE TRIGGER trg_products_after_views_change
 AFTER UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_after_views_change ();
 
--- PRODUCTS sync popularity after favorites change
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the popularity of a product after a favorite is added or removed. Trigger
+-- function: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- it cannot be called directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.favorites_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1463,11 +1511,10 @@ CREATE TRIGGER trg_favorites_after_mod_popularity
 AFTER INSERT OR DELETE ON cartlify.favorites FOR EACH ROW
 EXECUTE FUNCTION cartlify.favorites_after_mod_popularity ();
 
--- PRODUCTS sync popularity after order items change
--- the score counts the items, not their quantity or price: only an item that comes, goes or moves
--- to another order or product counts again
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the popularity of a product after an order item is added, removed, or moved to
+-- another order or product. The score counts the items, not their quantity or price. Trigger
+-- function: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- it cannot be called directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1497,10 +1544,10 @@ CREATE TRIGGER trg_order_items_after_mod_popularity
 AFTER INSERT OR DELETE OR UPDATE OF "orderId", "productId" ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod_popularity ();
 
--- PRODUCTS sync popularity after review changes
--- the score counts the reviews, not their votes or texts: only a review that comes or goes counts
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the popularity of a product after a review is added or removed. The score counts
+-- the reviews, not their votes or texts. Trigger function: runs as the owner, the recalc
+-- function it calls is internal and closed for the app; it cannot be called directly, only the
+-- trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.reviews_after_mod_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1530,9 +1577,9 @@ CREATE TRIGGER trg_reviews_after_mod_popularity
 AFTER INSERT OR DELETE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_after_mod_popularity ();
 
--- PRODUCTS sync popularity after order status change
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the popularity of the products of an order when its confirmed flag changes.
+-- Trigger function: runs as the owner, the recalc function it calls is internal and closed for
+-- the app; it cannot be called directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.orders_after_update_popularity () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1542,7 +1589,8 @@ DECLARE
 BEGIN
 
   -- an item counts as in a cart or as bought by the confirmed flag of its order: a step of a
-  -- confirmed order (paid, shipped, delivered) changes nothing the score counts
+  -- confirmed order (paid, shipped, delivered) starts no recalculation; the window of the
+  -- purchases follows orders."updatedAt"
   IF NEW."confirmed" IS DISTINCT FROM OLD."confirmed" THEN
 
     FOR v_product_id IN
@@ -1567,9 +1615,11 @@ EXECUTE FUNCTION cartlify.orders_after_update_popularity ();
 ------------------------------------------------------------
 -- ORDERS AND ITEMS
 ------------------------------------------------------------
--- ORDERS AND ITEMS === system functions ===
--- ORDERS AND ITEMS recalc order total from order items
--- internal: only the order items trigger calls it, the app has no execute right (db/01)
+
+-- Sets the total of an order to the sum of its items. Until the order is confirmed the total is
+-- only the items; the confirmation adds the delivery price (orders_before_update), and a
+-- confirmed order refuses a new total. Internal: only the order items trigger calls it, the app
+-- has no execute right (db/01).
 CREATE OR REPLACE FUNCTION cartlify.recalc_order_total (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1588,11 +1638,10 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS === user actions ===
--- ORDERS AND ITEMS refresh item prices of an unconfirmed order from current product prices
--- (product_current_price: the sale price while the sale lasts)
--- runs with caller rights: rls lets only the order owner change items, and only before confirmation
--- returns the number of items whose price changed
+-- Refreshes the item prices of an order from the prices its products sell at now
+-- (product_current_price: the sale price while the sale lasts). Returns the number of items
+-- whose price changed. Runs with caller rights: RLS lets only the owner change items, and only
+-- before the confirmation.
 CREATE OR REPLACE FUNCTION cartlify.refresh_order_prices (p_order_id integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -1614,10 +1663,42 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS === system functions ===
--- ORDERS AND ITEMS confirm order and reserve product stock
--- system function: acts only for the USER who owns the order
-CREATE OR REPLACE FUNCTION cartlify.confirm_order (p_order_id integer, p_reserve_for interval) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+-- Gives what the buyer pays for the delivery: the manual method costs the flat price, and
+-- nothing from the free-from sum of the items on (that sum itself is free); a pickup, and a shop
+-- that names no flat price, cost nothing. The server gives the flat price and the free-from sum
+-- from its settings. Pure arithmetic, no table is read.
+CREATE OR REPLACE FUNCTION cartlify.delivery_price (
+  p_method cartlify."DeliveryMethod",
+  p_items_total numeric,
+  p_flat numeric,
+  p_free_from numeric
+) RETURNS numeric LANGUAGE sql IMMUTABLE AS $$
+  SELECT CASE
+    WHEN p_method IS DISTINCT FROM 'manual' OR p_flat IS NULL THEN 0::numeric
+    WHEN p_free_from IS NOT NULL AND p_items_total >= p_free_from THEN 0::numeric
+    ELSE p_flat
+  END
+$$;
+
+-- Removes the old signature of confirm_order, from before the delivery arguments.
+DROP FUNCTION IF EXISTS cartlify.confirm_order (integer, interval);
+
+-- Confirms an order: reserves the stock, checks the prices, fixes the delivery price and sets the
+-- reservation deadline (the status becomes waiting). System function: runs as the owner, acts
+-- only for a USER (ORDER_CONFIRM_FORBIDDEN) and only on an order of their own: the order of
+-- another user is not found (ORDER_NOT_FOUND). The delivery of the order
+-- (order_deliveries) must be written before. Its price is fixed here by the rule in the
+-- arguments (the flat price and the free-from sum come from the settings of the server). When
+-- the buyer sent the price he saw (p_expected_delivery_price) and the rule gives another one,
+-- the confirmation is refused (ORDER_DELIVERY_PRICE_CHANGED); an item price that is not the
+-- price its product sells at now refuses it too (ORDER_PRICES_CHANGED).
+CREATE OR REPLACE FUNCTION cartlify.confirm_order (
+  p_order_id integer,
+  p_reserve_for interval,
+  p_delivery_flat numeric DEFAULT NULL,
+  p_delivery_free_from numeric DEFAULT NULL,
+  p_expected_delivery_price numeric DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -1625,9 +1706,12 @@ DECLARE
   v_actor_role text;
   v_actor_id   integer;
 
-  v_user_id    integer;
   v_confirmed  boolean;
   v_status     text;
+
+  v_method         cartlify."DeliveryMethod";
+  v_items_total    numeric;
+  v_delivery_price numeric;
 
   r record;
 BEGIN
@@ -1645,8 +1729,8 @@ BEGIN
   END IF;
 
   -- lock order row; orders of other users stay hidden, as they were under rls
-  SELECT o."userId", o.confirmed, o.status
-  INTO v_user_id, v_confirmed, v_status
+  SELECT o.confirmed, o.status
+  INTO v_confirmed, v_status
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id
     AND o."userId" = v_actor_id
@@ -1656,17 +1740,13 @@ BEGIN
     RAISE EXCEPTION 'ORDER_NOT_FOUND';
   END IF;
 
-  IF v_user_id IS DISTINCT FROM v_actor_id THEN
-    RAISE EXCEPTION 'ORDER_CONFIRM_FORBIDDEN';
-  END IF;
-
   IF v_confirmed THEN
     RAISE EXCEPTION 'ORDER_ALREADY_CONFIRMED';
   END IF;
 
-IF v_status NOT IN ('pending', 'unconfirmed') THEN
-  RAISE EXCEPTION 'ORDER_STATUS_NOT_ALLOWED';
-END IF;
+  IF v_status NOT IN ('pending', 'unconfirmed') THEN
+    RAISE EXCEPTION 'ORDER_STATUS_NOT_ALLOWED';
+  END IF;
 
   -- lock all order items to freeze the cart at confirm moment
   PERFORM 1
@@ -1690,9 +1770,9 @@ END IF;
     PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
   END LOOP;
 
-  -- product rows are locked by the reservation above, so prices cannot change until commit:
-  -- refuse if any item price differs from the price the product sells at now (a sale that just
-  -- ended counts), the user must confirm the amount they see
+  -- the reservation above locked the product rows, so prices cannot change until the commit:
+  -- refuse when an item price differs from the price its product sells at now (a sale that just
+  -- ended counts), the buyer must confirm the amount he sees
   IF EXISTS (
     SELECT 1
     FROM cartlify.order_items AS oi
@@ -1713,6 +1793,37 @@ END IF;
     AND p.id = oi."productId"
     AND oi."productName" IS DISTINCT FROM p.name;
 
+  -- where the order goes is written before the confirmation; its price is fixed now, from what
+  -- the items cost, and the total that the update below sets holds it
+  SELECT d.method
+  INTO v_method
+  FROM cartlify.order_deliveries AS d
+  WHERE d."orderId" = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_DELIVERY_REQUIRED';
+  END IF;
+
+  SELECT COALESCE(SUM(oi."totalPrice"), 0)
+  INTO v_items_total
+  FROM cartlify.order_items AS oi
+  WHERE oi."orderId" = p_order_id;
+
+  v_delivery_price := cartlify.delivery_price(
+    v_method, v_items_total, p_delivery_flat, p_delivery_free_from
+  );
+
+  IF p_expected_delivery_price IS NOT NULL
+     AND p_expected_delivery_price IS DISTINCT FROM v_delivery_price THEN
+    RAISE EXCEPTION 'ORDER_DELIVERY_PRICE_CHANGED';
+  END IF;
+
+  UPDATE cartlify.order_deliveries AS d
+  SET "price" = v_delivery_price
+  WHERE d."orderId" = p_order_id
+    AND d."price" IS DISTINCT FROM v_delivery_price;
+
   -- confirm order and set reservation deadline
   UPDATE cartlify.orders AS o
   SET
@@ -1723,7 +1834,9 @@ END IF;
 END;
 $$;
 
--- ORDERS AND ITEMS unconfirm order and release reserved stock
+-- Takes a confirmed order that waits for payment back to unconfirmed and releases its reserved
+-- stock. System function: only the system (the admin context without a user id) may call it, a
+-- signed-in admin is refused (ORDER_UNCONFIRM_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.unconfirm_order (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1734,7 +1847,6 @@ DECLARE
 
   r record;
 BEGIN
-  -- only the system: the admin context without a user id, a signed-in admin is refused
   IF NOT cartlify.is_system() THEN
     RAISE EXCEPTION 'ORDER_UNCONFIRM_FORBIDDEN';
   END IF;
@@ -1790,11 +1902,12 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS the owner cancels the payment of an order that waits for it
--- system function: runs as the owner, reserved stock is closed for the app;
--- callable only by the USER who owns the order. The server closes the stripe payment page before
--- the call, so no payment can come for this reservation any more. The order becomes unconfirmed
--- with its items and shipping data, the owner can change them and confirm it again
+-- The owner cancels the payment of an order that waits for it: the reservation is released and
+-- the order becomes unconfirmed, with its items and delivery data kept, so the owner can change
+-- them and confirm it again. System function: runs as the owner, the reserved stock is closed for
+-- the app. Callable only by the USER who owns the order (ORDER_CANCEL_PAYMENT_FORBIDDEN). The
+-- server closes the payment page of the provider before the call, so no payment can come for
+-- this reservation any more.
 CREATE OR REPLACE FUNCTION cartlify.cancel_order_payment (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1889,11 +2002,11 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS admin cancels a paid or shipped order and returns its stock
--- system function: runs as the owner, stock and the status of a paid order are closed for plain
--- updates (db/03); callable only in the admin context. The server refunds the payment in the same
--- transaction before the commit, so an order is cancelled only together with its refund.
--- A delivered order is not cancelled
+-- An admin cancels a paid or shipped order and puts its stock back into the batches. System
+-- function: runs as the owner, the stock of a paid order is closed for plain updates (db/03)
+-- and its status moves by the steps of an admin and by this function. Callable only in the admin context (ORDER_CANCEL_FORBIDDEN). The server
+-- refunds the payment in the same transaction before the commit, so an order is cancelled only
+-- together with its refund. A delivered order is not cancelled (ORDER_ALREADY_DELIVERED).
 CREATE OR REPLACE FUNCTION cartlify.cancel_paid_order (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -1905,7 +2018,7 @@ BEGIN
     RAISE EXCEPTION 'ORDER_CANCEL_FORBIDDEN';
   END IF;
 
-  -- read state without a lock: a delivered or cancelled order is not lockable for updates
+  -- read state without a lock, to answer with the reason
   SELECT o.status
   INTO v_status
   FROM cartlify.orders AS o
@@ -1952,8 +2065,21 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS pay order from a verified payment webhook
--- the same payment is the same provider with the same payment id: a repeated delivery
+-- Records a payment that a provider confirmed (the payment webhook) and turns the order into a
+-- paid one. It returns a text, not an error, so the server decides what to do with the money:
+--   PAID                        the order is paid now
+--   ALREADY_PAID_SAME_PAYMENT   a repeated delivery of the payment that is already recorded
+--   ALREADY_PAID_OTHER_PAYMENT  another payment for an order that is paid already
+--   ORDER_NOT_FOUND             there is no such order
+--   ORDER_NOT_PAYABLE           the order cannot be paid (no items, no delivery)
+--   AMOUNT_MISMATCH             the amount is not the items plus the delivery price
+--   OUT_OF_STOCK                the units are gone, also from a batch that went over since the
+--                               reservation
+-- The same payment is the same provider with the same payment id. Two paths: a waiting order
+-- consumes the stock it reserved; a pending or unconfirmed order, whose reservation is gone,
+-- reserves and consumes it now, only when every item is still available. System function:
+-- only the system (the admin context without a user id) may call it, a signed-in admin is
+-- refused (ORDER_PAY_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.pay_order (
   p_order_id integer,
   p_payment_provider cartlify."PaymentProvider",
@@ -1966,13 +2092,10 @@ SET
 DECLARE
   v_confirmed         boolean;
   v_status            text;
-  v_shipping_address  text;
-  v_first_name        text;
-  v_last_name         text;
-  v_phone             text;
   v_recorded_provider cartlify."PaymentProvider";
   v_recorded_payment  text;
   v_items_total       numeric;
+  v_delivery_price    numeric;
 
   r record;
 BEGIN
@@ -1990,7 +2113,7 @@ BEGIN
     RAISE EXCEPTION 'ORDER_PAYMENT_ID_REQUIRED';
   END IF;
 
-  -- read state without a lock: paid orders are not lockable for system updates
+  -- read state without a lock, to answer with the reason
   SELECT o.status, o."paymentProvider", o."paymentId"
   INTO v_status, v_recorded_provider, v_recorded_payment
   FROM cartlify.orders AS o
@@ -2013,12 +2136,8 @@ BEGIN
   END IF;
 
   -- lock order row; the payment is read again with it
-  SELECT o.confirmed, o.status, o."shippingAddress",
-         o."recipientFirstName", o."recipientLastName", o."recipientPhone",
-         o."paymentProvider", o."paymentId"
-  INTO v_confirmed, v_status, v_shipping_address,
-       v_first_name, v_last_name, v_phone,
-       v_recorded_provider, v_recorded_payment
+  SELECT o.confirmed, o.status, o."paymentProvider", o."paymentId"
+  INTO v_confirmed, v_status, v_recorded_provider, v_recorded_payment
   FROM cartlify.orders AS o
   WHERE o.id = p_order_id
   FOR UPDATE;
@@ -2063,13 +2182,19 @@ BEGIN
     RETURN 'ORDER_NOT_PAYABLE';
   END IF;
 
-  -- paid amount must match the items being sold
+  -- paid amount must match the items being sold and the price of the delivery fixed at the last
+  -- confirmation (an order that was never confirmed has no delivery and is refused below)
   SELECT COALESCE(SUM(oi."totalPrice"), 0)
   INTO v_items_total
   FROM cartlify.order_items AS oi
   WHERE oi."orderId" = p_order_id;
 
-  IF p_paid_amount IS NULL OR p_paid_amount <> v_items_total THEN
+  SELECT d."price"
+  INTO v_delivery_price
+  FROM cartlify.order_deliveries AS d
+  WHERE d."orderId" = p_order_id;
+
+  IF p_paid_amount IS NULL OR p_paid_amount <> v_items_total + COALESCE(v_delivery_price, 0) THEN
     RETURN 'AMOUNT_MISMATCH';
   END IF;
 
@@ -2098,11 +2223,8 @@ BEGIN
     END;
   ELSIF NOT v_confirmed AND v_status IN ('pending', 'unconfirmed') THEN
     -- emergency path: reservation is gone, sell only when every item is still available
-    -- the order becomes confirmed, so it needs what the confirm trigger requires
-    IF v_shipping_address IS NULL OR btrim(v_shipping_address) = ''
-       OR v_first_name IS NULL OR btrim(v_first_name) = ''
-       OR v_last_name IS NULL OR btrim(v_last_name) = ''
-       OR v_phone IS NULL OR btrim(v_phone) = '' THEN
+    -- the order becomes confirmed, so it needs what the confirm trigger requires: where it goes
+    IF v_delivery_price IS NULL THEN
       RETURN 'ORDER_NOT_PAYABLE';
     END IF;
 
@@ -2147,11 +2269,12 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS === system actions ===
--- ORDERS AND ITEMS expire order reservation and release reserved stock
--- system function: runs as the owner, it changes orders and stock of any user;
--- callable only by the system (the admin context without a user id), the order timeout worker
--- sets it before the call
+-- Ends the reservation of a waiting order whose time is over: releases the reserved stock and
+-- puts the order back to unconfirmed. Returns true when it did, false when there was nothing to
+-- expire (the order is gone, is not waiting, or its time has not come: a stale timer). System
+-- function: runs as the owner, it changes orders and stock of any user. Callable only by the
+-- system (the admin context without a user id), the order timeout worker sets it before the call
+-- (ORDER_EXPIRE_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.expire_order_reservation (p_order_id integer) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2169,7 +2292,7 @@ BEGIN
   END IF;
 
   BEGIN
-    -- read state without a lock: only waiting orders are lockable for system updates
+    -- read state without a lock, to answer with the reason
     SELECT o.confirmed, o.status, o."reservationExpiresAt"
     INTO v_confirmed, v_status, v_reserve_until
     FROM cartlify.orders AS o
@@ -2248,9 +2371,12 @@ BEGIN
 END;
 $$;
 
--- ORDERS AND ITEMS === triggers & functions ===
--- ORDERS AND ITEMS take unit price and name from product and calculate order item total price
--- before insert or update; the name of the product goes with the price, the confirm keeps both
+-- Takes the unit price and the name from the product and calculates the total price of an item
+-- (before an insert or update). The price is the one the product sells at now, never one from
+-- the caller. The order must be one the actor can change: RLS hides foreign and confirmed orders
+-- (ORDER_NOT_EDITABLE), a confirmed order seen by an admin refuses too (ORDER_ALREADY_CONFIRMED).
+-- The confirmation fixes the price and the name, because items of a confirmed order cannot
+-- change.
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
@@ -2308,9 +2434,9 @@ CREATE TRIGGER trg_order_items_before_ins_upd
 BEFORE INSERT OR UPDATE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_before_ins_upd ();
 
--- ORDERS AND ITEMS recalc order total after order items change
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the total of an order after its items change. Trigger function: runs as the
+-- owner, the recalc function it calls is internal and closed for the app; it cannot be called
+-- directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.order_items_after_mod () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2341,53 +2467,26 @@ CREATE TRIGGER trg_order_items_after_mod
 AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
--- ORDERS AND ITEMS guard order updates, recalc total before confirmation, stamp the time of the change
+-- Guards the updates of an order. It always stamps updatedAt. Going back to unconfirmed (the
+-- payment was cancelled or the reservation ended) makes the total the items again; the
+-- delivery is priced again at the next confirmation. A confirmed order keeps its owner and its
+-- total (ORDER_CONFIRMED_CHANGE_FORBIDDEN). At the confirmation the delivery must be written
+-- (ORDER_DELIVERY_REQUIRED) and the total becomes the items plus the delivery price.
 CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_total cartlify.orders.total%TYPE;
+  v_delivery_price numeric;
 BEGIN
-  -- prisma stamps updatedAt only in its own queries, db functions (pay, confirm, cancel, expire)
-  -- change the order too; the column holds utc time without a zone, as prisma writes it
+  -- prisma stamps updatedAt only in its own queries, the db functions (pay, confirm, cancel,
+  -- expire) change orders too; the column holds utc time without a zone, as prisma writes it
   NEW."updatedAt" := now() AT TIME ZONE 'UTC';
 
-  IF OLD."confirmed" THEN
-    IF NEW."userId" IS DISTINCT FROM OLD."userId"
-       OR NEW."total" IS DISTINCT FROM OLD."total"
-       OR NEW."shippingAddress" IS DISTINCT FROM OLD."shippingAddress"
-       OR NEW."recipientFirstName" IS DISTINCT FROM OLD."recipientFirstName"
-       OR NEW."recipientLastName" IS DISTINCT FROM OLD."recipientLastName"
-       OR NEW."recipientPhone" IS DISTINCT FROM OLD."recipientPhone"
-       OR COALESCE(NEW."note", '') IS DISTINCT FROM COALESCE(OLD."note", '')
-    THEN
+  IF OLD."confirmed" AND NOT NEW."confirmed" THEN
+    -- back to unconfirmed (the payment was cancelled or the reservation ended): the order is a
+    -- cart again and costs what its items cost, the delivery is priced again at the next
+    -- confirmation
+    IF NEW."userId" IS DISTINCT FROM OLD."userId" THEN
       RAISE EXCEPTION 'ORDER_CONFIRMED_CHANGE_FORBIDDEN'
-        USING ERRCODE = 'check_violation';
-    END IF;
-
-    RETURN NEW;
-  END IF;
-
-  IF NOT OLD."confirmed" AND NEW."confirmed" THEN
-    IF NEW."shippingAddress" IS NULL
-       OR btrim(NEW."shippingAddress") = '' THEN
-      RAISE EXCEPTION 'ORDER_SHIPPING_ADDRESS_REQUIRED'
-        USING ERRCODE = 'check_violation';
-    END IF;
-
-    IF NEW."recipientFirstName" IS NULL
-       OR btrim(NEW."recipientFirstName") = '' THEN
-      RAISE EXCEPTION 'ORDER_RECIPIENT_FIRST_NAME_REQUIRED'
-        USING ERRCODE = 'check_violation';
-    END IF;
-
-    IF NEW."recipientLastName" IS NULL
-       OR btrim(NEW."recipientLastName") = '' THEN
-      RAISE EXCEPTION 'ORDER_RECIPIENT_LAST_NAME_REQUIRED'
-        USING ERRCODE = 'check_violation';
-    END IF;
-
-    IF NEW."recipientPhone" IS NULL
-       OR btrim(NEW."recipientPhone") = '' THEN
-      RAISE EXCEPTION 'ORDER_RECIPIENT_PHONE_REQUIRED'
         USING ERRCODE = 'check_violation';
     END IF;
 
@@ -2397,6 +2496,39 @@ BEGIN
     WHERE oi."orderId" = OLD.id;
 
     NEW."total" := v_total;
+
+    RETURN NEW;
+  END IF;
+
+  IF OLD."confirmed" THEN
+    IF NEW."userId" IS DISTINCT FROM OLD."userId"
+       OR NEW."total" IS DISTINCT FROM OLD."total"
+    THEN
+      RAISE EXCEPTION 'ORDER_CONFIRMED_CHANGE_FORBIDDEN'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  IF NOT OLD."confirmed" AND NEW."confirmed" THEN
+    -- where the order goes must be written, with its price
+    SELECT d."price"
+    INTO v_delivery_price
+    FROM cartlify.order_deliveries AS d
+    WHERE d."orderId" = OLD.id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'ORDER_DELIVERY_REQUIRED'
+        USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT COALESCE(SUM(oi."totalPrice"), 0)
+    INTO v_total
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = OLD.id;
+
+    NEW."total" := v_total + v_delivery_price;
   END IF;
 
   RETURN NEW;
@@ -2412,9 +2544,9 @@ EXECUTE FUNCTION cartlify.orders_before_update ();
 ------------------------------------------------------------
 -- REVIEWS AND VOTES
 ------------------------------------------------------------
--- REVIEWS AND VOTES === system functions ===
--- REVIEWS AND VOTES recalc review vote counters
--- internal: only the review votes trigger calls it, the app has no execute right (db/01)
+
+-- Recalculates the up and down vote counters of a review from its votes. Internal: only the
+-- review votes trigger calls it, the app has no execute right (db/01).
 CREATE OR REPLACE FUNCTION cartlify.recalc_review_votes (p_review_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2440,8 +2572,9 @@ BEGIN
 END;
 $$;
 
--- REVIEWS AND VOTES === triggers & functions ===
--- REVIEWS AND VOTES guard review rating and protected keys before update
+-- Guards a review before an update. The rating and the comment are filled in once: a try to
+-- empty them keeps the old value, a try to change them is refused (REVIEW_RATING_UPDATE_FORBIDDEN,
+-- REVIEW_COMMENT_UPDATE_FORBIDDEN). The author and the product never change.
 CREATE OR REPLACE FUNCTION cartlify.reviews_lock_rating_and_keys () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF OLD."rating" IS NOT NULL AND NEW."rating" IS DISTINCT FROM OLD."rating" THEN
@@ -2480,9 +2613,9 @@ CREATE TRIGGER trg_reviews_lock_rating_and_keys
 BEFORE UPDATE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_lock_rating_and_keys ();
 
--- REVIEWS AND VOTES a product removed from the catalog gets no new review and goes into no
--- favorites; what it had before the removal stays (the app hides it). The same rule as the items
--- of an order (order_items_before_ins_upd)
+-- Refuses a new review or favorite for a product removed from the catalog (PRODUCT_NOT_FOUND);
+-- what the product had before the removal stays (the app hides it). The same rule as the items
+-- of an order (order_items_before_ins_upd).
 CREATE OR REPLACE FUNCTION cartlify.refuse_removed_product () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF EXISTS (
@@ -2510,9 +2643,9 @@ CREATE TRIGGER trg_favorites_refuse_removed_product
 BEFORE INSERT ON cartlify.favorites FOR EACH ROW
 EXECUTE FUNCTION cartlify.refuse_removed_product ();
 
--- REVIEWS AND VOTES sync review vote counters after vote changes
--- trigger: runs as the owner, the recalc function it calls is internal and closed for the app;
--- a trigger function cannot be called directly, only the trigger fires it
+-- Recalculates the vote counters of a review after a vote is added, changed or removed. Trigger
+-- function: runs as the owner, the recalc function it calls is internal and closed for the app;
+-- it cannot be called directly, only the trigger fires it.
 CREATE OR REPLACE FUNCTION cartlify.review_votes_after_mod () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2527,6 +2660,11 @@ BEGIN
   END IF;
 
   PERFORM cartlify.recalc_review_votes(v_review_id);
+
+  -- a vote moved to another review (only a script of the superuser can do it): both are recounted
+  IF TG_OP = 'UPDATE' AND OLD."reviewId" IS DISTINCT FROM NEW."reviewId" THEN
+    PERFORM cartlify.recalc_review_votes(OLD."reviewId");
+  END IF;
 
   IF TG_OP = 'DELETE' THEN
     RETURN OLD;
@@ -2545,8 +2683,9 @@ EXECUTE FUNCTION cartlify.review_votes_after_mod ();
 ------------------------------------------------------------
 -- CHAT
 ------------------------------------------------------------
--- CHAT === triggers & functions ===
--- CHAT guard chat messages before update: only read flag can change
+
+-- Guards a chat message before an update: only the read flag may change
+-- (CHAT_MESSAGE_UPDATE_FORBIDDEN).
 CREATE OR REPLACE FUNCTION cartlify.chat_messages_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF (to_jsonb(NEW) - 'isRead') IS DISTINCT FROM (to_jsonb(OLD) - 'isRead') THEN
@@ -2566,20 +2705,23 @@ EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 ------------------------------------------------------------
 -- PRICE CHANGE LOGS
 ------------------------------------------------------------
--- PRICE CHANGE LOGS === system functions ===
--- PRICE CHANGE LOGS insert product price change log entry
--- system function: runs as the owner, the app writes no line straight into the table (db/03);
--- the actor of a line is the admin of the context, a signed-in admin with an id is required.
--- p_mode is how the change was given, p_value is its size in that mode: the percent of the price
--- or the amount of money, negative for a change down. A line with an end (p_ends_at) is the start
--- of a sale, from the price down to the sale price (db/06); a sale taken off goes from the sale
--- price back to the price. A change that changes nothing is no line
+
+-- Writes a line of the price log of a product. System function: runs as the owner, the app
+-- writes no line straight into the table (db/03). Callable only by a signed-in admin or root
+-- with an id, the line is in their name (PRICE_LOG_FORBIDDEN, PRICE_LOG_ACTOR_REQUIRED). A
+-- change that changes nothing is no line.
+-- p_event names what made the line (price.set, price.set_batch, price.bulk, price.sale_start,
+-- price.sale_end), see src/config/journalEvents.ts. p_mode is how the change was given and
+-- p_value is its size in that mode: the percent of the price or the amount of money, negative
+-- for a change down. A line with an end (p_ends_at) is the start of a sale, from the price down
+-- to the sale price (db/06); a sale taken off goes from the sale price back to the price.
 CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
   p_product_id integer,
   p_old_price numeric,
   p_new_price numeric,
   p_mode cartlify."PriceChangeMode",
   p_value numeric,
+  p_event text,
   p_ends_at timestamp DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
@@ -2610,6 +2752,7 @@ BEGIN
     "mode",
     "value",
     "endsAt",
+    "event",
     "createdAt"
   )
   VALUES (
@@ -2620,20 +2763,33 @@ BEGIN
     p_mode,
     p_value,
     p_ends_at,
+    p_event,
     now()
   );
 END;
 $$;
 
+-- Removes the old signature, from before p_event.
+DROP FUNCTION IF EXISTS cartlify.log_product_price_change (
+  integer,
+  numeric,
+  numeric,
+  cartlify."PriceChangeMode",
+  numeric,
+  timestamp
+);
+
 ------------------------------------------------------------
--- LOGS
+-- LOGIN LOGS
 ------------------------------------------------------------
--- LOGS === system functions ===
--- LOGS the logins of a deleted account take the email the account has now (deleted+<id>+...,
--- the one its row of users keeps); the rest of a line stays.
--- system function: runs as the owner, the row policies deny every other change of a log line
--- (the data scripts of a superuser still clear the tables); callable by root, who deletes an
--- account (db/03 lets only root change an email), or by the system; only for a deleted account
+
+-- Gives the logins of a deleted account the email the account has now (deleted+<id>+..., the one
+-- its row of users keeps); the rest of a line stays. Returns how many lines changed. System
+-- function: runs as the owner, the row policies deny every other change of a log line, besides
+-- the clean-up of the addresses (the data scripts of a superuser still clear the tables).
+-- Callable by root, who deletes an account (trg_users_update_columns lets only root change an
+-- email), or by the system (LOGIN_LOGS_ANONYMIZE_FORBIDDEN),
+-- and only for a deleted account (USER_NOT_DELETED).
 CREATE OR REPLACE FUNCTION cartlify.anonymize_login_logs (p_user_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2670,14 +2826,19 @@ $$;
 ------------------------------------------------------------
 -- ADMIN AUDIT LOG
 ------------------------------------------------------------
--- ADMIN AUDIT LOG === system functions ===
--- ADMIN AUDIT LOG insert admin audit log entry
+
+-- Writes a line of the admin audit log. p_event names what made the line, finer than the action
+-- (product.update_batch, order.ship_bulk, ...), see src/config/journalEvents.ts. p_changes is an
+-- array of {field, old, new} objects (ADMIN_AUDIT_CHANGES_NOT_ARRAY). Not a system function:
+-- it runs with the rights of the caller, and the policy of the log (aal_insert, db/03) decides
+-- who may write and in whose name.
 CREATE OR REPLACE FUNCTION cartlify.log_admin_action (
   p_actor_id integer,
   p_actor_role cartlify."Role",
   p_entity_type cartlify."AdminAuditEntityType",
   p_entity_id integer,
   p_action cartlify."AdminAuditAction",
+  p_event text,
   p_changes jsonb
 ) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
@@ -2695,6 +2856,7 @@ BEGIN
     "entityType",
     "entityId",
     action,
+    "event",
     meta,
     ip,
     "userAgent",
@@ -2706,6 +2868,7 @@ BEGIN
     p_entity_type,
     p_entity_id,
     p_action,
+    p_event,
     p_changes,
     nullif(current_setting('cartlify.request_ip', true), ''),
     nullif(current_setting('cartlify.request_user_agent', true), ''),
@@ -2714,15 +2877,26 @@ BEGIN
 END;
 $$;
 
+-- Removes the old signature, from before p_event.
+DROP FUNCTION IF EXISTS cartlify.log_admin_action (
+  integer,
+  cartlify."Role",
+  cartlify."AdminAuditEntityType",
+  integer,
+  cartlify."AdminAuditAction",
+  jsonb
+);
+
 ------------------------------------------------------------
 -- MIGRATION AND MAINTENANCE
 ------------------------------------------------------------
--- MIGRATION AND MAINTENANCE remove the tokens used or ended more than p_keep_days ago: a renewal of
--- a session adds a row each time and closes the one before, the links of the mails stay after
--- they are used. A token used lately stays: a renewed one coming back is how a theft is seen.
--- The work of the system (the admin context without a user id), a periodic task of Railway:
--- SELECT cartlify.cleanup_user_tokens(30); the admin context may delete tokens anyway, so it runs
--- with the rights of the caller. Returns how many rows went
+
+-- Removes the tokens used or ended more than p_keep_days ago: a renewal of a session adds a row
+-- each time and closes the one before, and the links of the mails stay after they are used. A
+-- token used lately stays, because a renewed token coming back is how a theft is seen. Returns
+-- how many rows went. Runs with the rights of the caller (the admin context may delete tokens
+-- anyway). Callable only by the system (USER_TOKENS_CLEANUP_FORBIDDEN), meant for a periodic
+-- task: SELECT cartlify.cleanup_user_tokens(30);
 CREATE OR REPLACE FUNCTION cartlify.cleanup_user_tokens (p_keep_days integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -2750,12 +2924,17 @@ BEGIN
 END;
 $$;
 
--- MIGRATION AND MAINTENANCE how long the shop keeps what it needs no longer (4.18): the address and
--- the browser of old logins, the favorites and the chats of guests who stopped coming, the chats of
--- accounts deleted long ago. Each is the work of the system (the admin context without a user id),
--- a periodic task of Railway runs it with the days it keeps, e.g. SELECT * FROM
--- cartlify.cleanup_guest_data(180); it runs as the owner and reaches the rows through narrow
--- policies (db/03) and the guard of the login log (below)
+-- Retention: how long the shop keeps what it needs no longer. The functions below empty the
+-- address and the browser of old logins, remove the favorites and the chats of guests who
+-- stopped coming, and the chats of accounts deleted long ago. Each is the work of the system
+-- (the admin context without a user id), meant for a periodic task that passes the days to keep,
+-- e.g. SELECT * FROM cartlify.cleanup_guest_data(180). The ones that run as the owner reach the
+-- rows through narrow policies (db/03) and the guard of the login log
+-- (trg_login_logs_update_columns).
+
+-- Gives the moment before which rows are old, for p_keep_days days to keep; the cleanup
+-- functions share it. Only the system may call it (RETENTION_CLEANUP_FORBIDDEN), with at least
+-- 1 day (RETENTION_CLEANUP_KEEP_DAYS_INVALID). Internal: runs with the rights of the caller.
 CREATE OR REPLACE FUNCTION cartlify.retention_cutoff (p_keep_days integer) RETURNS timestamp LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -2774,8 +2953,8 @@ BEGIN
 END;
 $$;
 
--- MIGRATION AND MAINTENANCE the address and the browser of the logins older than p_keep_days go,
--- the line stays history (who logged in, when, with which role). Returns how many lines it emptied
+-- Empties the address and the browser of the logins older than p_keep_days; the line stays as
+-- history (who logged in, when, with which role). Returns how many lines it emptied.
 CREATE OR REPLACE FUNCTION cartlify.cleanup_login_log_addresses (p_keep_days integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2796,9 +2975,10 @@ BEGIN
 END;
 $$;
 
--- MIGRATION AND MAINTENANCE the favorites and the chats of a guest who has not come for longer than
--- p_keep_days go: the last favorite and the last message of the guest are older. A guest who came
--- lately keeps all of it, an old favorite too; the messages go with their chats
+-- Removes the favorites and the chats of guests who have not come for longer than p_keep_days:
+-- a guest is gone when the newest of their favorites and chat messages is older. A guest who
+-- came lately keeps all of it, an old favorite too; the messages go with their chats. Returns
+-- how many favorites and chats went.
 CREATE OR REPLACE FUNCTION cartlify.cleanup_guest_data (p_keep_days integer) RETURNS TABLE (
   removed_favorites integer,
   removed_chats integer
@@ -2839,9 +3019,9 @@ BEGIN
 END;
 $$;
 
--- MIGRATION AND MAINTENANCE the chats of the accounts deleted more than p_keep_days ago go with
--- their messages; a deletion keeps them for a while (an admin may still need the conversation).
--- Returns how many chats went
+-- Removes the chats, with their messages, of the accounts deleted more than p_keep_days ago; a
+-- deletion keeps them for a while (an admin may still need the conversation). Returns how many
+-- chats went.
 CREATE OR REPLACE FUNCTION cartlify.cleanup_deleted_accounts_chats (p_keep_days integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2861,11 +3041,15 @@ BEGIN
 END;
 $$;
 
--- MIGRATION AND MAINTENANCE === system functions ===
--- MIGRATION AND MAINTENANCE migrate guest data to user after authentication
--- system function: runs as the owner, a user cannot see or change guest rows;
--- callable only by the user who has just signed in (user, admin or root), and only for themselves.
--- guest rows are reached through the narrow *_owner policies in db/03, no session flag is involved
+-- Moves the data of a guest to the account of a user who has just signed in: the favorites (one
+-- the user has already is dropped) and the chats. Every guest chat becomes a chat of the user;
+-- an open guest chat is closed, with its counters and its request for an admin cleared, when
+-- the user has an open chat already or it is not the newest open guest chat; the newest one stays
+-- open otherwise. Nothing happens for an
+-- empty guest or user id. System function: runs as the owner, a user cannot see or change guest
+-- rows. Callable only by the user who has just signed in (user, admin or root), and only for
+-- themselves (GUEST_MIGRATION_FORBIDDEN). Guest rows are reached through the narrow *_owner
+-- policies in db/03, no session flag is involved.
 CREATE OR REPLACE FUNCTION cartlify.migrate_guest_data_to_user (p_guest_id uuid, p_user_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
@@ -2898,7 +3082,8 @@ BEGIN
       "guestId" = NULL
   WHERE "guestId" = p_guest_id;
 
--- CHAT THREADS: migrate guest threads to user
+-- CHAT THREADS: every guest thread becomes a thread of the user; an open one is closed when the
+-- user has an open thread already or it is not the newest open guest thread
 WITH selected_open_guest_thread AS (
   SELECT
     id
@@ -3024,10 +3209,12 @@ $$;
 ------------------------------------------------------------
 -- LEGAL DOCUMENTS AND CONSENTS
 ------------------------------------------------------------
--- LEGAL a new version of the terms or of the contract takes the next number of its kind and the
--- sha256 of its text, whatever the row says; two versions published at once wait for each other,
--- and a version waits for the consents being written to its kind. It is dated when it got that
--- lock, not when its transaction began: every consent to the version before it comes earlier
+
+-- Sets what the database owns in a new version of the terms or of the contract: the next number
+-- of its kind, the sha256 of its text and the time, whatever the row says. Two versions
+-- published at once wait for each other (an advisory lock of the kind), and a version waits for
+-- the consents being written to its kind. It is dated when it got that lock, not when its
+-- transaction began, so every consent to the version before it comes earlier.
 CREATE OR REPLACE FUNCTION cartlify.legal_documents_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('cartlify.legal_documents:' || NEW.kind::text));
@@ -3049,11 +3236,12 @@ CREATE TRIGGER trg_legal_documents_before_insert
 BEFORE INSERT ON cartlify.legal_documents FOR EACH ROW
 EXECUTE FUNCTION cartlify.legal_documents_before_insert ();
 
--- LEGAL a consent is to the version in force of its kind; the address and the browser are the
--- ones of the request (cartlify.request_ip, cartlify.request_user_agent, set with the context),
--- not what the row says. It holds the lock of its kind shared until it commits: a version
--- published meanwhile waits for it, and one published before it is seen here. It is dated when
--- it is written
+-- Checks and completes a new consent. It must be to the version in force of its kind, a newer
+-- version refuses it (LEGAL_DOCUMENT_NOT_CURRENT). The address and the browser are the ones of
+-- the request (cartlify.request_ip, cartlify.request_user_agent, set with the context), not what
+-- the row says. It holds the lock of its kind shared until it commits: a version published
+-- meanwhile waits for it, and one published before it is seen here. It is dated when it is
+-- written.
 CREATE OR REPLACE FUNCTION cartlify.legal_acceptances_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_kind cartlify."LegalDocumentKind";
@@ -3088,26 +3276,30 @@ BEFORE INSERT ON cartlify.legal_acceptances FOR EACH ROW
 EXECUTE FUNCTION cartlify.legal_acceptances_before_insert ();
 
 ------------------------------------------------------------
--- UPDATE GUARDS: which columns an update may change
+-- UPDATE GUARDS
 ------------------------------------------------------------
--- The policies of db/03 say who may update a row; these triggers say what the update may change,
--- comparing NEW with OLD. A policy that read the old row again by a subquery saw the version from
--- the start of the statement: an update that waited for the lock of the row and then changed the
--- version another transaction left (a view of a product while it is paid for) looked as if it
--- changed what the other one did, and failed with 42501. OLD is the version the update changes.
+
+-- The policies of db/03 say who may update a row; the triggers below say what the update may
+-- change, comparing NEW with OLD. A policy that read the old row again by a subquery saw the
+-- version from the start of the statement: an update that waited for the lock of the row and then
+-- changed the version another transaction left (a view of a product while it is paid for)
+-- looked as if it changed what the other one did, and failed with 42501. OLD is the version the
+-- update changes.
+--
 -- Each trigger keeps the branches of the policies of its table: the update passes when one of
--- them lets it.
+-- them lets it. A refusal is <TABLE>_UPDATE_FORBIDDEN with the code 42501.
+--
 -- The functions run as the role of the statement, not as the owner: current_user tells an update
 -- of the app (cartlify_app) from a step of the database (cartlify_owner, a security definer
 -- function). A superuser (a data script by hand) is not checked, as rls does not check it either.
+--
 -- Each trigger is named to run after the other before-update triggers of its table, so it checks
--- the row they leave.
+-- the row they leave. Most guards list the changed columns (v_changed) with an expression, not
+-- with a function (those of user_tokens and chat_threads compare the columns one by one): the app has no execute right on internal functions.
 
--- UPDATE GUARDS the columns of NEW that differ from OLD
--- an expression in every guard, not a function: the app has no execute right on internal functions
-
--- UPDATE GUARDS users: the owner changes its row but its email, role, verification and deletion;
--- root changes anything; the steps of the database verify an email or remove an avatar
+-- Guard of users: the owner changes its own row but not its email, role, verification or
+-- deletion (the one exception: an unverified LOCAL account taken over by an OAuth provider);
+-- root changes anything; the steps of the database verify an email or remove an avatar.
 CREATE OR REPLACE FUNCTION cartlify.users_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3162,11 +3354,12 @@ CREATE TRIGGER trg_users_update_columns
 BEFORE UPDATE ON cartlify.users FOR EACH ROW
 EXECUTE FUNCTION cartlify.users_update_columns ();
 
--- UPDATE GUARDS user tokens: a token keeps its user, its kind, its session and its browser, a
--- closed token stays closed, a session gets its hash and deadline once it is made, every other
--- link keeps them and is only closed; a session is revoked only as it is closed (db/06: at that
--- moment), so a token closed by its renewal stays the sign of theft it is when it comes back;
--- the steps of the database close a link of an email verification
+-- Guard of user tokens. The owner or an admin may update a token only so: it keeps its user,
+-- its kind, its session and its browser; a closed token (usedAt) stays closed; a revoke
+-- (revokedAt) is set only as the token is closed (db/06: at that moment), so a token closed by
+-- its renewal stays the sign of theft it is when it comes back; a session (REFRESH_TOKEN) may
+-- get its hash and deadline after the row is made, every other link keeps them and is only
+-- closed. The steps of the database close a link of an email verification.
 CREATE OR REPLACE FUNCTION cartlify.user_tokens_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
@@ -3206,8 +3399,9 @@ CREATE TRIGGER trg_user_tokens_update_columns
 BEFORE UPDATE ON cartlify.user_tokens FOR EACH ROW
 EXECUTE FUNCTION cartlify.user_tokens_update_columns ();
 
--- UPDATE GUARDS login logs: history, only anonymize_login_logs gives a line of a deleted account
--- the email the account has now
+-- Guard of login logs: a line is history. Only two steps of the database change one:
+-- anonymize_login_logs gives the line of a deleted account the email the account has now, and
+-- cleanup_login_log_addresses empties the address and the browser of an old line.
 CREATE OR REPLACE FUNCTION cartlify.login_logs_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3249,9 +3443,11 @@ CREATE TRIGGER trg_login_logs_update_columns
 BEFORE UPDATE ON cartlify.login_logs FOR EACH ROW
 EXECUTE FUNCTION cartlify.login_logs_update_columns ();
 
--- UPDATE GUARDS products: an admin changes everything but what the database counts and adds one
--- view like anybody; a guest or a user adds a view; the steps of the database change one group of
--- what they count at a time (the rating, the stock and the reserve, the popularity)
+-- Guard of products: an admin changes everything but what the database counts (the stock, the
+-- reserve, the rating, the review count, the popularity) and adds at most one view; a guest or a
+-- user changes only the views (products_before_views_change limits it to one); the steps of the
+-- database change one group of what they count at a time (the rating, the stock and the reserve,
+-- the popularity).
 CREATE OR REPLACE FUNCTION cartlify.products_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3307,7 +3503,8 @@ CREATE TRIGGER trg_products_update_columns
 BEFORE UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_update_columns ();
 
--- UPDATE GUARDS product batches: a sale, a write-off or a cancel changes only what a batch has left
+-- Guard of product batches: a sale, a write-off or a cancel, as a step of the database, changes
+-- only what a batch has left.
 CREATE OR REPLACE FUNCTION cartlify.product_batches_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3333,8 +3530,8 @@ CREATE TRIGGER trg_product_batches_update_columns
 BEFORE UPDATE ON cartlify.product_batches FOR EACH ROW
 EXECUTE FUNCTION cartlify.product_batches_update_columns ();
 
--- UPDATE GUARDS reviews: the author adds the missing rating or comment and nothing else; the
--- steps of the database count the votes
+-- Guard of reviews: the author adds the missing rating or comment and nothing else; the steps of
+-- the database recount the two vote counters and change nothing else.
 CREATE OR REPLACE FUNCTION cartlify.reviews_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3357,7 +3554,8 @@ BEGIN
 
   IF current_user = 'cartlify_owner'
      AND NEW."upVotes" >= 0
-     AND NEW."downVotes" >= 0 THEN
+     AND NEW."downVotes" >= 0
+     AND v_changed <@ ARRAY['upVotes', 'downVotes'] THEN
     RETURN NEW;
   END IF;
 
@@ -3371,10 +3569,10 @@ CREATE TRIGGER trg_reviews_update_columns
 BEFORE UPDATE ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.reviews_update_columns ();
 
--- UPDATE GUARDS orders: the owner of an unconfirmed order writes the shipping data and the note;
--- an admin or root takes the shipping steps; the steps of the database change the total, the
--- confirmation and the reservation, the payment, and the cancel of an admin
-CREATE OR REPLACE FUNCTION cartlify.orders_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+-- Guard of review votes: the voter switches the vote UP <-> DOWN and nothing else. A vote never
+-- moves to another review or to another voter (the counters of the review it left would stay as
+-- they were); the vote still never lands on an own review (the policy review_votes_update).
+CREATE OR REPLACE FUNCTION cartlify.review_votes_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
     SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
@@ -3386,20 +3584,41 @@ BEGIN
   END IF;
 
   IF cartlify.is_owner(NEW."userId")
-     AND NEW."paymentId" IS NULL
-     AND NEW."paymentProvider" IS NULL
-     AND NEW.confirmed = false
-     AND NEW.status IN ('pending', 'unconfirmed')
-     AND NEW."reservationExpiresAt" IS NULL
-     AND v_changed <@ ARRAY[
-       'shippingAddress', 'recipientFirstName', 'recipientLastName', 'recipientPhone', 'note',
-       'updatedAt'
-     ] THEN
+     AND v_changed <@ ARRAY['action', 'updatedAt'] THEN
     RETURN NEW;
   END IF;
 
+  RAISE EXCEPTION 'REVIEW_VOTE_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_review_votes_update_columns ON cartlify.review_votes;
+
+CREATE TRIGGER trg_review_votes_update_columns
+BEFORE UPDATE ON cartlify.review_votes FOR EACH ROW
+EXECUTE FUNCTION cartlify.review_votes_update_columns ();
+
+-- Guard of orders: an admin or root takes the shipping steps, one on or one back (a step over
+-- is not allowed); the steps of the database change the total, the confirmation and the
+-- reservation, the payment, and the cancel of an admin. The owner changes nothing of an order
+-- with a plain update: where it goes is written in order_deliveries.
+CREATE OR REPLACE FUNCTION cartlify.orders_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  -- the steps of the shipping: paid to shipped to delivered, and one step back of each; a step
+  -- over (paid to delivered) is not one
   IF cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
-     AND NEW.status IN ('shipped', 'delivered')
+     AND (OLD.status::text, NEW.status::text) IN (
+       ('paid', 'shipped'), ('shipped', 'delivered'), ('shipped', 'paid'), ('delivered', 'shipped')
+     )
      AND v_changed <@ ARRAY['status', 'updatedAt'] THEN
     RETURN NEW;
   END IF;
@@ -3407,11 +3626,12 @@ BEGIN
   IF current_user = 'cartlify_owner'
      AND (
        (NEW."total" >= 0 AND v_changed <@ ARRAY['total', 'updatedAt'])
+       -- back to unconfirmed: the total goes back to the items (orders_before_update)
        OR (
          NEW.confirmed = false
          AND NEW.status IN ('pending', 'unconfirmed')
          AND NEW."reservationExpiresAt" IS NULL
-         AND v_changed <@ ARRAY['confirmed', 'status', 'reservationExpiresAt', 'updatedAt']
+         AND v_changed <@ ARRAY['confirmed', 'status', 'reservationExpiresAt', 'total', 'updatedAt']
        )
        OR (
          NEW.confirmed = true
@@ -3460,9 +3680,128 @@ CREATE TRIGGER trg_orders_update_columns
 BEFORE UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_update_columns ();
 
--- UPDATE GUARDS chat threads: a chat keeps its user or guest, a closed chat stays closed, a request
+-- Stamps updatedAt of a delivery on every update (utc without a zone, as prisma writes it).
+CREATE OR REPLACE FUNCTION cartlify.order_deliveries_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+
+  -- A pickup costs nothing. An order that went back to unconfirmed keeps the price of its manual
+  -- delivery, so a buyer who changes it to a pickup would meet the check of the address (price 0).
+  IF NEW.method = 'pickup' THEN
+    NEW."price" := 0;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_order_deliveries_before_update ON cartlify.order_deliveries;
+
+CREATE TRIGGER trg_order_deliveries_before_update
+BEFORE UPDATE ON cartlify.order_deliveries FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_deliveries_before_update ();
+
+-- Guard of order deliveries: a user writes where the order goes, the method too (the policy lets
+-- this only while the order is not confirmed); an admin or root corrects the person and the
+-- address of a paid order (the policy), but not the method or the price; the price is fixed by
+-- confirm_order, a step of the database.
+CREATE OR REPLACE FUNCTION cartlify.order_deliveries_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY['price', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  -- A user may not touch the price, except that a pickup is free: the price goes to 0 together
+  -- with the method (order_deliveries_before_update).
+  IF cartlify.current_actor_role() = 'USER'
+     AND v_changed <@ ARRAY[
+       'method', 'recipientFirstName', 'recipientLastName', 'recipientPhone', 'country',
+       'postalCode', 'city', 'street', 'house', 'apartment', 'note', 'price', 'updatedAt'
+     ]
+     AND (NOT 'price' = ANY (v_changed) OR (NEW.method = 'pickup' AND NEW."price" = 0)) THEN
+    RETURN NEW;
+  END IF;
+
+  IF cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
+     AND v_changed <@ ARRAY[
+       'recipientFirstName', 'recipientLastName', 'recipientPhone', 'country', 'postalCode', 'city',
+       'street', 'house', 'apartment', 'note', 'updatedAt'
+     ] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ORDER_DELIVERY_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_order_deliveries_update_columns ON cartlify.order_deliveries;
+
+CREATE TRIGGER trg_order_deliveries_update_columns
+BEFORE UPDATE ON cartlify.order_deliveries FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_deliveries_update_columns ();
+
+-- Stamps updatedAt of a shipment on every update (utc without a zone, as prisma writes it).
+CREATE OR REPLACE FUNCTION cartlify.order_shipments_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_order_shipments_before_update ON cartlify.order_shipments;
+
+CREATE TRIGGER trg_order_shipments_before_update
+BEFORE UPDATE ON cartlify.order_shipments FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_shipments_before_update ();
+
+-- Guard of order shipments: an admin or root corrects the carrier, the number, the link and the
+-- cost, marks the cost as no expense (the shop owes the carrier nothing for it), and rolls a
+-- shipment back once. A shipment that was rolled back is history: only its cost and the mark of
+-- the cost change.
+CREATE OR REPLACE FUNCTION cartlify.order_shipments_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
+     AND v_changed <@ ARRAY[
+       'carrier', 'trackingNumber', 'trackingUrl', 'cost', 'expense', 'rolledBackAt', 'updatedAt'
+     ]
+     AND (OLD."rolledBackAt" IS NULL OR v_changed <@ ARRAY['cost', 'expense', 'updatedAt']) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ORDER_SHIPMENT_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_order_shipments_update_columns ON cartlify.order_shipments;
+
+CREATE TRIGGER trg_order_shipments_update_columns
+BEFORE UPDATE ON cartlify.order_shipments FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_shipments_update_columns ();
+
+-- Guard of chat threads: a chat keeps its user or guest, a closed chat stays closed, a request
 -- for an admin is made now, never earlier (the queue goes by adminRequestedAt; a minute is left
--- for the clock of the server); migrate_guest_data_to_user makes a guest chat a chat of the user
+-- for the clock of the server). migrate_guest_data_to_user, a step of the database, makes a
+-- guest chat a chat of the user.
 CREATE OR REPLACE FUNCTION cartlify.chat_threads_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
@@ -3503,8 +3842,8 @@ CREATE TRIGGER trg_chat_threads_update_columns
 BEFORE UPDATE ON cartlify.chat_threads FOR EACH ROW
 EXECUTE FUNCTION cartlify.chat_threads_update_columns ();
 
--- UPDATE GUARDS admin alert settings: an admin or root changes whether a kind of their alerts is
--- on and its threshold, never whose the row is or which kind
+-- Guard of admin alert settings: an admin or root changes whether a kind of their alerts is on
+-- and its threshold, never whose the row is or which kind.
 CREATE OR REPLACE FUNCTION cartlify.admin_alert_settings_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(

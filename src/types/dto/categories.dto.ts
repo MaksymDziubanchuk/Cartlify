@@ -1,5 +1,6 @@
 import type { CategoryId, IdParam, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
+import type { ProductImagesUrls } from './products.dto.js';
 
 export interface GetAllCategoriesQueryDto {
   limit?: number;
@@ -23,6 +24,8 @@ export interface CategoryResponseDto {
   slug?: string;
   description?: string;
   parentId?: CategoryId;
+  // the picture of the category in three sizes, null without one
+  imageUrls: ProductImagesUrls | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -39,6 +42,7 @@ export interface CategoryTreeNodeDto {
   id: CategoryId;
   name: string;
   slug: string;
+  imageUrls: ProductImagesUrls | null;
   productCount: number;
   children: CategoryTreeNodeDto[];
 }
@@ -88,6 +92,22 @@ export interface DeleteCategoryDto {
   categoryId: CategoryId;
   actorId: UserId;
   actorRole: Role;
+}
+
+// the picture of a category in its form part: the stream is read while the request is parsed
+export interface CategoryImagePart {
+  file: NodeJS.ReadableStream;
+  mimetype: string;
+  filename?: string;
+}
+
+// a picture waiting on Cloudinary under an id of its own until the category is written
+export interface UploadedCategoryImage {
+  publicId: string;
+}
+
+export interface CategoryImageParamsDto {
+  categoryId: IdParam;
 }
 
 export interface DeleteCategoryResponseDto {

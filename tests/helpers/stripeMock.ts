@@ -106,7 +106,14 @@ const KNOWN_PARAMS: Record<string, unknown> = {
         price_data: { currency: true, unit_amount: true, product_data: { name: true } },
       },
     ],
-    payment_intent_data: { description: true },
+    payment_intent_data: {
+      description: true,
+      shipping: {
+        name: true,
+        phone: true,
+        address: { line1: true, line2: true, city: true, postal_code: true, country: true },
+      },
+    },
     customer_email: true,
     success_url: true,
     cancel_url: true,
@@ -160,6 +167,8 @@ export function startStripeMock(key: string): StripeMock {
   const sessions = new Map<string, Session>();
   // the description each page gives its payment, not a field of the session
   const descriptions = new Map<string, string | null>();
+  // where the order goes, the shipping each page gives its payment
+  const shippings = new Map<string, unknown>();
   const lineItems = new Map<string, LineItem[]>();
   const paymentIntents = new Map<string, PaymentIntent>();
   const paymentMethods = new Map<
@@ -322,6 +331,7 @@ export function startStripeMock(key: string): StripeMock {
       ((params.payment_intent_data as Params | undefined)?.description as string | undefined) ??
         null,
     );
+    shippings.set(id, (params.payment_intent_data as Params | undefined)?.shipping ?? null);
 
     return { status: 200, body: copy(session) };
   }
@@ -393,6 +403,7 @@ export function startStripeMock(key: string): StripeMock {
       currency: session.currency as string,
       paymentMethod: method.id,
       description: descriptions.get(session.id) ?? null,
+      shipping: shippings.get(session.id) ?? null,
       status: byBank ? 'processing' : 'succeeded',
     });
 
@@ -434,6 +445,7 @@ export function startStripeMock(key: string): StripeMock {
     currency: string;
     paymentMethod: string;
     description: string | null;
+    shipping?: unknown;
     status: 'succeeded' | 'processing';
   }): PaymentIntent {
     const payment: PaymentIntent = {
@@ -446,6 +458,7 @@ export function startStripeMock(key: string): StripeMock {
       created: now(),
       currency: fields.currency,
       description: fields.description,
+      shipping: fields.shipping ?? null,
       latest_charge: fields.status === 'succeeded' ? idOf('ch_', 27) : null,
       livemode: false,
       metadata: {},

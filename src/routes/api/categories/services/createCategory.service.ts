@@ -69,6 +69,7 @@ export async function createCategory({
         entityType: 'category',
         entityId: category.id,
         action: 'OTHER',
+        event: 'category.create',
         changes: auditChanges,
       });
 
@@ -82,6 +83,8 @@ export async function createCategory({
       slug: created.slug,
       ...(created.description ? { description: created.description } : {}),
       ...(created.parentId ? { parentId: created.parentId } : {}),
+      // a new category has no picture, it comes with PUT /api/categories/{categoryId}/image
+      imageUrls: null,
       createdAt: created.createdAt,
       updatedAt: created.updatedAt,
     };

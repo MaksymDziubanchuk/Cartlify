@@ -18,6 +18,17 @@ export const productSafety: ProductSafetyInput = {
   },
 };
 
+// what a new product weighs and measures packed: the weight in grams and the three sizes in
+// millimetres, as the text fields of a form. A new product needs them
+export function shippingFormFields(): FormPart[] {
+  return [
+    { name: 'weightGrams', value: '350' },
+    { name: 'lengthMm', value: '200' },
+    { name: 'widthMm', value: '100' },
+    { name: 'heightMm', value: '50' },
+  ];
+}
+
 // the same data as the text fields of a form: safety.manufacturer.name and so on
 export function safetyFormFields(safety: ProductSafetyInput = productSafety): FormPart[] {
   const parts: FormPart[] = Object.entries(safety.manufacturer).map(([key, value]) => ({

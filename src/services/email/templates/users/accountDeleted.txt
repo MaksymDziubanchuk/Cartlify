@@ -2,7 +2,7 @@
 
 {{/userName}}Your {{appName}} account is deleted. Your profile is removed and you can no longer sign in to it.
 {{#hasDeliveries}}
-These orders are paid and will still be delivered to the address given in each order:
+These orders are paid and will still be delivered to the address given in each order, or kept for you to collect at the shop:
 {{#deliveries}}- Order #{{orderId}}, {{total}}: {{statusText}}
   {{itemsText}}
 {{/deliveries}}You will get no more mails about them.

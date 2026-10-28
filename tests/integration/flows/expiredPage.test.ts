@@ -62,7 +62,7 @@ describe('a payment page that runs out', () => {
       method: 'POST',
       url: '/api/orders/current/confirm',
       headers: withCsrf(csrf, accessCookie(buyer)),
-      payload: { orderId },
+      payload: { orderId, expectedDeliveryPrice: 0 },
     });
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json()).toMatchObject({ id: orderId, status: 'waiting' });

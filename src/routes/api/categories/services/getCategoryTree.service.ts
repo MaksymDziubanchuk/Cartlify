@@ -1,4 +1,5 @@
 import { prisma } from '@db/client.js';
+import { categoryImageUrlsOf } from './helpers/categories.helper.js';
 import { InternalError } from '@utils/errors.js';
 
 import type { CategoryTreeNodeDto, CategoryTreeResponseDto } from 'types/dto/categories.dto.js';
@@ -12,7 +13,7 @@ export async function getCategoryTree(): Promise<CategoryTreeResponseDto> {
   try {
     const [categories, counts] = await prisma.$transaction([
       prisma.category.findMany({
-        select: { id: true, name: true, slug: true, parentId: true },
+        select: { id: true, name: true, slug: true, parentId: true, imageUrl: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
       prisma.product.groupBy({
@@ -30,6 +31,7 @@ export async function getCategoryTree(): Promise<CategoryTreeResponseDto> {
           id: row.id as CategoryId,
           name: row.name,
           slug: row.slug,
+          imageUrls: categoryImageUrlsOf(row.imageUrl),
           productCount: 0,
           children: [],
         },
