@@ -176,4 +176,37 @@ describe('review_votes', () => {
 
     expect(outcome).toMatchObject({ ok: false, code: '42501' });
   });
+
+  // a vote moved to another review would leave the counters of the review it left as they were
+  it('does not let a vote move to another review, the counts stay', async () => {
+    const { id: elsewhere } = await createReview(third.id, (await createProduct()).id);
+
+    const { outcome, counts } = await inRolledBackTx(async (db) => {
+      await db.as({ role: 'USER', userId: first.id });
+      const outcome = await db.attempt(
+        `update cartlify.review_votes set "reviewId" = $1 where "userId" = $2 and "reviewId" = $3`,
+        elsewhere,
+        first.id,
+        reviewId,
+      );
+      return { outcome, counts: await countsOf(db) };
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: '42501' });
+    expect(counts).toEqual({ up: 1, down: 1 });
+  });
+
+  it('does not let a vote change its voter', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await db.as({ role: 'USER', userId: first.id });
+      return db.attempt(
+        `update cartlify.review_votes set "userId" = $1 where "userId" = $2 and "reviewId" = $3`,
+        third.id,
+        first.id,
+        reviewId,
+      );
+    });
+
+    expect(outcome).toMatchObject({ ok: false, code: '42501' });
+  });
 });

@@ -153,6 +153,7 @@ export async function githubCallback({
         userId: u.id as any,
         email,
         role: u.role as any,
+        event: 'login.github',
         ip: ip ?? null,
         userAgent: userAgent ?? null,
       });

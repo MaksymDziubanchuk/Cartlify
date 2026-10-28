@@ -58,7 +58,10 @@ export interface AdminStatsOrdersDto {
   confirmedTotal: number;
   pendingCartsTotal: number;
   byStatus: AdminStatsOrdersByStatusDto;
+  // the totals of the orders, the delivery included
   revenue: AdminStatsOrdersRevenueDto;
+  // the delivery alone, part of the revenue
+  deliveryRevenue: AdminStatsOrdersRevenueDto;
   averageOrderValue: number;
   itemsSold: number;
 }
@@ -103,6 +106,9 @@ export interface GetAdminStatsResponseDto {
   orders: AdminStatsOrdersDto;
   products: AdminStatsProductsDto;
   reviews: AdminStatsReviewsDto;
+  // the income, the expenses and the margins of the period, the same as the report of the
+  // accounting of the whole shop for it
+  money: AdminMoneySummaryDto;
   createdAt: Date;
 }
 // GET /admin/reports/accounting: the money of a period, the products asked for or all of them
@@ -133,14 +139,43 @@ export interface AdminSalesDto {
   margin: number;
 }
 
+// the delivery of the orders in a period, apart from the products: what buyers paid for it, what
+// went back with a cancel, what the shop paid the carriers; it is of no product, so a report of
+// some products has none
+export interface AdminDeliveryMoneyDto {
+  // the delivery of the orders paid in the period and not cancelled (orders that paid for it)
+  income: { orders: number; revenue: number };
+  // told apart: the delivery of the paid orders cancelled in the period, by cancelledAt; it went
+  // back, and the income of the period they were paid in has it no more
+  refunded: { orders: number; revenue: number };
+  // the sends the shop owes the carriers for, by the time they were sent (shippedAt); the ones
+  // without a cost written count apart
+  shipping: { sends: number; cost: number; withoutCost: number };
+  // the income less what the carriers cost
+  result: number;
+}
+
+// the money of a period in three parts; the delivery and the sends are of the whole shop, none for
+// a report of some products or of a category, and the totals are of the items then
+export interface AdminMoneySummaryDto {
+  // the orders paid in the period and not cancelled: their items, their delivery, together
+  income: { items: number; delivery: number | null; total: number };
+  // what the items sold cost (their batches), the units written off, the sends the shop owes the
+  // carriers for, together
+  expenses: { costOfGoods: number; writeOffs: number; shipping: number | null; total: number };
+  // the items less their cost, the delivery less the sends, all the income less all the expenses
+  margin: { items: number; delivery: number | null; total: number };
+}
+
 export interface GetAdminAccountingResponseDto {
   period: AdminStatsPeriodDto;
   currency: string;
-  // the orders paid in the period, the cancelled ones among them too
+  // the orders paid in the period and not cancelled
   sales: AdminSalesDto;
-  // the orders cancelled in the period: their payments went back
+  // told apart and in no margin: the orders cancelled in the period, their payments went back
   cancellations: Omit<AdminSalesDto, 'margin'>;
-  net: { revenue: number; cost: number; margin: number };
+  // the income, the expenses and the margins of the period
+  summary: AdminMoneySummaryDto;
   // the batches taken in during the period, at their costs
   purchases: AdminUnitsValueDto & {
     bySource: Record<'supplier' | 'surplus' | 'customer_return', AdminUnitsValueDto>;
@@ -154,15 +189,19 @@ export interface GetAdminAccountingResponseDto {
   };
   // what the batches have left now, at their costs
   stock: AdminUnitsValueDto;
+  // the delivery of all orders; none when the report is of some products or of a category
+  delivery: AdminDeliveryMoneyDto | null;
 }
 
 // the money of a product, a category or a step of time in a period
 export interface AdminMoneyBreakdownDto {
-  sales: Omit<AdminSalesDto, 'orders'>;
+  // the orders paid in the period and not cancelled; the percent is of the revenue, none without
+  sales: Omit<AdminSalesDto, 'orders'> & { marginPercent: number | null };
+  // told apart and in no margin: the orders cancelled in the period
   cancellations: Omit<AdminSalesDto, 'orders' | 'margin'>;
-  // the sales less the cancellations; the percent is of the revenue, none without a revenue
-  net: Omit<AdminSalesDto, 'orders'> & { marginPercent: number | null };
   writeOffs: AdminUnitsValueDto;
+  // the margin of the sales less the write-offs, the percent of the revenue of the sales
+  afterWriteOffs: { margin: number; marginPercent: number | null };
   purchases: AdminUnitsValueDto;
   stock: AdminUnitsValueDto;
 }
@@ -170,12 +209,14 @@ export interface AdminMoneyBreakdownDto {
 export type AdminReportFormat = 'json' | 'csv';
 export type AdminReportSortOrder = 'asc' | 'desc';
 
-// the products and the categories sort by the net money, the write-offs, the purchases, the stock
+// the products and the categories sort by the money of the sales, the margin after the
+// write-offs, the write-offs, the purchases, the stock
 export type AdminReportSortBy =
   | 'revenue'
   | 'margin'
   | 'marginPercent'
   | 'units'
+  | 'marginAfterWriteOffs'
   | 'writeOffs'
   | 'purchases'
   | 'stockValue'
@@ -200,7 +241,14 @@ export type AdminReportCategoriesQueryDto = Omit<AdminReportProductsQueryDto, 'l
 
 export type AdminReportStep = 'day' | 'week' | 'month';
 export type AdminTimelineSortBy =
-  'period' | 'revenue' | 'margin' | 'units' | 'writeOffs' | 'purchases';
+  | 'period'
+  | 'revenue'
+  | 'margin'
+  | 'units'
+  | 'marginAfterWriteOffs'
+  | 'marginTotal'
+  | 'writeOffs'
+  | 'purchases';
 
 export interface AdminReportTimelineQueryDto extends AdminReportScopeQueryDto {
   productIds?: string;
@@ -242,6 +290,10 @@ export interface AdminReportStepRowDto extends Omit<AdminMoneyBreakdownDto, 'sto
   // the day or the monday of the week (yyyy-mm-dd), the month (yyyy-mm), by the shop calendar
   label: string;
   period: AdminStatsPeriodDto;
+  // the delivery of the step; none when the report is of some products or of a category
+  delivery: AdminDeliveryMoneyDto | null;
+  // the income, the expenses and the margins of the step
+  summary: AdminMoneySummaryDto;
 }
 
 export interface GetAdminReportTimelineResponseDto {
@@ -365,8 +417,40 @@ export interface GetAdminStockMovementsResponseDto {
   total: number;
 }
 
+// THE JOURNALS (the admin log, the log of prices, of logins and of consents): the same query for
+// each. A journal sorts by any simple column, reads a period, takes some events and some columns
+export interface AdminLogQueryDto {
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  from?: string;
+  to?: string;
+  // the columns of the answer through commas, all unless given
+  columns?: string;
+  // the events through commas, all unless given
+  events?: string;
+  limit?: number;
+  cursor?: string;
+  format?: 'json' | 'csv';
+}
+
+// the account of a line; none of its data for an admin when it is root, the role stays
+export interface AdminLogAccountDto {
+  id: UserId | null;
+  name: string | null;
+  email: string | null;
+  role: Role;
+}
+
+// a page of a journal: the lines with the columns asked for
+export interface AdminLogPageDto<Item> {
+  items: Partial<Item>[];
+  limit: number;
+  total: number;
+  nextCursor: string | null;
+}
+
 // THE ADMIN LOG: who did what to what, from which address and browser
-export interface AdminAuditLogQueryDto {
+export interface AdminAuditLogQueryDto extends AdminLogQueryDto {
   actorId?: number;
   // the lines written with this role
   actorRole?: 'USER' | 'ADMIN' | 'ROOT';
@@ -376,41 +460,115 @@ export interface AdminAuditLogQueryDto {
   actions?: string;
   // the lines with a change of this field
   field?: string;
-  from?: string;
-  to?: string;
-  limit?: number;
-  cursor?: string;
-  format?: 'json' | 'csv';
 }
 
 export interface AdminAuditLogItemDto {
   id: number;
+  createdAt: string;
+  actorId: UserId | null;
   // the account that did it; a deleted one has no email
-  actor: { id: UserId; name: string | null; email: string | null; role: Role };
+  actor: AdminLogAccountDto;
   // the role it had when it did it
   actorRole: Role;
+  action: string;
+  // what made the line, finer than the action
+  event: string;
   entityType: string;
   entityId: number | null;
-  action: string;
-  changes: Array<{ field: string; old: unknown; new: unknown }>;
   ip: string | null;
   userAgent: string | null;
-  createdAt: string;
+  changes: Array<{ field: string; old: unknown; new: unknown }>;
 }
 
-export interface GetAdminAuditLogResponseDto {
-  items: AdminAuditLogItemDto[];
-  limit: number;
-  total: number;
-  nextCursor: string | null;
+export type GetAdminAuditLogResponseDto = AdminLogPageDto<AdminAuditLogItemDto>;
+
+// THE LOG OF PRICES: every change of the price of every product
+export interface AdminPriceLogQueryDto extends AdminLogQueryDto {
+  productId?: number;
+  actorId?: number;
+  mode?: 'fixed' | 'percent';
+}
+
+export interface AdminPriceLogItemDto {
+  id: number;
+  createdAt: string;
+  productId: number;
+  product: { id: number; name: string };
+  actorId: UserId | null;
+  actor: AdminLogAccountDto;
+  event: string;
+  oldPrice: number;
+  newPrice: number;
+  mode: 'fixed' | 'percent';
+  value: number;
+  endsAt: string | null;
+}
+
+export type GetAdminPriceLogResponseDto = AdminLogPageDto<AdminPriceLogItemDto>;
+
+// THE LOG OF LOGINS: who came in, how, from where
+export interface AdminLoginLogQueryDto extends AdminLogQueryDto {
+  userId?: number;
+  // the roles of the accounts through commas
+  roles?: string;
+  // a part of the email
+  email?: string;
+}
+
+export interface AdminLoginLogItemDto {
+  id: number;
+  createdAt: string;
+  userId: UserId | null;
+  user: AdminLogAccountDto & { deleted: boolean };
+  email: string | null;
+  role: Role;
+  ipAddress: string | null;
+  userAgent: string | null;
+  event: string;
+}
+
+export type GetAdminLoginLogResponseDto = AdminLogPageDto<AdminLoginLogItemDto>;
+
+// THE LOG OF CONSENTS: who agreed to which version, where
+export interface AdminConsentLogQueryDto extends AdminLogQueryDto {
+  userId?: number;
+  documentId?: number;
+  orderId?: number;
+  kind?: 'terms' | 'contract';
+}
+
+export interface AdminConsentLogItemDto {
+  id: number;
+  createdAt: string;
+  userId: UserId | null;
+  user: AdminLogAccountDto & { deleted: boolean };
+  documentId: number;
+  document: { kind: 'terms' | 'contract'; version: number; title: string };
+  orderId: number | null;
+  ip: string | null;
+  userAgent: string | null;
+  event: string;
+}
+
+export type GetAdminConsentLogResponseDto = AdminLogPageDto<AdminConsentLogItemDto>;
+
+// the events each journal writes, for the checkboxes of a page
+export interface GetAdminLogEventsResponseDto {
+  auditLog: string[];
+  priceLog: string[];
+  loginLog: string[];
+  consentLog: string[];
 }
 
 // ALERTS: what waits for the work of an admin, each kind with how many there are
 export type AdminAlertKind =
   | 'paid_orders_waiting'
   | 'shipped_orders_waiting'
+  | 'pickup_not_collected'
+  | 'shipped_without_cost'
   | 'out_of_stock'
   | 'low_stock'
+  | 'products_without_shipping_data'
   | 'expiring_batches'
   | 'expired_batches'
   | 'chats_waiting'

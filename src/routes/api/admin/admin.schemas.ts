@@ -41,6 +41,12 @@ const adminStatsResponseExample = {
       last7d: 820.25,
       last30d: 3200.5,
     },
+    deliveryRevenue: {
+      total: 410,
+      inPeriod: 105,
+      last7d: 25,
+      last30d: 105,
+    },
     averageOrderValue: 239.44,
     itemsSold: 148,
   },
@@ -83,8 +89,10 @@ const getStatsSchema = {
   description:
     'Returns aggregated dashboard statistics for users, orders, products and reviews. The period ' +
     'is [from, to), all time until now unless given: the money, the units sold, the average order ' +
-    'and the tops count the orders paid in it (paidAt), the reviews and the users the ones made in ' +
-    'it. The users are the accounts of buyers, admins and root are left out.',
+    'and the tops count the orders paid in it (paidAt) and not cancelled, the reviews and the ' +
+    'users the ones made in it. The users are the accounts of buyers, admins and root are left ' +
+    'out. `money` is the income, the expenses and the margins of the period, counted the way ' +
+    '`summary` of GET /api/admin/reports/accounting counts them, in the same snapshot as the rest.',
 
   querystring: {
     $ref: 'adminStatsQuerySchema#',
@@ -120,18 +128,34 @@ const getStatsSchema = {
 
 const nothing = { units: 0, value: 0 };
 
+// the delivery of all orders in a period, as the report of the whole shop gives it
+const deliveryExample = {
+  income: { orders: 9, revenue: 45 },
+  refunded: { orders: 1, revenue: 5 },
+  shipping: { sends: 10, cost: 36.5, withoutCost: 2 },
+  result: 8.5,
+};
+
 // Schema for the accounting report
 const getAccountingReportSchema = {
   operationId: 'getAccountingReport',
   summary: 'Get the accounting report',
   description:
     'The money of a period, from `from` (taken in) to `to` (left out), in the money of the ' +
-    'shop: the sales of the orders paid in it at the prices they were paid with, their cost at ' +
-    'the costs of the batches they took and the margin; the paid orders cancelled in it, whose ' +
-    'money went back; the net of both; the batches taken in during it by source; the units ' +
-    'written off in it by reason, at the costs of their batches; and what the batches have left ' +
-    'now. A sale cancelled later stays a sale of its period, its cancel counts in the period of ' +
-    'the cancel. `productIds` keeps only these products, `categoryId` the products of a category, with its whole branch unless `branch=false`. All of it comes from one snapshot. ' +
+    'shop: the sales of the orders paid in it and not cancelled, at the prices they were paid ' +
+    'with, their cost at the costs of the batches they took and the margin; told apart and in no ' +
+    'margin, the paid orders cancelled in it, whose money went back; `summary`, the income (the ' +
+    'items, the delivery, together), the expenses (what the items cost, the write-offs, the ' +
+    'sends, together) and the margins (the items, the delivery, all of it); the batches taken in ' +
+    'during it by source; the units written off in it by reason, at the costs of their batches; ' +
+    'and what the batches have left now. An order cancelled later is taken out of the period it ' +
+    'was paid in: the report of that period changes. `productIds` keeps only these products, `categoryId` the products of a category, with its whole branch unless `branch=false`. All of it comes from one snapshot. ' +
+    'The `delivery` is of all orders and of no product, so it is none (null) in a report of some ' +
+    'products or of a category: what the orders paid in the period and not cancelled paid for ' +
+    'it (by the time of the payment), told apart what went back with the cancels (by the time of ' +
+    'the cancel), what the sends ' +
+    'cost the shop (by the time they were sent; the ones whose cost is not written are counted ' +
+    'apart in `withoutCost`), and the result. ' +
     'This operation is restricted to privileged users.',
 
   querystring: {
@@ -149,7 +173,11 @@ const getAccountingReportSchema = {
           currency: 'eur',
           sales: { orders: 12, units: 30, revenue: 1500, cost: 900, margin: 600 },
           cancellations: { orders: 1, units: 2, revenue: 100, cost: 60 },
-          net: { revenue: 1400, cost: 840, margin: 560 },
+          summary: {
+            income: { items: 1500, delivery: 45, total: 1545 },
+            expenses: { costOfGoods: 900, writeOffs: 90, shipping: 36.5, total: 1026.5 },
+            margin: { items: 600, delivery: 8.5, total: 518.5 },
+          },
           purchases: {
             units: 50,
             value: 1500,
@@ -172,6 +200,7 @@ const getAccountingReportSchema = {
             },
           },
           stock: { units: 120, value: 3600 },
+          delivery: deliveryExample,
         },
       ],
     },
@@ -227,10 +256,11 @@ const reportErrors = (what: string) => ({
 });
 
 const MONEY_TEXT =
-  'For each row: the sales of the orders paid in the period at their prices and the costs of ' +
-  'the batches they took, with the margin; the paid orders cancelled in it; the net of both, ' +
-  'with the margin as a percent of the revenue (none without a revenue); the units written off ' +
-  'and taken in, at their costs. The margin is of the sales, the write-offs are apart. ';
+  'For each row: the sales of the orders paid in the period and not cancelled, at their prices ' +
+  'and the costs of the batches they took, with the margin and its percent of the revenue (none ' +
+  'without a revenue); told apart and in no margin, the paid orders cancelled in it; the units ' +
+  'written off, and the margin after them (`afterWriteOffs`); the units taken in, at their ' +
+  'costs. An order cancelled later is taken out of the period it was paid in. ';
 
 const CSV_TEXT =
   '`format=csv` gives the same as a csv file for the accountant (utf-8 with a byte order ' +
@@ -315,7 +345,9 @@ const getAccountingTimelineSchema = {
     'period is the step of `to` and the eleven before it. ' +
     MONEY_TEXT +
     'Each step in the order of time, or by `sortBy`; the products of `productIds` or of a ' +
-    'category. ' +
+    'category. The `delivery` of each step is of all orders, and none (null) with `productIds` ' +
+    'or `categoryId`; the csv has its columns empty then. `summary` of each step is its income, ' +
+    'its expenses and its margins, as in the report of the period. ' +
     CSV_TEXT +
     ' This operation is restricted to privileged users.',
 
@@ -418,12 +450,17 @@ const getAuditLogSchema = {
   operationId: 'getAdminAuditLog',
   summary: 'Get the admin log',
   description:
-    'The lines of the admin log, the newest first: who did what to what, the changes, the ' +
-    'address and the browser of the request (none for the work of the server alone). Filters: ' +
-    'the account (`actorId`), the role it wrote with (`actorRole`), the thing (`entityType`, ' +
-    '`entityId`), the actions (`actions`), a field among the changes (`field`), the period ' +
-    '(`from` taken in, `to` left out). `format=csv` gives every line of the filters ' +
-    'as a file, without pages. Admin and root read every line.',
+    'The lines of the admin log, the newest first unless sorted: who did what to what, the ' +
+    'changes, the address and the browser of the request (none for the work of the server ' +
+    'alone), and the `event` that made the line, finer than the action (`product.update_batch`, ' +
+    '`order.ship_bulk`; GET /api/admin/log-events lists them). Filters: the account ' +
+    '(`actorId`), the role it wrote with (`actorRole`), the thing (`entityType`, `entityId`), ' +
+    'the actions (`actions`), a field among the changes (`field`), the events (`events`), the ' +
+    'period (`from` taken in, `to` left out). `sortBy` takes any simple column, `columns` the ' +
+    'columns of the answer and of the csv. `format=csv` gives every line of the filters as a ' +
+    'file, without pages. Admin and root read the same lines with the same filters; for an ' +
+    'admin the data of root (who, the address, the browser, the things and changes about its ' +
+    'account) are left out, only its role is there.',
 
   querystring: { $ref: 'adminAuditLogQuerySchema#' },
 
@@ -438,7 +475,8 @@ const getAuditLogSchema = {
     400: {
       description:
         'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
-        '(INVALID_STATS_PERIOD), a cursor of another list (CURSOR_INVALID).',
+        '(INVALID_STATS_PERIOD), a column or an event the log has not (LOG_COLUMNS_INVALID, ' +
+        'LOG_EVENTS_INVALID, `details.allowed`), a cursor of another list or sort (CURSOR_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -456,6 +494,121 @@ const getAuditLogSchema = {
   },
 } satisfies FastifySchema;
 
+// the way the other journals answer: the same errors and the same csv
+const journalResponse = (what: string, schemaId: string) => ({
+  200: {
+    description: 'The lines of the page; a csv file with format=csv.',
+    content: {
+      'application/json': { schema: { $ref: `${schemaId}#` } },
+      'text/csv': { schema: CSV_FILE_SCHEMA },
+    },
+  },
+  400: {
+    description:
+      'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
+      '(INVALID_STATS_PERIOD), a column or an event the journal has not (LOG_COLUMNS_INVALID, ' +
+      'LOG_EVENTS_INVALID, `details.allowed`), a cursor of another list or sort (CURSOR_INVALID).',
+    $ref: 'errorResponseSchema#',
+  },
+  401: {
+    description: `Authentication is required to read ${what}.`,
+    $ref: 'errorResponseSchema#',
+  },
+  403: {
+    description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+    $ref: 'errorResponseSchema#',
+  },
+  500: {
+    description: `Unexpected server error while reading ${what}.`,
+    $ref: 'errorResponseSchema#',
+  },
+});
+
+const JOURNAL_TEXT =
+  'Sorted by any simple column (`sortBy`, `sortOrder`), within a period (`from` taken in, `to` ' +
+  'left out), for the events asked for (`events`, GET /api/admin/log-events lists them), with the ' +
+  'columns asked for (`columns`); `format=csv` gives every line of the filters as a file. Admin ' +
+  'and root read the same lines with the same filters; for an admin the data of root (who, ' +
+  'the address, the browser) are left out, only its role is there.';
+
+// Schema for the log of prices
+const getPriceLogSchema = {
+  operationId: 'getAdminPriceLog',
+  summary: 'Get the log of prices',
+  description:
+    'Every change of the price of every product: the old and the new price, how it was given ' +
+    '(`mode`, `value`), who did it and the `event` that made the line (a price of one product, ' +
+    'of many, of a selection, the start of a sale, its end). A line with `endsAt` starts a ' +
+    'sale. Filters: `productId`, `actorId`, `mode`. ' +
+    JOURNAL_TEXT,
+  querystring: {
+    $ref: 'adminPriceLogQuerySchema#',
+    examples: [{ productId: 10, events: 'price.set,price.bulk', sortBy: 'newPrice' }],
+  },
+  response: journalResponse('the log of prices', 'adminPriceLogResponseSchema'),
+} satisfies FastifySchema;
+
+// Schema for the log of logins
+const getLoginLogSchema = {
+  operationId: 'getAdminLoginLog',
+  summary: 'Get the log of logins',
+  description:
+    'Who came in, with which role and how (`event`: a password, Google, GitHub or LinkedIn), ' +
+    'from which address and browser. Filters: `userId`, `roles`, `email` (a part of it). A ' +
+    'person reads their own logins in their sessions and in their export. ' +
+    JOURNAL_TEXT,
+  querystring: {
+    $ref: 'adminLoginLogQuerySchema#',
+    examples: [{ roles: 'ADMIN,ROOT', events: 'login.password', sortBy: 'ipAddress' }],
+  },
+  response: journalResponse('the log of logins', 'adminLoginLogResponseSchema'),
+} satisfies FastifySchema;
+
+// Schema for the log of consents
+const getConsentLogSchema = {
+  operationId: 'getAdminConsentLog',
+  summary: 'Get the log of consents',
+  description:
+    'Who agreed to which version of the terms and of the contract, and where (`event`: the ' +
+    'registration, a login, an account made through a provider, the agreement a customer gives ' +
+    'by itself, an order), from which address and browser. Filters: `userId`, `documentId`, ' +
+    '`orderId`, `kind`. ' +
+    JOURNAL_TEXT,
+  querystring: {
+    $ref: 'adminConsentLogQuerySchema#',
+    examples: [{ kind: 'terms', events: 'consent.order', orderId: 42 }],
+  },
+  response: journalResponse('the log of consents', 'adminConsentLogResponseSchema'),
+} satisfies FastifySchema;
+
+// Schema for the events of the journals
+const getLogEventsSchema = {
+  operationId: 'getAdminLogEvents',
+  summary: 'Get the events of the journals',
+  description:
+    'The events every journal writes (the admin log, the log of prices, of logins and of ' +
+    'consents): what the checkboxes of a page of a journal list. A line from before the events ' +
+    'has `legacy.unknown`.',
+  response: {
+    200: {
+      description: 'The events of each journal.',
+      $ref: 'adminLogEventsResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to read the events.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for the alerts of an admin
 const getAlertsSchema = {
   operationId: 'getAdminAlerts',
@@ -463,9 +616,12 @@ const getAlertsSchema = {
   description:
     'What waits for the work of an admin, each kind of the zone of the actor with how many ' +
     'cases wait now, counted with the thresholds of the actor (GET ' +
-    '/api/admin/alerts/subscriptions): paid orders to ship (`paid_orders_waiting`), shipped ' +
-    'orders not delivered for some days (`shipped_orders_waiting`), products of the catalog ' +
-    'with no free units (`out_of_stock`) or with a few (`low_stock`), batches whose last good ' +
+    '/api/admin/alerts/subscriptions): paid orders to ship (`paid_orders_waiting`), orders sent ' +
+    'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
+    'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
+    'written for some days (`shipped_without_cost`), products of the catalog with no free ' +
+    'units (`out_of_stock`) or with a few (`low_stock`), products that lack the weight or the ' +
+    'sizes (`products_without_shipping_data`), batches whose last good ' +
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
     'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
     'some last days (`refunded_payments`), a reservation worker that has not run for some ' +
@@ -719,6 +875,10 @@ const taggedAdminSchema = withOpenApiTag(
     getStockBatchesSchema,
     getStockMovementsSchema,
     getAuditLogSchema,
+    getPriceLogSchema,
+    getLoginLogSchema,
+    getConsentLogSchema,
+    getLogEventsSchema,
     getAlertsSchema,
     getAlertSubscriptionsSchema,
     putAlertSubscriptionSchema,

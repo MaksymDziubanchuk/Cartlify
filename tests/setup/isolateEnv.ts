@@ -20,6 +20,8 @@ const REQUIRED_AT_IMPORT: Record<string, string> = {
   STRIPE_SECRET_KEY: STRIPE_PLACEHOLDER_KEY,
   // required when a test loads a module in production; a test without it sets it empty itself
   STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
+  // the manual delivery needs its countries in every environment
+  DELIVERY_COUNTRIES: 'UA',
   ...CLOUDINARY_PLACEHOLDERS,
 };
 

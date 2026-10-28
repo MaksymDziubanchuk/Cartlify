@@ -16,6 +16,10 @@ import { updateOrderStatus } from './services/updateOrderStatus.service.js';
 
 import { updateOrdersStatus } from './services/updateOrdersStatus.service.js';
 
+import { updateShipment } from './services/updateShipment.service.js';
+
+import { updateOrderDelivery } from './services/updateOrderDelivery.service.js';
+
 import { cancelOrderPayment } from './services/cancelOrderPayment.service.js';
 
 import { cancelPaidOrder } from './services/cancelPaidOrder.service.js';
@@ -32,6 +36,8 @@ export const ordersServices = {
   findById,
   updateOrderStatus,
   updateOrdersStatus,
+  updateShipment,
+  updateOrderDelivery,
 
   cancelOrderPayment,
   cancelPaidOrder,

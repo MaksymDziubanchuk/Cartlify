@@ -87,6 +87,31 @@ export default async function ordersRouter(app: FastifyInstance) {
     ordersController.putOrderStatus,
   );
 
+  // what the shop pays the carrier, the details of a send
+  app.patch(
+    '/:orderId/shipments/:shipmentId',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('orderId'),
+        validateId('shipmentId'),
+      ],
+      schema: ordersSchema.patchShipmentSchema,
+    },
+    ordersController.patchShipment,
+  );
+
+  // where a paid order goes, corrected by an admin until it is sent
+  app.patch(
+    '/:orderId/delivery',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      schema: ordersSchema.patchOrderDeliverySchema,
+    },
+    ordersController.patchOrderDelivery,
+  );
+
   // items of an own order that lost its reservation (unconfirmed)
   app.post(
     '/:orderId/items',
@@ -128,6 +153,10 @@ export default async function ordersRouter(app: FastifyInstance) {
     '/:orderId/cancel',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
+      // a cancel may come without a body: only a manual order that was shipped needs an answer
+      preValidation: async (req) => {
+        if (req.body === undefined || req.body === null) (req as any).body = {};
+      },
       schema: ordersSchema.postCancelOrderSchema,
     },
     ordersController.postCancelOrder,

@@ -50,6 +50,7 @@ export async function restoreProduct(dto: RestoreProductDto): Promise<FullProduc
         entityType: 'product',
         entityId: after.id,
         action: 'PRODUCT_UPDATE',
+        event: 'product.restore',
         changes: [{ field: 'deletedAt', old: before.deletedAt.toISOString(), new: null }],
       });
 

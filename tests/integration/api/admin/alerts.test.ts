@@ -2,7 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { setUserContext } from '@db/dbContext.service.js';
-import { prisma } from '@db/client.js';
 import { closeRedis, connectRedis } from '@redis/client.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
@@ -17,8 +16,9 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
 import { moveClock } from '../../../helpers/payments.js';
+import { testTx } from '../../../helpers/db.js';
 
 // the alerts of an admin (GET /api/admin/alerts): each kind of the work of an admin with how many
 // cases wait, its threshold and the ready request to the list of the app that shows the cases;
@@ -77,8 +77,11 @@ type Alerts = { alerts: Alert[]; total: number; dismissalsAvailable: boolean };
 const ADMIN_KINDS = [
   'paid_orders_waiting',
   'shipped_orders_waiting',
+  'pickup_not_collected',
+  'shipped_without_cost',
   'out_of_stock',
   'low_stock',
+  'products_without_shipping_data',
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
@@ -90,7 +93,12 @@ const ADMIN_KINDS = [
 const get = (actor: TestUser, url: string) =>
   app.inject({ method: 'GET', url, headers: { cookie: accessCookie(actor) } });
 
-const change = (actor: TestUser, method: 'PUT' | 'DELETE', url: string, payload?: object) =>
+const change = (
+  actor: TestUser,
+  method: 'PUT' | 'DELETE' | 'PATCH',
+  url: string,
+  payload?: object,
+) =>
   app.inject({
     method,
     url,
@@ -120,6 +128,12 @@ const listOf = async (actor: TestUser, kind: string, narrow: Record<string, stri
 };
 
 const idsIn = (page: { items: Array<{ id: number | string }> }) => page.items.map((row) => row.id);
+
+// the order looked for in a list narrowed by its number: a number in the search finds the order of
+// that number and also the orders of other files whose postal code or tracking number holds those
+// digits, so only the order itself is taken
+const theOrderIn = (page: { items: Array<{ id: number | string }> }, orderId: number) =>
+  idsIn(page).filter((id) => id === orderId);
 
 const turn = (actor: TestUser, kind: string, on: boolean) =>
   change(actor, on ? 'PUT' : 'DELETE', `/api/admin/alerts/subscriptions/${kind}`);
@@ -156,6 +170,23 @@ const runClock = (ms: number) => {
 
 const day = (days: number) => new Date(Date.now() + days * DAY).toISOString().slice(0, 10);
 
+// a paid order sent by hand the way an admin sends it: the status with the carrier, no cost yet
+async function sentOrder(actor: TestUser): Promise<number> {
+  const orderId = await paidOrder();
+  const res = await change(actor, 'PATCH', `/api/orders/${orderId}/status`, {
+    status: 'shipped',
+    shipment: { carrier: 'DHL' },
+  });
+  expect(res.statusCode).toBe(200);
+  return orderId;
+}
+
+const sendsOf = (orderId: number) =>
+  testTx(async (tx) => {
+    await setUserContext(tx, { userId: admin.id, role: admin.role });
+    return tx.orderShipment.findMany({ where: { orderId }, orderBy: { id: 'asc' } });
+  });
+
 const paidOrder = async () =>
   placeOrder(app, csrf, await newUser(), await createProduct({ price: 10, stock: 5 }), 'paid');
 
@@ -164,11 +195,11 @@ const shippedOrder = async () =>
 
 // a line of the admin log, the way the late payment refund writes one (field refund) or another
 async function logLine(actor: TestUser, orderId: number, field: string): Promise<number> {
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId: actor.id, role: actor.role });
     await tx.$executeRaw`select cartlify.log_admin_action(
       ${actor.id}::int, ${actor.role}::cartlify."Role", 'order'::cartlify."AdminAuditEntityType",
-      ${orderId}::int, 'OTHER'::cartlify."AdminAuditAction",
+      ${orderId}::int, 'OTHER'::cartlify."AdminAuditAction", 'order.refund_late',
       ${JSON.stringify([{ field, new: { provider: 'stripe', paymentId: `pi_${orderId}` } }])}::jsonb)`;
     const [line] = await tx.$queryRaw<{ id: number }[]>`
       select id from cartlify.admin_audit_log
@@ -252,8 +283,12 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     const paid = await paidOrder();
     const shipped = await shippedOrder();
 
-    expect(idsIn(await listOf(someone, 'paid_orders_waiting', { q: paid }))).toEqual([paid]);
-    expect(idsIn(await listOf(someone, 'paid_orders_waiting', { q: shipped }))).toEqual([]);
+    expect(
+      theOrderIn(await listOf(someone, 'paid_orders_waiting', { q: paid, limit: 100 }), paid),
+    ).toEqual([paid]);
+    expect(
+      theOrderIn(await listOf(someone, 'paid_orders_waiting', { q: shipped, limit: 100 }), shipped),
+    ).toEqual([]);
     await expectCounted(someone, 'paid_orders_waiting', paid);
     await expectNotCounted(someone, 'paid_orders_waiting', shipped);
   });
@@ -263,15 +298,156 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     const shipped = await shippedOrder();
     await setThreshold(someone, 'shipped_orders_waiting', 2);
 
-    expect(idsIn(await listOf(someone, 'shipped_orders_waiting', { q: shipped }))).toEqual([]);
+    expect(
+      theOrderIn(
+        await listOf(someone, 'shipped_orders_waiting', { q: shipped, limit: 100 }),
+        shipped,
+      ),
+    ).toEqual([]);
     await expectNotCounted(someone, 'shipped_orders_waiting', shipped);
 
     runClock(3 * DAY);
 
-    expect(idsIn(await listOf(someone, 'shipped_orders_waiting', { q: shipped }))).toEqual([
-      shipped,
-    ]);
+    expect(
+      theOrderIn(
+        await listOf(someone, 'shipped_orders_waiting', { q: shipped, limit: 100 }),
+        shipped,
+      ),
+    ).toEqual([shipped]);
     await expectCounted(someone, 'shipped_orders_waiting', shipped);
+  });
+
+  it('shipped orders left out when they are pickups, which have a kind of their own', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { address: _address, ...person } = deliveryBody;
+    const pickup = await placeOrder(
+      app,
+      csrf,
+      await newUser(),
+      await createProduct({ price: 10, stock: 5 }),
+      'shipped',
+      1,
+      { ...person, method: 'pickup' },
+    );
+    const byHand = await shippedOrder();
+    await setThreshold(someone, 'shipped_orders_waiting', 2);
+    await setThreshold(someone, 'pickup_not_collected', 2);
+
+    runClock(3 * DAY);
+
+    expect(
+      theOrderIn(
+        await listOf(someone, 'shipped_orders_waiting', { q: pickup, limit: 100 }),
+        pickup,
+      ),
+    ).toEqual([]);
+    expect(
+      theOrderIn(
+        await listOf(someone, 'shipped_orders_waiting', { q: byHand, limit: 100 }),
+        byHand,
+      ),
+    ).toEqual([byHand]);
+    await expectNotCounted(someone, 'shipped_orders_waiting', pickup);
+    await expectCounted(someone, 'shipped_orders_waiting', byHand);
+
+    expect(
+      theOrderIn(await listOf(someone, 'pickup_not_collected', { q: pickup, limit: 100 }), pickup),
+    ).toEqual([pickup]);
+    expect(
+      theOrderIn(await listOf(someone, 'pickup_not_collected', { q: byHand, limit: 100 }), byHand),
+    ).toEqual([]);
+    await expectCounted(someone, 'pickup_not_collected', pickup);
+    await expectNotCounted(someone, 'pickup_not_collected', byHand);
+  });
+
+  it('pickups ready and not collected for the days of the threshold', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { address: _address, ...person } = deliveryBody;
+    const pickup = await placeOrder(
+      app,
+      csrf,
+      await newUser(),
+      await createProduct({ price: 10, stock: 5 }),
+      'shipped',
+      1,
+      { ...person, method: 'pickup' },
+    );
+
+    expect((await alertOf(someone, 'pickup_not_collected')).threshold).toBe(7);
+    await expectNotCounted(someone, 'pickup_not_collected', pickup);
+
+    runClock(8 * DAY);
+
+    await expectCounted(someone, 'pickup_not_collected', pickup);
+  });
+
+  it('sends the shop owes something for and has written no cost of, for the days of the threshold', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const sent = await sentOrder(someone);
+    const [send] = await sendsOf(sent);
+    await setThreshold(someone, 'shipped_without_cost', 2);
+
+    expect(
+      theOrderIn(await listOf(someone, 'shipped_without_cost', { q: sent, limit: 100 }), sent),
+    ).toEqual([]);
+    await expectNotCounted(someone, 'shipped_without_cost', sent);
+
+    runClock(3 * DAY);
+
+    expect(
+      theOrderIn(await listOf(someone, 'shipped_without_cost', { q: sent, limit: 100 }), sent),
+    ).toEqual([sent]);
+    await expectCounted(someone, 'shipped_without_cost', sent);
+
+    // the cost is written: the order is no case any more
+    const written = await change(someone, 'PATCH', `/api/orders/${sent}/shipments/${send!.id}`, {
+      cost: 6.5,
+    });
+    expect(written.statusCode).toBe(200);
+    expect(
+      theOrderIn(await listOf(someone, 'shipped_without_cost', { q: sent, limit: 100 }), sent),
+    ).toEqual([]);
+    await expectNotCounted(someone, 'shipped_without_cost', sent);
+  });
+
+  it('a send taken back that the shop owes nothing for is no case', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const sent = await sentOrder(someone);
+    // rolled back and the send is not owed
+    const back = await change(someone, 'PATCH', `/api/orders/${sent}/status`, {
+      status: 'paid',
+      keepShippingCost: false,
+    });
+    expect(back.statusCode).toBe(200);
+    await setThreshold(someone, 'shipped_without_cost', 1);
+
+    runClock(2 * DAY);
+
+    await expectNotCounted(someone, 'shipped_without_cost', sent);
+  });
+
+  it('products of the catalog that lack the weight or the sizes', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const bare = await createProduct({ price: 10, stock: 3 });
+    const whole = await createProduct({
+      price: 10,
+      stock: 3,
+      weightGrams: 100,
+      sizesMm: { length: 10, width: 10, height: 10 },
+    });
+
+    expect(
+      idsIn(
+        await listOf(someone, 'products_without_shipping_data', { categoryIds: bare.categoryId }),
+      ),
+    ).toEqual([bare.id]);
+    expect(
+      idsIn(
+        await listOf(someone, 'products_without_shipping_data', { categoryIds: whole.categoryId }),
+      ),
+    ).toEqual([]);
+    await expectCounted(someone, 'products_without_shipping_data', bare.id);
+    await expectNotCounted(someone, 'products_without_shipping_data', whole.id);
   });
 
   it('products of the catalog with no free units', async () => {

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createServer, type AddressInfo, type Socket } from 'node:net';
 import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 
@@ -31,6 +32,17 @@ export const uploadedPublicIds = new Set<string>();
 
 // public ids the app moved an upload to during this test file
 export const movedToPublicIds = new Set<string>();
+
+// every move the app asked for during this test file, with what it asked Cloudinary
+export type MoveCall = { from: string; to: string; options: Record<string, unknown> };
+export const moveCalls: MoveCall[] = [];
+
+// the move of the sdk itself, taken before the mock and the guard below take its place
+const sdkRename = cloudinary.uploader.rename as (...args: unknown[]) => unknown;
+
+// the move of the service, the mock or the account; withSilentCloudinaryMoves puts another in its
+// place for a while
+let serviceRename: (...args: unknown[]) => unknown = sdkRename;
 
 // a Cloudinary failure without the keys in it, an error of the sdk can name them
 function cloudinaryFailure(err: unknown, what: string): Error {
@@ -74,12 +86,18 @@ function holdCloudinaryInTestFolder(): void {
     return (uploadStream as (...a: unknown[]) => ReturnType<typeof uploadStream>).apply(this, args);
   } as typeof uploadStream;
 
+  serviceRename = rename as (...args: unknown[]) => unknown;
   uploader.rename = function (this: unknown, ...args: unknown[]) {
     assertTestFolder(args[0], 'move');
     assertTestFolder(args[1], 'move');
     movedToPublicIds.add(args[1]);
+    moveCalls.push({
+      from: args[0],
+      to: args[1],
+      options: { ...((args[2] as Record<string, unknown> | undefined) ?? {}) },
+    });
 
-    return (rename as (...a: unknown[]) => ReturnType<typeof rename>).apply(this, args);
+    return serviceRename.apply(this, args) as ReturnType<typeof rename>;
   } as typeof rename;
 
   uploader.destroy = function (this: unknown, ...args: unknown[]) {
@@ -121,13 +139,47 @@ export async function storedImage(publicId: string): Promise<StoredImage | null>
   }
 }
 
-export type UploadMark = { uploads: number; moves: number };
+export type UploadMark = { uploads: number; moves: number; calls: number };
 
 // how many uploads and moves the app made so far, to tell the ones of a request apart
 export const uploadMark = (): UploadMark => ({
   uploads: uploadedPublicIds.size,
   moves: movedToPublicIds.size,
+  calls: moveCalls.length,
 });
+
+// the moves the app asked for since the mark, with what each asked of Cloudinary
+export const moveCallsSince = (mark: UploadMark) => moveCalls.slice(mark.calls);
+
+// Cloudinary that takes the connection of a move and never answers, the way a Cloudinary that
+// hangs does: the moves go to a server of the test that keeps the connection and says nothing, and
+// the sdk itself gives up after the time the app gives a move. Only the moves: the uploads and the
+// deletes go to the mock or the account as before
+export async function withSilentCloudinaryMoves<T>(fn: () => Promise<T>): Promise<T> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+  const { port } = server.address() as AddressInfo;
+
+  const service = serviceRename;
+  serviceRename = function (this: unknown, from: unknown, to: unknown, options: unknown) {
+    return sdkRename.call(this, from, to, {
+      ...((options as Record<string, unknown> | undefined) ?? {}),
+      upload_prefix: `https://127.0.0.1:${port}`,
+    });
+  };
+
+  try {
+    return await fn();
+  } finally {
+    serviceRename = service;
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+}
 
 // the uploads the app made since the mark
 export const uploadsSince = (mark: UploadMark) => [...uploadedPublicIds].slice(mark.uploads);

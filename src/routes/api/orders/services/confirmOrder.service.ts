@@ -1,4 +1,5 @@
 import env from '@config/env.js';
+import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 import { getPgMessage, prisma, tx, isRetryableTxError } from '@db/client.js';
@@ -7,6 +8,7 @@ import {
   assertAcceptedForOrder,
   recordConsents,
 } from '@routes/api/legal/services/helpers/legalDocuments.helper.js';
+import { deliveryPriceOf } from '@helpers/deliveryPrice.js';
 import { currentPrice } from '@helpers/productSale.js';
 import { assertRedisReady } from '@redis/client.js';
 import { lowestMinimumTotal, shopCurrency } from '@routes/api/payments/providers/index.js';
@@ -20,11 +22,12 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import {
-  buildConfirmOrderData,
+  buildDeliveryData,
+  assertDeliveryOfShop,
   findUnavailableItems,
   mapOrderRowToResponse,
   expiredOfOrders,
-  orderResponseSelect,
+  readOrderResponse,
   scheduleOrderReservationExpiry,
 } from './helpers/index.js';
 
@@ -55,17 +58,47 @@ async function unavailableItemsOf(actorId: UserId, orderId: number) {
   });
 }
 
+// what the delivery of an unconfirmed order of the user costs now, by the items it has: the price
+// a confirmation that the buyer saw another price for names. The method is the one sent with the
+// confirmation, else the one the order has
+async function deliveryPriceNowOf(
+  actorId: UserId,
+  orderId: number,
+  method: DeliveryMethodName | undefined,
+): Promise<number> {
+  return prisma.$transaction(async (db) => {
+    await setUserContext(db, { userId: actorId, role: 'USER' });
+    const order = await db.order.findFirst({
+      where: { id: orderId, userId: actorId as any, confirmed: false },
+      select: {
+        delivery: { select: { method: true } },
+        items: { select: { totalPrice: true } },
+      },
+    });
+
+    const chosen = method ?? order?.delivery?.method;
+    if (!order || !chosen) return 0;
+
+    const itemsCents = order.items.reduce(
+      (sum, item) => sum + Math.round(Number(item.totalPrice) * 100),
+      0,
+    );
+    return deliveryPriceOf(chosen, itemsCents / 100);
+  });
+}
+
 export async function confirmOrder({
   actorId,
   actorRole,
   orderId,
-  ...shipping
+  delivery,
+  expectedDeliveryPrice,
 }: ConfirmCurrentOrderDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
-  // check the shipping data before anything is written; a field that is not sent keeps
-  // what the order already has
-  const shippingData = buildConfirmOrderData(shipping);
+  // check the delivery before anything is written; a delivery that is not sent leaves the one the
+  // order already has
+  const deliveryData = delivery ? buildDeliveryData(delivery) : null;
 
   // refuse early so nothing is confirmed in db while redis is down
   assertRedisReady();
@@ -80,14 +113,32 @@ export async function confirmOrder({
         // confirms an order; the order keeps them for the mail after the payment
         const legalVersions = await assertAcceptedForOrder(db, Number(actorId));
 
-        // store shipping data before confirm, db refuses to confirm an order without the address
-        // and the recipient; rls lets the owner change only an own unconfirmed order, any other
-        // case is reported by confirm_order
-        if (Object.keys(shippingData).length) {
-          await db.order.updateMany({
-            where: { id: Number(orderId), confirmed: false },
-            data: shippingData,
+        // write where the order goes before the confirmation, the database refuses to confirm an
+        // order without it; rls lets the owner write it only for an own unconfirmed order, any
+        // other case is reported by confirm_order
+        if (deliveryData) {
+          const cart = await db.order.findFirst({
+            where: { id: Number(orderId), userId: actorId as any, confirmed: false },
+            select: { id: true },
           });
+          if (cart) {
+            await db.orderDelivery.upsert({
+              where: { orderId: cart.id },
+              create: { orderId: cart.id, ...deliveryData },
+              update: deliveryData,
+            });
+          }
+        } else {
+          // no delivery sent: the one the order has, written before, goes on if the shop still
+          // offers it
+          const written = await db.orderDelivery.findFirst({
+            where: {
+              orderId: Number(orderId),
+              order: { userId: actorId as any, confirmed: false },
+            },
+            select: { method: true, country: true },
+          });
+          if (written) assertDeliveryOfShop(written.method, written.country);
         }
 
         // name every item the order cannot be confirmed with, a product deleted from the catalog or
@@ -128,35 +179,48 @@ export async function confirmOrder({
         // no payment provider takes a smaller payment: refused before the stock is held, the page
         // tells the buyer the smallest total. The buyer picks the provider after this, so only a
         // total below the minimum of every one of them is refused here; the payment page checks the
-        // one picked. The total at the prices the products sell at now (the sale price while a
-        // sale lasts), the ones confirm_order takes; an empty order is left to confirm_order
-        // (ORDER_ITEMS_REQUIRED)
+        // one picked. The total is what the buyer pays: the items at the prices the products sell
+        // at now (the sale price while a sale lasts), the ones confirm_order takes, and the
+        // delivery by the settings of the shop. An empty order is left to confirm_order
+        // (ORDER_ITEMS_REQUIRED), an order without a delivery too (ORDER_DELIVERY_REQUIRED)
         const minimum = lowestMinimumTotal();
-        const totalCents = items.reduce(
+        const itemsCents = items.reduce(
           (sum, item) => sum + Math.round(currentPrice(item.product) * 100) * item.quantity,
           0,
         );
-        if (items.length > 0 && totalCents < Math.round(minimum * 100)) {
+        const method =
+          deliveryData?.method ??
+          (
+            await db.orderDelivery.findUnique({
+              where: { orderId: Number(orderId) },
+              select: { method: true },
+            })
+          )?.method;
+        const deliveryCents = method
+          ? Math.round(deliveryPriceOf(method, itemsCents / 100) * 100)
+          : 0;
+        if (items.length > 0 && itemsCents + deliveryCents < Math.round(minimum * 100)) {
           throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
             minimum,
             currency: shopCurrency(),
           });
         }
 
-        // confirm in db; the order holds its units ORDER_RESERVATION_MINUTES (15 unless set)
+        // confirm in db; the order holds its units ORDER_RESERVATION_MINUTES (15 unless set) and
+        // its delivery is priced by the rule of the shop
         await db.$executeRaw`select cartlify.confirm_order(
           ${Number(orderId)}::int,
-          ${`${env.ORDER_RESERVATION_MINUTES} minutes`}::interval
+          ${`${env.ORDER_RESERVATION_MINUTES} minutes`}::interval,
+          ${env.DELIVERY_FLAT_PRICE}::numeric,
+          ${env.DELIVERY_FREE_FROM}::numeric,
+          ${expectedDeliveryPrice}::numeric
         )`;
 
-        const order = await db.order.findUnique({
-          where: { id: orderId },
-          select: orderResponseSelect,
-        });
+        const order = await readOrderResponse(db, orderId);
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CONFIRM' });
 
-        await recordConsents(db, Number(actorId), legalVersions, order.id);
+        await recordConsents(db, Number(actorId), legalVersions, 'consent.order', order.id);
 
         const response = mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
 
@@ -195,15 +259,16 @@ export async function confirmOrder({
         throw new ConflictError('ORDER_STATUS_NOT_ALLOWED');
       if (msg.includes('ORDER_ITEMS_REQUIRED')) throw new BadRequestError('ORDER_ITEMS_REQUIRED');
 
-      // order has no shipping data and the request did not bring it
-      if (msg.includes('ORDER_SHIPPING_ADDRESS_REQUIRED'))
-        throw new BadRequestError('SHIPPING_ADDRESS_REQUIRED');
-      if (msg.includes('ORDER_RECIPIENT_FIRST_NAME_REQUIRED'))
-        throw new BadRequestError('RECIPIENT_FIRST_NAME_REQUIRED');
-      if (msg.includes('ORDER_RECIPIENT_LAST_NAME_REQUIRED'))
-        throw new BadRequestError('RECIPIENT_LAST_NAME_REQUIRED');
-      if (msg.includes('ORDER_RECIPIENT_PHONE_REQUIRED'))
-        throw new BadRequestError('RECIPIENT_PHONE_REQUIRED');
+      // the order has no delivery and the request did not bring one
+      if (msg.includes('ORDER_DELIVERY_REQUIRED')) throw new BadRequestError('DELIVERY_REQUIRED');
+
+      // the price of the delivery the buyer saw is not the one the shop asks now: the buyer sees
+      // the new one and confirms again
+      if (msg.includes('ORDER_DELIVERY_PRICE_CHANGED')) {
+        throw new ConflictError('DELIVERY_PRICE_CHANGED', {
+          price: await deliveryPriceNowOf(actorId, Number(orderId), delivery?.method),
+        });
+      }
 
       // some item price differs from current product price
       // nothing is reserved; client reloads the order to get fresh prices and confirms again

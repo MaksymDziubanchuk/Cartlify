@@ -93,6 +93,17 @@ const MAKERS = {
 };
 
 // sale - a percent off for 14 days; expiresIn - the last good day of the batch, days from today
+// what a product of a category weighs and measures packed: grams, then length, width and height in
+// millimetres; the shop needs them to send an order
+const PACKAGES = {
+  phones: [350, 200, 110, 60],
+  laptops: [2400, 420, 310, 70],
+  headphones: [450, 220, 190, 90],
+  kitchen: [1800, 320, 260, 200],
+  lighting: [900, 300, 150, 150],
+  books: [600, 240, 170, 40],
+};
+
 const PRODUCTS = [
   {
     sku: 'DEMO-001',
@@ -552,6 +563,11 @@ async function makeProducts(admin, base, categories) {
         form.append('sku', product.sku);
         form.append('price', product.price.toFixed(2));
         form.append('categoryId', String(categories.get(product.category)));
+        const [weight, length, width, height] = PACKAGES[product.category];
+        form.append('weightGrams', String(weight));
+        form.append('lengthMm', String(length));
+        form.append('widthMm', String(width));
+        form.append('heightMm', String(height));
         form.append('safety.manufacturer.name', maker.name);
         form.append('safety.manufacturer.address', maker.address);
         form.append('safety.manufacturer.email', maker.email);
@@ -683,26 +699,79 @@ async function hasOrders(session, index) {
   return cart.status === 200 && (cart.body.items?.length ?? 0) > 0;
 }
 
-async function placeOrders(session, index, buyer, bySku) {
+// a postal code of the form each country writes it, for the countries the shop may deliver to
+const SAMPLE_POSTAL_CODES = {
+  UA: '01001',
+  PL: '00-950',
+  DE: '10115',
+  FR: '75001',
+  ES: '28001',
+  IT: '00100',
+  NL: '1011 AB',
+  BE: '1000',
+  AT: '1010',
+  CZ: '110 00',
+  SK: '811 01',
+  PT: '1000-001',
+  SE: '111 22',
+  GB: 'SW1A 1AA',
+  CH: '8001',
+};
+
+// how the demo orders are delivered, as the shop offers it now: to an address of the first country
+// of the manual method, else a pickup
+async function deliveryOfDemo(base) {
+  const res = await new Session(base).send('GET', '/api/delivery/methods');
+  expectStatus(res, [200], 'the delivery methods of the shop');
+  const manual = res.body.methods.find((method) => method.method === 'manual');
+  const country = manual?.countries.find((code) => SAMPLE_POSTAL_CODES[code]);
+  if (manual && country) {
+    return {
+      method: 'manual',
+      address: {
+        country,
+        postalCode: SAMPLE_POSTAL_CODES[country],
+        city: 'Demo city',
+        street: 'Demo street',
+        house: '1',
+      },
+    };
+  }
+  if (res.body.methods.some((method) => method.method === 'pickup')) return { method: 'pickup' };
+
+  return stop(
+    'the shop offers no delivery the demo orders can use: set DELIVERY_COUNTRIES or DELIVERY_METHODS',
+  );
+}
+
+async function placeOrders(session, index, buyer, bySku, delivery) {
   let placed = 0;
   for (const order of buyer.orders) {
-    // the cart the items went into, the answer of each item names it
+    // the cart the items went into, the answer of each item names it with the price of each
+    // delivery for what it holds now
     let orderId;
+    let quotes = [];
     for (const [sku, quantity] of order.items) {
       const res = await session.send('POST', '/api/orders/current/items', {
         json: { productId: bySku.get(sku), quantity },
       });
       expectStatus(res, [200, 201], `the cart of buyer ${index + 1}`);
       orderId = res.body.id;
+      quotes = res.body.deliveryQuotes ?? [];
     }
     if (order.confirm) {
+      // the price of the delivery the page shows, as a buyer confirms it
+      const quote = quotes.find((one) => one.method === delivery.method);
       const res = await session.send('POST', '/api/orders/current/confirm', {
         json: {
           orderId,
-          shippingAddress: `Demo street ${index + 1}, Kyiv`,
-          recipientFirstName: buyer.name,
-          recipientLastName: 'Demo',
-          recipientPhone: `+38067111223${index + 1}`,
+          expectedDeliveryPrice: quote?.price ?? 0,
+          delivery: {
+            ...delivery,
+            recipientFirstName: buyer.name,
+            recipientLastName: 'Demo',
+            recipientPhone: `+38067111223${index + 1}`,
+          },
         },
       });
       expectStatus(res, [200], `the order of buyer ${index + 1}`);
@@ -771,6 +840,7 @@ async function main() {
   await putOnSale(admin, bySku, made);
 
   const inForce = await versionsInForce(base);
+  const delivery = await deliveryOfDemo(base);
   const states = { ready: 0, waiting: 0, registered: 0 };
   let consents = 0;
   let orders = 0;
@@ -786,7 +856,7 @@ async function main() {
     consents += accepted;
     if (!session) continue;
     if (!(await hasOrders(session, index))) {
-      orders += await placeOrders(session, index, buyer, bySku);
+      orders += await placeOrders(session, index, buyer, bySku, delivery);
     }
     const given = await reviewAndFavor(session, index, buyer, bySku);
     reviews += given.reviews;

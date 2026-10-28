@@ -22,7 +22,7 @@ import {
   orderRowOf,
   placeOrder,
   placeUnconfirmedOrder,
-  shippingData,
+  deliveryAnswer,
 } from '../../../helpers/orders.js';
 import { openPaymentPage, redisStateOf } from '../../../helpers/payments.js';
 import {
@@ -100,7 +100,7 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       id: orderId,
       status: 'unconfirmed',
       confirmed: false,
-      ...shippingData,
+      delivery: deliveryAnswer,
       items: [{ productId: product.id, quantity: 2 }],
     });
     expect(res.json()).not.toHaveProperty('reservationExpiresAt');
@@ -129,11 +129,11 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       method: 'POST',
       url: '/api/orders/current/confirm',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { orderId },
+      payload: { orderId, expectedDeliveryPrice: 0 },
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ status: 'waiting', ...shippingData });
+    expect(res.json()).toMatchObject({ status: 'waiting', delivery: deliveryAnswer });
     expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 1 });
   });
 

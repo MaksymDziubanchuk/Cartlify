@@ -3,7 +3,14 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
+import { getCsrf } from '../../../helpers/csrf.js';
+import {
+  closeSessions,
+  createProduct,
+  createUser,
+  type TestUser,
+} from '../../../helpers/factories.js';
+import { orderRowOf, placeOrder } from '../../../helpers/orders.js';
 
 // GET /api/admin/stats: the numbers of the dashboard of an admin, read from
 // cartlify.admin_stats_view (its numbers are checked in db/adminStats.test.ts). The period is
@@ -77,6 +84,7 @@ describe('GET /api/admin/stats', () => {
           cancelled: count,
         },
         revenue: { total: count, inPeriod: count, last7d: count, last30d: count },
+        deliveryRevenue: { total: count, inPeriod: count, last7d: count, last30d: count },
         averageOrderValue: count,
         itemsSold: count,
       },
@@ -94,6 +102,12 @@ describe('GET /api/admin/stats', () => {
         newInPeriod: count,
         avgRating: count,
         negativeCount: count,
+      },
+      // the whole shop: the delivery and the sends are numbers
+      money: {
+        income: { items: count, delivery: count, total: count },
+        expenses: { costOfGoods: count, writeOffs: count, shipping: count, total: count },
+        margin: { items: count, delivery: count, total: count },
       },
       createdAt: expect.any(String),
     });
@@ -135,7 +149,41 @@ describe('GET /api/admin/stats', () => {
       orders: { revenue: { inPeriod: 0 } },
       products: { topProductsByRevenue: [], topCategoriesByRevenue: [] },
       reviews: { newInPeriod: 0 },
+      money: {
+        income: { items: 0, delivery: 0, total: 0 },
+        expenses: { costOfGoods: 0, writeOffs: 0, shipping: 0, total: 0 },
+        margin: { items: 0, delivery: 0, total: 0 },
+      },
     });
+  });
+
+  // the statistics and the report of the accounting count the money of a period the same way: the
+  // page of an admin and the file of the accountant say the same
+  it('gives the money of the period the report of the accounting gives for it', async () => {
+    const csrf = await getCsrf(app);
+    const product = await createProduct({ price: 10, stock: 5 });
+    const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
+    const { paidAt } = await orderRowOf(orderId);
+    // the millisecond of the payment: money of other files at that very time is unlikely
+    const period = {
+      from: paidAt!.toISOString(),
+      to: new Date(paidAt!.getTime() + 1).toISOString(),
+    };
+
+    const fromStats = (await stats(period)).json();
+    const fromReport = (
+      await app.inject({
+        method: 'GET',
+        url: `/api/admin/reports/accounting?${new URLSearchParams(period)}`,
+        headers: { cookie: accessCookie(admin) },
+      })
+    ).json();
+
+    expect(fromStats.money).toEqual(fromReport.summary);
+    expect(fromStats.money.income.items).toBeGreaterThanOrEqual(20);
+    // the money of the orders of the statistics is the income of the period
+    expect(fromStats.orders.revenue.inPeriod).toBe(fromStats.money.income.total);
+    expect(fromStats.orders.deliveryRevenue.inPeriod).toBe(fromStats.money.income.delivery);
   });
 
   it('takes a period that starts and ends at the same time', async () => {

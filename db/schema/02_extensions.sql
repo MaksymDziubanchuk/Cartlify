@@ -1,21 +1,26 @@
--- db/02_extensions_search_safe.sql
--- Goal: replicate existing migration behavior safely:
---  - ensure pg_trgm + unaccent exist
---  - ensure extension objects live in schema cartlify
---  - ensure cartlify.immutable_unaccent(text) exists with expected definition
---  - ensure products_name_unaccent_trgm_idx exists with expected expression/opclass
--- If already in desired state -> do nothing.
+-- The extensions and the name search of products.
+-- It makes sure that:
+--  - pg_trgm and unaccent exist and live in the schema cartlify
+--  - cartlify.immutable_unaccent(text) exists and is IMMUTABLE and STRICT
+--  - the index products_name_unaccent_trgm_idx exists
+--  - the roles may run the unaccent functions (the trigram ones are granted in 01)
+-- Run it as a superuser (it installs extensions), after the prisma migrations. It can be run
+-- again: what is right is left alone. An extension in another schema is moved; a function or an
+-- index that exists in another shape is not changed, the script stops with an error instead.
 BEGIN;
 
+-- give up instead of waiting: 5 s for a lock, 60 s for a statement
 SET
   LOCAL lock_timeout = '5s';
 
 SET
   LOCAL statement_timeout = '60s';
 
+-- the schema is made by 01; this line only keeps the statements below from failing without it
+-- (the roles of 01 must exist too: the grants below name them)
 CREATE SCHEMA IF NOT EXISTS cartlify;
 
--- 1) Extensions: ensure they exist; if exist but not in cartlify -> move (same intent as your migration)
+-- 1) Extensions: create them in cartlify, or move them there if they are installed elsewhere
 DO $do$
 DECLARE
   s text;
@@ -46,8 +51,9 @@ BEGIN
 END
 $do$;
 
--- 2) Function: create ONLY if missing.
--- If exists but differs -> error (to avoid silently masking mismatch).
+-- 2) Function immutable_unaccent: unaccent that an index may use (unaccent itself is only
+-- STABLE). Created only when it is missing. If it exists but is not IMMUTABLE, not STRICT or does
+-- not call cartlify.unaccent, the script stops with an error: a difference is never hidden.
 DO $do$
 DECLARE
   fn_oid oid;
@@ -89,11 +95,14 @@ BEGIN
 END
 $do$;
 
--- 2a) Function owner: this script runs as superuser, keep the function owned by cartlify_owner
--- like the other non-extension objects.
+-- 2a) Function owner: the script runs as a superuser, so the function is handed to cartlify_owner,
+-- like the other objects of the shop.
 ALTER FUNCTION cartlify.immutable_unaccent (text) OWNER TO cartlify_owner;
 
--- 3) Index: create if missing. If exists but not matching -> error.
+-- 3) Index products_name_unaccent_trgm_idx: a GIN trigram index on the product name without
+-- accents, for the search of products by name. Created when it is missing. An existing one is
+-- only checked (GIN, uses immutable_unaccent and gin_trgm_ops); a different one stops the script.
+-- Without the products table the index is skipped with a notice.
 DO $do$
 DECLARE
   idxdef text;
@@ -135,7 +144,8 @@ BEGIN
 END
 $do$;
 
--- 4) Explicit execute grants for extension/custom search functions.
+-- 4) Execute rights on the unaccent functions (the trigram ones are granted in 01). Script 01 takes the public right from every function
+-- of the schema, so each role gets its own grant.
 GRANT
 EXECUTE ON FUNCTION cartlify.unaccent (text) TO cartlify_app;
 

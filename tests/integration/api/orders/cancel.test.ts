@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { resetDelivery, setDelivery } from '../../../helpers/delivery.js';
 import {
   closeSessions,
   createProduct,
@@ -19,7 +20,7 @@ import {
   orderRowOf,
   placeOrder,
   placeUnconfirmedOrder,
-  shippingData,
+  deliveryAnswer,
 } from '../../../helpers/orders.js';
 import { placePaidOrder } from '../../../helpers/payments.js';
 import { refundsOf, stripeRequestsDuring, withStripeOutOfReach } from '../../../helpers/stripe.js';
@@ -90,6 +91,8 @@ beforeAll(async () => {
   root = await newUser({ role: 'ROOT' });
 });
 
+afterEach(resetDelivery);
+
 afterAll(async () => {
   try {
     await closeSessions(userIds);
@@ -135,7 +138,7 @@ describe('POST /api/orders/:orderId/cancel', () => {
       const res = await cancel(admin, orderId);
 
       expect(res.json()).toMatchObject({
-        ...shippingData,
+        delivery: deliveryAnswer,
         user: { id: buyer.id, deleted: false, email: buyer.email },
       });
       expect(res.json()).not.toHaveProperty('paymentId');
@@ -191,7 +194,7 @@ describe('POST /api/orders/:orderId/cancel', () => {
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({
         status: 'cancelled',
-        ...shippingData,
+        delivery: deliveryAnswer,
         user: { id: buyer.id, deleted: true },
       });
       expect(res.json().user).not.toHaveProperty('email');
@@ -293,6 +296,19 @@ describe('POST /api/orders/:orderId/cancel', () => {
       expect(mails[0]).toMatchObject({ to: [buyer.email], accepted: true });
       expect(mails[0]!.subject).toBe(`Cartlify — Order #${orderId} is cancelled`);
       expect(mails[0]!.text).toContain('The payment of €10.00 is refunded in full');
+    });
+
+    // the refund is the whole payment, the delivery too: the lines of the mail add up to it
+    it('shows the delivery the buyer paid for in the mail of the cancel', async () => {
+      setDelivery({ DELIVERY_FLAT_PRICE: 4.5 });
+      const mails = watchMail();
+      const buyer = await newUser({ name: 'Anna' });
+      const { orderId } = await paidOrder(buyer);
+
+      await cancel(admin, orderId);
+
+      expect(mails[0]!.text).toContain('Delivery: €4.50');
+      expect(mails[0]!.text).toContain('The payment of €14.50 is refunded in full');
     });
 
     it('mails nobody when the account of the buyer is deleted', async () => {

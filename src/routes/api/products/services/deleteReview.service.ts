@@ -70,6 +70,7 @@ export async function deleteProductReview(
         entityType: 'review',
         entityId: reviewId,
         action: 'REVIEW_DELETE',
+        event: 'review.delete',
         changes: [
           { field: 'productId', old: review.productId, new: null },
           { field: 'userId', old: review.userId, new: null },

@@ -5,7 +5,7 @@ import { prisma } from '@db/client.js';
 import { shopToday } from '@helpers/shopDay.js';
 
 import { inCommittedTx, inRolledBackTx, type DbSession } from '../../helpers/db.js';
-import { pay, waitingOrderOf } from '../../helpers/dbOrders.js';
+import { pay, waitingOrderOf, type DeliveryRule } from '../../helpers/dbOrders.js';
 import { dayAfter, setShopDay } from '../../helpers/dbStock.js';
 import {
   closeSessions,
@@ -37,6 +37,7 @@ type Stats = {
   orders: {
     byStatus: Record<string, number>;
     revenue: { total: number; inPeriod: number; last7d: number; last30d: number };
+    deliveryRevenue: { total: number; inPeriod: number; last7d: number; last30d: number };
     averageOrderValue: number;
     itemsSold: number;
   };
@@ -90,10 +91,10 @@ async function afterCartOf(db: DbSession, orderId: number): Promise<string> {
 
 // an order of units at 40 (2 unless asked) that waits for its payment, its cart made and
 // committed before
-async function waitingOrder(quantity = 2) {
+async function waitingOrder(quantity = 2, rule: DeliveryRule = {}) {
   const product = await createProduct({ stock: 5, price: 40 });
   const orderId = await inCommittedTx((db) =>
-    waitingOrderOf(db, buyer.id, [[product.id, quantity]]),
+    waitingOrderOf(db, buyer.id, [[product.id, quantity]], rule),
   );
   return { product, orderId };
 }
@@ -125,6 +126,75 @@ describe('cartlify.admin_stats_view', () => {
 
     expect(after.orders.revenue.total - before.orders.revenue.total).toBeCloseTo(80, 2);
     expect(after.orders.revenue.inPeriod - before.orders.revenue.inPeriod).toBeCloseTo(80, 2);
+  });
+
+  // the revenue is what the buyers paid, the delivery they paid for included; the delivery alone is
+  // a part of it, and it is none while the order is not paid
+  it('counts the delivery a buyer paid for in the revenue and apart in the delivery revenue', async () => {
+    const { orderId } = await waitingOrder(2, { flat: 6 });
+
+    const { waiting, before, after } = await inRolledBackTx(async (db) => {
+      const from = await afterCartOf(db, orderId);
+      const before = await statsOf(db, from, FAR_FUTURE);
+      const waiting = await statsOf(db, from, FAR_FUTURE);
+      expect(await pay(db, admin.id, orderId)).toBe('PAID');
+      return { waiting, before, after: await statsOf(db, from, FAR_FUTURE) };
+    }, REPEATABLE_READ);
+
+    expect(waiting.orders.deliveryRevenue).toEqual(before.orders.deliveryRevenue);
+    for (const period of ['total', 'inPeriod'] as const) {
+      expect(after.orders.revenue[period] - before.orders.revenue[period]).toBeCloseTo(86, 2);
+      expect(
+        after.orders.deliveryRevenue[period] - before.orders.deliveryRevenue[period],
+      ).toBeCloseTo(6, 2);
+    }
+  });
+
+  it('counts the delivery of the last 7 and 30 days from the payment', async () => {
+    const { orderId } = await waitingOrder(2, { flat: 6 });
+
+    const { before, after } = await inRolledBackTx(async (db) => {
+      const before = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await pay(db, admin.id, orderId);
+      return { before, after: await statsOf(db, FAR_PAST, FAR_FUTURE) };
+    }, REPEATABLE_READ);
+
+    for (const period of ['last7d', 'last30d'] as const) {
+      expect(
+        after.orders.deliveryRevenue[period] - before.orders.deliveryRevenue[period],
+      ).toBeCloseTo(6, 2);
+    }
+  });
+
+  it('counts nothing for the delivery of a pickup or of a delivery that cost nothing', async () => {
+    const { orderId } = await waitingOrder(2);
+
+    const { before, after } = await inRolledBackTx(async (db) => {
+      const before = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await pay(db, admin.id, orderId);
+      return { before, after: await statsOf(db, FAR_PAST, FAR_FUTURE) };
+    }, REPEATABLE_READ);
+
+    expect(after.orders.deliveryRevenue.total).toBeCloseTo(before.orders.deliveryRevenue.total, 2);
+    expect(after.orders.revenue.total - before.orders.revenue.total).toBeCloseTo(80, 2);
+  });
+
+  it('takes the delivery out of the revenue with the rest once the order is cancelled', async () => {
+    const { orderId } = await waitingOrder(2, { flat: 6 });
+
+    const { paid, cancelled } = await inRolledBackTx(async (db) => {
+      await pay(db, admin.id, orderId);
+      const paid = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await db.as({ role: 'ADMIN' });
+      await db.rows(`select 1 as done from cartlify.cancel_paid_order($1::int)`, orderId);
+      return { paid, cancelled: await statsOf(db, FAR_PAST, FAR_FUTURE) };
+    }, REPEATABLE_READ);
+
+    expect(paid.orders.deliveryRevenue.total - cancelled.orders.deliveryRevenue.total).toBeCloseTo(
+      6,
+      2,
+    );
+    expect(paid.orders.revenue.total - cancelled.orders.revenue.total).toBeCloseTo(86, 2);
   });
 
   it('names the product and the category of an order paid in the period in its tops', async () => {

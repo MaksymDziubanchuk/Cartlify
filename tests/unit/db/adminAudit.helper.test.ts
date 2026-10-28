@@ -243,6 +243,7 @@ describe('writeAdminAuditLog', () => {
     entityType: 'product' as const,
     entityId: 4,
     action: 'PRODUCT_UPDATE' as const,
+    event: 'product.update' as const,
   };
 
   it('writes nothing when there are no changes', async () => {
@@ -261,6 +262,14 @@ describe('writeAdminAuditLog', () => {
 
     const [strings, ...values] = $executeRaw.mock.calls[0]!;
     expect(strings.join('?')).toContain('cartlify.log_admin_action(');
-    expect(values).toEqual([1, 'ADMIN', 'product', 4, 'PRODUCT_UPDATE', JSON.stringify(changes)]);
+    expect(values).toEqual([
+      1,
+      'ADMIN',
+      'product',
+      4,
+      'PRODUCT_UPDATE',
+      'product.update',
+      JSON.stringify(changes),
+    ]);
   });
 });

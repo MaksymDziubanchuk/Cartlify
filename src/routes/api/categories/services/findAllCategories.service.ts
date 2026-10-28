@@ -3,32 +3,11 @@ import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
 
-import type {
-  FindAllCategoriesDto,
-  CategoriesListResponseDto,
-  CategoryResponseDto,
-} from 'types/dto/categories.dto.js';
+import { categoryResponseOf } from './helpers/categories.helper.js';
 
-function mapCategoryRowToResponse(row: {
-  id: number;
-  name: string;
-  slug: string;
-  description: string | null;
-  parentId: number | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): CategoryResponseDto {
-  // map db nullables into optional api fields
-  return {
-    id: row.id as any,
-    name: row.name,
-    slug: row.slug,
-    ...(row.description != null ? { description: row.description } : {}),
-    ...(row.parentId != null ? { parentId: row.parentId as any } : {}),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
+import type { FindAllCategoriesDto, CategoriesListResponseDto } from 'types/dto/categories.dto.js';
+
+const mapCategoryRowToResponse = categoryResponseOf;
 
 export async function findAllCategories(
   dto: FindAllCategoriesDto,
@@ -96,6 +75,7 @@ export async function findAllCategories(
         slug: true,
         description: true,
         parentId: true,
+        imageUrl: true,
         createdAt: true,
         updatedAt: true,
       },

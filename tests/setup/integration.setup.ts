@@ -73,6 +73,12 @@ isolateEnv(
     // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
+    // a shop that sends by hand to four countries and lets a buyer collect an order; no price for
+    // the delivery unless a test sets one (tests/helpers/delivery.ts)
+    DELIVERY_METHODS: 'manual,pickup',
+    DELIVERY_COUNTRIES: 'UA,PL,DE,GB',
+    PICKUP_ADDRESS: 'Test shop, Main street 1, Kyiv',
+    PICKUP_HOURS: 'Mon-Fri 10:00-18:00',
     // short limits of avatar and review removals: a test passes each in three removals
     AVATAR_REMOVALS_LIMIT: '2',
     REVIEW_REMOVALS_LIMIT: '2',

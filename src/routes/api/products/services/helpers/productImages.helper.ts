@@ -62,8 +62,11 @@ export async function placeProductImages(args: {
     uploads: placed.map(({ upload, publicId }) => ({ ...upload, publicId })),
   });
 
+  // a new path never had a file, so nothing of it is cached to drop
   for (const { upload, publicId } of placed) {
-    const file = args.moved.get(upload.publicId) ?? (await moveImage(upload.publicId, publicId));
+    const file =
+      args.moved.get(upload.publicId) ??
+      (await moveImage(upload.publicId, publicId, { invalidate: false }));
     args.moved.set(upload.publicId, file);
 
     await tx.productImage.updateMany({

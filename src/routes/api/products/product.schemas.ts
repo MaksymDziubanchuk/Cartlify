@@ -31,8 +31,17 @@ const productBuyerFieldsExample = {
   createdAt: '2026-01-01T10:00:00.000Z',
 };
 
+// the weight and the packed sizes: the card of every role has them, the list of an admin
+const productShippingFieldsExample = {
+  weightGrams: 350,
+  lengthMm: 200,
+  widthMm: 100,
+  heightMm: 50,
+};
+
 // what an admin and root get on top
 const productAdminFieldsExample = {
+  ...productShippingFieldsExample,
   popularity: 120,
   views: 350,
   updatedAt: '2026-01-02T10:00:00.000Z',
@@ -51,6 +60,7 @@ const productListItemExample = {
 
 const productResponseExample = {
   ...productBuyerFieldsExample,
+  ...productShippingFieldsExample,
   category: {
     ...productBuyerFieldsExample.category,
     path: [{ id: 3, name: 'Audio', slug: 'audio' }],
@@ -190,9 +200,10 @@ const getAllProductsRouterSchema = {
     '`popularity`, `avgRating`, `name` and `saleEndsAt` (the products on sale first by the end ' +
     'of their sale, then the rest by popularity), any other sort is `SORT_FORBIDDEN`; the flags ' +
     'of an admin are `DELETED_PRODUCTS_FORBIDDEN` and `FILTER_FORBIDDEN` for a buyer. An admin ' +
-    'sorts by any field. `deleted`, `onSale`, `popularityOverridden` and `maxStock` list only ' +
-    'the products that are deleted, have a sale that is on, have a popularity override that is ' +
-    'on (its end ahead), have no more free units than the number, whatever else they have; ' +
+    'sorts by any field. `deleted`, `onSale`, `popularityOverridden`, `maxStock` and ' +
+    '`withoutShippingData` list only the products that are deleted, have a sale that is on, have ' +
+    'a popularity override that is on (its end ahead), have no more free units than the number, ' +
+    'lack the weight or the sizes, whatever else they have; ' +
     'without any flag an admin gets only the plain products, ' +
     'not deleted, without a sale and an override that are on. A sort by the field of a flag ' +
     'needs the flag. ' +
@@ -223,9 +234,10 @@ const getAllProductsRouterSchema = {
       description:
         'Invalid products query parameters: a sort by the field of a flag without the flag ' +
         '(`SORT_DELETED_AT_REQUIRES_DELETED`, `SORT_SALE_ENDS_AT_REQUIRES_ON_SALE`, ' +
-        '`SORT_SALE_PRICE_REQUIRES_ON_SALE`, ' +
+        '`SORT_SALE_PRICE_REQUIRES_ON_SALE`, `SORT_DISCOUNT_REQUIRES_ON_SALE`, ' +
         '`SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN`), `sort: relevance` without a search ' +
-        '(`SORT_RELEVANCE_REQUIRES_SEARCH`), `CATEGORY_IDS_INVALID`, `CURSOR_INVALID`.',
+        '(`SORT_RELEVANCE_REQUIRES_SEARCH`), a period of the sort by sales that does not end ' +
+        'after it starts (`SALES_PERIOD_INVALID`), `CATEGORY_IDS_INVALID`, `CURSOR_INVALID`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -235,8 +247,8 @@ const getAllProductsRouterSchema = {
     403: {
       description:
         'A guest or a user asks for something of an admin: deleted products ' +
-        '(`DELETED_PRODUCTS_FORBIDDEN`), the flag `onSale`, `popularityOverridden` or ' +
-        '`maxStock` ' +
+        '(`DELETED_PRODUCTS_FORBIDDEN`), the flag `onSale`, `popularityOverridden`, ' +
+        '`maxStock` or `withoutShippingData` ' +
         '(`FILTER_FORBIDDEN`, `details.filter`), a sort of an admin (`SORT_FORBIDDEN`, ' +
         '`details.sort`).',
       $ref: 'errorResponseSchema#',
@@ -361,7 +373,10 @@ const postProductRouterSchema = {
     'data of the EU GPSR as text fields: the name, the postal and electronic address and the ' +
     'country of the manufacturer (`safety.manufacturer.*`), a person responsible in the EU for a ' +
     'manufacturer outside it (`safety.responsiblePerson.*`), the warnings (`safety.warnings`). ' +
-    'The description keeps them with its text; the card gives them apart, as `safety`.',
+    'The description keeps them with its text; the card gives them apart, as `safety`. The ' +
+    'shipping needs what the product weighs and measures packed: `weightGrams` and the three ' +
+    'sizes `lengthMm`, `widthMm`, `heightMm`, whole grams and millimetres; a new product has them ' +
+    'unless `withoutShippingData=true` says they come later (the flag is not kept).',
 
   response: {
     201: {
@@ -378,7 +393,11 @@ const postProductRouterSchema = {
         'stock (PRODUCT_STOCK_NOT_ALLOWED), an article number over 64 signs (PRODUCT_SKU_TOO_LONG), ' +
         'the safety data of the manufacturer missing (PRODUCT_SAFETY_REQUIRED, `details.fields`) ' +
         'or wrong (PRODUCT_SAFETY_INVALID, `details.fields`), a manufacturer outside the EU ' +
-        'without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than ' +
+        'without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), the weight or ' +
+        'the sizes missing (PRODUCT_SHIPPING_DATA_REQUIRED, `details.fields`), a wrong weight ' +
+        '(PRODUCT_WEIGHT_INVALID) or size (PRODUCT_SIZES_INVALID), one or two sizes instead of ' +
+        'three (PRODUCT_SIZES_INCOMPLETE), a flag that is not true or false ' +
+        '(PRODUCT_WITHOUT_SHIPPING_DATA_INVALID), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than ' +
         MAX_PRODUCT_IMAGES +
         ' images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), an image Cloudinary cannot read (IMAGE_INVALID), or a text of the form with a NUL sign (TEXT_NUL_FORBIDDEN).',
       $ref: 'errorResponseSchema#',
@@ -502,7 +521,9 @@ const updateProductByIdRouterSchema = {
     'with a sale that is on says in `sale` what happens to the sale: `keep`, null (`remove` in a ' +
     'form) to take it off, or a new sale (JSON only) that takes the old one off and is put on ' +
     'from the new price. The steps go one by one with every line of the logs: the old sale off, ' +
-    'the price, the new sale; all of them or none.',
+    'the price, the new sale; all of them or none. The weight and the sizes of the product are ' +
+    'changed here too: a size alone is changed when the other two are there, clearing what is ' +
+    'known needs `withoutShippingData=true`.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -537,7 +558,11 @@ const updateProductByIdRouterSchema = {
         'number of a form over 64 signs, safety data that are not whole or wrong in a form ' +
         '(PRODUCT_SAFETY_REQUIRED, PRODUCT_SAFETY_INVALID, `details.fields`), a manufacturer ' +
         'outside the EU without a person responsible in the EU (PRODUCT_EU_RESPONSIBLE_REQUIRED), ' +
-        'POPULARITY_OVERRIDE_UNTIL_INVALID for an end that is not ahead), a popularity override ' +
+        'POPULARITY_OVERRIDE_UNTIL_INVALID for an end that is not ahead), the weight or the sizes ' +
+        'cleared without the flag (PRODUCT_SHIPPING_DATA_REQUIRED, `details.fields`), a wrong ' +
+        'weight (PRODUCT_WEIGHT_INVALID) or size (PRODUCT_SIZES_INVALID) in a form, one or two ' +
+        'sizes after the change (PRODUCT_SIZES_INCOMPLETE), a flag that is not true or false in a ' +
+        'form (PRODUCT_WITHOUT_SHIPPING_DATA_INVALID), a popularity override ' +
         'without its end or an end without an override after the change ' +
         '(POPULARITY_OVERRIDE_UNTIL_REQUIRED, POPULARITY_OVERRIDE_REQUIRED), a word on the sale ' +
         'without a price (PRODUCT_SALE_REQUIRES_PRICE), a stock (PRODUCT_STOCK_NOT_ALLOWED), ' +
@@ -622,7 +647,8 @@ const patchProductsBatchRouterSchema = {
         'wrong field (PRODUCT_NAME_INVALID, PRODUCT_PRICE_INVALID, CATEGORY_ID_INVALID, ' +
         'POPULARITY_OVERRIDE_INVALID, POPULARITY_OVERRIDE_UNTIL_INVALID, PRODUCT_SKU_TOO_LONG, ' +
         'safety data that are not whole or wrong: PRODUCT_SAFETY_REQUIRED, PRODUCT_SAFETY_INVALID ' +
-        'with `fields`, PRODUCT_EU_RESPONSIBLE_REQUIRED), a popularity override without its end ' +
+        'with `fields`, PRODUCT_EU_RESPONSIBLE_REQUIRED, PRODUCT_SHIPPING_DATA_REQUIRED with ' +
+        '`fields`, PRODUCT_SIZES_INCOMPLETE), a popularity override without its end ' +
         'or an end without an override after the change (POPULARITY_OVERRIDE_UNTIL_REQUIRED, ' +
         'POPULARITY_OVERRIDE_REQUIRED), a word on the sale without a price ' +
         '(PRODUCT_SALE_REQUIRES_PRICE), a stock (PRODUCT_STOCK_NOT_ALLOWED), a new sale that does ' +

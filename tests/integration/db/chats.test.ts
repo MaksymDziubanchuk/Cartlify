@@ -268,6 +268,38 @@ describe('chats: changing one', () => {
     expect(outcome.ok).toBe(false);
   });
 
+  // the marks of an open admin chat: waiting (asked, not taken), unread (a message no admin has
+  // read) or neither, when an admin took it and read it
+  it('lets an admin take and read a chat: an open admin chat can have neither mark', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const threadId = await chatOf(db, { userId: user.id }, 'admin');
+      await db.as(asAdmin());
+      return updateChat(db, `"adminRequestedAt" = null, "adminUnreadSince" = null`, threadId);
+    });
+
+    expect(changedRows(outcome)).toBe(true);
+  });
+
+  it('does not let a bot chat have a mark of the admins', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const threadId = await chatOf(db, { userId: user.id });
+      await db.as(asUser());
+      return updateChat(db, `"adminUnreadSince" = now()`, threadId);
+    });
+
+    expect(outcome.ok).toBe(false);
+  });
+
+  it('does not let a closed chat keep a mark of the admins', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      const threadId = await chatOf(db, { userId: user.id }, 'admin');
+      await db.as(asAdmin());
+      return updateChat(db, `status = 'closed'`, threadId);
+    });
+
+    expect(outcome.ok).toBe(false);
+  });
+
   // a message of the waiting user changes the chat, its request keeps its time
   it('lets a chat that waits for an admin change otherwise, its request time as it was', async () => {
     const outcome = await inRolledBackTx(async (db) => {

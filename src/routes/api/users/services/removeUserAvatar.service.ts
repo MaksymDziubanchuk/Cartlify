@@ -61,6 +61,7 @@ export async function removeUserAvatar({
           entityType: 'user',
           entityId: id,
           action: 'OTHER',
+          event: 'user.avatar_remove',
           changes: [avatarRemovalChange(taken!.public_id ?? taken!.avatar_url)],
         });
       }

@@ -1,5 +1,7 @@
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
+import { deliveryLineOf } from './deliveryLine.js';
+
 export type OrderPaidItem = {
   name: string;
   quantity: number;
@@ -21,6 +23,10 @@ export type OrderPaidTemplateArgs = {
   shippingAddress?: string | null;
   recipientName?: string | null;
   recipientPhone?: string | null;
+  // where and when to collect the order, a pickup only
+  pickup?: string | null;
+  // what the buyer pays for the delivery, part of the total: free when 0, no line for a pickup
+  deliveryPrice?: number | string | null;
   appName?: string;
   logoCid?: string;
   // the documents attached to the mail as files: the versions of the terms and of the contract the
@@ -79,8 +85,10 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
       unitPrice: price(item.unitPrice),
       lineTotal: price(item.totalPrice),
     })),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
     shippingAddress: args.shippingAddress?.trim() || '',
+    pickup: args.pickup?.trim() || '',
     // the name and the phone in one line; an order confirmed before the recipient fields existed
     // has neither, then the line is left out
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),

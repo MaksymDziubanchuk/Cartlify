@@ -30,7 +30,7 @@ const APP_FUNCTIONS = [
   'cartlify.users_get_public_profile(integer)',
   'cartlify.remove_user_avatar(integer)',
   'cartlify.migrate_guest_data_to_user(uuid, integer)',
-  'cartlify.confirm_order(integer, interval)',
+  'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
   'cartlify.unconfirm_order(integer)',
   'cartlify.cancel_order_payment(integer)',
   'cartlify.cancel_paid_order(integer)',
@@ -44,12 +44,13 @@ const APP_FUNCTIONS = [
   'cartlify.cleanup_deleted_accounts_chats(integer)',
   'cartlify.refresh_order_prices(integer)',
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
-  'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)',
-  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
+  'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',
+  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
   'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
   'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
   'cartlify.shop_today()',
   'cartlify.product_expired_units(integer)',
+  'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
 ];
 
 // the context readers rls policies call and the search helpers, all readonly may run

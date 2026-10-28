@@ -2,14 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { closeChatSockets, openChatSocket, type ChatSocket } from '../../../helpers/chatSocket.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { asAdmin } from '../../../helpers/db.js';
+import { asAdmin, testTx } from '../../../helpers/db.js';
 import { createChatThread, createUser, type TestUser } from '../../../helpers/factories.js';
 
 // the work of an admin in the support chat: the queues, a chat opened, answered, read and closed,
@@ -35,7 +34,7 @@ const customer = () => createUser();
 // the chat the bot leaves when the customer asks for a person: an admin chat that waits for the
 // customer to describe the problem, so no message of theirs waits for the admin yet
 function escalatedChat(userId: number): Promise<{ id: string }> {
-  return prisma.$transaction(async (tx) => {
+  return testTx(async (tx) => {
     await setUserContext(tx, { userId, role: 'USER' });
     const id = randomUUID();
     await tx.chatThread.create({
@@ -133,20 +132,33 @@ describe('GET /api/chat/admin/threads', () => {
 
   // the alerts of an admin send to it: every chat with a message no admin has read, the one that
   // waits the longest first, whether an admin took it or not
-  it('gives the unread queue the chats of both queues, the longest waiting first', async () => {
-    const waiting = await createChatThread((await customer()).id);
-    const taken = await createChatThread((await customer()).id);
-    expect((await openChat(taken.id)).statusCode).toBe(200);
+  it('gives the unread queue the chats with a message no admin has read, the longest unread first', async () => {
+    const first = await createChatThread((await customer()).id);
+    const second = await createChatThread((await customer()).id);
+    const read = await createChatThread((await customer()).id);
+    expect((await openChat(read.id)).statusCode).toBe(200);
     const undescribed = await escalatedChat((await customer()).id);
     const bot = await createChatThread((await customer()).id, { type: 'bot' });
 
     const unread = await queueOf('unread');
 
-    expect(unread).toContain(waiting.id);
-    expect(unread).toContain(taken.id);
-    expect(unread.indexOf(waiting.id)).toBeLessThan(unread.indexOf(taken.id));
+    expect(unread).toContain(first.id);
+    expect(unread).toContain(second.id);
+    expect(unread.indexOf(first.id)).toBeLessThan(unread.indexOf(second.id));
+    expect(unread).not.toContain(read.id);
     expect(unread).not.toContain(undescribed.id);
     expect(unread).not.toContain(bot.id);
+  });
+
+  it('keeps a chat an admin read in the active queue, out of the unread one', async () => {
+    const chat = await createChatThread((await customer()).id);
+    expect(await queueOf('unread')).toContain(chat.id);
+
+    expect((await openChat(chat.id)).statusCode).toBe(200);
+
+    expect(await queueOf('active')).toContain(chat.id);
+    expect(await queueOf('unread')).not.toContain(chat.id);
+    expect((await threadOf(chat.id)).adminUnreadSince).toBeNull();
   });
 
   it('refuses a page that is no whole number', async () => {
@@ -401,7 +413,9 @@ describe('the chat socket of an admin', () => {
       { senderType: 'user', isRead: true, content: 'Where is my order?' },
     ]);
     expect((await threadOf(chat.id)).adminRequestedAt).toBeNull();
+    expect((await threadOf(chat.id)).adminUnreadSince).toBeNull();
     expect(await queueOf('active')).toContain(chat.id);
+    expect(await queueOf('unread')).not.toContain(chat.id);
   });
 
   it('lets the admin read a chat whose customer has not described the problem yet', async () => {
@@ -457,10 +471,16 @@ describe('the chat socket of an admin', () => {
       senderId: admin.id,
     });
     const thread = await threadOf(chat.id);
-    expect({ unreadCount: thread.unreadCount, adminRequestedAt: thread.adminRequestedAt }).toEqual({
+    expect({
+      unreadCount: thread.unreadCount,
+      adminRequestedAt: thread.adminRequestedAt,
+      adminUnreadSince: thread.adminUnreadSince,
+    }).toEqual({
       unreadCount: 0,
       adminRequestedAt: null,
+      adminUnreadSince: null,
     });
+    expect(await queueOf('unread')).not.toContain(chat.id);
   });
 
   it('lets the admin answer a chat whose customer has not described the problem yet', async () => {
@@ -480,7 +500,10 @@ describe('the chat socket of an admin', () => {
     expect(answer.payload.content).toBe('How can I help?');
     expect(await queueOf('active')).toContain(chat.id);
 
-    // what the customer writes then reaches the admin who answered, the chat stays active
+    expect(await queueOf('unread')).not.toContain(chat.id);
+
+    // what the customer writes then reaches the admin who answered, the chat stays active and is
+    // unread again, from the first message no admin has read
     userSocket.send({ type: 'message:send', payload: { threadId: chat.id, content: 'My order.' } });
     await adminSocket.take('message:new', (e) => e.payload?.content === 'My order.');
     const thread = await threadOf(chat.id);
@@ -488,7 +511,15 @@ describe('the chat socket of an admin', () => {
       unreadCount: 1,
       requested: null,
     });
+    expect(thread.adminUnreadSince).not.toBeNull();
     expect(await queueOf('active')).toContain(chat.id);
+    expect(await queueOf('unread')).toContain(chat.id);
+
+    userSocket.send({ type: 'message:send', payload: { threadId: chat.id, content: 'Please.' } });
+    await adminSocket.take('message:new', (e) => e.payload?.content === 'Please.');
+    const later = await threadOf(chat.id);
+    expect(later.unreadCount).toBe(2);
+    expect(later.adminUnreadSince).toEqual(thread.adminUnreadSince);
   });
 
   it('shares typing with the others of the chat', async () => {

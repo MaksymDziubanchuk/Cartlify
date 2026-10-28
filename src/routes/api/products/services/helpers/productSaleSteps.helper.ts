@@ -9,6 +9,7 @@ import { productResponseSelect } from './productMapper.helper.js';
 import { SALE_PRIOR_PRICE_DAYS, computeSalePrice, lowestPriceOf } from './productSale.helper.js';
 
 import type { SaleAuditEvent } from '@db/adminAudit.helper.js';
+import type { AuditEvent, SaleSource, WrittenEvent } from '@config/journalEvents.js';
 import type { ProductSaleDiscountDto, ProductSaleDto } from 'types/dto/products.dto.js';
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
@@ -21,6 +22,16 @@ export type SaleStepContext = {
   db: Prisma.TransactionClient;
   actorId: UserId;
   actorRole: Role;
+  // where the sale is set or taken off: its own route (the default), the route of many sales, or
+  // together with a price; the lines of the admin log tell it
+  source?: SaleSource;
+};
+
+// the event of the line of a sale in the admin log
+const SALE_EVENTS: Record<SaleSource, { set: AuditEvent; remove: AuditEvent }> = {
+  route: { set: 'product.sale_set', remove: 'product.sale_remove' },
+  bulk: { set: 'product.sale_set_bulk', remove: 'product.sale_remove' },
+  with_price: { set: 'product.sale_set_with_price', remove: 'product.sale_remove_with_price' },
 };
 
 // the sale of a product before the step, and the price it is counted from
@@ -64,6 +75,9 @@ const auditSale = (
     entityType: 'product',
     entityId: before.id,
     action: 'PRODUCT_SALE',
+    event: SALE_EVENTS[ctx.source ?? 'route'][
+      event === 'removed' ? 'remove' : 'set'
+    ] as WrittenEvent<AuditEvent>,
     changes: buildSaleAuditChanges({
       event,
       price: before.price,
@@ -88,6 +102,7 @@ export async function takeSaleOff(ctx: SaleStepContext, product: ProductSaleStat
     afterPrice: product.price,
     mode: 'fixed',
     value: computeFixedDelta(product.salePrice, product.price),
+    event: 'price.sale_end',
   });
   await auditSale(ctx, product, 'removed', after);
 
@@ -136,6 +151,7 @@ export async function putSaleOn(
     afterPrice: salePrice,
     mode: 'percent' in given ? 'percent' : 'fixed',
     value: 'percent' in given ? -given.percent : -discount.toNumber(),
+    event: 'price.sale_start',
     endsAt,
   });
   await auditSale(ctx, product, wasOn ? 'change' : 'start', after, given);

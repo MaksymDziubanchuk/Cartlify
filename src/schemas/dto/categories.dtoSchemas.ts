@@ -21,6 +21,36 @@ export const categoriesGetQuerySchema = {
   },
 } as const;
 
+// the picture of a category in three sizes
+const categoryImageUrlsSchema = {
+  $id: 'categoryImageUrlsSchema',
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The picture of the category, three sizes of it (the whole picture, fit in a square).',
+  properties: {
+    url200: { type: 'string' },
+    url400: { type: 'string' },
+    url800: { type: 'string' },
+  },
+  required: ['url200', 'url400', 'url800'],
+} as const;
+
+// the form of the picture of a category
+const categoriesImageFormSchema = {
+  $id: 'categoriesImageFormSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    image: {
+      type: 'string',
+      format: 'binary',
+      description: 'The picture of the category: a jpeg, png or webp file by its content.',
+    },
+  },
+  required: ['image'],
+} as const;
+
 const categoriesCategoryResponseSchema = {
   $id: 'categoriesCategoryResponseSchema',
   type: 'object',
@@ -31,10 +61,11 @@ const categoriesCategoryResponseSchema = {
     slug: { type: 'string' },
     description: { type: 'string' },
     parentId: { type: 'number' },
+    imageUrls: { anyOf: [{ $ref: 'categoryImageUrlsSchema#' }, { type: 'null' }] },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
-  required: ['id', 'name', 'createdAt', 'updatedAt'],
+  required: ['id', 'name', 'imageUrls', 'createdAt', 'updatedAt'],
 } as const;
 
 export const categoriesListResponseSchema = {
@@ -60,6 +91,7 @@ const categoryTreeNodeSchema = {
     id: { type: 'integer' },
     name: { type: 'string' },
     slug: { type: 'string' },
+    imageUrls: { anyOf: [{ $ref: 'categoryImageUrlsSchema#' }, { type: 'null' }] },
     productCount: {
       type: 'integer',
       minimum: 0,
@@ -73,7 +105,7 @@ const categoryTreeNodeSchema = {
       items: { $ref: 'categoryTreeNodeSchema#' },
     },
   },
-  required: ['id', 'name', 'slug', 'productCount', 'children'],
+  required: ['id', 'name', 'slug', 'imageUrls', 'productCount', 'children'],
 } as const;
 
 const categoryTreeResponseSchema = {
@@ -171,6 +203,8 @@ const categoriesDeleteResponseSchema = {
 
 export const categoriesDtoSchemas = [
   categoriesGetQuerySchema,
+  categoryImageUrlsSchema,
+  categoriesImageFormSchema,
   categoriesCategoryResponseSchema,
   categoriesListResponseSchema,
   categoryTreeNodeSchema,

@@ -26,6 +26,27 @@ afterEach(() => {
 });
 
 describe('buildOrderDeliveredTemplate', () => {
+  it.each([
+    ['a price the buyer paid', 4.99, 'Delivery: €4.99'],
+    ['a free delivery', 0, 'Delivery: free'],
+  ])(
+    'shows the delivery line of %s above the total in both versions',
+    (_name, deliveryPrice, line) => {
+      const { text, html } = buildOrderDeliveredTemplate(order({ deliveryPrice }));
+
+      expect(text).toContain(line);
+      expect(text.indexOf(line)).toBeLessThan(text.indexOf('Total:'));
+      expect(html).toContain(line.replace('Delivery: ', ''));
+    },
+  );
+
+  it('leaves the delivery line out for a pickup, which has no price', () => {
+    const { text, html } = buildOrderDeliveredTemplate(order({ deliveryPrice: null }));
+
+    expect(text).not.toContain('Delivery:');
+    expect(html).not.toContain('>Delivery<');
+  });
+
   // a delivered order asks the buyer to rate what came, each product with the page of its reviews
   it('asks to rate each product that has the page of its reviews', () => {
     const { text, html } = buildOrderDeliveredTemplate(

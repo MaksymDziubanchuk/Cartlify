@@ -123,7 +123,7 @@ export async function loadProfileLists(
         result.loginLogs = await tx.loginLog.findMany({
           where: { userId, createdAt },
           orderBy: newestFirst,
-          select: { id: true, createdAt: true, ipAddress: true, userAgent: true },
+          select: { id: true, createdAt: true, ipAddress: true, userAgent: true, event: true },
         });
         break;
       // the versions of the terms and of the contract the user accepted (orderId null) and the
@@ -138,6 +138,7 @@ export async function loadProfileLists(
             orderId: true,
             ip: true,
             userAgent: true,
+            event: true,
             createdAt: true,
             document: { select: { kind: true, version: true, title: true } },
           },
@@ -151,6 +152,7 @@ export async function loadProfileLists(
           orderId: consent.orderId,
           ip: consent.ip,
           userAgent: consent.userAgent,
+          event: consent.event,
           createdAt: consent.createdAt,
         }));
         break;

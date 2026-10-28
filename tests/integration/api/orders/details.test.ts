@@ -19,6 +19,7 @@ import {
   orderRowOf,
   placeOrder,
   placeUnconfirmedOrder,
+  deliveryAnswer,
   shippingData,
 } from '../../../helpers/orders.js';
 
@@ -104,7 +105,7 @@ describe('GET /api/orders/:orderId', () => {
       status: 'waiting',
       confirmed: true,
       total: 20,
-      ...shippingData,
+      delivery: deliveryAnswer,
       reservationExpiresAt: expect.any(String),
       items: [{ productId: product.id, quantity: 2, unitPrice: 10, totalPrice: 20 }],
     });
@@ -157,7 +158,7 @@ describe('GET /api/orders/:orderId', () => {
     const res = await getOrder(await newUser({ role }), orderId);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: orderId, status: 'paid', ...shippingData });
+    expect(res.json()).toMatchObject({ id: orderId, status: 'paid', delivery: deliveryAnswer });
     expect(res.json()).not.toHaveProperty('paymentId');
     expect(res.json()).not.toHaveProperty('paymentProvider');
   });

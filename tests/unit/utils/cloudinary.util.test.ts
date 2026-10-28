@@ -23,6 +23,35 @@ import { importWithEnv } from '../../helpers/freshImport.js';
 
 const base = 'https://res.cloudinary.com/demo/image/upload/v1712345678/products/7/1.jpg';
 
+// what the sdk rejects with when Cloudinary is out of reach (node_modules/cloudinary/lib/uploader.js):
+// a call that ran out of its time and a connection that broke come wrapped in error, a status the
+// sdk does not read comes as it is
+const networkError = (message: string, code: string) => Object.assign(new Error(message), { code });
+const OUT_OF_REACH: Array<[string, unknown]> = [
+  [
+    'the time of the call ran out',
+    { error: { message: 'Request Timeout', http_code: 499, name: 'TimeoutError' } },
+  ],
+  [
+    'the connection was refused',
+    { error: networkError('connect ECONNREFUSED 127.0.0.1:443', 'ECONNREFUSED') },
+  ],
+  ['the connection broke', { error: networkError('socket hang up', 'ECONNRESET') }],
+  [
+    'the name of the host was not found',
+    { error: networkError('getaddrinfo ENOTFOUND api.cloudinary.com', 'ENOTFOUND') },
+  ],
+  [
+    'Cloudinary answered a status the sdk does not read',
+    {
+      message: 'Server returned unexpected status code - 502',
+      http_code: 502,
+      name: 'UnexpectedResponse',
+    },
+  ],
+  ['Cloudinary failed', { message: 'General Error', http_code: 500 }],
+];
+
 // the tests run with NODE_ENV=test, so their files go to the test folder
 describe('makePublicId', () => {
   it('gives one avatar path per user, in the folder of the environment', () => {
@@ -162,7 +191,9 @@ describe('deleteImage', () => {
     jest.restoreAllMocks();
   });
 
-  it('removes the image by its public id and drops the cached copies', async () => {
+  // a delete runs after the commit of a request and holds up its answer: 8 s at most, not the
+  // minute the sdk gives a call
+  it('removes the image by its public id, drops the cached copies and waits 8 s at most', async () => {
     const destroy = jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
 
     await deleteImage('users/42/avatar');
@@ -170,8 +201,22 @@ describe('deleteImage', () => {
     expect(destroy).toHaveBeenCalledWith('users/42/avatar', {
       resource_type: 'image',
       invalidate: true,
+      timeout: 8_000,
     });
   });
+
+  it.each(OUT_OF_REACH)(
+    'says the store of images is out of reach when %s',
+    async (_what, failure) => {
+      jest.spyOn(cloudinary.uploader, 'destroy').mockRejectedValue(failure);
+
+      expect(await rejectedBy(() => deleteImage('users/42/avatar'))).toMatchObject({
+        statusCode: 503,
+        errorCode: 'IMAGE_STORAGE_UNAVAILABLE',
+        cause: failure,
+      });
+    },
+  );
 
   it.each(['', '   '])('refuses a blank public id before asking cloudinary', async (publicId) => {
     const destroy = jest.spyOn(cloudinary.uploader, 'destroy');
@@ -182,8 +227,8 @@ describe('deleteImage', () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
-  it('wraps a cloudinary failure and keeps it as the cause', async () => {
-    const failure = new Error('cloudinary is down');
+  it('wraps another cloudinary failure and keeps it as the cause', async () => {
+    const failure = { message: 'Must supply api_key', http_code: 401 };
     jest.spyOn(cloudinary.uploader, 'destroy').mockRejectedValue(failure);
 
     expect(await rejectedBy(() => deleteImage('users/42/avatar'))).toMatchObject({
@@ -412,6 +457,41 @@ describe('uploadImage', () => {
       details: { reason: 'CLOUDINARY_UPLOAD_UNEXPECTED' },
     });
   });
+
+  // nothing is written yet, the request can come again
+  it.each(OUT_OF_REACH)(
+    'says the store of images is out of reach when %s',
+    async (_what, failure) => {
+      uploadAnswers(failure);
+
+      const err = await rejectedBy(() => uploadImage({ file: PNG_HEAD, mimetype: 'image/png' }));
+
+      expect(err).toMatchObject({
+        statusCode: 503,
+        errorCode: 'IMAGE_STORAGE_UNAVAILABLE',
+        cause: failure,
+      });
+    },
+  );
+
+  // sending a file can take long: an upload keeps the time of the sdk unless the call names one
+  it('gives an upload the time of the sdk unless the call names one', async () => {
+    const upload = uploadAnswers(undefined, {
+      public_id: 'test/uploads/x',
+      secure_url: 'https://x',
+    });
+
+    await uploadImage({ file: PNG_HEAD, mimetype: 'image/png', publicId: 'test/uploads/x' });
+    await uploadImage({
+      file: PNG_HEAD,
+      mimetype: 'image/png',
+      publicId: 'test/uploads/x',
+      timeout: 3_000,
+    });
+
+    expect(upload.mock.calls[0]![0]).not.toHaveProperty('timeout');
+    expect(upload.mock.calls[1]![0]).toMatchObject({ timeout: 3_000 });
+  });
 });
 
 describe('moveImage', () => {
@@ -419,18 +499,22 @@ describe('moveImage', () => {
     jest.restoreAllMocks();
   });
 
-  it('moves the upload over the file at its place and drops the cached copies', async () => {
+  // a move runs inside the transaction of its request: 8 s at most, so it ends before the
+  // transaction does. A place a page may show already (the avatar of an account) has its cached
+  // copies dropped, a new place has none
+  it('moves the upload over the file at its place, drops the cached copies and waits 8 s at most', async () => {
     const rename = jest.spyOn(cloudinary.uploader, 'rename').mockResolvedValue({
       public_id: 'test/users/5/avatar',
       secure_url: 'https://res.cloudinary.com/demo/image/upload/v2/test/users/5/avatar.png',
     } as never);
 
-    const res = await moveImage('test/uploads/x', 'test/users/5/avatar');
+    const res = await moveImage('test/uploads/x', 'test/users/5/avatar', { invalidate: true });
 
     expect(rename).toHaveBeenCalledWith('test/uploads/x', 'test/users/5/avatar', {
       resource_type: 'image',
       overwrite: true,
       invalidate: true,
+      timeout: 8_000,
     });
     expect(res).toEqual({
       publicId: 'test/users/5/avatar',
@@ -444,18 +528,49 @@ describe('moveImage', () => {
   ])('refuses a blank id before asking cloudinary', async (from, to) => {
     const rename = jest.spyOn(cloudinary.uploader, 'rename');
 
-    expect(await rejectedBy(() => moveImage(from, to))).toMatchObject({
+    expect(await rejectedBy(() => moveImage(from, to, { invalidate: false }))).toMatchObject({
       errorCode: 'PUBLIC_ID_REQUIRED',
     });
     expect(rename).not.toHaveBeenCalled();
   });
 
-  it('wraps a cloudinary failure and keeps it as the cause', async () => {
-    const failure = new Error('cloudinary is down');
+  it('asks no drop of cached copies for a new place', async () => {
+    const rename = jest.spyOn(cloudinary.uploader, 'rename').mockResolvedValue({
+      public_id: 'test/products/7/k',
+      secure_url: 'https://res.cloudinary.com/demo/image/upload/v2/test/products/7/k.png',
+    } as never);
+
+    await moveImage('test/uploads/x', 'test/products/7/k', { invalidate: false });
+
+    expect(rename).toHaveBeenCalledWith('test/uploads/x', 'test/products/7/k', {
+      resource_type: 'image',
+      overwrite: true,
+      invalidate: false,
+      timeout: 8_000,
+    });
+  });
+
+  it.each(OUT_OF_REACH)(
+    'says the store of images is out of reach when %s',
+    async (_what, failure) => {
+      jest.spyOn(cloudinary.uploader, 'rename').mockRejectedValue(failure);
+
+      expect(
+        await rejectedBy(() =>
+          moveImage('test/uploads/x', 'test/products/7/k', { invalidate: false }),
+        ),
+      ).toMatchObject({ statusCode: 503, errorCode: 'IMAGE_STORAGE_UNAVAILABLE', cause: failure });
+    },
+  );
+
+  it('wraps another cloudinary failure and keeps it as the cause', async () => {
+    const failure = { message: 'Resource not found - test/uploads/x', http_code: 404 };
     jest.spyOn(cloudinary.uploader, 'rename').mockRejectedValue(failure);
 
     expect(
-      await rejectedBy(() => moveImage('test/uploads/x', 'test/users/5/avatar')),
+      await rejectedBy(() =>
+        moveImage('test/uploads/x', 'test/users/5/avatar', { invalidate: true }),
+      ),
     ).toMatchObject({
       statusCode: 500,
       details: { reason: 'CLOUDINARY_MOVE_UNEXPECTED' },

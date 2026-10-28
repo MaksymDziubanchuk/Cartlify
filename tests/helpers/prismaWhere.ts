@@ -1,6 +1,8 @@
 // a small in-memory stand-in for the database side of a prisma query: it applies a where
 // object and an orderBy list to plain rows, the way postgres would. Only the parts our
-// list helpers build are supported; anything else throws, so a test never passes by accident
+// list helpers build are supported; anything else throws, so a test never passes by accident.
+// A one-to-one relation is a nested object of the row: { delivery: { is: {...} } } and
+// { delivery: { isNot: null } } filter by it, { delivery: { method: 'asc' } } orders by it
 
 type Row = Record<string, unknown>;
 type Plain = number | string | null;
@@ -90,20 +92,45 @@ export function matchesWhere(row: Row, where: Record<string, unknown> | undefine
     }
     if (key === 'NOT') return !matchesWhere(row, condition as Record<string, unknown>);
 
+    // a relation of one row: is (it is there and matches), isNot (it is not there, or does not match)
+    if (isFilterObject(condition) && ('is' in condition || 'isNot' in condition)) {
+      const related = row[key] as Row | null | undefined;
+      const missing = related === null || related === undefined;
+      return Object.entries(condition).every(([op, inner]) => {
+        if (op === 'is') {
+          return inner === null ? missing : !missing && matchesWhere(related, inner as Row);
+        }
+        if (op === 'isNot') {
+          return inner === null ? !missing : missing || !matchesWhere(related, inner as Row);
+        }
+        throw new Error(`unsupported relation filter: ${op}`);
+      });
+    }
+
     return matchesField(row[key], condition);
   });
 }
 
+type Direction = 'asc' | 'desc';
+// a field and its direction, or a field of a relation of one row and its direction
+export type OrderItem = Record<string, Direction | Record<string, Direction>>;
+
+// the field an order item sorts by, with its direction
+function orderOf(row: Row, item: OrderItem): { value: Plain; dir: Direction } {
+  const [field, spec] = Object.entries(item)[0]!;
+  if (typeof spec === 'string') return { value: plain(row[field]), dir: spec };
+
+  const [inner, dir] = Object.entries(spec)[0]!;
+  const related = row[field] as Row | null | undefined;
+  return { value: related ? plain(related[inner]) : null, dir };
+}
+
 // postgres default: ascending puts nulls last, descending puts them first
-export function sortRows<T extends Row>(
-  rows: T[],
-  orderBy: Array<Record<string, 'asc' | 'desc'>>,
-): T[] {
+export function sortRows<T extends Row>(rows: T[], orderBy: OrderItem[]): T[] {
   return [...rows].sort((a, b) => {
     for (const item of orderBy) {
-      const [field, dir] = Object.entries(item)[0]!;
-      const left = plain(a[field]);
-      const right = plain(b[field]);
+      const { value: left, dir } = orderOf(a, item);
+      const { value: right } = orderOf(b, item);
 
       if (left === right) continue;
       if (left === null) return dir === 'asc' ? 1 : -1;
@@ -122,7 +149,7 @@ export function sortRows<T extends Row>(
 export function walkPages<T extends Row & { id: number }>(args: {
   rows: T[];
   where?: Record<string, unknown>;
-  orderBy: Array<Record<string, 'asc' | 'desc'>>;
+  orderBy: OrderItem[];
   limit: number;
   cursorWhere: (cursor: string | undefined) => Record<string, unknown> | undefined;
   nextCursor: (last: T) => string;

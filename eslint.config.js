@@ -40,7 +40,8 @@ export default [
       'import-x/no-named-as-default': 'off',
       'import-x/no-named-as-default-member': 'off',
 
-      '@typescript-eslint/no-unused-vars': ['warn'],
+      // a field taken out of an object to leave it out of the rest (const { a, ...rest } = x) is used
+      '@typescript-eslint/no-unused-vars': ['warn', { ignoreRestSiblings: true }],
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-empty-object-type': 'off',
       '@typescript-eslint/no-namespace': 'off',

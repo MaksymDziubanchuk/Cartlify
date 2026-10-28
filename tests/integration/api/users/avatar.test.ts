@@ -13,6 +13,7 @@ import {
   gifImage,
   IMAGE_FIXTURES,
   imageField,
+  moveCallsSince,
   pngImage,
   removeUploads,
   storedImage,
@@ -20,11 +21,13 @@ import {
   uploadMark,
   uploadsSince,
   waitingUploadsSince,
+  withSilentCloudinaryMoves,
 } from '../../../helpers/cloudinary.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { closeSessions, createUser, uniqueTag, type TestUser } from '../../../helpers/factories.js';
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail } from '../../../helpers/mail.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 
@@ -173,6 +176,48 @@ describe('PATCH /api/users/me with an avatar (Cloudinary)', () => {
     // the version in the url is new, so no browser or cdn keeps showing the old picture
     expect(versionOf(row.avatarUrl ?? '')).not.toBe(versionOf(first.row.avatarUrl ?? ''));
     expect(await storedImage(avatarPath(user))).toMatchObject({ width: 50, height: 20 });
+  });
+
+  // the avatar lives at one path, pages show the file there: the copies cached of the old one are
+  // dropped. The move runs inside the transaction and has 8 s at most
+  it('moves the avatar over the one at its place, dropping its cached copies, 8 s at most', async () => {
+    const user = await newUser();
+    const mark = uploadMark();
+
+    const res = await patchForm(user, [avatar(pngImage(41, 30))]);
+
+    expect(res.statusCode).toBe(200);
+    expect(moveCallsSince(mark)).toEqual([
+      expect.objectContaining({
+        to: avatarPath(user),
+        options: expect.objectContaining({ invalidate: true, timeout: 8_000 }),
+      }),
+    ]);
+  });
+
+  // Cloudinary takes the move and never answers: the move gives up after its 8 s, and nothing of
+  // the form is kept, the name neither
+  it('keeps the profile and its avatar when Cloudinary does not answer the move in 8 s', async () => {
+    const user = await newUser();
+    const first = await giveAvatar(user, pngImage(42, 30));
+    const mark = uploadMark();
+    const startedAt = Date.now();
+
+    const res = await withSilentCloudinaryMoves(() =>
+      patchForm(user, [...fields({ name: `Silent ${uniqueTag()}` }), avatar(pngImage(43, 30))]),
+    );
+    const took = Date.now() - startedAt;
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ errorCode: 'IMAGE_STORAGE_UNAVAILABLE' });
+    expect(took).toBeGreaterThanOrEqual(8_000);
+    expect(took).toBeLessThan(20_000);
+    expect(await rowOf(user.id)).toEqual(first.row);
+    expect(await storedImage(avatarPath(user))).toEqual(first.stored);
+    expect(await waitingUploadsSince(mark)).toEqual([]);
+    expect(
+      takeLogs({ msg: 'request failed', errorCode: 'IMAGE_STORAGE_UNAVAILABLE' }),
+    ).toHaveLength(1);
   });
 
   describe('a form the app refuses', () => {

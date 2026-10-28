@@ -60,6 +60,10 @@ const moveOrderTo = (orderId: number, stage: 'shipped' | 'delivered' | 'cancelle
     if (stage === 'cancelled') {
       await tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`;
     } else {
+      // the steps go one by one: delivered comes after shipped
+      if (stage === 'delivered') {
+        await tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } });
+      }
       await tx.order.update({ where: { id: orderId }, data: { status: stage } });
     }
   });

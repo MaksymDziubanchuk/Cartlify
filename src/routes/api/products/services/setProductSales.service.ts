@@ -143,7 +143,12 @@ export async function setProductSales(dto: SetProductSalesDto): Promise<ProductS
 
           const after = same
             ? before
-            : await putSaleOn({ db, actorId, actorRole }, before, item.sale, item.endsAt);
+            : await putSaleOn(
+                { db, actorId, actorRole, source: 'bulk' },
+                before,
+                item.sale,
+                item.endsAt,
+              );
 
           results.set(item.productId, {
             id: after.id as ProductId,

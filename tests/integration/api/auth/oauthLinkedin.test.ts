@@ -121,6 +121,18 @@ describe('GET /api/auth/linkedin/callback', () => {
     });
   });
 
+  // the log of logins names how the person came in
+  it('writes the login to the login log as a login with LinkedIn', async () => {
+    const claims = account();
+    await loginWith(claims);
+    const user = await userByEmail(claims.email);
+
+    const logs = await asAdmin((tx) =>
+      tx.loginLog.findMany({ where: { userId: user!.id }, select: { event: true } }),
+    );
+    expect(logs).toEqual([{ event: 'login.linkedin' }]);
+  });
+
   it('signs a returning user into the same account', async () => {
     const claims = account();
     await loginWith(claims);

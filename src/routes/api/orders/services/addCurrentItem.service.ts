@@ -15,7 +15,7 @@ import {
   isOrderNotEditable,
   mapOrderRowToResponse,
   expiredOfOrders,
-  orderResponseSelect,
+  readOrderResponse,
 } from './helpers/index.js';
 
 import type { CurrentAddItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
@@ -137,10 +137,7 @@ export async function addCurrentItem({
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // totals are maintained by db triggers; fetch current order
-        const order = await db.order.findUnique({
-          where: { id: orderId },
-          select: orderResponseSelect,
-        });
+        const order = await readOrderResponse(db, orderId);
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
 

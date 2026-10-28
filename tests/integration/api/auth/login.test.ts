@@ -209,10 +209,13 @@ describe('POST /api/auth/login', () => {
     const logs = await asAdmin((tx) =>
       tx.loginLog.findMany({
         where: { userId: user.id },
-        select: { ipAddress: true, userAgent: true },
+        select: { ipAddress: true, userAgent: true, event: true },
       }),
     );
-    expect(logs).toEqual([{ ipAddress: '127.0.0.1', userAgent: 'login-test-browser/1.0' }]);
+    // and how the person came in: with a password
+    expect(logs).toEqual([
+      { ipAddress: '127.0.0.1', userAgent: 'login-test-browser/1.0', event: 'login.password' },
+    ]);
   });
 
   it('writes nothing to the login log for a failed login', async () => {

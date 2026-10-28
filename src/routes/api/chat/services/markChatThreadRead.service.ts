@@ -32,7 +32,6 @@ interface LockedChatThreadDto {
     guestId: string | null;
     type: 'bot' | 'admin';
     status: 'open' | 'closed';
-    adminUnreadSince: Date | null;
 }
 
 // normalize user id
@@ -64,7 +63,7 @@ export async function markChatThreadReadService({
 
                 // lock target thread
                 const lockedThreads = await db.$queryRaw<LockedChatThreadDto[]>`
-                    SELECT id, "userId", "guestId", type, status, "adminUnreadSince"
+                    SELECT id, "userId", "guestId", type, status
                     FROM cartlify.chat_threads
                     WHERE id = ${threadId}::uuid
                     FOR UPDATE
@@ -150,9 +149,7 @@ export async function markChatThreadReadService({
                         data: {
                             unreadCount: 0,
                             adminRequestedAt: null,
-                            // a chat read before its customer described the problem goes to the
-                            // active queue: an open chat of an admin keeps one of the two marks
-                            adminUnreadSince: lockedThread.adminUnreadSince ?? new Date(),
+                            adminUnreadSince: null,
                         },
                     });
 

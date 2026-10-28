@@ -17,6 +17,7 @@ import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 import {
   productSafety,
   safetyFormFields,
+  shippingFormFields,
   type ProductSafetyInput,
 } from '../../../helpers/productSafety.js';
 
@@ -50,6 +51,7 @@ const create = (parts: FormPart[]) => {
     { name: 'name', value: `Safety product ${uniqueTag()}` },
     { name: 'price', value: '10' },
     { name: 'categoryId', value: String(categoryId) },
+    ...shippingFormFields(),
     ...parts,
     imageField('images', pngImage(30, 20)),
   ]);

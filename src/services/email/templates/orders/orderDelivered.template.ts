@@ -1,5 +1,7 @@
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
+import { deliveryLineOf } from './deliveryLine.js';
+
 export type OrderDeliveredItem = {
   name: string;
   quantity: number;
@@ -15,12 +17,16 @@ export type OrderDeliveredTemplateArgs = {
   orderUrl: string;
   items: OrderDeliveredItem[];
   total: number | string;
+  // what the buyer paid for the delivery, none for a pickup
+  deliveryPrice?: number | string | null;
   // the currency checkout charges in, for example "eur"
   currency: string;
   userName?: string;
   shippingAddress?: string | null;
   recipientName?: string | null;
   recipientPhone?: string | null;
+  // where the order was collected, a pickup only: the mail then says it is collected
+  pickup?: string | null;
   appName?: string;
   logoCid?: string;
 };
@@ -52,6 +58,7 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
       quantity: String(item.quantity),
       lineTotal: price(item.totalPrice),
     })),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
     // the products to rate, each with the page of its reviews
     ratings: args.items
@@ -59,8 +66,11 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
       .map((item) => ({ name: item.name.trim(), reviewUrl: item.reviewUrl!.trim() })),
     hasRatings: args.items.some((item) => item.reviewUrl?.trim()) ? 'yes' : '',
     shippingAddress: args.shippingAddress?.trim() || '',
-    // the name and the phone in one line; an order confirmed before the recipient fields existed
-    // has neither, then the line is left out
+    pickup: args.pickup?.trim() || '',
+    // how the mail says the order came to the buyer
+    statement: args.pickup?.trim() ? 'is collected' : 'is delivered',
+    heading: args.pickup?.trim() ? 'Order collected' : 'Order delivered',
+    // the name and the phone in one line
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
@@ -68,7 +78,7 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
   };
 
   return {
-    subject: `${appName} — Order #${args.orderId} is delivered`,
+    subject: `${appName} — Order #${args.orderId} ${args.pickup?.trim() ? 'is collected' : 'is delivered'}`,
     text: renderTemplate('orders/orderDelivered.txt', values),
     html: renderTemplate('orders/orderDelivered.html', values),
   };

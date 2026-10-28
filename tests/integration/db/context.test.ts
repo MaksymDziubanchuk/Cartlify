@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { parseDatabaseUrl, prisma } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
-import { inRolledBackTx, type DbSession } from '../../helpers/db.js';
+import { inRolledBackTx, type DbSession, testTx } from '../../helpers/db.js';
 import {
   closeSessions,
   createChatThread,
@@ -97,7 +97,7 @@ beforeAll(async () => {
   await createLoginLog(owner, new Date());
   await createResetToken(owner.id);
 
-  orderId = await prisma.$transaction(async (tx) => {
+  orderId = await testTx(async (tx) => {
     await setUserContext(tx, { userId: owner.id, role: 'USER' });
     const order = await tx.order.create({
       data: {
@@ -111,16 +111,25 @@ beforeAll(async () => {
   });
 
   // a paid order: what it took from the batch of the product is in order_batch_allocations
-  await prisma.$transaction(async (tx) => {
+  await testTx(async (tx) => {
     await setUserContext(tx, { userId: owner.id, role: 'USER' });
     const paid = await tx.order.create({
       data: {
         userId: owner.id,
         total: 0,
-        shippingAddress: 'Test street 1, Kyiv',
-        recipientFirstName: 'Anna',
-        recipientLastName: 'Koval',
-        recipientPhone: '+380501234567',
+        delivery: {
+          create: {
+            method: 'manual',
+            recipientFirstName: 'Anna',
+            recipientLastName: 'Koval',
+            recipientPhone: '+380501234567',
+            country: 'UA',
+            postalCode: '01001',
+            city: 'Kyiv',
+            street: 'Test street',
+            house: '1',
+          },
+        },
         items: { create: { productId: product.id, quantity: 1, unitPrice: 10, totalPrice: 10 } },
       },
       select: { id: true },
@@ -128,15 +137,18 @@ beforeAll(async () => {
     await tx.$executeRaw`select cartlify.confirm_order(${paid.id}::int, '15 minutes'::interval)`;
     await setAdminContext(tx);
     await tx.$executeRaw`select cartlify.pay_order(${paid.id}::int, 'stripe'::cartlify."PaymentProvider", ${`pi_context_${paid.id}`}, 10)`;
+    // sent: a row of the sends of the order
+    await tx.$executeRaw`update cartlify.orders set status = 'shipped' where id = ${paid.id}`;
+    await tx.$executeRaw`insert into cartlify.order_shipments ("orderId", carrier) values (${paid.id}, 'DHL')`;
   });
 
-  await prisma.$transaction(async (tx) => {
+  await testTx(async (tx) => {
     await setUserContext(tx, { userId: admin.id, role: 'ADMIN' });
     await tx.$executeRaw`select cartlify.log_admin_action(
       ${admin.id}::int, 'ADMIN'::cartlify."Role", 'product'::cartlify."AdminAuditEntityType",
-      ${product.id}::int, 'OTHER'::cartlify."AdminAuditAction", '[]'::jsonb)`;
+      ${product.id}::int, 'OTHER'::cartlify."AdminAuditAction", 'product.update', '[]'::jsonb)`;
     await tx.$executeRaw`select cartlify.log_product_price_change(
-      ${product.id}::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2)`;
+      ${product.id}::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2, 'price.set')`;
     // a setting of an alert of the admin
     await tx.adminAlertSetting.create({
       data: { userId: admin.id, kind: 'low_stock', subscribed: false, threshold: 10 },
@@ -314,7 +326,7 @@ describe('without a context', () => {
         );
         await db.as({ role: 'USER', userId: owner.id });
         await db.rows(
-          'insert into cartlify.legal_acceptances ("userId", "documentId") values ($1, $2) returning id',
+          'insert into cartlify.legal_acceptances ("userId", "documentId", "event") values ($1, $2, \'consent.accept\') returning id',
           owner.id,
           terms!.id,
         );
@@ -345,7 +357,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(20);
+    expect(Object.keys(hidden)).toHaveLength(22);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );
@@ -442,12 +454,12 @@ describe('without a context', () => {
   it('writes no line to the admin log or the price log', async () => {
     const { audit, price } = await inRolledBackTx(async (db) => ({
       audit: await db.attempt(
-        `select cartlify.log_admin_action($1::int, 'ADMIN', 'product', $2::int, 'OTHER', '[]'::jsonb)`,
+        `select cartlify.log_admin_action($1::int, 'ADMIN', 'product', $2::int, 'OTHER', 'product.update', '[]'::jsonb)`,
         admin.id,
         product.id,
       ),
       price: await db.attempt(
-        `select 1 as done from cartlify.log_product_price_change($1::int, 10, 11, 'fixed', 1)`,
+        `select 1 as done from cartlify.log_product_price_change($1::int, 10, 11, 'fixed', 1, 'price.set')`,
         product.id,
       ),
     }));

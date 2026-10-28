@@ -41,6 +41,10 @@
                     <td align="center" style="padding:10px 8px;border-bottom:1px solid #ede9fe;">{{quantity}}</td>
                     <td align="right" style="padding:10px 0;border-bottom:1px solid #ede9fe;white-space:nowrap;">{{lineTotal}}</td>
                   </tr>{{/items}}
+                  {{#deliveryLine}}<tr>
+                    <td colspan="2" align="right" style="padding:10px 8px 0 0;">Delivery</td>
+                    <td align="right" style="padding:10px 0 0 0;white-space:nowrap;">{{deliveryLine}}</td>
+                  </tr>{{/deliveryLine}}
                   <tr>
                     <td colspan="2" align="right" style="padding:12px 8px 0 0;font-weight:800;">Refunded</td>
                     <td align="right" style="padding:12px 0 0 0;font-weight:800;white-space:nowrap;">{{total}}</td>

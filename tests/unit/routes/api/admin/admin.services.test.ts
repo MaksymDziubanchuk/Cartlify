@@ -44,6 +44,7 @@ const viewRow = () => ({
       cancelled: 0,
     },
     revenue: { total: 120.5, inPeriod: 60, last7d: 10, last30d: 60 },
+    deliveryRevenue: { total: 10.5, inPeriod: 5, last7d: 1, last30d: 5 },
     averageOrderValue: 30.13,
     itemsSold: 7,
   },
@@ -61,10 +62,24 @@ const viewRow = () => ({
 
 const stats = () => adminServices.showAllStats({ ...PERIOD, actorId: 5, actorRole: 'ADMIN' });
 
+// the view answers its own query; the money of the period is counted by the queries of the report
+// of the accounting, which find nothing here
+const isViewQuery = (first: unknown) =>
+  Array.isArray(first) && (first as string[]).join('?').includes('cartlify.admin_stats_view');
+const answerView = (rows: unknown[]) =>
+  queryRaw.mockImplementation(async (first: unknown) => (isViewQuery(first) ? rows : []));
+
+// the money of a period with nothing in it, counted the way the report counts it
+const NO_MONEY = {
+  income: { items: 0, delivery: null, total: 0 },
+  expenses: { costOfGoods: 0, writeOffs: 0, shipping: null, total: 0 },
+  margin: { items: 0, delivery: null, total: 0 },
+};
+
 beforeEach(() => {
   executeRaw.mockClear();
   queryRaw.mockReset();
-  queryRaw.mockResolvedValue([viewRow()]);
+  answerView([viewRow()]);
 });
 
 describe('adminServices.showAllStats', () => {
@@ -91,13 +106,13 @@ describe('adminServices.showAllStats', () => {
   it('gives the row as it is, the dates of the period as dates', async () => {
     const out = await stats();
 
-    expect(out).toEqual({ ...viewRow(), period: PERIOD });
+    expect(out).toEqual({ ...viewRow(), period: PERIOD, money: NO_MONEY });
   });
 
   // postgres gives numeric as text in some paths, a json date as text
   it('reads numbers given as numeric text and dates given as text', async () => {
     const row = viewRow();
-    queryRaw.mockResolvedValue([
+    answerView([
       {
         ...row,
         orders: { ...row.orders, revenue: { ...row.orders.revenue, total: '120.50' } },
@@ -109,12 +124,13 @@ describe('adminServices.showAllStats', () => {
     const out = await stats();
 
     expect(out.orders.revenue.total).toBe(120.5);
+    expect(out.orders.deliveryRevenue).toEqual({ total: 10.5, inPeriod: 5, last7d: 1, last30d: 5 });
     expect(out.users.verifiedRate).toBe(66.67);
     expect(out.createdAt).toEqual(new Date('2026-02-01T00:00:00.000Z'));
   });
 
   it('fails with a server error when the view gives no row', async () => {
-    queryRaw.mockResolvedValue([]);
+    answerView([]);
 
     const err = await rejectedBy(stats);
 
@@ -142,6 +158,22 @@ describe('adminServices.showAllStats', () => {
         orders: { ...r.orders, revenue: { ...r.orders.revenue, inPeriod: Number.NaN } },
       }),
       'orders.revenue.inPeriod',
+    ],
+    [
+      'a delivery revenue that is missing',
+      (r: Row) => ({ ...r, orders: { ...r.orders, deliveryRevenue: undefined } }),
+      'orders.deliveryRevenue',
+    ],
+    [
+      'a delivery revenue that is not a number',
+      (r: Row) => ({
+        ...r,
+        orders: {
+          ...r.orders,
+          deliveryRevenue: { ...r.orders.deliveryRevenue, last7d: 'free' },
+        },
+      }),
+      'orders.deliveryRevenue.last7d',
     ],
     [
       'a count of a status that is missing',
@@ -187,7 +219,7 @@ describe('adminServices.showAllStats', () => {
       'products.topCategoriesByRevenue.item',
     ],
   ])('fails with a server error naming the field for %s', async (_case, broken, field) => {
-    queryRaw.mockResolvedValue([broken(viewRow())]);
+    answerView([broken(viewRow())]);
 
     const err = await rejectedBy(stats);
 

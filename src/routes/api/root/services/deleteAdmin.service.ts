@@ -64,6 +64,7 @@ export async function removeAdmin(dto: DeleteAdminDto): Promise<DeleteAdminRespo
         entityType: 'user',
         entityId: before.id,
         action: 'USER_ROLE_CHANGE',
+        event: 'user.role_revoke',
         changes: [{ field: 'role', old: before.role, new: 'USER' }],
       });
     });

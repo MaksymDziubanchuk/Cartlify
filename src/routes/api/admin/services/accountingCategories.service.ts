@@ -82,10 +82,11 @@ const SORT_VALUE: Record<
   AdminReportSortBy,
   (row: AdminReportCategoryRowDto) => number | string | null
 > = {
-  revenue: (row) => row.net.revenue,
-  margin: (row) => row.net.margin,
-  marginPercent: (row) => row.net.marginPercent,
-  units: (row) => row.net.units,
+  revenue: (row) => row.sales.revenue,
+  margin: (row) => row.sales.margin,
+  marginPercent: (row) => row.sales.marginPercent,
+  units: (row) => row.sales.units,
+  marginAfterWriteOffs: (row) => row.afterWriteOffs.margin,
   writeOffs: (row) => row.writeOffs.value,
   purchases: (row) => row.purchases.value,
   stockValue: (row) => row.stock.value,

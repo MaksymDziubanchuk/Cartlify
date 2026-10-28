@@ -183,23 +183,20 @@ describe('orders: a new order', () => {
 });
 
 describe('orders: a user changes an own order', () => {
-  it('lets a user write the shipping data and a note of an own cart', async () => {
+  // where the order goes is written in order_deliveries (db/delivery.test.ts); a plain update of the
+  // order itself changes nothing, not even the time of its last change
+  it('does not let a user change a column of an own cart with a plain update', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { shipping: false });
+      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
       await db.as({ role: 'USER', userId: owner.id });
-      return updateOrder(
-        db,
-        `"shippingAddress" = 'Main street 5', "recipientFirstName" = 'Anna',
-         "recipientLastName" = 'Koval', "recipientPhone" = '+380501234567', note = 'Ring twice'`,
-        orderId,
-      );
+      return updateOrder(db, `"updatedAt" = now() - interval '1 day'`, orderId);
     });
 
-    expect(changedRows(outcome)).toBe(true);
+    expect(changedRows(outcome)).toBe(false);
   });
 
-  // a plain update of the owner writes the shipping data; the status, the total, the payment and
-  // the reservation change only through the steps of the database
+  // a plain update of the owner changes nothing; the status, the total, the payment and the
+  // reservation change only through the steps of the database
   it.each([
     ['confirm it', 'confirmed = true', () => []],
     [
@@ -237,7 +234,7 @@ describe('orders: a user changes an own order', () => {
             ? await waitingOrderOf(db, owner.id, [[product.id, 1]])
             : await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
         await db.as({ role: 'USER', userId: owner.id });
-        return updateOrder(db, `"shippingAddress" = 'Elsewhere 2'`, orderId);
+        return updateOrder(db, 'total = 0.01', orderId);
       });
 
       expect(changedRows(outcome)).toBe(false);
@@ -249,7 +246,7 @@ describe('orders: a user changes an own order', () => {
       const orderId = await cartOf(db, other.id, [[product.id, 1]]);
       await db.as({ role: 'USER', userId: owner.id });
       return {
-        update: await updateOrder(db, `"shippingAddress" = 'Elsewhere 2'`, orderId),
+        update: await updateOrder(db, 'total = 0.01', orderId),
         removal: await db.attempt(
           'delete from cartlify.orders where id = $1 returning id',
           orderId,
@@ -317,7 +314,7 @@ describe('orders: an admin', () => {
     ],
     ['move it back to waiting', `status = 'waiting'`, () => []],
     ['change its total', 'total = 0', () => []],
-    ['change its address', `"shippingAddress" = 'Elsewhere 2'`, () => []],
+    ['change the time of its last change', `"updatedAt" = now() - interval '1 day'`, () => []],
     ['give it to another user', '"userId" = $2', () => [other.id]],
     ['change its payment', `"paymentId" = 'pi_other'`, () => []],
     ['change the time of its payment', `"paidAt" = now() - interval '1 day'`, () => []],
@@ -350,15 +347,18 @@ describe('orders: an admin', () => {
     },
   );
 
-  it('does not let an admin move a delivered order back', async () => {
-    const outcome = await inRolledBackTx(async (db) => {
+  it('does not let an admin move a delivered order two steps back, or step over shipped', async () => {
+    const { back, over } = await inRolledBackTx(async (db) => {
       const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
       await db.as({ role: 'ADMIN', userId: admin.id });
+      const over = await updateOrder(db, `status = 'delivered'`, orderId);
+      await updateOrder(db, `status = 'shipped'`, orderId);
       await updateOrder(db, `status = 'delivered'`, orderId);
-      return updateOrder(db, `status = 'shipped'`, orderId);
+      return { back: await updateOrder(db, `status = 'paid'`, orderId), over };
     });
 
-    expect(changedRows(outcome)).toBe(false);
+    expect(changedRows(over)).toBe(false);
+    expect(changedRows(back)).toBe(false);
   });
 
   it('does not let an admin delete an order', async () => {

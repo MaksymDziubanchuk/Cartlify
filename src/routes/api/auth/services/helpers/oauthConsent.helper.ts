@@ -37,7 +37,7 @@ export async function takeConsentAtOAuthLogin(
     if (login.role !== 'USER') return;
     // the consents are read and written by their owner (db/03)
     await setUserContext(tx, { userId: login.userId, role: 'USER' });
-    await takeConsentAtLogin(tx, login.userId, login.accepted);
+    await takeConsentAtLogin(tx, login.userId, login.accepted, 'consent.oauth_login');
     return;
   }
 
@@ -49,5 +49,5 @@ export async function takeConsentAtOAuthLogin(
 
   // a consent is written by its owner (db/03)
   await setUserContext(tx, { userId: login.userId, role: 'USER' });
-  await recordConsents(tx, login.userId, login.accepted);
+  await recordConsents(tx, login.userId, login.accepted, 'consent.oauth_signup');
 }

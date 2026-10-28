@@ -61,8 +61,15 @@ const BATCHES = Prisma.sql`from cartlify.product_batches as t`;
 const LOG = Prisma.sql`from cartlify.admin_audit_log as t`;
 // the products with their free units, the number the catalog shows as stock
 const PRODUCTS = Prisma.sql`from (
-    select p.id, p."deletedAt", ${FREE_STOCK_SQL} as free from cartlify.products as p
+    select p.id, p."deletedAt", p."weightGrams", p."lengthMm", ${FREE_STOCK_SQL} as free
+    from cartlify.products as p
   ) as t`;
+
+// the order is delivered by the method: the delivery row of the order says it
+const deliveryMethodIs = (method: 'manual' | 'pickup') => Prisma.sql`exists (
+    select 1 from cartlify.order_deliveries d
+    where d."orderId" = t.id and d.method = ${method}::cartlify."DeliveryMethod"
+  )`;
 
 const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   // paid, to be shipped
@@ -70,11 +77,28 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     from: ORDERS,
     where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus"`,
   }),
-  // shipped long ago and not delivered yet
+  // sent by hand long ago and not delivered yet
   shipped_orders_waiting: (window) => ({
     from: ORDERS,
     where: Prisma.sql`t.status = 'shipped'::cartlify."OrderStatus"
-      and t."updatedAt" < ${utcTime(window.before ?? new Date(0))}`,
+      and t."updatedAt" < ${utcTime(window.before ?? new Date(0))}
+      and ${deliveryMethodIs('manual')}`,
+  }),
+  // a pickup ready long ago and not collected yet
+  pickup_not_collected: (window) => ({
+    from: ORDERS,
+    where: Prisma.sql`t.status = 'shipped'::cartlify."OrderStatus"
+      and t."updatedAt" < ${utcTime(window.before ?? new Date(0))}
+      and ${deliveryMethodIs('pickup')}`,
+  }),
+  // orders with a send the shop owes something for, sent long ago, whose cost is not written
+  shipped_without_cost: (window) => ({
+    from: ORDERS,
+    where: Prisma.sql`exists (
+      select 1 from cartlify.order_shipments s
+      where s."orderId" = t.id and s.expense and s.cost is null
+        and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
+    )`,
   }),
   // products of the catalog with no free units
   out_of_stock: () => ({
@@ -85,6 +109,11 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   low_stock: (window) => ({
     from: PRODUCTS,
     where: Prisma.sql`t."deletedAt" is null and t.free >= 1 and t.free <= ${window.units ?? 0}`,
+  }),
+  // products of the catalog that lack the weight or the sizes (the sizes come all three or none)
+  products_without_shipping_data: () => ({
+    from: PRODUCTS,
+    where: Prisma.sql`t."deletedAt" is null and (t."weightGrams" is null or t."lengthMm" is null)`,
   }),
   // batches with units whose last good day is near, by the day of the shop
   expiring_batches: (window) => ({

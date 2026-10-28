@@ -5,6 +5,7 @@ import { webPageUrl } from '@helpers/webOrigin.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
 import type Stripe from 'stripe';
+import type { PaymentPageShipping } from '../types.js';
 import type {
   CheckoutPaymentStatus,
   CheckoutSessionResponseDto,
@@ -25,6 +26,10 @@ type BuildCheckoutSessionPayloadArgs = {
   total: number;
   reservationExpiresAt: Date;
   items: { name: string; unitPrice: number; quantity: number }[];
+  // what the buyer pays for the delivery, a line of its own when it is above 0
+  deliveryPrice?: number;
+  // where and to whom the order goes: the payment carries it, it helps Stripe tell a fraud
+  shipping?: PaymentPageShipping | null;
   customerEmail: string | null;
 };
 
@@ -61,18 +66,35 @@ function buildCheckoutSessionPayload({
   total,
   reservationExpiresAt,
   items,
+  deliveryPrice = 0,
+  shipping = null,
   customerEmail,
 }: BuildCheckoutSessionPayloadArgs): Stripe.Checkout.SessionCreateParams {
-  // a line for each item; the webhook takes the paid amount for the total of the order, so the
-  // lines add up to it to the cent, or the page is not opened
-  const lines = items.map((item) => ({
-    quantity: item.quantity,
-    price_data: {
-      currency: env.STRIPE_CURRENCY,
-      unit_amount: centsOf(item.unitPrice),
-      product_data: { name: item.name },
-    },
-  }));
+  // a line for each item and one for the delivery when it costs something; the webhook takes the
+  // paid amount for the total of the order, so the lines add up to it to the cent, or the page is
+  // not opened
+  const lines = [
+    ...items.map((item) => ({
+      quantity: item.quantity,
+      price_data: {
+        currency: env.STRIPE_CURRENCY,
+        unit_amount: centsOf(item.unitPrice),
+        product_data: { name: item.name },
+      },
+    })),
+    ...(deliveryPrice > 0
+      ? [
+          {
+            quantity: 1,
+            price_data: {
+              currency: env.STRIPE_CURRENCY,
+              unit_amount: centsOf(deliveryPrice),
+              product_data: { name: 'Delivery' },
+            },
+          },
+        ]
+      : []),
+  ];
   const linesTotal = lines.reduce(
     (sum, line) => sum + line.price_data.unit_amount * line.quantity,
     0,
@@ -107,7 +129,26 @@ function buildCheckoutSessionPayload({
     },
     line_items: lines,
     // the payment names the shop and the order, the bank statement and the dashboard show it
-    payment_intent_data: { description: `${env.SHOP_NAME} order #${orderId}` },
+    payment_intent_data: {
+      description: `${env.SHOP_NAME} order #${orderId}`,
+      ...(shipping
+        ? {
+            shipping: {
+              name: shipping.name,
+              phone: shipping.phone,
+              address: {
+                line1: shipping.address.line1,
+                ...(shipping.address.line2 ? { line2: shipping.address.line2 } : {}),
+                city: shipping.address.city,
+                ...(shipping.address.postalCode
+                  ? { postal_code: shipping.address.postalCode }
+                  : {}),
+                country: shipping.address.country,
+              },
+            },
+          }
+        : {}),
+    },
     ...(customerEmail ? { customer_email: customerEmail } : {}),
     success_url: successUrlText,
     cancel_url: cancelUrlText,

@@ -92,6 +92,7 @@ type RouteHandlers = {
     onRequest?: unknown;
     preValidation?: unknown;
     preHandler?: unknown;
+    config?: { formBodySchema?: string };
 };
 
 const hooksOf = (route: RouteHandlers): unknown[] =>
@@ -196,6 +197,22 @@ const sharedRefusals = (
             status: '429',
             code: 'RATE_LIMITED',
             text: 'too many requests from this address in a minute; the retry-after header tells how many seconds to wait.',
+        });
+    }
+    // every transaction of the app goes through src/db/client.ts, which gives this answer
+    if (url.startsWith('/api/')) {
+        refusals.push({
+            status: '409',
+            code: 'RESOURCE_BUSY',
+            text: 'the database was too busy for the request (a lock it could not take in time, or a transaction whose time ran out); nothing was changed, repeat the request.',
+        });
+    }
+    // a route with a form takes image files, Cloudinary keeps them
+    if (route.config?.formBodySchema) {
+        refusals.push({
+            status: '503',
+            code: 'IMAGE_STORAGE_UNAVAILABLE',
+            text: 'Cloudinary, which keeps the images, did not answer in time, could not be reached or failed; nothing was changed, repeat the request.',
         });
     }
     refusals.push({

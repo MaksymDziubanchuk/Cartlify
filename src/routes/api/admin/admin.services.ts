@@ -1,13 +1,19 @@
+import { Prisma } from '@prisma/client';
+
 import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError } from '@utils/errors.js';
-import { buildAccountingReport } from './services/accountingReport.service.js';
+import { buildAccountingReport, shopMoneyOf } from './services/accountingReport.service.js';
 import { reportCategories, reportCategoriesCsv } from './services/accountingCategories.service.js';
 import { reportProducts, reportProductsCsv } from './services/accountingProducts.service.js';
 import { reportTimeline, reportTimelineCsv } from './services/accountingTimeline.service.js';
 import { listStockBatches } from './services/stockBatches.service.js';
 import { listStockMovements } from './services/stockMovements.service.js';
 import { auditLogCsv, listAuditLog } from './services/auditLog.service.js';
+import { listPriceLog, priceLogCsv } from './services/priceLog.service.js';
+import { listLoginLog, loginLogCsv } from './services/loginLog.service.js';
+import { consentLogCsv, listConsentLog } from './services/consentLog.service.js';
+import { getLogEvents } from './services/logEvents.service.js';
 import {
   getAdminAlerts,
   getAlertDismissals,
@@ -132,14 +138,14 @@ function parseOrdersByStatus(value: unknown): AdminStatsOrdersByStatusDto {
   };
 }
 
-function parseOrdersRevenue(value: unknown): AdminStatsOrdersRevenueDto {
-  const revenue = toRecord(value, 'orders.revenue');
+function parseOrdersRevenue(value: unknown, path = 'orders.revenue'): AdminStatsOrdersRevenueDto {
+  const revenue = toRecord(value, path);
 
   return {
-    total: toNumber(revenue.total, 'orders.revenue.total'),
-    inPeriod: toNumber(revenue.inPeriod, 'orders.revenue.inPeriod'),
-    last7d: toNumber(revenue.last7d, 'orders.revenue.last7d'),
-    last30d: toNumber(revenue.last30d, 'orders.revenue.last30d'),
+    total: toNumber(revenue.total, `${path}.total`),
+    inPeriod: toNumber(revenue.inPeriod, `${path}.inPeriod`),
+    last7d: toNumber(revenue.last7d, `${path}.last7d`),
+    last30d: toNumber(revenue.last30d, `${path}.last30d`),
   };
 }
 
@@ -152,6 +158,7 @@ function parseOrders(value: unknown): AdminStatsOrdersDto {
     pendingCartsTotal: toNumber(orders.pendingCartsTotal, 'orders.pendingCartsTotal'),
     byStatus: parseOrdersByStatus(orders.byStatus),
     revenue: parseOrdersRevenue(orders.revenue),
+    deliveryRevenue: parseOrdersRevenue(orders.deliveryRevenue, 'orders.deliveryRevenue'),
     averageOrderValue: toNumber(orders.averageOrderValue, 'orders.averageOrderValue'),
     itemsSold: toNumber(orders.itemsSold, 'orders.itemsSold'),
   };
@@ -222,13 +229,17 @@ function parseReviews(value: unknown): AdminStatsReviewsDto {
   };
 }
 
-function mapStatsViewRow(row: AdminStatsViewRow): GetAdminStatsResponseDto {
+function mapStatsViewRow(
+  row: AdminStatsViewRow,
+  money: GetAdminStatsResponseDto['money'],
+): GetAdminStatsResponseDto {
   return {
     period: parsePeriod(row.period),
     users: parseUsers(row.users),
     orders: parseOrders(row.orders),
     products: parseProducts(row.products),
     reviews: parseReviews(row.reviews),
+    money,
     createdAt: toDate(row.createdAt, 'createdAt'),
   };
 }
@@ -239,24 +250,25 @@ async function showAllStats({
   actorId,
   actorRole,
 }: AdminStatsDto): Promise<GetAdminStatsResponseDto> {
-  const rows = await tx(async (db) => {
-    // set rls context for security_invoker view
-    await setUserContext(db, {
-      userId: actorId,
-      role: actorRole,
-    });
+  const { rows, money } = await tx(
+    async (db) => {
+      // set rls context for security_invoker view
+      await setUserContext(db, {
+        userId: actorId,
+        role: actorRole,
+      });
 
-    // set stats period used by cartlify.admin_stats_view
-    await db.$executeRaw`
+      // set stats period used by cartlify.admin_stats_view
+      await db.$executeRaw`
       SELECT set_config('cartlify.stats_from', ${from.toISOString()}, true)
     `;
 
-    await db.$executeRaw`
+      await db.$executeRaw`
       SELECT set_config('cartlify.stats_to', ${to.toISOString()}, true)
     `;
 
-    // read single json-shaped stats row
-    return db.$queryRaw<AdminStatsViewRow[]>`
+      // read single json-shaped stats row
+      const rows = await db.$queryRaw<AdminStatsViewRow[]>`
       SELECT
         period,
         users,
@@ -267,7 +279,15 @@ async function showAllStats({
       FROM cartlify.admin_stats_view
       LIMIT 1
     `;
-  });
+
+      // the income, the expenses and the margins by the code of the report of the accounting, in the
+      // same snapshot: the statistics and the report of the period say the same
+      const money = await shopMoneyOf(db, { from, to });
+
+      return { rows, money };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
+  );
 
   const row = rows[0];
 
@@ -277,7 +297,7 @@ async function showAllStats({
     });
   }
 
-  return mapStatsViewRow(row);
+  return mapStatsViewRow(row, money);
 }
 
 export const adminServices = {
@@ -293,6 +313,13 @@ export const adminServices = {
   listStockMovements,
   listAuditLog,
   auditLogCsv,
+  listPriceLog,
+  priceLogCsv,
+  listLoginLog,
+  loginLogCsv,
+  listConsentLog,
+  consentLogCsv,
+  getLogEvents,
   getAdminAlerts,
   getAlertSubscriptions,
   setAlertSubscription,

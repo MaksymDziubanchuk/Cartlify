@@ -1,13 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { asAdmin } from '../../../helpers/db.js';
+import { asAdmin, testTx } from '../../../helpers/db.js';
 import {
   closeSessions,
   createProduct,
@@ -174,7 +173,7 @@ describe('POST /api/orders/current/confirm and the last unit', () => {
     const orders: number[] = [];
     for (const buyer of buyers) orders.push((await addToCart(buyer, product.id)).json().id);
 
-    const held = prisma.$transaction(
+    const held = testTx(
       async (tx) => {
         await setAdminContext(tx);
         await tx.$queryRaw`select id from cartlify.products where id = ${product.id} for update`;

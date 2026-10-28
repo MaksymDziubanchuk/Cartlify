@@ -45,6 +45,8 @@ type OpenOrder = {
   id: number;
   status: 'waiting' | 'paid' | 'shipped';
   total: Prisma.Decimal;
+  // how it goes to the buyer
+  delivery: { method: 'manual' | 'pickup' } | null;
   items: { quantity: number; productName: string | null; product: { name: string } }[];
 };
 
@@ -119,6 +121,7 @@ async function eraseAccount(
           id: true,
           status: true,
           total: true,
+          delivery: { select: { method: true } },
           items: {
             orderBy: { id: 'asc' },
             select: { quantity: true, productName: true, product: { select: { name: true } } },
@@ -195,6 +198,7 @@ async function eraseAccount(
           entityType: 'user',
           entityId: userId,
           action: 'OTHER',
+          event: 'user.delete',
           changes: [{ field: 'deletedAt', old: null, new: deletedAt.toISOString() }],
         });
       }
@@ -297,6 +301,7 @@ export async function deleteAccount(args: DeleteAccountArgs): Promise<void> {
     .map((order) => ({
       orderId: order.id,
       status: order.status,
+      pickup: order.delivery?.method === 'pickup',
       total: order.total.toString(),
       items: itemsOf(order),
     }));

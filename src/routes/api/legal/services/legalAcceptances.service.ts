@@ -54,6 +54,7 @@ export async function acceptLegalDocuments(args: {
       db,
       userId,
       args.documentIds.filter((id) => !accepted.has(id)),
+      'consent.accept',
     );
     return acceptanceStatusOf(db, userId);
   });

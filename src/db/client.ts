@@ -1,7 +1,7 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { Prisma, PrismaClient } from '@prisma/client';
 import env from '@config/env.js';
-import { ResourceBusyError } from '@utils/errors.js';
+import { ResourceBusyError, isAppError } from '@utils/errors.js';
 
 import type { PoolConfig } from 'pg';
 
@@ -49,7 +49,60 @@ function buildAdapter(databaseUrl: string): PrismaPg {
   return new PrismaPg(pool, schema ? { schema } : undefined);
 }
 
+// prisma gives a transaction this long unless its call names a time
+const PRISMA_TX_TIMEOUT_MS = 5_000;
+
+// prisma ended the transaction itself: its time ran out, or it could not start in its maxWait
+const isTransactionExpired = (err: unknown) =>
+  err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2028';
+
+// A transaction whose time runs out is rolled back by prisma, and a nested write still on its way
+// runs the rest of its statements outside it, with no context: rls refuses them (42501), or prisma
+// says the transaction expired (P2028). Whatever comes of it, the database was too busy for the
+// request: RESOURCE_BUSY, the client repeats it (tx() does not, it would only run out again). An
+// error of the app itself stays as it is; a failure of the server after the time ran out is the
+// time too. Every transaction of the app goes through here, the ones of tx() too
+function guardTransactionTime(client: PrismaClient): void {
+  const run = client.$transaction.bind(client) as (
+    arg: unknown,
+    opts?: TxOptions,
+  ) => Promise<unknown>;
+
+  const guarded = (arg: unknown, opts?: TxOptions): Promise<unknown> => {
+    // a list of queries prisma runs in one go: no code of the app runs inside it
+    if (typeof arg !== 'function') return run(arg, opts);
+
+    const fn = arg as (db: Prisma.TransactionClient) => Promise<unknown>;
+    const timeout = opts?.timeout ?? PRISMA_TX_TIMEOUT_MS;
+    let startedAt: number | null = null;
+
+    return run((db: Prisma.TransactionClient) => {
+      startedAt = Date.now();
+      return fn(db);
+    }, opts).catch((err: unknown) => {
+      if (isAppError(err) && err.statusCode !== 500) throw err;
+
+      const ranOut =
+        isTransactionExpired(err) || (startedAt !== null && Date.now() - startedAt >= timeout);
+      if (!ranOut) throw err;
+
+      throw new ResourceBusyError(
+        {
+          reason: 'TRANSACTION_TIME_RAN_OUT',
+          timeoutMs: timeout,
+          pgCode: getPgCode(err),
+          prismaCode: err instanceof Prisma.PrismaClientKnownRequestError ? err.code : undefined,
+        },
+        err,
+      );
+    });
+  };
+
+  (client as unknown as { $transaction: typeof guarded }).$transaction = guarded;
+}
+
 export const prisma = new PrismaClient({ adapter: buildAdapter(env.DATABASE_URL) });
+guardTransactionTime(prisma);
 
 type TxOptions = {
   maxRetries?: number;

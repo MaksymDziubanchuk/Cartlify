@@ -7,6 +7,7 @@ import {
   type ChatBotOrderContextItemDto,
   type ChatBotProductContextItemDto,
 } from '@routes/api/chat/services/bot/chatBotPrompt.service.js';
+import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
 
 const said = (
   senderType: ChatBotHistoryMessageDto['senderType'],
@@ -38,8 +39,30 @@ const order = (patch: Partial<ChatBotOrderContextItemDto> = {}): ChatBotOrderCon
   createdAt: '2026-10-20T10:00:00.000Z',
   paidAt: '2026-10-20T10:05:00.000Z',
   items: [{ name: 'Mug', quantity: 2 }],
+  unusual: false,
+  delivery: null,
+  shipment: null,
   ...patch,
 });
+
+// the methods of the shop as the list of the delivery methods gives them
+const BY_HAND: DeliveryMethodInfoDto = {
+  method: 'manual',
+  price: 5,
+  freeFrom: 50,
+  countries: ['UA', 'PL'],
+  address: null,
+  hours: null,
+};
+
+const PICKUP: DeliveryMethodInfoDto = {
+  method: 'pickup',
+  price: 0,
+  freeFrom: null,
+  countries: [],
+  address: 'Lichtstrasse 4, Berlin',
+  hours: 'Mon-Fri 9-18',
+};
 
 const build = (patch: Partial<BuildChatBotPromptDto> = {}) =>
   buildChatBotPrompt({
@@ -51,6 +74,7 @@ const build = (patch: Partial<BuildChatBotPromptDto> = {}) =>
     orders: [],
     currency: 'eur',
     paymentProviders: ['Stripe'],
+    delivery: [BY_HAND],
     ...patch,
   });
 
@@ -121,6 +145,47 @@ describe('buildChatBotPrompt', () => {
     expect(instructions).toContain(
       'on a payment page of Stripe or LiqPay, the one the customer picks after confirming the order.',
     );
+  });
+
+  // the model invented a carrier and a delivery time when it was told nothing of the delivery
+  describe('the delivery of the shop', () => {
+    it('tells the model the method by hand, its countries, its price and the sum it is free from', () => {
+      const { instructions } = build({ delivery: [BY_HAND] });
+
+      expect(instructions).toContain(
+        '- by hand: the shop sends the order to an address in UA or PL; the delivery costs 5 EUR, and nothing when the items cost 50 EUR or more.',
+      );
+      expect(instructions).not.toContain('- pickup:');
+    });
+
+    it('tells the model a pickup with its address and hours, and that it costs nothing', () => {
+      const { instructions } = build({ delivery: [PICKUP] });
+
+      expect(instructions).toContain(
+        '- pickup: the customer collects the order at Lichtstrasse 4, Berlin (Mon-Fri 9-18); it costs nothing.',
+      );
+      expect(instructions).not.toContain('- by hand:');
+    });
+
+    it('names both methods as a choice of the customer', () => {
+      const { instructions } = build({ delivery: [BY_HAND, PICKUP] });
+
+      expect(instructions).toContain('the customer picks one when confirming the order');
+      expect(instructions).toContain('- by hand:');
+      expect(instructions).toContain('- pickup:');
+    });
+
+    it('says a delivery that costs nothing costs nothing, without a sum it is free from', () => {
+      const { instructions } = build({ delivery: [{ ...BY_HAND, price: 0, freeFrom: null }] });
+
+      expect(instructions).toContain('to an address in UA or PL; the delivery costs nothing.');
+    });
+
+    it('forbids naming a method, a country, a price, a carrier or a time that is not given', () => {
+      expect(build().instructions).toContain(
+        'Name no other delivery method, country, price, carrier or delivery time than these.',
+      );
+    });
   });
 
   it('ends with the current message, its sender role and trimmed text', () => {
@@ -271,12 +336,100 @@ describe('buildChatBotPrompt', () => {
       ['paid', 'paid, being prepared for shipping'],
       ['shipped', 'sent, on its way to the customer'],
       ['delivered', 'delivered to the customer'],
-      ['cancelled', 'cancelled by the shop, the payment is refunded'],
     ] as const)('say what the status %s means', (status, meaning) => {
       const line = build({ orders: [order({ status, paidAt: null })] }).messages[0]!.content;
 
       expect(line).toContain(`- order 12: ${status} (${meaning}); total 25.5 EUR; placed`);
       expect(line).not.toContain('; paid ');
+    });
+
+    // a pickup is not on its way: it waits for the customer
+    it.each([
+      ['paid', 'paid, being prepared'],
+      ['shipped', 'ready, waiting for the customer to collect it'],
+      ['delivered', 'collected by the customer'],
+    ] as const)('say what the status %s means for a pickup', (status, meaning) => {
+      const line = build({
+        orders: [
+          order({
+            status,
+            delivery: { method: 'pickup', price: 0, country: null },
+          }),
+        ],
+      }).messages[0]!.content;
+
+      expect(line).toContain(`- order 12: ${status} (${meaning});`);
+      expect(line).toContain('delivery: pickup at the shop');
+    });
+
+    it('name the delivery by hand with its country and price, not the address', () => {
+      const { messages } = build({
+        orders: [order({ delivery: { method: 'manual', price: 5, country: 'PL' } })],
+      });
+
+      expect(messages[0]!.content).toContain('; delivery: by hand to PL for 5 EUR;');
+      expect(messages[0]!.content).not.toMatch(/street|city|phone/i);
+    });
+
+    it('name the carrier, the number and the link of the send', () => {
+      const { messages } = build({
+        orders: [
+          order({
+            shipment: {
+              carrier: 'DHL',
+              trackingNumber: 'JD0146',
+              trackingUrl: 'https://dhl.example.com/JD0146',
+            },
+          }),
+        ],
+      });
+
+      expect(messages[0]!.content).toContain(
+        '; send: carrier DHL, tracking number JD0146, tracking link https://dhl.example.com/JD0146;',
+      );
+    });
+
+    it('name a send without the number, and a send without any detail', () => {
+      const partly = build({
+        orders: [order({ shipment: { carrier: 'DHL', trackingNumber: null, trackingUrl: null } })],
+      }).messages[0]!.content;
+      const bare = build({
+        orders: [order({ shipment: { carrier: null, trackingNumber: null, trackingUrl: null } })],
+      }).messages[0]!.content;
+
+      expect(partly).toContain('; send: carrier DHL;');
+      expect(bare).toContain('; send: no carrier or tracking number was given;');
+    });
+
+    // an order with a send taken back or a cancellation is for an admin: the bot says nothing of it
+    it('leave an unusual order to an admin and say nothing of it', () => {
+      const { messages } = build({
+        orders: [
+          order({
+            id: 7,
+            status: 'cancelled',
+            unusual: true,
+            delivery: { method: 'manual', price: 5, country: 'PL' },
+            shipment: { carrier: 'DHL', trackingNumber: 'JD0146', trackingUrl: null },
+          }),
+          order({ id: 8 }),
+        ],
+      });
+
+      const text = messages[0]!.content;
+      expect(text).toContain('- order 7: HUMAN ONLY, an admin handles this order');
+      expect(text).not.toContain('order 7: cancelled');
+      expect(text).not.toContain('JD0146');
+      expect(text).toContain('- order 8: shipped');
+      expect(text).toContain(
+        'An order marked HUMAN ONLY is for an admin: say nothing of its status, items, delivery or payment, tell the customer that an admin will look into it, and set escalate to true with the reason HUMAN_REQUIRED.',
+      );
+    });
+
+    it('add the rule of the unusual orders only when there is one', () => {
+      const { messages } = build({ orders: [order()] });
+
+      expect(messages[0]!.content).not.toContain('HUMAN ONLY');
     });
 
     it('name several items of an order', () => {

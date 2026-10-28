@@ -93,6 +93,7 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
         entityType: 'user',
         entityId: updated.id,
         action: 'USER_ROLE_CHANGE',
+        event: 'user.role_grant',
         changes,
       });
 

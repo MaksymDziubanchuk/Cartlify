@@ -434,7 +434,7 @@ describe('POST /api/payments/checkout/sessions', () => {
         method: 'POST',
         url: '/api/orders/current/confirm',
         headers: withCsrf(csrf, accessCookie(user)),
-        payload: { orderId },
+        payload: { orderId, expectedDeliveryPrice: 0 },
       });
       expect(confirmed.statusCode).toBe(200);
 

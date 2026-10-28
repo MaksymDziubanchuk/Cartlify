@@ -7,6 +7,7 @@ import {
   serializeProductDescription,
 } from '@helpers/productDescription.js';
 import { isSaleOn } from '@helpers/productSale.js';
+import { readShippingChanges, resolveShippingData } from '@helpers/productShipping.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { BadRequestError, ConflictError, NotFoundError } from '@utils/errors.js';
 
@@ -15,6 +16,9 @@ import { assertCategoryExists } from './productCategory.helper.js';
 import { productResponseSelect } from './productMapper.helper.js';
 import { computeSalePrice, normalizeSaleEnd } from './productSale.helper.js';
 import { putSaleOn, takeSaleOff, type SaleStepContext } from './productSaleSteps.helper.js';
+
+// the context of a change of a product: batch says the change comes from the route of many
+export type ProductWriteContext = SaleStepContext & { batch?: boolean };
 import {
   assertPopularityOverridePair,
   normalizeSku,
@@ -71,6 +75,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
   const skuNorm = normalizeSku(sku);
   // the safety data come whole and replace the ones of the product
   const safetyNorm = safety !== undefined ? normalizeProductSafety(safety) : undefined;
+  // the weight and the sizes sent, each one a whole number or null
+  const { changes: shippingChanges, without } = readShippingChanges(fields);
 
   // the word on the sale goes with a price; the sale alone has a route of its own
   if (sale !== undefined && price === undefined) {
@@ -87,7 +93,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     price !== undefined ||
     categoryId !== undefined ||
     popularityOverride !== undefined ||
-    popularityOverrideUntil !== undefined;
+    popularityOverrideUntil !== undefined ||
+    Object.keys(shippingChanges).length > 0;
 
   if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
@@ -105,6 +112,9 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     popularityOverrideUntilDate,
     skuNorm,
     safetyNorm,
+    shippingChanges,
+    // the admin says the data come later (not kept): clearing what is known is allowed then
+    withoutShippingData: without,
     newSaleEndsAt,
   };
 }
@@ -119,6 +129,10 @@ export const productBeforeUpdateSelect = {
   salePrice: true,
   saleEndsAt: true,
   categoryId: true,
+  weightGrams: true,
+  lengthMm: true,
+  widthMm: true,
+  heightMm: true,
   popularityOverride: true,
   popularityOverrideUntil: true,
   popularity: true,
@@ -161,6 +175,11 @@ export async function checkProductUpdate(
     });
   }
 
+  // the sizes stay all three or none, what is known is cleared only when the admin says so
+  if (Object.keys(plan.shippingChanges).length > 0) {
+    resolveShippingData(before, plan.shippingChanges, plan.withoutShippingData);
+  }
+
   // a new price of a product with a sale that is on says what happens to the sale: keep it,
   // take it off, or a new one
   const saleOn = isSaleOn(before);
@@ -192,7 +211,7 @@ export async function checkProductUpdate(
 // off, the fields and the price, the new sale from the new price, each with every line of the
 // logs, in the name of the admin of the context
 export async function writeProductUpdate(
-  ctx: SaleStepContext,
+  ctx: ProductWriteContext,
   plan: ProductUpdatePlan,
   before: ProductBeforeUpdate,
 ) {
@@ -200,7 +219,9 @@ export async function writeProductUpdate(
   const { input } = plan;
   const { sale } = input;
 
-  if (isSaleOn(before) && sale !== undefined && sale !== 'keep') await takeSaleOff(ctx, before);
+  // a sale that goes or comes here goes with the price
+  const saleCtx: SaleStepContext = { ...ctx, source: 'with_price' };
+  if (isSaleOn(before) && sale !== undefined && sale !== 'keep') await takeSaleOff(saleCtx, before);
 
   // build update payload only for provided fields
   // the description keeps the text and the safety data: a change of one keeps the other
@@ -218,6 +239,7 @@ export async function writeProductUpdate(
     ...(plan.skuNorm !== undefined ? { sku: plan.skuNorm } : {}),
     ...(input.price !== undefined ? { price: new Prisma.Decimal(plan.priceRaw!) } : {}),
     ...(input.categoryId !== undefined ? { categoryId: plan.categoryIdRaw! } : {}),
+    ...plan.shippingChanges,
   };
 
   // apply explicit nulls only when client asked to clear values
@@ -258,6 +280,7 @@ export async function writeProductUpdate(
       categoryId: input.categoryId,
       popularityOverride: input.popularityOverride,
       popularityOverrideUntil: input.popularityOverrideUntil,
+      ...plan.shippingChanges,
     },
   });
 
@@ -269,6 +292,7 @@ export async function writeProductUpdate(
       entityType: 'product',
       entityId: after.id,
       action: 'PRODUCT_UPDATE',
+      event: ctx.batch ? 'product.update_batch' : 'product.update',
       changes: auditChanges,
     });
   }
@@ -281,13 +305,14 @@ export async function writeProductUpdate(
       afterPrice: after.price,
       mode: 'fixed',
       value: computeFixedDelta(before.price, after.price),
+      event: ctx.batch ? 'price.set_batch' : 'price.set',
     });
   }
 
   // the new sale is counted from the new price, after the old one went and the price changed
   return sale && sale !== 'keep'
     ? putSaleOn(
-        ctx,
+        saleCtx,
         { id: after.id, price: after.price, salePrice: null, saleEndsAt: null },
         sale,
         plan.newSaleEndsAt!,

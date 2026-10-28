@@ -18,8 +18,9 @@ import { orderRowOf, placeOrder } from '../../../helpers/orders.js';
 
 // GET /api/admin/reports/accounting: what the shop sold in a period and what it cost, the cancels
 // that took sales back, what came in and what was written off, and the value of the stock left.
-// A sale counts from the time it was paid, its cost from the batches it took; a cancel takes it
-// back at the time of the cancel. Other test files make orders and batches at the same time, so
+// A sale counts from the time it was paid, its cost from the batches it took; an order cancelled
+// later is taken out of the period it was paid in, its cancel is told apart in the period of the
+// cancel. Other test files make orders and batches at the same time, so
 // each test reads only its own products (productIds)
 
 let app: FastifyInstance;
@@ -79,6 +80,32 @@ afterAll(async () => {
 });
 
 describe('GET /api/admin/reports/accounting', () => {
+  // the delivery is of all orders and of no product: months long before the tests have none of it
+  it('gives the delivery of the whole shop, and none to a report of some products', async () => {
+    const startedAt = Date.now();
+    const product = await newProduct(10);
+    const past = {
+      from: '2025-01-01T00:00:00.000Z',
+      to: '2025-02-01T00:00:00.000Z',
+    };
+
+    const whole = await report(past);
+    const some = await report({ ...past, productIds: String(product.id) });
+    const category = await report({ ...past, categoryId: String(product.categoryId) });
+    const ofProducts = await reportOf([product], startedAt);
+
+    expect(whole.json().delivery).toEqual({
+      income: { orders: 0, revenue: 0 },
+      refunded: { orders: 0, revenue: 0 },
+      shipping: { sends: 0, cost: 0, withoutCost: 0 },
+      result: 0,
+    });
+    for (const res of [some, category, ofProducts]) {
+      expect(res.statusCode).toBe(200);
+      expect(res.json().delivery).toBeNull();
+    }
+  });
+
   it('counts the sales of the period, the cost of the batches they took and the margin', async () => {
     const startedAt = Date.now();
     const product = await newProduct(10);
@@ -94,7 +121,12 @@ describe('GET /api/admin/reports/accounting', () => {
       currency: 'eur',
       sales: { orders: 1, units: 4, revenue: 40, cost: 9, margin: 31 },
       cancellations: { orders: 0, units: 0, revenue: 0, cost: 0 },
-      net: { revenue: 40, cost: 9, margin: 31 },
+      // a report of some products: no delivery, the totals are of the items
+      summary: {
+        income: { items: 40, delivery: null, total: 40 },
+        expenses: { costOfGoods: 9, writeOffs: 0, shipping: null, total: 9 },
+        margin: { items: 31, delivery: null, total: 31 },
+      },
       // what is left: 4 of the batch at 3
       stock: { units: 4, value: 12 },
     });
@@ -118,34 +150,61 @@ describe('GET /api/admin/reports/accounting', () => {
     expect(both.json().sales).toEqual({ orders: 1, units: 3, revenue: 40, cost: 23, margin: 17 });
   });
 
-  it('takes a cancelled sale back in the period of the cancel', async () => {
+  // the order keeps the time it was paid, its money is gone: the report of that period changes
+  it('takes a cancelled order out of the period it was paid in, and tells the cancel apart', async () => {
     const startedAt = Date.now();
     const product = await newProduct(10);
     await receiveBatch(product.id, { quantity: 5, unitCost: 4 });
     const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
+    const { paidAt } = await orderRowOf(orderId);
+    // the period of the payment, before the cancel came
+    const ofPayment = () =>
+      report({
+        from: new Date(startedAt - 60_000).toISOString(),
+        to: new Date(paidAt!.getTime() + 1).toISOString(),
+        productIds: String(product.id),
+      });
+    const beforeCancel = await ofPayment();
+
     await cancelPaid(orderId);
-    const { paidAt, cancelledAt } = await orderRowOf(orderId);
-
+    const { cancelledAt } = await orderRowOf(orderId);
+    const afterCancel = await ofPayment();
     const whole = await reportOf([product], startedAt);
-    // the period of the sale ends where the cancel comes
-    const beforeCancel = await report({
-      from: new Date(startedAt - 60_000).toISOString(),
-      to: cancelledAt!.toISOString(),
-      productIds: String(product.id),
-    });
 
-    expect(whole.json()).toMatchObject({
+    expect(beforeCancel.json()).toMatchObject({
       sales: { orders: 1, units: 2, revenue: 20, cost: 8, margin: 12 },
+      summary: { income: { items: 20, total: 20 }, margin: { total: 12 } },
+    });
+    expect(afterCancel.json()).toMatchObject({
+      sales: { orders: 0, units: 0, revenue: 0, cost: 0, margin: 0 },
+      cancellations: { orders: 0, revenue: 0 },
+      summary: { income: { items: 0, total: 0 }, margin: { total: 0 } },
+    });
+    expect(whole.json()).toMatchObject({
+      sales: { orders: 0, units: 0, revenue: 0, cost: 0, margin: 0 },
+      // told apart, in no margin
       cancellations: { orders: 1, units: 2, revenue: 20, cost: 8 },
-      net: { revenue: 0, cost: 0, margin: 0 },
+      summary: { income: { items: 0, total: 0 }, expenses: { costOfGoods: 0 } },
       // the units went back into their batch
       stock: { units: 5, value: 20 },
     });
-    expect(beforeCancel.json()).toMatchObject({
-      sales: { orders: 1, revenue: 20 },
-      cancellations: { orders: 0, revenue: 0 },
-    });
     expect(paidAt!.getTime()).toBeLessThan(cancelledAt!.getTime());
+  });
+
+  it('takes the write-offs into the expenses and out of the total margin', async () => {
+    const startedAt = Date.now();
+    const product = await newProduct(10);
+    const batch = await receiveBatch(product.id, { quantity: 5, unitCost: 4 });
+    await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
+    await writeOffStock(product.id, 1, { batchId: batch, reason: 'damaged' });
+
+    const res = await reportOf([product], startedAt);
+
+    expect(res.json().summary).toEqual({
+      income: { items: 20, delivery: null, total: 20 },
+      expenses: { costOfGoods: 8, writeOffs: 4, shipping: null, total: 12 },
+      margin: { items: 12, delivery: null, total: 8 },
+    });
   });
 
   it('counts a sale from the time it was paid: the period starts there and ends before it', async () => {
@@ -224,7 +283,11 @@ describe('GET /api/admin/reports/accounting', () => {
       currency: 'eur',
       sales: { orders: 0, units: 0, revenue: 0, cost: 0, margin: 0 },
       cancellations: { orders: 0, units: 0, revenue: 0, cost: 0 },
-      net: { revenue: 0, cost: 0, margin: 0 },
+      summary: {
+        income: { items: 0, delivery: null, total: 0 },
+        expenses: { costOfGoods: 0, writeOffs: 0, shipping: null, total: 0 },
+        margin: { items: 0, delivery: null, total: 0 },
+      },
       purchases: {
         ...NOTHING,
         bySource: { supplier: NOTHING, surplus: NOTHING, customer_return: NOTHING },
@@ -241,6 +304,8 @@ describe('GET /api/admin/reports/accounting', () => {
         },
       },
       stock: NOTHING,
+      // the delivery is of no product
+      delivery: null,
     });
   });
 

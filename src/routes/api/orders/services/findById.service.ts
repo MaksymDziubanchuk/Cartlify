@@ -6,7 +6,7 @@ import {
   dropDeletedProductItems,
   mapOrderRowToResponse,
   expiredOfOrders,
-  orderResponseSelect,
+  readOrderResponse,
 } from './helpers/index.js';
 
 import type { FindOrderByIdDto, OrderResponseDto } from 'types/dto/orders.dto.js';
@@ -35,15 +35,16 @@ export async function findById({
           await db.$executeRaw`select cartlify.refresh_order_prices(${Number(orderId)}::int)`;
         }
 
-        const order = await db.order.findUnique({
-          where: { id: Number(orderId) },
-          select: orderResponseSelect,
-        });
+        const order = await readOrderResponse(db, Number(orderId));
 
         // if rls denies access, it will look like "not found"
         if (!order) throw new NotFoundError('ORDER_NOT_FOUND', { orderId });
 
-        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        return mapOrderRowToResponse(
+          order,
+          await expiredOfOrders(db, [order]),
+          actorRole === 'ADMIN' || actorRole === 'ROOT' ? 'admin' : 'buyer',
+        );
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

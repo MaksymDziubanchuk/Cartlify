@@ -3,8 +3,9 @@ import { Prisma } from '@prisma/client';
 
 import env from '@config/env.js';
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
-import { setActorContext } from '@db/dbContext.service.js';
+import { setActorContext, setAdminContext } from '@db/dbContext.service.js';
 import { parseProductDescription } from '@helpers/productDescription.js';
+import { getDeliveryMethods } from '@routes/api/delivery/services/getDeliveryMethods.service.js';
 import { isSaleOn } from '@helpers/productSale.js';
 import {
     paymentProviders,
@@ -38,6 +39,7 @@ import type {
     ChatMessageItemDto,
     ChatThreadItemDto,
 } from 'types/dto/chats.dto.js';
+import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
@@ -62,6 +64,8 @@ interface LoadedChatBotContextDto {
     productContext: ChatBotProductContextItemDto[];
     // the last orders of a user, none for a guest
     orders: ChatBotOrderContextItemDto[];
+    // the ways the shop delivers an order now
+    delivery: DeliveryMethodInfoDto[];
     // only a user who confirmed the email talks to an admin
     emailConfirmed: boolean;
     // the answers the customer got from the bot in the last 24 hours
@@ -499,6 +503,7 @@ const loadChatBotContext = async ({
                 ),
             ),
             orders: userId ? await findOrdersForBotContext(db, userId) : [],
+            delivery: (await getDeliveryMethods()).methods,
             emailConfirmed: userId ? await isEmailConfirmed(db, userId) : false,
             recentTurns: await countRecentBotTurns(
                 db,
@@ -510,6 +515,40 @@ const loadChatBotContext = async ({
 };
 
 // the last orders of the user under their own rights, newest first; the cart is no order
+// the steps an admin takes back: a send, a delivery, a pickup made ready or collected, one at a
+// time or in bulk
+const STEP_BACK_EVENTS = [
+    'order.ship_back',
+    'order.ship_back_bulk',
+    'order.deliver_back',
+    'order.deliver_back_bulk',
+    'order.pickup_ready_back',
+    'order.pickup_ready_back_bulk',
+    'order.pickup_collected_back',
+    'order.pickup_collected_back_bulk',
+];
+
+// the orders whose step an admin took back. The journal of the admins is not for the person, so it
+// is read as the system, apart from the transaction of the person
+const rolledBackOrderIds = async (orderIds: number[]): Promise<Set<number>> => {
+    if (orderIds.length === 0) return new Set();
+
+    const lines = await prisma.$transaction(async (sys) => {
+        await setAdminContext(sys);
+
+        return sys.adminAuditLog.findMany({
+            where: {
+                entityType: 'order',
+                entityId: { in: orderIds },
+                event: { in: STEP_BACK_EVENTS },
+            },
+            select: { entityId: true },
+        });
+    });
+
+    return new Set(lines.flatMap((line) => (line.entityId === null ? [] : [line.entityId])));
+};
+
 const findOrdersForBotContext = async (
     db: Prisma.TransactionClient,
     userId: number,
@@ -524,6 +563,8 @@ const findOrdersForBotContext = async (
             total: true,
             createdAt: true,
             paidAt: true,
+            // how it goes, not where: the address and the phone are not for the model
+            delivery: { select: { method: true, price: true, country: true } },
             items: {
                 orderBy: { id: 'asc' },
                 select: {
@@ -535,12 +576,52 @@ const findOrdersForBotContext = async (
         },
     });
 
-    return orders.map((order) => ({
+    // the sends are read apart: a query reads at most two relations side by side
+    const sends = await db.orderShipment.findMany({
+        where: { orderId: { in: orders.map((order) => order.id) } },
+        orderBy: { id: 'asc' },
+        select: {
+            orderId: true,
+            carrier: true,
+            trackingNumber: true,
+            trackingUrl: true,
+            rolledBackAt: true,
+        },
+    });
+
+    const rolledBack = await rolledBackOrderIds(orders.map((order) => order.id));
+
+    return orders.map((order) => {
+        const shipments = sends.filter((send) => send.orderId === order.id);
+
+        // the send on its way is the last one that was not taken back
+        const onItsWay = shipments.filter((send) => !send.rolledBackAt).at(-1);
+
+        return {
         id: order.id,
         status: order.status as ChatBotOrderStatus,
         total: Number(order.total),
         createdAt: order.createdAt.toISOString(),
         paidAt: order.paidAt?.toISOString() ?? null,
+        // a cancellation or a send taken back is for an admin, the bot says nothing of it
+        unusual:
+            order.status === 'cancelled' ||
+            shipments.some((send) => send.rolledBackAt !== null) ||
+            rolledBack.has(order.id),
+        delivery: order.delivery
+            ? {
+                  method: order.delivery.method,
+                  price: Number(order.delivery.price),
+                  country: order.delivery.country,
+              }
+            : null,
+        shipment: onItsWay
+            ? {
+                  carrier: onItsWay.carrier,
+                  trackingNumber: onItsWay.trackingNumber,
+                  trackingUrl: onItsWay.trackingUrl,
+              }
+            : null,
         // the name an item was confirmed with, the one of now for an unconfirmed order
         items: order.items.map((item) => ({
             name:
@@ -548,7 +629,8 @@ const findOrdersForBotContext = async (
                 item.product.name,
             quantity: item.quantity,
         })),
-    }));
+        };
+    });
 };
 
 const isEmailConfirmed = async (
@@ -625,6 +707,8 @@ const askModelForReply = (
         // the currency checkout charges in, so the bot names the same one
         currency: shopCurrency(),
         paymentProviders: paymentProviders.map((provider) => provider.label),
+        // how the shop delivers an order, as the settings say it now
+        delivery: context.delivery,
     });
 
     // a broken answer is asked once more, a failure is not

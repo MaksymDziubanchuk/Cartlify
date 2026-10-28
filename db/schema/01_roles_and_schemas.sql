@@ -1,30 +1,37 @@
+-- Roles, schema, rights on tables and sequences, and rights to run functions.
+-- Run it as a superuser: it creates roles and hands out rights. It can be run again at any time.
+-- Order on a new database: this file, the passwords of the roles, the prisma migrations, 02, 05,
+-- 03, 04, 06, and this file once more. The second run covers what appeared after the first one:
+-- the table of the prisma history and the functions of the lists in section 5a.
 BEGIN;
 
 ------------------------------------------------------------
 -- 1. Roles
 ------------------------------------------------------------
+-- cartlify_owner owns the schema and what is made in it (the functions of the extensions
+-- pg_trgm and unaccent stay with their installer), and the system functions run with its rights. cartlify_app is the role the server connects as; row level security limits it.
+-- cartlify_readonly only reads. The passwords are set outside of this file.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cartlify_owner') THEN
-
     CREATE ROLE cartlify_owner LOGIN;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cartlify_app') THEN
-
     CREATE ROLE cartlify_app LOGIN;
   END IF;
 
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'cartlify_readonly') THEN
-
     CREATE ROLE cartlify_readonly LOGIN;
   END IF;
 END
 $$;
 
 ------------------------------------------------------------
--- 1a. SEARCH_PATH
+-- 1a. Search path
 ------------------------------------------------------------
+-- Queries and functions find the objects of the shop without a schema prefix. The owner also
+-- sees public.
 ALTER ROLE cartlify_owner
 SET
   search_path = 'cartlify',
@@ -39,11 +46,11 @@ SET
   search_path = 'cartlify';
 
 ------------------------------------------------------------
--- 1a2. TIMEOUTS of the app
+-- 1a2. Timeouts of the app
 ------------------------------------------------------------
--- the timeout of a prisma transaction only stops the waiting of the app, the statement goes on
--- in the database: a statement of the app ends after 15 s (the reports take 15 s for their whole
--- transaction too), a transaction left open and idle after 30 s. New sessions take them
+-- The timeout of a prisma transaction only stops the waiting of the app, the statement goes on
+-- in the database. So the database ends a statement of the app after 15 s, and a transaction
+-- left open and idle after 30 s. New sessions get these values.
 ALTER ROLE cartlify_app
 SET
   statement_timeout = '15s';
@@ -53,17 +60,18 @@ SET
   idle_in_transaction_session_timeout = '30s';
 
 ------------------------------------------------------------
--- 1b. owner role extras (were set by hand on railway)
+-- 1b. Extra rights of the owner
 ------------------------------------------------------------
 -- may create databases
 ALTER ROLE cartlify_owner CREATEDB;
 
--- read access to server statistics views
+-- may read the views of server statistics
 GRANT pg_read_all_stats TO cartlify_owner;
 
 ------------------------------------------------------------
--- 2. 
+-- 2. Schema
 ------------------------------------------------------------
+-- The schema belongs to the owner. A schema that exists already is handed over to the owner.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -73,15 +81,16 @@ BEGIN
   ) THEN
     EXECUTE 'CREATE SCHEMA cartlify AUTHORIZATION cartlify_owner';
   ELSE
-
     EXECUTE 'ALTER SCHEMA cartlify OWNER TO cartlify_owner';
   END IF;
 END
 $$;
 
 ------------------------------------------------------------
--- 3. 
+-- 3. Access to the schema
 ------------------------------------------------------------
+-- Public gets nothing. The app and readonly may look into the schema; what they may do with the
+-- objects in it comes below.
 REVOKE ALL ON SCHEMA cartlify
 FROM
   PUBLIC;
@@ -91,8 +100,9 @@ GRANT USAGE ON SCHEMA cartlify TO cartlify_app;
 GRANT USAGE ON SCHEMA cartlify TO cartlify_readonly;
 
 ------------------------------------------------------------
--- 4. 
+-- 4. Rights on tables and sequences
 ------------------------------------------------------------
+-- the app reads and writes every table; row level security decides which rows
 GRANT
 SELECT
 ,
@@ -100,25 +110,28 @@ SELECT
 UPDATE,
 DELETE ON ALL TABLES IN SCHEMA cartlify TO cartlify_app;
 
+-- readonly reads every table
 GRANT
 SELECT
   ON ALL TABLES IN SCHEMA cartlify TO cartlify_readonly;
 
--- the app takes ids with usage (nextval); update would let it move a sequence with setval,
--- and a sequence moved back makes every insert of its table fail on a taken id
+-- the app takes ids with usage (nextval). It gets no update right: that would let it move a
+-- sequence with setval, and a sequence moved back makes every insert of its table fail on a
+-- taken id
 GRANT USAGE,
 SELECT
   ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_app;
 
--- readonly only reads a sequence; usage would let it take ids with nextval
+-- readonly only reads a sequence: usage would let it take ids with nextval
 GRANT
 SELECT
   ON ALL SEQUENCES IN SCHEMA cartlify TO cartlify_readonly;
 
 ------------------------------------------------------------
--- 4a. prisma migration history: owner only
+-- 4a. Prisma migration history: owner only
 ------------------------------------------------------------
--- table appears after the first prisma migrate, so rerun this file after it
+-- The table appears after the first prisma migrate, so this file runs again after the migrations.
+-- The app and readonly get no right on it.
 DO $$
 BEGIN
   IF to_regclass('cartlify._prisma_migrations') IS NOT NULL THEN
@@ -131,8 +144,10 @@ END
 $$;
 
 ------------------------------------------------------------
--- 5. DEFAULT PRIVILEGES
+-- 5. Default privileges
 ------------------------------------------------------------
+-- The same rights on tables and sequences for the objects that cartlify_owner creates later
+-- (new migrations).
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner IN SCHEMA cartlify
 GRANT
 SELECT
@@ -157,13 +172,16 @@ SELECT
   ON SEQUENCES TO cartlify_readonly;
 
 ------------------------------------------------------------
--- 5a. FUNCTION EXECUTE RIGHTS
+-- 5a. Function execute rights
 ------------------------------------------------------------
--- every function starts closed: no right for public, app or readonly.
--- each role then gets an explicit list of what it calls; internal functions
--- (recalc_*, *_product_stock, trigger functions, maintenance) stay closed for the app,
--- they run only from triggers or from system functions, as the owner.
--- the whole file is one transaction, so the app never sees the moment between revoke and grant
+-- Every function starts closed: no right for public, the app or readonly. Each role then gets an
+-- explicit list of the functions it calls. Internal functions (recalc_*, the steps of stock and
+-- batches, delivery_price, retention_cutoff, trigger functions) stay closed for the app: they
+-- are called by triggers and by other functions (recalc_all_products_popularity is run by hand as
+-- the owner until a periodic job exists).
+-- The file is one transaction, so the app never sees the moment between the revoke and the grant.
+
+-- close every function that exists now
 REVOKE
 EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify
 FROM
@@ -179,7 +197,8 @@ EXECUTE ON ALL FUNCTIONS IN SCHEMA cartlify
 FROM
   cartlify_readonly;
 
--- new functions start closed too: a function the app calls has to be added to the list below
+-- close the functions that cartlify_owner creates later too (PostgreSQL would open them to
+-- public). A function the app calls has to be added to the list below.
 ALTER DEFAULT PRIVILEGES FOR ROLE cartlify_owner
 REVOKE
 EXECUTE ON FUNCTIONS
@@ -198,14 +217,14 @@ EXECUTE ON FUNCTIONS
 FROM
   cartlify_readonly;
 
--- app: functions it calls itself, and the ones rls policies and search call on its behalf.
--- functions appear after db/02 and db/05, so rerun this file after them; a missing one is skipped
+-- app: the functions it calls itself, and the ones that policies and search call for it.
+-- They appear after 02 and 05, so this file runs again after them; a missing one is skipped.
 DO $$
 DECLARE
   v_fn text;
 BEGIN
   FOREACH v_fn IN ARRAY ARRAY[
-    -- request context and its readers, used by every rls policy
+    -- request context: the server sets it, policies and functions read it
     'cartlify.set_current_context(cartlify."Role", integer, uuid)',
     'cartlify.current_actor_id()',
     'cartlify.current_guest_id()',
@@ -217,34 +236,42 @@ BEGIN
     'cartlify.is_owner_or_admin(integer)',
     -- product search
     'cartlify.immutable_unaccent(text)',
-    -- system functions: each checks the actor role itself before it acts as the owner
+    -- accounts and login: they run as the owner, each checks the role of the actor first
     'cartlify.auth_get_user_for_login(text)',
     'cartlify.auth_resend_verify(text, text, timestamp with time zone)',
     'cartlify.auth_verify_email(text)',
     'cartlify.users_get_public_profile(integer)',
     'cartlify.remove_user_avatar(integer)',
     'cartlify.migrate_guest_data_to_user(uuid, integer)',
-    'cartlify.confirm_order(integer, interval)',
+    -- orders and payments: the same; unconfirm_order, pay_order and expire_order_reservation
+    -- answer to the system only
+    'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
     'cartlify.unconfirm_order(integer)',
     'cartlify.cancel_order_payment(integer)',
     'cartlify.cancel_paid_order(integer)',
     'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
     'cartlify.expire_order_reservation(integer)',
+    -- logins of a deleted account: root or the system
     'cartlify.anonymize_login_logs(integer)',
-    -- maintenance the periodic tasks run as the system, each checks it is the system
+    -- cleanup of old data for the periodic tasks: the system only
     'cartlify.cleanup_user_tokens(integer)',
     'cartlify.cleanup_login_log_addresses(integer)',
     'cartlify.cleanup_guest_data(integer)',
     'cartlify.cleanup_deleted_accounts_chats(integer)',
-    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, timestamp without time zone)',
+    -- admin only: the price journal, deliveries and write-offs of stock
+    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
     'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
     'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
-    -- functions that run with the app rights, under its rls
+    -- helpers: refresh_order_prices, product_current_price, shop_today and log_admin_action run
+    -- with the rights of the caller, so row level security applies; product_expired_units and
+    -- units_sold_in_period run as the owner, because a buyer cannot read the batches or the orders
+    -- of others
     'cartlify.refresh_order_prices(integer)',
     'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
     'cartlify.shop_today()',
     'cartlify.product_expired_units(integer)',
-    'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", jsonb)'
+    'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
+    'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)'
   ]
   LOOP
     IF to_regprocedure(v_fn) IS NOT NULL THEN
@@ -254,8 +281,8 @@ BEGIN
 END
 $$;
 
--- app: functions of the extensions in this schema (pg_trgm, unaccent) used by product search;
--- they are library code without data access, so all of them are open
+-- app: the functions of the extensions in this schema (pg_trgm, unaccent), used by the product
+-- search. They are library code that reads no table, so every one is opened.
 DO $$
 DECLARE
   v_fn regprocedure;
@@ -274,8 +301,8 @@ BEGIN
 END
 $$;
 
--- readonly: context readers used by rls policies and search helpers
--- functions appear after db/02 and db/05, so rerun this file after them on a fresh database
+-- readonly: the readers of the request context that policies call, and the search helpers.
+-- They appear after 02 and 05, so this file runs again after them; a missing one is skipped.
 DO $$
 DECLARE
   v_fn text;

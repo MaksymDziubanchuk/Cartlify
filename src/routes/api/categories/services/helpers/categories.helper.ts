@@ -2,8 +2,40 @@ import { BadRequestError } from '@utils/errors.js';
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
+import { buildImageUrls, isCloudinaryUrl } from '@utils/cloudinary.util.js';
+
+import type { CategoryResponseDto } from 'types/dto/categories.dto.js';
+import type { ProductImagesUrls } from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
+
+// the sizes of the picture of a category, null for a category without one (or with an address that
+// is no picture of ours)
+export const categoryImageUrlsOf = (imageUrl: string | null): ProductImagesUrls | null =>
+  imageUrl && isCloudinaryUrl(imageUrl) ? buildImageUrls(imageUrl, 'product') : null;
+
+// the answer for a row of a category: the nullable columns are left out, the picture is its sizes
+export function categoryResponseOf(row: {
+  id: number;
+  name: string;
+  slug: string;
+  description: string | null;
+  parentId: number | null;
+  imageUrl: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): CategoryResponseDto {
+  return {
+    id: row.id as any,
+    name: row.name,
+    slug: row.slug,
+    ...(row.description != null ? { description: row.description } : {}),
+    ...(row.parentId != null ? { parentId: row.parentId as any } : {}),
+    imageUrls: categoryImageUrlsOf(row.imageUrl),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
 
 export function slugifyLoose(input: string): string {
   return input

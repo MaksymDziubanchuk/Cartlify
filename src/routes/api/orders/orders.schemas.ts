@@ -26,39 +26,65 @@ const orderItemExample = {
   totalPrice: 99.98,
 };
 
+// where and to whom a confirmed order goes
+const deliveryExample = {
+  method: 'manual',
+  price: 4.99,
+  recipient: { firstName: 'Anna', lastName: 'Koval', phone: '+380501234567' },
+  address: {
+    country: 'UA',
+    postalCode: '01001',
+    city: 'Kyiv',
+    street: 'Khreshchatyk',
+    house: '1',
+    apartment: '12',
+  },
+  note: 'Leave near the door.',
+  pickup: null,
+  shipment: null,
+};
+
+// a cart: nothing chosen yet, the shop quotes each method it has enabled
 const orderExample = {
   id: 1,
   userId: 1,
   status: 'pending',
   items: [orderItemExample],
+  itemsTotal: 99.98,
   total: 99.98,
+  delivery: null,
+  deliveryQuotes: [
+    { method: 'manual', price: 4.99, freeFrom: 150, remainingToFree: 50.02 },
+    { method: 'pickup', price: 0, freeFrom: null, remainingToFree: null },
+  ],
   createdAt: '2026-01-01T10:00:00.000Z',
   updatedAt: '2026-01-01T10:00:00.000Z',
-  note: 'Leave near the door.',
-  shippingAddress: 'Example shipping address',
   confirmed: false,
-};
-
-const recipientExample = {
-  recipientFirstName: 'Anna',
-  recipientLastName: 'Koval',
-  recipientPhone: '+380501234567',
 };
 
 // a confirmed order waits for the payment until reservationExpiresAt
 const waitingOrderExample = {
   ...orderExample,
-  ...recipientExample,
   status: 'waiting',
   confirmed: true,
+  total: 104.97,
+  delivery: deliveryExample,
+  deliveryQuotes: undefined,
   reservationExpiresAt: '2026-01-01T10:15:00.000Z',
 };
 
 const shippedOrderExample = {
-  ...orderExample,
-  ...recipientExample,
+  ...waitingOrderExample,
   status: 'shipped',
-  confirmed: true,
+  reservationExpiresAt: undefined,
+  delivery: {
+    ...deliveryExample,
+    shipment: {
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000123',
+      trackingUrl: 'https://track.example.com/JD0146000123',
+    },
+  },
   paidAt: '2026-01-01T10:05:00.000Z',
 };
 
@@ -74,12 +100,13 @@ const orderItemParamsExample = {
   itemId: '1',
 };
 
-// an order that lost its reservation: it keeps its items and shipping data
+// an order that lost its reservation: it keeps its items and where it goes, and costs its items
+// again until it is confirmed
 const unconfirmedOrderExample = {
   ...orderExample,
-  ...recipientExample,
   status: 'unconfirmed',
   confirmed: false,
+  delivery: deliveryExample,
 };
 
 // what an admin cancel answers: the order and how to reach its buyer
@@ -112,9 +139,22 @@ const updateCurrentOrderItemBodyExample = {
 
 const confirmCurrentOrderBodyExample = {
   orderId: 1,
-  shippingAddress: 'Example shipping address',
-  ...recipientExample,
-  note: 'Leave near the door.',
+  delivery: {
+    method: 'manual',
+    recipientFirstName: 'Anna',
+    recipientLastName: 'Koval',
+    recipientPhone: '+380501234567',
+    address: {
+      country: 'UA',
+      postalCode: '01001',
+      city: 'Kyiv',
+      street: 'Khreshchatyk',
+      house: '1',
+      apartment: '12',
+    },
+    note: 'Leave near the door.',
+  },
+  expectedDeliveryPrice: 4.99,
 };
 
 const orderIdParamsExample = {
@@ -340,9 +380,9 @@ const postCurrentConfirmSchema = {
   summary: 'Confirm current order',
   description:
     'Confirms the current order, reserves stock and prepares it for checkout. ' +
-    'The shipping address and the recipient (`recipientFirstName`, `recipientLastName`, `recipientPhone`) are stored on the order and are required when the order does not have them yet. A field that is not sent keeps what the order has: an order that lost its reservation (`unconfirmed`) keeps them, so confirming it again needs only `orderId`; a confirmation that fails stores nothing. ' +
-    'A page can take the first name and the phone from the profile, the last name is asked from the person. `note` is optional. ' +
-    'After the confirmation the order keeps these fields as they are. ' +
+    'The `delivery` says where and to whom the order goes: the method the shop has enabled (`manual`: the shop sends it to an address; `pickup`: the buyer collects it at the shop, GET /api/delivery/methods lists them), the recipient and, for `manual`, the address (a country the shop delivers to, the postal code in the form of its country, the city, the street, the house, the apartment if there is one). A buyer is a person, not a company. It is whole when sent and replaces what the order has; an order that lost its reservation (`unconfirmed`) keeps it, so confirming it again needs only `orderId`. A confirmation that fails stores nothing. ' +
+    'A page can take the first name and the phone from the profile, the last name is asked from the person, and the cart offers the delivery of the last order (`deliverySuggestion`) to start from. `note` is optional. After the confirmation the order keeps the delivery as it is. ' +
+    'The confirmation fixes the price of the delivery by the rule of the shop (a flat price for `manual`, free from a sum of the items, nothing for `pickup`); `total` is the items and that price. `expectedDeliveryPrice` (required) is the price the page showed: another price now refuses the confirmation (`DELIVERY_PRICE_CHANGED`), the page shows the price now and the buyer confirms again. ' +
     'When an item price differs from the current product price, the order is not confirmed and `ORDER_PRICES_CHANGED` is returned: reload the order to get fresh prices and confirm again.',
 
   body: {
@@ -359,11 +399,16 @@ const postCurrentConfirmSchema = {
 
     400: {
       description:
-        'Invalid confirm order request. `VALIDATION_ERROR`: a field breaks the request schema (length, phone format). ' +
-        '`SHIPPING_ADDRESS_INVALID`, `RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: an address of spaces, a name without a letter or with a digit. ' +
-        '`SHIPPING_ADDRESS_REQUIRED`, `RECIPIENT_FIRST_NAME_REQUIRED`, `RECIPIENT_LAST_NAME_REQUIRED`, `RECIPIENT_PHONE_REQUIRED`: the order has no such field and the request did not bring it. ' +
+        'Invalid confirm order request. `VALIDATION_ERROR`: a field breaks the request schema (length, phone format, a country that is not two capital letters, a part of the delivery that is missing). ' +
+        '`RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: a name without a letter or with a digit. `RECIPIENT_PHONE_INVALID`: a phone of another form (the request schema refuses it first, so over HTTP it is `VALIDATION_ERROR`). ' +
+        '`DELIVERY_REQUIRED`: the order has no delivery and the request did not bring one. ' +
+        '`DELIVERY_METHOD_NOT_AVAILABLE`: the shop has not enabled the method, `details.method`. ' +
+        '`DELIVERY_ADDRESS_REQUIRED`: the manual method without an address. `DELIVERY_ADDRESS_NOT_ALLOWED`: a pickup with an address. ' +
+        '`DELIVERY_COUNTRY_NOT_ALLOWED`: the shop does not deliver to the country, `details.country`. ' +
+        '`DELIVERY_POSTAL_CODE_INVALID`: not a postal code of that country (a typo, a code of another country). ' +
+        '`DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`: no letter in it. `DELIVERY_HOUSE_INVALID`: a house of only spaces. ' +
         '`ORDER_ITEMS_REQUIRED`: the order is empty. ' +
-        '`ORDER_TOTAL_BELOW_MINIMUM`: the total at the prices of the catalog is below the smallest payment any payment provider takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`.',
+        '`ORDER_TOTAL_BELOW_MINIMUM`: the total, the items at the prices of the catalog and the delivery, is below the smallest payment any payment provider takes, nothing is reserved; `details` has the smallest total (`minimum`) and its `currency`.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -386,7 +431,8 @@ const postCurrentConfirmSchema = {
         '`ORDER_ITEMS_UNAVAILABLE`: some items cannot be confirmed, `details.items` names each: ' +
         '`{ itemId, productId, reason: deleted | out_of_stock, available, requested }`; the owner removes or changes them and confirms again. ' +
         'The same code names the items when another buyer took the last free units at the same moment. ' +
-        '`ORDER_PRICES_CHANGED`: reload the order and confirm again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
+        '`ORDER_PRICES_CHANGED`: reload the order and confirm again. ' +
+        '`DELIVERY_PRICE_CHANGED`: the price of the delivery the page showed (`expectedDeliveryPrice`) is not the price now, `details.price` is the price now; the page shows it and the buyer confirms again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
         '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order. ' +
         '`LEGAL_ACCEPTANCE_REQUIRED`: the customer did not accept a version in force of the terms ' +
         'or of the contract; `details.kinds` the kinds missing, `details.current` the versions in ' +
@@ -415,7 +461,7 @@ const getOrdersSchema = {
     'The cart (`pending`) is not an order and is not listed, GET /api/orders/current gives it. ' +
     'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of products deleted from the catalog are removed from it. ' +
     '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment. ' +
-    '`statuses` takes a few statuses, `productId` the orders that hold a product. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages.',
+    '`statuses` takes a few statuses, `productId` the orders that hold a product. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages.',
 
   querystring: {
     $ref: 'ordersGetQuerySchema#',
@@ -434,7 +480,7 @@ const getOrdersSchema = {
           schema: {
             type: 'string',
             description:
-              'Order, Status, Paid at, Buyer email, Recipient, Phone, Address, Items, Total.',
+              'Order, Status, Paid at, Buyer email, Recipient, Phone, Method, Country, Postal code, City, Street, House, Apartment, Note, Delivery price, Items, Weight g, Weight complete, Total, Carrier, Tracking number, Shipping cost.',
           },
         },
       },
@@ -442,7 +488,7 @@ const getOrdersSchema = {
 
     400: {
       description:
-        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`) a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`) and such a period of the last change (`UPDATED_PERIOD_INVALID`).',
+        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`) a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`), such a period of the last change (`UPDATED_PERIOD_INVALID`) and the sort by the send without a cost without its filter (`SORT_SHIPPING_COST_MISSING_REQUIRES_FILTER`).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -514,9 +560,11 @@ const patchOrderStatusSchema = {
   operationId: 'updateOrderStatus',
   summary: 'Update order status',
   description:
-    'Updates order status by order id: a paid order becomes shipped or delivered, a shipped one delivered. ' +
-    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel. ' +
-    'A shipped or delivered order mails the buyer, unless the account is deleted; a mail that fails is only logged and never undoes the status.',
+    'Takes an order one step: a paid order becomes shipped, a shipped one delivered, and one step back: a delivered order shipped, a shipped one paid. A step over (paid straight to delivered) is not one. ' +
+    'Shipping a manual order records the send (`shipment`: the carrier, the tracking number, the link, what the shop pays the carrier, each only if known; a number and a link each need the carrier, a link may come without a number); a pickup is shipped when it is ready to be collected, delivered when it is collected, and has no send. ' +
+    'The step back of a manual order takes the send back (it stays as history) and needs `keepShippingCost`: true keeps its cost as owed to the carrier, false makes it 0 (a mistake; the cost it had stays in the admin log). ' +
+    'Every step is written to the admin log with what it did. The buyer is mailed after each step, unless the account is deleted: a shipped order (a pickup: ready for pickup), a delivered one (a pickup: collected), and a short notice for a step back that says nothing of the reason, the admin explains it in the chat; a mail that fails is only logged and never undoes the status. ' +
+    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel.',
 
   params: {
     $ref: 'ordersUpdateStatusParamsSchema#',
@@ -536,7 +584,12 @@ const patchOrderStatusSchema = {
     },
 
     400: {
-      description: 'Invalid order status update request.',
+      description:
+        'Invalid order status update request. `VALIDATION_ERROR`: a field breaks the request schema (a link that is not https, a cost with a fraction of a cent, a text too long). ' +
+        '`STATUS_INVALID`: not a status an admin sets (the request schema refuses it first). ' +
+        '`SHIPMENT_NOT_ALLOWED`: a send with any step but shipped, or for a pickup. ' +
+        '`SHIPMENT_CARRIER_REQUIRED`: a number or a link without the carrier. `SHIPMENT_CARRIER_INVALID`, `SHIPMENT_NUMBER_INVALID`: a text of only spaces. ' +
+        '`KEEP_SHIPPING_COST_REQUIRED`: the step back of a manual order that was shipped needs the choice. `KEEP_SHIPPING_COST_NOT_ALLOWED`: the choice with any other step, or for a pickup.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -554,7 +607,7 @@ const patchOrderStatusSchema = {
     409: {
       description:
         '`ORDER_STATUS_TRANSITION_INVALID`: the order is there, its status does not allow the step, `details: { status, requested }` ' +
-        '(shipped only from paid, delivered from paid or shipped). `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
+        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -569,14 +622,24 @@ const postOrdersStatusSchema = {
   operationId: 'updateOrdersStatus',
   summary: 'Update the status of many orders',
   description:
-    'Moves many orders one step: shipped (from paid) or delivered (from paid or shipped). Each ' +
-    'order goes on its own, in a transaction of its own, the way `PATCH /api/orders/{orderId}/status` ' +
-    'moves one: the admin log and the mail of each. A mail cannot be taken back, so an order that ' +
-    'cannot take the step does not stop the others: each order gets its answer. Admin and root only.',
+    'Moves many orders one step: shipped (from paid), delivered (from shipped), or one step back. ' +
+    'Each order comes with its own send (`shipment`) when it is shipped and its own `keepShippingCost` ' +
+    'when it goes back to paid, the way `PATCH /api/orders/{orderId}/status` takes them. Each ' +
+    'order goes on its own, in a transaction of its own: the admin log and the mail of each. A mail ' +
+    'cannot be taken back, so an order that cannot take the step does not stop the others: each ' +
+    'order gets its answer. An order named twice is answered twice: the first takes the step, the second answers that the order has taken it already (`ORDER_STATUS_TRANSITION_INVALID`). Admin and root only.',
 
   body: {
     $ref: 'ordersBulkStatusBodySchema#',
-    examples: [{ orderIds: [41, 42], status: 'shipped' }],
+    examples: [
+      {
+        status: 'shipped',
+        orders: [
+          { orderId: 41, shipment: { carrier: 'DHL', trackingNumber: 'JD0146000123', cost: 7.5 } },
+          { orderId: 42 },
+        ],
+      },
+    ],
   },
 
   response: {
@@ -599,8 +662,8 @@ const postOrdersStatusSchema = {
     },
     400: {
       description:
-        'Invalid request (VALIDATION_ERROR): no orders or more than 100, an order named twice, ' +
-        'a status other than shipped or delivered.',
+        'Invalid request (VALIDATION_ERROR): no orders or more than 100, a status an admin does not set, ' +
+        'a send, a cost choice or an id that breaks the request schema.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -749,7 +812,7 @@ const postCancelPaymentSchema = {
   summary: 'Cancel the payment of an order',
   description:
     'The owner cancels the payment of an own order that waits for it (`waiting`), for example after coming back from the payment page without paying. ' +
-    'The payment page is closed first at its payment provider, so no payment can come for it any more; then the reservation is released and the order becomes `unconfirmed` with its items and shipping data. ' +
+    'The payment page is closed first at its payment provider, so no payment can come for it any more; then the reservation is released and the order becomes `unconfirmed` with its items and its delivery. ' +
     'The owner can change its items (POST/PATCH/DELETE /api/orders/{orderId}/items) and confirm it again with POST /api/orders/current/confirm.',
 
   params: {
@@ -805,11 +868,17 @@ const postCancelOrderSchema = {
     'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full by the payment provider that took it, ' +
     'the stock of its items comes back and the buyer gets a mail, unless the account is deleted. The order is cancelled only together with its refund: ' +
     'when the provider refuses the refund nothing changes. A delivered order is not cancelled. ' +
-    'The answer gives how to reach the buyer: the order holds the address, the recipient and the phone, `user` tells whether the account is deleted and its email while it is not.',
+    'A manual order that was shipped has a send on its way: `shippingPaid` says whether the carrier was paid already, true keeps the cost of the send as owed (an expense of the shop), false makes it 0 (nothing is owed; the cost it had stays in the admin log). It is needed then, and not allowed otherwise. ' +
+    'The answer gives how to reach the buyer: the order holds the delivery (the address or the pickup, the recipient and the phone), `user` tells whether the account is deleted and its email while it is not.',
 
   params: {
     $ref: 'ordersGetByIdParamsSchema#',
     examples: [orderIdParamsExample],
+  },
+
+  body: {
+    $ref: 'ordersCancelBodySchema#',
+    examples: [{ shippingPaid: true }],
   },
 
   response: {
@@ -819,7 +888,8 @@ const postCancelOrderSchema = {
       examples: [cancelledOrderExample],
     },
     400: {
-      description: 'Invalid order id (VALIDATION_ERROR).',
+      description:
+        'Invalid order id or body (VALIDATION_ERROR). `SHIPPING_PAID_REQUIRED`: the order was shipped by hand and has a send on its way, say whether the carrier was paid. `SHIPPING_PAID_NOT_ALLOWED`: the order has no send on its way.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -848,6 +918,123 @@ const postCancelOrderSchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for the details of a send and what the shop pays the carrier
+const patchShipmentSchema = {
+  operationId: 'updateOrderShipment',
+  summary: 'Write the cost of a send and correct its details',
+  description:
+    'An admin or root writes what the shop pays the carrier when the invoice comes and corrects the carrier, the number and the link of a send. ' +
+    'The details change only on the send on its way of a shipped order (`SHIPMENT_NOT_EDITABLE` otherwise) and the buyer is mailed all of them, never the cost. ' +
+    'The cost is written while the shop owes the carrier for the send, whatever became of the order (`SHIPMENT_COST_NOT_OWED` when it does not: a step back with the cost cleared, a cancel that said the carrier was not paid), and it is not mailed. ' +
+    'A request that changes nothing writes no line to the admin log and sends no mail. The answer is the order with its sends.',
+
+  params: { $ref: 'ordersShipmentParamsSchema#' },
+  body: {
+    $ref: 'ordersShipmentUpdateBodySchema#',
+    examples: [{ cost: 7.5 }, { carrier: 'UPS', trackingNumber: '1Z999AA10123456784' }],
+  },
+
+  response: {
+    200: {
+      description: 'The send is changed (or was as asked) and the order is returned.',
+      $ref: 'ordersOrderResponseSchema#',
+      examples: [shippedOrderExample],
+    },
+    400: {
+      description:
+        '`VALIDATION_ERROR`: a field breaks the request schema, nothing is sent. `NO_FIELDS_TO_UPDATE`: only fields the schema does not name. `SHIPMENT_CARRIER_REQUIRED`: a number or a link without the carrier. `SHIPMENT_CARRIER_INVALID`, `SHIPMENT_NUMBER_INVALID`: a text of only spaces.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only an admin or root changes a send (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`ORDER_NOT_FOUND`: no order with this id. `SHIPMENT_NOT_FOUND`: the order has no send with this id.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`SHIPMENT_NOT_EDITABLE`: the details of a send change only while the order is shipped and the send is on its way. `SHIPMENT_COST_NOT_OWED`: the shop owes the carrier nothing for this send. `RESOURCE_BUSY`: try again.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while changing the send.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the correction of where a paid order goes
+const patchOrderDeliverySchema = {
+  operationId: 'updateOrderDelivery',
+  summary: 'Correct where a paid order goes',
+  description:
+    'An admin or root corrects the recipient, the address or the note of a paid order until it is sent. The method and the price stay: a buyer who wants another method cancels and orders again. ' +
+    'The person can be changed alone; an address is sent whole and is checked the way the confirmation checks it (the country the shop delivers to, the postal code of that country), a pickup has none. ' +
+    'The change goes to the admin log with the old and the new value of each field and the buyer is mailed the new data, unless the account is deleted. A request that changes nothing writes no line and sends no mail. The answer is the order.',
+
+  params: {
+    $ref: 'ordersGetByIdParamsSchema#',
+    examples: [orderIdParamsExample],
+  },
+  body: {
+    $ref: 'ordersDeliveryUpdateBodySchema#',
+    examples: [
+      {
+        address: {
+          country: 'UA',
+          postalCode: '01001',
+          city: 'Kyiv',
+          street: 'Khreshchatyk',
+          house: '1',
+          apartment: '12',
+        },
+      },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The delivery is corrected (or was as asked) and the order is returned.',
+      $ref: 'ordersOrderResponseSchema#',
+      examples: [waitingOrderExample],
+    },
+    400: {
+      description:
+        '`VALIDATION_ERROR`: a field breaks the request schema, nothing is sent. `NO_FIELDS_TO_UPDATE`: only fields the schema does not name. `RECIPIENT_FIRST_NAME_INVALID`, `RECIPIENT_LAST_NAME_INVALID`: a name without a letter or with a digit. `RECIPIENT_PHONE_INVALID`: a phone of another form (the request schema refuses it first, so over HTTP it is `VALIDATION_ERROR`). ' +
+        '`DELIVERY_ADDRESS_NOT_ALLOWED`: an address for a pickup. `DELIVERY_COUNTRY_NOT_ALLOWED`: the shop does not deliver to the country. `DELIVERY_POSTAL_CODE_INVALID`, `DELIVERY_CITY_INVALID`, `DELIVERY_STREET_INVALID`, `DELIVERY_HOUSE_INVALID`: a part of the address that is not one.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only an admin or root corrects a delivery (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: '`ORDER_NOT_FOUND`: no order with this id.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`ORDER_DELIVERY_NOT_EDITABLE`: only a paid order changes, `details.status` is the status it has. `RESOURCE_BUSY`: try again.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while correcting the delivery.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group order routes under the orders Swagger tag
 const taggedOrdersSchema = withOpenApiTag(
   {
@@ -860,6 +1047,8 @@ const taggedOrdersSchema = withOpenApiTag(
     getOrderByIdSchema,
     patchOrderStatusSchema,
     postOrdersStatusSchema,
+    patchShipmentSchema,
+    patchOrderDeliverySchema,
     postOrderItemsSchema,
     patchOrderItemsSchema,
     deleteOrderItemsSchema,

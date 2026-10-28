@@ -36,19 +36,19 @@ type ProductRow = MoneyColumns & {
   categoryId: number;
   categoryName: string;
   deleted: boolean;
-  net_revenue: Prisma.Decimal;
-  net_margin: Prisma.Decimal;
-  net_margin_percent: Prisma.Decimal | null;
-  net_units: bigint;
+  sold_margin: Prisma.Decimal;
+  sold_margin_percent: Prisma.Decimal | null;
+  margin_after_write_offs: Prisma.Decimal;
 };
 
 // the column of each sort in the rows of the report; the percent is none without a revenue,
 // such rows come last whichever way
 const SORTS: Record<AdminReportSortBy, { column: string; kind: 'number' | 'text' | 'nullable' }> = {
-  revenue: { column: 'net_revenue', kind: 'number' },
-  margin: { column: 'net_margin', kind: 'number' },
-  marginPercent: { column: 'net_margin_percent', kind: 'nullable' },
-  units: { column: 'net_units', kind: 'number' },
+  revenue: { column: 'sold_revenue', kind: 'number' },
+  margin: { column: 'sold_margin', kind: 'number' },
+  marginPercent: { column: 'sold_margin_percent', kind: 'nullable' },
+  units: { column: 'sold_units', kind: 'number' },
+  marginAfterWriteOffs: { column: 'margin_after_write_offs', kind: 'number' },
   writeOffs: { column: 'written_value', kind: 'number' },
   purchases: { column: 'bought_value', kind: 'number' },
   stockValue: { column: 'stock_value', kind: 'number' },

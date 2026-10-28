@@ -75,8 +75,22 @@ export async function createCheckoutSession({
           confirmed: true,
           reservationExpiresAt: true,
           total: true,
-          // the buyer reads their own account: the page fills in the email
-          user: { select: { email: true, deletedAt: true } },
+          // where the order goes and what the delivery costs, the page and the payment carry it
+          delivery: {
+            select: {
+              method: true,
+              price: true,
+              recipientFirstName: true,
+              recipientLastName: true,
+              recipientPhone: true,
+              country: true,
+              postalCode: true,
+              city: true,
+              street: true,
+              house: true,
+              apartment: true,
+            },
+          },
           items: {
             orderBy: { id: 'asc' },
             select: {
@@ -99,6 +113,13 @@ export async function createCheckoutSession({
       if (!order) {
         throw new NotFoundError('ORDER_NOT_FOUND', { orderId: Number(orderId) });
       }
+
+      // the buyer reads their own account: the page fills in the email. A query reads at most two
+      // relations side by side, so the account is read apart
+      const buyer = await db.user.findUniqueOrThrow({
+        where: { id: order.userId },
+        select: { email: true, deletedAt: true },
+      });
 
       // require confirmed order
       if (!order.confirmed) {
@@ -173,7 +194,27 @@ export async function createCheckoutSession({
           unitPrice: Number(item.unitPrice),
           quantity: item.quantity,
         })),
-        customerEmail: order.user.deletedAt ? null : order.user.email,
+        // the delivery is part of the total: its own line on the page
+        deliveryPrice: order.delivery ? Number(order.delivery.price) : 0,
+        shipping:
+          order.delivery?.method === 'manual' &&
+          order.delivery.country &&
+          order.delivery.city &&
+          order.delivery.street &&
+          order.delivery.house
+            ? {
+                name: `${order.delivery.recipientFirstName} ${order.delivery.recipientLastName}`,
+                phone: order.delivery.recipientPhone,
+                address: {
+                  line1: `${order.delivery.street} ${order.delivery.house}`,
+                  line2: order.delivery.apartment,
+                  city: order.delivery.city,
+                  postalCode: order.delivery.postalCode,
+                  country: order.delivery.country,
+                },
+              }
+            : null,
+        customerEmail: buyer.deletedAt ? null : buyer.email,
       };
     });
 

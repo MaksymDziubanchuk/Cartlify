@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import type { LoginEvent, WrittenEvent } from '@config/journalEvents.js';
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 
@@ -12,19 +13,22 @@ export async function insertLoginLog(
     role: Role;
     ip?: string | null;
     userAgent?: string | null;
+    // how the person came in (src/config/journalEvents.ts)
+    event: WrittenEvent<LoginEvent>;
   },
 ): Promise<void> {
-  const { userId, email, role, ip, userAgent } = args;
+  const { userId, email, role, ip, userAgent, event } = args;
 
   // write login log row
   await tx.$executeRaw`
-    insert into cartlify.login_logs ("userId", "email", "role", "ipAddress", "userAgent")
+    insert into cartlify.login_logs ("userId", "email", "role", "ipAddress", "userAgent", "event")
     values (
       ${userId}::int,
       ${email},
       ${role}::cartlify."Role",
       ${ip ?? null},
-      ${userAgent ?? null}
+      ${userAgent ?? null},
+      ${event}
     )
   `;
 }

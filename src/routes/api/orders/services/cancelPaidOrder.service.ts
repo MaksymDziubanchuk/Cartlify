@@ -3,6 +3,7 @@ import { getPgMessage, isRetryableTxError, tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import {
+  BadRequestError,
   ConflictError,
   ForbiddenError,
   InternalError,
@@ -11,7 +12,12 @@ import {
   isAppError,
 } from '@utils/errors.js';
 import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
-import { mapOrderRowToResponse, expiredOfOrders, orderResponseSelect } from './helpers/index.js';
+import {
+  mapOrderRowToResponse,
+  expiredOfOrders,
+  readOrderResponse,
+  shipmentLogOf,
+} from './helpers/index.js';
 import {
   sendOrderCancelledEmail,
   type OrderCancelLogger,
@@ -26,7 +32,7 @@ import type { CancelOrderDto, CancelledOrderResponseDto } from 'types/dto/orders
 // try, the provider gives no money twice for the same payment. The answer names the buyer, also a deleted one, so the admin
 // can reach them: the recipient and the phone of the order stay on it
 export async function cancelPaidOrder(
-  { actorId, actorRole, orderId }: CancelOrderDto,
+  { actorId, actorRole, orderId, shippingPaid }: CancelOrderDto,
   log: OrderCancelLogger,
 ): Promise<CancelledOrderResponseDto> {
   if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
@@ -40,8 +46,42 @@ export async function cancelPaidOrder(
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        const before = await db.order.findUnique({ where: { id }, select: { status: true } });
+        // hold the order while the step is decided: an admin who ships it or takes the step back at
+        // the same time would leave the cost of the send marked the wrong way
+        await db.$queryRaw`select id from cartlify.orders where id = ${id}::int for update`;
+
+        const before = await db.order.findUnique({
+          where: { id },
+          select: {
+            status: true,
+            delivery: { select: { method: true } },
+            // the send on its way
+            shipments: {
+              where: { rolledBackAt: null },
+              orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              select: {
+                id: true,
+                carrier: true,
+                trackingNumber: true,
+                trackingUrl: true,
+                cost: true,
+              },
+            },
+          },
+        });
         if (!before) throw new NotFoundError('ORDER_NOT_FOUND', { orderId: id });
+
+        // an order shipped by hand has a send on its way, and the carrier may be paid already: the
+        // admin says so, the cost of the send stays owed or not
+        const onItsWay =
+          before.status === 'shipped' && before.delivery?.method === 'manual'
+            ? before.shipments[0]
+            : undefined;
+        if (onItsWay && shippingPaid === undefined)
+          throw new BadRequestError('SHIPPING_PAID_REQUIRED');
+        if (!onItsWay && shippingPaid !== undefined)
+          throw new BadRequestError('SHIPPING_PAID_NOT_ALLOWED');
 
         // checks the status, locks the order, returns the stock, marks it cancelled
         await db.$executeRaw`select cartlify.cancel_paid_order(${id}::int)`;
@@ -67,12 +107,33 @@ export async function cancelPaidOrder(
           paymentId,
         });
 
+        // the send stays owed when the carrier was paid; when it was not, it cost the shop nothing:
+        // its cost becomes 0, the one it had stays in the admin log
+        const oldCost = onItsWay && onItsWay.cost !== null ? Number(onItsWay.cost) : null;
+        if (onItsWay) {
+          await db.orderShipment.update({
+            where: { id: onItsWay.id },
+            data: shippingPaid === true ? { expense: true } : { expense: false, cost: 0 },
+          });
+        }
+
+        // the event says what was cancelled: an order before any send, a pickup ready to be
+        // collected, a send on its way with the carrier paid or not
+        const event = onItsWay
+          ? shippingPaid === true
+            ? 'order.cancel_shipped_paid'
+            : 'order.cancel_shipped_unpaid'
+          : before.status === 'shipped' && before.delivery?.method === 'pickup'
+            ? 'order.cancel_pickup_ready'
+            : 'order.cancel';
+
         await writeAdminAuditLog(db, {
           actorId,
           actorRole,
           entityType: 'order',
           entityId: id,
           action: 'ORDER_STATUS_CHANGE',
+          event,
           changes: [
             { field: 'status', old: before.status, new: 'cancelled' },
             {
@@ -80,16 +141,25 @@ export async function cancelPaidOrder(
               old: null,
               new: { initiator: 'admin', provider, paymentId, refundId },
             },
+            ...(onItsWay
+              ? [
+                  { field: 'shipment', old: shipmentLogOf(onItsWay), new: null },
+                  { field: 'shippingPaid', old: null, new: shippingPaid === true },
+                  ...(shippingPaid === true
+                    ? []
+                    : [{ field: 'shippingCost', old: oldCost, new: 0 }]),
+                ]
+              : []),
           ],
         });
 
-        const row = await db.order.findUnique({ where: { id }, select: orderResponseSelect });
+        const row = await readOrderResponse(db, id);
         if (!row) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CANCEL' });
 
         const deleted = user.deletedAt !== null;
 
         return {
-          ...mapOrderRowToResponse(row, await expiredOfOrders(db, [row])),
+          ...mapOrderRowToResponse(row, await expiredOfOrders(db, [row]), 'admin'),
           user: { id: user.id as any, deleted, ...(deleted ? {} : { email: user.email }) },
         };
       },

@@ -144,6 +144,18 @@ describe('GET /api/auth/google/callback', () => {
     });
   });
 
+  // the log of logins names how the person came in
+  it('writes the login to the login log as a login with Google', async () => {
+    const claims = account();
+    await loginWith(claims);
+    const user = await userByEmail(claims.email);
+
+    const logs = await asAdmin((tx) =>
+      tx.loginLog.findMany({ where: { userId: user!.id }, select: { event: true } }),
+    );
+    expect(logs).toEqual([{ event: 'login.google' }]);
+  });
+
   // a profile name is at most 100 characters; a long name from the provider must not stop the login
   it('cuts a name over 100 characters instead of refusing the login', async () => {
     const claims = account({ name: 'N'.repeat(150) });

@@ -6,7 +6,8 @@
 //   npm test -- unit api:orders       named parts, also the groups: all, unit, integration, api
 //   npm test -- --failed              rerun only the tests that failed in the last selection
 //   npm test -- api:orders --keep-db  leave the test database running after the tests
-//   npm test -- --workers=1           integration files one by one (up to 6 at a time by default)
+//   npm test -- --workers=1           integration files one by one (by default one more than the
+//                                     cores docker has, at most 6 at a time)
 //   npm test -- api:auth service:sendgrid   a service of SERVICES for real instead of its mock
 //   npm test -- unit -- -t "cursor"   everything after a second -- goes to jest unchanged
 
@@ -27,9 +28,33 @@ const LAUNCHER_FLAGS = ['--failed', '--keep-db'];
 const WORKERS_FLAG = /^--workers=(\d+)$/;
 
 // integration files share one database and redis; every test makes and checks only its own rows,
-// so a few files run at once, one per core and at most 6: more wait for the same database
-// (measured 18.10.2026: 4 files at a time 93 s, 6 at a time 81 s; one by one on github 360 s)
-const DEFAULT_WORKERS = Math.min(6, availableParallelism());
+// so a few files run at once. The database is what they wait for: one file more than the cores
+// docker gives it, at most one per core and at most 6. With more, transactions of the app and of
+// the tests run out of their 5 s on a busy database (measured 28.10.2026, docker with 2 cores: 6
+// files at a time 488-632 s with such failures, 3 at a time 522 s and none).
+// Docker Desktop keeps cores of its own (WSL2 or Hyper-V: fewer than the machine has); the files
+// get what is left but two, for the rest of the machine (docker with 6 of 12 cores: 6 files and
+// the database took all 12 and transactions ran out). On Linux (GitHub) docker runs on the cores
+// of the machine itself and shows all of them: nothing is taken off there
+function dockerCpus() {
+  const result = spawnSync('docker', ['info', '--format', '{{.NCPU}}'], {
+    encoding: 'utf8',
+    env: { ...process.env, COMPOSE_DISABLE_ENV_FILE: '1' },
+  });
+  const cpus = Number(result.stdout?.trim());
+  return result.status === 0 && Number.isInteger(cpus) && cpus > 0 ? cpus : null;
+}
+
+function defaultWorkers() {
+  const cores = availableParallelism();
+  const docker = dockerCpus();
+  const ownCores = docker !== null && docker < cores;
+  const leftToFiles = ownCores ? cores - docker - 2 : cores;
+
+  return Math.max(1, Math.min(6, cores, (docker ?? 5) + 1, leftToFiles));
+}
+
+const DEFAULT_WORKERS = defaultWorkers();
 
 // external services the tests answer from a mock unless the run names them (a checkbox under
 // Services, service:<name> in the arguments); jest gets the named ones in TEST_REAL_SERVICES.
@@ -328,7 +353,9 @@ function runJest(selected, services, { failedOnly, jestFlags, workers }) {
   ];
 
   console.log(`\n> Running: ${selected.map((part) => part.name).join(', ')}`);
-  console.log(`> Services: ${describeServices(services)}\n`);
+  console.log(`> Services: ${describeServices(services)}`);
+  if (needsDb) console.log(`> Integration files at a time: ${workers}`);
+  console.log('');
 
   // only the services with a real mode; set here and not left to the shell
   const real = services.filter((service) => service.real).map((service) => service.name);

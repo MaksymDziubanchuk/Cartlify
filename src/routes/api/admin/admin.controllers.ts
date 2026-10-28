@@ -10,8 +10,15 @@ import type {
   AdminAlertThresholdBodyDto,
   GetAdminAlertsQueryDto,
   AdminAuditLogQueryDto,
+  AdminConsentLogQueryDto,
+  AdminLoginLogQueryDto,
+  AdminPriceLogQueryDto,
   GetAdminAlertsResponseDto,
   GetAdminAuditLogResponseDto,
+  GetAdminConsentLogResponseDto,
+  GetAdminLoginLogResponseDto,
+  GetAdminLogEventsResponseDto,
+  GetAdminPriceLogResponseDto,
   AdminAccountingQueryDto,
   AdminReportCategoriesQueryDto,
   AdminReportProductsQueryDto,
@@ -36,6 +43,9 @@ import { parseProductIds } from './services/helpers/accountingReport.helper.js';
 import { stockBatchesArgsOf } from './services/stockBatches.service.js';
 import { stockMovementsArgsOf } from './services/stockMovements.service.js';
 import { auditLogArgsOf } from './services/auditLog.service.js';
+import { priceLogArgsOf } from './services/priceLog.service.js';
+import { loginLogArgsOf } from './services/loginLog.service.js';
+import { consentLogArgsOf } from './services/consentLog.service.js';
 
 const ALL_TIME_FROM_MS = 0;
 
@@ -246,6 +256,57 @@ const getAuditLog: ControllerRouter<
   return reply.code(200).send(await adminServices.listAuditLog(args));
 };
 
+// the log of prices of every product, the same way
+const getPriceLog: ControllerRouter<
+  {},
+  {},
+  AdminPriceLogQueryDto,
+  GetAdminPriceLogResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = priceLogArgsOf(req.query, req.user);
+  if (req.query.format === 'csv') return sendCsv(reply, await adminServices.priceLogCsv(args));
+
+  return reply.code(200).send(await adminServices.listPriceLog(args));
+};
+
+// the log of logins, the same way
+const getLoginLog: ControllerRouter<
+  {},
+  {},
+  AdminLoginLogQueryDto,
+  GetAdminLoginLogResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = loginLogArgsOf(req.query, req.user);
+  if (req.query.format === 'csv') return sendCsv(reply, await adminServices.loginLogCsv(args));
+
+  return reply.code(200).send(await adminServices.listLoginLog(args));
+};
+
+// the log of consents, the same way
+const getConsentLog: ControllerRouter<
+  {},
+  {},
+  AdminConsentLogQueryDto,
+  GetAdminConsentLogResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = consentLogArgsOf(req.query, req.user);
+  if (req.query.format === 'csv') return sendCsv(reply, await adminServices.consentLogCsv(args));
+
+  return reply.code(200).send(await adminServices.listConsentLog(args));
+};
+
+// the events every journal writes, for the checkboxes of a page
+const getLogEvents: ControllerRouter<{}, {}, {}, GetAdminLogEventsResponseDto> = async (
+  _req,
+  reply,
+) => reply.code(200).send(adminServices.getLogEvents());
+
 // the alerts of the actor, each kind of their zone with its count, or the ones they follow
 const getAlerts: ControllerRouter<
   {},
@@ -371,6 +432,10 @@ export const adminController = {
   getStockBatches,
   getStockMovements,
   getAuditLog,
+  getPriceLog,
+  getLoginLog,
+  getConsentLog,
+  getLogEvents,
   getAlerts,
   getAlertSubscriptions,
   putAlertSubscription: alertSubscription(true),

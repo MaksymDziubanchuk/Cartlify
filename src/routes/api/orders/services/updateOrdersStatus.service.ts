@@ -20,10 +20,18 @@ export async function updateOrdersStatus(
 ): Promise<UpdateOrdersStatusResponseDto> {
   const results: UpdateOrdersStatusResultDto[] = [];
 
-  for (const orderId of dto.orderIds) {
+  for (const { orderId, shipment, keepShippingCost } of dto.orders) {
     try {
       const order = await updateOrderStatus(
-        { actorId: dto.actorId, actorRole: dto.actorRole, orderId, status: dto.status },
+        {
+          actorId: dto.actorId,
+          actorRole: dto.actorRole,
+          orderId,
+          status: dto.status,
+          bulk: true,
+          ...(shipment !== undefined ? { shipment } : {}),
+          ...(keepShippingCost !== undefined ? { keepShippingCost } : {}),
+        },
         log,
       );
       results.push({ orderId, ok: true, status: order.status as OrderStatus });

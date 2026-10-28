@@ -2,7 +2,8 @@ Your {{appName}} order #{{orderId}} is cancelled.
 The payment of {{total}} is refunded in full; your bank shows it within a few days.
 
 {{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
-{{/items}}
+{{/items}}{{#deliveryLine}}Delivery: {{deliveryLine}}
+{{/deliveryLine}}
 See your order:
 {{orderUrl}}
 

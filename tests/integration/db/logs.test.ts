@@ -53,12 +53,12 @@ const asSystem = (): Actor => ({ role: 'ADMIN' });
 async function writeLogs(db: DbSession) {
   await db.as({ role: 'ADMIN', userId: admin.id });
   await db.rows(
-    `select 1 as done from cartlify.log_admin_action($1::int, 'ADMIN', 'product', $2::int, 'OTHER', '[]'::jsonb)`,
+    `select 1 as done from cartlify.log_admin_action($1::int, 'ADMIN', 'product', $2::int, 'OTHER', 'product.update', '[]'::jsonb)`,
     admin.id,
     product.id,
   );
   await db.rows(
-    `select 1 as done from cartlify.log_product_price_change($1::int, 10, 12, 'fixed', 2)`,
+    `select 1 as done from cartlify.log_product_price_change($1::int, 10, 12, 'fixed', 2, 'price.set')`,
     product.id,
   );
 }

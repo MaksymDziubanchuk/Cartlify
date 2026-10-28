@@ -53,9 +53,8 @@ docker-compose.override.yml
 build/
 .cache/
 
-# Data scripts that wipe or reseed a database: they live only on a local machine and run by
-# hand from it, never through a workflow
-db/data/reseed.sql
+# Data scripts that wipe a database: they live only on a local machine and run by hand from it,
+# never through a workflow
 db/data/clear_all_tables.sql
 db/data/clear_orders_and_stock.sql
 

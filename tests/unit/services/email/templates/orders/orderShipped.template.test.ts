@@ -24,6 +24,27 @@ afterEach(() => {
 });
 
 describe('buildOrderShippedTemplate', () => {
+  it.each([
+    ['a price the buyer paid', 4.99, 'Delivery: €4.99'],
+    ['a free delivery', 0, 'Delivery: free'],
+  ])(
+    'shows the delivery line of %s above the total in both versions',
+    (_name, deliveryPrice, line) => {
+      const { text, html } = buildOrderShippedTemplate(order({ deliveryPrice }));
+
+      expect(text).toContain(line);
+      expect(text.indexOf(line)).toBeLessThan(text.indexOf('Total:'));
+      expect(html).toContain(line.replace('Delivery: ', ''));
+    },
+  );
+
+  it('leaves the delivery line out for a pickup, which has no price', () => {
+    const { text, html } = buildOrderShippedTemplate(order({ deliveryPrice: null }));
+
+    expect(text).not.toContain('Delivery:');
+    expect(html).not.toContain('>Delivery<');
+  });
+
   it('names the shop and the order in the subject', () => {
     const { subject } = buildOrderShippedTemplate(order());
 

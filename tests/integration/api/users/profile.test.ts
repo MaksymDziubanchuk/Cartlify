@@ -371,6 +371,7 @@ describe('GET /api/users/:userId for an admin', () => {
       createdAt: expect.any(String),
       ipAddress: null,
       userAgent: null,
+      event: 'login.password',
     };
     expect(body.loginLogs).toEqual([login, login]);
     expect(Date.parse(body.loginLogs[0].createdAt)).toBeGreaterThan(

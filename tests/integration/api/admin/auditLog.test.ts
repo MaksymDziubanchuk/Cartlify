@@ -198,13 +198,22 @@ describe('GET /api/admin/audit-log', () => {
 
   // the numbers of products, categories and orders repeat: a line of another file about a category
   // with the same number is no line of this product, so every query names the kind of the thing
-  it('keeps the lines of a period', async () => {
+  // the period starts at the time of the line itself: the database dates it by its own clock,
+  // which is not the clock of the test
+  it('keeps the lines of a period: from its start, taken in, to its end, left out', async () => {
     const product = await createProduct({ price: 10, stock: 0 });
-    const before = new Date().toISOString();
-    await patchProduct(admin, product.id, { name: `Period ${Date.now()}` });
+    const patched = await patchProduct(admin, product.id, { name: `Period ${Date.now()}` });
+    expect(patched.statusCode).toBe(200);
+    const [line] = await asAdmin((tx) =>
+      tx.adminAuditLog.findMany({
+        where: { entityType: 'product', entityId: product.id },
+        select: { createdAt: true },
+      }),
+    );
+    const at = encodeURIComponent(line!.createdAt.toISOString());
 
-    const inside = await readLog(admin, `entityType=product&entityId=${product.id}&from=${before}`);
-    const outside = await readLog(admin, `entityType=product&entityId=${product.id}&to=${before}`);
+    const inside = await readLog(admin, `entityType=product&entityId=${product.id}&from=${at}`);
+    const outside = await readLog(admin, `entityType=product&entityId=${product.id}&to=${at}`);
 
     expect(inside.json().items).toHaveLength(1);
     expect(outside.json().items).toHaveLength(0);
@@ -243,10 +252,10 @@ describe('GET /api/admin/audit-log', () => {
       .trim()
       .split('\r\n');
     expect(lines[0]).toBe(
-      'id,createdAt,actorId,actorRole,action,entityType,entityId,ip,userAgent,changes',
+      'id,createdAt,actorId,actorName,actorEmail,actorRole,action,event,entityType,entityId,ip,userAgent,changes',
     );
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain(',PRODUCT_UPDATE,product,');
+    expect(lines[1]).toContain(',PRODUCT_UPDATE,product.update,product,');
   });
 
   it('refuses a user', async () => {
@@ -287,6 +296,7 @@ describe('GET /api/products/:productId/price-history', () => {
         mode: 'fixed',
         value: -3,
         endsAt: null,
+        event: 'price.set',
         actor: expect.objectContaining({ id: other.id }),
       }),
       expect.objectContaining({

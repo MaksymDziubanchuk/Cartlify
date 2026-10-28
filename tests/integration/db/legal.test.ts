@@ -79,8 +79,8 @@ const accept = (
   opts: { orderId?: number; ip?: string } = {},
 ) =>
   db.attempt<{ ip: string | null; userAgent: string | null }>(
-    `insert into cartlify.legal_acceptances ("userId", "documentId", "orderId", ip, "userAgent")
-     values ($1, $2, $3, $4, 'typed by the row')
+    `insert into cartlify.legal_acceptances ("userId", "documentId", "orderId", ip, "userAgent", event)
+     values ($1, $2, $3, $4, 'typed by the row', 'consent.accept')
      returning ip, "userAgent"`,
     userId,
     documentId,

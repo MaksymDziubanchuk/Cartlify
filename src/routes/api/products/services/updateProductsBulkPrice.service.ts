@@ -121,7 +121,13 @@ export async function updateProductsBulkPrice(
         }
       }
 
-      const saleContext = { db: tx, actorId: dto.actorId, actorRole: dto.actorRole };
+      const saleContext = {
+        db: tx,
+        actorId: dto.actorId,
+        actorRole: dto.actorRole,
+        // a sale taken off with a price
+        source: 'with_price' as const,
+      };
 
       // apply per-row updates to keep logs accurate
       let updatedCount = 0;
@@ -149,6 +155,7 @@ export async function updateProductsBulkPrice(
           afterPrice: afterDec,
           mode,
           value,
+          event: 'price.bulk',
         });
 
         updatedCount++;
@@ -170,6 +177,7 @@ export async function updateProductsBulkPrice(
         entityType: 'product',
         entityId: 0,
         action: 'PRODUCT_PRICE_BULK_UPDATE',
+        event: 'product.price_bulk',
         changes: auditChanges,
       });
 

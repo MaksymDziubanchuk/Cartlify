@@ -20,12 +20,35 @@ const dto = (patch: Partial<FindOrdersDto> = {}): FindOrdersDto =>
 
 const at = (day: number) => new Date(`2026-03-${String(day).padStart(2, '0')}T10:00:00.000Z`);
 
+// how an order goes: by hand to a city of a country (the price of the delivery with it), a pickup
+// at the shop, or no delivery yet
+type Delivery = {
+  method: 'manual' | 'pickup';
+  price: Prisma.Decimal;
+  country: string | null;
+  city: string | null;
+};
+
+const byHand = (country: string, city: string, price = '5.00'): Delivery => ({
+  method: 'manual',
+  price: new Prisma.Decimal(price),
+  country,
+  city,
+});
+
+const pickup: Delivery = {
+  method: 'pickup',
+  price: new Prisma.Decimal('0.00'),
+  country: null,
+  city: null,
+};
+
 const order = (
   id: number,
   userId: number,
   status: string,
   total: string,
-  shippingAddress: string | null,
+  delivery: Delivery | null,
   createdDay: number,
   updatedDay: number,
   paidDay: number | null,
@@ -34,7 +57,7 @@ const order = (
   userId,
   status,
   total: new Prisma.Decimal(total),
-  shippingAddress,
+  delivery,
   createdAt: at(createdDay),
   updatedAt: at(updatedDay),
   paidAt: paidDay === null ? null : at(paidDay),
@@ -43,20 +66,28 @@ const order = (
 // ties on every sort field, so the id has to break them; the carts (pending) are never listed,
 // the orders that are not paid have no time of payment
 const orders = [
-  order(1, 3, 'paid', '10.00', 'Kyiv', 1, 1, 1),
+  order(1, 3, 'paid', '10.00', byHand('UA', 'Kyiv'), 1, 1, 1),
   order(2, 3, 'unconfirmed', '25.50', null, 1, 2, null),
-  order(3, 4, 'waiting', '10.00', 'Lviv', 2, 2, null),
-  order(4, 3, 'shipped', '99.99', 'Kyiv', 2, 2, 2),
-  order(5, 4, 'delivered', '25.50', 'Odesa', 2, 5, 2),
+  order(3, 4, 'waiting', '10.00', byHand('UA', 'Lviv', '0.00'), 2, 2, null),
+  order(4, 3, 'shipped', '99.99', byHand('UA', 'Kyiv'), 2, 2, 2),
+  order(5, 4, 'delivered', '25.50', pickup, 2, 5, 2),
   order(6, 3, 'unconfirmed', '0.00', null, 5, 5, null),
-  order(7, 5, 'cancelled', '10.00', 'Kyiv', 6, 7, 6),
-  order(8, 5, 'paid', '99.99', 'Lviv', 1, 1, 1),
-  order(9, 3, 'paid', '25.50', 'Odesa', 9, 9, 9),
-  order(10, 3, 'pending', '25.50', 'Kyiv', 9, 9, null),
+  order(7, 5, 'cancelled', '10.00', byHand('PL', 'Warsaw', '9.50'), 6, 7, 6),
+  order(8, 5, 'paid', '99.99', byHand('UA', 'Lviv'), 1, 1, 1),
+  order(9, 3, 'paid', '25.50', pickup, 9, 9, 9),
+  order(10, 3, 'pending', '25.50', byHand('UA', 'Kyiv'), 9, 9, null),
   order(11, 4, 'pending', '0.00', null, 3, 3, null),
 ];
 
-const SORTS: OrdersSortBy[] = ['createdAt', 'updatedAt', 'total', 'shippingAddress', 'paidAt'];
+const SORTS: OrdersSortBy[] = [
+  'createdAt',
+  'updatedAt',
+  'total',
+  'paidAt',
+  'deliveryMethod',
+  'destination',
+  'deliveryPrice',
+];
 const DIRS: OrdersSortDir[] = ['asc', 'desc'];
 
 describe('normalizeFindOrdersInput', () => {
@@ -196,10 +227,20 @@ describe('buildOrdersWhere', () => {
     ).toEqual({ ...NOT_A_CART, confirmed: false });
   });
 
-  it('leaves out orders without a shipping address when they are sorted by it', () => {
-    expect(buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', sortBy: 'shippingAddress' })).toEqual(
-      { ...NOT_A_CART, shippingAddress: { not: null } },
-    );
+  it('leaves out orders without a delivery when they are sorted by its method or its price', () => {
+    for (const sortBy of ['deliveryMethod', 'deliveryPrice'] as const) {
+      expect(buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', sortBy })).toEqual({
+        ...NOT_A_CART,
+        AND: [{ delivery: { isNot: null } }],
+      });
+    }
+  });
+
+  it('leaves out the orders that go to no address (a pickup) when they are sorted by the destination', () => {
+    expect(buildOrdersWhere({ actorId: 1, actorRole: 'ADMIN', sortBy: 'destination' })).toEqual({
+      ...NOT_A_CART,
+      AND: [{ delivery: { is: { country: { not: null } } } }],
+    });
   });
 
   it('leaves out the orders that are not paid when they are sorted by the time of payment', () => {
@@ -272,13 +313,15 @@ describe('order list pagination', () => {
         nextCursor: (last) => makeNextOrdersCursor(sortBy, last, sortDir),
       });
 
+      // the orders a sort lists: the ones that have what it sorts by
+      const hasSortField = (row: (typeof orders)[number]) => {
+        if (sortBy === 'paidAt') return row.paidAt !== null;
+        if (sortBy === 'deliveryMethod' || sortBy === 'deliveryPrice') return row.delivery !== null;
+        if (sortBy === 'destination') return row.delivery?.country != null;
+        return true;
+      };
       const expected = sortRows(
-        orders.filter(
-          (row) =>
-            row.status !== 'pending' &&
-            (sortBy !== 'shippingAddress' || row.shippingAddress !== null) &&
-            (sortBy !== 'paidAt' || row.paidAt !== null),
-        ),
+        orders.filter((row) => row.status !== 'pending' && hasSortField(row)),
         orderBy,
       ).map((row) => row.id);
 
@@ -333,7 +376,9 @@ describe('makeNextOrdersCursor', () => {
     ['updatedAt', '2026-03-02T10:00:00.000Z'],
     ['paidAt', '2026-03-02T10:00:00.000Z'],
     ['total', 99.99],
-    ['shippingAddress', 'Kyiv'],
+    ['deliveryMethod', 'manual'],
+    ['deliveryPrice', 5],
+    ['destination', 'UA\u0001Kyiv'],
   ] as const)('puts the %s of the last row next to its id, with the sort', (sortBy, v) => {
     expect(decodeCursor(makeNextOrdersCursor(sortBy, last, 'desc'))).toEqual({
       id: 4,
@@ -415,13 +460,24 @@ describe('buildOrdersWhere and the desk', () => {
   const base = { actorId: 1, actorRole: 'ADMIN', sortBy: 'createdAt' } as const;
 
   it('finds an order by its number, and by a part of the buyer or the recipient otherwise', () => {
-    expect(buildOrdersWhere({ ...base, q: '42' })).toMatchObject({ id: 42 });
+    const digits = { contains: '42', mode: 'insensitive' };
+    expect(buildOrdersWhere({ ...base, q: '42' })).toMatchObject({
+      OR: [
+        { id: 42 },
+        { delivery: { is: { postalCode: digits } } },
+        { shipments: { some: { trackingNumber: digits } } },
+      ],
+    });
+    const like = { contains: 'koval', mode: 'insensitive' };
     expect(buildOrdersWhere({ ...base, q: 'koval' })).toMatchObject({
       OR: [
-        { user: { email: { contains: 'koval', mode: 'insensitive' } } },
-        { recipientFirstName: { contains: 'koval', mode: 'insensitive' } },
-        { recipientLastName: { contains: 'koval', mode: 'insensitive' } },
-        { recipientPhone: { contains: 'koval', mode: 'insensitive' } },
+        { user: { email: like } },
+        { delivery: { is: { recipientFirstName: like } } },
+        { delivery: { is: { recipientLastName: like } } },
+        { delivery: { is: { recipientPhone: like } } },
+        { delivery: { is: { city: like } } },
+        { delivery: { is: { postalCode: like } } },
+        { shipments: { some: { trackingNumber: like } } },
       ],
     });
   });
@@ -432,7 +488,7 @@ describe('buildOrdersWhere and the desk', () => {
     ['a number of three digits', '123', { id: 123 }],
     ['the last id', '2147483647', { id: 2_147_483_647 }],
   ])('finds an order by %s', (_case, q, where) => {
-    expect(buildOrdersWhere({ ...base, q })).toMatchObject(where);
+    expect(buildOrdersWhere({ ...base, q })).toMatchObject({ OR: expect.arrayContaining([where]) });
   });
 
   it.each([
@@ -444,7 +500,7 @@ describe('buildOrdersWhere and the desk', () => {
     const where = buildOrdersWhere({ ...base, q });
 
     expect(where).not.toHaveProperty('id');
-    expect(where.OR).toHaveLength(4);
+    expect(where.OR).toHaveLength(7);
   });
 
   it('keeps one status within a few statuses', () => {
@@ -457,7 +513,11 @@ describe('buildOrdersWhere and the desk', () => {
   it('takes the wildcards of a pattern in the text as they are', () => {
     expect(buildOrdersWhere({ ...base, q: '50%_a\\b' })).toMatchObject({
       OR: expect.arrayContaining([
-        { recipientPhone: { contains: '50\\%\\_a\\\\b', mode: 'insensitive' } },
+        {
+          delivery: {
+            is: { recipientPhone: { contains: '50\\%\\_a\\\\b', mode: 'insensitive' } },
+          },
+        },
       ]),
     });
   });
@@ -476,6 +536,108 @@ describe('buildOrdersWhere and the desk', () => {
   it('keeps a buyer to their own orders', () => {
     expect(buildOrdersWhere({ ...base, actorRole: 'USER', actorId: 3, userId: 7 })).toMatchObject({
       userId: 3,
+    });
+  });
+});
+
+// the filters of the delivery on the desk of an admin: what the order goes with, where, who carries it
+describe('the delivery filters of the desk', () => {
+  const adminBase = { actorId: 1, actorRole: 'ADMIN', sortBy: 'createdAt' } as const;
+
+  it.each([
+    ['deliveryMethod', 'manual'],
+    ['country', 'UA'],
+    ['carrier', 'DHL'],
+    ['shippedWithoutNumber', true],
+    ['deliveryCharged', true],
+    ['withoutWeight', true],
+    ['shippingCostMissing', true],
+    ['shippedTo', new Date('2026-03-01T00:00:00.000Z')],
+  ] as const)('refuses %s to a buyer', (filter, value) => {
+    expect(thrownBy(() => normalizeFindOrdersInput(dto({ [filter]: value })))).toMatchObject({
+      statusCode: 403,
+      errorCode: 'FILTER_FORBIDDEN',
+      details: { filter },
+    });
+  });
+
+  it('lets an admin send them, the methods and the countries through commas', () => {
+    expect(
+      normalizeFindOrdersInput(
+        dto({
+          actorRole: 'ADMIN',
+          deliveryMethod: 'manual,pickup',
+          country: 'UA,PL',
+          carrier: ' DHL ',
+        }),
+      ),
+    ).toMatchObject({
+      deliveryMethod: ['manual', 'pickup'],
+      country: ['UA', 'PL'],
+      carrier: 'DHL',
+    });
+  });
+
+  it('keeps the orders of the methods and of the countries', () => {
+    expect(
+      buildOrdersWhere({ ...adminBase, deliveryMethod: ['pickup'], country: ['UA', 'PL'] }),
+    ).toMatchObject({
+      AND: [
+        { delivery: { is: { method: { in: ['pickup'] } } } },
+        { delivery: { is: { country: { in: ['UA', 'PL'] } } } },
+      ],
+    });
+  });
+
+  it('keeps the orders whose delivery the buyer pays for, or does not', () => {
+    expect(buildOrdersWhere({ ...adminBase, deliveryCharged: true })).toMatchObject({
+      AND: [{ delivery: { is: { price: { gt: 0 } } } }],
+    });
+    expect(buildOrdersWhere({ ...adminBase, deliveryCharged: false })).toMatchObject({
+      AND: [{ delivery: { is: { price: { equals: 0 } } } }],
+    });
+  });
+
+  it('looks for the carrier among the sends that were not taken back, the wildcards as text', () => {
+    expect(buildOrdersWhere({ ...adminBase, carrier: 'D_H%L' })).toMatchObject({
+      AND: [
+        {
+          shipments: {
+            some: { rolledBackAt: null, carrier: { contains: 'D\\_H\\%L', mode: 'insensitive' } },
+          },
+        },
+      ],
+    });
+  });
+
+  it('keeps the shipped orders whose send has no number', () => {
+    expect(buildOrdersWhere({ ...adminBase, shippedWithoutNumber: true })).toMatchObject({
+      AND: [
+        { status: 'shipped', shipments: { some: { rolledBackAt: null, trackingNumber: null } } },
+      ],
+    });
+  });
+
+  it('keeps the orders that hold a product without a weight', () => {
+    expect(buildOrdersWhere({ ...adminBase, withoutWeight: true })).toMatchObject({
+      AND: [{ items: { some: { product: { weightGrams: null } } } }],
+    });
+  });
+
+  // the cost and the time are about one send: a send that lacks its cost and was sent before a time
+  it('keeps the orders with a send the shop owes something for and wrote no cost of, sent before a time', () => {
+    const before = new Date('2026-03-01T00:00:00.000Z');
+
+    expect(buildOrdersWhere({ ...adminBase, shippingCostMissing: true })).toMatchObject({
+      AND: [{ shipments: { some: { expense: true, cost: null } } }],
+    });
+    expect(buildOrdersWhere({ ...adminBase, shippedTo: before })).toMatchObject({
+      AND: [{ shipments: { some: { shippedAt: { lt: before } } } }],
+    });
+    expect(
+      buildOrdersWhere({ ...adminBase, shippingCostMissing: true, shippedTo: before }),
+    ).toMatchObject({
+      AND: [{ shipments: { some: { expense: true, cost: null, shippedAt: { lt: before } } } }],
     });
   });
 });

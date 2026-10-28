@@ -9,6 +9,7 @@ import {
   normalizeProductSafety,
   serializeProductDescription,
 } from '@helpers/productDescription.js';
+import { readShippingChanges, resolveShippingData } from '@helpers/productShipping.js';
 
 import {
   assertCategoryExists,
@@ -39,6 +40,11 @@ export async function createProduct({
   categoryId,
   images,
   stock,
+  weightGrams,
+  lengthMm,
+  widthMm,
+  heightMm,
+  withoutShippingData,
   log,
 }: CreateProductDto): Promise<CreateProductResponseDto> {
   // validate actor context for rls and admin-only create
@@ -56,6 +62,15 @@ export async function createProduct({
   const skuNorm = normalizeSku(sku) ?? null;
   // a new product names its manufacturer and who answers for it in the EU (GPSR)
   const safetyNorm = normalizeProductSafety(safety);
+  // and its weight and sizes, unless the admin says they come later
+  const { changes, without } = readShippingChanges({
+    weightGrams,
+    lengthMm,
+    widthMm,
+    heightMm,
+    withoutShippingData,
+  });
+  const shipping = resolveShippingData(null, changes, without);
 
   // reject invalid payload when controller sent no uploads
   if (!Array.isArray(images) || images.length === 0) {
@@ -70,6 +85,9 @@ export async function createProduct({
     ...(skuNorm ? [{ field: 'sku', old: null, new: skuNorm }] : []),
     { field: 'price', old: null, new: priceRaw },
     { field: 'categoryId', old: null, new: categoryIdRaw },
+    ...Object.entries(shipping)
+      .filter(([, value]) => value !== null)
+      .map(([field, value]) => ({ field, old: null, new: value })),
   ];
 
   // the uploads that moved to the paths of the product, for a failure after some of them
@@ -97,6 +115,7 @@ export async function createProduct({
             sku: skuNorm,
             price: new Prisma.Decimal(priceRaw),
             categoryId: categoryIdRaw,
+            ...shipping,
           },
           select: productResponseSelect,
         });
@@ -108,6 +127,7 @@ export async function createProduct({
           entityType: 'product',
           entityId: product.id,
           action: 'PRODUCT_CREATE',
+          event: 'product.create',
           changes: auditChanges,
         });
 

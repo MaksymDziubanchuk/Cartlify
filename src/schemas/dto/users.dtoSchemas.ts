@@ -143,8 +143,13 @@ const usersAdminProfileListsSchema = {
         createdAt: dateTime,
         ipAddress: nullableString,
         userAgent: nullableString,
+        event: {
+          type: 'string',
+          description:
+            'How the person came in: login.password, login.google, login.github, login.linkedin.',
+        },
       },
-      required: ['id', 'createdAt', 'ipAddress', 'userAgent'],
+      required: ['id', 'createdAt', 'ipAddress', 'userAgent', 'event'],
     },
   },
   consents: {
@@ -165,6 +170,11 @@ const usersAdminProfileListsSchema = {
         orderId: { anyOf: [{ type: 'number' }, { type: 'null' }] },
         ip: nullableString,
         userAgent: nullableString,
+        event: {
+          type: 'string',
+          description:
+            'Where the person agreed: consent.register, consent.login, consent.accept, consent.order, ...',
+        },
         createdAt: dateTime,
       },
       required: [
@@ -176,6 +186,7 @@ const usersAdminProfileListsSchema = {
         'orderId',
         'ip',
         'userAgent',
+        'event',
         'createdAt',
       ],
     },
@@ -588,7 +599,7 @@ const usersExportResponseSchema = {
         'id, email, name, locale, phone, avatarUrl, role, authProvider, isVerified, createdAt, updatedAt.',
     },
     orders: exportRows(
-      'The orders with their status, total, shipping data, note, dates and items (product, name, quantity, prices).',
+      'The orders with their status, total, dates, items (product, name, quantity, prices), the delivery (method, recipient, address, note, price) and the sends (carrier, tracking number and link, dates).',
     ),
     favorites: exportRows('The favorite products: productId, name, createdAt.'),
     reviews: exportRows('The reviews: id, productId, rating, comment, createdAt, updatedAt.'),
@@ -596,11 +607,13 @@ const usersExportResponseSchema = {
     chats: exportRows(
       'The chats: id, type, status, createdAt, messages (senderType, content, createdAt).',
     ),
-    logins: exportRows('The logins, the newest first: createdAt, ipAddress, userAgent.'),
+    logins: exportRows(
+      'The logins, the newest first: createdAt, ipAddress, userAgent, event (how the person came in).',
+    ),
     sessions: exportRows('The open sessions: device, lastUsedAt, expiresAt.'),
     legalAcceptances: exportRows(
       'The consents to the terms and the contract: documentId, kind, version, title, orderId (the ' +
-        'versions an order was confirmed with), ip, userAgent, createdAt.',
+        'versions an order was confirmed with), ip, userAgent, event (where the person agreed), createdAt.',
     ),
   },
   required: [
