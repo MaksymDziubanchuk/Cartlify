@@ -34,17 +34,17 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | OAuth                         | Google, GitHub, LinkedIn                                                    | Implemented |
 | Cache / background processing | Redis, order timeout worker                                                 | Implemented |
 | Lint / formatting             | ESLint, Prettier                                                            | Implemented |
-| CI utilities                  | GitHub Actions for DB migration / SQL execution                             | Implemented |
+| Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker             | Implemented |
+| CI utilities                  | GitHub Actions for tests, DB migration and SQL execution                    | Implemented |
 
 ### Planned stack / next steps
 
-| Area                     | Planned technologies                                  | Status      |
-| ------------------------ | ----------------------------------------------------- | ----------- |
-| Testing                  | Jest, PostgreSQL and Redis integration tests (Docker) | In progress |
-| API docs refinement      | security metadata, operation ids, examples            | Planned     |
-| Deployment               | Docker, AWS ECS/Fargate                               | Planned     |
-| SSR delivery layer       | detachable Handlebars-based web module                | Planned     |
-| Production observability | broader monitoring / metrics / reporting              | Planned     |
+| Area                     | Planned technologies                       | Status  |
+| ------------------------ | ------------------------------------------ | ------- |
+| API docs refinement      | security metadata, operation ids, examples | Planned |
+| Deployment               | Docker, AWS ECS/Fargate                    | Planned |
+| SSR delivery layer       | detachable Handlebars-based web module     | Planned |
+| Production observability | broader monitoring / metrics / reporting   | Planned |
 
 ## Project Structure
 
@@ -90,7 +90,7 @@ Cartlify/
 │   ├── coverage/               # generated coverage report (gitignored)
 │   └── run.mjs                 # test launcher behind npm test
 ├── docker-compose.test.yml     # disposable PostgreSQL and Redis for integration tests
-├── .github/workflows/          # DB migration and SQL execution workflows
+├── .github/workflows/          # tests, DB migration and SQL execution workflows
 └── package.json
 ```
 
@@ -107,10 +107,10 @@ Current production-oriented pieces already present:
 - OAuth support
 - structured backend module boundaries
 - Swagger/OpenAPI documentation deployed with the running API
+- unit and integration tests on every push in GitHub Actions
 
 Planned production improvements:
 
-- automated unit and integration tests
 - Swagger/OpenAPI refinement with full protected-route security metadata and request/response examples
 - Dockerized local/dev/prod workflow
 - AWS ECS/Fargate deployment target
