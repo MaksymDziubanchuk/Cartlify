@@ -22,7 +22,7 @@ What is important to state honestly:
 - there is no storefront/UI layer in this repository yet; the current stage is the backend API
 - WebSocket chat and OpenAI chatbot logic are implemented, but the admin-chat workflow is still being actively refined
 - Swagger/OpenAPI is implemented and available, but route security metadata, operation ids, examples, and response descriptions are still being refined
-- the test setup (Jest, Docker test database, launcher) is in place, but the test suite itself is only starting
+- unit and integration tests (Jest, a disposable PostgreSQL and Redis in Docker) run on every push to `develop` and `main`
 - Dockerized deployment and broader observability are **planned**, not done in this snapshot
 
 ## In Progress / Planned
@@ -35,7 +35,6 @@ What is important to state honestly:
 
 ### Planned
 
-- automated tests with Jest: unit tests and integration tests against a disposable PostgreSQL and Redis in Docker
 - Swagger/OpenAPI refinement for protected routes, operation ids, examples, and response descriptions
 - detachable SSR/web layer for showcase pages without coupling business logic to the UI
 - Dockerized local/dev/prod workflow and a production deployment target on AWS ECS/Fargate
