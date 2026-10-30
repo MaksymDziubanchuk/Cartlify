@@ -69,6 +69,7 @@ Cartlify/
 │   │   ├── categories/
 │   │   ├── favorites/
 │   │   ├── orders/
+│   │   ├── payments/
 │   │   ├── delivery/
 │   │   ├── reviews/
 │   │   ├── admin/
