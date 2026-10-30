@@ -15,6 +15,7 @@ What this repo already shows well:
 - OpenAI-powered chatbot integration
 - guest-to-user chat continuity and admin escalation flow
 - Swagger/OpenAPI documentation for the REST API
+- stock in batches with expiry dates, delivery and an accounting report
 
 What is important to state honestly:
 
