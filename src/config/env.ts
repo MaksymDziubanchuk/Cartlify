@@ -58,6 +58,12 @@ declare global {
 
       UPLOAD_MAX_BYTES?: string;
       PRODUCT_IMAGES_MAX?: string;
+      PRODUCT_VARIANTS_MAX?: string;
+      VARIANT_IMAGES_MAX?: string;
+      DOCUMENT_MAX_BYTES?: string;
+      PRODUCT_DOCUMENTS_MAX?: string;
+      ATTRIBUTE_OPTIONS_MAX?: string;
+      ATTRIBUTE_MULTI_VALUES_MAX?: string;
       VERIFY_TTL_MS?: string;
       ORDER_RESERVATION_MINUTES?: string;
       STRIPE_PAGE_AFTER_RESERVATION_MINUTES?: string;
@@ -93,6 +99,8 @@ declare global {
       OPENAI_MAX_OUTPUT_TOKENS?: string;
       CHAT_BOT_GUEST_DAILY_TURNS?: string;
       CHAT_BOT_USER_DAILY_TURNS?: string;
+      CHAT_BOT_IP_DAILY_TURNS?: string;
+      CHAT_BOT_SHOP_DAILY_TURNS?: string;
 
       SENDGRID_API_KEY: string;
 
@@ -137,14 +145,19 @@ function required(name: string): string {
 }
 
 // fail fast on a numeric setting that is not a positive whole number; unset gives the default.
-// Number() alone lets NaN and 0 through: a NaN or 0 interval makes node run it every 1 ms
-function positiveInt(name: string, fallback: number): number {
+// Number() alone lets NaN and 0 through: a NaN or 0 interval makes node run it every 1 ms. A setting
+// with a bound a shop can have no use for beyond (a typo of an extra zero would let a request
+// fill the database or the memory) names it in `max`; the message names the bound, not the value
+function positiveInt(name: string, fallback: number, max?: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
 
   const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(value) || value <= 0) {
     throw new Error(`Invalid env variable: ${name} must be a positive whole number`);
+  }
+  if (max !== undefined && value > max) {
+    throw new Error(`Invalid env variable: ${name} must be at most ${max}`);
   }
 
   return value;
@@ -283,20 +296,28 @@ function webPage(name: string, fallback: string, takesId: boolean): string {
 }
 
 // fail fast on a logo that is not a png or a jpeg file: every mail carries it, a missing one
-// would stop each of them. A path from the folder the server runs in
+// would stop each of them. A path from the folder the server runs in, inside src/static: the logo
+// is a public file of the shop, /static serves it too
 function logoFile(name: string, fallback: string): string {
   const raw = process.env[name]?.trim();
   if (!raw) return fallback;
 
+  const file = path.resolve(process.cwd(), raw);
+  const inStatic = path.relative(path.resolve(process.cwd(), 'src', 'static'), file);
   let isFile: boolean;
   try {
-    isFile = statSync(path.resolve(process.cwd(), raw)).isFile();
+    isFile = statSync(file).isFile();
   } catch {
     isFile = false;
   }
 
-  if (!isFile || !/\.(png|jpe?g)$/i.test(raw)) {
-    throw new Error(`Invalid env variable: ${name} must be a png or jpeg file`);
+  if (
+    !isFile ||
+    !/\.(png|jpe?g)$/i.test(raw) ||
+    inStatic.split(path.sep)[0] === '..' ||
+    path.isAbsolute(inStatic)
+  ) {
+    throw new Error(`Invalid env variable: ${name} must be a png or jpeg file inside src/static`);
   }
 
   return raw;
@@ -421,6 +442,27 @@ function reservationMinutes(): {
   };
 }
 
+// The bounds above which the limits of the catalog and of its files stop the start (positiveInt): a
+// shop has no use for more, and a value with a zero too many would let one request write thousands of
+// rows, hold a transaction for minutes or fill the memory with a file. They are well above the
+// defaults (5 MB, 50, 200, 10, 20 MB, 20, 500)
+const UPLOAD_LIMIT_BOUNDS = {
+  // the biggest file of a form or a document, in bytes (100 MB)
+  bytes: 100_000_000,
+  // the pictures of a gallery
+  galleryImages: 1_000,
+  // the variants of a product
+  variantsPerProduct: 10_000,
+  // the pictures one variant shows
+  imagesPerVariant: 100,
+  // the documents one product names
+  documentsPerProduct: 100,
+  // the values one characteristic of a choice has
+  options: 10_000,
+  // the values of a set one variant has for one characteristic
+  multiValues: 1_000,
+} as const;
+
 export default {
   // runtime mode and server bind
   NODE_ENV,
@@ -508,9 +550,30 @@ export default {
   LOGIN_FAILURES_BEFORE_PAUSE: positiveInt('LOGIN_FAILURES_BEFORE_PAUSE', 5),
 
   // the biggest file of a form (an avatar, a picture of a product) and the most pictures of a
-  // product; a bigger file is cut off with 413 before cloudinary
-  UPLOAD_MAX_BYTES: positiveInt('UPLOAD_MAX_BYTES', 5_000_000),
-  PRODUCT_IMAGES_MAX: positiveInt('PRODUCT_IMAGES_MAX', 10),
+  // product (its gallery); a bigger file is cut off with 413 before cloudinary
+  // (each has a bound above which the start stops, see UPLOAD_LIMIT_BOUNDS)
+  UPLOAD_MAX_BYTES: positiveInt('UPLOAD_MAX_BYTES', 5_000_000, UPLOAD_LIMIT_BOUNDS.bytes),
+  PRODUCT_IMAGES_MAX: positiveInt('PRODUCT_IMAGES_MAX', 50, UPLOAD_LIMIT_BOUNDS.galleryImages),
+  // the variants of a product and the pictures of the gallery one variant shows
+  PRODUCT_VARIANTS_MAX: positiveInt(
+    'PRODUCT_VARIANTS_MAX',
+    200,
+    UPLOAD_LIMIT_BOUNDS.variantsPerProduct,
+  ),
+  VARIANT_IMAGES_MAX: positiveInt('VARIANT_IMAGES_MAX', 10, UPLOAD_LIMIT_BOUNDS.imagesPerVariant),
+  DOCUMENT_MAX_BYTES: positiveInt('DOCUMENT_MAX_BYTES', 20_000_000, UPLOAD_LIMIT_BOUNDS.bytes),
+  PRODUCT_DOCUMENTS_MAX: positiveInt(
+    'PRODUCT_DOCUMENTS_MAX',
+    20,
+    UPLOAD_LIMIT_BOUNDS.documentsPerProduct,
+  ),
+  ATTRIBUTE_OPTIONS_MAX: positiveInt('ATTRIBUTE_OPTIONS_MAX', 500, UPLOAD_LIMIT_BOUNDS.options),
+  // the values of a set (a characteristic that holds several values of its list) one variant has
+  ATTRIBUTE_MULTI_VALUES_MAX: positiveInt(
+    'ATTRIBUTE_MULTI_VALUES_MAX',
+    50,
+    UPLOAD_LIMIT_BOUNDS.multiValues,
+  ),
 
   // the minutes a confirmed order holds its units for the payment, and the minutes stripe keeps
   // its payment page open after them
@@ -540,8 +603,9 @@ export default {
   // the name of the shop on a payment and in the mails, Cartlify unless given
   SHOP_NAME: process.env.SHOP_NAME?.trim() || 'Cartlify',
 
-  // the logo every mail shows, a png or jpeg file from the folder the server runs in
-  SHOP_LOGO_PATH: logoFile('SHOP_LOGO_PATH', 'src/static/images/logo3.png'),
+  // the logo every mail shows, a png or jpeg file from the folder the server runs in; it goes with
+  // every mail, so the one by default is small: 320 px, twice the width a mail shows it at
+  SHOP_LOGO_PATH: logoFile('SHOP_LOGO_PATH', 'src/static/images/logo-mail.png'),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
@@ -558,9 +622,18 @@ export default {
     : 450,
 
   // the answers of the chat bot one guest or one user gets in 24 hours, each one a paid call of
-  // the model; past them the bot answers with a text of its own and asks the model nothing
+  // the model; past them the bot answers with a text of its own and asks the model nothing. A user
+  // who has not confirmed the email is counted as a guest
   CHAT_BOT_GUEST_DAILY_TURNS: positiveInt('CHAT_BOT_GUEST_DAILY_TURNS', 30),
   CHAT_BOT_USER_DAILY_TURNS: positiveInt('CHAT_BOT_USER_DAILY_TURNS', 100),
+  // the turns of customers who are no confirmed account (guests, users with an unconfirmed email)
+  // that come from one address in 24 hours: a new cookie or a new account does not reset them. An
+  // IPv6 address counts by its /64 network
+  CHAT_BOT_IP_DAILY_TURNS: positiveInt('CHAT_BOT_IP_DAILY_TURNS', 60),
+  // the turns of the whole shop that call the model in 24 hours: the ceiling of the bill of the
+  // bot whatever the number of customers and addresses; past it the bot answers with its fallback
+  // text and asks the model nothing
+  CHAT_BOT_SHOP_DAILY_TURNS: positiveInt('CHAT_BOT_SHOP_DAILY_TURNS', 3000),
 
   // sendgrid variables
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',

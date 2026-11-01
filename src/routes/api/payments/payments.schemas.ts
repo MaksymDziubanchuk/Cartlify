@@ -61,7 +61,7 @@ const postCheckoutSessionSchema = {
     },
     409: {
       description:
-        'The order cannot be paid now: `ORDER_NOT_CONFIRMED` (a cart or an order that lost its reservation, confirm it first), `ORDER_ALREADY_PAID` (also when the page of another provider took the money meanwhile), `ORDER_PAYMENT_IN_PROGRESS` (a payment on the page of another provider is still on its way), `ORDER_STATUS_NOT_WAITING`, `ORDER_RESERVATION_EXPIRED`, `ORDER_ITEMS_UNAVAILABLE` (an item was removed from the catalog: `details.items` names it as the confirmation does; cancel the payment, change the order and confirm it again).',
+        'The order cannot be paid now: `ORDER_NOT_CONFIRMED` (a cart or an order that lost its reservation, confirm it first), `ORDER_ALREADY_PAID` (also when the page of another provider took the money meanwhile), `ORDER_PAYMENT_IN_PROGRESS` (a payment on the page of another provider is still on its way), `ORDER_STATUS_NOT_WAITING`, `ORDER_RESERVATION_EXPIRED`, `ORDER_ITEMS_UNAVAILABLE` (the variant of an item was taken out of sale after the confirmation, its product removed with it: `details.items` names the items `{ itemId, variantId, reason: deleted, available, requested }` as the confirmation does; cancel the payment, change the order and confirm it again).',
       $ref: 'errorResponseSchema#',
     },
     429: {

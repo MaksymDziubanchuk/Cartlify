@@ -189,12 +189,41 @@ export const uploadsSince = (mark: UploadMark) => [...uploadedPublicIds].slice(m
 export const movesSince = (mark: UploadMark) => [...movedToPublicIds].slice(mark.moves);
 
 // the uploads the app made since the mark that still wait at their waiting id: a request leaves
-// none, it moves each upload to its place or deletes it
+// none, it moves each upload to its place or deletes it. One read of the admin api for up to 100
+// of them, not one for each: the account answers a few hundred reads an hour (tests/run.mjs checks
+// what is left before a run with the real service)
 export async function waitingUploadsSince(mark: UploadMark): Promise<string[]> {
   const ids = uploadsSince(mark);
-  const left = await Promise.all(ids.map(async (id) => ((await storedImage(id)) ? id : null)));
+  const there = new Set<string>();
 
-  return left.filter((id): id is string => id !== null);
+  for (let at = 0; at < ids.length; at += 100) {
+    const some = ids.slice(at, at + 100);
+    try {
+      const res = await cloudinary.api.resources_by_ids(some, {
+        resource_type: 'image',
+        type: 'upload',
+      });
+      for (const file of res.resources) there.add(file.public_id);
+    } catch (err) {
+      throw cloudinaryFailure(err, `read ${some.join(', ')}`);
+    }
+  }
+
+  return ids.filter((id) => there.has(id));
+}
+
+export type StoredDocument = { version: number; bytes: number };
+
+// the file at the public id as Cloudinary keeps it (a pdf of a document is kept as an image), null when there is none
+export async function storedDocument(publicId: string): Promise<StoredDocument | null> {
+  try {
+    const res = await cloudinary.api.resource(publicId, { resource_type: 'image', type: 'upload' });
+
+    return { version: res.version, bytes: res.bytes };
+  } catch (err) {
+    if (httpCodeOf(err) === 404) return null;
+    throw cloudinaryFailure(err, `read ${publicId}`);
+  }
 }
 
 // deletes what the app uploaded and moved during the file; a file already gone is fine
@@ -203,7 +232,10 @@ export async function removeUploads(): Promise<void> {
   const results = await Promise.allSettled(
     ids.map(async (publicId) => {
       try {
-        await cloudinary.uploader.destroy(publicId, { resource_type: 'image', invalidate: true });
+        await cloudinary.uploader.destroy(publicId, {
+          resource_type: 'image',
+          invalidate: true,
+        });
       } catch (err) {
         throw cloudinaryFailure(err, `delete ${publicId}`);
       }

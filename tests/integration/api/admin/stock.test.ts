@@ -11,21 +11,25 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   receiveBatch,
+  uniqueTag,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { placeOrder } from '../../../helpers/orders.js';
 import { moveClock } from '../../../helpers/payments.js';
+import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/admin/stock/batches and /movements: what the stock of the shop is made of and how it
-// got there. A batch shows what it came in with, what is left of it, what the paid orders took and
-// what was written off, the delivery it came with (the supplier, the invoice, the note and the
-// admin from the admin log) and whether it is over by the day of the shop. The journal puts the
-// steps of the stock in one list: the deliveries and the write-offs of the admin log, the units
-// the paid orders took and the units their cancels put back. Other files make batches at the same
-// time, so each test reads only its own products
+// got there. A batch belongs to a variant (the row names it with its product), shows what it came
+// in with, what is left of it, what the paid orders took and what was written off, the delivery it
+// came with (the supplier, the invoice, the note and the admin from the stock log) and whether it
+// is over by the day of the shop. The journal puts the steps of the stock of the variants in one
+// list, read from the stock log (a line for each variant for each change): the deliveries, the
+// write-offs, the units the paid orders took and the units their cancels put back. The filters name a product (all its variants) or a variant. Other
+// files make batches at the same time, so each test reads only its own products
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -56,6 +60,25 @@ const nameOf = async (productId: number) =>
       tx.product.findUniqueOrThrow({ where: { id: productId }, select: { name: true } }),
     )
   ).name;
+
+// the variant of a line as the admin lists show it: its place, its name (the name of the product
+// until the characteristics tell variants apart), its article number, whether it is out of sale
+const variantRefOf = async (variantId: number, expected: { deleted?: boolean } = {}) => {
+  const row = await asAdmin((tx) =>
+    tx.productVariant.findUniqueOrThrow({
+      where: { id: variantId },
+      select: { position: true, sku: true, product: { select: { name: true } } },
+    }),
+  );
+
+  return {
+    id: variantId,
+    position: row.position,
+    name: row.product.name,
+    sku: row.sku,
+    deleted: expected.deleted ?? false,
+  };
+};
 
 const dayOf = (offsetDays: number) =>
   new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
@@ -155,7 +178,7 @@ describe('GET /api/admin/stock/batches', () => {
       note: 'Morning truck',
       items: [
         {
-          productId: product.id,
+          variantId: product.variantId,
           quantity: 10,
           unitCost: 2.5,
           expiresAt: dayOf(90),
@@ -176,6 +199,7 @@ describe('GET /api/admin/stock/batches', () => {
         source: 'supplier',
         supplierBatchNumber: 'LOT-A',
         product: { id: product.id, name: await nameOf(product.id), deleted: false },
+        variant: await variantRefOf(product.variantId),
         unitCost: 2.5,
         quantity: 10,
         remaining: 10,
@@ -196,7 +220,7 @@ describe('GET /api/admin/stock/batches', () => {
   it('gives null for what a delivery did not name', async () => {
     const product = await newProduct();
     await deliver(
-      { source: 'surplus', items: [{ productId: product.id, quantity: 1, unitCost: 0 }] },
+      { source: 'surplus', items: [{ variantId: product.variantId, quantity: 1, unitCost: 0 }] },
       root,
     );
 
@@ -219,10 +243,10 @@ describe('GET /api/admin/stock/batches', () => {
     const product = await newProduct();
     const [batchId] = await deliver({
       source: 'supplier',
-      items: [{ productId: product.id, quantity: 10, unitCost: 3 }],
+      items: [{ variantId: product.variantId, quantity: 10, unitCost: 3 }],
     });
     await placeOrder(app, csrf, await newUser(), product, 'paid', 3);
-    await writeOff({ reason: 'damaged', items: [{ productId: product.id, quantity: 2 }] });
+    await writeOff({ reason: 'damaged', items: [{ variantId: product.variantId, quantity: 2 }] });
 
     const [item] = (await batches({ productId: product.id })).json().items;
 
@@ -247,7 +271,7 @@ describe('GET /api/admin/stock/batches', () => {
     expect(item).toMatchObject({ quantity: 4, remaining: 4, sold: 0, writtenOff: 0 });
   });
 
-  it('shows the batch of a product removed from the catalog', async () => {
+  it('shows the batch of a product removed from the catalog, and of its variant', async () => {
     const product = await newProduct();
     await receiveBatch(product.id, { quantity: 1 });
     await deleteProductFromCatalog(product.id);
@@ -255,6 +279,97 @@ describe('GET /api/admin/stock/batches', () => {
     const [item] = (await batches({ productId: product.id })).json().items;
 
     expect(item.product).toMatchObject({ id: product.id, deleted: true });
+    expect(item.variant).toMatchObject({ id: product.variantId, deleted: true });
+  });
+
+  it('shows the batch of a variant taken out of sale while its product stays', async () => {
+    const product = await newProduct();
+    const other = await createVariant(product.id, { stock: 0 });
+    const kept = await receiveBatch({ variantId: other.id }, { quantity: 1 });
+    const gone = await receiveBatch({ variantId: product.variantId }, { quantity: 1 });
+    await markVariantDeleted(product.variantId);
+
+    const items = (await batches({ productId: product.id, sortOrder: 'asc' })).json().items;
+
+    expect(items.map((item: { id: number }) => item.id)).toEqual(
+      [gone, kept].sort((a, b) => a - b),
+    );
+    const byId = new Map(items.map((item: { id: number }) => [item.id, item]));
+    expect(byId.get(gone)).toMatchObject({
+      product: { id: product.id, deleted: false },
+      variant: { id: product.variantId, deleted: true },
+    });
+    expect(byId.get(kept)).toMatchObject({ variant: { id: other.id, deleted: false } });
+  });
+
+  // a product with two variants: each batch belongs to one of them, the row names it
+  it('names the variant of each batch, with its place and its article number', async () => {
+    const product = await newProduct();
+    const code = `SKU-${uniqueTag()}`;
+    const second = await createVariant(product.id, { stock: 0, sku: code });
+    const first = await receiveBatch({ variantId: product.variantId }, { quantity: 2 });
+    const next = await receiveBatch({ variantId: second.id }, { quantity: 3 });
+
+    const items = (await batches({ productId: product.id, sortOrder: 'asc' })).json().items;
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: first,
+        variant: await variantRefOf(product.variantId),
+        product: { id: product.id, name: await nameOf(product.id), deleted: false },
+      }),
+      expect.objectContaining({
+        id: next,
+        variant: {
+          id: second.id,
+          position: 2,
+          name: await nameOf(product.id),
+          sku: code,
+          deleted: false,
+        },
+      }),
+    ]);
+  });
+
+  describe('the product and the variant filters', () => {
+    it('keeps the batches of all the variants of a product, or of one of them', async () => {
+      const product = await newProduct();
+      const second = await createVariant(product.id, { stock: 0 });
+      const other = await newProduct();
+      const a = await receiveBatch({ variantId: product.variantId }, { quantity: 1 });
+      const b = await receiveBatch({ variantId: second.id }, { quantity: 1 });
+      await receiveBatch(other.id, { quantity: 1 });
+
+      const ofProduct = await batches({ productId: product.id, sortOrder: 'asc' });
+      const ofFirst = await batches({ variantId: product.variantId });
+      const ofSecond = await batches({ variantId: second.id });
+
+      expect(idsOf(ofProduct)).toEqual([a, b]);
+      expect(idsOf(ofFirst)).toEqual([a]);
+      expect(idsOf(ofSecond)).toEqual([b]);
+      expect(ofProduct.json().total).toBe(2);
+      expect(ofFirst.json().total).toBe(1);
+    });
+
+    it('gives nothing for a variant of another product than the product asked for', async () => {
+      const product = await newProduct();
+      const other = await newProduct();
+      await receiveBatch(product.id, { quantity: 1 });
+
+      const res = await batches({ productId: other.id, variantId: product.variantId });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ items: [], total: 0 });
+    });
+
+    it('lists nothing for a variant without batches', async () => {
+      const product = await newProduct();
+
+      const res = await batches({ variantId: product.variantId });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ items: [], nextCursor: null, total: 0 });
+    });
   });
 
   // the last good day is behind the day of the shop: the units are not sold, they wait for a
@@ -263,7 +378,7 @@ describe('GET /api/admin/stock/batches', () => {
     const product = await newProduct();
     const [today] = await deliver({
       source: 'supplier',
-      items: [{ productId: product.id, quantity: 2, unitCost: 1, expiresAt: shopToday() }],
+      items: [{ variantId: product.variantId, quantity: 2, unitCost: 1, expiresAt: shopToday() }],
     });
 
     const before = (await batches({ productId: product.id })).json().items[0];
@@ -281,8 +396,8 @@ describe('GET /api/admin/stock/batches', () => {
       const [first, second] = await deliver({
         source: 'supplier',
         items: [
-          { productId: product.id, quantity: 1, unitCost: 1 },
-          { productId: other.id, quantity: 1, unitCost: 1 },
+          { variantId: product.variantId, quantity: 1, unitCost: 1 },
+          { variantId: other.variantId, quantity: 1, unitCost: 1 },
         ],
       });
       await receiveBatch(product.id, { quantity: 1 });
@@ -311,7 +426,7 @@ describe('GET /api/admin/stock/batches', () => {
       const left = await receiveBatch(product.id, { quantity: 3 });
       await writeOff({
         reason: 'damaged',
-        items: [{ productId: product.id, batchId: empty, quantity: 1 }],
+        items: [{ variantId: product.variantId, batchId: empty, quantity: 1 }],
       });
 
       const withUnits = await batches({ productId: product.id, inStock: true });
@@ -465,6 +580,8 @@ describe('GET /api/admin/stock/batches', () => {
     ['a delivery that is not a uuid', { deliveryId: 'abc' }],
     ['a day that is not a day', { expiresBy: '2026-13-01' }],
     ['a product id over the range', { productId: 2147483648 }],
+    ['a variant id over the range', { variantId: 2147483648 }],
+    ['a variant id of 0', { variantId: 0 }],
     ['a page of more than 100', { limit: 101 }],
   ])('refuses %s', async (_case, query) => {
     const res = await batches(query);
@@ -496,15 +613,15 @@ describe('GET /api/admin/stock/movements', () => {
       document: 'INV-9',
       note: 'Two lots',
       items: [
-        { productId: product.id, quantity: 2, unitCost: 2, expiresAt: dayOf(10) },
-        { productId: product.id, quantity: 5, unitCost: 1 },
+        { variantId: product.variantId, quantity: 2, unitCost: 2, expiresAt: dayOf(10) },
+        { variantId: product.variantId, quantity: 5, unitCost: 1 },
       ],
     });
     const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 3);
     const writeOffId = await writeOff({
       reason: 'shortage',
       note: 'Inventory',
-      items: [{ productId: product.id, batchId: noEnd, quantity: 1 }],
+      items: [{ variantId: product.variantId, batchId: noEnd, quantity: 1 }],
     });
     await cancelPaid(orderId);
     return { product, soon: soon!, noEnd: noEnd!, orderId, writeOffId };
@@ -513,6 +630,7 @@ describe('GET /api/admin/stock/movements', () => {
   it('puts the deliveries, the sales, the write-offs and the cancels in one list', async () => {
     const { product, soon, noEnd, orderId, writeOffId } = await productWithHistory();
     const name = await nameOf(product.id);
+    const variant = await variantRefOf(product.variantId);
 
     const res = await movements({ productId: product.id, sortOrder: 'asc' });
 
@@ -535,6 +653,7 @@ describe('GET /api/admin/stock/movements', () => {
       kind: 'delivery',
       at: expect.any(String),
       product: { id: product.id, name, deleted: false },
+      variant,
       deliveryId: expect.stringMatching(UUID),
       source: 'supplier',
       supplier: 'Acme',
@@ -543,7 +662,7 @@ describe('GET /api/admin/stock/movements', () => {
       actor: { id: admin.id, role: 'ADMIN' },
     };
     expect(body.items).toEqual([
-      // a line of the admin log for each product of a delivery: here two batches, two lines
+      // a line of the stock log for each batch of a delivery: here two batches, two lines
       {
         ...deliveryLine,
         quantity: 2,
@@ -561,6 +680,7 @@ describe('GET /api/admin/stock/movements', () => {
         kind: 'sale',
         at: expect.any(String),
         product: { id: product.id, name, deleted: false },
+        variant,
         orderId,
         quantity: -3,
         value: -5,
@@ -574,6 +694,7 @@ describe('GET /api/admin/stock/movements', () => {
         kind: 'writeOff',
         at: expect.any(String),
         product: { id: product.id, name, deleted: false },
+        variant,
         writeOffId,
         reason: 'shortage',
         note: 'Inventory',
@@ -587,6 +708,7 @@ describe('GET /api/admin/stock/movements', () => {
         kind: 'cancel',
         at: expect.any(String),
         product: { id: product.id, name, deleted: false },
+        variant,
         orderId,
         quantity: 3,
         value: 5,
@@ -616,7 +738,7 @@ describe('GET /api/admin/stock/movements', () => {
     expect([...times].sort((a, b) => b - a)).toEqual(times);
   });
 
-  it('keeps only the units of a sale of the product asked for', async () => {
+  it('keeps only the units of a sale of the variant asked for', async () => {
     const product = await newProduct(10);
     const other = await newProduct(10);
     await receiveBatch(product.id, { quantity: 2, unitCost: 1 });
@@ -625,11 +747,110 @@ describe('GET /api/admin/stock/movements', () => {
     await placeOrder(app, csrf, buyer, other, 'cart');
     const orderId = await placeOrder(app, csrf, buyer, product, 'paid', 2);
 
-    const res = await movements({ productId: product.id, kind: 'sale' });
+    const res = await movements({ variantId: product.variantId, kind: 'sale' });
 
     expect(res.json().items).toEqual([
       expect.objectContaining({ kind: 'sale', orderId, quantity: -2, value: -2 }),
     ]);
+  });
+
+  // a product with two variants: one delivery of both, one sale of each, one write-off of the
+  // second. The lines name their variants; the filters keep all of the product or one variant
+  describe('with two variants of one product', () => {
+    async function twoVariants() {
+      const product = await newProduct(10);
+      const second = await createVariant(product.id, { stock: 0 });
+      const [a, b] = await deliver({
+        source: 'supplier',
+        items: [
+          { variantId: product.variantId, quantity: 4, unitCost: 1 },
+          { variantId: second.id, quantity: 6, unitCost: 2 },
+        ],
+      });
+      const buyer = await newUser();
+      const saleOfFirst = await placeOrder(app, csrf, buyer, product, 'paid', 1);
+      const saleOfSecond = await placeOrder(
+        app,
+        csrf,
+        buyer,
+        { ...product, variantId: second.id },
+        'paid',
+        2,
+      );
+      const writeOffId = await writeOff({
+        reason: 'damaged',
+        items: [{ variantId: second.id, batchId: b, quantity: 1 }],
+      });
+      return { product, second, a: a!, b: b!, saleOfFirst, saleOfSecond, writeOffId };
+    }
+
+    it('names the variant of each step and keeps the steps of the product or of a variant', async () => {
+      const { product, second, a, b, saleOfFirst, saleOfSecond } = await twoVariants();
+
+      const ofProduct = (await movements({ productId: product.id, sortOrder: 'asc' })).json();
+      const ofFirst = (await movements({ variantId: product.variantId, sortOrder: 'asc' })).json();
+      const ofSecond = (await movements({ variantId: second.id, sortOrder: 'asc' })).json();
+
+      const shape = (items: { kind: string; variant: { id: number } }[]) =>
+        items.map((item) => [item.kind, item.variant.id]);
+      expect(ofProduct.total).toBe(5);
+      expect(shape(ofProduct.items)).toEqual([
+        ['delivery', product.variantId],
+        ['delivery', second.id],
+        ['sale', product.variantId],
+        ['sale', second.id],
+        ['writeOff', second.id],
+      ]);
+      expect(shape(ofFirst.items)).toEqual([
+        ['delivery', product.variantId],
+        ['sale', product.variantId],
+      ]);
+      expect(shape(ofSecond.items)).toEqual([
+        ['delivery', second.id],
+        ['sale', second.id],
+        ['writeOff', second.id],
+      ]);
+      // the sales are told apart by their orders
+      expect(ofFirst.items[1]).toMatchObject({ orderId: saleOfFirst, quantity: -1, value: -1 });
+      expect(ofSecond.items[1]).toMatchObject({ orderId: saleOfSecond, quantity: -2, value: -4 });
+      expect(ofFirst.items[0].batches).toEqual([{ batchId: a, quantity: 4, unitCost: 1 }]);
+      expect(ofSecond.items[0].batches).toEqual([{ batchId: b, quantity: 6, unitCost: 2 }]);
+    });
+
+    it('keeps the steps of the variant a batch belongs to, whatever the product filter', async () => {
+      const { product, second, a, b } = await twoVariants();
+
+      const ofBatch = await movements({ batchId: b, sortOrder: 'asc' });
+      const notTogether = await movements({
+        productId: product.id,
+        variantId: second.id,
+        batchId: a,
+      });
+
+      expect(
+        ofBatch
+          .json()
+          .items.every((item: { variant: { id: number } }) => item.variant.id === second.id),
+      ).toBe(true);
+      expect(notTogether.json()).toMatchObject({ items: [], total: 0 });
+    });
+
+    it('gives the steps of a variant that is taken out of sale, its product still there', async () => {
+      const { product, second } = await twoVariants();
+      await markVariantDeleted(second.id);
+
+      const ofSecond = (await movements({ variantId: second.id })).json();
+
+      expect(ofSecond.total).toBe(3);
+      expect(
+        ofSecond.items.every(
+          (item: { variant: { deleted: boolean }; product: { deleted: boolean } }) =>
+            item.variant.deleted && !item.product.deleted,
+        ),
+      ).toBe(true);
+      const ofProduct = (await movements({ productId: product.id })).json();
+      expect(ofProduct.total).toBe(5);
+    });
   });
 
   describe('the filters', () => {
@@ -788,6 +1009,8 @@ describe('GET /api/admin/stock/movements', () => {
     ['a kind it does not have', { kind: 'gift' }],
     ['a write-off that is not a uuid', { writeOffId: 'abc' }],
     ['an order id over the range', { orderId: 2147483648 }],
+    ['a variant id over the range', { variantId: 2147483648 }],
+    ['a variant id of 0', { variantId: 0 }],
     ['a date that is not a date', { from: 'yesterday' }],
   ])('refuses %s', async (_case, query) => {
     const res = await movements(query);

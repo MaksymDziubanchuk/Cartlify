@@ -8,13 +8,15 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   type TestUser,
 } from '../../helpers/factories.js';
 import { shippingData } from '../../helpers/orders.js';
 
 // a price that changes between the cart and its confirmation, through the routes of products and
 // orders: the confirmation does not take an old price, the cart read again shows the new one and
-// the confirmation takes it; a sale put on meanwhile lowers the total the same way
+// the confirmation takes it; a sale put on meanwhile lowers the total the same way. The price is
+// the price of the variant in the cart: the other variant of the product keeps its own
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
@@ -37,12 +39,12 @@ afterAll(async () => {
 
 const asBuyer = (buyer: TestUser) => withCsrf(csrf, accessCookie(buyer));
 
-async function cartOf(buyer: TestUser, productId: number, quantity: number) {
+async function cartOf(buyer: TestUser, variantId: number, quantity: number) {
   const res = await app.inject({
     method: 'POST',
     url: '/api/orders/current/items',
     headers: asBuyer(buyer),
-    payload: { productId, quantity },
+    payload: { variantId, quantity },
   });
   expect(res.statusCode).toBe(200);
   return res.json() as { id: number; total: number };
@@ -64,16 +66,51 @@ const readCart = (buyer: TestUser) =>
   });
 
 describe('a price that changes before the confirmation', () => {
+  // the price of one variant changes: the cart holds the other one at its own price, the cart read
+  // again shows the new price of the one and the old price of the other
+  it('moves only the position of the variant whose price changed', async () => {
+    const black = await createProduct({ price: 10, stock: 5 });
+    const white = await createVariant(black.id, { price: 20, stock: 5 });
+    const buyer = await createUser();
+    userIds.push(buyer.id);
+    await cartOf(buyer, black.variantId, 1);
+    const cart = await cartOf(buyer, white.id, 1);
+    expect(cart.total).toBe(30);
+
+    const raised = await app.inject({
+      method: 'PATCH',
+      url: `/api/products/${black.id}/variants/${white.id}`,
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: { price: 25 },
+    });
+    expect(raised.statusCode).toBe(200);
+
+    const stale = await confirm(buyer, cart.id);
+    expect(stale.json()).toMatchObject({ errorCode: 'ORDER_PRICES_CHANGED' });
+    const reread = (await readCart(buyer)).json();
+    expect(reread).toMatchObject({ total: 35 });
+    expect(
+      reread.items.map((it: { variant: { id: number }; unitPrice: number }) => [
+        it.variant.id,
+        it.unitPrice,
+      ]),
+    ).toEqual([
+      [black.variantId, 10],
+      [white.id, 25],
+    ]);
+    expect((await confirm(buyer, cart.id)).statusCode).toBe(200);
+  });
+
   it('refuses the old price, and confirms the new one once the cart is read again', async () => {
     const product = await createProduct({ price: 10, stock: 5 });
     const buyer = await createUser();
     userIds.push(buyer.id);
-    const cart = await cartOf(buyer, product.id, 2);
+    const cart = await cartOf(buyer, product.variantId, 2);
     expect(cart.total).toBe(20);
 
     const raised = await app.inject({
       method: 'PATCH',
-      url: `/api/products/${product.id}`,
+      url: `/api/products/${product.id}/variants/${product.variantId}`,
       headers: withCsrf(csrf, accessCookie(admin)),
       payload: { price: 12 },
     });
@@ -95,7 +132,7 @@ describe('a price that changes before the confirmation', () => {
     const product = await createProduct({ price: 40, stock: 5 });
     const buyer = await createUser();
     userIds.push(buyer.id);
-    const cart = await cartOf(buyer, product.id, 1);
+    const cart = await cartOf(buyer, product.variantId, 1);
 
     const sale = await app.inject({
       method: 'PATCH',

@@ -141,7 +141,7 @@ async function consentingUser() {
   return user;
 }
 
-// a cart of the user with one unit of a product, read back for its id
+// a cart of the user with one unit of a variant of a product, read back for its id
 async function cartOf(user: TestUser) {
   const product = await createProduct({ price: 10, stock: 5 });
   const headers = withCsrf(csrf, accessCookie(user));
@@ -149,7 +149,7 @@ async function cartOf(user: TestUser) {
     method: 'POST',
     url: '/api/orders/current/items',
     headers,
-    payload: { productId: product.id, quantity: 1 },
+    payload: { variantId: product.variantId, quantity: 1 },
   });
   expect(added.statusCode).toBe(200);
   const cart = await app.inject({

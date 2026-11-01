@@ -16,9 +16,10 @@ import {
 import { placeOrder } from '../../../helpers/orders.js';
 import { placePaidOrder } from '../../../helpers/payments.js';
 
-// two sorts of the catalog for everybody: by the discount (the products on sale first, the biggest
-// discount first going desc, then the rest by popularity) and by the units sold in a period (the
-// orders paid in it that were not cancelled)
+// two sorts of the catalog for everybody: by the discount (the variants on sale first, the biggest
+// discount first going desc, then the rest by popularity; the rows are variants) and by the units
+// sold in a period (the orders paid in it that were not cancelled; the rows are products). Every
+// product here has one variant
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
@@ -46,7 +47,7 @@ const list = (query: Record<string, string>, actor?: TestUser) =>
   });
 
 const idsOf = (res: LightMyRequestResponse) =>
-  (res.json().items as Array<{ id: number }>).map((item) => item.id);
+  (res.json().items as Array<{ product: { id: number } }>).map((item) => item.product.id);
 
 // the ids of every page, walked by the cursor, two products to a page
 async function walk(query: Record<string, string>, actor?: TestUser): Promise<number[]> {
@@ -221,6 +222,30 @@ describe('GET /api/products?sort=sales', () => {
         cancelled.id,
       ]);
     }
+  });
+
+  // the cursor held the units of the last product of the page in plain base64url: a guest read the
+  // sales of every product for any period from it, and a value written into one moved the page
+  it('keeps the units sold out of the cursor, and a value put in one is not read', async () => {
+    const first = await list({ categoryIds, sort: 'sales', order: 'desc', limit: '1', ...period });
+    const cursor = first.json().nextCursor as string;
+    const payload = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+
+    expect(idsOf(first)).toEqual([best.id]);
+    expect(payload.v).toBeNull();
+
+    const forged = Buffer.from(JSON.stringify({ ...payload, v: 0 })).toString('base64url');
+    const next = await list({
+      categoryIds,
+      sort: 'sales',
+      order: 'desc',
+      limit: '1',
+      ...period,
+      cursor: forged,
+    });
+
+    expect(next.statusCode).toBe(200);
+    expect(idsOf(next)).toEqual([some.id]);
   });
 
   it('counts the days before today by default, and the orders paid in the period only', async () => {

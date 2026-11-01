@@ -16,7 +16,7 @@ import {
   buildAddressData,
   isRecipientName,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
 } from './helpers/index.js';
 import { sendOrderNoticeEmail } from './helpers/sendOrderNoticeEmail.helper.js';
@@ -123,7 +123,7 @@ export async function updateOrderDelivery(
       const row = await readOrderResponse(db, orderId);
       if (!row) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_DELIVERY_UPDATE' });
 
-      return mapOrderRowToResponse(row, await expiredOfOrders(db, [row]), 'admin');
+      return mapOrderRowToResponse(row, await orderContextOf(db, [row]), 'admin');
     });
 
     // the change is committed; the mail never undoes it, a failure is only logged

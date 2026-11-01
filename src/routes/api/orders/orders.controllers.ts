@@ -46,10 +46,10 @@ const postCurrentItems: ControllerRouter<{}, CurrentAddItemBodyDto, {}, OrderRes
   reply,
 ) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const { productId, quantity } = req.body;
+  const { variantId, quantity } = req.body;
 
   const args = pickDefined<CurrentAddItemDto>(
-    { actorId, actorRole, productId, quantity },
+    { actorId, actorRole, variantId, quantity },
     { orderId: undefined },
   );
 
@@ -127,6 +127,7 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     updatedFrom,
     updatedTo,
     productId,
+    variantId,
     userId,
     q,
     format,
@@ -162,6 +163,7 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
       updatedFrom: updatedFrom ? new Date(updatedFrom) : undefined,
       updatedTo: updatedTo ? new Date(updatedTo) : undefined,
       productId,
+      variantId,
       userId,
       q,
       format,
@@ -285,10 +287,10 @@ const postOrderItems: ControllerRouter<
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const orderId = Number(req.params.orderId);
-  const { productId, quantity } = req.body;
+  const { variantId, quantity } = req.body;
 
   const args = pickDefined<CurrentAddItemDto>(
-    { actorId, actorRole, productId, quantity },
+    { actorId, actorRole, variantId, quantity },
     { orderId },
   );
 

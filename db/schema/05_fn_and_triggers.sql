@@ -532,7 +532,7 @@ BEGIN
 END;
 $$;
 
--- Stock and batches. The stock of a product is what its batches have left; every step that
+-- Stock and batches. The stock of a variant is what its batches have left; every step that
 -- changes one changes the other in the same transaction: a batch taken in, a sale, a write-off,
 -- a cancel. Only the functions below change them, the batches and the stock are closed for plain
 -- changes (db/03). Costs go into the admin log as text without a trailing zero (trim_scale:
@@ -552,16 +552,132 @@ SET
   );
 $$;
 
--- Counts the units of a product that sit in batches whose last good day is over. They are not
+-- The names of variants and the values that tell them apart: the one rule of the name. A name is
+-- the name of the product, then a dash, then the labels of the characteristics that DIFFER between
+-- the variants of the product (a book with one variant has the plain name of the product). The
+-- variants compared are the visible ones (for sale and showing a picture); a variant that is not
+-- visible itself is compared with the live ones (not taken out of sale) and with itself, so an admin
+-- reads a name for it as well. A characteristic differs when the variants compared do not all hold
+-- the same value of it (a variant that holds none counts as another value). The labels come main
+-- characteristics first, then by the place of the group and of the characteristic in the directory:
+-- a text as it is, a number without trailing zeros and with its unit ("256 GB"), a choice by the
+-- name of its value (several: the names joined with a comma in the order of the values), yes/no as
+-- "<characteristic>: yes|no" in the name and as yes|no in the values. "values" is the same list as
+-- json, [{attributeId, name, value}]. Order items keep a name (order_items_before_ins_upd and
+-- confirm_order), the card shows the same one: the application reads names only here. Runs with the
+-- rights of the caller: all the tables it reads are read by everybody.
+CREATE OR REPLACE FUNCTION cartlify.variant_names (p_variant_ids integer[]) RETURNS TABLE (variant_id integer, name text, "values" jsonb) LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  WITH asked AS (
+    SELECT v.id, v."productId" AS product_id, p.name AS product_name,
+           (v."deletedAt" IS NULL AND EXISTS (
+             SELECT 1 FROM cartlify.variant_images AS i WHERE i."variantId" = v.id
+           )) AS visible
+    FROM cartlify.product_variants AS v
+    JOIN cartlify.products AS p ON p.id = v."productId"
+    WHERE v.id = ANY (p_variant_ids)
+  ),
+  siblings AS (
+    SELECT s.id, s."productId" AS product_id, (s."deletedAt" IS NULL) AS live,
+           (s."deletedAt" IS NULL AND EXISTS (
+             SELECT 1 FROM cartlify.variant_images AS i WHERE i."variantId" = s.id
+           )) AS visible
+    FROM cartlify.product_variants AS s
+    WHERE s."productId" IN (SELECT product_id FROM asked)
+  ),
+  compared AS (
+    SELECT a.id AS variant_id, s.id AS member_id
+    FROM asked AS a
+    JOIN siblings AS s ON s.product_id = a.product_id
+    WHERE s.id = a.id OR CASE WHEN a.visible THEN s.visible ELSE s.live END
+  ),
+  sizes AS (
+    SELECT c.variant_id, count(*) AS n FROM compared AS c GROUP BY c.variant_id
+  ),
+  held AS (
+    SELECT x."variantId" AS variant_id, x."attributeId" AS attribute_id,
+           string_agg(
+             CASE
+               WHEN x."textValue" IS NOT NULL THEN 't' || x."textValue"
+               WHEN x."numberValue" IS NOT NULL THEN 'n' || trim_scale(x."numberValue")::text
+               WHEN x."boolValue" IS NOT NULL THEN 'b' || x."boolValue"::text
+               ELSE 'o' || x."optionId"::text
+             END,
+             ',' ORDER BY x."optionId"
+           ) AS signature
+    FROM cartlify.variant_attribute_values AS x
+    WHERE x."variantId" IN (SELECT id FROM siblings)
+    GROUP BY x."variantId", x."attributeId"
+  ),
+  differing AS (
+    SELECT c.variant_id, h.attribute_id
+    FROM compared AS c
+    JOIN held AS h ON h.variant_id = c.member_id
+    JOIN sizes AS z ON z.variant_id = c.variant_id
+    GROUP BY c.variant_id, h.attribute_id, z.n
+    HAVING count(DISTINCT h.signature) > 1 OR count(*) < z.n
+  ),
+  shown AS (
+    SELECT d.variant_id, a.id AS attribute_id, a.name AS attribute_name, a.type,
+           a."isMain" AS is_main, g.position AS group_position, a.position AS attribute_position,
+           own.label
+    FROM differing AS d
+    JOIN cartlify.attributes AS a ON a.id = d.attribute_id
+    JOIN cartlify.attribute_groups AS g ON g.id = a."groupId"
+    CROSS JOIN LATERAL (
+      SELECT CASE
+               WHEN count(*) = 0 THEN NULL
+               WHEN a.type = 'text' THEN max(x."textValue")
+               WHEN a.type = 'number' THEN trim_scale(max(x."numberValue"))::text || COALESCE(' ' || a.unit, '')
+               WHEN a.type = 'boolean' THEN CASE WHEN bool_or(x."boolValue") THEN 'yes' ELSE 'no' END
+               ELSE string_agg(o.name, ', ' ORDER BY o.position, o.id)
+             END AS label
+      FROM cartlify.variant_attribute_values AS x
+      LEFT JOIN cartlify.attribute_options AS o ON o.id = x."optionId"
+      WHERE x."variantId" = d.variant_id AND x."attributeId" = d.attribute_id
+    ) AS own
+    WHERE own.label IS NOT NULL
+  ),
+  folded AS (
+    SELECT s.variant_id,
+           jsonb_agg(
+             jsonb_build_object('attributeId', s.attribute_id, 'name', s.attribute_name, 'value', s.label)
+             ORDER BY s.is_main DESC, s.group_position, s.attribute_position, s.attribute_id
+           ) AS values_json,
+           string_agg(
+             CASE WHEN s.type = 'boolean' THEN s.attribute_name || ': ' || s.label ELSE s.label END,
+             ', ' ORDER BY s.is_main DESC, s.group_position, s.attribute_position, s.attribute_id
+           ) AS labels
+    FROM shown AS s
+    GROUP BY s.variant_id
+  )
+  SELECT a.id,
+         a.product_name || COALESCE(' ' || chr(8212) || ' ' || f.labels, ''),
+         COALESCE(f.values_json, '[]'::jsonb)
+  FROM asked AS a
+  LEFT JOIN folded AS f ON f.variant_id = a.id;
+$$;
+
+-- The name of one variant: the same rule as variant_names (its single implementation).
+CREATE OR REPLACE FUNCTION cartlify.variant_display_name (p_variant_id integer) RETURNS text LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT n.name FROM cartlify.variant_names(ARRAY[p_variant_id]) AS n;
+$$;
+
+-- Counts the units of a variant that sit in batches whose last good day is over. They are not
 -- sold, so they are no free units; an admin writes them off. Runs as the owner: a buyer sees
 -- no batch.
-CREATE OR REPLACE FUNCTION cartlify.product_expired_units (p_product_id integer) RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER
+CREATE OR REPLACE FUNCTION cartlify.variant_expired_units (p_variant_id integer) RETURNS integer LANGUAGE sql STABLE SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
   SELECT COALESCE(SUM(b.remaining), 0)::integer
   FROM cartlify.product_batches AS b
-  WHERE b."productId" = p_product_id
+  WHERE b."variantId" = p_variant_id
     AND b.remaining > 0
     AND b."expiresAt" < cartlify.shop_today();
 $$;
@@ -582,15 +698,31 @@ SET
   GROUP BY i."productId";
 $$;
 
--- Takes units out of the batches of a product: first the batch that ends first, then the ones
+-- TEMPORARY: take_from_batches took a product, and a parameter cannot be renamed in place. Remove
+-- this block once the structure of dev and prod matches the snapshot.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc AS p
+    WHERE p.pronamespace = 'cartlify'::regnamespace
+      AND p.proname = 'take_from_batches'
+      AND p.proargnames[1] = 'p_product_id'
+  ) THEN
+    DROP FUNCTION cartlify.take_from_batches (integer, integer, boolean);
+  END IF;
+END
+$$;
+
+-- Takes units out of the batches of a variant: first the batch that ends first, then the ones
 -- without an end, the oldest first. Returns what each batch gave and its cost of a unit. A sale
 -- skips the batches that are over (p_skip_expired), a write-off takes them first. Raises
--- STOCK_QTY_INVALID for a quantity below 1 and PRODUCT_BATCHES_SHORT when the batches hold
+-- STOCK_QTY_INVALID for a quantity below 1 and VARIANT_BATCHES_SHORT when the batches hold
 -- less than asked. Internal step: runs with the caller rights, only the system functions
 -- reach the batches (db/03); the app has no execute right (db/01). The caller holds the lock of
--- the product row.
+-- the variant row.
 CREATE OR REPLACE FUNCTION cartlify.take_from_batches (
-  p_product_id integer,
+  p_variant_id integer,
   p_qty integer,
   p_skip_expired boolean
 ) RETURNS TABLE (
@@ -615,7 +747,7 @@ BEGIN
   FOR r IN
     SELECT b.id, b.remaining, b."unitCost"
     FROM cartlify.product_batches AS b
-    WHERE b."productId" = p_product_id
+    WHERE b."variantId" = p_variant_id
       AND b.remaining > 0
       AND (NOT p_skip_expired OR b."expiresAt" IS NULL OR b."expiresAt" >= v_today)
     ORDER BY b."expiresAt" ASC NULLS LAST, b."createdAt" ASC, b.id ASC
@@ -639,58 +771,168 @@ BEGIN
 
   -- the stock is the sum of the batches: less in them than the stock says is a broken state
   IF v_left > 0 THEN
-    RAISE EXCEPTION 'PRODUCT_BATCHES_SHORT';
+    RAISE EXCEPTION 'VARIANT_BATCHES_SHORT';
   END IF;
 END;
 $$;
 
--- Puts the units of a cancelled paid order back into the batches they came from. Raises
--- ORDER_ALLOCATIONS_MISSING when the allocations do not cover the items. Internal step: runs
--- with the caller rights; cancel_paid_order calls it as the owner. The lines of the allocations
--- stay: the reports take the cost back from the time of the cancel.
+-- Writes a line of the stock log: the change of the stock of a variant and what made it
+-- (p_event, see src/config/journalEvents.ts), with the stock after it and the operation the change
+-- belongs to (a delivery, a write-off or an order; at most one of the three). p_meta is an array of
+-- {field, old, new} objects (STOCK_LOG_CHANGES_NOT_ARRAY): the batches with their costs, the reason
+-- of a write-off, the supplier, the invoice and the note of a delivery. Raises VARIANT_NOT_FOUND.
+-- The actor is the one of the context; the system (the admin context without a user id, such as
+-- the payment webhook) has none, and neither has its role. The time is utc without a zone, as the
+-- other dates the database writes (orders.paidAt); the address and the browser of the request come
+-- from the context of the transaction (empty without a request). Internal step: runs with the
+-- caller rights, and the policy of the log (stock_log_insert_owner, db/03) lets only the system
+-- functions that run as the owner write; the app has no execute right (db/01). Each function that
+-- changes the stock calls it in the same transaction, a variant at a time.
+CREATE OR REPLACE FUNCTION cartlify.log_stock_change (
+  p_variant_id integer,
+  p_event text,
+  p_quantity_change integer,
+  p_stock_after integer,
+  p_meta jsonb,
+  p_delivery_id uuid,
+  p_write_off_id uuid,
+  p_order_id integer
+) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_product_id integer;
+  v_actor_id   integer := cartlify.current_actor_id();
+BEGIN
+  IF p_meta IS NOT NULL AND jsonb_typeof(p_meta) <> 'array' THEN
+    RAISE EXCEPTION 'STOCK_LOG_CHANGES_NOT_ARRAY'
+      USING HINT = 'expected an array of {field, old, new} objects';
+  END IF;
+
+  SELECT v."productId"
+  INTO v_product_id
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
+  END IF;
+
+  INSERT INTO cartlify.stock_log (
+    "actorId",
+    "actorRole",
+    "productId",
+    "variantId",
+    event,
+    "quantityChange",
+    "stockAfter",
+    meta,
+    "deliveryId",
+    "writeOffId",
+    "orderId",
+    ip,
+    "userAgent",
+    "createdAt"
+  )
+  VALUES (
+    v_actor_id,
+    CASE WHEN v_actor_id IS NULL THEN NULL ELSE cartlify.current_actor_role() END,
+    v_product_id,
+    p_variant_id,
+    p_event,
+    p_quantity_change,
+    p_stock_after,
+    p_meta,
+    p_delivery_id,
+    p_write_off_id,
+    p_order_id,
+    nullif(current_setting('cartlify.request_ip', true), ''),
+    nullif(current_setting('cartlify.request_user_agent', true), ''),
+    now() AT TIME ZONE 'UTC'
+  );
+END;
+$$;
+
+-- Puts the units of a cancelled paid order back into the batches they came from, and writes a line
+-- of the stock log for each variant (stock.cancel_return, with the order, in the name of the
+-- admin who cancels). Raises ORDER_ALLOCATIONS_MISSING when the allocations do not cover the
+-- items. Internal step: runs with the caller rights; cancel_paid_order calls it as the owner. The
+-- lines of the allocations stay: the reports take the cost back from the time of the cancel.
 CREATE OR REPLACE FUNCTION cartlify.return_order_stock (p_order_id integer) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
   r record;
+  v_stock   integer;
+  v_batches jsonb;
 BEGIN
   -- every unit a paid order sold came from a batch; an order paid before the batches has none
   IF EXISTS (
     SELECT 1
     FROM (
-      SELECT oi."productId" AS product_id, SUM(oi.quantity) AS qty
+      SELECT oi."variantId" AS variant_id, SUM(oi.quantity) AS qty
       FROM cartlify.order_items AS oi
       WHERE oi."orderId" = p_order_id
-      GROUP BY oi."productId"
+      GROUP BY oi."variantId"
     ) AS i
     LEFT JOIN (
-      SELECT a."productId" AS product_id, SUM(a.quantity) AS qty
+      SELECT a."variantId" AS variant_id, SUM(a.quantity) AS qty
       FROM cartlify.order_batch_allocations AS a
       WHERE a."orderId" = p_order_id
-      GROUP BY a."productId"
-    ) AS a ON a.product_id = i.product_id
+      GROUP BY a."variantId"
+    ) AS a ON a.variant_id = i.variant_id
     WHERE a.qty IS DISTINCT FROM i.qty
   ) THEN
     RAISE EXCEPTION 'ORDER_ALLOCATIONS_MISSING';
   END IF;
 
-  -- the products in a deterministic lock order by id, then their batches
+  -- the variants in a deterministic lock order by id, then their batches
   FOR r IN
-    SELECT a."productId" AS product_id,
+    SELECT a."variantId" AS variant_id,
            SUM(a.quantity)::integer AS qty
     FROM cartlify.order_batch_allocations AS a
     WHERE a."orderId" = p_order_id
-    GROUP BY a."productId"
-    ORDER BY a."productId"
+    GROUP BY a."variantId"
+    ORDER BY a."variantId"
   LOOP
-    UPDATE cartlify.products AS p
-    SET "stock" = p."stock" + r.qty
-    WHERE p.id = r.product_id;
+    UPDATE cartlify.product_variants AS v
+    SET "stock" = v."stock" + r.qty
+    WHERE v.id = r.variant_id
+    RETURNING v."stock" INTO v_stock;
 
     IF NOT FOUND THEN
-      RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+      RAISE EXCEPTION 'VARIANT_NOT_FOUND';
     END IF;
+
+    -- the batches the units go back to, in the order the sale took them
+    SELECT jsonb_agg(
+             jsonb_build_object(
+               'batchId', a."batchId",
+               'quantity', a.quantity,
+               'unitCost', trim_scale(b."unitCost")::text
+             )
+             ORDER BY a.id
+           )
+    INTO v_batches
+    FROM cartlify.order_batch_allocations AS a
+    JOIN cartlify.product_batches AS b ON b.id = a."batchId"
+    WHERE a."orderId" = p_order_id
+      AND a."variantId" = r.variant_id;
+
+    PERFORM cartlify.log_stock_change(
+      r.variant_id,
+      'stock.cancel_return',
+      r.qty,
+      v_stock,
+      jsonb_build_array(
+        jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_batches)
+      ),
+      NULL,
+      NULL,
+      p_order_id
+    );
   END LOOP;
 
   UPDATE cartlify.product_batches AS b
@@ -701,15 +943,15 @@ BEGIN
 END;
 $$;
 
--- Takes in a batch of a product and returns its id: the stock grows by it, and the admin log
--- keeps a line (STOCK_DELIVERY) with the delivery it came with, the supplier, the invoice and
--- the note. System function: runs as the owner, the batches and the stock are closed for plain
+-- Takes in a batch of a variant and returns its id: the stock grows by it, and the stock log
+-- keeps a line (stock.delivery) with the delivery it came with, the batch with its cost, the
+-- supplier, the invoice and the note. The line of the admin log, one for the whole delivery, is
+-- the server's. System function: runs as the owner, the batches and the stock are closed for plain
 -- changes (db/03). Callable only by a signed-in admin or root, the line of the log is in their
--- name (STOCK_RECEIVE_FORBIDDEN). A product removed from the catalog takes in nothing
--- (PRODUCT_NOT_FOUND).
-CREATE OR REPLACE FUNCTION cartlify.receive_product_batch (
+-- name (STOCK_RECEIVE_FORBIDDEN). A variant that is deleted takes in nothing (VARIANT_NOT_FOUND).
+CREATE OR REPLACE FUNCTION cartlify.receive_variant_batch (
   p_delivery_id uuid,
-  p_product_id integer,
+  p_variant_id integer,
   p_source cartlify."StockSource",
   p_quantity integer,
   p_unit_cost numeric,
@@ -729,6 +971,7 @@ DECLARE
   v_document text := NULLIF(btrim(p_document), '');
   v_note     text := NULLIF(btrim(p_note), '');
   v_stock    integer;
+  v_product_id integer;
   v_batch_id integer;
 BEGIN
   IF v_actor_id IS NULL OR NOT cartlify.is_admin() THEN
@@ -759,20 +1002,21 @@ BEGIN
     RAISE EXCEPTION 'STOCK_TEXT_TOO_LONG';
   END IF;
 
-  -- lock product row
-  SELECT p."stock"
-  INTO v_stock
-  FROM cartlify.products AS p
-  WHERE p.id = p_product_id
-    AND p."deletedAt" IS NULL
+  -- lock variant row
+  SELECT v."stock", v."productId"
+  INTO v_stock, v_product_id
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id
+    AND v."deletedAt" IS NULL
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
   INSERT INTO cartlify.product_batches (
     "productId",
+    "variantId",
     "deliveryId",
     source,
     "supplierBatchNumber",
@@ -782,7 +1026,8 @@ BEGIN
     "expiresAt"
   )
   VALUES (
-    p_product_id,
+    v_product_id,
+    p_variant_id,
     p_delivery_id,
     p_source,
     v_number,
@@ -793,32 +1038,28 @@ BEGIN
   )
   RETURNING id INTO v_batch_id;
 
-  UPDATE cartlify.products AS p
+  UPDATE cartlify.product_variants AS v
   SET "stock" = v_stock + p_quantity
-  WHERE p.id = p_product_id;
+  WHERE v.id = p_variant_id;
 
-  PERFORM cartlify.log_admin_action(
-    v_actor_id,
-    cartlify.current_actor_role(),
-    'product',
-    p_product_id,
-    'STOCK_DELIVERY',
+  PERFORM cartlify.log_stock_change(
+    p_variant_id,
     'stock.delivery',
+    p_quantity,
+    v_stock + p_quantity,
     jsonb_build_array(
-      jsonb_build_object('field', 'stock', 'old', v_stock, 'new', v_stock + p_quantity),
       jsonb_build_object(
-        'field', 'batch',
+        'field', 'batches',
         'old', NULL,
-        'new', jsonb_build_object(
-          'id', v_batch_id,
-          'source', p_source,
-          'quantity', p_quantity,
-          'unitCost', trim_scale(p_unit_cost)::text,
-          'expiresAt', to_char(p_expires_at, 'YYYY-MM-DD'),
-          'supplierBatchNumber', v_number
+        'new', jsonb_build_array(
+          jsonb_build_object(
+            'batchId', v_batch_id,
+            'quantity', p_quantity,
+            'unitCost', trim_scale(p_unit_cost)::text
+          )
         )
       ),
-      jsonb_build_object('field', 'delivery', 'old', NULL, 'new', p_delivery_id)
+      jsonb_build_object('field', 'source', 'old', NULL, 'new', p_source)
     )
     || CASE WHEN v_supplier IS NULL THEN '[]'::jsonb
          ELSE jsonb_build_array(jsonb_build_object('field', 'supplier', 'old', NULL, 'new', v_supplier))
@@ -828,23 +1069,26 @@ BEGIN
        END
     || CASE WHEN v_note IS NULL THEN '[]'::jsonb
          ELSE jsonb_build_array(jsonb_build_object('field', 'note', 'old', NULL, 'new', v_note))
-       END
+       END,
+    p_delivery_id,
+    NULL,
+    NULL
   );
 
   RETURN v_batch_id;
 END;
 $$;
 
--- Writes off free units of a product: from the batch an admin names, or from the batches in the
--- order a sale takes them (the one that ends first, then the oldest). The admin log keeps a line
--- (STOCK_WRITE_OFF) with the reason, the batches and their costs; the batches also come back as
--- the result. The units that waiting orders hold are never written off
--- (INSUFFICIENT_AVAILABLE_STOCK). A product removed from the catalog keeps its units until they
+-- Writes off free units of a variant: from the batch an admin names, or from the batches in the
+-- order a sale takes them (the one that ends first, then the oldest). The stock log keeps a line
+-- (stock.write_off) with the reason, the batches and their costs; the batches also come back as
+-- the result. The line of the admin log, one for the whole write-off, is the server's. The units that waiting orders hold are never written off
+-- (INSUFFICIENT_AVAILABLE_STOCK). A variant that is deleted keeps its units until they
 -- are written off, so it can be written off too. System function: runs as the owner; callable
 -- only by a signed-in admin or root (STOCK_WRITE_OFF_FORBIDDEN).
-CREATE OR REPLACE FUNCTION cartlify.write_off_product_stock (
+CREATE OR REPLACE FUNCTION cartlify.write_off_variant_stock (
   p_write_off_id uuid,
-  p_product_id integer,
+  p_variant_id integer,
   p_batch_id integer,
   p_quantity integer,
   p_reason text,
@@ -889,15 +1133,15 @@ BEGIN
     RAISE EXCEPTION 'WRITE_OFF_QUANTITY_INVALID';
   END IF;
 
-  -- lock product row
-  SELECT p."stock", p."reservedStock"
+  -- lock variant row
+  SELECT v."stock", v."reservedStock"
   INTO v_stock, v_reserved
-  FROM cartlify.products AS p
-  WHERE p.id = p_product_id
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
   IF v_stock - v_reserved < p_quantity THEN
@@ -909,7 +1153,7 @@ BEGIN
     INTO v_remaining, v_cost, v_expires
     FROM cartlify.product_batches AS b
     WHERE b.id = p_batch_id
-      AND b."productId" = p_product_id
+      AND b."variantId" = p_variant_id
     FOR UPDATE;
 
     IF NOT FOUND THEN
@@ -924,7 +1168,7 @@ BEGIN
     -- only the good units that no order holds. A batch that is over, and units taken without a
     -- named batch (the ones that are over go first), cannot cut into the reserve.
     IF (v_expires IS NULL OR v_expires >= cartlify.shop_today())
-       AND v_stock - cartlify.product_expired_units(p_product_id) - v_reserved < p_quantity THEN
+       AND v_stock - cartlify.variant_expired_units(p_variant_id) - v_reserved < p_quantity THEN
       RAISE EXCEPTION 'INSUFFICIENT_AVAILABLE_STOCK';
     END IF;
 
@@ -949,63 +1193,62 @@ BEGIN
              ORDER BY t.n
            )
     INTO v_taken
-    FROM cartlify.take_from_batches(p_product_id, p_quantity, false)
+    FROM cartlify.take_from_batches(p_variant_id, p_quantity, false)
       WITH ORDINALITY AS t(taken_batch_id, taken_quantity, taken_unit_cost, n);
   END IF;
 
-  UPDATE cartlify.products AS p
+  UPDATE cartlify.product_variants AS v
   SET "stock" = v_stock - p_quantity
-  WHERE p.id = p_product_id;
+  WHERE v.id = p_variant_id;
 
-  PERFORM cartlify.log_admin_action(
-    v_actor_id,
-    cartlify.current_actor_role(),
-    'product',
-    p_product_id,
-    'STOCK_WRITE_OFF',
+  PERFORM cartlify.log_stock_change(
+    p_variant_id,
     'stock.write_off',
+    -p_quantity,
+    v_stock - p_quantity,
     jsonb_build_array(
-      jsonb_build_object('field', 'stock', 'old', v_stock, 'new', v_stock - p_quantity),
       jsonb_build_object('field', 'reason', 'old', NULL, 'new', p_reason),
-      jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_taken),
-      jsonb_build_object('field', 'writeOff', 'old', NULL, 'new', p_write_off_id)
+      jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_taken)
     )
     || CASE WHEN v_note IS NULL THEN '[]'::jsonb
          ELSE jsonb_build_array(jsonb_build_object('field', 'note', 'old', NULL, 'new', v_note))
-       END
+       END,
+    NULL,
+    p_write_off_id,
+    NULL
   );
 
   RETURN v_taken;
 END;
 $$;
 
--- Checks that the stock of a product equals what its batches have left. It runs at the end of
+-- Checks that the stock of a variant equals what its batches have left. It runs at the end of
 -- the transaction (the triggers below are deferred), because a step changes the stock and the
--- batches one after the other. Raises PRODUCT_STOCK_BATCHES_MISMATCH (check_violation). A
--- product with stock and no batches (a copy of prod restored to dev, a reseed) fails at the
--- next change of its stock; db/data/clear_orders_and_stock.sql wipes such data. A product
+-- batches one after the other. Raises VARIANT_STOCK_BATCHES_MISMATCH (check_violation). A
+-- variant with stock and no batches (a copy of prod restored to dev, a reseed) fails at the
+-- next change of its stock; db/data/clear_orders_and_stock.sql wipes such data. A variant
 -- removed for good in the same transaction has nothing to check. Runs as the owner: it reads
 -- the batches.
-CREATE OR REPLACE FUNCTION cartlify.check_product_stock_batches () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+CREATE OR REPLACE FUNCTION cartlify.check_variant_stock_batches () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_product_id integer;
+  v_variant_id integer;
   v_stock      integer;
 BEGIN
-  IF TG_TABLE_NAME = 'products' THEN
-    v_product_id := NEW.id;
+  IF TG_TABLE_NAME = 'product_variants' THEN
+    v_variant_id := NEW.id;
   ELSE
-    v_product_id := NEW."productId";
+    v_variant_id := NEW."variantId";
   END IF;
 
-  SELECT p."stock"
+  SELECT v."stock"
   INTO v_stock
-  FROM cartlify.products AS p
-  WHERE p.id = v_product_id;
+  FROM cartlify.product_variants AS v
+  WHERE v.id = v_variant_id;
 
-  -- a product removed for good in the same transaction takes its batches with it
+  -- a variant removed for good in the same transaction takes its batches with it
   IF NOT FOUND THEN
     RETURN NULL;
   END IF;
@@ -1013,9 +1256,9 @@ BEGIN
   IF v_stock <> (
     SELECT COALESCE(SUM(b.remaining), 0)
     FROM cartlify.product_batches AS b
-    WHERE b."productId" = v_product_id
+    WHERE b."variantId" = v_variant_id
   ) THEN
-    RAISE EXCEPTION 'PRODUCT_STOCK_BATCHES_MISMATCH'
+    RAISE EXCEPTION 'VARIANT_STOCK_BATCHES_MISMATCH'
       USING ERRCODE = 'check_violation';
   END IF;
 
@@ -1024,13 +1267,13 @@ END;
 $$;
 
 -- The check runs after a change of the stock and after a change of the batches.
-DROP TRIGGER IF EXISTS trg_products_stock_batches ON cartlify.products;
+DROP TRIGGER IF EXISTS trg_product_variants_stock_batches ON cartlify.product_variants;
 
-CREATE CONSTRAINT TRIGGER trg_products_stock_batches
-AFTER INSERT OR UPDATE OF "stock" ON cartlify.products
+CREATE CONSTRAINT TRIGGER trg_product_variants_stock_batches
+AFTER INSERT OR UPDATE OF "stock" ON cartlify.product_variants
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-EXECUTE FUNCTION cartlify.check_product_stock_batches ();
+EXECUTE FUNCTION cartlify.check_variant_stock_batches ();
 
 DROP TRIGGER IF EXISTS trg_product_batches_stock ON cartlify.product_batches;
 
@@ -1038,21 +1281,21 @@ CREATE CONSTRAINT TRIGGER trg_product_batches_stock
 AFTER INSERT OR UPDATE OF remaining ON cartlify.product_batches
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
-EXECUTE FUNCTION cartlify.check_product_stock_batches ();
+EXECUTE FUNCTION cartlify.check_variant_stock_batches ();
 
--- Reserves units of a product for an order that is being confirmed. Free units are the stock
--- minus the reserve minus the units of batches that are over. Raises PRODUCT_NOT_FOUND (also
--- for a product removed from the catalog) and INSUFFICIENT_AVAILABLE_STOCK. Internal step: runs
--- with caller rights; trg_products_update_columns lets only the steps of the database change the
--- stock columns, and the app has no execute right (db/01); confirm_order and pay_order call it as
--- the owner.
-CREATE OR REPLACE FUNCTION cartlify.reserve_product_stock (p_product_id int, p_qty int) RETURNS void LANGUAGE plpgsql
+-- Reserves units of a variant for an order that is being confirmed. Free units are the stock
+-- minus the reserve minus the units of batches that are over. Raises VARIANT_NOT_FOUND (also
+-- for a variant that is deleted) and INSUFFICIENT_AVAILABLE_STOCK. Internal step: runs
+-- with caller rights; trg_product_variants_update_columns lets only the steps of the database
+-- change the stock columns, and the app has no execute right (db/01); confirm_order and
+-- pay_order call it as the owner.
+CREATE OR REPLACE FUNCTION cartlify.reserve_variant_stock (p_variant_id int, p_qty int) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
 BEGIN
-  IF p_product_id IS NULL OR p_product_id <= 0 THEN
-    RAISE EXCEPTION 'PRODUCT_ID_INVALID';
+  IF p_variant_id IS NULL OR p_variant_id <= 0 THEN
+    RAISE EXCEPTION 'VARIANT_ID_INVALID';
   END IF;
 
   IF p_qty IS NULL OR p_qty <= 0 THEN
@@ -1060,21 +1303,21 @@ BEGIN
   END IF;
 
   -- reserve only available stock: the units of batches that are over are not sold
-  UPDATE cartlify.products p
-  SET "reservedStock" = p."reservedStock" + p_qty
-  WHERE p.id = p_product_id
-    AND p."deletedAt" IS NULL
-    AND (p.stock - p."reservedStock" - cartlify.product_expired_units(p.id)) >= p_qty;
+  UPDATE cartlify.product_variants v
+  SET "reservedStock" = v."reservedStock" + p_qty
+  WHERE v.id = p_variant_id
+    AND v."deletedAt" IS NULL
+    AND (v.stock - v."reservedStock" - cartlify.variant_expired_units(v.id)) >= p_qty;
 
-  -- no row changed: tell a missing product from a lack of free units
+  -- no row changed: tell a missing variant from a lack of free units
   IF NOT FOUND THEN
     IF NOT EXISTS (
       SELECT 1
-      FROM cartlify.products p
-      WHERE p.id = p_product_id
-        AND p."deletedAt" IS NULL
+      FROM cartlify.product_variants v
+      WHERE v.id = p_variant_id
+        AND v."deletedAt" IS NULL
     ) THEN
-      RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+      RAISE EXCEPTION 'VARIANT_NOT_FOUND';
     END IF;
 
     RAISE EXCEPTION 'INSUFFICIENT_AVAILABLE_STOCK';
@@ -1083,35 +1326,35 @@ END;
 $$;
 
 -- Releases the reserve of units after an unconfirm, a cancelled payment or an expired
--- reservation. Returns the reserve that is left. Raises PRODUCT_NOT_FOUND and
--- INSUFFICIENT_RESERVED_STOCK. Internal step: runs with caller rights; trg_products_update_columns
--- lets only the steps of the database change the stock columns, and the app has no execute right
--- (db/01); unconfirm_order,
--- cancel_order_payment and expire_order_reservation call it.
-CREATE OR REPLACE FUNCTION cartlify.release_product_stock (p_product_id int, p_qty int) RETURNS integer LANGUAGE plpgsql
+-- reservation. Returns the reserve that is left. Raises VARIANT_NOT_FOUND and
+-- INSUFFICIENT_RESERVED_STOCK. Internal step: runs with caller rights;
+-- trg_product_variants_update_columns lets only the steps of the database change the stock
+-- columns, and the app has no execute right (db/01); unconfirm_order, cancel_order_payment and
+-- expire_order_reservation call it.
+CREATE OR REPLACE FUNCTION cartlify.release_variant_stock (p_variant_id int, p_qty int) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
   v_reserved_stock integer;
 BEGIN
-  IF p_product_id IS NULL OR p_product_id <= 0 THEN
-    RAISE EXCEPTION 'PRODUCT_ID_INVALID';
+  IF p_variant_id IS NULL OR p_variant_id <= 0 THEN
+    RAISE EXCEPTION 'VARIANT_ID_INVALID';
   END IF;
 
   IF p_qty IS NULL OR p_qty <= 0 THEN
     RAISE EXCEPTION 'RELEASE_QTY_INVALID';
   END IF;
 
-  -- lock product row
-  SELECT p."reservedStock"
+  -- lock variant row
+  SELECT v."reservedStock"
   INTO v_reserved_stock
-  FROM cartlify.products AS p
-  WHERE p.id = p_product_id
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
   IF v_reserved_stock < p_qty THEN
@@ -1120,9 +1363,9 @@ BEGIN
 
   v_reserved_stock := v_reserved_stock - p_qty;
 
-  UPDATE cartlify.products AS p
+  UPDATE cartlify.product_variants AS v
   SET "reservedStock" = v_reserved_stock
-  WHERE p.id = p_product_id;
+  WHERE v.id = p_variant_id;
 
   RETURN v_reserved_stock;
 END;
@@ -1130,12 +1373,14 @@ $$;
 
 -- Turns the reserve of a paid order into a sale: takes the units out of the batches that are
 -- still good (a sale skips the batches that are over) and keeps in order_batch_allocations which
--- batch gave how many, which is the cost of goods of the order. Returns the stock that is left.
+-- batch gave how many, which is the cost of goods of the order. The stock log keeps a line
+-- (stock.sale, with the order and the batches, no actor when the system pays). Returns the stock
+-- that is left.
 -- Raises STOCK_CONSUME_FORBIDDEN unless the role is ADMIN or ROOT (the system is an admin
--- context). Internal step: runs with caller rights; trg_products_update_columns lets only the steps of
--- the database change the stock columns, and the app has no execute right (db/01); pay_order calls
--- it as the owner.
-CREATE OR REPLACE FUNCTION cartlify.consume_product_stock (p_order_id integer, p_product_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
+-- context). Internal step: runs with caller rights; trg_product_variants_update_columns lets only
+-- the steps of the database change the stock columns, and the app has no execute right (db/01);
+-- pay_order calls it as the owner.
+CREATE OR REPLACE FUNCTION cartlify.consume_variant_stock (p_order_id integer, p_variant_id integer, p_qty integer) RETURNS integer LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -1143,6 +1388,10 @@ DECLARE
   v_role           text;
   v_stock          integer;
   v_reserved_stock integer;
+  v_product_id     integer;
+  v_taken          jsonb := '[]'::jsonb;
+
+  r record;
 BEGIN
   IF p_qty IS NULL OR p_qty <= 0 THEN
     RAISE EXCEPTION 'STOCK_QTY_INVALID';
@@ -1154,15 +1403,15 @@ BEGIN
     RAISE EXCEPTION 'STOCK_CONSUME_FORBIDDEN';
   END IF;
 
-  -- lock product row
-  SELECT p."stock", p."reservedStock"
-  INTO v_stock, v_reserved_stock
-  FROM cartlify.products AS p
-  WHERE p.id = p_product_id
+  -- lock variant row
+  SELECT v."stock", v."reservedStock", v."productId"
+  INTO v_stock, v_reserved_stock, v_product_id
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
   -- reserved units must exist before final consume
@@ -1178,15 +1427,39 @@ BEGIN
   v_stock := v_stock - p_qty;
   v_reserved_stock := v_reserved_stock - p_qty;
 
-  UPDATE cartlify.products AS p
+  UPDATE cartlify.product_variants AS v
   SET
     "stock" = v_stock,
     "reservedStock" = v_reserved_stock
-  WHERE p.id = p_product_id;
+  WHERE v.id = p_variant_id;
 
-  INSERT INTO cartlify.order_batch_allocations ("orderId", "productId", "batchId", quantity)
-  SELECT p_order_id, p_product_id, t.taken_batch_id, t.taken_quantity
-  FROM cartlify.take_from_batches(p_product_id, p_qty, true) AS t;
+  -- the batches give their units in the order of a sale; the line of the log names them in it
+  FOR r IN
+    SELECT t.taken_batch_id, t.taken_quantity, t.taken_unit_cost
+    FROM cartlify.take_from_batches(p_variant_id, p_qty, true) AS t
+  LOOP
+    INSERT INTO cartlify.order_batch_allocations ("orderId", "productId", "variantId", "batchId", quantity)
+    VALUES (p_order_id, v_product_id, p_variant_id, r.taken_batch_id, r.taken_quantity);
+
+    v_taken := v_taken || jsonb_build_array(
+      jsonb_build_object(
+        'batchId', r.taken_batch_id,
+        'quantity', r.taken_quantity,
+        'unitCost', trim_scale(r.taken_unit_cost)::text
+      )
+    );
+  END LOOP;
+
+  PERFORM cartlify.log_stock_change(
+    p_variant_id,
+    'stock.sale',
+    -p_qty,
+    v_stock,
+    jsonb_build_array(jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_taken)),
+    NULL,
+    NULL,
+    p_order_id
+  );
 
   RETURN v_stock;
 END;
@@ -1242,7 +1515,8 @@ BEGIN
     RETURN;
   END IF;
 
-  SELECT COUNT(*)::integer
+  -- a person with several variants of the product among the favorites counts once
+  SELECT COUNT(DISTINCT COALESCE(f."userId"::text, f."guestId"::text))::integer
   INTO v_favs_30d
   FROM cartlify.favorites AS f
   WHERE f."productId" = p_product_id
@@ -1372,17 +1646,50 @@ CREATE TRIGGER trg_products_before_views_change
 BEFORE UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_before_views_change ();
 
--- Keeps the sale of a product valid, whatever way the row changes (before an update of the
+-- A product that is removed from the catalog takes its live variants with it (the same time), so
+-- a variant of a removed product is never sold and lets its article number and barcode go; a
+-- restore of the product brings back the variants that went with it (the same time) and leaves
+-- the ones an admin removed earlier. Runs as the owner: the variants are closed for plain changes
+-- of the removal mark by anybody but admin and the system (db/05, product_variants_update_columns).
+CREATE OR REPLACE FUNCTION cartlify.products_after_deleted_change () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF NEW."deletedAt" IS NOT NULL AND OLD."deletedAt" IS NULL THEN
+    UPDATE cartlify.product_variants AS v
+    SET "deletedAt" = NEW."deletedAt"
+    WHERE v."productId" = NEW.id
+      AND v."deletedAt" IS NULL;
+  ELSIF NEW."deletedAt" IS NULL AND OLD."deletedAt" IS NOT NULL THEN
+    UPDATE cartlify.product_variants AS v
+    SET "deletedAt" = NULL
+    WHERE v."productId" = NEW.id
+      AND v."deletedAt" = OLD."deletedAt";
+  END IF;
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_products_after_deleted_change ON cartlify.products;
+
+CREATE TRIGGER trg_products_after_deleted_change
+AFTER UPDATE OF "deletedAt" ON cartlify.products FOR EACH ROW
+EXECUTE FUNCTION cartlify.products_after_deleted_change ();
+
+-- Keeps the sale of a variant valid, whatever way the row changes (before an update of the
 -- price, the sale price or the end of the sale). A sale that is set or changed must end in the
--- future (PRODUCT_SALE_ENDS_AT_INVALID). A price changed down to the sale price or below ends
+-- future (VARIANT_SALE_ENDS_AT_INVALID). A price changed down to the sale price or below ends
 -- the sale: its fields and the lowest price of the 30 days before it go empty. A sale that was
--- still on gets a line of its end in the admin log (PRODUCT_SALE, event product.sale_end_by_price, with a change entry event = ended_by_price) in the
+-- still on gets a line of its end in the admin log (PRODUCT_SALE, event product.sale_end_by_price,
+-- about the variant, with a change entry event = ended_by_price) in the
 -- name of the admin who changed the price; the system has no id, so it is refused
--- (PRODUCT_SALE_ACTOR_REQUIRED). The log of prices has the change of the price itself. Prices go
+-- (VARIANT_SALE_ACTOR_REQUIRED). The log of prices has the change of the price itself. Prices go
 -- to the log as text without a trailing zero (trim_scale: 15.50 becomes 15.5), dates as iso utc.
 -- Only an update is checked: rows copied in (dev restored from a copy of prod) keep their sales,
 -- ended ones too. Prisma keeps dates as utc in columns without a time zone.
-CREATE OR REPLACE FUNCTION cartlify.products_before_price_change () RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION cartlify.product_variants_before_price_change () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_now timestamp := now() AT TIME ZONE 'UTC';
   v_actor_id integer := cartlify.current_actor_id();
@@ -1394,7 +1701,7 @@ BEGIN
      )
      AND (NEW."saleEndsAt" IS NULL OR NEW."saleEndsAt" <= v_now)
   THEN
-    RAISE EXCEPTION 'PRODUCT_SALE_ENDS_AT_INVALID';
+    RAISE EXCEPTION 'VARIANT_SALE_ENDS_AT_INVALID';
   END IF;
 
   IF NEW."price" IS DISTINCT FROM OLD."price"
@@ -1403,13 +1710,13 @@ BEGIN
   THEN
     IF NEW."saleEndsAt" > v_now THEN
       IF v_actor_id IS NULL OR NOT cartlify.is_admin() THEN
-        RAISE EXCEPTION 'PRODUCT_SALE_ACTOR_REQUIRED';
+        RAISE EXCEPTION 'VARIANT_SALE_ACTOR_REQUIRED';
       END IF;
 
       PERFORM cartlify.log_admin_action(
         v_actor_id,
         cartlify.current_actor_role(),
-        'product',
+        'variant',
         NEW.id,
         'PRODUCT_SALE',
         'product.sale_end_by_price',
@@ -1443,11 +1750,11 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_products_before_price_change ON cartlify.products;
+DROP TRIGGER IF EXISTS trg_product_variants_before_price_change ON cartlify.product_variants;
 
-CREATE TRIGGER trg_products_before_price_change
-BEFORE UPDATE OF "price", "salePrice", "saleEndsAt" ON cartlify.products FOR EACH ROW
-EXECUTE FUNCTION cartlify.products_before_price_change ();
+CREATE TRIGGER trg_product_variants_before_price_change
+BEFORE UPDATE OF "price", "salePrice", "saleEndsAt" ON cartlify.product_variants FOR EACH ROW
+EXECUTE FUNCTION cartlify.product_variants_before_price_change ();
 
 -- Recalculates the popularity after the views of a product change. Views enter the score through
 -- a logarithm, so one view rarely changes it: recalculate while the counter is small (up to 20),
@@ -1638,7 +1945,7 @@ BEGIN
 END;
 $$;
 
--- Refreshes the item prices of an order from the prices its products sell at now
+-- Refreshes the item prices of an order from the prices its variants sell at now
 -- (product_current_price: the sale price while the sale lasts). Returns the number of items
 -- whose price changed. Runs with caller rights: RLS lets only the owner change items, and only
 -- before the confirmation.
@@ -1650,12 +1957,12 @@ DECLARE
   v_changed integer;
 BEGIN
   UPDATE cartlify.order_items AS oi
-  SET "unitPrice" = cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt")
-  FROM cartlify.products AS p
+  SET "unitPrice" = cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt")
+  FROM cartlify.product_variants AS v
   WHERE oi."orderId" = p_order_id
-    AND p.id = oi."productId"
+    AND v.id = oi."variantId"
     AND oi."unitPrice" IS DISTINCT FROM
-      cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt");
+      cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt");
 
   GET DIAGNOSTICS v_changed = ROW_COUNT;
 
@@ -1691,7 +1998,7 @@ DROP FUNCTION IF EXISTS cartlify.confirm_order (integer, interval);
 -- arguments (the flat price and the free-from sum come from the settings of the server). When
 -- the buyer sent the price he saw (p_expected_delivery_price) and the rule gives another one,
 -- the confirmation is refused (ORDER_DELIVERY_PRICE_CHANGED); an item price that is not the
--- price its product sells at now refuses it too (ORDER_PRICES_CHANGED).
+-- price its variant sells at now refuses it too (ORDER_PRICES_CHANGED).
 CREATE OR REPLACE FUNCTION cartlify.confirm_order (
   p_order_id integer,
   p_reserve_for interval,
@@ -1758,40 +2065,38 @@ BEGIN
     RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
   END IF;
 
-  -- reserve stock (deterministic lock order by productId)
+  -- reserve stock (deterministic lock order by variantId)
   FOR r IN
-    SELECT oi."productId" AS product_id,
+    SELECT oi."variantId" AS variant_id,
            SUM(oi.quantity)::integer AS qty
     FROM cartlify.order_items AS oi
     WHERE oi."orderId" = p_order_id
-    GROUP BY oi."productId"
-    ORDER BY oi."productId"
+    GROUP BY oi."variantId"
+    ORDER BY oi."variantId"
   LOOP
-    PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
+    PERFORM cartlify.reserve_variant_stock(r.variant_id, r.qty);
   END LOOP;
 
-  -- the reservation above locked the product rows, so prices cannot change until the commit:
-  -- refuse when an item price differs from the price its product sells at now (a sale that just
+  -- the reservation above locked the variant rows, so prices cannot change until the commit:
+  -- refuse when an item price differs from the price its variant sells at now (a sale that just
   -- ended counts), the buyer must confirm the amount he sees
   IF EXISTS (
     SELECT 1
     FROM cartlify.order_items AS oi
-    JOIN cartlify.products AS p ON p.id = oi."productId"
+    JOIN cartlify.product_variants AS v ON v.id = oi."variantId"
     WHERE oi."orderId" = p_order_id
       AND oi."unitPrice" IS DISTINCT FROM
-        cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt")
+        cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt")
   ) THEN
     RAISE EXCEPTION 'ORDER_PRICES_CHANGED';
   END IF;
 
-  -- the items keep the names their products have now, the history shows what was bought; the
+  -- the items keep the names their variants have now, the history shows what was bought; the
   -- update goes through order_items_before_ins_upd while the order is not confirmed yet
   UPDATE cartlify.order_items AS oi
-  SET "productName" = p.name
-  FROM cartlify.products AS p
+  SET "productName" = cartlify.variant_display_name(oi."variantId")
   WHERE oi."orderId" = p_order_id
-    AND p.id = oi."productId"
-    AND oi."productName" IS DISTINCT FROM p.name;
+    AND oi."productName" IS DISTINCT FROM cartlify.variant_display_name(oi."variantId");
 
   -- where the order goes is written before the confirmation; its price is fixed now, from what
   -- the items cost, and the total that the update below sets holds it
@@ -1880,16 +2185,16 @@ BEGIN
     RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
   END IF;
 
-  -- release reserved stock (deterministic lock order by productId)
+  -- release reserved stock (deterministic lock order by variantId)
   FOR r IN
-    SELECT oi."productId" AS product_id,
+    SELECT oi."variantId" AS variant_id,
            SUM(oi.quantity)::integer AS qty
     FROM cartlify.order_items AS oi
     WHERE oi."orderId" = p_order_id
-    GROUP BY oi."productId"
-    ORDER BY oi."productId"
+    GROUP BY oi."variantId"
+    ORDER BY oi."variantId"
   LOOP
-    PERFORM cartlify.release_product_stock(r.product_id, r.qty);
+    PERFORM cartlify.release_variant_stock(r.variant_id, r.qty);
   END LOOP;
 
   -- rollback order state
@@ -1981,16 +2286,16 @@ BEGIN
     RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
   END IF;
 
-  -- release reserved stock (deterministic lock order by productId)
+  -- release reserved stock (deterministic lock order by variantId)
   FOR r IN
-    SELECT oi."productId" AS product_id,
+    SELECT oi."variantId" AS variant_id,
            SUM(oi.quantity)::integer AS qty
     FROM cartlify.order_items AS oi
     WHERE oi."orderId" = p_order_id
-    GROUP BY oi."productId"
-    ORDER BY oi."productId"
+    GROUP BY oi."variantId"
+    ORDER BY oi."variantId"
   LOOP
-    PERFORM cartlify.release_product_stock(r.product_id, r.qty);
+    PERFORM cartlify.release_variant_stock(r.variant_id, r.qty);
   END LOOP;
 
   UPDATE cartlify.orders AS o
@@ -2203,19 +2508,19 @@ BEGIN
     -- reservation: what is over is never sold, the money goes back
     BEGIN
       FOR r IN
-        SELECT oi."productId" AS product_id,
+        SELECT oi."variantId" AS variant_id,
                SUM(oi.quantity)::integer AS qty
         FROM cartlify.order_items AS oi
         WHERE oi."orderId" = p_order_id
-        GROUP BY oi."productId"
-        ORDER BY oi."productId"
+        GROUP BY oi."variantId"
+        ORDER BY oi."variantId"
       LOOP
-        PERFORM cartlify.consume_product_stock(p_order_id, r.product_id, r.qty);
+        PERFORM cartlify.consume_variant_stock(p_order_id, r.variant_id, r.qty);
       END LOOP;
     EXCEPTION
       WHEN raise_exception THEN
         -- all or nothing: stock changes made in this block are rolled back
-        IF SQLERRM = 'PRODUCT_BATCHES_SHORT' THEN
+        IF SQLERRM = 'VARIANT_BATCHES_SHORT' THEN
           RETURN 'OUT_OF_STOCK';
         END IF;
 
@@ -2230,20 +2535,20 @@ BEGIN
 
     BEGIN
       FOR r IN
-        SELECT oi."productId" AS product_id,
+        SELECT oi."variantId" AS variant_id,
                SUM(oi.quantity)::integer AS qty
         FROM cartlify.order_items AS oi
         WHERE oi."orderId" = p_order_id
-        GROUP BY oi."productId"
-        ORDER BY oi."productId"
+        GROUP BY oi."variantId"
+        ORDER BY oi."variantId"
       LOOP
-        PERFORM cartlify.reserve_product_stock(r.product_id, r.qty);
-        PERFORM cartlify.consume_product_stock(p_order_id, r.product_id, r.qty);
+        PERFORM cartlify.reserve_variant_stock(r.variant_id, r.qty);
+        PERFORM cartlify.consume_variant_stock(p_order_id, r.variant_id, r.qty);
       END LOOP;
     EXCEPTION
       WHEN raise_exception THEN
         -- all or nothing: stock changes made in this block are rolled back
-        IF SQLERRM IN ('INSUFFICIENT_AVAILABLE_STOCK', 'PRODUCT_NOT_FOUND', 'PRODUCT_BATCHES_SHORT') THEN
+        IF SQLERRM IN ('INSUFFICIENT_AVAILABLE_STOCK', 'VARIANT_NOT_FOUND', 'VARIANT_BATCHES_SHORT') THEN
           RETURN 'OUT_OF_STOCK';
         END IF;
 
@@ -2342,16 +2647,16 @@ BEGIN
       RAISE EXCEPTION 'ORDER_ITEMS_REQUIRED';
     END IF;
 
-    -- release reserved stock (deterministic lock order by productId)
+    -- release reserved stock (deterministic lock order by variantId)
     FOR r IN
-      SELECT oi."productId" AS product_id,
+      SELECT oi."variantId" AS variant_id,
              SUM(oi.quantity)::integer AS qty
       FROM cartlify.order_items AS oi
       WHERE oi."orderId" = p_order_id
-      GROUP BY oi."productId"
-      ORDER BY oi."productId"
+      GROUP BY oi."variantId"
+      ORDER BY oi."variantId"
     LOOP
-      PERFORM cartlify.release_product_stock(r.product_id, r.qty);
+      PERFORM cartlify.release_variant_stock(r.variant_id, r.qty);
     END LOOP;
 
     -- rollback expired reservation
@@ -2371,8 +2676,8 @@ BEGIN
 END;
 $$;
 
--- Takes the unit price and the name from the product and calculates the total price of an item
--- (before an insert or update). The price is the one the product sells at now, never one from
+-- Takes the unit price and the name from the variant and calculates the total price of an item
+-- (before an insert or update). The price is the one the variant sells at now, never one from
 -- the caller. The order must be one the actor can change: RLS hides foreign and confirmed orders
 -- (ORDER_NOT_EDITABLE), a confirmed order seen by an admin refuses too (ORDER_ALREADY_CONFIRMED).
 -- The confirmation fixes the price and the name, because items of a confirmed order cannot
@@ -2380,9 +2685,9 @@ $$;
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
-  v_price cartlify.products.price%TYPE;
-  v_name cartlify.products.name%TYPE;
-  v_deleted_at cartlify.products."deletedAt"%TYPE;
+  v_price cartlify.product_variants.price%TYPE;
+  v_name text;
+  v_deleted_at cartlify.product_variants."deletedAt"%TYPE;
 BEGIN
 
   SELECT o."confirmed"
@@ -2402,21 +2707,24 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
-  -- unit price always comes from the product, never from the caller: the price it sells at now
-  SELECT cartlify.product_current_price(p."price", p."salePrice", p."saleEndsAt"), p.name, p."deletedAt"
+  -- unit price always comes from the variant, never from the caller: the price it sells at now
+  SELECT cartlify.product_current_price(v."price", v."salePrice", v."saleEndsAt"),
+         cartlify.variant_display_name(v.id),
+         v."deletedAt"
   INTO v_price, v_name, v_deleted_at
-  FROM cartlify.products AS p
-  WHERE p.id = NEW."productId";
+  FROM cartlify.product_variants AS v
+  WHERE v.id = NEW."variantId";
 
   IF NOT FOUND THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
-  -- a product removed from the catalog goes into no order; an item that holds one since before
-  -- the removal keeps it, the app drops such items when it reads the order
+  -- a variant that is deleted (a product that is deleted takes its variants with it) goes into
+  -- no order; an item that holds one since before the removal keeps it, the app drops such items
+  -- when it reads the order
   IF v_deleted_at IS NOT NULL
-     AND (TG_OP = 'INSERT' OR NEW."productId" IS DISTINCT FROM OLD."productId") THEN
-    RAISE EXCEPTION 'PRODUCT_NOT_FOUND';
+     AND (TG_OP = 'INSERT' OR NEW."variantId" IS DISTINCT FROM OLD."variantId") THEN
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
   END IF;
 
   NEW."unitPrice" := v_price;
@@ -2637,6 +2945,29 @@ CREATE TRIGGER trg_reviews_refuse_removed_product
 BEFORE INSERT ON cartlify.reviews FOR EACH ROW
 EXECUTE FUNCTION cartlify.refuse_removed_product ();
 
+-- Refuses a new favorite for a variant taken out of sale (VARIANT_NOT_FOUND); a product that is
+-- removed takes its variants with it, the rule above stays for the reviews.
+CREATE OR REPLACE FUNCTION cartlify.refuse_removed_variant () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM cartlify.product_variants AS v
+    WHERE v.id = NEW."variantId"
+      AND v."deletedAt" IS NOT NULL
+  ) THEN
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_favorites_refuse_removed_variant ON cartlify.favorites;
+
+CREATE TRIGGER trg_favorites_refuse_removed_variant
+BEFORE INSERT ON cartlify.favorites FOR EACH ROW
+EXECUTE FUNCTION cartlify.refuse_removed_variant ();
+
 DROP TRIGGER IF EXISTS trg_favorites_refuse_removed_product ON cartlify.favorites;
 
 CREATE TRIGGER trg_favorites_refuse_removed_product
@@ -2706,7 +3037,7 @@ EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 -- PRICE CHANGE LOGS
 ------------------------------------------------------------
 
--- Writes a line of the price log of a product. System function: runs as the owner, the app
+-- Writes a line of the price log of a variant. System function: runs as the owner, the app
 -- writes no line straight into the table (db/03). Callable only by a signed-in admin or root
 -- with an id, the line is in their name (PRICE_LOG_FORBIDDEN, PRICE_LOG_ACTOR_REQUIRED). A
 -- change that changes nothing is no line.
@@ -2715,8 +3046,8 @@ EXECUTE FUNCTION cartlify.chat_messages_before_update ();
 -- p_value is its size in that mode: the percent of the price or the amount of money, negative
 -- for a change down. A line with an end (p_ends_at) is the start of a sale, from the price down
 -- to the sale price (db/06); a sale taken off goes from the sale price back to the price.
-CREATE OR REPLACE FUNCTION cartlify.log_product_price_change (
-  p_product_id integer,
+CREATE OR REPLACE FUNCTION cartlify.log_variant_price_change (
+  p_variant_id integer,
   p_old_price numeric,
   p_new_price numeric,
   p_mode cartlify."PriceChangeMode",
@@ -2729,6 +3060,7 @@ SET
   pg_temp AS $$
 DECLARE
   v_actor_id integer;
+  v_product_id integer;
 BEGIN
   IF NOT cartlify.is_admin() THEN
     RAISE EXCEPTION 'PRICE_LOG_FORBIDDEN';
@@ -2744,8 +3076,18 @@ BEGIN
     RETURN;
   END IF;
 
+  SELECT v."productId"
+  INTO v_product_id
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
+  END IF;
+
   INSERT INTO cartlify."product_price_change_logs" (
     "productId",
+    "variantId",
     "actorId",
     "oldPrice",
     "newPrice",
@@ -2756,7 +3098,8 @@ BEGIN
     "createdAt"
   )
   VALUES (
-    p_product_id,
+    v_product_id,
+    p_variant_id,
     v_actor_id,
     p_old_price,
     p_new_price,
@@ -3041,8 +3384,8 @@ BEGIN
 END;
 $$;
 
--- Moves the data of a guest to the account of a user who has just signed in: the favorites (one
--- the user has already is dropped) and the chats. Every guest chat becomes a chat of the user;
+-- Moves the data of a guest to the account of a user who has just signed in: the favorites (a
+-- variant the user has already is dropped) and the chats. Every guest chat becomes a chat of the user;
 -- an open guest chat is closed, with its counters and its request for an admin cleared, when
 -- the user has an open chat already or it is not the newest open guest chat; the newest one stays
 -- open otherwise. Nothing happens for an
@@ -3066,14 +3409,14 @@ BEGIN
     RETURN;
   END IF;
 
-  -- FAVORITES: remove conflicts (user already has same product)
+  -- FAVORITES: remove conflicts (user already has same variant)
   DELETE FROM cartlify.favorites f
   WHERE f."guestId" = p_guest_id
     AND EXISTS (
       SELECT 1
       FROM cartlify.favorites u
       WHERE u."userId" = p_user_id
-        AND u."productId" = f."productId"
+        AND u."variantId" = f."variantId"
     );
 
   -- FAVORITES: migrate guest -> user
@@ -3443,11 +3786,10 @@ CREATE TRIGGER trg_login_logs_update_columns
 BEFORE UPDATE ON cartlify.login_logs FOR EACH ROW
 EXECUTE FUNCTION cartlify.login_logs_update_columns ();
 
--- Guard of products: an admin changes everything but what the database counts (the stock, the
--- reserve, the rating, the review count, the popularity) and adds at most one view; a guest or a
--- user changes only the views (products_before_views_change limits it to one); the steps of the
--- database change one group of what they count at a time (the rating, the stock and the reserve,
--- the popularity).
+-- Guard of products: an admin changes everything but what the database counts (the rating, the
+-- review count, the popularity) and adds at most one view; a guest or a user changes only the
+-- views (products_before_views_change limits it to one); the steps of the database change one
+-- group of what they count at a time (the rating, the popularity).
 CREATE OR REPLACE FUNCTION cartlify.products_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3460,8 +3802,6 @@ BEGIN
   END IF;
 
   IF cartlify.is_admin()
-     AND NEW."stock" = OLD."stock"
-     AND NEW."reservedStock" = OLD."reservedStock"
      AND NEW."avgRating" = OLD."avgRating"
      AND NEW."reviewsCount" = OLD."reviewsCount"
      AND NEW.popularity = OLD.popularity
@@ -3482,12 +3822,6 @@ BEGIN
          AND NEW."reviewsCount" >= 0
          AND v_changed <@ ARRAY['avgRating', 'reviewsCount', 'updatedAt']
        )
-       OR (
-         NEW."stock" >= 0
-         AND NEW."reservedStock" >= 0
-         AND NEW."reservedStock" <= NEW."stock"
-         AND v_changed <@ ARRAY['stock', 'reservedStock', 'updatedAt']
-       )
        OR (NEW.popularity >= 0 AND v_changed <@ ARRAY['popularity', 'updatedAt'])
      ) THEN
     RETURN NEW;
@@ -3502,6 +3836,88 @@ DROP TRIGGER IF EXISTS trg_products_update_columns ON cartlify.products;
 CREATE TRIGGER trg_products_update_columns
 BEFORE UPDATE ON cartlify.products FOR EACH ROW
 EXECUTE FUNCTION cartlify.products_update_columns ();
+
+-- Guard of variants: an admin changes everything but what the database counts (the stock and the
+-- reserve) and the product of the variant (the rows that name the variant name its product too); a
+-- variant of a removed product is not brought back by hand, only with its product. The steps of the
+-- database change the stock and the reserve, one pair at a time, and the removal mark (a product
+-- that is removed takes its variants with it).
+CREATE OR REPLACE FUNCTION cartlify.product_variants_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF cartlify.is_admin()
+     AND NEW."stock" = OLD."stock"
+     AND NEW."reservedStock" = OLD."reservedStock"
+     AND NEW."productId" = OLD."productId"
+     AND (
+       NEW."deletedAt" IS NOT NULL
+       OR OLD."deletedAt" IS NULL
+       OR NOT EXISTS (
+         SELECT 1
+         FROM cartlify.products AS p
+         WHERE p.id = NEW."productId"
+           AND p."deletedAt" IS NOT NULL
+       )
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND (
+       (
+         NEW."stock" >= 0
+         AND NEW."reservedStock" >= 0
+         AND NEW."reservedStock" <= NEW."stock"
+         AND v_changed <@ ARRAY['stock', 'reservedStock', 'updatedAt']
+       )
+       OR v_changed <@ ARRAY['deletedAt', 'updatedAt']
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'VARIANT_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_product_variants_update_columns ON cartlify.product_variants;
+
+CREATE TRIGGER trg_product_variants_update_columns
+BEFORE UPDATE ON cartlify.product_variants FOR EACH ROW
+EXECUTE FUNCTION cartlify.product_variants_update_columns ();
+
+-- A variant shows the pictures of the gallery of its own product only (VARIANT_IMAGE_NOT_FOUND,
+-- check_violation). The picture and the variant of a row do not change afterwards except by this
+-- rule too.
+CREATE OR REPLACE FUNCTION cartlify.variant_images_before_write () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM cartlify.product_variants AS v
+    JOIN cartlify.product_images AS i ON i."productId" = v."productId"
+    WHERE v.id = NEW."variantId"
+      AND i.id = NEW."imageId"
+  ) THEN
+    RAISE EXCEPTION 'VARIANT_IMAGE_NOT_FOUND'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_variant_images_before_write ON cartlify.variant_images;
+
+CREATE TRIGGER trg_variant_images_before_write
+BEFORE INSERT OR UPDATE OF "variantId", "imageId" ON cartlify.variant_images FOR EACH ROW
+EXECUTE FUNCTION cartlify.variant_images_before_write ();
 
 -- Guard of product batches: a sale, a write-off or a cancel, as a step of the database, changes
 -- only what a batch has left.
@@ -3869,4 +4285,346 @@ CREATE TRIGGER trg_admin_alert_settings_update_columns
 BEFORE UPDATE ON cartlify.admin_alert_settings FOR EACH ROW
 EXECUTE FUNCTION cartlify.admin_alert_settings_update_columns ();
 
+-- Guard of parties: the policy says who (admin or root), this says what. A party changes its name,
+-- address, email and country, never its id (products name it by the id) or the day it was made.
+CREATE OR REPLACE FUNCTION cartlify.parties_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['name', 'address', 'email', 'country', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'PARTY_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_parties_update_columns ON cartlify.parties;
+
+CREATE TRIGGER trg_parties_update_columns
+BEFORE UPDATE ON cartlify.parties FOR EACH ROW
+EXECUTE FUNCTION cartlify.parties_update_columns ();
+
+-- Guard of documents: the policy says who (admin or root), this says what. A document changes its
+-- title and kind; its file (url, public id, size), its id and its day stay as they were made.
+CREATE OR REPLACE FUNCTION cartlify.documents_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['title', 'kind', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'DOCUMENT_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_documents_update_columns ON cartlify.documents;
+
+CREATE TRIGGER trg_documents_update_columns
+BEFORE UPDATE ON cartlify.documents FOR EACH ROW
+EXECUTE FUNCTION cartlify.documents_update_columns ();
+
+-- Guard of attribute groups: the policy says who, this says what. A group changes its name and place, never its id or its day.
+CREATE OR REPLACE FUNCTION cartlify.attribute_groups_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['name', 'position', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ATTRIBUTE_GROUPS_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_attribute_groups_update_columns ON cartlify.attribute_groups;
+
+CREATE TRIGGER trg_attribute_groups_update_columns
+BEFORE UPDATE ON cartlify.attribute_groups FOR EACH ROW
+EXECUTE FUNCTION cartlify.attribute_groups_update_columns ();
+
+-- Guard of characteristics: everything a characteristic is described by may change (the type only while the API allows it), never its id or its day.
+CREATE OR REPLACE FUNCTION cartlify.attributes_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['name', 'type', 'unit', 'groupId', 'position', 'isMain', 'inFilters', 'decimals', 'minValue', 'maxValue', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ATTRIBUTES_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_attributes_update_columns ON cartlify.attributes;
+
+CREATE TRIGGER trg_attributes_update_columns
+BEFORE UPDATE ON cartlify.attributes FOR EACH ROW
+EXECUTE FUNCTION cartlify.attributes_update_columns ();
+
+-- Guard of the values of a choice: a value changes its name, place and colour, never the characteristic it belongs to.
+CREATE OR REPLACE FUNCTION cartlify.attribute_options_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['name', 'position', 'colorCode', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ATTRIBUTE_OPTIONS_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_attribute_options_update_columns ON cartlify.attribute_options;
+
+CREATE TRIGGER trg_attribute_options_update_columns
+BEFORE UPDATE ON cartlify.attribute_options FOR EACH ROW
+EXECUTE FUNCTION cartlify.attribute_options_update_columns ();
+
+-- The value a variant holds of a characteristic stays within the type of the characteristic: the
+-- column of the value is the one its type asks for, a number has no more digits after the point
+-- than the characteristic allows and lies within its bounds, a value of a list is a value of this
+-- characteristic, and a choice of one value has one row for a variant. The API says the same with
+-- the reason (ATTRIBUTE_VALUE_*); this keeps a row that bypassed it out. A characteristic or a
+-- value that is not there is left to the foreign keys. The error is a code (check_violation).
+CREATE OR REPLACE FUNCTION cartlify.variant_attribute_values_before_write () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_type cartlify."AttributeType";
+  v_decimals integer;
+  v_min numeric;
+  v_max numeric;
+  v_option_attribute integer;
+BEGIN
+  SELECT a.type, a.decimals, a."minValue", a."maxValue"
+  INTO v_type, v_decimals, v_min, v_max
+  FROM cartlify.attributes AS a
+  WHERE a.id = NEW."attributeId";
+
+  IF NOT FOUND THEN
+    RETURN NEW;
+  END IF;
+
+  IF NOT (
+    CASE v_type
+      WHEN 'text' THEN NEW."textValue" IS NOT NULL
+      WHEN 'number' THEN NEW."numberValue" IS NOT NULL
+      WHEN 'boolean' THEN NEW."boolValue" IS NOT NULL
+      ELSE NEW."optionId" IS NOT NULL
+    END
+    AND num_nonnulls(NEW."textValue", NEW."numberValue", NEW."boolValue", NEW."optionId") = 1
+  ) THEN
+    RAISE EXCEPTION 'ATTRIBUTE_VALUE_INVALID'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF v_type = 'number' THEN
+    IF NEW."numberValue" <> round(NEW."numberValue", COALESCE(v_decimals, 0)) THEN
+      RAISE EXCEPTION 'ATTRIBUTE_VALUE_TOO_PRECISE'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF v_min IS NOT NULL AND NEW."numberValue" < v_min THEN
+      RAISE EXCEPTION 'ATTRIBUTE_VALUE_TOO_SMALL'
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF v_max IS NOT NULL AND NEW."numberValue" > v_max THEN
+      RAISE EXCEPTION 'ATTRIBUTE_VALUE_TOO_LARGE'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  IF v_type IN ('option', 'options') THEN
+    SELECT o."attributeId"
+    INTO v_option_attribute
+    FROM cartlify.attribute_options AS o
+    WHERE o.id = NEW."optionId";
+
+    IF FOUND AND v_option_attribute <> NEW."attributeId" THEN
+      RAISE EXCEPTION 'ATTRIBUTE_OPTION_NOT_FOUND'
+        USING ERRCODE = 'check_violation';
+    END IF;
+  END IF;
+
+  -- one value of a choice: the row of the variant is locked, so two rows made at once meet here
+  -- (a row of a text, a number and yes/no is held by the unique index; the values of a set differ
+  -- by the value)
+  IF v_type = 'option' THEN
+    PERFORM 1
+    FROM cartlify.product_variants AS v
+    WHERE v.id = NEW."variantId"
+    FOR NO KEY UPDATE;
+
+    IF EXISTS (
+      SELECT 1
+      FROM cartlify.variant_attribute_values AS x
+      WHERE x."variantId" = NEW."variantId"
+        AND x."attributeId" = NEW."attributeId"
+        AND x.id <> NEW.id
+    ) THEN
+      RAISE EXCEPTION 'ATTRIBUTE_VALUE_REPEATED'
+        USING ERRCODE = 'unique_violation';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_variant_attribute_values_before_write ON cartlify.variant_attribute_values;
+
+CREATE TRIGGER trg_variant_attribute_values_before_write
+BEFORE INSERT OR UPDATE ON cartlify.variant_attribute_values FOR EACH ROW
+EXECUTE FUNCTION cartlify.variant_attribute_values_before_write ();
+
+-- Guard of the values of variants: the policy says who, this says what. A row keeps its variant and
+-- its characteristic for good; only the value changes.
+CREATE OR REPLACE FUNCTION cartlify.variant_attribute_values_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_changed <@ ARRAY['textValue', 'numberValue', 'boolValue', 'optionId'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'VARIANT_ATTRIBUTE_VALUES_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_variant_attribute_values_update_columns ON cartlify.variant_attribute_values;
+
+CREATE TRIGGER trg_variant_attribute_values_update_columns
+BEFORE UPDATE ON cartlify.variant_attribute_values FOR EACH ROW
+EXECUTE FUNCTION cartlify.variant_attribute_values_update_columns ();
+
+-- A characteristic whose type is changed while a variant holds a value of it would leave values of
+-- the old type behind (the API refuses the change with ATTRIBUTE_TYPE_LOCKED and the numbers; this
+-- is the net under it, for every role).
+CREATE OR REPLACE FUNCTION cartlify.attributes_type_locked () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NEW.type IS DISTINCT FROM OLD.type
+     AND EXISTS (
+       SELECT 1 FROM cartlify.variant_attribute_values AS x WHERE x."attributeId" = OLD.id
+     ) THEN
+    RAISE EXCEPTION 'ATTRIBUTE_TYPE_LOCKED'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_attributes_type_locked ON cartlify.attributes;
+
+CREATE TRIGGER trg_attributes_type_locked
+BEFORE UPDATE OF type ON cartlify.attributes FOR EACH ROW
+EXECUTE FUNCTION cartlify.attributes_type_locked ();
+
+-- Guard of the stock log: a line is history, written once by the functions that move the stock
+-- and never changed or removed. The policies of db/03 deny every update and delete already; this
+-- guard says it a second time for a role that would skip them. A superuser (a data script by
+-- hand, such as the cleanup of a development database) is not checked, as rls does not check it
+-- either. The refusal is STOCK_LOG_APPEND_ONLY with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.stock_log_append_only () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'STOCK_LOG_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_stock_log_append_only ON cartlify.stock_log;
+
+CREATE TRIGGER trg_stock_log_append_only
+BEFORE UPDATE OR DELETE ON cartlify.stock_log FOR EACH ROW
+EXECUTE FUNCTION cartlify.stock_log_append_only ();
+
 COMMIT;
+
+------------------------------------------------------------
+-- TEMPORARY: the product versions of the functions that now take a variant. Remove this block
+-- once the structure of dev and prod matches the snapshot (npm run db:snapshot:check:db).
+------------------------------------------------------------
+DROP FUNCTION IF EXISTS cartlify.product_expired_units (integer);
+
+DROP FUNCTION IF EXISTS cartlify.reserve_product_stock (integer, integer);
+
+DROP FUNCTION IF EXISTS cartlify.release_product_stock (integer, integer);
+
+DROP FUNCTION IF EXISTS cartlify.consume_product_stock (integer, integer, integer);
+
+DROP FUNCTION IF EXISTS cartlify.receive_product_batch (
+  uuid,
+  integer,
+  cartlify."StockSource",
+  integer,
+  numeric,
+  date,
+  text,
+  text,
+  text,
+  text
+);
+
+DROP FUNCTION IF EXISTS cartlify.write_off_product_stock (uuid, integer, integer, integer, text, text);
+
+DROP FUNCTION IF EXISTS cartlify.check_product_stock_batches ();
+
+DROP FUNCTION IF EXISTS cartlify.products_before_price_change ();
+
+DROP FUNCTION IF EXISTS cartlify.log_product_price_change (
+  integer,
+  numeric,
+  numeric,
+  cartlify."PriceChangeMode",
+  numeric,
+  text,
+  timestamp
+);

@@ -5,6 +5,7 @@ import {
   buildProductUpdateAuditChanges,
   buildSaleAuditChanges,
   writeAdminAuditLog,
+  writeStockOperationAuditLog,
 } from '@db/adminAudit.helper.js';
 
 type Tx = Parameters<typeof writeAdminAuditLog>[0];
@@ -84,30 +85,58 @@ describe('buildProductUpdateAuditChanges', () => {
     ]);
   });
 
-  // the description keeps the text and the safety data in one column: each is a change of its own
-  it('records the text and the safety data of the description apart', () => {
-    const safety = {
-      manufacturer: { name: 'Lampwerk', address: 'Berlin', email: 'a@b.de', country: 'DE' },
-      responsiblePerson: null,
-      warnings: null,
-    };
-    const kept = (text: string, data: unknown) => JSON.stringify({ v: 1, text, safety: data });
-
+  // the description is plain text; the manufacturer, the person in the EU and the warnings are
+  // fields of the product, each a change of its own
+  it('records the text of the description, and that an empty one takes it away', () => {
     expect(
       buildProductUpdateAuditChanges(
         { ...before, description: 'White' },
-        { after: { ...before, description: kept('White', safety) }, input: { safety } },
-      ),
-    ).toEqual([{ field: 'safety', old: null, new: safety }]);
-    expect(
-      buildProductUpdateAuditChanges(
-        { ...before, description: kept('White', safety) },
-        {
-          after: { ...before, description: kept('Black', safety) },
-          input: { description: 'Black' },
-        },
+        { after: { ...before, description: 'Black' }, input: { description: 'Black' } },
       ),
     ).toEqual([{ field: 'description', old: 'White', new: 'Black' }]);
+    expect(
+      buildProductUpdateAuditChanges(
+        { ...before, description: 'White' },
+        { after: { ...before, description: null }, input: { description: '' } },
+      ),
+    ).toEqual([{ field: 'description', old: 'White', new: null }]);
+  });
+
+  it('records the manufacturer, the person in the EU and the warnings as they were and are', () => {
+    expect(
+      buildProductUpdateAuditChanges(
+        { ...before, manufacturerId: 1, euResponsibleId: null, warnings: null },
+        {
+          after: { ...before, manufacturerId: 2, euResponsibleId: 5, warnings: 'Hot surface.' },
+          input: { manufacturerId: 2, euResponsibleId: 5, warnings: 'Hot surface.' },
+        },
+      ),
+    ).toEqual([
+      { field: 'manufacturerId', old: 1, new: 2 },
+      { field: 'euResponsibleId', old: null, new: 5 },
+      { field: 'warnings', old: null, new: 'Hot surface.' },
+    ]);
+  });
+
+  it('records a person and warnings taken away as null, and nothing for what was not named or did not change', () => {
+    const had = { ...before, manufacturerId: 1, euResponsibleId: 5, warnings: 'Hot surface.' };
+
+    expect(
+      buildProductUpdateAuditChanges(had, {
+        after: { ...had, euResponsibleId: null, warnings: null },
+        input: { euResponsibleId: null, warnings: null },
+      }),
+    ).toEqual([
+      { field: 'euResponsibleId', old: 5, new: null },
+      { field: 'warnings', old: 'Hot surface.', new: null },
+    ]);
+    expect(
+      buildProductUpdateAuditChanges(had, {
+        after: { ...had, manufacturerId: 1 },
+        input: { manufacturerId: 1 },
+      }),
+    ).toEqual([]);
+    expect(buildProductUpdateAuditChanges(had, { after: had, input: { name: 'x' } })).toEqual([]);
   });
 
   it('compares prices by value, so 9.90 and 9.9 are the same price', () => {
@@ -270,6 +299,108 @@ describe('writeAdminAuditLog', () => {
       'PRODUCT_UPDATE',
       'product.update',
       JSON.stringify(changes),
+    ]);
+  });
+});
+
+describe('writeStockOperationAuditLog', () => {
+  const fakeTx = () => {
+    const $executeRaw = jest.fn<RawQuery>(async () => 1);
+    return { tx: { $executeRaw } as unknown as Tx, $executeRaw };
+  };
+
+  const operation = {
+    actorId: 7,
+    actorRole: 'ROOT',
+    operationId: '7d1f4f6e-6b1f-4a43-9a1b-0d2a3c4b5e6f',
+    quantity: 9,
+  };
+
+  // the values the database function got: actor, role, entity type, entity id, action, event, changes
+  const writtenOf = ($executeRaw: jest.Mock<RawQuery>) => {
+    const [, ...values] = $executeRaw.mock.calls[0]!;
+    return {
+      entity: [values[2], values[3]],
+      action: values[4],
+      event: values[5],
+      changes: JSON.parse(values[6] as string) as { field: string; old: unknown; new: unknown }[],
+    };
+  };
+
+  it('points at the variant when the operation touched exactly one', async () => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeStockOperationAuditLog(tx, {
+      ...operation,
+      kind: 'delivery',
+      variantIds: [31],
+      details: [{ field: 'source', value: 'supplier' }],
+    });
+
+    expect(writtenOf($executeRaw)).toMatchObject({
+      entity: ['variant', 31],
+      action: 'STOCK_DELIVERY',
+      event: 'stock.delivery',
+    });
+  });
+
+  it('points at nothing when the operation touched more than one variant', async () => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeStockOperationAuditLog(tx, {
+      ...operation,
+      kind: 'write_off',
+      variantIds: [31, 32],
+      details: [],
+    });
+
+    expect(writtenOf($executeRaw)).toMatchObject({
+      entity: ['other', null],
+      action: 'STOCK_WRITE_OFF',
+      event: 'stock.write_off',
+    });
+  });
+
+  it('starts the changes with the id of the operation and ends them with how much it moved', async () => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeStockOperationAuditLog(tx, {
+      ...operation,
+      kind: 'delivery',
+      variantIds: [31, 32, 33],
+      details: [
+        { field: 'source', value: 'supplier' },
+        { field: 'supplier', value: 'Acme' },
+        { field: 'document', value: null },
+        { field: 'note', value: undefined },
+      ],
+    });
+
+    // the details that are empty are left out
+    expect(writtenOf($executeRaw).changes).toEqual([
+      { field: 'deliveryId', old: null, new: operation.operationId },
+      { field: 'source', old: null, new: 'supplier' },
+      { field: 'supplier', old: null, new: 'Acme' },
+      { field: 'variants', old: null, new: 3 },
+      { field: 'quantity', old: null, new: 9 },
+    ]);
+  });
+
+  it('names the write-off by its own field', async () => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeStockOperationAuditLog(tx, {
+      ...operation,
+      kind: 'write_off',
+      variantIds: [31],
+      details: [{ field: 'reason', value: 'damaged' }],
+    });
+
+    expect(writtenOf($executeRaw).changes.map((change) => change.field)).toEqual([
+      'writeOffId',
+      'reason',
+      'variants',
+      'quantity',
     ]);
   });
 });

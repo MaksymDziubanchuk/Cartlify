@@ -10,12 +10,15 @@ interface AddChatSocketDto {
     socket: WebSocket;
     actorId: UserId;
     actorRole: Role;
+    // the address the socket was opened from, none when the request has none
+    ip?: string | null;
 }
 
 export interface ChatSocketContext {
     socketId: string;
     actorId: UserId;
     actorRole: Role;
+    ip: string | null;
     joinedThreads: Set<string>;
     // what the socket sent lately, against its limits (chatWs.limits.ts)
     limits: SocketLimits;
@@ -28,7 +31,7 @@ class ChatWsConnectionManager {
     private adminSockets = new Set<string>();
 
     // register socket connection
-    add({ socket, actorId, actorRole }: AddChatSocketDto): string {
+    add({ socket, actorId, actorRole, ip }: AddChatSocketDto): string {
         const socketId = randomUUID();
 
         this.sockets.set(socketId, socket);
@@ -37,6 +40,7 @@ class ChatWsConnectionManager {
             socketId,
             actorId,
             actorRole,
+            ip: ip ?? null,
             joinedThreads: new Set(),
             limits: new SocketLimits(),
         });

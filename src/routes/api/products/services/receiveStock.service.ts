@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 
 import { isRetryableTxError, tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeStockOperationAuditLog } from '@db/adminAudit.helper.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
@@ -12,8 +13,10 @@ import {
   deliverySteps,
   normalizeDeliveryInput,
   stockErrorOf,
+  stockRefsOf,
   stockSummaryOf,
-  withProductIds,
+  withVariantIds,
+  type DeliveryItem,
 } from './helpers/index.js';
 
 import type {
@@ -22,20 +25,20 @@ import type {
   ReceiveStockResponseDto,
   StockSourceName,
 } from 'types/dto/products.dto.js';
-import type { ProductId } from 'types/ids.js';
 
-// takes in a delivery: a batch of each item at its cost, all of them or none. The database takes
-// each batch in (cartlify.receive_product_batch, db/05): the stock grows by it and the admin log
-// keeps a line for it with the delivery, the supplier, the invoice and the note, in the name of
-// the admin. A product removed from the catalog takes in nothing
+// takes in a delivery: a batch of each item at its cost, all of them or none. An item names its
+// variant by its id, its article number or its barcode; the cost and the last good day of the
+// delivery stand in for the item that has none of its own. The database takes each batch in
+// (cartlify.receive_variant_batch, db/05): the stock of the variant grows by it and the stock log
+// keeps a line for it with the delivery, the batch, the supplier, the invoice and the note, in the
+// name of the admin. The admin log keeps one line for the whole delivery, with the same id of the
+// delivery. A variant taken out of sale takes in nothing
 export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockResponseDto> {
   const { actorId, actorRole } = dto;
   assertAdminActor(actorId, actorRole);
 
-  const delivery = normalizeDeliveryInput({
-    ...dto,
-    items: await withProductIds(dto.items, dto),
-  });
+  const delivery = normalizeDeliveryInput(dto);
+  const items: DeliveryItem[] = await withVariantIds(delivery.items, dto, { deleted: false });
   const deliveryId = randomUUID();
 
   try {
@@ -44,14 +47,14 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // the rows of the products are locked by the id of the product, in every request
+        // the rows of the variants are locked by the id of the variant, in every request
         const batchIds: number[] = [];
-        for (const { item, index } of deliverySteps(delivery.items)) {
+        for (const { item, index } of deliverySteps(items)) {
           try {
             const [row] = await db.$queryRaw<{ id: number }[]>`
-              select cartlify.receive_product_batch(
+              select cartlify.receive_variant_batch(
                 ${deliveryId}::uuid,
-                ${item.productId}::int,
+                ${item.variantId}::int,
                 ${delivery.source}::cartlify."StockSource",
                 ${item.quantity}::int,
                 ${item.unitCost}::numeric,
@@ -68,11 +71,27 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
           }
         }
 
+        // one line of the admin log for the whole delivery, the id of it among its changes
+        await writeStockOperationAuditLog(db, {
+          actorId,
+          actorRole,
+          kind: 'delivery',
+          operationId: deliveryId,
+          variantIds: [...new Set(items.map((item) => item.variantId))],
+          quantity: items.reduce((sum, item) => sum + item.quantity, 0),
+          details: [
+            { field: 'source', value: delivery.source },
+            { field: 'supplier', value: delivery.supplier },
+            { field: 'document', value: delivery.document },
+            { field: 'note', value: delivery.note },
+          ],
+        });
+
         const batches = await db.productBatch.findMany({
           where: { id: { in: batchIds } },
           select: {
             id: true,
-            productId: true,
+            variantId: true,
             source: true,
             supplierBatchNumber: true,
             unitCost: true,
@@ -84,9 +103,11 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
         });
         const byId = new Map(batches.map((batch) => [batch.id, batch]));
 
-        const products = await db.product.findMany({
-          where: { id: { in: [...new Set(delivery.items.map((item) => item.productId))] } },
-          select: { id: true, stock: true, reservedStock: true },
+        const variantIds = [...new Set(items.map((item) => item.variantId))];
+        const refs = await stockRefsOf(db, variantIds);
+        const variants = await db.productVariant.findMany({
+          where: { id: { in: variantIds } },
+          select: { id: true, productId: true, stock: true, reservedStock: true },
         });
 
         return {
@@ -94,8 +115,8 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
           batches: batchIds.map((id): ProductBatchDto => {
             const batch = byId.get(id)!;
             return {
+              ...refs.get(batch.variantId)!,
               id: batch.id,
-              productId: batch.productId as ProductId,
               source: batch.source as StockSourceName,
               supplierBatchNumber: batch.supplierBatchNumber,
               unitCost: decimalToNumber(batch.unitCost),
@@ -105,13 +126,7 @@ export async function receiveStock(dto: ReceiveStockDto): Promise<ReceiveStockRe
               createdAt: batch.createdAt,
             };
           }),
-          products: stockSummaryOf(
-            products,
-            await expiredUnitsOf(
-              db,
-              products.map((row) => row.id),
-            ),
-          ),
+          variants: stockSummaryOf(variants, await expiredUnitsOf(db, variantIds)),
         };
       },
       {

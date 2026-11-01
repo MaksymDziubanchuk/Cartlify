@@ -1,7 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
-  clashingSkus,
   refusalOfProduct,
   refuseTogether,
   repeatedProductIds,
@@ -110,46 +109,5 @@ describe('repeatedProductIds', () => {
 
   it('is empty when each product comes once', () => {
     expect(repeatedProductIds([1, 2, 3])).toEqual([]);
-  });
-});
-
-describe('clashingSkus', () => {
-  it('names a product that takes an article number another product holds', () => {
-    expect(
-      clashingSkus(
-        [
-          { productId: 1, lowered: 'a-1' },
-          { productId: 2, lowered: 'b-2' },
-        ],
-        new Set(['a-1']),
-      ),
-    ).toEqual([1]);
-  });
-
-  it('names every product of the request that takes the same article number', () => {
-    expect(
-      clashingSkus(
-        [
-          { productId: 1, lowered: 'x' },
-          { productId: 2, lowered: 'y' },
-          { productId: 3, lowered: 'x' },
-        ],
-        new Set(),
-      ),
-    ).toEqual([1, 3]);
-  });
-
-  it('lets products swap their article numbers and take theirs away', () => {
-    expect(
-      clashingSkus(
-        [
-          { productId: 1, lowered: 'b' },
-          { productId: 2, lowered: 'a' },
-          { productId: 3, lowered: null },
-          { productId: 4, lowered: null },
-        ],
-        new Set(),
-      ),
-    ).toEqual([]);
   });
 });

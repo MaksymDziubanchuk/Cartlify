@@ -79,9 +79,35 @@ enum StockSource {
 enum AdminAuditEntityType {
   user
   product
+  // a variant of a product: its price, its sale, its stock and its own edits
+  variant
   category
   order
   review
+  // a manufacturer or a person responsible in the EU of the directory of parties
+  party
+  // a file of the directory of documents (instructions, certificates)
+  document
+  // a group, a characteristic or a value of a characteristic of the directory of characteristics
+  attribute
+  other
+}
+
+// what a characteristic holds: a text, a number, yes or no, one of a list of values, or several
+// of them
+enum AttributeType {
+  text
+  number
+  boolean
+  option
+  options
+}
+
+// what a document of a product is
+enum DocumentKind {
+  instruction
+  certificate
+  declaration
   other
 }
 
@@ -95,7 +121,8 @@ enum AdminAuditAction {
   PRODUCT_PRICE_BULK_UPDATE
   // a sale set, changed or taken off by an admin, or ended by a price put down to it (db/05)
   PRODUCT_SALE
-  // goods taken in and units written off, one line for each product (db/05)
+  // goods taken in and units written off: one line for the whole delivery or write-off, written
+  // by the server; the line of each variant is in the stock log (db/05)
   STOCK_DELIVERY
   STOCK_WRITE_OFF
   // a step of the shipping, a step back, or a cancel
@@ -174,6 +201,7 @@ model User {
   orders                  Order[]
   productPriceChangeLogs  ProductPriceChangeLog[]
   adminAuditLogs          AdminAuditLog[]
+  stockLogs               StockLog[]
   alertSettings           AdminAlertSetting[]
   // the versions of the terms and of the contract this account published (only root does)
   legalDocumentsPublished LegalDocument[]         @relation("LegalDocumentPublisher")
@@ -265,10 +293,145 @@ model Category {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  products Product[]
+  products   Product[]
+  attributes CategoryAttribute[]
 
   @@index([parentId])
   @@map("categories")
+}
+
+// The directory of the parties a product names: the manufacturer and the person responsible in the
+// EU (GPSR). One row serves every product of the party, so an address changed here changes in all of
+// them. The values are held by db/06: lengths, the email, the country as two capitals, and one row
+// for one name, address and country.
+model Party {
+  id        Int      @id @default(autoincrement())
+  name      String
+  address   String
+  email     String
+  // the country, ISO 3166 alpha-2 in capitals
+  country   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  manufactured Product[] @relation("ProductManufacturer")
+  represented  Product[] @relation("ProductEuResponsible")
+
+  @@map("parties")
+}
+
+// The directory of the characteristics a variant of a product has: a group is a section of the
+// tab of the characteristics of a card ("Screen", "Memory"), a characteristic is "Diagonal" or
+// "Colour", its values come from a list when it is a choice. The positions are the order of the
+// card: one place for one row in its scope (db/06 keeps them unique, checked at the end of a
+// transaction so that a new order is written row by row).
+model AttributeGroup {
+  id        Int      @id @default(autoincrement())
+  name      String
+  position  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  attributes Attribute[]
+
+  @@map("attribute_groups")
+}
+
+model Attribute {
+  id        Int            @id @default(autoincrement())
+  name      String
+  type      AttributeType
+  // a label only ("GB", "mm"): nothing is converted
+  unit      String?
+  groupId   Int
+  group     AttributeGroup @relation(fields: [groupId], references: [id], onDelete: Restrict)
+  position  Int
+  // a main characteristic splits the products of a list into rows by its value (a colour); only a
+  // choice, a number or yes/no can be one (db/06)
+  isMain    Boolean        @default(false)
+  // a buyer may filter the catalog by it (a text never is)
+  inFilters Boolean        @default(true)
+  // a number: the digits after the point (0 to 3) and the bounds; empty for the other types (db/06)
+  decimals  Int?
+  minValue  Decimal?       @db.Decimal(18, 3)
+  maxValue  Decimal?       @db.Decimal(18, 3)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @default(now()) @updatedAt
+
+  options    AttributeOption[]
+  categories CategoryAttribute[]
+  values     VariantAttributeValue[]
+
+  @@index([groupId])
+  @@map("attributes")
+}
+
+// a value of a characteristic that is a choice: "black", "XL", "iOS"; found by its id, so a rename
+// breaks no filter
+model AttributeOption {
+  id          Int       @id @default(autoincrement())
+  attributeId Int
+  attribute   Attribute @relation(fields: [attributeId], references: [id], onDelete: Cascade)
+  name        String
+  position    Int
+  // for a swatch of a colour on the storefront: #RRGGBB
+  colorCode   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @default(now()) @updatedAt
+
+  values VariantAttributeValue[]
+
+  @@index([attributeId])
+  @@map("attribute_options")
+}
+
+// the characteristics a category asks of its products, and which of them are required; a child
+// category has the ones of its parents too (read, not stored)
+model CategoryAttribute {
+  categoryId  Int
+  category    Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  attributeId Int
+  attribute   Attribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+  required    Boolean   @default(false)
+
+  @@id([categoryId, attributeId])
+  @@index([attributeId])
+  @@map("category_attributes")
+}
+
+// The directory of the documents products show to a buyer: an instruction, a certificate, a
+// declaration of conformity, as PDF files kept on Cloudinary as raw files (the public id keeps
+// the .pdf). One row serves every product that names it. db/06 holds the values.
+model Document {
+  id        Int          @id @default(autoincrement())
+  title     String
+  kind      DocumentKind
+  // where the file lies on Cloudinary, and its public id there
+  url       String
+  publicId  String       @unique
+  sizeBytes Int
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @default(now()) @updatedAt
+
+  products ProductDocument[]
+
+  @@index([kind])
+  @@map("documents")
+}
+
+// the documents a product names, in the order an admin gave them (position from 1, one place for
+// one document); a document in use cannot be deleted
+model ProductDocument {
+  productId  Int
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  documentId Int
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  position   Int
+
+  @@id([productId, documentId])
+  @@unique([productId, position])
+  @@index([documentId])
+  @@map("product_documents")
 }
 
 // A product of the catalog. Taking it out of the catalog sets deletedAt and the row stays, because
@@ -278,37 +441,24 @@ model Category {
 model Product {
   id          Int     @id @default(autoincrement())
   name        String
-  // the text, or a json document { v, text, safety } that also holds the safety and origin data of
-  // the manufacturer (src/helpers/productDescription.ts); an older description is plain text
+  // plain text; the safety and origin data of the product are the manufacturer and the person
+  // responsible in the EU below, and the warnings
   description String?
-  // the article number: optional; one product of the catalog has a number, letter case ignored,
-  // and a deleted product lets it go (db/06)
-  sku         String? @db.VarChar(64)
 
-  // the regular price, in the currency of the shop
-  price         Decimal @db.Decimal(10, 2)
-  // units on hand: the sum of what the batches have left. Only database functions change it
-  stock         Int     @default(0)
-  // units of stock held for confirmed orders that wait for payment
-  reservedStock Int     @default(0)
-
-  // the weight and the size of the product packed for sending, in grams and millimetres. The weight
-  // can be empty alone; the three sizes are set together or not at all (db/06)
-  weightGrams Int?
-  lengthMm    Int?
-  widthMm     Int?
-  heightMm    Int?
-
-  // the sale: while saleEndsAt is ahead the product sells at salePrice, which is below price. Both
-  // are set or both are empty (db/06). A price put down to the sale price or below ends the sale
-  // (db/05). After saleEndsAt the fields stay as they are and the sale is simply over
-  salePrice      Decimal?  @db.Decimal(10, 2)
-  saleEndsAt     DateTime?
-  // the lowest price of the 30 days before the sale; it goes only with a sale (db/06)
-  salePriorPrice Decimal?  @db.Decimal(10, 2)
+  // what a buyer chooses and buys: the price, the sale, the stock, the article number, the weight
+  // and the size are not here, every variant has its own. A product has at least one variant
 
   categoryId Int
   category   Category @relation(fields: [categoryId], references: [id])
+
+  // who made the product (EU GPSR), and the person who answers for it in the EU, which a
+  // manufacturer outside the EU needs; a party in use cannot be deleted
+  manufacturerId  Int
+  manufacturer    Party   @relation("ProductManufacturer", fields: [manufacturerId], references: [id], onDelete: Restrict)
+  euResponsibleId Int?
+  euResponsible   Party?  @relation("ProductEuResponsible", fields: [euResponsibleId], references: [id], onDelete: Restrict)
+  // the warnings of the product, plain text, optional (db/06 holds the length)
+  warnings        String?
 
   // how many times buyers opened the card (an admin's opens are not counted)
   views Int @default(0)
@@ -331,29 +481,33 @@ model Product {
   // moved by the edits of an admin only; a view, a sale of stock and a new review do not move it
   updatedAt DateTime @default(now()) @updatedAt
 
+  documents       ProductDocument[]
   reviews         Review[]
   favorites       Favorite[]
   orderItems      OrderItem[]
   priceChangeLogs ProductPriceChangeLog[]
   images          ProductImage[]
+  variants        ProductVariant[]
   batches         ProductBatch[]
   allocations     OrderBatchAllocation[]
+  stockLogs       StockLog[]
 
   @@index([categoryId])
-  @@index([price, id])
+  @@index([manufacturerId])
+  @@index([euResponsibleId])
   @@index([createdAt, id])
   @@index([name, id])
   @@index([popularity, id])
   @@index([views, id])
-  @@index([stock, id])
   @@index([updatedAt, id])
   @@index([avgRating, id])
   @@index([reviewsCount, id])
   @@map("products")
 }
 
-// A picture of a product, kept in Cloudinary. Lists, carts and orders show the primary picture, and
-// a product has at most one (db/06).
+// A picture in the gallery of a product, kept in Cloudinary. The gallery is loaded once for the
+// product; every variant picks its own pictures from it (VariantImage), and lists, carts and
+// orders show the pictures of the variant.
 model ProductImage {
   id Int @id @default(autoincrement())
 
@@ -366,14 +520,136 @@ model ProductImage {
   alt      String?
 
   // the place in the gallery of the product
-  position  Int     @default(0)
-  isPrimary Boolean @default(false)
+  position Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
+  variantImages VariantImage[]
+
   @@index([productId, position])
   @@map("product_images")
+}
+
+// What a buyer chooses and buys of a product: a size, a color, a memory. A product has at least one
+// variant; a book has just one and the buyer never notices it. The price, the sale, the stock, the
+// article number, the weight and the size are the variant's, not the product's. The units are
+// changed only by database functions (db/05): a delivery, a sale, a write-off, a cancel.
+model ProductVariant {
+  id Int @id @default(autoincrement())
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // the place among the variants of the product, set by an admin (a new variant is the last one);
+  // the main variant of the card is the first one with free units (db/06 keeps the place unique)
+  position Int
+
+  // the article number: optional; one live variant of the catalog has a number, letter case
+  // ignored, and a deleted variant lets it go (db/06)
+  sku     String? @db.VarChar(64)
+  // the barcode: 8, 12, 13 or 14 digits with a good check digit (the server checks it); one live
+  // variant of the catalog has a code (db/06)
+  barcode String? @db.VarChar(14)
+
+  // the regular price, in the currency of the shop
+  price         Decimal @db.Decimal(10, 2)
+  // units on hand: the sum of what the batches have left. Only database functions change it
+  stock         Int     @default(0)
+  // units of stock held for confirmed orders that wait for payment
+  reservedStock Int     @default(0)
+
+  // the weight and the size of the variant packed for sending, in grams and millimetres. The
+  // weight can be empty alone; the three sizes are set together or not at all (db/06)
+  weightGrams Int?
+  lengthMm    Int?
+  widthMm     Int?
+  heightMm    Int?
+
+  // the sale: while saleEndsAt is ahead the variant sells at salePrice, which is below price. Both
+  // are set or both are empty (db/06). A price put down to the sale price or below ends the sale
+  // (db/05). After saleEndsAt the fields stay as they are and the sale is simply over
+  salePrice      Decimal?  @db.Decimal(10, 2)
+  saleEndsAt     DateTime?
+  // the lowest price of the 30 days before the sale; it goes only with a sale (db/06)
+  salePriorPrice Decimal?  @db.Decimal(10, 2)
+
+  // when the variant was taken out of sale: a buyer sees and buys no such variant, an admin sees
+  // and does everything. A product that is deleted takes its variants with it (db/05)
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
+  // moved by the edits of an admin only
+  updatedAt DateTime @default(now()) @updatedAt
+
+  images          VariantImage[]
+  favorites       Favorite[]
+  orderItems      OrderItem[]
+  priceChangeLogs ProductPriceChangeLog[]
+  batches         ProductBatch[]
+  allocations     OrderBatchAllocation[]
+  stockLogs       StockLog[]
+  attributeValues VariantAttributeValue[]
+
+  // the key a row of another table uses to name the variant together with its product, so the two
+  // always belong together
+  @@unique([id, productId])
+  @@index([productId, deletedAt])
+  @@index([price, id])
+  @@index([stock, id])
+  @@map("product_variants")
+}
+
+// A picture of the gallery that a variant shows, at a place of its own (the main picture of the
+// variant is the first). A picture taken out of the gallery leaves every variant (db/06 keeps the
+// place unique within a variant).
+model VariantImage {
+  id Int @id @default(autoincrement())
+
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  imageId Int
+  image   ProductImage @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  position Int
+
+  createdAt DateTime @default(now())
+
+  @@unique([variantId, imageId])
+  @@index([imageId])
+  @@map("variant_images")
+}
+
+// What a variant has of a characteristic of the directory: one row for a value, so a text, a number
+// or a yes/no is one row, and a choice from a list is one row too; a characteristic that holds
+// several values of its list (type options) has one row for each value chosen. Exactly one of the
+// four value columns is set, the one the type of the characteristic asks for (db/05 keeps the value
+// within its type, db/06 keeps one row for one value). A characteristic that has no row for a
+// variant is a characteristic the variant does not have: there is no empty value.
+model VariantAttributeValue {
+  id Int @id @default(autoincrement())
+
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  attributeId Int
+  attribute   Attribute @relation(fields: [attributeId], references: [id], onDelete: Restrict)
+
+  // a value of the list of the characteristic (a choice, or one of several)
+  optionId Int?
+  option   AttributeOption? @relation(fields: [optionId], references: [id], onDelete: Restrict)
+
+  // a text, trimmed, up to 500 signs
+  textValue   String?
+  // a number, within the digits after the point and the bounds of the characteristic
+  numberValue Decimal? @db.Decimal(18, 3)
+  // yes or no
+  boolValue   Boolean?
+
+  @@index([attributeId, optionId])
+  @@index([optionId])
+  @@map("variant_attribute_values")
 }
 
 // A review of a product by a buyer: a rating, a comment or both (db/06). A buyer has one review
@@ -442,11 +718,17 @@ model Favorite {
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
+  // the variant the buyer likes; the product is kept beside it for the popularity of the product
+  // (the two always belong together)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
+
   createdAt DateTime @default(now())
 
-  @@unique([userId, productId])
-  @@unique([guestId, productId])
+  @@unique([userId, variantId])
+  @@unique([guestId, variantId])
   @@index([productId])
+  @@index([variantId])
   @@map("favorites")
 }
 
@@ -492,6 +774,8 @@ model Order {
   items            OrderItem[]
   // the batches the paid order took units from
   allocations      OrderBatchAllocation[]
+  // the lines of the stock log: the sale at the payment and the units back at the cancel
+  stockLogs        StockLog[]
   // the versions of the terms and of the contract the order was confirmed with
   legalAcceptances LegalAcceptance[]
 
@@ -600,7 +884,12 @@ model ProductBatch {
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
-  // the delivery the batch came with: one delivery takes in batches of several products
+  // a batch holds the units of one variant; the product is kept beside it (the two always belong
+  // together)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
+
+  // the delivery the batch came with: one delivery takes in batches of several variants
   deliveryId String @db.Uuid
 
   source              StockSource
@@ -619,7 +908,8 @@ model ProductBatch {
 
   allocations OrderBatchAllocation[]
 
-  @@index([productId, expiresAt, createdAt, id])
+  @@index([variantId, expiresAt, createdAt, id])
+  @@index([productId])
   @@index([createdAt, id])
   @@index([deliveryId])
   @@map("product_batches")
@@ -637,6 +927,9 @@ model OrderBatchAllocation {
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
+
   batchId Int
   batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
 
@@ -647,12 +940,13 @@ model OrderBatchAllocation {
   @@unique([orderId, batchId])
   @@index([batchId])
   @@index([productId])
+  @@index([variantId])
   @@map("order_batch_allocations")
 }
 
-// A line of an order: a product and a quantity. The database sets unitPrice and totalPrice from
-// the price the product sells at now, the caller cannot set them; the items of a confirmed order
-// do not change (db/05).
+// A line of an order: a variant of a product and a quantity. The database sets unitPrice and
+// totalPrice from the price the variant sells at now, the caller cannot set them; the items of a
+// confirmed order do not change (db/05).
 model OrderItem {
   id Int @id @default(autoincrement())
 
@@ -662,11 +956,15 @@ model OrderItem {
   productId Int
   product   Product @relation(fields: [productId], references: [id])
 
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId])
+
   quantity    Int
   unitPrice   Decimal @db.Decimal(10, 2)
   totalPrice  Decimal @db.Decimal(10, 2)
-  // the name of the product: it follows the product while the order is a cart, and the
-  // confirmation keeps the name of that moment (db/05); empty on old items
+  // the name of the variant (the name of the product and the values that tell the variants
+  // apart): it follows the variant while the order is a cart, and the confirmation keeps the name
+  // of that moment (db/05); empty on old items
   productName String?
 
   createdAt DateTime @default(now())
@@ -674,6 +972,7 @@ model OrderItem {
 
   @@index([orderId])
   @@index([productId])
+  @@index([variantId])
   @@map("order_items")
 }
 
@@ -749,6 +1048,10 @@ model ProductPriceChangeLog {
   productId Int
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
 
+  // the variant whose price changed; the product is kept beside it (the two always belong together)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
+
   actorId Int
   actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
 
@@ -773,6 +1076,7 @@ model ProductPriceChangeLog {
   createdAt DateTime @default(now())
 
   @@index([productId, createdAt])
+  @@index([variantId, createdAt])
   @@index([actorId, createdAt])
   @@index([event, createdAt])
   @@map("product_price_change_logs")
@@ -831,6 +1135,59 @@ model AdminAuditLog {
   @@index([action, createdAt])
   @@index([event, createdAt])
   @@map("admin_audit_log")
+}
+
+// The journal of the stock: a line for every change of the quantity of a variant (product_variants
+// stock), with the event that made it. Only added, nobody edits or deletes a line, and only admin and
+// root read. The lines are written by the functions of the database that move the stock (db/05, by
+// log_stock_change) in the same transaction: a delivery, a write-off, a sale at the payment of an
+// order and the units back at the cancel of a paid order. A reserve and its release do not change
+// the stock and have no line. For a variant whose stock only moved through those functions the
+// sum of the quantityChange is its stock and the last stockAfter is its stock.
+model StockLog {
+  id Int @id @default(autoincrement())
+
+  // who did it; empty for the work of the system (the sale at the payment of an order, which the
+  // payment webhook does). The role is empty together with the account (db/06)
+  actorId   Int?
+  actor     User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actorRole Role?
+
+  // the variant, and its product beside it (the two always belong together). A variant that has a
+  // line cannot be deleted for good
+  productId Int
+  product   Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
+
+  // what made the line: stock.delivery, stock.write_off, stock.sale, stock.cancel_return (the list
+  // is src/config/journalEvents.ts)
+  event          String @db.VarChar(60)
+  // the change of the stock, units in above 0 and out below 0, and the stock after it
+  quantityChange Int
+  stockAfter     Int
+  // what the change was made of, a list of { field, old, new }: the batches with their costs, the
+  // reason of a write-off, the supplier, the invoice and the note of a delivery
+  meta           Json?
+
+  // the operation that touched many variants carries one id in all its lines
+  deliveryId String? @db.Uuid
+  writeOffId String? @db.Uuid
+  orderId    Int?
+  order      Order?  @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  // the address and the browser of the request; empty for work done without a request
+  ip        String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([variantId, createdAt])
+  @@index([productId, createdAt])
+  @@index([event, createdAt])
+  @@index([createdAt, id])
+  @@index([actorId, createdAt])
+  @@map("stock_log")
 }
 
 // A version of the terms or of the contract of the shop. Root publishes it and nobody changes or

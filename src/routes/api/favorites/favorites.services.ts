@@ -1,15 +1,20 @@
-import { expiredUnitsOf } from '@db/expiredStock.helper.js';
-import { Prisma } from '@prisma/client';
-import { prisma } from '@db/client.js';
+import { getPgMessage, prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
-import { encodeCursor, decodeCursor } from '@helpers/codeCursor.js';
+import { Prisma } from '@prisma/client';
 import { assertLimit } from '@helpers/assertLimit.js';
+import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import {
-  mapProductListRowToResponse,
-  productListSelect,
-} from '../products/services/helpers/getAllProducts.helper.js';
+  mapProductListPart,
+  productResponseSelect,
+} from '../products/services/helpers/productMapper.helper.js';
+import {
+  readVariantContext,
+  variantRowSelect,
+  variantShortOf,
+  visibleVariantWhere,
+} from '../products/services/helpers/variant.helper.js';
 
-import { BadRequestError, NotFoundError, InternalError, isAppError } from '@utils/errors.js';
+import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 import type {
   FindFavoritesDto,
   GetFavoritesResponseDto,
@@ -18,6 +23,9 @@ import type {
   DeleteFavoriteDto,
   DeleteFavoriteResponseDto,
 } from 'types/dto/favorites.dto.js';
+
+// the variants a buyer sees: alive, with a picture, of a product that is in the catalog
+const BUYER_VARIANT = { ...visibleVariantWhere, product: { deletedAt: null } };
 
 async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesResponseDto> {
   // normalize keyset pagination input
@@ -63,12 +71,8 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
           ? { guestId: dto.actorId as string }
           : { userId: Number(dto.actorId) };
 
-      // the list of a buyer: a product taken out of the catalog or without an image is left out,
-      // the favorite itself stays
-      const baseWhere: any = {
-        ...actorWhere,
-        product: { deletedAt: null, images: { some: { isPrimary: true } } },
-      };
+      // the list of a buyer: a variant the buyer does not see is left out, the favorite itself stays
+      const baseWhere: Prisma.FavoriteWhereInput = { ...actorWhere, variant: BUYER_VARIANT };
 
       // apply cursor window when provided
       const finalWhere = cursorWhere ? { AND: [baseWhere, cursorWhere] } : baseWhere;
@@ -78,30 +82,42 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
         where: finalWhere,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
-        select: {
-          id: true,
-          createdAt: true,
-          // the card of a list: free units, the sale while it lasts, the primary image
-          product: { select: productListSelect },
-        },
+        select: { id: true, createdAt: true, productId: true, variantId: true },
       });
 
       const hasNext = rows.length > limit;
       const pageRows = hasNext ? rows.slice(0, limit) : rows;
 
-      // map favorites into product cards; the free units leave out the units that are over
-      const expired = await expiredUnitsOf(
-        tx,
-        pageRows.map((r) => r.product.id),
-      );
-      const items = pageRows.map((r) => ({
-        // a favorite is a product of a buyer list
-        product: mapProductListRowToResponse(
-          { ...r.product, expiredStock: expired.get(r.product.id) ?? 0 },
-          'buyer',
-        ),
-        addedAt: r.createdAt,
-      }));
+      // the products and the variants of the page, each read apart (a query reads at most two
+      // relations side by side), put in the order of the favorites
+      const products = await tx.product.findMany({
+        where: { id: { in: [...new Set(pageRows.map((row) => row.productId))] } },
+        select: productResponseSelect,
+      });
+      const variants = await tx.productVariant.findMany({
+        where: { id: { in: pageRows.map((row) => row.variantId) } },
+        select: variantRowSelect,
+      });
+      const context = await readVariantContext(tx, variants, 'buyer');
+
+      const productById = new Map(products.map((row) => [row.id, row]));
+      const variantById = new Map(variants.map((row) => [row.id, row]));
+
+      const items = pageRows.flatMap((row) => {
+        const product = productById.get(row.productId);
+        const variant = variantById.get(row.variantId);
+        // a row that vanished between the two reads (the variant is deleted for good) is left out
+        if (!product || !variant) return [];
+
+        return [
+          {
+            // the product as a list of a buyer shows it, and the variant the buyer likes
+            product: mapProductListPart(product, 'buyer'),
+            variant: variantShortOf(variant, context, 'buyer'),
+            addedAt: row.createdAt,
+          },
+        ];
+      });
 
       const last = pageRows.length ? pageRows[pageRows.length - 1] : null;
 
@@ -117,12 +133,21 @@ async function findFavorites(dto: FindFavoritesDto): Promise<GetFavoritesRespons
   }
 }
 
+// whether a failure of the database says the variant is not one to keep: the triggers that refuse a
+// new favorite of a variant or a product taken out, the foreign key of a variant that is gone
+function isMissingVariant(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') return true;
+
+  const message = `${getPgMessage(err) ?? ''} ${(err as Error)?.message ?? ''}`;
+  return message.includes('VARIANT_NOT_FOUND') || message.includes('PRODUCT_NOT_FOUND');
+}
+
 async function addFavorite(dto: AddFavoriteDto): Promise<AddFavoriteResponseDto> {
   // idempotent add favorite for actor
-  const { actorId, actorRole, productId } = dto;
+  const { actorId, actorRole, variantId } = dto;
 
-  if (productId == null || !Number.isInteger(productId) || productId <= 0) {
-    throw new BadRequestError('PRODUCT_ID_INVALID');
+  if (!Number.isInteger(variantId) || variantId <= 0) {
+    throw new BadRequestError('VARIANT_ID_INVALID');
   }
 
   try {
@@ -130,39 +155,29 @@ async function addFavorite(dto: AddFavoriteDto): Promise<AddFavoriteResponseDto>
       // set rls session context
       await setActorContext(tx, { actorId, role: actorRole });
 
-      // enforce not deleted product
-      const exists = await tx.product.findFirst({
-        where: { id: productId, deletedAt: null },
-        select: { id: true },
+      // a favorite is a variant a buyer sees; the product it belongs to is kept beside it
+      const variant = await tx.productVariant.findFirst({
+        where: { id: variantId, ...BUYER_VARIANT },
+        select: { id: true, productId: true },
       });
-      if (!exists) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      if (!variant) throw new NotFoundError('VARIANT_NOT_FOUND', { variantId });
 
+      // write favorite row by actor kind; the same variant again is kept once
+      const owner =
+        actorRole === 'GUEST' ? { guestId: actorId as string } : { userId: Number(actorId) };
       try {
-        // write favorite row by actor kind
-        if (actorRole === 'GUEST') {
-          await tx.favorite.create({
-            data: { guestId: actorId as string, productId },
-          });
-        } else {
-          const userId = typeof actorId === 'number' ? actorId : Number(actorId);
-          await tx.favorite.create({
-            data: { userId, productId },
-          });
-        }
+        await tx.favorite.createMany({
+          data: [{ ...owner, productId: variant.productId, variantId: variant.id }],
+          skipDuplicates: true,
+        });
       } catch (err) {
-        // treat unique conflict as already favorited
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-          return { productId, isFavorite: true };
-        }
-
-        if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') {
-          throw new NotFoundError('PRODUCT_NOT_FOUND');
-        }
+        // the variant went out of sale between the read and the write
+        if (isMissingVariant(err)) throw new NotFoundError('VARIANT_NOT_FOUND', { variantId });
 
         throw err;
       }
 
-      return { productId, isFavorite: true };
+      return { variantId, isFavorite: true as const };
     });
   } catch (err) {
     if (isAppError(err)) throw err;
@@ -172,7 +187,7 @@ async function addFavorite(dto: AddFavoriteDto): Promise<AddFavoriteResponseDto>
 
 async function deleteFavorite(dto: DeleteFavoriteDto): Promise<DeleteFavoriteResponseDto> {
   // idempotent remove favorite for actor
-  const { actorId, actorRole, productId } = dto;
+  const { actorId, actorRole, variantId } = dto;
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -180,15 +195,15 @@ async function deleteFavorite(dto: DeleteFavoriteDto): Promise<DeleteFavoriteRes
       await setActorContext(tx, { actorId, role: actorRole });
 
       if (actorRole === 'GUEST') {
-        await tx.favorite.deleteMany({ where: { guestId: actorId as string, productId } });
+        await tx.favorite.deleteMany({ where: { guestId: actorId as string, variantId } });
         return;
       }
 
       const userId = typeof actorId === 'number' ? actorId : Number(actorId);
-      await tx.favorite.deleteMany({ where: { userId, productId } });
+      await tx.favorite.deleteMany({ where: { userId, variantId } });
     });
 
-    return { productId, isFavorite: false };
+    return { variantId, isFavorite: false };
   } catch (err) {
     if (isAppError(err)) throw err;
     throw new InternalError({ reason: 'FAVORITES_DELETE_UNEXPECTED' }, err);

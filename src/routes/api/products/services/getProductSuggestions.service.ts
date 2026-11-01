@@ -12,7 +12,7 @@ import type {
 import type { ProductId } from 'types/ids.js';
 
 // up to 8 names of the catalog for what a person types, forgiving a typo, the best match first;
-// a product taken out of the catalog is not among them, nor one without an image for a buyer
+// a product taken out of the catalog is not among them, nor one none of whose variants a buyer sees
 export async function findSuggestions(
   dto: ProductSuggestionsDto,
 ): Promise<ProductSuggestionsResponseDto> {

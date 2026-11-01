@@ -53,6 +53,15 @@ export default {
   // real leak still holds it past this time and gets the warning
   workerGracefulExitTimeout: 15_000,
 
+  // the copy of the modules of a finished test file stays reachable from the caches of compiled
+  // code of v8 until a last resort collection, which tests/setup/integration.gc.ts makes after
+  // every integration file (node gets --expose-gc from tests/run.mjs); without it a worker grew by
+  // the size of the app, about 70 MB a file, and met the heap limit of node after some forty. This
+  // limit is the fallback for jest started without the flag: a worker over it is replaced after
+  // the file it is on. In band there is no worker to replace, so the runner gives one worker with
+  // --maxWorkers=1 and not --runInBand (tests/run.mjs)
+  workerIdleMemoryLimit: '1500MB',
+
   // the files that change what the whole shop does for everybody (*.shopwide.test.ts) run last,
   // each alone (tests/setup/integration.shopState.ts)
   testSequencer: '<rootDir>/tests/setup/sequencer.mjs',
@@ -75,6 +84,8 @@ export default {
       // cloudinary calls stay in its test/ folder; sendgrid and stripe answer from mocks unless
       // the run takes them for real; the time of a test is the same as in the unit tests
       setupFilesAfterEnv: [
+        '<rootDir>/tests/setup/integration.gc.ts',
+        '<rootDir>/tests/setup/integration.driver.ts',
         '<rootDir>/tests/setup/integration.shopState.ts',
         '<rootDir>/tests/setup/integration.logs.ts',
         '<rootDir>/tests/setup/integration.contract.ts',

@@ -1,6 +1,7 @@
 import { findAll } from './services/getAllProducts.service.js';
-import { findById } from './services/getProductById.service.js';
+import { findById, findVariant } from './services/getProductById.service.js';
 import { findSuggestions } from './services/getProductSuggestions.service.js';
+import { findCatalogFilters } from './services/getCatalogFilters.service.js';
 import { restoreProduct } from './services/restoreProduct.service.js';
 import { findPriceHistory } from './services/priceHistory.service.js';
 import { createProduct } from './services/createProduct.service.js';
@@ -16,11 +17,30 @@ import { deleteProductReview } from './services/deleteReview.service.js';
 import { deleteProductById } from './services/deleteProduct.service.js';
 import { receiveStock } from './services/receiveStock.service.js';
 import { writeOffStock } from './services/writeOffStock.service.js';
+import { createVariants } from './services/createVariants.service.js';
+import { updateVariant } from './services/updateVariant.service.js';
+import { updateVariants } from './services/updateVariants.service.js';
+import { updateVariantsBatch } from './services/updateVariantsBatch.service.js';
+import { deleteVariant } from './services/deleteVariant.service.js';
+import { restoreVariant } from './services/restoreVariant.service.js';
+import { readGalleryRoom, uploadGallery } from './services/uploadGallery.service.js';
+import { deleteGalleryImage } from './services/deleteGalleryImage.service.js';
 
 export const productServices = {
   findAll,
   findSuggestions,
+  findCatalogFilters,
   findById,
+  findVariant,
+  createVariants,
+  updateVariant,
+  updateVariants,
+  updateVariantsBatch,
+  deleteVariant,
+  restoreVariant,
+  readGalleryRoom,
+  uploadGallery,
+  deleteGalleryImage,
   restoreProduct,
   findPriceHistory,
   findReviews,

@@ -5,7 +5,10 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { shopToday } from '@helpers/shopDay.js';
 import { NotFoundError } from '@utils/errors.js';
 import { orderTimeoutWorkerState } from '../../../../workers/orderTimeout.worker.js';
-import { FREE_STOCK_SQL } from '../../products/services/helpers/getAllProducts.helper.js';
+import {
+  FREE_STOCK_SQL,
+  visibleSql,
+} from '../../products/services/helpers/getAllProducts.helper.js';
 import { utcTime } from './helpers/accountingSql.helper.js';
 import {
   dismissalFieldOf,
@@ -41,7 +44,8 @@ import type { Role } from 'types/user.js';
 // with how many cases wait, counted when asked in one snapshot with the thresholds of the actor,
 // and the request to the list of the app that shows those cases. Root has the actions of the
 // admins too. Each admin and each root, for themselves, follows a kind or not and sets its
-// threshold (admin_alert_settings), and puts single cases aside (in redis)
+// threshold (admin_alert_settings), and puts single cases aside (in redis). The cases of the
+// stock are variants (a product with three variants out of stock is three cases)
 
 type Db = Prisma.TransactionClient;
 type Actor = { actorId: UserId; actorRole: Role };
@@ -59,11 +63,27 @@ type Cases = { from: Prisma.Sql; where: Prisma.Sql };
 const ORDERS = Prisma.sql`from cartlify.orders as t`;
 const BATCHES = Prisma.sql`from cartlify.product_batches as t`;
 const LOG = Prisma.sql`from cartlify.admin_audit_log as t`;
-// the products with their free units, the number the catalog shows as stock
-const PRODUCTS = Prisma.sql`from (
-    select p.id, p."deletedAt", p."weightGrams", p."lengthMm", ${FREE_STOCK_SQL} as free
-    from cartlify.products as p
+// the variants of the products of the catalog with their free units, the number the catalog shows
+// as stock. A case is a variant: t.id is its id. A variant taken out of sale is none of the cases
+// of the kinds that count variants (the stock and the shipping data); its batches still are cases
+// of the kinds that count batches
+const VARIANTS = Prisma.sql`from (
+    select v.id, v."deletedAt", v."weightGrams", v."lengthMm", ${FREE_STOCK_SQL} as free
+    from cartlify.product_variants as v
+    join cartlify.products as p on p.id = v."productId"
+    where p."deletedAt" is null
   ) as t`;
+
+// the variants that lack a characteristic their category requires: the view of the database is the
+// one place of the rule, the admin list (missingRequired) reads it too. A case is a variant: t.id is
+// its id, whatever number of characteristics it lacks
+const MISSING_REQUIRED = Prisma.sql`from (
+    select distinct m.variant_id as id from cartlify.variants_missing_required as m
+  ) as t`;
+// the products of the catalog a buyer sees none of the variants of: no variant that is alive and
+// shows a picture (the rule of the list of a buyer, visibleSql). A product removed from the catalog
+// is none of them: it was removed on purpose. A case is a product: t.id is its id
+const HIDDEN_PRODUCTS = Prisma.sql`from cartlify.products as t`;
 
 // the order is delivered by the method: the delivery row of the order says it
 const deliveryMethodIs = (method: 'manual' | 'pickup') => Prisma.sql`exists (
@@ -100,20 +120,33 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
         and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
     )`,
   }),
-  // products of the catalog with no free units
+  // variants of the catalog with no free units
   out_of_stock: () => ({
-    from: PRODUCTS,
+    from: VARIANTS,
     where: Prisma.sql`t."deletedAt" is null and t.free = 0`,
   }),
-  // products of the catalog with few free units
+  // variants of the catalog with few free units
   low_stock: (window) => ({
-    from: PRODUCTS,
+    from: VARIANTS,
     where: Prisma.sql`t."deletedAt" is null and t.free >= 1 and t.free <= ${window.units ?? 0}`,
   }),
-  // products of the catalog that lack the weight or the sizes (the sizes come all three or none)
+  // variants of the catalog that lack the weight or the sizes (the sizes come all three or none)
   products_without_shipping_data: () => ({
-    from: PRODUCTS,
+    from: VARIANTS,
     where: Prisma.sql`t."deletedAt" is null and (t."weightGrams" is null or t."lengthMm" is null)`,
+  }),
+  // variants that lack a value of a characteristic their category requires
+  variants_missing_required: () => ({
+    from: MISSING_REQUIRED,
+    where: Prisma.sql`true`,
+  }),
+  // products of the catalog none of whose variants a buyer sees
+  products_hidden_from_buyers: () => ({
+    from: HIDDEN_PRODUCTS,
+    where: Prisma.sql`t."deletedAt" is null and not exists (
+      select 1 from cartlify.product_variants as hv
+      where hv."productId" = t.id and ${visibleSql('hv')}
+    )`,
   }),
   // batches with units whose last good day is near, by the day of the shop
   expiring_batches: (window) => ({

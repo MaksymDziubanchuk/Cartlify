@@ -2,12 +2,14 @@ import { describe, expect, it } from '@jest/globals';
 
 import { isRateLimitFree } from '@helpers/rateLimitFree.js';
 
+import { shopLogoUrl } from '../../helpers/shopLogo.js';
+
 describe('isRateLimitFree', () => {
   it.each([
     '/health',
     '/health/',
     '/ready',
-    '/static/images/logo3.png',
+    shopLogoUrl(),
     '/api/payments/stripe/webhook',
     '/api/payments/stripe/webhook?from=stripe',
   ])('leaves %s out of the rate limit', (url) => {

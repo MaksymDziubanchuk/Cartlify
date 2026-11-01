@@ -93,6 +93,7 @@ const adminUserResponseExample = {
       createdAt: '2025-12-31T09:00:00.000Z',
       ipAddress: '192.0.2.10',
       userAgent: 'Mozilla/5.0',
+      event: 'login.password',
     },
   ],
 };
@@ -256,8 +257,10 @@ const getMeExportSchema = {
   summary: 'Export my data',
   description:
     'Everything the shop keeps of the signed-in person, read with the rights of the person, as one JSON file ' +
-    '(content-disposition attachment): the profile, the orders, the favorites, the reviews and votes, the ' +
-    'chats, the logins, the open sessions and the consents to the terms and the contract. At most ' +
+    '(content-disposition attachment): the profile, the orders (each item names its product and its variant, ' +
+    'with the name and the prices the order was confirmed with), the favorites (variants, each with its ' +
+    'product), the reviews and votes, the chats, the logins, the open sessions and the consents to the ' +
+    'terms and the contract. At most ' +
     env.LIMIT_EXPORT_PER_USER +
     ' a user an hour.',
 

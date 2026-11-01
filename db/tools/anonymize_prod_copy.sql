@@ -76,6 +76,12 @@ BEGIN
       ('admin_audit_log', 'action'), ('admin_audit_log', 'event'), ('admin_audit_log', 'meta'),
       ('admin_audit_log', 'ip'),
       ('admin_audit_log', 'userAgent'), ('admin_audit_log', 'createdAt'),
+      -- the stock log is the admin log of the stock: the address and the browser of the request go
+      ('stock_log', 'id'), ('stock_log', 'actorId'), ('stock_log', 'actorRole'),
+      ('stock_log', 'productId'), ('stock_log', 'variantId'), ('stock_log', 'event'),
+      ('stock_log', 'quantityChange'), ('stock_log', 'stockAfter'), ('stock_log', 'meta'),
+      ('stock_log', 'deliveryId'), ('stock_log', 'writeOffId'), ('stock_log', 'orderId'),
+      ('stock_log', 'ip'), ('stock_log', 'userAgent'), ('stock_log', 'createdAt'),
       -- a review is public: the shop shows it with its author, whose name changes above
       ('reviews', 'id'), ('reviews', 'productId'), ('reviews', 'userId'), ('reviews', 'rating'),
       ('reviews', 'comment'), ('reviews', 'createdAt'), ('reviews', 'downVotes'),
@@ -83,6 +89,14 @@ BEGIN
       -- tables with no personal data: the catalog, the stock, the money, what links them
       ('_prisma_migrations', '*'), ('admin_alert_settings', '*'), ('categories', '*'),
       ('legal_documents', '*'),
+      -- the manufacturers and the persons responsible in the EU: business data the card of a product shows
+      ('parties', '*'),
+      -- the documents of products and the directory of characteristics: catalog data
+      ('documents', '*'), ('product_documents', '*'),
+      ('attribute_groups', '*'), ('attributes', '*'), ('attribute_options', '*'),
+      ('category_attributes', '*'),
+      -- the variants of the products and the pictures each one shows: catalog data
+      ('product_variants', '*'), ('variant_images', '*'), ('variant_attribute_values', '*'),
       ('favorites', '*'), ('order_batch_allocations', '*'), ('order_items', '*'),
       ('product_batches', '*'), ('product_images', '*'), ('product_price_change_logs', '*'),
       ('products', '*'), ('review_votes', '*')
@@ -247,6 +261,15 @@ WHERE a.ip IS NOT NULL
     AND jsonb_array_length(a.meta) > 0
   );
 
+-- the stock log: the address and the browser of the request go, the rest is the work of the shop
+-- (the suppliers and the invoices of its deliveries are business data)
+UPDATE cartlify.stock_log
+SET
+  ip = NULL,
+  "userAgent" = NULL
+WHERE ip IS NOT NULL
+  OR "userAgent" IS NOT NULL;
+
 ------------------------------------------------------------
 -- 6. CHECK
 ------------------------------------------------------------
@@ -317,6 +340,13 @@ BEGIN
     WHERE EXISTS (
       SELECT 1
       FROM cartlify.admin_audit_log
+      WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
+    )
+    UNION ALL
+    SELECT 'stock_log'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.stock_log
       WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
     )
     UNION ALL

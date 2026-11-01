@@ -6,10 +6,14 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { parseDatabaseUrl, prisma } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
-import { inRolledBackTx, type DbSession, testTx } from '../../helpers/db.js';
+import { asAdmin, inRolledBackTx, type DbSession, testTx } from '../../helpers/db.js';
 import {
   closeSessions,
+  createAttribute,
+  createAttributeGroup,
+  createAttributeOption,
   createChatThread,
+  createDocument,
   createFavorite,
   createLoginLog,
   createProduct,
@@ -17,6 +21,7 @@ import {
   createReview,
   createReviewVote,
   createUser,
+  createVariantValue,
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
@@ -93,6 +98,22 @@ beforeAll(async () => {
   const review = await createReview(owner.id, product.id);
   await createReviewVote(voter.id, review.id, 'UP');
   await createFavorite(owner.id, product.id);
+  await createDocument({ productId: product.id });
+  // the directory of characteristics, with one of each: a group, a choice, a value, and a category
+  // that asks for the choice
+  const choice = await createAttribute({
+    type: 'option',
+    groupId: (await createAttributeGroup()).id,
+  });
+  await createAttributeOption(choice.id);
+  // the value a variant has of a characteristic
+  const note = await createAttribute({ type: 'text' });
+  await createVariantValue(product.variantId, note.id, { text: 'Matte' });
+  await asAdmin((tx) =>
+    tx.categoryAttribute.create({
+      data: { categoryId: product.categoryId, attributeId: choice.id },
+    }),
+  );
   await createChatThread(owner.id);
   await createLoginLog(owner, new Date());
   await createResetToken(owner.id);
@@ -103,7 +124,15 @@ beforeAll(async () => {
       data: {
         userId: owner.id,
         total: 0,
-        items: { create: { productId: product.id, quantity: 1, unitPrice: 10, totalPrice: 10 } },
+        items: {
+          create: {
+            productId: product.id,
+            variantId: product.variantId,
+            quantity: 1,
+            unitPrice: 10,
+            totalPrice: 10,
+          },
+        },
       },
       select: { id: true },
     });
@@ -130,7 +159,15 @@ beforeAll(async () => {
             house: '1',
           },
         },
-        items: { create: { productId: product.id, quantity: 1, unitPrice: 10, totalPrice: 10 } },
+        items: {
+          create: {
+            productId: product.id,
+            variantId: product.variantId,
+            quantity: 1,
+            unitPrice: 10,
+            totalPrice: 10,
+          },
+        },
       },
       select: { id: true },
     });
@@ -147,8 +184,8 @@ beforeAll(async () => {
     await tx.$executeRaw`select cartlify.log_admin_action(
       ${admin.id}::int, 'ADMIN'::cartlify."Role", 'product'::cartlify."AdminAuditEntityType",
       ${product.id}::int, 'OTHER'::cartlify."AdminAuditAction", 'product.update', '[]'::jsonb)`;
-    await tx.$executeRaw`select cartlify.log_product_price_change(
-      ${product.id}::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2, 'price.set')`;
+    await tx.$executeRaw`select cartlify.log_variant_price_change(
+      ${product.variantId}::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2, 'price.set')`;
     // a setting of an alert of the admin
     await tx.adminAlertSetting.create({
       data: { userId: admin.id, kind: 'low_stock', subscribed: false, threshold: 10 },
@@ -310,7 +347,23 @@ describe('without a context', () => {
   // the catalog the shop shows to every visitor; reviews name their author. A vote is what one
   // user did, the review keeps the counts. The versions of the terms and of the contract are
   // public too: everybody reads them before accepting them
-  const CATALOG = ['categories', 'legal_documents', 'product_images', 'products', 'reviews'];
+  const CATALOG = [
+    'attribute_groups',
+    'attribute_options',
+    'attributes',
+    'categories',
+    'category_attributes',
+    'documents',
+    'legal_documents',
+    'parties',
+    'product_documents',
+    'product_images',
+    'product_variants',
+    'products',
+    'reviews',
+    'variant_images',
+    'variant_attribute_values',
+  ];
 
   // the counts of the four contexts are compared, so they come from one snapshot of the tables
   it('shows no row outside the catalog, and of the catalog no more than a visitor sees', async () => {
@@ -357,7 +410,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(22);
+    expect(Object.keys(hidden)).toHaveLength(33);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );
@@ -459,8 +512,8 @@ describe('without a context', () => {
         product.id,
       ),
       price: await db.attempt(
-        `select 1 as done from cartlify.log_product_price_change($1::int, 10, 11, 'fixed', 1, 'price.set')`,
-        product.id,
+        `select 1 as done from cartlify.log_variant_price_change($1::int, 10, 11, 'fixed', 1, 'price.set')`,
+        product.variantId,
       ),
     }));
 
@@ -476,8 +529,8 @@ describe('without a context', () => {
     const { refreshed, unitPrice } = await inRolledBackTx(async (db) => {
       await db.as({ role: 'ADMIN', userId: admin.id });
       await db.rows(
-        'update cartlify.products set price = 15 where id = $1 returning 1',
-        product.id,
+        'update cartlify.product_variants set price = 15 where id = $1 returning 1',
+        product.variantId,
       );
       await db.as(null);
       const [refresh] = await db.rows<{ refreshed: number }>(

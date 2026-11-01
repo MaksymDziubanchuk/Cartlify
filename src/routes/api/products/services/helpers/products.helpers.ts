@@ -1,5 +1,9 @@
 import { Prisma } from '@prisma/client';
 import { getPgCode } from '@db/client.js';
+import {
+  parseCharacteristicFilter,
+  type CharacteristicFilterEntry,
+} from '@helpers/characteristicFilter.js';
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import { BadRequestError } from '@utils/errors.js';
 
@@ -29,7 +33,7 @@ export function normalizeSku(value: unknown): string | null | undefined {
   return sku;
 }
 
-// the article number another product of the catalog has already: the unique index of db/06
+// the article number another variant of the catalog has already: the unique index of db/06
 export function isSkuTaken(err: unknown): boolean {
   const unique =
     (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') ||
@@ -38,7 +42,7 @@ export function isSkuTaken(err: unknown): boolean {
 
   const meta = err instanceof Prisma.PrismaClientKnownRequestError ? err.meta : undefined;
   return `${JSON.stringify(meta ?? {})} ${String((err as Error)?.message ?? '')}`.includes(
-    'products_sku_catalog_uidx',
+    'product_variants_sku_catalog_uidx',
   );
 }
 
@@ -52,10 +56,11 @@ export function normalizeFindProductByIdInput(dto: { productId: unknown }) {
   return { productId };
 }
 
+// the fields of a new product itself; its price, its article number, its weight and its stock are
+// the ones of its variants (variantInput.helper.ts)
 export function normalizeCreateProductInput(args: {
   name: unknown;
   description?: unknown;
-  price: unknown;
   stock?: unknown;
   categoryId: unknown;
 }) {
@@ -70,7 +75,6 @@ export function normalizeCreateProductInput(args: {
 
   // normalize required scalars
   const nameRaw = toStringSafe(args.name);
-  const priceRaw = toNumberSafe(args.price);
 
   // normalize optional description
   const descriptionRaw = args.description != null ? toStringSafe(args.description) : undefined;
@@ -84,15 +88,9 @@ export function normalizeCreateProductInput(args: {
     throw new BadRequestError('PRODUCT_NAME_INVALID');
   }
 
-  // validate required price: cents, and what numeric(10, 2) holds
-  if (priceRaw == null || !isPrice(priceRaw)) {
-    throw new BadRequestError('PRODUCT_PRICE_INVALID');
-  }
-
   return {
     nameNorm,
     descriptionNorm,
-    priceRaw,
     categoryIdRaw,
   };
 }
@@ -100,7 +98,6 @@ export function normalizeUpdateProductInput(
   args: {
     name?: unknown;
     description?: unknown;
-    price?: unknown;
     stock?: unknown;
     categoryId?: unknown;
     popularityOverride?: unknown;
@@ -122,7 +119,6 @@ export function normalizeUpdateProductInput(
   // normalize optional scalars
   const nameRaw = args.name != null ? toStringSafe(args.name) : undefined;
   const descriptionRaw = args.description != null ? toStringSafe(args.description) : undefined;
-  const priceRaw = args.price != null ? toNumberSafe(args.price) : undefined;
 
   const popularityOverrideRaw =
     args.popularityOverride === null
@@ -144,11 +140,6 @@ export function normalizeUpdateProductInput(
   // validate optional name
   if (args.name != null && (!nameNorm || !nameNorm.length)) {
     throw new BadRequestError('PRODUCT_NAME_INVALID');
-  }
-
-  // validate optional price: cents, and what numeric(10, 2) holds
-  if (args.price != null && (priceRaw == null || !isPrice(priceRaw))) {
-    throw new BadRequestError('PRODUCT_PRICE_INVALID');
   }
 
   // validate optional popularity override
@@ -180,7 +171,6 @@ export function normalizeUpdateProductInput(
   return {
     nameNorm,
     descriptionNorm,
-    priceRaw,
     categoryIdRaw,
     popularityOverrideRaw,
     popularityOverrideUntilDate,
@@ -214,8 +204,12 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
   mode: 'percent' | 'fixed';
   value: number;
 
-  where: Prisma.ProductWhereInput;
-  // the products with free units (true) or without (false); none: every product of the scope
+  // the filter of the variants the change goes to
+  where: Prisma.ProductVariantWhereInput;
+  // the characteristics the variants have to have (scope.f, the filter of the catalog): the entries,
+  // none when the scope names none; the database checks them (resolveCharacteristicFilter)
+  characteristics: CharacteristicFilterEntry[];
+  // the variants with free units (true) or without (false); none: every variant of the scope
   inStock?: boolean;
 
   dryRun: boolean;
@@ -256,15 +250,17 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
     }
   }
 
-  const productIdsVal = scopeObj ? scopeObj.productIds : undefined;
-  let productIdsRaw: number[] | undefined = undefined;
-  if (Array.isArray(productIdsVal) && productIdsVal.length) {
-    const nums = productIdsVal.map((x) => toNumberSafe(x));
+  const idsOf = (value: unknown, code: string): number[] | undefined => {
+    if (!Array.isArray(value) || !value.length) return undefined;
+
+    const nums = value.map((x) => toNumberSafe(x));
     if (nums.some((n) => n == null || !Number.isInteger(n) || n <= 0)) {
-      throw new BadRequestError('PRODUCT_IDS_INVALID');
+      throw new BadRequestError(code);
     }
-    productIdsRaw = Array.from(new Set(nums as number[]));
-  }
+    return Array.from(new Set(nums as number[]));
+  };
+  const productIdsRaw = idsOf(scopeObj ? scopeObj.productIds : undefined, 'PRODUCT_IDS_INVALID');
+  const variantIdsRaw = idsOf(scopeObj ? scopeObj.variantIds : undefined, 'VARIANT_IDS_INVALID');
 
   const minPriceVal = scopeObj ? scopeObj.minPrice : undefined;
   const maxPriceVal = scopeObj ? scopeObj.maxPrice : undefined;
@@ -283,18 +279,22 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
     throw new BadRequestError('PRICE_RANGE_INVALID');
   }
 
+  const characteristics = parseCharacteristicFilter(scopeObj ? scopeObj.f : undefined);
+
   const inStockVal = scopeObj ? scopeObj.inStock : undefined;
   const inStockRaw = typeof inStockVal === 'boolean' ? inStockVal : undefined;
 
-  // deleted products stay untouched unless the request asks for them
+  // deleted variants (the ones of a deleted product too) stay untouched unless the request asks for them
   const deletedRaw = typeof scopeObj?.deleted === 'boolean' ? scopeObj.deleted : false;
 
   // build prisma where once, outside tx
-  const and: Prisma.ProductWhereInput[] = [];
+  const and: Prisma.ProductVariantWhereInput[] = [];
 
-  if (categoryIdRaw != null) and.push({ categoryId: categoryIdRaw });
-  if (productIdsRaw?.length) and.push({ id: { in: productIdsRaw } });
+  if (categoryIdRaw != null) and.push({ product: { categoryId: categoryIdRaw } });
+  if (productIdsRaw?.length) and.push({ productId: { in: productIdsRaw } });
+  if (variantIdsRaw?.length) and.push({ id: { in: variantIdsRaw } });
 
+  // the usual price of the variant, not the sale price
   if (minPriceRaw != null || maxPriceRaw != null) {
     and.push({
       price: {
@@ -310,12 +310,13 @@ export function normalizeBulkUpdateProductsPriceInput(args: {
   if (deletedRaw === true) and.push({ deletedAt: { not: null } });
   else if (deletedRaw === false) and.push({ deletedAt: null });
 
-  const where: Prisma.ProductWhereInput = and.length ? { AND: and } : {};
+  const where: Prisma.ProductVariantWhereInput = and.length ? { AND: and } : {};
 
   return {
     mode: modeRaw,
     value: valueRaw,
     where,
+    characteristics,
     ...(inStockRaw !== undefined ? { inStock: inStockRaw } : {}),
     dryRun,
     ...(reason ? { reason } : {}),

@@ -4,6 +4,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { getPgMessage, tx } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { requireSiteDomain } from '@helpers/siteDomain.js';
+import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { isRedisReady } from '@redis/client.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
@@ -47,7 +48,12 @@ type OpenOrder = {
   total: Prisma.Decimal;
   // how it goes to the buyer
   delivery: { method: 'manual' | 'pickup' } | null;
-  items: { quantity: number; productName: string | null; product: { name: string } }[];
+  items: {
+    quantity: number;
+    productName: string | null;
+    variantId: number;
+    product: { name: string };
+  }[];
 };
 
 type ErasedAccount = {
@@ -58,9 +64,9 @@ type ErasedAccount = {
 };
 
 const itemsOf = (order: OpenOrder): AccountDeletedItem[] =>
-  // the open orders are confirmed: each item has the name it was confirmed with
+  // the open orders are confirmed: each item has the name of its variant it was confirmed with
   order.items.map((item) => ({
-    name: item.productName ?? item.product.name,
+    name: itemNameOf(item),
     quantity: item.quantity,
   }));
 
@@ -124,7 +130,12 @@ async function eraseAccount(
           delivery: { select: { method: true } },
           items: {
             orderBy: { id: 'asc' },
-            select: { quantity: true, productName: true, product: { select: { name: true } } },
+            select: {
+              quantity: true,
+              productName: true,
+              variantId: true,
+              product: { select: { name: true } },
+            },
           },
         },
       })) as OpenOrder[];

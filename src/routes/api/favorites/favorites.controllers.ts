@@ -1,6 +1,5 @@
 import type { ControllerRouter } from 'types/controller.js';
 import type { UserEntity } from 'types/user.js';
-import type { ProductId } from 'types/ids.js';
 import type {
   GetFavoritesQueryDto,
   GetFavoritesResponseDto,
@@ -42,9 +41,9 @@ const postAddFavorite: ControllerRouter<
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
 
-  const productId = Number(req.params.productId) as ProductId;
+  const variantId = Number(req.params.variantId);
 
-  const args = pickDefined<AddFavoriteDto>({ actorId, actorRole, productId }, {});
+  const args = pickDefined<AddFavoriteDto>({ actorId, actorRole, variantId }, {});
 
   const result = await favoritesServices.addFavorite(args);
 
@@ -59,9 +58,9 @@ const deleteFavorite: ControllerRouter<
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
 
-  const productId = Number(req.params.productId) as ProductId;
+  const variantId = Number(req.params.variantId);
 
-  const args = pickDefined<DeleteFavoriteDto>({ actorId, actorRole, productId }, {});
+  const args = pickDefined<DeleteFavoriteDto>({ actorId, actorRole, variantId }, {});
 
   const result = await favoritesServices.deleteFavorite(args);
 

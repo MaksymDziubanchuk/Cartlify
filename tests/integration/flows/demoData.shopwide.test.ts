@@ -11,8 +11,8 @@ import { asAdmin } from '../../helpers/db.js';
 import { createProduct, createUser, uniqueTag, type TestUser } from '../../helpers/factories.js';
 import { mailedToken, watchMail, type SentMail } from '../../helpers/mail.js';
 
-// the demo data of db/tools/demo_data.mjs: a catalog, its stock and a few buyers made through the
-// routes of the shop, by a process of its own against the app listening on a port, the way it runs
+// the demo data of db/tools/demo_data.mjs: a catalog of products with one, two or three variants each,
+// the stock of every variant and a few buyers made through the routes of the shop, by a process of its own against the app listening on a port, the way it runs
 // against dev. Its requests pass the checks real ones pass, and every answer is held against the
 // swagger document like any other of the tests. Root puts versions of the terms and of the contract
 // in force before the runs, and a new contract before the run that gives the orders: the buyers
@@ -88,7 +88,8 @@ const byOwner = <T, K>(rows: T[], keyOf: (row: T) => K): Map<K, T[]> => {
 };
 
 // what the demo made, read under the admin context. Each table is a query of its own, one after
-// the other: a transaction has one connection, and prisma reads the relations of one query at once
+// the other: a transaction has one connection, and prisma reads the relations of one query at once.
+// The article number of a variant of the demo is <code of the product>-<its place>
 async function demoState() {
   return asAdmin(async (tx) => {
     const categories = await tx.category.findMany({
@@ -96,46 +97,68 @@ async function demoState() {
       select: { id: true, slug: true, parentId: true },
     });
 
-    const productRows = await tx.product.findMany({
+    const variantRows = await tx.productVariant.findMany({
       where: { sku: { startsWith: 'DEMO-' } },
       select: {
         id: true,
+        productId: true,
+        position: true,
         sku: true,
-        categoryId: true,
+        price: true,
         stock: true,
         salePrice: true,
         saleEndsAt: true,
-        reviewsCount: true,
+        deletedAt: true,
       },
       orderBy: { sku: 'asc' },
     });
-    const productIds = productRows.map((p) => p.id);
-    const images = byOwner(
+    const productIds = [...new Set(variantRows.map((v) => v.productId))];
+    const productRows = await tx.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, name: true, categoryId: true, reviewsCount: true },
+      orderBy: { id: 'asc' },
+    });
+    const gallery = byOwner(
       await tx.productImage.findMany({
         where: { productId: { in: productIds } },
-        select: { productId: true, isPrimary: true },
+        select: { id: true, productId: true },
       }),
       (row) => row.productId,
     );
+    const variantIds = variantRows.map((v) => v.id);
+    const shown = byOwner(
+      await tx.variantImage.findMany({
+        where: { variantId: { in: variantIds } },
+        select: { variantId: true, imageId: true, position: true },
+        orderBy: { position: 'asc' },
+      }),
+      (row) => row.variantId,
+    );
     const batches = byOwner(
       await tx.productBatch.findMany({
-        where: { productId: { in: productIds } },
-        select: { productId: true, quantity: true, unitCost: true, expiresAt: true },
+        where: { variantId: { in: variantIds } },
+        select: { variantId: true, quantity: true, unitCost: true, expiresAt: true },
       }),
-      (row) => row.productId,
+      (row) => row.variantId,
     );
     const reviewCounts = await tx.review.groupBy({
       by: ['productId'],
       where: { productId: { in: productIds } },
       _count: { _all: true },
     });
+    const variants = variantRows.map((v) => ({
+      ...v,
+      images: shown.get(v.id) ?? [],
+      batches: batches.get(v.id) ?? [],
+    }));
+    const variantsOf = byOwner(variants, (v) => v.productId);
     const products = productRows.map((p) => ({
       ...p,
       _count: {
         reviews: reviewCounts.find((r) => r.productId === p.id)?._count._all ?? 0,
       },
-      images: images.get(p.id) ?? [],
-      batches: batches.get(p.id) ?? [],
+      gallery: gallery.get(p.id) ?? [],
+      variants: variantsOf.get(p.id) ?? [],
     }));
 
     const buyerRows = await tx.user.findMany({
@@ -157,6 +180,14 @@ async function demoState() {
       }),
       (row) => row.userId,
     );
+    const orderItems = byOwner(
+      await tx.orderItem.findMany({
+        where: { order: { userId: { in: buyerIds } } },
+        select: { orderId: true, productId: true, variantId: true, quantity: true },
+        orderBy: { id: 'asc' },
+      }),
+      (row) => row.orderId,
+    );
     const consents = byOwner(
       await tx.legalAcceptance.findMany({
         where: { userId: { in: buyerIds } },
@@ -175,13 +206,16 @@ async function demoState() {
     const favorites = byOwner(
       await tx.favorite.findMany({
         where: { userId: { in: buyerIds } },
-        select: { userId: true, productId: true },
+        select: { userId: true, productId: true, variantId: true },
       }),
       (row) => row.userId,
     );
     const buyers = buyerRows.map((b) => ({
       ...b,
-      orders: orders.get(b.id) ?? [],
+      orders: (orders.get(b.id) ?? []).map((order) => ({
+        ...order,
+        items: orderItems.get(order.id) ?? [],
+      })),
       reviews: reviews.get(b.id) ?? [],
       favorites: favorites.get(b.id) ?? [],
       consents: (consents.get(b.id) ?? []).map(({ documentId, orderId }) => ({
@@ -190,15 +224,17 @@ async function demoState() {
       })),
     }));
 
-    return { categories, products, buyers };
+    return { categories, products, variants, buyers };
   });
 }
 
 const countsOf = (state: Awaited<ReturnType<typeof demoState>>) => ({
   categories: state.categories.length,
   products: state.products.length,
-  images: state.products.reduce((sum, p) => sum + p.images.length, 0),
-  batches: state.products.reduce((sum, p) => sum + p.batches.length, 0),
+  variants: state.variants.length,
+  gallery: state.products.reduce((sum, p) => sum + p.gallery.length, 0),
+  pictures: state.variants.reduce((sum, v) => sum + v.images.length, 0),
+  batches: state.variants.reduce((sum, v) => sum + v.batches.length, 0),
   buyers: state.buyers.length,
   orders: state.buyers.reduce((sum, b) => sum + b.orders.length, 0),
   reviews: state.buyers.reduce((sum, b) => sum + b.reviews.length, 0),
@@ -214,8 +250,8 @@ beforeAll(async () => {
   root = await createUser({ role: 'ROOT' });
   emailDomain = `demo-${uniqueTag()}.example.com`;
 
-  // a product of the shop with no image, the way an import may leave one: the catalog of a guest
-  // leaves it out, and the demo reads the catalog of its own categories only
+  // a product of the shop whose variant shows no picture, the way an import may leave one: the
+  // catalog of a guest leaves it out, and the demo reads the catalog of its own categories only
   const other = await createProduct();
   await asAdmin((tx) => tx.productImage.deleteMany({ where: { productId: other.id } }));
 });
@@ -331,30 +367,80 @@ describe('db/tools/demo_data.mjs', () => {
     expect(state.products).toHaveLength(DEMO_PRODUCTS);
     for (const p of state.products) {
       expect(leafIds.has(p.categoryId)).toBe(true);
-      expect(p.images.length).toBeGreaterThanOrEqual(1);
-      expect(p.images.filter((i) => i.isPrimary)).toHaveLength(1);
+      // the gallery of the product: a picture the variants share and one of each variant
+      expect(p.gallery).toHaveLength(p.variants.length + 1);
     }
     // every category with no categories below has products
     for (const id of leafIds) expect(state.products.some((p) => p.categoryId === id)).toBe(true);
   });
 
-  it('brings the stock of every product with a delivery in batches', () => {
-    for (const p of state.products) {
-      const delivered = p.batches.reduce((sum, b) => sum + b.quantity, 0);
-      expect(p.batches.length).toBeGreaterThanOrEqual(1);
-      expect(p.stock).toBe(delivered);
-      expect(p.stock).toBeGreaterThan(0);
-    }
-    // a batch with a last good day, for the expiry alerts and the selling order
-    expect(state.products.some((p) => p.batches.some((b) => b.expiresAt !== null))).toBe(true);
+  // some have a choice, some none: a book is one variant
+  it('gives the products one, two or three variants each', () => {
+    const counts = state.products.map((p) => p.variants.length);
+
+    expect(counts.every((n) => n >= 1 && n <= 3)).toBe(true);
+    for (const n of [1, 2, 3]) expect(counts).toContain(n);
+    expect(state.variants).toHaveLength(counts.reduce((sum, n) => sum + n, 0));
   });
 
-  it('keeps the data of safety of every product in its description', async () => {
+  it('gives every variant a price, an article number of its place and pictures of the gallery of its product', () => {
+    for (const p of state.products) {
+      expect(p.variants.map((v) => v.position)).toEqual(p.variants.map((_, n) => n + 1));
+      const galleryIds = new Set(p.gallery.map((image) => image.id));
+      const shownIds = new Set<number>();
+
+      for (const v of p.variants) {
+        expect(v.deletedAt).toBeNull();
+        expect(Number(v.price)).toBeGreaterThan(0);
+        expect(v.sku).toMatch(/^DEMO-\d{3}-[123]$/);
+        expect(v.sku!.endsWith(`-${v.position}`)).toBe(true);
+        // the pictures it shows are the ones of its product's gallery, one place each, the main
+        // one (the first) its own
+        expect(v.images.length).toBeGreaterThanOrEqual(1);
+        expect(v.images.map((image) => image.position)).toEqual(v.images.map((_, n) => n + 1));
+        for (const image of v.images) {
+          expect(galleryIds.has(image.imageId)).toBe(true);
+          shownIds.add(image.imageId);
+        }
+      }
+      // no picture of the gallery is left unshown
+      expect([...shownIds].sort()).toEqual([...galleryIds].sort());
+    }
+    // the variants of a product do not all have the same main picture
+    const multi = state.products.filter((p) => p.variants.length > 1);
+    for (const p of multi) {
+      expect(new Set(p.variants.map((v) => v.images[0]!.imageId)).size).toBe(p.variants.length);
+    }
+  });
+
+  it('shows the guests every product with all its variants in its card', async () => {
+    for (const p of state.products) {
+      const res = await app.inject({ method: 'GET', url: `/api/products/${p.id}` });
+      const body = res.json();
+
+      expect(res.statusCode).toBe(200);
+      expect(body.variants.map((v: { id: number }) => v.id)).toEqual(p.variants.map((v) => v.id));
+    }
+  });
+
+  it('brings the stock of every variant with a delivery in batches', () => {
+    for (const v of state.variants) {
+      const delivered = v.batches.reduce((sum, b) => sum + b.quantity, 0);
+      expect(v.batches.length).toBeGreaterThanOrEqual(1);
+      expect(v.stock).toBe(delivered);
+      expect(v.stock).toBeGreaterThan(0);
+    }
+    // a batch with a last good day, for the expiry alerts and the selling order
+    expect(state.variants.some((v) => v.batches.some((b) => b.expiresAt !== null))).toBe(true);
+  });
+
+  it('names a manufacturer of the directory on every product', async () => {
     for (const p of state.products.slice(0, 3)) {
       const res = await app.inject({ method: 'GET', url: `/api/products/${p.id}` });
       const body = res.json();
       expect(res.statusCode).toBe(200);
-      expect(body.safety.manufacturer).toEqual({
+      expect(body.product.manufacturer).toEqual({
+        id: expect.any(Number),
         name: expect.any(String),
         address: expect.any(String),
         email: expect.any(String),
@@ -363,12 +449,13 @@ describe('db/tools/demo_data.mjs', () => {
     }
   });
 
-  it('puts some of the products on a sale that lasts', () => {
-    const onSale = state.products.filter(
-      (p) => p.salePrice !== null && p.saleEndsAt !== null && p.saleEndsAt > new Date(),
+  it('puts some of the variants on a sale that lasts, each below its price', () => {
+    const onSale = state.variants.filter(
+      (v) => v.salePrice !== null && v.saleEndsAt !== null && v.saleEndsAt > new Date(),
     );
     expect(onSale.length).toBeGreaterThanOrEqual(3);
-    expect(onSale.length).toBeLessThan(DEMO_PRODUCTS);
+    expect(onSale.length).toBeLessThan(state.variants.length);
+    for (const v of onSale) expect(Number(v.salePrice)).toBeLessThan(Number(v.price));
   });
 
   it('lets the buyers who confirmed their email in with the password of the demo', async () => {
@@ -388,6 +475,22 @@ describe('db/tools/demo_data.mjs', () => {
       headers: withCsrf(await getCsrf(app)),
     });
     expect(res.statusCode).toBe(200);
+  });
+
+  // an item of an order is a variant of a product, both named
+  it('gives the orders items that name a variant and its product', () => {
+    const productOf = new Map(state.variants.map((v) => [v.id, v.productId]));
+    const skuOf = new Map(state.variants.map((v) => [v.id, v.sku]));
+    const items = state.buyers.flatMap((b) => b.orders.flatMap((o) => o.items));
+
+    expect(items.length).toBeGreaterThanOrEqual(5);
+    for (const item of items) expect(productOf.get(item.variantId)).toBe(item.productId);
+
+    const first = state.buyers[0]!.orders[0]!;
+    expect(first.items.map((i) => [skuOf.get(i.variantId), i.quantity])).toEqual([
+      ['DEMO-001-2', 1],
+      ['DEMO-006-1', 2],
+    ]);
   });
 
   it('gives the buyers carts and confirmed orders with their shipping', () => {
@@ -440,10 +543,21 @@ describe('db/tools/demo_data.mjs', () => {
       expect(p.reviewsCount).toBe(p._count.reviews);
       if (reviews.some((r) => r.productId === p.id)) expect(p.reviewsCount).toBeGreaterThan(0);
     }
+    const productOf = new Map(state.variants.map((v) => [v.id, v.productId]));
     for (const b of state.buyers) {
       expect(b.favorites.length).toBeGreaterThanOrEqual(2);
-      expect(b.favorites.every((f) => productIds.has(f.productId))).toBe(true);
+      // a favorite is a variant, kept with its product
+      expect(
+        b.favorites.every(
+          (f) => productIds.has(f.productId) && productOf.get(f.variantId) === f.productId,
+        ),
+      ).toBe(true);
     }
+    // a buyer who likes two variants of one product has a favorite for each
+    const first = state.buyers[0]!.favorites;
+    expect(first.filter((f) => f.productId === first[0]!.productId).length).toBeGreaterThanOrEqual(
+      2,
+    );
   });
 
   it('adds nothing when it runs again', async () => {

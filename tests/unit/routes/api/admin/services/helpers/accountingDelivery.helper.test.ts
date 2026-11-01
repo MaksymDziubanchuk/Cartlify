@@ -138,14 +138,16 @@ describe('summaryOf', () => {
 });
 
 describe('isWholeShop', () => {
-  it('is true for a report with no product and no category asked for', () => {
+  it('is true for a report with no product, no variant and no category asked for', () => {
     expect(isWholeShop({ branch: true })).toBe(true);
     expect(isWholeShop({ branch: false })).toBe(true);
   });
 
-  it('is false when products or a category are asked for', () => {
+  it('is false when products, variants or a category are asked for', () => {
     expect(isWholeShop({ productIds: [1], branch: true })).toBe(false);
     expect(isWholeShop({ productIds: [], branch: true })).toBe(false);
+    expect(isWholeShop({ variantIds: [1], branch: true })).toBe(false);
+    expect(isWholeShop({ variantIds: [], branch: true })).toBe(false);
     expect(isWholeShop({ categoryId: 3, branch: true })).toBe(false);
   });
 });

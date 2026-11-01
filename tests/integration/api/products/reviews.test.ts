@@ -190,4 +190,26 @@ describe('GET /api/products/:productId/reviews', () => {
     expect(staff.statusCode).toBe(200);
     expect(staff.json().items).toHaveLength(1);
   });
+
+  // a product whose variants all lack a picture is in no list and its card is 404 for a buyer; its
+  // reviews answered the buyer all the same
+  it('shows a buyer no reviews of a product with no variant a buyer sees, an admin sees them', async () => {
+    const product = await createProduct();
+    await createReview((await newUser()).id, product.id, { rating: 4 });
+    await asAdmin((tx) => tx.variantImage.deleteMany({ where: { variantId: product.variantId } }));
+    const admin = await createUser({ role: 'ADMIN' });
+    userIds.push(admin.id);
+
+    const buyer = await app.inject({ method: 'GET', url: `/api/products/${product.id}/reviews` });
+    const staff = await app.inject({
+      method: 'GET',
+      url: `/api/products/${product.id}/reviews`,
+      headers: { cookie: accessCookie(admin) },
+    });
+
+    expect(buyer.statusCode).toBe(404);
+    expect(buyer.json()).toMatchObject({ errorCode: 'PRODUCT_NOT_FOUND' });
+    expect(staff.statusCode).toBe(200);
+    expect(staff.json().items).toHaveLength(1);
+  });
 });

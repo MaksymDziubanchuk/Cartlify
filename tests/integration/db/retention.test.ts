@@ -150,10 +150,11 @@ describe('cartlify.cleanup_guest_data', () => {
     const threadId = randomUUID();
     await db.as({ role: 'GUEST', guestId });
     await db.rows(
-      `insert into cartlify.favorites ("guestId", "productId", "createdAt")
-       values ($1::uuid, $2, ${daysAgo(days.favorite)})`,
+      `insert into cartlify.favorites ("guestId", "productId", "variantId", "createdAt")
+       values ($1::uuid, $2, $3, ${daysAgo(days.favorite)})`,
       guestId,
       product.id,
+      product.variantId,
     );
     await db.rows(
       `insert into cartlify.chat_threads (id, "guestId", type, status, "lastMessageAt", "createdAt", "updatedAt")
@@ -211,10 +212,11 @@ describe('cartlify.cleanup_guest_data', () => {
     const left = await inRolledBackTx(async (db) => {
       await db.as({ role: 'USER', userId: user.id });
       await db.rows(
-        `insert into cartlify.favorites ("userId", "productId", "createdAt")
-         values ($1, $2, ${daysAgo(500)})`,
+        `insert into cartlify.favorites ("userId", "productId", "variantId", "createdAt")
+         values ($1, $2, $3, ${daysAgo(500)})`,
         user.id,
         product.id,
+        product.variantId,
       );
 
       await db.as(asSystem());

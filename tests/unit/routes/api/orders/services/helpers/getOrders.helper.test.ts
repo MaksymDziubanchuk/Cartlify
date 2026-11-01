@@ -532,6 +532,25 @@ describe('buildOrdersWhere and the desk', () => {
     });
   });
 
+  it('keeps the orders that hold a variant', () => {
+    expect(buildOrdersWhere({ ...base, variantId: 21 })).toMatchObject({
+      items: { some: { variantId: 21 } },
+    });
+  });
+
+  // both name the same position: a variant of that product
+  it('keeps the orders that hold a variant of the product when both filters are sent', () => {
+    expect(buildOrdersWhere({ ...base, productId: 9, variantId: 21 })).toMatchObject({
+      items: { some: { productId: 9, variantId: 21 } },
+    });
+  });
+
+  it('puts the variant filter into the normalized input of the list', () => {
+    expect(normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', variantId: 21 }))).toMatchObject({
+      variantId: 21,
+    });
+  });
+
   // a buyer sees only their own orders, whatever the request names
   it('keeps a buyer to their own orders', () => {
     expect(buildOrdersWhere({ ...base, actorRole: 'USER', actorId: 3, userId: 7 })).toMatchObject({
@@ -618,9 +637,9 @@ describe('the delivery filters of the desk', () => {
     });
   });
 
-  it('keeps the orders that hold a product without a weight', () => {
+  it('keeps the orders that hold a variant without a weight', () => {
     expect(buildOrdersWhere({ ...adminBase, withoutWeight: true })).toMatchObject({
-      AND: [{ items: { some: { product: { weightGrams: null } } } }],
+      AND: [{ items: { some: { variant: { weightGrams: null } } } }],
     });
   });
 

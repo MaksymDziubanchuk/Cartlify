@@ -67,20 +67,3 @@ export function repeatedProductIds(ids: readonly number[]): number[] {
   }
   return [...repeated];
 }
-
-// the products of the catalog that take an article number another product of the catalog holds
-// after the change, or that another product of the request takes too; the numbers are lowered
-// the way the unique index of db/06 lowers them. Null takes a number away and clashes with none
-export function clashingSkus(
-  changing: ReadonlyArray<{ productId: number; lowered: string | null }>,
-  held: ReadonlySet<string>,
-): number[] {
-  const taking = new Map<string, number>();
-  for (const { lowered } of changing) {
-    if (lowered !== null) taking.set(lowered, (taking.get(lowered) ?? 0) + 1);
-  }
-
-  return changing
-    .filter(({ lowered }) => lowered !== null && (held.has(lowered) || taking.get(lowered)! > 1))
-    .map(({ productId }) => productId);
-}

@@ -136,7 +136,7 @@ describe('POST /api/auth/register', () => {
     products.push(product);
     const added = await app.inject({
       method: 'POST',
-      url: `/api/favorites/${product.id}`,
+      url: `/api/favorites/${product.variantId}`,
       headers: withCsrf(csrf),
     });
     const guestId = cookieJar(added).guestId!;

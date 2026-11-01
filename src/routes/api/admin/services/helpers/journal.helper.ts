@@ -113,7 +113,7 @@ export function journalArgsOf<Row extends { id: number }, Item extends Record<st
   actor: { id: UserId; role: Role },
 ): JournalArgs {
   const sortBy = query.sortBy ?? 'createdAt';
-  if (!(sortBy in def.sorts)) {
+  if (!Object.hasOwn(def.sorts, sortBy)) {
     throw new BadRequestError('LOG_SORT_INVALID', { sortBy, allowed: Object.keys(def.sorts) });
   }
 

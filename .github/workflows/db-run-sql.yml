@@ -16,9 +16,9 @@ on:
         required: true
         type: choice
         options:
-          # keep this list in sync with /db/schema/*.sql
-          - db/schema/01_roles_and_schemas.sql
-          - db/schema/02_extensions.sql
+          # keep this list in sync with /db/schema/*.sql. 01 (roles and rights) and 02 (extensions)
+          # need a superuser and run only by hand from a local machine: the address of a superuser
+          # never goes into the secrets of this public repo
           - db/schema/03_policies_and_rls.sql
           - db/schema/04_views.sql
           - db/schema/05_fn_and_triggers.sql
@@ -94,6 +94,15 @@ jobs:
             db/data/*) echo "db/data scripts are not run by this workflow"; exit 1 ;;
           esac
 
+          # 01 and 02 need a superuser, the secrets of this workflow are the owner's
+          case "$SCRIPT" in
+            db/schema/01_*|db/schema/02_*)
+              echo "$SCRIPT needs a superuser, run it from a local machine:"
+              echo "  psql -v ON_ERROR_STOP=1 -f $SCRIPT \"<superuser address>\""
+              exit 1
+              ;;
+          esac
+
           # require file to exist
           if [ ! -f "$SCRIPT" ]; then
             echo "file not found: $SCRIPT"
@@ -164,6 +173,15 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PROD_DB_URL }}
         run: npm run db:snapshot:check:db
+
+      # the order after the migrations: 02, then 05, 03, 04, 06, then 01. 02 and 01 need a
+      # superuser and run by hand; 01 hands out the rights on what the other scripts make (the
+      # functions the app may call, the rights of the roles on new tables and views), so it runs
+      # last, and a red check above may only mean it has not run yet
+      - name: Remind to run 02 and 01 by hand
+        if: always()
+        run: |
+          echo "::notice::The order after the migrations: db/schema/02_extensions.sql under a superuser from a local machine, then 05, 03, 04, 06 here, then db/schema/01_roles_and_schemas.sql last, under a superuser from a local machine: psql -v ON_ERROR_STOP=1 -f <file> \"<superuser address>\"."
 
   deny_prod_from_other_branches:
     name: Deny prod runs outside develop

@@ -4,11 +4,13 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createCategory,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   receiveBatch,
   uniqueTag,
@@ -16,9 +18,9 @@ import {
 } from '../../../helpers/factories.js';
 
 // the cost of a unit in the latest delivery of a supplier (lastUnitCost): an admin sees it next to
-// the price in the card and the list of products and in the answers of the changes of a product,
-// to set a price or a sale against it. A surplus an inventory found or goods a buyer brought back
-// are no purchase; a buyer never sees it
+// the price in the variant of the card and of a list row and in the answers of the changes of a
+// variant, to set a price or a sale against it. Each variant has its own. A surplus an inventory
+// found or goods a buyer brought back are no purchase; a buyer never sees it
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -58,6 +60,17 @@ const listOf = (categoryId: number, actor?: TestUser) =>
     headers: actor ? { cookie: accessCookie(actor) } : {},
   });
 
+const variantIdOf = async (productId: number) =>
+  (
+    await asAdmin((tx) =>
+      tx.productVariant.findFirstOrThrow({
+        where: { productId },
+        orderBy: { position: 'asc' },
+        select: { id: true },
+      }),
+    )
+  ).id;
+
 const send = (method: 'PATCH' | 'POST', url: string, payload?: Record<string, unknown>) =>
   app.inject({
     method,
@@ -92,7 +105,12 @@ describe('the cost of the latest delivery of a supplier', () => {
     const res = await cardOf(product.id, admin);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: product.id, price: 30, lastUnitCost: 14 });
+    expect(res.json().product).toMatchObject({ id: product.id });
+    expect(res.json().variant).toMatchObject({
+      id: product.variantId,
+      price: 30,
+      lastUnitCost: 14,
+    });
   });
 
   it('is null for a product no supplier delivered', async () => {
@@ -103,7 +121,7 @@ describe('the cost of the latest delivery of a supplier', () => {
       const res = await cardOf(product.id, admin);
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ id: product.id, lastUnitCost: null });
+      expect(res.json().variant).toMatchObject({ id: product.variantId, lastUnitCost: null });
     }
   });
 
@@ -116,10 +134,11 @@ describe('the cost of the latest delivery of a supplier', () => {
       const list = await listOf(categoryId, actor);
 
       expect(card.statusCode).toBe(200);
-      expect(card.json()).not.toHaveProperty('lastUnitCost');
+      expect(card.json().variant).not.toHaveProperty('lastUnitCost');
+      expect(card.json().variants[0]).not.toHaveProperty('lastUnitCost');
       expect(list.statusCode).toBe(200);
       expect(list.json().items).toHaveLength(1);
-      expect(list.json().items[0]).not.toHaveProperty('lastUnitCost');
+      expect(list.json().items[0].variant).not.toHaveProperty('lastUnitCost');
     }
   });
 
@@ -134,13 +153,45 @@ describe('the cost of the latest delivery of a supplier', () => {
     const res = await listOf(categoryId, admin);
 
     expect(res.statusCode).toBe(200);
-    const items = res.json().items as Array<{ id: number; lastUnitCost: number | null }>;
-    expect(new Map(items.map((item) => [item.id, item.lastUnitCost]))).toEqual(
+    const items = res.json().items as Array<{
+      product: { id: number };
+      variant: { lastUnitCost: number | null };
+    }>;
+    expect(new Map(items.map((item) => [item.product.id, item.variant.lastUnitCost]))).toEqual(
       new Map([
         [delivered.id, 8.1],
         [bare.id, null],
       ]),
     );
+  });
+
+  // each variant has the cost of its own deliveries: a product row shows the cost of its main
+  // variant, a list of variants on their own (group=false) the cost of each
+  it('is the cost of the variant of the row, in a list of products and in a list of variants', async () => {
+    const { id: categoryId } = await createCategory();
+    const first = await productWithDeliveries([{ unitCost: 4 }], categoryId);
+    const second = await createVariant(first.id, { price: 31, stock: 0 });
+    await receiveBatch({ variantId: second.id }, { quantity: 1, unitCost: 6.5 });
+
+    const products = await listOf(categoryId, admin);
+    const variants = await app.inject({
+      method: 'GET',
+      url: `/api/products?categoryIds=${categoryId}&sort=price&order=asc&group=false`,
+      headers: { cookie: accessCookie(admin) },
+    });
+
+    expect(products.json().items).toEqual([
+      expect.objectContaining({
+        variant: expect.objectContaining({ id: first.variantId, lastUnitCost: 4 }),
+      }),
+    ]);
+    const costs = (
+      variants.json().items as Array<{ variant: { id: number; lastUnitCost: number } }>
+    ).map((item) => [item.variant.id, item.variant.lastUnitCost]);
+    expect(costs).toEqual([
+      [first.variantId, 4],
+      [second.id, 6.5],
+    ]);
   });
 
   it.each([
@@ -151,8 +202,13 @@ describe('the cost of the latest delivery of a supplier', () => {
     ],
     [
       'a sale',
-      async (id: number) =>
-        send('PATCH', `/api/products/${id}/sale`, { sale: { percent: 10, endsAt: inMs(DAY) } }),
+      async (id: number) => {
+        const variant = await variantIdOf(id);
+        return send('PATCH', `/api/products/${id}/variants/${variant}`, {
+          price: 30,
+          sale: { percent: 10, endsAt: inMs(DAY) },
+        });
+      },
     ],
     [
       'a move to another category',
@@ -174,6 +230,7 @@ describe('the cost of the latest delivery of a supplier', () => {
     const res = await change(product.id);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: product.id, lastUnitCost: 11.4 });
+    expect(res.json().product).toMatchObject({ id: product.id });
+    expect(res.json().variant).toMatchObject({ id: product.variantId, lastUnitCost: 11.4 });
   });
 });

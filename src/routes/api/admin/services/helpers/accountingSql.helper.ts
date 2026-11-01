@@ -10,15 +10,17 @@ import type {
   AdminMoneySummaryDto,
 } from 'types/dto/admin.dto.js';
 
-// the sql the reports of the accounting share. A report reads the products of its scope: all of
-// them, the ids asked for, the products of a category with its whole branch or its own only. The
-// money of a period [from, to) comes from where the database keeps it:
+// the sql the reports of the accounting share. A report reads the variants of its scope: all of
+// them, those of the products asked for, the variants asked for, the variants of the products of
+// a category with its whole branch or its own only. The money of a period [from, to) comes from
+// where the database keeps it, by variant:
 //  - a sale: the items of the orders paid in the period (orders.paidAt) and not cancelled, its cost
 //    from the batches it took (order_batch_allocations). An order cancelled later is no sale of its
 //    period any more: the report of the period changes with the cancel;
 //  - a cancel: the paid orders cancelled in the period (orders.cancelledAt), told apart and in no
 //    margin: the sale is gone from the period it was paid in;
-//  - a write-off: the lines STOCK_WRITE_OFF of the admin log, the batches with their costs;
+//  - a write-off: the lines stock.write_off of the stock log (a line for each variant), the batches
+//    with their costs;
 //  - a purchase: the batches taken in during the period;
 //  - the stock: what the batches have left now;
 //  - the delivery (of no product): what the orders paid in the period and not cancelled paid for it
@@ -30,16 +32,21 @@ import type {
 export const NOT_CANCELLED = Prisma.sql`o."cancelledAt" is null`;
 
 export type ReportScope = {
+  // the variants of these products
   productIds?: number[] | undefined;
+  // only these variants (both filters given: the variants of those products that are among these)
+  variantIds?: number[] | undefined;
   categoryId?: number | undefined;
   // with the whole branch of the category, or its own products only
   branch: boolean;
 };
 
-// a report is of the whole shop: no product and no category asked for. The delivery belongs to no
-// product, so only such a report has it
+// a report is of the whole shop: no product, no variant and no category asked for. The delivery
+// belongs to no product, so only such a report has it
 export const isWholeShop = (scope: ReportScope) =>
-  scope.productIds === undefined && scope.categoryId === undefined;
+  scope.productIds === undefined &&
+  scope.variantIds === undefined &&
+  scope.categoryId === undefined;
 
 // the time of a period bound as the columns keep it: utc without a zone
 export const utcTime = (date: Date) =>
@@ -55,10 +62,12 @@ export async function assertCategory(db: Prisma.TransactionClient, categoryId?: 
   if (!row) throw new NotFoundError('CATEGORY_NOT_FOUND', { categoryId });
 }
 
-// the start of a query: the category and its branch (tree), the products of the scope (scope).
-// A query goes on with more ctes after it, the first ones are recursive
+// the start of a query: the category and its branch (tree), the variants of the scope (scope: the
+// id of the variant, its product with the name and the category, the place and the article number
+// of the variant). A query goes on with more ctes after it, the first ones are recursive
 export function scopeCtes(scope: ReportScope): Prisma.Sql {
-  const ids = scope.productIds ?? null;
+  const productIds = scope.productIds ?? null;
+  const variantIds = scope.variantIds ?? null;
   const categoryId = scope.categoryId ?? null;
 
   return Prisma.sql`
@@ -71,17 +80,59 @@ export function scopeCtes(scope: ReportScope): Prisma.Sql {
       where ${scope.branch}::boolean
     ),
     scope as (
-      select p.id, p.name, p."categoryId", p."deletedAt"
-      from cartlify.products as p
-      where (${ids}::int[] is null or p.id = any(${ids}::int[]))
+      select v.id, v."productId", p.name, p."categoryId", p."deletedAt",
+             v."deletedAt" as "variantDeletedAt", v.position, v.sku
+      from cartlify.product_variants as v
+      join cartlify.products as p on p.id = v."productId"
+      where (${productIds}::int[] is null or p.id = any(${productIds}::int[]))
+        and (${variantIds}::int[] is null or v.id = any(${variantIds}::int[]))
         and (${categoryId}::int is null or p."categoryId" in (select id from tree))
     )
   `;
 }
 
-// the money of every product of the scope in the period, a row each in the cte "report_rows"; the
-// margin is of the sales, the write-offs are a column of their own
-export function productRowsCtes(scope: ReportScope, from: Date, to: Date): Prisma.Sql {
+// the rows of products: the variants of a product that have a line, added up. The product has its
+// name, category and removal once whichever variant says it; the margin and its percent come from
+// the sums, not from the percents of the variants
+const PRODUCT_ROWS = Prisma.sql`
+      select v."productId" as id,
+             min(v.name) as name,
+             min(v."categoryId") as "categoryId",
+             max(v."deletedAt") as "deletedAt",
+             sum(v.sold_units)::bigint as sold_units,
+             sum(v.sold_revenue) as sold_revenue,
+             sum(v.sold_cost) as sold_cost,
+             sum(v.cancelled_units)::bigint as cancelled_units,
+             sum(v.cancelled_revenue) as cancelled_revenue,
+             sum(v.cancelled_cost) as cancelled_cost,
+             sum(v.written_units)::bigint as written_units,
+             sum(v.written_value) as written_value,
+             sum(v.bought_units)::bigint as bought_units,
+             sum(v.bought_value) as bought_value,
+             sum(v.stock_units)::bigint as stock_units,
+             sum(v.stock_value) as stock_value,
+             sum(v.sold_revenue) - sum(v.sold_cost) as sold_margin,
+             case when sum(v.sold_revenue) = 0 then null
+                  else round((sum(v.sold_revenue) - sum(v.sold_cost)) * 100 / sum(v.sold_revenue), 2)
+             end as sold_margin_percent,
+             sum(v.sold_revenue) - sum(v.sold_cost) - sum(v.written_value) as margin_after_write_offs
+      from variant_rows as v
+      group by v."productId"`;
+
+// What a row of a report is: a variant, or a product (the money of all its variants of the scope
+// added up). The categories and the steps of time add up the variants, so they read the rows of
+// variants; the report by product sums them by product, the report by variant lists them
+export type ReportRows = 'variant' | 'product';
+
+// the money of every variant of the scope in the period, a row each in the cte "report_rows" (the
+// money of every product of the scope, a row each, with rows = 'product'); the margin is of the
+// sales, the write-offs are a column of their own
+export function productRowsCtes(
+  scope: ReportScope,
+  from: Date,
+  to: Date,
+  rows: ReportRows = 'variant',
+): Prisma.Sql {
   const inPeriod = (column: Prisma.Sql) =>
     Prisma.sql`${column} >= ${utcTime(from)} and ${column} < ${utcTime(to)}`;
 
@@ -91,21 +142,21 @@ export function productRowsCtes(scope: ReportScope, from: Date, to: Date): Prism
     const sales = column === 'paidAt' ? Prisma.sql`and ${NOT_CANCELLED}` : Prisma.empty;
     return Prisma.sql`
       ${Prisma.raw(name)} as (
-        select oi."productId" as pid,
+        select oi."variantId" as pid,
                sum(oi.quantity)::bigint as units,
                sum(oi."totalPrice") as revenue
         from cartlify.orders as o
         join cartlify.order_items as oi on oi."orderId" = o.id
-        where ${inPeriod(time)} ${sales} and oi."productId" in (select id from scope)
-        group by oi."productId"
+        where ${inPeriod(time)} ${sales} and oi."variantId" in (select id from scope)
+        group by oi."variantId"
       ),
       ${Prisma.raw(`${name}_cost`)} as (
-        select a."productId" as pid, sum(a.quantity * b."unitCost") as cost
+        select a."variantId" as pid, sum(a.quantity * b."unitCost") as cost
         from cartlify.order_batch_allocations as a
         join cartlify.orders as o on o.id = a."orderId"
         join cartlify.product_batches as b on b.id = a."batchId"
-        where ${inPeriod(time)} ${sales} and a."productId" in (select id from scope)
-        group by a."productId"
+        where ${inPeriod(time)} ${sales} and a."variantId" in (select id from scope)
+        group by a."variantId"
       )
     `;
   };
@@ -115,39 +166,39 @@ export function productRowsCtes(scope: ReportScope, from: Date, to: Date): Prism
     ${orderLines('paidAt', 'sold')},
     ${orderLines('cancelledAt', 'cancelled')},
     written as (
-      select l."entityId" as pid,
+      select l."variantId" as pid,
              sum((e->>'quantity')::int)::bigint as units,
              sum((e->>'quantity')::int * (e->>'unitCost')::numeric) as value
-      from cartlify.admin_audit_log as l
+      from cartlify.stock_log as l
       cross join lateral jsonb_array_elements(l.meta) as c
       cross join lateral jsonb_array_elements(
         case when c->>'field' = 'batches' and jsonb_typeof(c->'new') = 'array'
              then c->'new' else '[]'::jsonb end
       ) as e
-      where l.action = 'STOCK_WRITE_OFF'::cartlify."AdminAuditAction"
-        and l."entityType" = 'product'::cartlify."AdminAuditEntityType"
+      where l.event = 'stock.write_off'
         and ${inPeriod(Prisma.sql`l."createdAt"`)}
-        and l."entityId" in (select id from scope)
-      group by l."entityId"
+        and l."variantId" in (select id from scope)
+      group by l."variantId"
     ),
     bought as (
-      select b."productId" as pid,
+      select b."variantId" as pid,
              sum(b.quantity)::bigint as units,
              sum(b.quantity * b."unitCost") as value
       from cartlify.product_batches as b
-      where ${inPeriod(Prisma.sql`b."createdAt"`)} and b."productId" in (select id from scope)
-      group by b."productId"
+      where ${inPeriod(Prisma.sql`b."createdAt"`)} and b."variantId" in (select id from scope)
+      group by b."variantId"
     ),
     left_now as (
-      select b."productId" as pid,
+      select b."variantId" as pid,
              sum(b.remaining)::bigint as units,
              sum(b.remaining * b."unitCost") as value
       from cartlify.product_batches as b
-      where b."productId" in (select id from scope)
-      group by b."productId"
+      where b."variantId" in (select id from scope)
+      group by b."variantId"
     ),
     raw_rows as (
-      select s.id, s.name, s."categoryId", s."deletedAt",
+      select s.id, s."productId", s.name, s."categoryId", s."deletedAt", s."variantDeletedAt",
+             s.position, s.sku, cartlify.variant_display_name(s.id) as variant_name,
              coalesce(sold.units, 0) as sold_units,
              coalesce(sold.revenue, 0) as sold_revenue,
              coalesce(sold_cost.cost, 0) as sold_cost,
@@ -169,7 +220,7 @@ export function productRowsCtes(scope: ReportScope, from: Date, to: Date): Prism
       left join bought on bought.pid = s.id
       left join left_now on left_now.pid = s.id
     ),
-    report_rows as (
+    variant_rows as (
       select r.*,
              r.sold_revenue - r.sold_cost as sold_margin,
              case when r.sold_revenue = 0 then null
@@ -178,9 +229,12 @@ export function productRowsCtes(scope: ReportScope, from: Date, to: Date): Prism
              -- the margin of the sales less what was written off
              r.sold_revenue - r.sold_cost - r.written_value as margin_after_write_offs
       from raw_rows as r
-      -- a product of the scope with nothing in the period and nothing left is no line of a report
+      -- a variant of the scope with nothing in the period and nothing left is no line of a report
       where r.sold_units <> 0 or r.cancelled_units <> 0 or r.written_units <> 0
          or r.bought_units <> 0 or r.stock_units <> 0
+    ),
+    report_rows as (
+      ${rows === 'product' ? PRODUCT_ROWS : Prisma.sql`select * from variant_rows`}
     )
   `;
 }

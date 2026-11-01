@@ -22,11 +22,11 @@ import type { ProductId, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 import { isDbYear } from '@helpers/dbDate.js';
 
-// the journal of the stock for an admin, every step of a product in one list: a delivery and a
-// write-off are the lines the database wrote in the admin log (one for each product), a sale is
-// the units a paid order took from the batches (at the payment), a cancel is the same units the
-// cancel of the paid order put back (at the cancel). Sorted by the time of the step; the steps of
-// one time go by kind, then by the line of the log or the order and the product
+// the journal of the stock for an admin, every step of a variant in one list, read from the stock
+// log (one line for each variant for each change): a delivery, a write-off, a sale (the units a
+// paid order took at the payment) and a cancel (the same units the cancel of the paid order put
+// back, at the cancel). Each step names its variant with its product. Sorted by the time of the
+// step; the steps of one time go by kind, then by the line of the log
 
 type MovementRow = {
   kind: AdminStockMovementKind;
@@ -34,9 +34,14 @@ type MovementRow = {
   rank: number;
   a: number;
   b: number;
+  variantId: number;
   productId: number;
   productName: string;
   productDeleted: boolean;
+  variantPosition: number;
+  variantName: string;
+  variantSku: string | null;
+  variantDeleted: boolean;
   quantity: number;
   value: Prisma.Decimal;
   batches: { batchId: number; quantity: number; unitCost: number | string }[];
@@ -59,6 +64,7 @@ export type StockMovementsArgs = {
   actorId: UserId;
   actorRole: Role;
   productId?: number | undefined;
+  variantId?: number | undefined;
   batchId?: number | undefined;
   orderId?: number | undefined;
   deliveryId?: string | undefined;
@@ -107,6 +113,7 @@ export function stockMovementsArgsOf(
     actorId: actor.id,
     actorRole: actor.role,
     productId: query.productId,
+    variantId: query.variantId,
     batchId: query.batchId,
     orderId: query.orderId,
     deliveryId: query.deliveryId?.toLowerCase(),
@@ -134,7 +141,7 @@ function readCursor(text: string, sortOrder: AdminReportSortOrder): Cursor {
   return cursor as Cursor;
 }
 
-// a field the database wrote in the meta of a line of the admin log: [{ field, old, new }]
+// a field the database wrote in the meta of a line of the stock log: [{ field, old, new }]
 const metaText = (field: string) =>
   Prisma.raw(
     `(select c->>'new' from jsonb_array_elements(l.meta) as c where c->>'field' = '${field}' limit 1)`,
@@ -144,74 +151,36 @@ const metaJson = (field: string) =>
     `(select c->'new' from jsonb_array_elements(l.meta) as c where c->>'field' = '${field}' limit 1)`,
   );
 
-// every step of the stock: one row for each line of the log, and for each product of an order
+// every step of the stock: one row for each line of the stock log. A delivery and a write-off name
+// the admin who did them; a sale is the work of the system and a cancel is told apart by its
+// order, so those two have no actor
 const MOVEMENTS = Prisma.sql`
   movements as (
     select
-      case l.action when 'STOCK_DELIVERY' then 'delivery' else 'writeOff' end as kind,
+      case l.event
+        when 'stock.delivery' then 'delivery'
+        when 'stock.write_off' then 'writeOff'
+        when 'stock.sale' then 'sale'
+        else 'cancel'
+      end as kind,
       l."createdAt" as at,
-      0 as rank,
+      case l.event when 'stock.sale' then 1 when 'stock.cancel_return' then 2 else 0 end as rank,
       l.id as a,
       0 as b,
-      l."entityId" as "productId",
-      case l.action
-        when 'STOCK_DELIVERY' then jsonb_build_array(jsonb_build_object(
-          'batchId', (${metaJson('batch')}->>'id')::int,
-          'quantity', (${metaJson('batch')}->>'quantity')::int,
-          'unitCost', (${metaJson('batch')}->>'unitCost')::numeric
-        ))
-        else (
-          select jsonb_agg(jsonb_build_object(
-            'batchId', (t.x->>'batchId')::int,
-            'quantity', (t.x->>'quantity')::int,
-            'unitCost', (t.x->>'unitCost')::numeric
-          ) order by t.n)
-          from jsonb_array_elements(${metaJson('batches')}) with ordinality as t(x, n)
-        )
-      end as batches,
-      null::int as "orderId",
-      ${metaText('delivery')} as "deliveryId",
-      ${metaText('writeOff')} as "writeOffId",
-      ${metaJson('batch')}->>'source' as source,
+      l."variantId",
+      ${metaJson('batches')} as batches,
+      l."orderId",
+      l."deliveryId"::text as "deliveryId",
+      l."writeOffId"::text as "writeOffId",
+      ${metaText('source')} as source,
       ${metaText('reason')} as reason,
       ${metaText('supplier')} as supplier,
       ${metaText('document')} as document,
       ${metaText('note')} as note,
-      l."actorId",
-      l."actorRole"::text as "actorRole"
-    from cartlify.admin_audit_log as l
-    where l."entityType" = 'product'
-      and l.action in ('STOCK_DELIVERY', 'STOCK_WRITE_OFF')
-      and l."entityId" is not null
-
-    union all
-
-    -- the units a paid order took, at the payment; a cancel keeps these lines
-    select
-      'sale', coalesce(o."paidAt", min(al."createdAt")), 1, o.id, al."productId", al."productId",
-      jsonb_agg(jsonb_build_object(
-        'batchId', al."batchId", 'quantity', al.quantity, 'unitCost', pb."unitCost"
-      ) order by al.id),
-      o.id, null, null, null, null, null, null, null, null::int, null
-    from cartlify.order_batch_allocations as al
-    join cartlify.orders as o on o.id = al."orderId"
-    join cartlify.product_batches as pb on pb.id = al."batchId"
-    group by o.id, al."productId"
-
-    union all
-
-    -- the same units back in the same batches, at the cancel of the paid order
-    select
-      'cancel', coalesce(o."cancelledAt", o."updatedAt"), 2, o.id, al."productId", al."productId",
-      jsonb_agg(jsonb_build_object(
-        'batchId', al."batchId", 'quantity', al.quantity, 'unitCost', pb."unitCost"
-      ) order by al.id),
-      o.id, null, null, null, null, null, null, null, null::int, null
-    from cartlify.order_batch_allocations as al
-    join cartlify.orders as o on o.id = al."orderId"
-    join cartlify.product_batches as pb on pb.id = al."batchId"
-    where o.status = 'cancelled'::cartlify."OrderStatus"
-    group by o.id, al."productId"
+      case when l.event in ('stock.delivery', 'stock.write_off') then l."actorId" end as "actorId",
+      case when l.event in ('stock.delivery', 'stock.write_off') then l."actorRole"::text end
+        as "actorRole"
+    from cartlify.stock_log as l
   )
 `;
 
@@ -219,7 +188,8 @@ const MOVEMENTS = Prisma.sql`
 function filtersOf(args: StockMovementsArgs): Prisma.Sql {
   const parts: Prisma.Sql[] = [Prisma.sql`true`];
 
-  if (args.productId !== undefined) parts.push(Prisma.sql`m."productId" = ${args.productId}::int`);
+  if (args.productId !== undefined) parts.push(Prisma.sql`v."productId" = ${args.productId}::int`);
+  if (args.variantId !== undefined) parts.push(Prisma.sql`m."variantId" = ${args.variantId}::int`);
   if (args.batchId !== undefined) {
     parts.push(
       Prisma.sql`m.batches @> jsonb_build_array(jsonb_build_object('batchId', ${args.batchId}::int))`,
@@ -259,6 +229,13 @@ const toItem = (row: MovementRow): AdminStockMovementDto => ({
   kind: row.kind,
   at: row.at,
   product: { id: row.productId as ProductId, name: row.productName, deleted: row.productDeleted },
+  variant: {
+    id: row.variantId,
+    position: row.variantPosition,
+    name: row.variantName,
+    sku: row.variantSku,
+    deleted: row.variantDeleted,
+  },
   quantity: row.quantity,
   value: decimalToNumber(row.value),
   batches: row.batches.map(toBatch),
@@ -284,21 +261,26 @@ export async function listStockMovements(
     async (db) => {
       await setUserContext(db, { userId: args.actorId, role: args.actorRole });
 
-      // a product removed for good took its batches with it, and its lines are left out
       const rows = await db.$queryRaw<MovementRow[]>`
         with ${MOVEMENTS}
         select
           m.kind, m.at, m.rank, m.a, m.b,
-          m."productId",
+          m."variantId",
+          v."productId",
           p.name as "productName",
           p."deletedAt" is not null as "productDeleted",
+          v.position as "variantPosition",
+          cartlify.variant_display_name(m."variantId") as "variantName",
+          v.sku as "variantSku",
+          v."deletedAt" is not null as "variantDeleted",
           (${SIGNED} * q.units)::int as quantity,
           (${SIGNED} * q.value) as value,
           m.batches,
           m."orderId", m."deliveryId", m."writeOffId", m.source, m.reason,
           m.supplier, m.document, m.note, m."actorId", m."actorRole"
         from movements as m
-        join cartlify.products as p on p.id = m."productId"
+        join cartlify.product_variants as v on v.id = m."variantId"
+        join cartlify.products as p on p.id = v."productId"
         cross join lateral (
           select
             coalesce(sum((x->>'quantity')::int), 0) as units,
@@ -313,7 +295,7 @@ export async function listStockMovements(
         with ${MOVEMENTS}
         select count(*)::int as total
         from movements as m
-        join cartlify.products as p on p.id = m."productId"
+        join cartlify.product_variants as v on v.id = m."variantId"
         where ${where}
       `;
 

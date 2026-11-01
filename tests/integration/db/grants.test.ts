@@ -45,11 +45,13 @@ const APP_FUNCTIONS = [
   'cartlify.refresh_order_prices(integer)',
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',
-  'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
-  'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
-  'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
+  'cartlify.log_variant_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
+  'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
+  'cartlify.write_off_variant_stock(uuid, integer, integer, integer, text, text)',
   'cartlify.shop_today()',
-  'cartlify.product_expired_units(integer)',
+  'cartlify.variant_display_name(integer)',
+  'cartlify.variant_names(integer[])',
+  'cartlify.variant_expired_units(integer)',
   'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
 ];
 
@@ -254,10 +256,14 @@ describe(`role ${APP}`, () => {
 
   it.each([
     ['take_from_batches', 'select * from cartlify.take_from_batches(1, 1, true)'],
+    [
+      'log_stock_change',
+      `select cartlify.log_stock_change(1, 'stock.delivery', 1, 1, null, null, null, null)`,
+    ],
     ['return_order_stock', 'select cartlify.return_order_stock(1)'],
-    ['consume_product_stock', 'select cartlify.consume_product_stock(1, 1, 1)'],
-    ['reserve_product_stock', 'select cartlify.reserve_product_stock(1, 1)'],
-    ['release_product_stock', 'select cartlify.release_product_stock(1, 1)'],
+    ['consume_variant_stock', 'select cartlify.consume_variant_stock(1, 1, 1)'],
+    ['reserve_variant_stock', 'select cartlify.reserve_variant_stock(1, 1)'],
+    ['release_variant_stock', 'select cartlify.release_variant_stock(1, 1)'],
     ['recalc_order_total', 'select cartlify.recalc_order_total(1)'],
     ['recalc_product_rating', 'select cartlify.recalc_product_rating(1)'],
     ['recalc_product_popularity', 'select cartlify.recalc_product_popularity(1)'],

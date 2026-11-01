@@ -1,12 +1,18 @@
-import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
 
 import env from '@config/env.js';
 import { isRetryableTxError, prisma, tx } from '@db/client.js';
 import { setActorContext, setAdminContext } from '@db/dbContext.service.js';
-import { parseProductDescription } from '@helpers/productDescription.js';
+import { variantNamesOf } from '@db/variantNames.helper.js';
 import { getDeliveryMethods } from '@routes/api/delivery/services/getDeliveryMethods.service.js';
-import { isSaleOn } from '@helpers/productSale.js';
+import {
+    readVariantContext,
+    variantRowSelect,
+    variantShortOf,
+    visibleVariantWhere,
+    type VariantRow,
+} from '@routes/api/products/services/helpers/variant.helper.js';
+import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import {
     paymentProviders,
     shopCurrency,
@@ -32,8 +38,10 @@ import {
     ChatBotOrderContextItemDto,
     ChatBotOrderStatus,
     ChatBotProductContextItemDto,
+    ChatBotVariantContextItemDto,
 } from './chatBotPrompt.service.js';
 import { evaluateChatBotEscalation } from './chatBotEscalation.service.js';
+import { botLimits } from './chatBotLimits.service.js';
 
 import type {
     ChatMessageItemDto,
@@ -41,6 +49,7 @@ import type {
 } from 'types/dto/chats.dto.js';
 import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
 import type { UserId } from 'types/ids.js';
+import type { VariantContext } from 'types/dto/variants.dto.js';
 import type { Role } from 'types/user.js';
 
 interface HandleChatBotTurnDto {
@@ -49,6 +58,8 @@ interface HandleChatBotTurnDto {
     threadId: string;
     userMessageId: number;
     userMessage: string;
+    // the address the customer writes from, for the limit of a customer who is no confirmed account
+    ip?: string | null | undefined;
     log: ChatBotLogger;
 }
 
@@ -115,7 +126,8 @@ const ADMIN_REQUEST_TEXTS: Record<
     },
 };
 
-// the text past the answers of a day: no model call, so it is in english as it is
+// the text past the answers of a day of one customer or one address: no model call, so it is in
+// english as it is
 const DAILY_LIMIT_MESSAGE =
     'I have answered as many messages as I can today. Please come back tomorrow.';
 const DAILY_LIMIT_ADMIN_HINT =
@@ -287,24 +299,24 @@ const extractSearchTerms = (message: string): string[] => {
         .slice(0, 6);
 };
 
-// a product the bot may recommend has free units: stock not taken by confirmed orders
-const IN_STOCK = { gt: prisma.product.fields.reservedStock };
+// a variant the bot may recommend has free units: stock not taken by confirmed orders
+const IN_STOCK = { gt: prisma.productVariant.fields.reservedStock };
 
-// and is one the catalog lists: of the catalog, with an image
-const LISTED = { deletedAt: null, images: { some: { isPrimary: true } } };
+// and is one the catalog lists: a product of the catalog with a variant a buyer sees (alive, with a
+// picture) that has units to sell
+const LISTED = {
+    deletedAt: null,
+    variants: { some: { ...visibleVariantWhere, stock: IN_STOCK } },
+};
 
 // builds product search conditions from extracted terms
 const buildProductSearchWhere = (terms: string[]): Prisma.ProductWhereInput => {
     if (terms.length === 0) {
-        return {
-            ...LISTED,
-            stock: IN_STOCK,
-        };
+        return LISTED;
     }
 
     return {
         ...LISTED,
-        stock: IN_STOCK,
         OR: terms.flatMap((term) => [
             {
                 name: {
@@ -330,48 +342,59 @@ const buildProductSearchWhere = (terms: string[]): Prisma.ProductWhereInput => {
     };
 };
 
-// converts product rows into compact prompt context items; a product whose free units are all
-// gone (held by waiting orders or in batches that are over) is no product to recommend
+// the variant a buyer sees as the prompt carries it: its name, its price, the sale while it lasts
+// and the free units (the units of batches that are over are not free)
+const mapVariantContext = (
+    row: VariantRow,
+    product: { name: string },
+    context: VariantContext,
+): ChatBotVariantContextItemDto => {
+    const variant = variantShortOf(row, context, 'buyer');
+
+    return {
+        id: variant.id,
+        name: variant.name,
+        price: variant.price,
+        // the sale while it lasts, the one the catalog shows next to the price
+        sale:
+            variant.salePrice != null && variant.saleEndsAt != null
+                ? {
+                      price: variant.salePrice,
+                      endsAt: variant.saleEndsAt,
+                      priorPrice: variant.salePriorPrice ?? null,
+                  }
+                : null,
+        stock: variant.stock,
+    };
+};
+
+// converts product rows with the variants a buyer sees into prompt context items; a product whose
+// free units are all gone (held by waiting orders or in batches that are over) is no product to
+// recommend
 const mapProductContext = (
     products: Awaited<ReturnType<typeof findProductsForBotContext>>,
-    expired: Map<number, number>,
+    variants: VariantRow[],
+    context: VariantContext,
 ): ChatBotProductContextItemDto[] => {
     return products
-        .filter(
-            (product) =>
-                freeUnits(
-                    product.stock,
-                    product.reservedStock,
-                    expired.get(product.id) ?? 0,
-                ) > 0,
-        )
         .map((product) => ({
             id: product.id,
             name: product.name,
-            price: Number(product.price),
-            // the sale while it lasts, the one the catalog shows next to the price
-            sale: isSaleOn(product)
-                ? {
-                      price: Number(product.salePrice),
-                      endsAt: product.saleEndsAt!.toISOString(),
-                      priorPrice:
-                          product.salePriorPrice === null
-                              ? null
-                              : Number(product.salePriorPrice),
-                  }
-                : null,
-            // free units, never below zero, the stock the catalog shows
-            stock: freeUnits(
-                product.stock,
-                product.reservedStock,
-                expired.get(product.id) ?? 0,
-            ),
             categoryName: product.category.name,
-            // the text of the description, without the safety data it keeps
-            description: parseProductDescription(product.description).text,
+            description: product.description,
             popularity: product.popularity,
-        }));
+            variants: variants
+                .filter((row) => row.productId === product.id)
+                .map((row) => mapVariantContext(row, product, context)),
+        }))
+        .filter((product) => product.variants.some((variant) => variant.stock > 0));
 };
+
+const BOT_PRODUCT_ORDER: Prisma.ProductOrderByWithRelationInput[] = [
+    { popularity: 'desc' },
+    { views: 'desc' },
+    { id: 'asc' },
+];
 
 // loads matching products for the bot prompt
 const findProductsForBotContext = async (
@@ -390,17 +413,7 @@ const findProductsForBotContext = async (
                 },
             },
         },
-        orderBy: [
-            {
-                popularity: 'desc',
-            },
-            {
-                views: 'desc',
-            },
-            {
-                id: 'asc',
-            },
-        ],
+        orderBy: BOT_PRODUCT_ORDER,
         take: PRODUCT_CONTEXT_LIMIT,
     });
 
@@ -409,10 +422,7 @@ const findProductsForBotContext = async (
     }
 
     return db.product.findMany({
-        where: {
-            ...LISTED,
-            stock: IN_STOCK,
-        },
+        where: LISTED,
         include: {
             category: {
                 select: {
@@ -420,19 +430,28 @@ const findProductsForBotContext = async (
                 },
             },
         },
-        orderBy: [
-            {
-                popularity: 'desc',
-            },
-            {
-                views: 'desc',
-            },
-            {
-                id: 'asc',
-            },
-        ],
+        orderBy: BOT_PRODUCT_ORDER,
         take: PRODUCT_CONTEXT_LIMIT,
     });
+};
+
+// the products the bot may name and the variants of them that a buyer sees, with the free units
+const loadProductContext = async (
+    db: Prisma.TransactionClient,
+    userMessage: string,
+): Promise<ChatBotProductContextItemDto[]> => {
+    const products = await findProductsForBotContext(db, userMessage);
+    if (products.length === 0) return [];
+
+    // every variant a buyer sees, not only the ones with units: the sold out ones are named too
+    const variants = await db.productVariant.findMany({
+        where: { productId: { in: products.map((product) => product.id) }, ...visibleVariantWhere },
+        select: variantRowSelect,
+        orderBy: [{ productId: 'asc' }, { position: 'asc' }],
+    });
+    const context = await readVariantContext(db, variants, 'buyer');
+
+    return mapProductContext(products, variants, context);
 };
 
 // loads thread, recent history, and product context for one bot turn
@@ -486,22 +505,14 @@ const loadChatBotContext = async ({
             take: HISTORY_LIMIT,
         });
 
-        // loads compact product context for shopping-related answers
-        const productRows = await findProductsForBotContext(db, userMessage);
-
         const userId = chatBotActorRole === 'USER' ? toUserId(actorId) : null;
 
         // returns prompt-ready context in chronological order
         return {
             thread,
             history: mapHistoryMessages(historyMessages.reverse()),
-            productContext: mapProductContext(
-                productRows,
-                await expiredUnitsOf(
-                    db,
-                    productRows.map((product) => product.id),
-                ),
-            ),
+            // compact product context for shopping-related answers
+            productContext: await loadProductContext(db, userMessage),
             orders: userId ? await findOrdersForBotContext(db, userId) : [],
             delivery: (await getDeliveryMethods()).methods,
             emailConfirmed: userId ? await isEmailConfirmed(db, userId) : false,
@@ -570,6 +581,7 @@ const findOrdersForBotContext = async (
                 select: {
                     quantity: true,
                     productName: true,
+                    variantId: true,
                     product: { select: { name: true } },
                 },
             },
@@ -590,6 +602,14 @@ const findOrdersForBotContext = async (
     });
 
     const rolledBack = await rolledBackOrderIds(orders.map((order) => order.id));
+
+    // the name of the variant of now, for the items of a cart that is not confirmed
+    const liveNames = await variantNamesOf(
+        db,
+        orders
+            .filter((order) => order.status === 'unconfirmed')
+            .flatMap((order) => order.items.map((item) => item.variantId)),
+    );
 
     return orders.map((order) => {
         const shipments = sends.filter((send) => send.orderId === order.id);
@@ -622,11 +642,13 @@ const findOrdersForBotContext = async (
                   trackingUrl: onItsWay.trackingUrl,
               }
             : null,
-        // the name an item was confirmed with, the one of now for an unconfirmed order
+        // the name an item was confirmed with (the copy of the name of its variant), the name of
+        // the variant of now for an unconfirmed order
         items: order.items.map((item) => ({
             name:
-                (order.status !== 'unconfirmed' && item.productName) ||
-                item.product.name,
+                order.status === 'unconfirmed'
+                    ? (liveNames.get(item.variantId)?.name ?? item.product.name)
+                    : itemNameOf(item),
             quantity: item.quantity,
         })),
         };
@@ -759,22 +781,46 @@ const generateLoopAssistanceBotText = async (
     });
 };
 
+// whether the model is asked in this turn, and if not, why:
+// - 'model': the customer is within the limits;
+// - 'limit': the customer, or the address they come from, used up the answers of the day;
+// - 'ceiling': the whole shop used up the turns of the day that call the model
+type ModelAccess = 'model' | 'limit' | 'ceiling';
+
+// A customer who is no confirmed account (a guest, or a user who has not confirmed the email) has
+// the limit of a guest and is counted by the address too: a new cookie or a new account does not
+// start the day again. Only a turn that is to call the model takes a turn of the ceiling of the shop
+const modelAccessOf = (
+    context: LoadedChatBotContextDto,
+    actorRole: ChatBotActorRole,
+    ip: string | null | undefined,
+): ModelAccess => {
+    const guestLike = actorRole === 'GUEST' || !context.emailConfirmed;
+    const limit = guestLike
+        ? env.CHAT_BOT_GUEST_DAILY_TURNS
+        : env.CHAT_BOT_USER_DAILY_TURNS;
+
+    // the address counts every turn of such a customer, an answered one or not
+    const addressWithin = guestLike ? botLimits.takeAddressTurn(ip) : true;
+    if (!addressWithin || context.recentTurns >= limit) return 'limit';
+
+    return botLimits.takeShopTurn() ? 'model' : 'ceiling';
+};
+
 // decides the turn: an explicit request for a person and a loop are found before the model and
 // take one call of it, for the text in the language of the customer; past the answers of the day
-// the model is asked nothing; otherwise the model answers and decides by meaning whether a person
-// is needed
+// (of the customer, of their address, of the shop) the model is asked nothing; otherwise the model
+// answers and decides by meaning whether a person is needed
 const planBotTurn = async (
     context: LoadedChatBotContextDto,
     actorRole: ChatBotActorRole,
     userMessage: string,
     log: ChatBotLogger,
+    ip?: string | null,
 ): Promise<ChatBotTurnPlanDto> => {
     const access = adminAccessOf(actorRole, context.emailConfirmed);
-    const limit =
-        actorRole === 'GUEST'
-            ? env.CHAT_BOT_GUEST_DAILY_TURNS
-            : env.CHAT_BOT_USER_DAILY_TURNS;
-    const withModel = context.recentTurns < limit;
+    const modelAccess = modelAccessOf(context, actorRole, ip);
+    const withModel = modelAccess === 'model';
 
     const signal = evaluateChatBotEscalation({
         userMessage,
@@ -794,7 +840,11 @@ const planBotTurn = async (
         };
     }
 
-    if (!withModel) {
+    if (modelAccess === 'ceiling') {
+        return { text: BOT_FALLBACK_MESSAGE, toAdmin: false };
+    }
+
+    if (modelAccess === 'limit') {
         return {
             text:
                 DAILY_LIMIT_MESSAGE +
@@ -935,6 +985,7 @@ export const handleChatBotTurn = async (
             actorRole,
             dto.userMessage,
             dto.log,
+            dto.ip,
         );
 
         // saves the bot message, and gives the chat to the admins with it

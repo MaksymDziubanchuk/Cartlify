@@ -11,14 +11,21 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   putOnSale,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { watchMail } from '../../../helpers/mail.js';
-import { placeOrder, placeUnconfirmedOrder, shippingData } from '../../../helpers/orders.js';
+import {
+  placeOrder,
+  placeOrderOf,
+  placeUnconfirmedOrder,
+  shippingData,
+} from '../../../helpers/orders.js';
+import { lockVariantRow } from '../../../helpers/variants.js';
 
-// the items of an order: an order that is not paid shows the sale of each product next to its
-// price, the way the catalog does; a confirmed order keeps the name each product had when it was
+// the items of an order: an order that is not paid shows the sale of each variant next to its
+// price, the way the catalog does; a confirmed order keeps the name each variant had when it was
 // confirmed, the history and the mails show it after a rename. Two buyers of the last unit: the one
 // who loses gets the items that cannot be had, as a confirm that comes later gets them
 
@@ -60,7 +67,7 @@ const orderOf = async (user: TestUser, orderId: number) =>
 const rename = (productId: number, name: string) =>
   asAdmin((tx) => tx.product.update({ where: { id: productId }, data: { name } }));
 
-describe('the sale of a product in an order that is not paid', () => {
+describe('the sale of a variant in an order that is not paid', () => {
   it.each(['cart', 'waiting'] as const)('shows in an order of the %s', async (stage) => {
     const product = await createProduct({ price: 20, stock: 3 });
     await putOnSale(product.id, 15);
@@ -69,7 +76,7 @@ describe('the sale of a product in an order that is not paid', () => {
 
     const [item] = (await orderOf(buyer, orderId)).items;
 
-    expect(item.product).toMatchObject({
+    expect(item.variant).toMatchObject({
       price: 20,
       salePrice: 15,
       saleEndsAt: expect.any(String),
@@ -84,7 +91,28 @@ describe('the sale of a product in an order that is not paid', () => {
 
     const [item] = (await orderOf(buyer, orderId)).items;
 
-    expect(item.product).toMatchObject({ price: 20, salePrice: 15 });
+    expect(item.variant).toMatchObject({ price: 20, salePrice: 15 });
+  });
+
+  // the sale is a sale of one variant: its sibling in the same order sells at the regular price
+  it('belongs to the variant that is on sale and not to its sibling in the same order', async () => {
+    const product = await createProduct({ price: 20, stock: 3 });
+    const sibling = await createVariant(product.id, { price: 30, stock: 3 });
+    await putOnSale({ variantId: product.variantId }, 15);
+    const buyer = await newUser();
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [{ item: product }, { item: { variantId: sibling.id } }],
+      'waiting',
+    );
+
+    const items = (await orderOf(buyer, orderId)).items;
+
+    expect(items[0]).toMatchObject({ unitPrice: 15, variant: { price: 20, salePrice: 15 } });
+    expect(items[1]).toMatchObject({ unitPrice: 30, variant: { price: 30 } });
+    expect(items[1].variant).not.toHaveProperty('salePrice');
   });
 
   // a paid order shows what it was paid at, the sale of now is no matter to it
@@ -96,8 +124,9 @@ describe('the sale of a product in an order that is not paid', () => {
 
     const [item] = (await orderOf(buyer, orderId)).items;
 
-    expect(item.product).not.toHaveProperty('salePrice');
-    expect(item.product).not.toHaveProperty('price');
+    expect(item.variant).not.toHaveProperty('salePrice');
+    // the variant shows the price the order was paid at, not the price of now
+    expect(item.variant.price).toBe(20);
     expect(item.unitPrice).toBe(20);
   });
 });
@@ -111,7 +140,7 @@ describe('the name of the item', () => {
 
     const [item] = (await orderOf(buyer, orderId)).items;
 
-    expect(item.name).toBe('Phone X 128GB');
+    expect(item.variant.name).toBe('Phone X 128GB');
     const row = await asAdmin((tx) =>
       tx.orderItem.findFirstOrThrow({ where: { orderId }, select: { productName: true } }),
     );
@@ -126,7 +155,7 @@ describe('the name of the item', () => {
 
     const [item] = (await orderOf(buyer, orderId)).items;
 
-    expect(item.name).toBe('Lamp B');
+    expect(item.variant.name).toBe('Lamp B');
   });
 
   it('is the one the mail of a shipped order names', async () => {
@@ -149,12 +178,12 @@ describe('the name of the item', () => {
 });
 
 describe('POST /api/orders/current/confirm and the last unit', () => {
-  const addToCart = (user: TestUser, productId: number) =>
+  const addToCart = (user: TestUser, variantId: number) =>
     app.inject({
       method: 'POST',
       url: '/api/orders/current/items',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId, quantity: 1 },
+      payload: { variantId, quantity: 1 },
     });
 
   const confirm = (user: TestUser, orderId: number) =>
@@ -171,12 +200,12 @@ describe('POST /api/orders/current/confirm and the last unit', () => {
     const product = await createProduct({ price: 20, stock: 1 });
     const buyers = [await newUser(), await newUser()];
     const orders: number[] = [];
-    for (const buyer of buyers) orders.push((await addToCart(buyer, product.id)).json().id);
+    for (const buyer of buyers) orders.push((await addToCart(buyer, product.variantId)).json().id);
 
     const held = testTx(
       async (tx) => {
         await setAdminContext(tx);
-        await tx.$queryRaw`select id from cartlify.products where id = ${product.id} for update`;
+        await lockVariantRow(tx, product.variantId);
         await new Promise((resolve) => setTimeout(resolve, 700));
       },
       { timeout: 5_000 },
@@ -190,7 +219,9 @@ describe('POST /api/orders/current/confirm and the last unit', () => {
     expect(lost.json()).toMatchObject({
       errorCode: 'ORDER_ITEMS_UNAVAILABLE',
       details: {
-        items: [{ productId: product.id, reason: 'out_of_stock', available: 0, requested: 1 }],
+        items: [
+          { variantId: product.variantId, reason: 'out_of_stock', available: 0, requested: 1 },
+        ],
       },
     });
   });

@@ -5,8 +5,18 @@ const favoritesGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most rows a page holds, from 1 to 100.',
+    },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description: 'The nextCursor of the previous page.',
+    },
   },
 } as const;
 
@@ -16,9 +26,10 @@ const favoritesFavoriteItemSchema = {
   additionalProperties: false,
   properties: {
     product: { $ref: 'productItemResponseSchema#' },
+    variant: { $ref: 'variantShortSchema#' },
     addedAt: { type: 'string', format: 'date-time' },
   },
-  required: ['product', 'addedAt'],
+  required: ['product', 'variant', 'addedAt'],
 } as const;
 
 const favoritesGetResponseSchema = {
@@ -39,9 +50,9 @@ const favoritesAddParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: idPathParam('the product'),
+    variantId: idPathParam('the variant'),
   },
-  required: ['productId'],
+  required: ['variantId'],
 } as const;
 
 const favoritesAddResponseSchema = {
@@ -49,10 +60,10 @@ const favoritesAddResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'integer', minimum: 1 },
+    variantId: { type: 'integer', minimum: 1 },
     isFavorite: { const: true },
   },
-  required: ['productId', 'isFavorite'],
+  required: ['variantId', 'isFavorite'],
 } as const;
 
 const favoritesDeleteParamsSchema = {
@@ -60,9 +71,9 @@ const favoritesDeleteParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: idPathParam('the product'),
+    variantId: idPathParam('the variant'),
   },
-  required: ['productId'],
+  required: ['variantId'],
 } as const;
 
 const favoritesDeleteResponseSchema = {
@@ -70,10 +81,10 @@ const favoritesDeleteResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { type: 'integer', minimum: 1 },
+    variantId: { type: 'integer', minimum: 1 },
     isFavorite: { const: false },
   },
-  required: ['productId', 'isFavorite'],
+  required: ['variantId', 'isFavorite'],
 } as const;
 
 export const favoritesDtoSchemas = [

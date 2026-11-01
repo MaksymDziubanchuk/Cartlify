@@ -3,6 +3,7 @@ import {
   CONSENT_EVENTS,
   LOGIN_EVENTS,
   PRICE_LOG_EVENTS,
+  STOCK_LOG_EVENTS,
 } from '@config/journalEvents.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
@@ -53,8 +54,8 @@ const adminStatsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    from: dateTimeSchema,
-    to: dateTimeSchema,
+    from: { ...dateTimeSchema, description: 'The start of the period, taken in.' },
+    to: { ...dateTimeSchema, description: 'The end of the period, left out.' },
   },
 } as const;
 
@@ -189,12 +190,29 @@ const adminStatsProductsSchema = {
     total: nonNegativeIntegerSchema,
     activeTotal: nonNegativeIntegerSchema,
     deletedTotal: nonNegativeIntegerSchema,
-    outOfStockTotal: nonNegativeIntegerSchema,
+    outOfStockTotal: {
+      ...nonNegativeIntegerSchema,
+      description:
+        'The products of the catalog none of whose variants in sale has a free unit (the stock ' +
+        'less the reserve and the units of batches that are over); the variants taken out of ' +
+        'sale are not counted.',
+    },
 
     topProductsByRevenue: {
       type: 'array',
-      description: 'The 5 products of the most money paid in the period.',
+      description:
+        'The 5 products of the most money paid in the period; a product is the sum of all ' +
+        'its variants.',
       items: { $ref: 'adminTopProductRevenueSchema#' },
+    },
+
+    topVariantsByRevenue: {
+      type: 'array',
+      description:
+        'The 5 variants of the most money paid in the period, each with its product. The ' +
+        'product that sold in two variants is one line of topProductsByRevenue (the sales of ' +
+        'its variants together) and two lines here.',
+      items: { $ref: 'adminTopVariantRevenueSchema#' },
     },
 
     topCategoriesByRevenue: {
@@ -209,6 +227,7 @@ const adminStatsProductsSchema = {
     'deletedTotal',
     'outOfStockTotal',
     'topProductsByRevenue',
+    'topVariantsByRevenue',
     'topCategoriesByRevenue',
   ],
 } as const;
@@ -315,8 +334,16 @@ const adminAccountingQuerySchema = {
       type: 'string',
       pattern: '^[1-9][0-9]*(,[1-9][0-9]*)*$',
       description:
-        'Only these products, ids through commas, up to 100 (PRODUCT_IDS_INVALID); every ' +
-        'product without it.',
+        'Only the variants of these products, ids through commas, up to 100 ' +
+        '(PRODUCT_IDS_INVALID); every product without it.',
+    },
+    variantIds: {
+      type: 'string',
+      pattern: '^[1-9][0-9]*(,[1-9][0-9]*)*$',
+      description:
+        'Only these variants, ids through commas, up to 100 (VARIANT_IDS_INVALID); with ' +
+        'productIds, the variants of those products that are among these; every variant ' +
+        'without it.',
     },
     categoryId: {
       type: 'integer',
@@ -544,6 +571,7 @@ const reportSortByField = {
     'purchases are their value; rows without a margin percent come last.',
 } as const;
 
+// the query of the report by product and of the report by variant
 const adminReportProductsQuerySchema = {
   $id: 'adminReportProductsQuerySchema',
   type: 'object',
@@ -551,6 +579,8 @@ const adminReportProductsQuerySchema = {
   properties: {
     from: adminAccountingQuerySchema.properties.from,
     to: adminAccountingQuerySchema.properties.to,
+    productIds: adminAccountingQuerySchema.properties.productIds,
+    variantIds: adminAccountingQuerySchema.properties.variantIds,
     ...reportScopeQueryFields,
     sortBy: reportSortByField,
     sortOrder: { ...reportSortOrderField, description: 'desc by default.' },
@@ -590,6 +620,7 @@ const adminReportTimelineQuerySchema = {
     },
     to: adminAccountingQuerySchema.properties.to,
     productIds: adminAccountingQuerySchema.properties.productIds,
+    variantIds: adminAccountingQuerySchema.properties.variantIds,
     ...reportScopeQueryFields,
     step: {
       type: 'string',
@@ -678,6 +709,56 @@ const reportStockField = {
   description: 'What the batches have left now, at their costs, whatever the period.',
 } as const;
 
+const stockProductSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: positiveIntegerSchema,
+    name: { type: 'string' },
+    deleted: { type: 'boolean', description: 'The product is removed from the catalog.' },
+  },
+  required: ['id', 'name', 'deleted'],
+} as const;
+
+// the variant a line is about, as it is now
+const stockVariantSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: positiveIntegerSchema,
+    position: positiveIntegerSchema,
+    name: { type: 'string' },
+    sku: { type: ['string', 'null'] },
+    deleted: {
+      type: 'boolean',
+      description: 'Taken out of sale (so is every variant of a product removed from the catalog).',
+    },
+  },
+  required: ['id', 'position', 'name', 'sku', 'deleted'],
+} as const;
+
+// a line of the top of variants of the statistics: the variant and its product, as the accounting
+// names them
+const adminTopVariantRevenueSchema = {
+  $id: 'adminTopVariantRevenueSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    product: stockProductSchema,
+    variant: stockVariantSchema,
+    revenue: nonNegativeNumberSchema,
+    quantitySold: nonNegativeIntegerSchema,
+  },
+  required: ['product', 'variant', 'revenue', 'quantitySold'],
+} as const;
+
+const reportCategoryRefSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { id: { type: 'integer' }, name: { type: 'string' } },
+  required: ['id', 'name'],
+} as const;
+
 const adminReportProductsResponseSchema = {
   $id: 'adminReportProductsResponseSchema',
   type: 'object',
@@ -691,25 +772,55 @@ const adminReportProductsResponseSchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          id: { type: 'integer' },
-          name: { type: 'string' },
-          deleted: { type: 'boolean', description: 'Removed from the catalog.' },
-          category: {
-            type: 'object',
-            additionalProperties: false,
-            properties: { id: { type: 'integer' }, name: { type: 'string' } },
-            required: ['id', 'name'],
-          },
+          product: stockProductSchema,
+          category: reportCategoryRefSchema,
           ...reportMoneyProperties,
           stock: reportStockField,
         },
-        required: ['id', 'name', 'deleted', 'category', ...reportMoneyRequired, 'stock'],
+        required: ['product', 'category', ...reportMoneyRequired, 'stock'],
       },
     },
     totals: {
       type: 'object',
       additionalProperties: false,
       description: 'Of every product of the filter, not only of the page.',
+      properties: { ...reportMoneyProperties, stock: reportStockField },
+      required: [...reportMoneyRequired, 'stock'],
+    },
+    limit: { type: 'integer' },
+    nextCursor: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+  },
+  required: ['period', 'currency', 'items', 'totals', 'limit', 'nextCursor'],
+} as const;
+
+const adminReportVariantsResponseSchema = {
+  $id: 'adminReportVariantsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    period: { $ref: 'adminStatsPeriodSchema#' },
+    currency: { type: 'string' },
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          product: stockProductSchema,
+          variant: stockVariantSchema,
+          category: reportCategoryRefSchema,
+          ...reportMoneyProperties,
+          stock: reportStockField,
+        },
+        required: ['product', 'variant', 'category', ...reportMoneyRequired, 'stock'],
+      },
+    },
+    totals: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'Of every variant of the filter, not only of the page: the totals of the report by ' +
+        'product for the same filter.',
       properties: { ...reportMoneyProperties, stock: reportStockField },
       required: [...reportMoneyRequired, 'stock'],
     },
@@ -814,17 +925,6 @@ const stockPageQueryFields = {
   },
 } as const;
 
-const stockProductSchema = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    id: positiveIntegerSchema,
-    name: { type: 'string' },
-    deleted: { type: 'boolean', description: 'The product is removed from the catalog.' },
-  },
-  required: ['id', 'name', 'deleted'],
-} as const;
-
 const stockActorSchema = {
   type: ['object', 'null'],
   additionalProperties: false,
@@ -842,7 +942,8 @@ const adminStockBatchesQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: stockIdQueryField('batches of this product'),
+    productId: stockIdQueryField('batches of the variants of this product'),
+    variantId: stockIdQueryField('batches of this variant'),
     deliveryId: {
       type: 'string',
       format: 'uuid',
@@ -899,6 +1000,7 @@ const adminStockBatchesResponseSchema = {
           source: { type: 'string', enum: stockSourceValues },
           supplierBatchNumber: nullableText,
           product: stockProductSchema,
+          variant: stockVariantSchema,
           unitCost: nonNegativeNumberSchema,
           quantity: positiveIntegerSchema,
           remaining: nonNegativeIntegerSchema,
@@ -927,6 +1029,7 @@ const adminStockBatchesResponseSchema = {
           'source',
           'supplierBatchNumber',
           'product',
+          'variant',
           'unitCost',
           'quantity',
           'remaining',
@@ -957,7 +1060,8 @@ const adminStockMovementsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: stockIdQueryField('steps of this product'),
+    productId: stockIdQueryField('steps of the variants of this product'),
+    variantId: stockIdQueryField('steps of this variant'),
     batchId: stockIdQueryField('steps that took units in or out of this batch'),
     orderId: stockIdQueryField('sale and the cancel of this order'),
     deliveryId: {
@@ -1005,6 +1109,7 @@ const adminStockMovementsResponseSchema = {
             description: 'A sale is at the payment, a cancel at the cancel.',
           },
           product: stockProductSchema,
+          variant: stockVariantSchema,
           quantity: {
             type: 'integer',
             description: 'The change of the stock: units in above 0, units out below.',
@@ -1041,6 +1146,7 @@ const adminStockMovementsResponseSchema = {
           'kind',
           'at',
           'product',
+          'variant',
           'quantity',
           'value',
           'batches',
@@ -1186,7 +1292,18 @@ const AUDIT_ACTIONS = [
   'REVIEW_DELETE',
   'OTHER',
 ] as const;
-const AUDIT_ENTITY_TYPES = ['product', 'user', 'category', 'order', 'review', 'other'] as const;
+const AUDIT_ENTITY_TYPES = [
+  'product',
+  'variant',
+  'user',
+  'category',
+  'order',
+  'review',
+  'party',
+  'document',
+  'attribute',
+  'other',
+] as const;
 const auditActionPattern = `(${AUDIT_ACTIONS.join('|')})`;
 
 const AUDIT_COLUMNS = [
@@ -1232,7 +1349,11 @@ const adminAuditLogQuerySchema = {
         'Only the lines written with this role: root reads what the admins did with ADMIN; the ' +
         'system writes a refund of a late payment in the name of the buyer (USER).',
     },
-    entityType: { type: 'string', enum: AUDIT_ENTITY_TYPES },
+    entityType: {
+      type: 'string',
+      enum: AUDIT_ENTITY_TYPES,
+      description: 'Only the lines about this kind of thing.',
+    },
     entityId: { ...positiveIntegerSchema, description: 'Only the lines of this thing.' },
     actions: {
       type: 'string',
@@ -1301,6 +1422,8 @@ const PRICE_LOG_COLUMNS = [
   'createdAt',
   'productId',
   'product',
+  'variantId',
+  'variant',
   'actorId',
   'actor',
   'event',
@@ -1314,6 +1437,7 @@ const PRICE_LOG_SORTS = [
   'id',
   'createdAt',
   'productId',
+  'variantId',
   'actorId',
   'event',
   'oldPrice',
@@ -1328,7 +1452,11 @@ const adminPriceLogQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: { ...positiveIntegerSchema, description: 'Only the changes of this product.' },
+    productId: {
+      ...positiveIntegerSchema,
+      description: 'Only the changes of the variants of this product.',
+    },
+    variantId: { ...positiveIntegerSchema, description: 'Only the changes of this variant.' },
     actorId: {
       ...positiveIntegerSchema,
       description: 'Only the changes of this account.',
@@ -1354,11 +1482,24 @@ const adminPriceLogResponseSchema = journalPageSchema(
       properties: { id: { type: 'integer' }, name: { type: 'string' } },
       required: ['id', 'name'],
     },
+    variantId: { type: 'integer' },
+    variant: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The variant whose price changed, as it is now.',
+      properties: {
+        id: { type: 'integer' },
+        position: { type: 'integer' },
+        name: { type: 'string' },
+        sku: { type: ['string', 'null'] },
+      },
+      required: ['id', 'position', 'name', 'sku'],
+    },
     actorId: { type: ['integer', 'null'] },
     actor: logAccountSchema,
     event: logEventSchema(
       PRICE_LOG_EVENTS,
-      'What made the line: a price of one product, of many, of a selection, the start of a sale, its end.',
+      'What made the line: a price of one variant, of many, of a selection, the start of a sale, its end.',
     ),
     oldPrice: { type: 'number' },
     newPrice: { type: 'number' },
@@ -1372,7 +1513,149 @@ const adminPriceLogResponseSchema = journalPageSchema(
       description: 'The end of the sale a line starts; a line with an end is the start of a sale.',
     },
   },
-  'A line of the log of prices.',
+  'A line of the log of prices: one variant.',
+);
+
+// the stock log
+const STOCK_LOG_COLUMNS = [
+  'id',
+  'createdAt',
+  'actorId',
+  'actor',
+  'actorRole',
+  'productId',
+  'product',
+  'variantId',
+  'variant',
+  'event',
+  'quantityChange',
+  'stockAfter',
+  'deliveryId',
+  'writeOffId',
+  'orderId',
+  'ip',
+  'userAgent',
+  'changes',
+] as const;
+const STOCK_LOG_SORTS = [
+  'id',
+  'createdAt',
+  'actorId',
+  'actorRole',
+  'productId',
+  'variantId',
+  'event',
+  'quantityChange',
+  'stockAfter',
+  'deliveryId',
+  'writeOffId',
+  'orderId',
+  'ip',
+  'userAgent',
+] as const;
+
+const adminStockLogQuerySchema = {
+  $id: 'adminStockLogQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    productId: stockIdQueryField('lines of the variants of this product'),
+    variantId: stockIdQueryField('lines of this variant'),
+    deliveryId: {
+      type: 'string',
+      format: 'uuid',
+      description: 'Only the lines of this delivery (the deliveryId its response gave).',
+    },
+    writeOffId: {
+      type: 'string',
+      format: 'uuid',
+      description: 'Only the lines of this write-off (the writeOffId its response gave).',
+    },
+    orderId: stockIdQueryField('lines of this order: the sale at its payment and the units back'),
+    ...journalQueryFields(STOCK_LOG_SORTS, STOCK_LOG_COLUMNS, STOCK_LOG_EVENTS),
+  },
+} as const;
+
+const adminStockLogResponseSchema = journalPageSchema(
+  'adminStockLogResponseSchema',
+  {
+    id: { type: 'integer' },
+    createdAt: dateTimeSchema,
+    actorId: {
+      type: ['integer', 'null'],
+      description:
+        'The id of the account that did it; none for the work of the system (the sale at the ' +
+        'payment of an order); 0 for an admin where it is root.',
+    },
+    actor: {
+      anyOf: [logAccountSchema, { type: 'null' }],
+      description: 'The account that did it; none for the work of the system.',
+    },
+    actorRole: {
+      type: ['string', 'null'],
+      enum: ['USER', 'ADMIN', 'ROOT', null],
+      description: 'The role it had when it did it; none for the work of the system.',
+    },
+    productId: { type: 'integer' },
+    product: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { id: { type: 'integer' }, name: { type: 'string' } },
+      required: ['id', 'name'],
+    },
+    variantId: { type: 'integer' },
+    variant: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The variant whose stock changed, as it is now.',
+      properties: {
+        id: { type: 'integer' },
+        position: { type: 'integer' },
+        name: { type: 'string' },
+        sku: { type: ['string', 'null'] },
+      },
+      required: ['id', 'position', 'name', 'sku'],
+    },
+    event: logEventSchema(
+      STOCK_LOG_EVENTS,
+      'What made the line: a delivery, a write-off, a sale at the payment of an order, the units ' +
+        'back at the cancel of a paid order.',
+    ),
+    quantityChange: {
+      type: 'integer',
+      description: 'The change of the stock: units in above 0, units out below 0.',
+    },
+    stockAfter: { type: 'integer', description: 'The stock of the variant after the change.' },
+    deliveryId: {
+      type: ['string', 'null'],
+      format: 'uuid',
+      description: 'The delivery of a delivery line; all its lines carry the same id.',
+    },
+    writeOffId: {
+      type: ['string', 'null'],
+      format: 'uuid',
+      description: 'The write-off of a write-off line; all its lines carry the same id.',
+    },
+    orderId: {
+      type: ['integer', 'null'],
+      description: 'The order of a sale line and of a line of units back.',
+    },
+    ip: logIpSchema,
+    userAgent: logUserAgentSchema,
+    changes: {
+      type: 'array',
+      description:
+        'What the change was made of, each field with its value before and after: the batches ' +
+        'with their units and costs, the reason of a write-off, the source, the supplier, the ' +
+        'invoice and the note of a delivery.',
+      items: {
+        type: 'object',
+        properties: { field: { type: 'string' }, old: {}, new: {} },
+        required: ['field'],
+      },
+    },
+  },
+  'A line of the stock log: one variant, one change.',
 );
 
 // the log of logins
@@ -1524,8 +1807,9 @@ const adminLogEventsResponseSchema = {
     priceLog: { type: 'array', items: { type: 'string', enum: [...PRICE_LOG_EVENTS] } },
     loginLog: { type: 'array', items: { type: 'string', enum: [...LOGIN_EVENTS] } },
     consentLog: { type: 'array', items: { type: 'string', enum: [...CONSENT_EVENTS] } },
+    stockLog: { type: 'array', items: { type: 'string', enum: [...STOCK_LOG_EVENTS] } },
   },
-  required: ['auditLog', 'priceLog', 'loginLog', 'consentLog'],
+  required: ['auditLog', 'priceLog', 'loginLog', 'consentLog', 'stockLog'],
 } as const;
 
 // the alerts of an admin
@@ -1537,6 +1821,8 @@ const ALERT_KINDS = [
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
+  'variants_missing_required',
+  'products_hidden_from_buyers',
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
@@ -1671,7 +1957,13 @@ const adminAlertKindParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    kind: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z_]+$' },
+    kind: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[a-z_]+$',
+      description: 'The kind of the alert, one of those GET /api/admin/alerts lists.',
+    },
   },
   required: ['kind'],
 } as const;
@@ -1696,7 +1988,13 @@ const adminAlertDismissalParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    kind: { type: 'string', minLength: 1, maxLength: 64, pattern: '^[a-z_]+$' },
+    kind: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 64,
+      pattern: '^[a-z_]+$',
+      description: 'The kind of the alert, one of those GET /api/admin/alerts lists.',
+    },
     id: {
       type: 'string',
       minLength: 1,
@@ -1753,6 +2051,7 @@ export const adminDtoSchemas = [
   adminStatsOrdersRevenueSchema,
   adminStatsOrdersSchema,
   adminTopProductRevenueSchema,
+  adminTopVariantRevenueSchema,
   adminTopCategoryRevenueSchema,
   adminStatsProductsSchema,
   adminStatsReviewsSchema,
@@ -1763,6 +2062,7 @@ export const adminDtoSchemas = [
   adminReportCategoriesQuerySchema,
   adminReportTimelineQuerySchema,
   adminReportProductsResponseSchema,
+  adminReportVariantsResponseSchema,
   adminReportCategoriesResponseSchema,
   adminReportTimelineResponseSchema,
   adminStockBatchesQuerySchema,
@@ -1773,6 +2073,8 @@ export const adminDtoSchemas = [
   adminAuditLogResponseSchema,
   adminPriceLogQuerySchema,
   adminPriceLogResponseSchema,
+  adminStockLogQuerySchema,
+  adminStockLogResponseSchema,
   adminLoginLogQuerySchema,
   adminLoginLogResponseSchema,
   adminConsentLogQuerySchema,

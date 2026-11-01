@@ -118,6 +118,8 @@ const sharedRefusals = (
     schema: Record<string, unknown>,
     route: RouteHandlers,
     needsCsrf: boolean,
+    // the form of the route carries files (a form of text fields does not)
+    takesFiles: boolean,
 ): Refusal[] => {
     const hooks = hooksOf(route);
     const refusals: Refusal[] = [];
@@ -207,8 +209,8 @@ const sharedRefusals = (
             text: 'the database was too busy for the request (a lock it could not take in time, or a transaction whose time ran out); nothing was changed, repeat the request.',
         });
     }
-    // a route with a form takes image files, Cloudinary keeps them
-    if (route.config?.formBodySchema) {
+    // a route with a form that has files takes image files, Cloudinary keeps them
+    if (route.config?.formBodySchema && takesFiles) {
         refusals.push({
             status: '503',
             code: 'IMAGE_STORAGE_UNAVAILABLE',
@@ -286,9 +288,13 @@ const openApiPlugin: FastifyPluginAsync = async (app) => {
                 .flat()
                 .some((method) => requiresCsrfToken(method, route.config));
             const ownResponse = (schema.response ?? {}) as Record<string, unknown>;
+            const formSchema = route.config?.formBodySchema
+                ? getSchema(route.config.formBodySchema)
+                : undefined;
+            const takesFiles = JSON.stringify(formSchema ?? {}).includes('"binary"');
             const response = withRefusals(
                 ownResponse,
-                sharedRefusals(url, schema as Record<string, unknown>, route, needsCsrf),
+                sharedRefusals(url, schema as Record<string, unknown>, route, needsCsrf, takesFiles),
             );
 
             return {

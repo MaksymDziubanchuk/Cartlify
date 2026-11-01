@@ -2,7 +2,7 @@ import type { CategoryId, IdParam, ProductId, ReviewId, UserId } from '../ids.js
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
 import type { FastifyBaseLogger } from 'fastify';
-import type { ProductSafety } from '@helpers/productDescription.js';
+import type { GalleryImageDto, VariantFullDto, VariantShortDto } from './variants.dto.js';
 
 export type ProductImagePart = {
   file: NodeJS.ReadableStream;
@@ -27,9 +27,10 @@ export type ProductImagesUrls = {
 
 //GET ALL PRODUCTS
 
-// a buyer sorts by createdAt, price (the price it sells at now), popularity, avgRating, name and
-// saleEndsAt (the products on sale first); an admin by every field (price: the usual one), the ones
-// only some products have with their flag
+// a buyer sorts by createdAt, price (the price a variant sells at now), popularity, avgRating, name,
+// sales, relevance and saleEndsAt/discount (the variants on sale first); an admin by every field
+// (price: the usual one), the ones only some products have with their flag. A sort by price, sale
+// price, discount, end of sale or the stock of a variant makes the rows variants
 export type ProductsSortField =
   | 'relevance'
   | 'createdAt'
@@ -64,26 +65,52 @@ export interface GetAllProductsQueryDto {
   categoryIds?: string | string[];
   // the categories with their whole branch (default true) or only the products of each itself
   branch?: boolean;
+  // the price of a variant (a buyer: the price it sells at now, an admin: the usual price); a price
+  // in the query makes the rows variants
   minPrice?: number;
   maxPrice?: number;
 
   // admin and root only: true -> only deleted; without it or false -> only not deleted, for every role
   deleted?: boolean;
 
-  // free units (stock - reservedStock): true -> some are free, false -> none are free
+  // free units (stock - reservedStock - units of batches that are over): true -> some are free
+  // (a product row: some variant of it has them), false -> none are free
   inStock?: boolean;
-  // admin and root only, a flag: at most this many free units, any other mark
+  // admin and root only, a flag: the variants with at most this many free units, any other mark
   maxStock?: number;
-  // admin and root only, a flag: the products that lack the weight or the sizes
+  // admin and root only, a flag: the variants that lack the weight or the sizes
   withoutShippingData?: boolean;
+  // admin and root only, the flags that find the gaps of the catalog (true filters; hiddenFromBuyers
+  // false lists the products a buyer sees): the variants that lack a characteristic the category
+  // requires, the weight, any of the sizes, the barcode, a picture; the products a buyer does not
+  // see; the products with a variant taken out of sale
+  missingRequired?: boolean;
+  withoutWeight?: boolean;
+  withoutDimensions?: boolean;
+  withoutBarcode?: boolean;
+  withoutImages?: boolean;
+  hiddenFromBuyers?: boolean;
+  hasDeletedVariants?: boolean;
+  // admin and root only: the products of a manufacturer, of a person responsible in the EU, and the
+  // products that hold a document (ids of the directory)
+  manufacturerId?: number;
+  euResponsibleId?: number;
+  documentId?: number;
   // the period of the sort by sales: the orders paid in it count, [salesFrom, salesTo)
   salesFrom?: string;
   salesTo?: string;
 
-  // admin and root only: true -> only products with an active sale / with a popularity override;
-  // without it or false -> only products without one
+  // admin and root only: true -> only variants with an active sale / products with a popularity
+  // override; without it or false -> only products without one
   onSale?: boolean;
   popularityOverridden?: boolean;
+
+  // the filter by characteristics: one entry for a characteristic, `<attributeId>:<value>` (a list of
+  // value ids, a range `from..to`, `yes` or `no`); the parameter repeats. It makes the rows variants
+  f?: string | string[];
+  // admin and root only: false lists every variant on a row of its own; true (the default) merges
+  // the variants of a product with the same main characteristics into one row
+  group?: boolean;
 
   // sorting (default popularity desc)
   sort?: ProductsSortField;
@@ -109,10 +136,24 @@ export interface FindAllProductsDto {
   inStock?: boolean;
   maxStock?: number;
   withoutShippingData?: boolean;
+  missingRequired?: boolean;
+  withoutWeight?: boolean;
+  withoutDimensions?: boolean;
+  withoutBarcode?: boolean;
+  withoutImages?: boolean;
+  hiddenFromBuyers?: boolean;
+  hasDeletedVariants?: boolean;
+  manufacturerId?: number;
+  euResponsibleId?: number;
+  documentId?: number;
   salesFrom?: Date;
   salesTo?: Date;
   onSale?: boolean;
   popularityOverridden?: boolean;
+
+  // the filter by characteristics as the query had it, and the flag group of an admin
+  f?: string | string[];
+  group?: boolean;
 
   // without it: the best match of a search, or the popularity
   sort?: ProductsSortField;
@@ -125,39 +166,33 @@ export interface ProductCategoryDto {
   slug: string;
 }
 
-// the safety and origin data of a product (the EU GPSR) as a request gives them
-export interface ProductSafetyInputDto {
-  manufacturer: { name: string; address: string; email: string; country: string };
-  responsiblePerson?: { name: string; address: string; email: string } | null;
-  warnings?: string | null;
+// the manufacturer or the person responsible in the EU a product names (the EU GPSR), as the
+// directory of parties keeps it
+export interface ProductPartyDto {
+  id: number;
+  name: string;
+  address: string;
+  email: string;
+  country: string;
 }
 
-// a product as a buyer (guest, user) gets it; an admin (admin, root) gets the fields below the
-// line too. The list of a buyer has the popularity, the card of a buyer does not
+// a document of the directory of documents a product names: what a buyer opens
+export interface ProductDocumentDto {
+  id: number;
+  title: string;
+  kind: 'instruction' | 'certificate' | 'declaration' | 'other';
+  url: string;
+}
+
+// the product part of an answer, which the variants of it share: a buyer (guest, user) gets what
+// helps to buy it, an admin (admin, root) the fields below the line too. The price, the sale, the
+// stock, the weight and the article number are the variant's (src/types/dto/variants.dto.ts). The
+// list of a buyer has the popularity, the card of a buyer does not
 export interface ProductResponseDto {
   id: ProductId;
   name: string;
   description?: string;
-  // the article number, null without one
-  sku: string | null;
-  price: number;
-  // the sale next to the price: a buyer gets it only while it lasts (the product sells at
-  // salePrice until saleEndsAt), an admin always, as the row keeps it, null without one
-  salePrice?: number | null;
-  saleEndsAt?: string | null;
-  // the lowest price of the 30 days before the sale, the way salePrice is shown
-  salePriorPrice?: number | null;
-  // free units: the stock that orders do not hold
-  stock: number;
-  // the weight in grams and the packed sizes in millimetres, null while they are not known. The
-  // card shows them to everybody, the list to an admin
-  weightGrams?: number | null;
-  lengthMm?: number | null;
-  widthMm?: number | null;
-  heightMm?: number | null;
   category: ProductCategoryDto;
-  // the primary image of a list item; null for a product without one, which only an admin lists
-  images: ProductImagesUrls | null;
   avgRating: number;
   reviewsCount: number;
   createdAt: string;
@@ -166,20 +201,30 @@ export interface ProductResponseDto {
   // admin and root only
   views?: number;
   updatedAt?: string;
-  totalStock?: number;
-  reservedStock?: number;
-  // the units of batches that are over: not sold, the admin writes them off
-  expiredStock?: number;
-  // the cost of a unit in the latest delivery of a supplier, null without one
-  lastUnitCost?: number | null;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
   deletedAt?: string | null;
 }
 
+// a row of the catalog list: a product with its main variant (the query asks nothing of a variant)
+// or a variant with its product (it does). A buyer gets the short variant, an admin the full one
+export interface ProductListRowDto {
+  product: ProductResponseDto;
+  variant: VariantShortDto | VariantFullDto;
+  // a product row: the lowest and the highest price the variants of the list sell at now (the same
+  // when there is one price); a variant row has neither
+  minPrice?: number;
+  maxPrice?: number;
+  // the free units of the row: of the variants of the list for a product row, of the variant for
+  // a variant row
+  stock: number;
+}
+
 export interface ProductsResponseDto {
-  items: ProductResponseDto[];
+  items: ProductListRowDto[];
   limit: number;
+  // the number of the rows the filters find, whatever the page
+  total: number;
   nextCursor?: string;
 }
 
@@ -190,17 +235,37 @@ export interface GetProductByIdParamsDto {
 
 export interface FindProductByIdDto {
   productId: ProductId;
+  variantId?: number;
   actorId: UserId;
   actorRole: Role;
 }
 
-// the card: every image, the way to its category from the top of the tree, and the safety and
-// origin data, null for a product from before them
-export type FullProductResponseDto = Omit<ProductResponseDto, 'images' | 'category'> & {
+// the product of the card: the way to its category from the top of the tree, and the safety and
+// origin data (GPSR): the manufacturer, the person responsible in the EU, the warnings; the
+// instructions and certificates. An admin gets the gallery with the variants that show each picture
+export type ProductCardDto = Omit<ProductResponseDto, 'category'> & {
   category: ProductCategoryDto & { path: ProductCategoryDto[] };
-  images: ProductImagesUrls[];
-  safety: ProductSafety | null;
+  manufacturer: ProductPartyDto;
+  euResponsible: ProductPartyDto | null;
+  warnings: string | null;
+  documents: ProductDocumentDto[];
+  // admin and root only
+  gallery?: GalleryImageDto[];
 };
+
+// the card: the product, the variant it opens (the one asked for, or the main one: the first by its
+// place with free units, the first of all when none has), and the short form of every variant to
+// switch between. A buyer gets the variants for sale that show a picture, an admin all of them
+export interface FullProductResponseDto {
+  product: ProductCardDto;
+  variant: VariantFullDto;
+  variants: VariantShortDto[];
+}
+
+export interface GetProductByIdQueryDto {
+  // the variant to open; without it the main one
+  variantId?: number;
+}
 
 // GET PRODUCTS REVIEWS
 export interface GetProductReviewsParamsDto {
@@ -268,16 +333,12 @@ export interface ReviewsResponseDto {
 export interface CreateProductBodyDto {
   name: string;
   description?: string;
-  sku?: string;
-  price: number;
   categoryId: CategoryId;
-  // the weight and the sizes of the form, text; the service checks them
-  weightGrams?: string;
-  lengthMm?: string;
-  widthMm?: string;
-  heightMm?: string;
-  // true: the weight and the sizes come later (not kept)
-  withoutShippingData?: string;
+  // the variants: a JSON list of { price, sku?, barcode?, weightGrams?, lengthMm?, widthMm?,
+  // heightMm?, withoutShippingData?, images: [{ file, position }] }; a file is the number of an
+  // uploaded file (VariantInputBodyDto, with files for the pictures of the gallery)
+  variants: string;
+  // the gallery: the files in their order
   images: MultipartFile[];
 }
 
@@ -287,20 +348,23 @@ export interface CreateProductDto {
   productId: ProductId;
   name: string;
   description?: string;
-  // the article number, an empty one is none
-  sku?: string;
-  // the safety and origin data (GPSR), required: checked by the service
-  safety?: unknown;
-  price: number;
+  // the manufacturer: a party of the directory by its id, or a new one by its four values, one of
+  // the two (required); the person responsible in the EU the same, required for a manufacturer
+  // outside the EU. Checked by the service
+  manufacturerId?: unknown;
+  manufacturer?: unknown;
+  euResponsibleId?: unknown;
+  euResponsible?: unknown;
+  warnings?: unknown;
+  // the ids of the documents of the directory the product names, in their order: the text of a form
+  // (ids with a comma between)
+  documentIds?: unknown;
   // never taken: a new product has no stock, it comes with a delivery; one sent is refused
   stock?: unknown;
   categoryId: CategoryId;
-  // the weight and the sizes as they come (text of a form), required unless withoutShippingData
-  weightGrams?: unknown;
-  lengthMm?: unknown;
-  widthMm?: unknown;
-  heightMm?: unknown;
-  withoutShippingData?: unknown;
+  // the text of the field `variants`, a JSON list; the service reads and checks it
+  variants?: unknown;
+  // the gallery: the uploads of the form, in their order
   images: UploadedProductImage[];
   log: FastifyBaseLogger;
 }
@@ -315,36 +379,25 @@ export interface UpdateProductParamsDto {
 export interface UpdateProductBodyDto {
   name?: string;
   description?: string;
-  // the article number; an empty one or null takes it away
-  sku?: string | null;
-  // the safety and origin data, whole: they replace the ones the product has
-  safety?: ProductSafetyInputDto;
-  price?: number;
+  // the manufacturer and the person responsible in the EU by their ids in the directory; null takes
+  // the person away; the warnings, null or empty takes them away
+  manufacturerId?: number;
+  euResponsibleId?: number | null;
+  warnings?: string | null;
+  // the documents the product names, by their ids in their order, written whole; null or empty
+  // takes every document away
+  documentIds?: number[] | null;
   // never taken: the stock changes only with a delivery or a write-off; one sent is refused
   stock?: unknown;
   categoryId?: CategoryId;
-  // the weight in grams and the packed sizes in millimetres; null clears them, which needs
-  // withoutShippingData; a form gives them as text
-  weightGrams?: number | string | null;
-  lengthMm?: number | string | null;
-  widthMm?: number | string | null;
-  heightMm?: number | string | null;
-  withoutShippingData?: boolean | string;
   popularityOverride?: number | null;
   popularityOverrideUntil?: string | null;
-  // with a price: what happens to the sale that is on. keep keeps it, null takes it off, a new
-  // sale takes the old one off and is put on from the new price
-  sale?: ProductSaleWord;
 }
 
 export interface UpdateProductDto extends UpdateProductBodyDto {
   productId: ProductId;
   actorId: UserId;
   actorRole: Role;
-  // the images of a form, they replace the ones the product has
-  images?: UploadedProductImage[];
-  // a file the product no longer has and that could not be removed goes here
-  log: FastifyBaseLogger;
 }
 
 export type UpdateProductResponseDto = FullProductResponseDto;
@@ -369,15 +422,13 @@ export interface UpdateProductsBatchResponseDto {
   products: FullProductResponseDto[];
 }
 
-// PRODUCT SALE
+// SALE OF VARIANTS
 // a percent of the price, or an amount of money off it
 export type ProductSaleDiscountDto = { percent: number } | { amount: number };
 
 export type ProductSaleDto = ProductSaleDiscountDto & { endsAt: string };
 
-// the word on the sale of a change of a price
-export type ProductSaleWord = 'keep' | ProductSaleDto | null;
-
+// the word of a bulk change of prices on the sales that are on: keep them or take them off
 export type BulkSaleWord = 'keep' | 'remove';
 
 export interface SetProductSaleParamsDto {
@@ -385,6 +436,8 @@ export interface SetProductSaleParamsDto {
 }
 
 export interface SetProductSaleBodyDto {
+  // the variants of the product to put on sale or take off; without it every variant for sale
+  variantIds?: number[];
   // null takes the sale off
   sale: ProductSaleDto | null;
 }
@@ -395,17 +448,39 @@ export interface SetProductSaleDto extends SetProductSaleBodyDto {
   actorRole: Role;
 }
 
-export type SetProductSaleResponseDto = FullProductResponseDto;
+// what a sale route did to a variant: put the sale on, found the same sale (or no sale to take off)
+// and left the variant as it was, took the sale off
+export type SaleStatus = 'set' | 'unchanged' | 'removed';
 
-// BULK UPDATE PRODUCT PRICE
+// the variant after a sale route; the sale fields are empty without a sale that lasts
+export interface VariantSaleResultDto {
+  id: number;
+  productId: ProductId;
+  name: string;
+  price: number;
+  salePrice: number | null;
+  saleEndsAt: string | null;
+  // the lowest price of the 30 days before the sale
+  salePriorPrice: number | null;
+  status: SaleStatus;
+}
+
+export interface SetProductSaleResponseDto {
+  // every variant the request named (or every one for sale), in the order of the request
+  variants: VariantSaleResultDto[];
+}
+
+// BULK UPDATE OF PRICES
 
 export type BulkProductPriceMode = 'percent' | 'fixed';
 
 export interface BulkProductPriceScopeDto {
-  // optional filters (all optional, combined with AND in service)
+  // optional filters of the variants (all optional, combined with AND in service)
   categoryId?: CategoryId;
   productIds?: ProductId[];
+  variantIds?: number[];
 
+  // the usual price of the variant
   minPrice?: number;
   maxPrice?: number;
 
@@ -425,7 +500,7 @@ export interface BulkUpdateProductsPriceBodyDto {
   dryRun?: boolean;
   reason?: string;
 
-  // the same for the sale that is on of every product: keep it, or take it off
+  // the same for the sale that is on of every variant: keep it, or take it off
   sale?: BulkSaleWord;
 }
 
@@ -434,9 +509,20 @@ export interface BulkUpdateProductsPriceDto extends BulkUpdateProductsPriceBodyD
   actorRole: Role;
 }
 
+// a variant of a bulk change of prices
+export interface BulkPriceVariantDto {
+  id: number;
+  productId: ProductId;
+  name: string;
+  oldPrice: number;
+  newPrice: number;
+}
+
 export interface BulkUpdateProductsPriceResponseDto {
   message: string;
   updatedCount: number;
+  // a dry run lists the variants it would change with their old and new price
+  variants?: BulkPriceVariantDto[];
 }
 
 // DELETE PRODUCT BY ID
@@ -518,11 +604,11 @@ export interface UpdateProductCategoryDto extends UpdateProductCategoryBodyDto {
 
 export type UpdateProductCategoryResponseDto = FullProductResponseDto;
 
-// SALES OF MANY PRODUCTS: a sale for each product, or one sale for the products of a category
-export interface ProductSalesItemDto {
-  productId: ProductId;
-  sale: ProductSaleDto;
-}
+// SALES OF MANY VARIANTS: a sale for each variant (or for all the variants of a product), or one
+// sale for the variants of the products of a category
+export type ProductSalesItemDto = { sale: ProductSaleDto } & (
+  { variantId: number; productId?: never } | { productId: ProductId; variantId?: never }
+);
 
 export type ProductSalesBodyDto =
   | { items: ProductSalesItemDto[] }
@@ -530,19 +616,9 @@ export type ProductSalesBodyDto =
 
 export type SetProductSalesDto = ProductSalesBodyDto & { actorId: UserId; actorRole: Role };
 
-export interface ProductSalesResultDto {
-  id: ProductId;
-  name: string;
-  price: number;
-  salePrice: number;
-  saleEndsAt: string;
-  salePriorPrice: number | null;
-  // set: the sale was put on; unchanged: the product had this sale already
-  status: 'set' | 'unchanged';
-}
-
 export interface ProductSalesResponseDto {
-  products: ProductSalesResultDto[];
+  // the variants of the request: in the order of the items, or by id for a category
+  variants: VariantSaleResultDto[];
 }
 
 // SUGGESTIONS: a few names of the catalog for what a person types
@@ -560,12 +636,55 @@ export interface ProductSuggestionsResponseDto {
   items: Array<{ id: ProductId; name: string }>;
 }
 
-// PRICE HISTORY: the log of prices of a product, for admin and root
+// THE PANEL OF THE FILTER of a category (GET /api/products/filters)
+export interface CatalogFiltersQueryDto {
+  categoryId: number;
+  // the category with everything below it (the default) or only its own products
+  branch?: boolean;
+}
+
+export interface CatalogFiltersDto {
+  categoryId: CategoryId;
+  branch: boolean;
+  actorId: UserId;
+  actorRole: Role;
+}
+
+// a value of a choice that is in the category, with the colour of its swatch
+export interface CatalogFilterOptionDto {
+  id: number;
+  name: string;
+  colorCode: string | null;
+  position: number;
+}
+
+interface CatalogFilterBaseDto {
+  id: number;
+  name: string;
+  unit: string | null;
+  group: { id: number; name: string };
+}
+
+// a characteristic of the panel: a choice (one value or a set) gives the values that are there, a
+// number its lowest and highest value, yes/no the answers that are there (both: with one answer
+// the characteristic is not in the panel)
+export type CatalogFilterDto =
+  | (CatalogFilterBaseDto & { type: 'option' | 'options'; values: CatalogFilterOptionDto[] })
+  | (CatalogFilterBaseDto & { type: 'number'; min: number; max: number })
+  | (CatalogFilterBaseDto & { type: 'boolean'; values: Array<'yes' | 'no'> });
+
+export interface CatalogFiltersResponseDto {
+  items: CatalogFilterDto[];
+}
+
+// PRICE HISTORY: the log of prices of the variants of a product, for admin and root
 export interface PriceHistoryParamsDto {
   productId: IdParam;
 }
 
 export interface PriceHistoryQueryDto {
+  // only the changes of this variant of the product
+  variantId?: number;
   limit?: number;
   cursor?: string;
 }
@@ -576,8 +695,17 @@ export interface PriceHistoryDto extends PriceHistoryQueryDto {
   actorRole: Role;
 }
 
+// the variant a line of a log of prices names: a short reference, as it is now
+export interface LogVariantDto {
+  id: number;
+  position: number;
+  name: string;
+  sku: string | null;
+}
+
 export interface PriceHistoryItemDto {
   id: number;
+  variant: LogVariantDto;
   oldPrice: number;
   newPrice: number;
   // how the change was given: by a percent or by an amount
@@ -610,7 +738,8 @@ export interface RestoreProductDto {
   actorRole: Role;
 }
 
-// STOCK: a delivery takes in a batch of each item, a write-off takes free units out
+// STOCK: a delivery takes in a batch of each item, a write-off takes free units out. The stock is
+// the stock of a variant: an item names the variant it is about
 // where a batch came from: a supplier, a surplus an inventory found, goods a buyer brought back
 export type StockSourceName = 'supplier' | 'surplus' | 'customer_return';
 
@@ -618,18 +747,22 @@ export type StockSourceName = 'supplier' | 'surplus' | 'customer_return';
 export type WriteOffReason =
   'damaged' | 'defective' | 'expired' | 'shortage' | 'returned_to_supplier' | 'other';
 
-// an item names its product by its id or by its article number, never both (the schema); the
-// service turns an article number into the id of the product of the catalog that has it
-export type StockProductRefDto =
-  { productId: ProductId; sku?: never } | { sku: string; productId?: never };
+// an item names its variant by its id, by its article number or by its barcode, one of the three
+// (the schema); the service turns an article number or a barcode into the id of the live variant
+// of the catalog that has it
+export type StockVariantRefDto =
+  | { variantId: number; sku?: never; barcode?: never }
+  | { sku: string; variantId?: never; barcode?: never }
+  | { barcode: string; variantId?: never; sku?: never };
 
 export interface DeliveryItemBodyDto {
-  productId: ProductId;
+  variantId: number;
   quantity: number;
-  // the cost of a unit in the currency of the shop, to the cent
-  unitCost: number;
-  // the last good day, yyyy-mm-dd
-  expiresAt?: string;
+  // the cost of a unit in the currency of the shop, to the cent; the cost of the whole delivery
+  // stands in when the item has none
+  unitCost?: number;
+  // the last good day, yyyy-mm-dd; null: this item has no end, whatever the delivery says
+  expiresAt?: string | null;
   supplierBatchNumber?: string;
 }
 
@@ -638,18 +771,28 @@ export interface DeliveryBodyDto {
   supplier?: string;
   document?: string;
   note?: string;
+  // what an item takes when it has no cost or no last good day of its own
+  unitCost?: number;
+  expiresAt?: string;
   items: DeliveryItemBodyDto[];
 }
 
 export interface ReceiveStockDto extends Omit<DeliveryBodyDto, 'items'> {
-  items: Array<Omit<DeliveryItemBodyDto, 'productId'> & StockProductRefDto>;
+  items: Array<Omit<DeliveryItemBodyDto, 'variantId'> & StockVariantRefDto>;
   actorId: UserId;
   actorRole: Role;
 }
 
-export interface ProductBatchDto {
-  id: number;
+// the product and the variant a line of an answer of the stock is about, by name
+export interface StockLineRefDto {
   productId: ProductId;
+  variantId: number;
+  product: { id: ProductId; name: string };
+  variant: { id: number; position: number; name: string; sku: string | null };
+}
+
+export interface ProductBatchDto extends StockLineRefDto {
+  id: number;
   source: StockSourceName;
   supplierBatchNumber: string | null;
   unitCost: number;
@@ -659,9 +802,10 @@ export interface ProductBatchDto {
   createdAt: Date;
 }
 
-// the stock of a product after the request: free units, the whole stock and the reserve
-export interface StockProductSummaryDto {
-  id: ProductId;
+// the stock of a variant after the request: free units, the whole stock and the reserve
+export interface StockVariantSummaryDto {
+  variantId: number;
+  productId: ProductId;
   stock: number;
   totalStock: number;
   reservedStock: number;
@@ -671,11 +815,11 @@ export interface StockProductSummaryDto {
 export interface ReceiveStockResponseDto {
   deliveryId: string;
   batches: ProductBatchDto[];
-  products: StockProductSummaryDto[];
+  variants: StockVariantSummaryDto[];
 }
 
 export interface WriteOffItemBodyDto {
-  productId: ProductId;
+  variantId: number;
   quantity: number;
   // the batch to take the units from; without one they come in the order of a sale
   batchId?: number;
@@ -688,7 +832,7 @@ export interface WriteOffBodyDto {
 }
 
 export interface WriteOffStockDto extends Omit<WriteOffBodyDto, 'items'> {
-  items: Array<Omit<WriteOffItemBodyDto, 'productId'> & StockProductRefDto>;
+  items: Array<Omit<WriteOffItemBodyDto, 'variantId'> & StockVariantRefDto>;
   actorId: UserId;
   actorRole: Role;
 }
@@ -701,6 +845,6 @@ export interface WriteOffTakenDto {
 
 export interface WriteOffStockResponseDto {
   writeOffId: string;
-  items: { productId: ProductId; quantity: number; batches: WriteOffTakenDto[] }[];
-  products: StockProductSummaryDto[];
+  items: Array<StockLineRefDto & { quantity: number; batches: WriteOffTakenDto[] }>;
+  variants: StockVariantSummaryDto[];
 }

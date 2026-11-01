@@ -21,6 +21,8 @@ export const ADMIN_ALERT_KINDS = [
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
+  'variants_missing_required',
+  'products_hidden_from_buyers',
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
@@ -169,10 +171,13 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sortDir: 'asc',
         },
       };
+    // the cases of the alerts of the variants (the stock, the shipping data, the required
+    // characteristics) are variants: each variant has a row of its own in the list (group=false),
+    // the alert counts what its list shows
     case 'out_of_stock':
       return {
         path: '/api/products',
-        query: { maxStock: '0', sort: 'popularity', order: 'desc' },
+        query: { maxStock: '0', group: 'false', sort: 'popularity', order: 'desc' },
       };
     case 'low_stock':
       return {
@@ -180,6 +185,7 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
         query: {
           inStock: 'true',
           maxStock: String(window.units ?? 0),
+          group: 'false',
           sort: 'stock',
           order: 'asc',
         },
@@ -187,7 +193,19 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
     case 'products_without_shipping_data':
       return {
         path: '/api/products',
-        query: { withoutShippingData: 'true', sort: 'popularity', order: 'desc' },
+        query: { withoutShippingData: 'true', group: 'false', sort: 'popularity', order: 'desc' },
+      };
+    case 'variants_missing_required':
+      return {
+        path: '/api/products',
+        query: { missingRequired: 'true', group: 'false', sort: 'popularity', order: 'desc' },
+      };
+    // the cases are products, the rows of the list are products (a filter of a product leaves them
+    // so), so the total of the list is the count of the alert
+    case 'products_hidden_from_buyers':
+      return {
+        path: '/api/products',
+        query: { hiddenFromBuyers: 'true', sort: 'popularity', order: 'desc' },
       };
     case 'expiring_batches':
       return {

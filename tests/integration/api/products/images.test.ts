@@ -2,6 +2,9 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import cloudinary from '@config/cloudinary.js';
+import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
+import { prisma } from '@db/client.js';
+import { IMAGES_TX_BASE_MS, imagesTxTimeout } from '@routes/api/products/services/helpers/index.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -28,8 +31,8 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   removeProducts,
-  stockOf,
   uniqueTag,
   type TestProduct,
   type TestUser,
@@ -37,15 +40,24 @@ import {
 import { hideSecrets } from '../../../helpers/hideSecrets.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
-import { safetyFormFields, shippingFormFields } from '../../../helpers/productSafety.js';
+import { createProductForm, formVariant } from '../../../helpers/productForm.js';
+import { manufacturerFormFields } from '../../../helpers/productSafety.js';
+import {
+  auditLinesOf,
+  galleryIdsOf,
+  imagesOfVariant,
+  markVariantDeleted,
+} from '../../../helpers/variants.js';
 
-// the images of POST /api/products and PATCH /api/products/:productId go to Cloudinary (its mock,
-// or the real account with service:cloudinary, tests/helpers/cloudinary.ts): each waits at a waiting id until the product is written and then moves to
-// test/products/<id>/<a key of its own>, a new path for each upload: a file the product shows is
-// never overwritten, the ones it no longer has go after the commit. A refused request moves nothing and leaves nothing
-// waiting, which is what the refusals check: the id a refused form took is not in the answer,
-// and other files make products at the same time. The PATCH tests start from a product of the
-// factory and give it its files through PATCH, so they do not depend on the create form
+// The pictures of a product go to Cloudinary (its mock, or the real account with
+// service:cloudinary, tests/helpers/cloudinary.ts): the gallery of POST /api/products and the
+// pictures POST /api/products/:productId/images adds. Each waits at a waiting id until the rows are
+// written and then moves to test/products/<id>/<a key of its own>, a new path for each upload: a
+// file the product shows is never overwritten, the ones it no longer has go after the commit
+// (DELETE /api/products/:productId/images/:imageId). A refused request moves nothing and leaves
+// nothing waiting, which is what the refusals check: the id a refused form took is not in the
+// answer, and other files make products at the same time. The gallery tests start from a product of
+// the factory and give it its files through the route, so they do not depend on the create form
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -59,78 +71,97 @@ const products: TestProduct[] = [];
 const imagePath = (productId: number) => new RegExp(`^test/products/${productId}/[0-9a-f-]{36}$`);
 const IMAGE_KEY = '[0-9a-f-]{36}';
 
-const fields = (values: Record<string, string | undefined>): FormPart[] =>
-  Object.entries(values)
-    .filter((entry): entry is [string, string] => entry[1] !== undefined)
-    .map(([name, value]) => ({ name, value }));
-
-// a new product needs the safety data of its manufacturer
-const productFields = (overrides: Record<string, string | undefined> = {}) => [
-  ...fields({
-    name: `Image test product ${uniqueTag()}`,
-    price: '10',
-    categoryId: String(categoryId),
-    ...overrides,
-  }),
-  ...safetyFormFields(),
-  ...shippingFormFields(),
-];
-
 const image = (data: Buffer, opts: Parameters<typeof imageField>[2] = {}) =>
   imageField('images', data, opts);
 
-const sendForm = (
-  method: 'POST' | 'PATCH',
-  url: string,
-  parts: FormPart[],
-  actor: TestUser = admin,
-) => {
+const createForm = (parts: FormPart[], actor: TestUser = admin) => {
   const { payload, headers } = multipartBody(parts);
 
   return app.inject({
-    method,
-    url,
+    method: 'POST',
+    url: '/api/products',
     headers: { ...withCsrf(csrf, accessCookie(actor)), ...headers },
     payload,
   });
 };
 
-const createForm = (parts: FormPart[], actor?: TestUser) =>
-  sendForm('POST', '/api/products', parts, actor);
+// the fields of a form of a new product, with the variant that shows every file
+const formFields = (files: number, over: Record<string, string> = {}): FormPart[] => {
+  const form = [
+    { name: 'name', value: `Image test product ${uniqueTag()}` },
+    { name: 'categoryId', value: String(categoryId) },
+    {
+      name: 'variants',
+      value: JSON.stringify([
+        formVariant({
+          images: Array.from({ length: files }, (_, i) => ({ file: i, position: i + 1 })),
+        }),
+      ]),
+    },
+  ];
 
-const patchForm = (productId: number, parts: FormPart[], actor?: TestUser) =>
-  sendForm('PATCH', `/api/products/${productId}`, parts, actor);
+  return [
+    ...form.filter((part) => !(part.name in over)),
+    ...Object.entries(over).map(([name, value]) => ({ name, value })),
+  ];
+};
+
+const addImages = (productId: number | string, parts: FormPart[], actor: TestUser = admin) => {
+  const { payload, headers } = multipartBody(parts);
+
+  return app.inject({
+    method: 'POST',
+    url: `/api/products/${productId}/images`,
+    headers: { ...withCsrf(csrf, accessCookie(actor)), ...headers },
+    payload,
+  });
+};
+
+const removeImage = (
+  productId: number | string,
+  imageId: number | string,
+  actor: TestUser = admin,
+) =>
+  app.inject({
+    method: 'DELETE',
+    url: `/api/products/${productId}/images/${imageId}`,
+    headers: withCsrf(csrf, accessCookie(actor)),
+  });
 
 const imagesOf = (productId: number) =>
   asAdmin((tx) =>
     tx.productImage.findMany({
       where: { productId },
-      orderBy: { position: 'asc' },
-      select: { publicId: true, url: true, alt: true, position: true, isPrimary: true },
+      orderBy: [{ position: 'asc' }, { id: 'asc' }],
+      select: { id: true, publicId: true, url: true, alt: true, position: true },
     }),
   );
 
 // the rows without their urls, which carry the cloud name: a failed check prints what it compares
 const withoutUrls = (rows: Awaited<ReturnType<typeof imagesOf>>) =>
-  rows.map(({ publicId, alt, position, isPrimary }) => ({ publicId, alt, position, isPrimary }));
+  rows.map(({ id, publicId, alt, position }) => ({ id, publicId, alt, position }));
 
-// a product of the catalog whose images were uploaded through the form
-async function productWithImages(images: Buffer[]): Promise<number> {
+// a product of the catalog whose gallery got its files through the route
+async function productWithImages(images: Buffer[]): Promise<TestProduct> {
   const product = await createProduct();
   products.push(product);
 
-  const res = await patchForm(
+  const res = await addImages(
     product.id,
     images.map((data) => image(data)),
   );
-  if (res.statusCode !== 200) throw new Error(`the image upload answered ${res.statusCode}`);
+  if (res.statusCode !== 201) throw new Error(`the image upload answered ${res.statusCode}`);
 
-  return product.id;
+  return product;
 }
 
-// the files of the images the product has, in their order, to compare before and after a request
+// the files of the pictures the product has, in their order, to compare before and after a request
 const filesOf = async (productId: number) =>
-  Promise.all((await imagesOf(productId)).map((row) => storedImage(row.publicId!)));
+  Promise.all(
+    (await imagesOf(productId))
+      .filter((row) => row.publicId)
+      .map((row) => storedImage(row.publicId!)),
+  );
 
 // an image url the app gives: the transforms, the version, the path of the file (a pattern)
 const urlPattern = (transforms: string, path: string) =>
@@ -176,43 +207,13 @@ describe('product images (Cloudinary)', () => {
     }
   }, 120_000);
 
-  describe('POST /api/products', () => {
-    it('creates the product with its fields and its images from one form', async () => {
-      const res = await createForm([
-        ...productFields({ name: 'Form headphones', description: 'Over-ear.', price: '49.99' }),
-        image(pngImage(30, 20)),
-      ]);
-
-      expect(res.statusCode).toBe(201);
-      expect(bodyOf(res)).toMatchObject({
-        name: 'Form headphones',
-        description: 'Over-ear.',
-        price: 49.99,
-        // a new product has no stock, it comes with a delivery
-        stock: 0,
-        category: expect.objectContaining({ id: categoryId }),
-        images: [expect.any(Object)],
-      });
-      const row = await asAdmin((tx) =>
-        tx.product.findUniqueOrThrow({
-          where: { id: res.json().id },
-          select: { name: true, description: true, stock: true, categoryId: true },
-        }),
-      );
-      // the description keeps the text with the safety data
-      expect({ ...row, description: JSON.parse(row.description!).text }).toEqual({
-        name: 'Form headphones',
-        description: 'Over-ear.',
-        stock: 0,
-        categoryId,
-      });
-    });
-
+  describe('POST /api/products (the gallery of the form)', () => {
     it('uploads the images into the test folder in their order and gives their sizes', async () => {
       const mark = uploadMark();
 
       const res = await createForm([
-        ...productFields(),
+        ...formFields(2),
+        ...manufacturerFormFields(),
         image(pngImage(30, 20), { filename: 'front.png' }),
         image(pngImage(25, 25), { filename: 'back.png' }),
       ]);
@@ -222,64 +223,74 @@ describe('product images (Cloudinary)', () => {
       expect(uploadsSince(mark)).toHaveLength(2);
       expect(await waitingUploadsSince(mark)).toEqual([]);
       const body = bodyOf(res);
-      expect(body.images).toHaveLength(2);
-      body.images.forEach((urls: Record<string, string>) => {
+      const productId = body.product.id as number;
+      expect(body.product.gallery).toHaveLength(2);
+      for (const picture of body.product.gallery) {
         for (const size of [200, 400, 800]) {
-          expect(urls[`url${size}`]).toMatch(
-            urlPattern(`c_fit,w_${size},h_${size},f_auto,q_auto`, pathOf(body.id)),
+          expect(picture[`url${size}`]).toMatch(
+            urlPattern(`c_fit,w_${size},h_${size},f_auto,q_auto`, pathOf(productId)),
           );
         }
-      });
+      }
 
-      const rows = await imagesOf(body.id);
+      const rows = await imagesOf(productId);
       expect(withoutUrls(rows)).toEqual([
         {
-          publicId: expect.stringMatching(imagePath(body.id)),
+          id: expect.any(Number),
+          publicId: expect.stringMatching(imagePath(productId)),
           alt: 'front.png',
           position: 0,
-          isPrimary: true,
         },
         {
-          publicId: expect.stringMatching(imagePath(body.id)),
+          id: expect.any(Number),
+          publicId: expect.stringMatching(imagePath(productId)),
           alt: 'back.png',
           position: 1,
-          isPrimary: false,
         },
       ]);
       expect(rows[0]!.publicId).not.toBe(rows[1]!.publicId);
       expect(hideSecrets(rows[0]!.url)).toMatch(urlPattern('', rows[0]!.publicId!));
 
-      expect(await filesOf(body.id)).toEqual([
+      expect(await filesOf(productId)).toEqual([
         expect.objectContaining({
           width: 30,
           height: 20,
           format: 'png',
-          tags: expect.arrayContaining(['product', `product:${body.id}`, 'pos:1']),
+          tags: expect.arrayContaining(['product', `product:${productId}`, 'pos:1']),
         }),
         expect.objectContaining({
           width: 25,
           height: 25,
-          tags: expect.arrayContaining(['product', `product:${body.id}`, 'pos:2']),
+          tags: expect.arrayContaining(['product', `product:${productId}`, 'pos:2']),
         }),
       ]);
     });
 
-    it('refuses a product without images', async () => {
-      const res = await createForm(productFields());
+    it('shows the variant the first picture of its own list, in three sizes', async () => {
+      const res = await createForm([
+        ...formFields(2),
+        ...manufacturerFormFields(),
+        image(pngImage(30, 20)),
+        image(pngImage(31, 20)),
+      ]);
 
-      expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_IMAGES_REQUIRED' });
+      const { variant, product } = bodyOf(res);
+      expect(res.statusCode).toBe(201);
+      expect(variant.image.url200).toBe(variant.images[0].url200);
+      expect(variant.images[0].id).toBe(product.gallery[0].id);
     });
 
     it.each([
-      ['no name', { name: undefined }, 'BODY_NOT_FULL'],
-      ['a price that is not a number', { price: 'abc' }, 'PRODUCT_PRICE_INVALID'],
-      // the stock comes only with a delivery
+      ['no variants', { variants: '[]' }, 'VARIANTS_REQUIRED'],
       ['a stock', { stock: '5' }, 'PRODUCT_STOCK_NOT_ALLOWED'],
-    ])('uploads nothing for a product with %s', async (_case, overrides, errorCode) => {
+    ])('uploads nothing for a product with %s', async (_case, over, errorCode) => {
       const mark = uploadMark();
 
-      const res = await createForm([...productFields(overrides), image(pngImage(30, 20))]);
+      const res = await createForm([
+        ...formFields(1, over),
+        ...manufacturerFormFields(),
+        image(pngImage(30, 20)),
+      ]);
 
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ errorCode });
@@ -291,7 +302,8 @@ describe('product images (Cloudinary)', () => {
       const mark = uploadMark();
 
       const res = await createForm([
-        ...productFields(),
+        ...formFields(2),
+        ...manufacturerFormFields(),
         image(Buffer.from('notes'), { contentType: 'text/plain', filename: 'notes.txt' }),
         image(pngImage(30, 20)),
       ]);
@@ -310,7 +322,7 @@ describe('product images (Cloudinary)', () => {
     ])('refuses %s and uploads nothing', async (_case, data) => {
       const mark = uploadMark();
 
-      const res = await createForm([...productFields(), image(data)]);
+      const res = await createForm([...formFields(1), ...manufacturerFormFields(), image(data)]);
 
       expect(res.statusCode).toBe(400);
       expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_TYPE_NOT_ALLOWED' });
@@ -322,7 +334,8 @@ describe('product images (Cloudinary)', () => {
       const mark = uploadMark();
 
       const res = await createForm([
-        ...productFields(),
+        ...formFields(2),
+        ...manufacturerFormFields(),
         image(pngImage(30, 20)),
         image(brokenPng()),
       ]);
@@ -340,11 +353,50 @@ describe('product images (Cloudinary)', () => {
       userIds.push(user.id);
       const mark = uploadMark();
 
-      const res = await createForm([...productFields(), image(pngImage(30, 20))], user);
+      const res = await createForm(
+        [...formFields(1), ...manufacturerFormFields(), image(pngImage(30, 20))],
+        user,
+      );
 
       expect(res.statusCode).toBe(403);
       expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
       expect(uploadsSince(mark)).toEqual([]);
+    });
+
+    it(`refuses more than ${MAX_PRODUCT_IMAGES} images and leaves nothing waiting`, async () => {
+      const mark = uploadMark();
+      const name = `Too many ${uniqueTag()}`;
+
+      const res = await createForm([
+        ...formFields(1, { name }),
+        ...manufacturerFormFields(),
+        ...Array.from({ length: MAX_PRODUCT_IMAGES + 1 }, (_, i) => image(pngImage(20 + i, 20))),
+      ]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({
+        errorCode: 'PRODUCT_IMAGES_TOO_MANY',
+        details: { max: MAX_PRODUCT_IMAGES },
+      });
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toEqual([]);
+      expect(await asAdmin((tx) => tx.product.count({ where: { name } }))).toBe(0);
+    });
+
+    it('keeps nothing of a form whose variants are refused after the files were uploaded', async () => {
+      const mark = uploadMark();
+
+      const res = await createProductForm(app, csrf, admin, {
+        categoryId,
+        files: 2,
+        variants: [formVariant({ price: -1 })],
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VARIANTS_INVALID' });
+      expect(uploadsSince(mark)).toHaveLength(2);
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toEqual([]);
     });
 
     // a new place of an image never had a file, so there are no cached copies to drop; a move
@@ -353,7 +405,8 @@ describe('product images (Cloudinary)', () => {
       const mark = uploadMark();
 
       const res = await createForm([
-        ...productFields(),
+        ...formFields(2),
+        ...manufacturerFormFields(),
         image(pngImage(30, 20)),
         image(pngImage(31, 20)),
       ]);
@@ -362,9 +415,28 @@ describe('product images (Cloudinary)', () => {
       const asked = moveCallsSince(mark);
       expect(asked).toHaveLength(2);
       for (const call of asked) {
-        expect(call.to).toMatch(imagePath(res.json().id));
+        expect(call.to).toMatch(imagePath(res.json().product.id));
         expect(call.options).toMatchObject({ invalidate: false, timeout: 8_000 });
       }
+    });
+
+    // the moves run inside the transaction one after the other: it is given time for each file
+    it('gives the transaction of the product time for every file', async () => {
+      const transaction = jest.spyOn(prisma, '$transaction');
+
+      const res = await createForm([
+        ...formFields(3),
+        ...manufacturerFormFields(),
+        image(pngImage(30, 20)),
+        image(pngImage(31, 20)),
+        image(pngImage(32, 20)),
+      ]);
+
+      expect(res.statusCode).toBe(201);
+      const timeouts = transaction.mock.calls.map(
+        (call) => (call[1] as { timeout?: number } | undefined)?.timeout,
+      );
+      expect(timeouts).toContain(imagesTxTimeout(3));
     });
 
     // Cloudinary takes the move and never answers: the move gives up after its 8 s, well before
@@ -374,8 +446,12 @@ describe('product images (Cloudinary)', () => {
       const mark = uploadMark();
       const startedAt = Date.now();
 
-      const res = await withSilentCloudinaryMoves(() =>
-        createForm([...productFields({ name }), image(pngImage(32, 20))]),
+      const res = await withSilentCloudinaryMoves(async () =>
+        createForm([
+          ...formFields(1, { name }),
+          ...manufacturerFormFields(),
+          image(pngImage(32, 20)),
+        ]),
       );
       const took = Date.now() - startedAt;
 
@@ -391,84 +467,283 @@ describe('product images (Cloudinary)', () => {
     });
   });
 
-  describe('PATCH /api/products/:productId', () => {
-    it('changes the fields and the images of the product in one form', async () => {
-      // a price change writes the price log, and a product with a log cannot be cleaned up
-      const productId = await productWithImages([pngImage(30, 20)]);
-
-      const res = await patchForm(productId, [
-        ...fields({ name: 'Renamed in a form', description: 'New text.' }),
-        image(pngImage(44, 22)),
-      ]);
-
-      expect(res.statusCode).toBe(200);
-      expect(bodyOf(res)).toMatchObject({
-        name: 'Renamed in a form',
-        description: 'New text.',
-        stock: 5,
-      });
-      expect(await filesOf(productId)).toEqual([
-        expect.objectContaining({ width: 44, height: 22 }),
-      ]);
-    });
-
-    // the stock changes only with a delivery or a write-off
-    it('refuses a stock in the form and keeps the images and the stock', async () => {
-      const productId = await productWithImages([pngImage(30, 20)]);
-      const before = await filesOf(productId);
+  describe('POST /api/products/:productId/images', () => {
+    it('adds the pictures at the next places of the gallery, at paths of their own, and answers with the whole gallery', async () => {
+      const product = await createProduct();
+      products.push(product);
+      const [first] = await galleryIdsOf(product.id);
       const mark = uploadMark();
 
-      const res = await patchForm(productId, [...fields({ stock: '3' }), image(pngImage(44, 22))]);
+      const res = await addImages(product.id, [
+        image(pngImage(30, 20), { filename: 'side.png' }),
+        image(pngImage(25, 25)),
+      ]);
 
-      expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_STOCK_NOT_ALLOWED' });
+      expect(res.statusCode).toBe(201);
+      expect(uploadsSince(mark)).toHaveLength(2);
       expect(await waitingUploadsSince(mark)).toEqual([]);
-      expect(await filesOf(productId)).toEqual(before);
-      expect(await stockOf(productId)).toMatchObject({ stock: 5 });
-    });
-
-    it('replaces the images of the product with files at new paths', async () => {
-      const productId = await productWithImages([pngImage(30, 20), pngImage(25, 25)]);
-      const old = (await imagesOf(productId)).map((row) => row.publicId);
-
-      const res = await patchForm(productId, [image(pngImage(44, 22), { filename: 'new.png' })]);
-
-      expect(res.statusCode).toBe(200);
-      const body = bodyOf(res);
-      expect(body.images).toHaveLength(1);
-      const rows = await imagesOf(productId);
-      expect(body.images[0].url200).toMatch(
-        urlPattern('c_fit,w_200,h_200,f_auto,q_auto', rows[0]!.publicId!),
-      );
-      expect(withoutUrls(rows)).toEqual([
+      const gallery = bodyOf(res).images as {
+        id: number;
+        position: number;
+        url800: string;
+        variantIds: number[];
+      }[];
+      // the picture the product had comes first, the new ones after it; no variant shows them yet
+      expect(
+        gallery.map((picture) => [picture.id === first, picture.position, picture.variantIds]),
+      ).toEqual([
+        [true, 0, [product.variantId]],
+        [false, 1, []],
+        [false, 2, []],
+      ]);
+      const rows = await imagesOf(product.id);
+      expect(withoutUrls(rows.slice(1))).toEqual([
         {
-          publicId: expect.stringMatching(imagePath(productId)),
-          alt: 'new.png',
-          position: 0,
-          isPrimary: true,
+          id: gallery[1]!.id,
+          publicId: expect.stringMatching(imagePath(product.id)),
+          alt: 'side.png',
+          position: 1,
+        },
+        {
+          id: gallery[2]!.id,
+          publicId: expect.stringMatching(imagePath(product.id)),
+          alt: 'image.png',
+          position: 2,
         },
       ]);
-      expect(old).not.toContain(rows[0]!.publicId);
-      expect(await storedImage(rows[0]!.publicId!)).toMatchObject({ width: 44, height: 22 });
+      expect(gallery[1]!.url800).toMatch(
+        urlPattern('c_fit,w_800,h_800,f_auto,q_auto', rows[1]!.publicId!),
+      );
+      expect(await storedImage(rows[1]!.publicId!)).toMatchObject({
+        width: 30,
+        height: 20,
+        tags: expect.arrayContaining(['product', `product:${product.id}`]),
+      });
     });
 
-    // nothing points to the second file any more, it would only take space in the account
-    it('removes the files of the images the product no longer has', async () => {
-      const productId = await productWithImages([pngImage(30, 20), pngImage(25, 25)]);
-      const old = (await imagesOf(productId)).map((row) => row.publicId!);
+    it('goes on from the last place when more are added later', async () => {
+      const product = await productWithImages([pngImage(30, 20)]);
 
-      const res = await patchForm(productId, [image(pngImage(44, 22))]);
+      const res = await addImages(product.id, [image(pngImage(31, 21))]);
 
-      expect(res.statusCode).toBe(200);
-      expect(await Promise.all(old.map((publicId) => storedImage(publicId)))).toEqual([null, null]);
+      expect(bodyOf(res).images.map((picture: { position: number }) => picture.position)).toEqual([
+        0, 1, 2,
+      ]);
     });
 
-    // the moves ran one by one with overwriting the paths the product showed: the third move
-    // failed, the transaction went back, and two files of the product were already replaced
-    it('keeps every file the product shows when a move fails in the middle', async () => {
-      const productId = await productWithImages([pngImage(30, 20), pngImage(25, 25)]);
-      const rowsBefore = await imagesOf(productId);
-      const filesBefore = await filesOf(productId);
+    it('keeps the pictures the product has, their files and their bindings', async () => {
+      const product = await productWithImages([pngImage(30, 20)]);
+      const before = await filesOf(product.id);
+      const variantImages = await imagesOfVariant(product.variantId);
+
+      await addImages(product.id, [image(pngImage(44, 22))]);
+
+      expect((await filesOf(product.id)).slice(0, before.length)).toEqual(before);
+      expect(await imagesOfVariant(product.variantId)).toEqual(variantImages);
+    });
+
+    it('shows the new picture to a variant only when the variant is told to', async () => {
+      const product = await createProduct();
+      products.push(product);
+      const res = await addImages(product.id, [image(pngImage(30, 20))]);
+      const added = bodyOf(res).images[1].id as number;
+      const [first] = await galleryIdsOf(product.id);
+
+      const change = await app.inject({
+        method: 'PATCH',
+        url: `/api/products/${product.id}/variants/${product.variantId}`,
+        headers: withCsrf(csrf, accessCookie(admin)),
+        payload: {
+          images: [
+            { imageId: first, position: 1 },
+            { imageId: added, position: 2 },
+          ],
+        },
+      });
+
+      expect(change.statusCode).toBe(200);
+      expect(change.json().variant.images.map((picture: { id: number }) => picture.id)).toEqual([
+        first,
+        added,
+      ]);
+    });
+
+    it('writes the addition to the admin log and moves the last edit of the product', async () => {
+      const product = await createProduct();
+      products.push(product);
+      const before = await asAdmin((tx) =>
+        tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { updatedAt: true } }),
+      );
+
+      const res = await addImages(product.id, [image(pngImage(30, 20)), image(pngImage(31, 20))]);
+
+      const added = bodyOf(res)
+        .images.slice(1)
+        .map((picture: { id: number }) => picture.id);
+      expect(await auditLinesOf('product', product.id, ['product.gallery_add'])).toEqual([
+        {
+          actorId: admin.id,
+          action: 'PRODUCT_UPDATE',
+          event: 'product.gallery_add',
+          meta: [{ field: 'images', old: null, new: added }],
+        },
+      ]);
+      const after = await asAdmin((tx) =>
+        tx.product.findUniqueOrThrow({ where: { id: product.id }, select: { updatedAt: true } }),
+      );
+      expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    });
+
+    it('adds pictures to the gallery of a product taken out of the catalog', async () => {
+      const product = await createProduct();
+      products.push(product);
+      await asAdmin((tx) =>
+        tx.product.update({ where: { id: product.id }, data: { deletedAt: new Date() } }),
+      );
+
+      const res = await addImages(product.id, [image(pngImage(30, 20))]);
+
+      expect(res.statusCode).toBe(201);
+    });
+
+    it('refuses a gallery with more pictures than the limit, counting the ones it has, and keeps nothing of the request', async () => {
+      const product = await createProduct();
+      products.push(product);
+      // the gallery is one short of full
+      await asAdmin((tx) =>
+        tx.productImage.createMany({
+          data: Array.from({ length: MAX_PRODUCT_IMAGES - 2 }, (_, i) => ({
+            productId: product.id,
+            url: `https://res.cloudinary.com/demo/image/upload/v1/products/test/fill-${i}.jpg`,
+            position: i + 1,
+          })),
+        }),
+      );
+      const mark = uploadMark();
+
+      const refused = await addImages(product.id, [
+        image(pngImage(30, 20)),
+        image(pngImage(31, 20)),
+      ]);
+      const taken = await addImages(product.id, [image(pngImage(32, 20))]);
+
+      expect(refused.statusCode).toBe(400);
+      expect(bodyOf(refused)).toMatchObject({
+        errorCode: 'PRODUCT_IMAGES_TOO_MANY',
+        details: { max: MAX_PRODUCT_IMAGES, have: MAX_PRODUCT_IMAGES - 1 },
+      });
+      expect(taken.statusCode).toBe(201);
+      // the refused request left nothing waiting and moved nothing: only the one file moved
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toHaveLength(1);
+      expect(await imagesOf(product.id)).toHaveLength(MAX_PRODUCT_IMAGES);
+    });
+
+    it(`refuses more than ${MAX_PRODUCT_IMAGES} files in a request`, async () => {
+      const product = await createProduct();
+      products.push(product);
+      const mark = uploadMark();
+
+      const res = await addImages(
+        product.id,
+        Array.from({ length: MAX_PRODUCT_IMAGES + 1 }, (_, i) => image(pngImage(20 + i, 20))),
+      );
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({
+        errorCode: 'PRODUCT_IMAGES_TOO_MANY',
+        details: { max: MAX_PRODUCT_IMAGES },
+      });
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toEqual([]);
+    });
+
+    // a refusal that the first look at the gallery knows costs no upload at all
+    it('refuses a full gallery before a file is uploaded', async () => {
+      const product = await createProduct();
+      products.push(product);
+      await asAdmin((tx) =>
+        tx.productImage.createMany({
+          data: Array.from({ length: MAX_PRODUCT_IMAGES - 1 }, (_, i) => ({
+            productId: product.id,
+            url: `https://res.cloudinary.com/demo/image/upload/v1/products/test/full-${i}.jpg`,
+            position: i + 1,
+          })),
+        }),
+      );
+      const mark = uploadMark();
+
+      const res = await addImages(product.id, [image(pngImage(30, 20)), image(pngImage(31, 20))]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({
+        errorCode: 'PRODUCT_IMAGES_TOO_MANY',
+        details: { max: MAX_PRODUCT_IMAGES, have: MAX_PRODUCT_IMAGES },
+      });
+      expect(uploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toEqual([]);
+      expect(await imagesOf(product.id)).toHaveLength(MAX_PRODUCT_IMAGES);
+    });
+
+    it('stops at the file the gallery has no room for: the files after it are not uploaded', async () => {
+      const product = await createProduct();
+      products.push(product);
+      // the gallery has room for one picture more
+      await asAdmin((tx) =>
+        tx.productImage.createMany({
+          data: Array.from({ length: MAX_PRODUCT_IMAGES - 2 }, (_, i) => ({
+            productId: product.id,
+            url: `https://res.cloudinary.com/demo/image/upload/v1/products/test/room-${i}.jpg`,
+            position: i + 1,
+          })),
+        }),
+      );
+      const mark = uploadMark();
+
+      const res = await addImages(product.id, [
+        image(pngImage(30, 20)),
+        image(pngImage(31, 20)),
+        image(pngImage(32, 20)),
+      ]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({
+        errorCode: 'PRODUCT_IMAGES_TOO_MANY',
+        details: { max: MAX_PRODUCT_IMAGES, have: MAX_PRODUCT_IMAGES - 1 },
+      });
+      // the first file began its upload before the second was seen; the others never did
+      expect(uploadsSince(mark)).toHaveLength(1);
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(movesSince(mark)).toEqual([]);
+      expect(await imagesOf(product.id)).toHaveLength(MAX_PRODUCT_IMAGES - 1);
+    });
+
+    // the moves at Cloudinary run inside the transaction one after the other, so it is given time
+    // for each file, not one limit for any number
+    it('gives the transaction time for every file', async () => {
+      const product = await createProduct();
+      products.push(product);
+      const transaction = jest.spyOn(prisma, '$transaction');
+
+      const res = await addImages(product.id, [
+        image(pngImage(30, 20)),
+        image(pngImage(31, 20)),
+        image(pngImage(32, 20)),
+      ]);
+
+      expect(res.statusCode).toBe(201);
+      const timeouts = transaction.mock.calls.map(
+        (call) => (call[1] as { timeout?: number } | undefined)?.timeout,
+      );
+      expect(timeouts).toContain(imagesTxTimeout(3));
+      expect(imagesTxTimeout(3)).toBeGreaterThan(IMAGES_TX_BASE_MS);
+    });
+
+    // the moves ran one by one: the third move failed, the transaction went back
+    it('keeps the gallery as it was when a move fails in the middle', async () => {
+      const product = await productWithImages([pngImage(30, 20), pngImage(25, 25)]);
+      const rowsBefore = await imagesOf(product.id);
+      const filesBefore = await filesOf(product.id);
       const mark = uploadMark();
       const rename = cloudinary.uploader.rename;
       let calls = 0;
@@ -479,7 +754,7 @@ describe('product images (Cloudinary)', () => {
             ? Promise.reject(new Error('cloudinary is down'))
             : rename(...args)) as typeof rename);
 
-      const res = await patchForm(productId, [
+      const res = await addImages(product.id, [
         image(pngImage(41, 21)),
         image(pngImage(42, 22)),
         image(pngImage(43, 23)),
@@ -487,10 +762,10 @@ describe('product images (Cloudinary)', () => {
 
       expect(res.statusCode).toBe(500);
       expect(takeLogs({ msg: 'request failed' })).toHaveLength(1);
-      expect(hideSecrets(JSON.stringify(await imagesOf(productId)))).toBe(
+      expect(hideSecrets(JSON.stringify(await imagesOf(product.id)))).toBe(
         hideSecrets(JSON.stringify(rowsBefore)),
       );
-      expect(await filesOf(productId)).toEqual(filesBefore);
+      expect(await filesOf(product.id)).toEqual(filesBefore);
       // the files that moved before the failure and the uploads that waited are gone too
       const moved = movesSince(mark);
       expect(moved).toHaveLength(2);
@@ -499,62 +774,54 @@ describe('product images (Cloudinary)', () => {
         null,
       ]);
       expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(await auditLinesOf('product', product.id, ['product.gallery_add'])).toHaveLength(1);
     });
 
-    it('refuses more than 10 images and keeps the images of the product', async () => {
-      const productId = await productWithImages([pngImage(30, 20)]);
-      const rowsBefore = await imagesOf(productId);
-      const mark = uploadMark();
+    it('wants a file (PRODUCT_IMAGES_REQUIRED) and a form (MULTIPART_REQUIRED)', async () => {
+      const product = await createProduct();
+      products.push(product);
 
-      const res = await patchForm(
-        productId,
-        Array.from({ length: 11 }, (_, i) => image(pngImage(20 + i, 20))),
-      );
-
-      expect(res.statusCode).toBe(400);
-      expect(bodyOf(res)).toMatchObject({
-        errorCode: 'PRODUCT_IMAGES_TOO_MANY',
-        details: { max: 10 },
+      const noFile = await addImages(product.id, [{ name: 'note', value: 'text' }]);
+      const json = await app.inject({
+        method: 'POST',
+        url: `/api/products/${product.id}/images`,
+        headers: withCsrf(csrf, accessCookie(admin)),
+        payload: {},
       });
-      expect(await waitingUploadsSince(mark)).toEqual([]);
-      expect(movesSince(mark)).toEqual([]);
-      expect(hideSecrets(JSON.stringify(await imagesOf(productId)))).toBe(
-        hideSecrets(JSON.stringify(rowsBefore)),
-      );
+
+      expect(noFile.statusCode).toBe(400);
+      expect(noFile.json()).toMatchObject({ errorCode: 'PRODUCT_IMAGES_REQUIRED' });
+      expect(json.statusCode).toBe(400);
+      expect(json.json()).toMatchObject({ errorCode: 'MULTIPART_REQUIRED' });
     });
 
-    it('keeps the images when the rest of the form is refused', async () => {
-      const productId = await productWithImages([pngImage(30, 20)]);
-      const [before] = await filesOf(productId);
-      const rowsBefore = await imagesOf(productId);
+    it('refuses a file that is no image and keeps the gallery', async () => {
+      const product = await productWithImages([pngImage(30, 20)]);
+      const rowsBefore = await imagesOf(product.id);
       const mark = uploadMark();
 
-      const res = await patchForm(productId, [
-        ...fields({ price: 'abc' }),
+      const res = await addImages(product.id, [
         image(pngImage(44, 22)),
+        image(Buffer.from('notes'), { contentType: 'text/plain', filename: 'notes.txt' }),
       ]);
 
       expect(res.statusCode).toBe(400);
-      expect(bodyOf(res)).toMatchObject({ errorCode: 'PRODUCT_PRICE_INVALID' });
+      expect(bodyOf(res)).toMatchObject({ errorCode: 'IMAGE_TYPE_NOT_ALLOWED' });
       expect(await waitingUploadsSince(mark)).toEqual([]);
-      expect(await storedImage(rowsBefore[0]!.publicId!)).toMatchObject({
-        version: before!.version,
-        width: 30,
-        height: 20,
-      });
-      expect(hideSecrets(JSON.stringify(await imagesOf(productId)))).toBe(
+      expect(hideSecrets(JSON.stringify(await imagesOf(product.id)))).toBe(
         hideSecrets(JSON.stringify(rowsBefore)),
       );
     });
 
     it('uploads nothing for a product that does not exist', async () => {
-      const productId = 2_000_000_000;
       const mark = uploadMark();
 
-      const res = await patchForm(productId, [image(pngImage(44, 22))]);
+      const res = await addImages(2_000_000_000, [image(pngImage(44, 22))]);
 
       expect(res.statusCode).toBe(404);
       expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_NOT_FOUND' });
+      // the product is looked for before the files are read: none began its upload
+      expect(uploadsSince(mark)).toEqual([]);
       expect(await waitingUploadsSince(mark)).toEqual([]);
       expect(movesSince(mark)).toEqual([]);
     });
@@ -562,23 +829,140 @@ describe('product images (Cloudinary)', () => {
     it('refuses a user before anything is uploaded', async () => {
       const user = await createUser();
       userIds.push(user.id);
-      const productId = await productWithImages([pngImage(30, 20)]);
-      const before = await filesOf(productId);
+      const product = await productWithImages([pngImage(30, 20)]);
+      const before = await filesOf(product.id);
+      const mark = uploadMark();
 
-      const res = await patchForm(productId, [image(pngImage(44, 22))], user);
+      const res = await addImages(product.id, [image(pngImage(44, 22))], user);
 
       expect(res.statusCode).toBe(403);
-      expect(await filesOf(productId)).toEqual(before);
+      expect(uploadsSince(mark)).toEqual([]);
+      expect(await filesOf(product.id)).toEqual(before);
+    });
+  });
+
+  describe('DELETE /api/products/:productId/images/:imageId', () => {
+    it('takes the picture out of the gallery, deletes its file, and writes the admin log', async () => {
+      const product = await productWithImages([pngImage(30, 20), pngImage(25, 25)]);
+      const [, second] = await imagesOf(product.id);
+
+      const res = await removeImage(product.id, second!.id);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ id: second!.id, variantsWithoutImages: [] });
+      expect((await imagesOf(product.id)).map((row) => row.id)).not.toContain(second!.id);
+      expect(await storedImage(second!.publicId!)).toBeNull();
+      expect(await auditLinesOf('product', product.id, ['product.gallery_remove'])).toEqual([
+        {
+          actorId: admin.id,
+          action: 'PRODUCT_UPDATE',
+          event: 'product.gallery_remove',
+          meta: [{ field: 'images', old: [second!.id], new: null }],
+        },
+      ]);
     });
 
-    // an image of a product is a file the app uploaded; a json body could point it anywhere
-    it('refuses images sent in a json body and keeps the images', async () => {
-      const productId = await productWithImages([pngImage(30, 20)]);
-      const rowsBefore = await imagesOf(productId);
+    it('takes the picture from the variants that showed it and names the ones it leaves with no picture', async () => {
+      const product = await productWithImages([pngImage(30, 20)]);
+      const [first, added] = await imagesOf(product.id);
+      // one variant shows only the picture, another shows it and the first one
+      const only = await createVariant(product.id, { imageIds: [added!.id] });
+      const both = await createVariant(product.id, { imageIds: [first!.id, added!.id] });
+      const gone = await createVariant(product.id, { imageIds: [added!.id] });
+      await markVariantDeleted(gone.id);
+
+      const res = await removeImage(product.id, added!.id);
+
+      expect(res.statusCode).toBe(200);
+      // only the variants for sale are named, the one taken out of sale is not
+      expect(res.json()).toEqual({ id: added!.id, variantsWithoutImages: [only.id] });
+      expect(await imagesOfVariant(only.id)).toEqual([]);
+      expect(await imagesOfVariant(both.id)).toEqual([[first!.id, 1]]);
+      expect(await imagesOfVariant(gone.id)).toEqual([]);
+      // the variant that is left with no picture is hidden from a buyer
+      const card = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
+      expect(card.json().variants.map((v: { id: number }) => v.id)).toEqual([
+        product.variantId,
+        both.id,
+      ]);
+    });
+
+    it('hides the whole product from a buyer when its last picture goes', async () => {
+      const product = await createProduct();
+      products.push(product);
+      const [only] = await galleryIdsOf(product.id);
+
+      const res = await removeImage(product.id, only!);
+
+      expect(res.json()).toEqual({ id: only, variantsWithoutImages: [product.variantId] });
+      const card = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
+      expect(card.statusCode).toBe(404);
+    });
+
+    it('answers 404 for a picture of another product, a picture that is not there, a product that is not there', async () => {
+      const product = await createProduct();
+      const other = await createProduct();
+      products.push(product, other);
+      const [foreign] = await galleryIdsOf(other.id);
+
+      const wrongProduct = await removeImage(product.id, foreign!);
+      const missing = await removeImage(product.id, 2_000_000_000);
+      const noProduct = await removeImage(2_000_000_000, 1);
+
+      expect(wrongProduct.statusCode).toBe(404);
+      expect(wrongProduct.json()).toMatchObject({ errorCode: 'PRODUCT_IMAGE_NOT_FOUND' });
+      expect(missing.json()).toMatchObject({ errorCode: 'PRODUCT_IMAGE_NOT_FOUND' });
+      expect(noProduct.json()).toMatchObject({ errorCode: 'PRODUCT_NOT_FOUND' });
+      expect(await galleryIdsOf(other.id)).toEqual([foreign]);
+    });
+
+    it('refuses a user and keeps the picture', async () => {
+      const user = await createUser();
+      userIds.push(user.id);
+      const product = await createProduct();
+      products.push(product);
+      const [only] = await galleryIdsOf(product.id);
+
+      const res = await removeImage(product.id, only!, user);
+
+      expect(res.statusCode).toBe(403);
+      expect(await galleryIdsOf(product.id)).toEqual([only]);
+    });
+  });
+
+  describe('PATCH /api/products/:productId', () => {
+    it('refuses a file of a form: the pictures of a product are its gallery', async () => {
+      const product = await productWithImages([pngImage(30, 20)]);
+      const rowsBefore = await imagesOf(product.id);
+      const mark = uploadMark();
+      const { payload, headers } = multipartBody([
+        { name: 'name', value: 'Renamed with a file' },
+        image(pngImage(44, 22)),
+      ]);
 
       const res = await app.inject({
         method: 'PATCH',
-        url: `/api/products/${productId}`,
+        url: `/api/products/${product.id}`,
+        headers: { ...withCsrf(csrf, accessCookie(admin)), ...headers },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_IMAGES_NOT_ALLOWED' });
+      expect(await waitingUploadsSince(mark)).toEqual([]);
+      expect(hideSecrets(JSON.stringify(await imagesOf(product.id)))).toBe(
+        hideSecrets(JSON.stringify(rowsBefore)),
+      );
+    });
+
+    // a picture of a product is a file the app uploaded; a json body could point it anywhere
+    it('refuses pictures sent in a json body and keeps the gallery', async () => {
+      const product = await productWithImages([pngImage(30, 20)]);
+      const rowsBefore = await imagesOf(product.id);
+
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/products/${product.id}`,
         headers: withCsrf(csrf, accessCookie(admin)),
         payload: {
           images: [
@@ -588,7 +972,7 @@ describe('product images (Cloudinary)', () => {
       });
 
       expect(res.statusCode).toBe(400);
-      expect(hideSecrets(JSON.stringify(await imagesOf(productId)))).toBe(
+      expect(hideSecrets(JSON.stringify(await imagesOf(product.id)))).toBe(
         hideSecrets(JSON.stringify(rowsBefore)),
       );
     });

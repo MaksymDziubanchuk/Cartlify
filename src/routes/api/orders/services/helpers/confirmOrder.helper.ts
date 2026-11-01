@@ -19,36 +19,48 @@ const HOUSE_WITHOUT_NUMBER = /^s\/n$/i;
 
 export type UnavailableOrderItem = {
   itemId: number;
-  productId: number;
-  // deleted: the product is gone from the catalog; out_of_stock: fewer units are free than ordered
+  variantId: number;
+  // deleted: the variant is not for sale any more (taken out of sale, its product removed, or it
+  // shows no picture); out_of_stock: fewer units are free than ordered
   reason: 'deleted' | 'out_of_stock';
   available: number;
   requested: number;
 };
 
 // the items an order cannot be confirmed with, so the page can show which ones and why; the
-// units of batches that are over are no free units (expired, by product)
+// units of batches that are over are no free units (expired, by variant). A variant that a buyer
+// does not see (taken out of sale, its product removed, no picture) has no free units to buy
 export function findUnavailableItems(
   items: {
     id: number;
-    productId: number;
+    variantId: number;
     quantity: number;
-    product: { deletedAt: Date | null; stock: number; reservedStock: number };
+    product: { deletedAt: Date | null };
+    variant: {
+      deletedAt: Date | null;
+      stock: number;
+      reservedStock: number;
+      images: readonly unknown[];
+    };
   }[],
   expired: Map<number, number>,
 ): UnavailableOrderItem[] {
   return items.flatMap((item) => {
-    const available = item.product.deletedAt
+    const hidden =
+      item.variant.deletedAt !== null ||
+      item.product.deletedAt !== null ||
+      item.variant.images.length === 0;
+    const available = hidden
       ? 0
-      : freeUnits(item.product.stock, item.product.reservedStock, expired.get(item.productId) ?? 0);
+      : freeUnits(item.variant.stock, item.variant.reservedStock, expired.get(item.variantId) ?? 0);
 
-    if (!item.product.deletedAt && item.quantity <= available) return [];
+    if (!hidden && item.quantity <= available) return [];
 
     return [
       {
         itemId: item.id,
-        productId: item.productId,
-        reason: item.product.deletedAt ? 'deleted' : 'out_of_stock',
+        variantId: item.variantId,
+        reason: hidden ? ('deleted' as const) : ('out_of_stock' as const),
         available,
         requested: item.quantity,
       },

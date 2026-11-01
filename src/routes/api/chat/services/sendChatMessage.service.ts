@@ -29,6 +29,9 @@ interface SendChatMessageDto {
     threadId: string;
     content: string;
     log: ChatBotLogger;
+    // the address the customer writes from (the socket knows it), counted against the limit of a
+    // customer who is no confirmed account
+    ip?: string | null | undefined;
     // called once the message is written, before the bot answers it: the socket shows the
     // message to the chat right away, the answer of the model takes seconds
     onSaved?: (saved: SendChatMessageResultDto) => void;
@@ -274,6 +277,7 @@ async function attachBotTurn({
     normalizedContent,
     result,
     log,
+    ip,
 }: Omit<SendChatMessageDto, 'onSaved'> & {
     normalizedContent: string;
     result: SendChatMessageResultDto;
@@ -286,6 +290,7 @@ async function attachBotTurn({
             threadId,
             userMessageId: result.message.id,
             userMessage: normalizedContent,
+            ip,
             log,
         });
 
@@ -310,6 +315,7 @@ export async function sendChatMessageService({
     threadId,
     content,
     log,
+    ip,
     onSaved,
 }: SendChatMessageDto): Promise<SendChatMessageResultDto> {
     const normalizedContent = normalizeContent(content);
@@ -351,6 +357,7 @@ export async function sendChatMessageService({
                 normalizedContent,
                 result,
                 log,
+                ip,
             });
         } finally {
             if (botTurn) botTurnsRunning.delete(threadId);

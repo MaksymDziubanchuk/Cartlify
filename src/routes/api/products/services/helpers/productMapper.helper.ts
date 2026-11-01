@@ -1,42 +1,36 @@
-import { freeUnits } from '@db/expiredStock.helper.js';
-import { parseProductDescription } from '@helpers/productDescription.js';
-import { saleFieldsOf } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 
 import type {
-  FullProductResponseDto,
+  ProductCardDto,
   ProductCategoryDto,
   ProductResponseDto,
 } from 'types/dto/products.dto.js';
+import type { GalleryImageDto } from 'types/dto/variants.dto.js';
 import type { Role } from 'types/user.js';
+import type { ProductExtras } from './productExtras.helper.js';
 
-// a buyer (guest, user) sees what helps to buy a product; an admin (admin, root) sees the counters,
-// the whole stock, the reserve and the override of the popularity on top
+// a buyer (guest, user) sees what helps to buy a product; an admin (admin, root) sees the counters
+// and the override of the popularity on top. The product is the part of an answer that every
+// variant of it shares: the price, the sale, the stock, the weight and the article number are the
+// variant's (variant.helper.ts)
 export type ProductView = 'buyer' | 'admin';
 
 export const productViewOf = (role: Role): ProductView =>
   role === 'ADMIN' || role === 'ROOT' ? 'admin' : 'buyer';
 
-// the fields of a product its answers show (a card, a list item, a favorite): a new field of the
+// the fields of a product its answers show (a card, a list row, a favorite): a new field of the
 // answer is added here once; categoryId is for the admin log of a change
 export const productResponseSelect = {
   id: true,
   name: true,
   description: true,
-  sku: true,
-  price: true,
-  salePrice: true,
-  saleEndsAt: true,
-  salePriorPrice: true,
-  stock: true,
-  reservedStock: true,
-  weightGrams: true,
-  lengthMm: true,
-  widthMm: true,
-  heightMm: true,
   categoryId: true,
   category: { select: { id: true, name: true, slug: true } },
+  // the parties and the warnings of the safety data (GPSR): the parties are read apart, by these ids
+  manufacturerId: true,
+  euResponsibleId: true,
+  warnings: true,
   views: true,
   popularity: true,
   popularityOverride: true,
@@ -52,22 +46,10 @@ export type ProductResponseRow = {
   id: number;
   name: string;
   description: string | null;
-  sku: string | null;
-  price: unknown;
-  salePrice: unknown;
-  saleEndsAt: Date | null;
-  salePriorPrice: unknown;
-  stock: number;
-  reservedStock: number;
-  weightGrams: number | null;
-  lengthMm: number | null;
-  widthMm: number | null;
-  heightMm: number | null;
-  // the units of batches that are over (expiredUnitsOf): not sold, so no free units
-  expiredStock: number;
-  // the cost of a unit in the latest delivery of a supplier (lastUnitCostsOf), read for an admin
-  lastUnitCost?: unknown;
   category: { id: number; name: string; slug: string };
+  manufacturerId: number;
+  euResponsibleId: number | null;
+  warnings: string | null;
   views: number;
   popularity: number;
   popularityOverride: number | null;
@@ -79,34 +61,14 @@ export type ProductResponseRow = {
   updatedAt: Date;
 };
 
-// the weight and the sizes of a product, null while they are not known: the card of everybody and
-// the list of an admin show them
-const shippingFieldsOf = (product: ProductResponseRow) => ({
-  weightGrams: product.weightGrams,
-  lengthMm: product.lengthMm,
-  widthMm: product.widthMm,
-  heightMm: product.heightMm,
-});
+const descriptionTextOf = (text: string | null) => (text ? { description: text } : {});
 
-const descriptionTextOf = (raw: string | null) => {
-  const { text } = parseProductDescription(raw);
-  return text ? { description: text } : {};
-};
-
-// what every role sees of a product, without its images
-export function buyerFieldsOf(product: ProductResponseRow): Omit<ProductResponseDto, 'images'> {
+// what every role sees of a product
+export function buyerFieldsOf(product: ProductResponseRow): ProductResponseDto {
   return {
     id: product.id as any,
     name: product.name,
-    // the text of the description, without the safety data it keeps (the card gives them)
     ...descriptionTextOf(product.description),
-    sku: product.sku,
-    price: decimalToNumber(product.price),
-    // the sale next to the price while it lasts, a sale that is over is left out
-    ...saleFieldsOf(product),
-    // free units, never below zero, the same in a card, a list and an order: the stock less what
-    // the waiting orders hold and what is over
-    stock: freeUnits(product.stock, product.reservedStock, product.expiredStock),
     category: {
       id: product.category.id as any,
       name: product.category.name,
@@ -118,10 +80,9 @@ export function buyerFieldsOf(product: ProductResponseRow): Omit<ProductResponse
   };
 }
 
-// what only an admin sees of a product: the counters, the whole stock, the reserve and the units
-// that are over, the cost of the latest delivery of a supplier, and the
-// fields of the row as they are, null when empty: the sale and the override of the popularity, a
-// sale or an override past its end too, and the delete date
+// what only an admin sees of a product: the counters, the last edit, the override of the
+// popularity, the delete date; the fields of the row as they are, null when empty (an override
+// past its end too)
 export function adminFieldsOf(
   product: ProductResponseRow,
 ): Pick<
@@ -129,59 +90,77 @@ export function adminFieldsOf(
   | 'popularity'
   | 'views'
   | 'updatedAt'
-  | 'totalStock'
-  | 'reservedStock'
-  | 'expiredStock'
-  | 'lastUnitCost'
-  | 'weightGrams'
-  | 'lengthMm'
-  | 'widthMm'
-  | 'heightMm'
   | 'popularityOverride'
   | 'popularityOverrideUntil'
-  | 'salePrice'
-  | 'saleEndsAt'
-  | 'salePriorPrice'
   | 'deletedAt'
 > {
   return {
     popularity: product.popularity,
     views: product.views,
     updatedAt: product.updatedAt.toISOString(),
-    totalStock: product.stock,
-    reservedStock: product.reservedStock,
-    expiredStock: product.expiredStock,
-    lastUnitCost: product.lastUnitCost == null ? null : decimalToNumber(product.lastUnitCost),
-    ...shippingFieldsOf(product),
     popularityOverride: product.popularityOverride,
     popularityOverrideUntil: product.popularityOverrideUntil
       ? product.popularityOverrideUntil.toISOString()
       : null,
-    salePrice: product.salePrice === null ? null : decimalToNumber(product.salePrice),
-    saleEndsAt: product.saleEndsAt ? product.saleEndsAt.toISOString() : null,
-    salePriorPrice: product.salePriorPrice == null ? null : decimalToNumber(product.salePriorPrice),
     deletedAt: product.deletedAt ? product.deletedAt.toISOString() : null,
   };
 }
 
-// the card of a product page; a buyer gets no popularity in it, the list shows it. Its category
-// names the way to it from the top of the tree (readCategoryPath)
-export function mapProductRowToResponse(args: {
+// the product part of a row of an answer (a list, a change of a variant): what everybody sees, and
+// the counters of an admin on top; a buyer gets no popularity in a card, the list adds it
+export function mapProductPart(product: ProductResponseRow, view: ProductView): ProductResponseDto {
+  return { ...buyerFieldsOf(product), ...(view === 'admin' ? adminFieldsOf(product) : {}) };
+}
+
+// the product part of a list row (and of a row of the favorites): what every role sees, and the
+// popularity the list sorts by; an admin gets the counters, the override and the delete date too
+export function mapProductListPart(
+  product: ProductResponseRow,
+  view: ProductView,
+): ProductResponseDto {
+  return {
+    ...buyerFieldsOf(product),
+    ...(view === 'admin' ? adminFieldsOf(product) : { popularity: product.popularity }),
+  };
+}
+
+// the pictures of the gallery with the variants that show each one, for the card of an admin
+export function mapGallery(
+  images: ReadonlyArray<{ id: number; url: string; position: number }>,
+  variantIdsOf: ReadonlyMap<number, number[]>,
+): GalleryImageDto[] {
+  return images.map((image) => ({
+    id: image.id,
+    position: image.position,
+    ...buildImageUrls(image.url, 'product'),
+    variantIds: variantIdsOf.get(image.id) ?? [],
+  }));
+}
+
+// the product part of the card; a buyer gets no popularity in it, the list shows it. Its category
+// names the way to it from the top of the tree (readCategoryPath), its parties are the ones of the
+// directory and its documents (readProductExtras). An admin gets the gallery with the variants
+// that show each picture
+export function mapProductCard(args: {
   product: ProductResponseRow;
-  images: Array<{ url: string; position: number }>;
   categoryPath: ProductCategoryDto[];
+  extras: ProductExtras;
+  // read for an admin only
+  gallery?: GalleryImageDto[];
   view: ProductView;
-}): FullProductResponseDto {
-  const { product, images, categoryPath, view } = args;
+}): ProductCardDto {
+  const { product, categoryPath, extras, gallery, view } = args;
   const fields = buyerFieldsOf(product);
 
   return {
     ...fields,
-    ...shippingFieldsOf(product),
     category: { ...fields.category, path: categoryPath },
-    images: images.map((r) => buildImageUrls(r.url, 'product')),
-    // the safety and origin data an offer shows (GPSR), null for a product from before them
-    safety: parseProductDescription(product.description).safety,
-    ...(view === 'admin' ? adminFieldsOf(product) : {}),
+    // the safety and origin data an offer shows (GPSR)
+    manufacturer: extras.manufacturer,
+    euResponsible: extras.euResponsible,
+    warnings: product.warnings,
+    // the instructions and certificates, in the order an admin gave them
+    documents: extras.documents,
+    ...(view === 'admin' ? { ...adminFieldsOf(product), gallery: gallery ?? [] } : {}),
   };
 }

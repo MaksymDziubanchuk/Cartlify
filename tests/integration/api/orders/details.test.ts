@@ -9,7 +9,9 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
+  putOnSale,
   setProductPrice,
   type TestProduct,
   type TestUser,
@@ -18,10 +20,12 @@ import {
   loseReservation,
   orderRowOf,
   placeOrder,
+  placeOrderOf,
   placeUnconfirmedOrder,
   deliveryAnswer,
   shippingData,
 } from '../../../helpers/orders.js';
+import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 
 // GET /api/orders/:orderId: one order, for its owner and for an admin. An unconfirmed order is
 // shown the way confirming it again would take it; a confirmed one never changes
@@ -54,15 +58,15 @@ const getOrder = (user: TestUser, orderId: number | string) =>
 const updatedAtOf = async (user: TestUser, orderId: number) =>
   Date.parse((await getOrder(user, orderId)).json().updatedAt);
 
-// an order of several products that lost its reservation
+// an order of several variants that lost its reservation
 async function unconfirmedOrderOf(user: TestUser, items: [number, number][]): Promise<number> {
   let orderId = 0;
-  for (const [productId, quantity] of items) {
+  for (const [variantId, quantity] of items) {
     const added = await app.inject({
       method: 'POST',
       url: '/api/orders/current/items',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId, quantity },
+      payload: { variantId, quantity },
     });
     orderId = added.json().id;
   }
@@ -107,7 +111,15 @@ describe('GET /api/orders/:orderId', () => {
       total: 20,
       delivery: deliveryAnswer,
       reservationExpiresAt: expect.any(String),
-      items: [{ productId: product.id, quantity: 2, unitPrice: 10, totalPrice: 20 }],
+      items: [
+        {
+          quantity: 2,
+          unitPrice: 10,
+          totalPrice: 20,
+          product: { id: product.id },
+          variant: { id: product.variantId, price: 10, forSale: true },
+        },
+      ],
     });
     expect(res.json()).not.toHaveProperty('paymentId');
     expect(res.json()).not.toHaveProperty('paymentProvider');
@@ -208,17 +220,57 @@ describe('GET /api/orders/:orderId', () => {
     const gone = await newProduct({ price: 10 });
     const kept = await newProduct({ price: 4 });
     const orderId = await unconfirmedOrderOf(user, [
-      [gone.id, 1],
-      [kept.id, 2],
+      [gone.variantId, 1],
+      [kept.variantId, 2],
     ]);
     await deleteProductFromCatalog(gone.id);
 
     const res = await getOrder(user, orderId);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ total: 8, items: [{ productId: kept.id, quantity: 2 }] });
+    expect(res.json()).toMatchObject({
+      total: 8,
+      items: [{ variant: { id: kept.variantId }, quantity: 2 }],
+    });
     expect(res.json().items).toHaveLength(1);
-    expect((await orderRowOf(orderId)).items.map((item) => item.productId)).toEqual([kept.id]);
+    expect((await orderRowOf(orderId)).items.map((item) => item.variantId)).toEqual([
+      kept.variantId,
+    ]);
+  });
+
+  it('drops the position of a variant taken out of sale from an unconfirmed order and keeps its sibling', async () => {
+    const user = await newUser();
+    const product = await newProduct({ price: 10 });
+    const sibling = await createVariant(product.id, { price: 4, stock: 20 });
+    const orderId = await unconfirmedOrderOf(user, [
+      [product.variantId, 1],
+      [sibling.id, 2],
+    ]);
+    await markVariantDeleted(product.variantId);
+
+    const res = await getOrder(user, orderId);
+
+    expect(res.json()).toMatchObject({ total: 8, items: [{ variant: { id: sibling.id } }] });
+    expect(res.json().items).toHaveLength(1);
+  });
+
+  it('drops the position of a variant that shows no picture from an unconfirmed order', async () => {
+    const user = await newUser();
+    const product = await newProduct({ price: 10 });
+    const sibling = await createVariant(product.id, { price: 4, stock: 20 });
+    const orderId = await unconfirmedOrderOf(user, [
+      [product.variantId, 1],
+      [sibling.id, 2],
+    ]);
+    await stripVariantImages(sibling.id);
+
+    const res = await getOrder(user, orderId);
+
+    expect(res.json()).toMatchObject({
+      total: 10,
+      items: [{ variant: { id: product.variantId } }],
+    });
+    expect(res.json().items).toHaveLength(1);
   });
 
   it('drops the items of deleted products from the cart as well', async () => {
@@ -235,7 +287,7 @@ describe('GET /api/orders/:orderId', () => {
     expect(res.json()).toMatchObject({
       status: 'pending',
       total: 8,
-      items: [{ productId: kept.id }],
+      items: [{ variant: { id: kept.variantId } }],
     });
     expect(res.json().items).toHaveLength(1);
   });
@@ -250,11 +302,126 @@ describe('GET /api/orders/:orderId', () => {
     const res = await getOrder(user, orderId);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().items).toEqual([expect.objectContaining({ productId: gone.id })]);
+    expect(res.json().items).toEqual([
+      expect.objectContaining({
+        variant: expect.objectContaining({ id: gone.variantId, forSale: false }),
+      }),
+    ]);
+  });
+
+  // a paid order is history: the variant is hidden since, the order keeps the position with the
+  // copies of the name and of the price it was bought at, and says it is not for sale
+  it('keeps the position of a variant taken out of sale in a paid order, not for sale', async () => {
+    const user = await newUser();
+    const product = await createProduct({ price: 10, stock: 20, name: 'Desk lamp' });
+    products.push(product);
+    const orderId = await placeOrder(app, csrf, user, product, 'paid', 2);
+    await markVariantDeleted(product.variantId);
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: product.id }, data: { name: 'Desk lamp, renamed' } }),
+    );
+    await setProductPrice({ variantId: product.variantId }, 99);
+
+    const res = await getOrder(user, orderId);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toEqual([
+      expect.objectContaining({
+        quantity: 2,
+        unitPrice: 10,
+        totalPrice: 20,
+        product: expect.objectContaining({ id: product.id, name: 'Desk lamp, renamed' }),
+        variant: expect.objectContaining({
+          id: product.variantId,
+          name: 'Desk lamp',
+          price: 10,
+          forSale: false,
+        }),
+      }),
+    ]);
+    expect(res.json().items[0].variant).not.toHaveProperty('salePrice');
+  });
+
+  it.each([
+    ['the variant shows no picture', 'pictures'],
+    ['its product is removed from the catalog', 'product'],
+  ] as const)(
+    'keeps the position in a delivered order when %s, not for sale',
+    async (_case, how) => {
+      const user = await newUser();
+      const product = await newProduct();
+      const orderId = await placeOrder(app, csrf, user, product, 'shipped');
+      await asAdmin((tx) =>
+        tx.order.update({ where: { id: orderId }, data: { status: 'delivered' } }),
+      );
+      if (how === 'pictures') await stripVariantImages(product.variantId);
+      else await deleteProductFromCatalog(product.id);
+
+      const res = await getOrder(user, orderId);
+
+      expect(res.json().items[0].variant).toMatchObject({ id: product.variantId, forSale: false });
+    },
+  );
+
+  it('shows each variant of a paid order with its own name, price and picture', async () => {
+    const user = await newUser();
+    const black = await newProduct({ price: 10 });
+    const white = await createVariant(black.id, { price: 12, stock: 20 });
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      user,
+      [
+        { item: black, quantity: 1 },
+        { item: { variantId: white.id }, quantity: 2 },
+      ],
+      'paid',
+    );
+
+    const res = await getOrder(user, orderId);
+
+    expect(res.json()).toMatchObject({ total: 34 });
+    expect(res.json().items).toHaveLength(2);
+    expect(res.json().items[0]).toMatchObject({
+      product: { id: black.id },
+      variant: { id: black.variantId, price: 10, position: 1, forSale: true },
+      unitPrice: 10,
+    });
+    expect(res.json().items[1]).toMatchObject({
+      product: { id: black.id },
+      variant: { id: white.id, price: 12, position: 2, forSale: true },
+      quantity: 2,
+      unitPrice: 12,
+    });
+    expect(res.json().items[1].variant.image).toEqual({
+      url200: expect.any(String),
+      url400: expect.any(String),
+      url800: expect.any(String),
+    });
+  });
+
+  // the sale is the sale of the variant: a paid order keeps the price of the sale it was bought at
+  // and shows no sale; an order waiting for its payment shows the one that lasts
+  it('shows the sale of the variant of an order waiting for its payment and not of a paid one', async () => {
+    const user = await newUser();
+    const product = await newProduct({ price: 10 });
+    await putOnSale(product.id, 8);
+    const waitingId = await placeOrder(app, csrf, user, product, 'waiting', 1);
+    const paidId = await placeOrder(app, csrf, user, product, 'paid', 1);
+
+    const waiting = (await getOrder(user, waitingId)).json();
+    const paid = (await getOrder(user, paidId)).json();
+
+    expect(waiting.items[0]).toMatchObject({
+      unitPrice: 8,
+      variant: { price: 10, salePrice: 8 },
+    });
+    expect(paid.items[0]).toMatchObject({ unitPrice: 8, variant: { price: 8 } });
+    expect(paid.items[0].variant).not.toHaveProperty('salePrice');
   });
 
   // the page marks what there is not enough of before the order is confirmed again
-  it('shows the free stock of each product of an unconfirmed order', async () => {
+  it('shows the free stock of each variant of an unconfirmed order', async () => {
     const user = await newUser();
     const product = await newProduct({ stock: 5 });
     const orderId = await placeUnconfirmedOrder(app, csrf, user, product, 3);
@@ -262,7 +429,7 @@ describe('GET /api/orders/:orderId', () => {
 
     const res = await getOrder(user, orderId);
 
-    expect(res.json().items[0]).toMatchObject({ quantity: 3, product: { availableStock: 1 } });
+    expect(res.json().items[0]).toMatchObject({ quantity: 3, variant: { stock: 1 } });
   });
 
   it('changes nothing in an unconfirmed order when an admin reads it', async () => {

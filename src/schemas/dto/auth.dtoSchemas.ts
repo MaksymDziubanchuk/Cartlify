@@ -73,11 +73,17 @@ const authGoogleCallbackQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    code: { type: 'string' },
-    state: { type: 'string' },
+    code: { type: 'string', description: 'The code the provider gives after the login.' },
+    state: {
+      type: 'string',
+      description: 'The state the app sent; the provider returns it unchanged.',
+    },
 
-    error: { type: 'string' },
-    error_description: { type: 'string' },
+    error: { type: 'string', description: 'What the provider says when the login was refused.' },
+    error_description: {
+      type: 'string',
+      description: 'The words of the provider about the error.',
+    },
   },
   // a provider sends either the code with the state, or an error when the login was refused
   anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
@@ -88,12 +94,18 @@ const authGithubCallbackQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    code: { type: 'string' },
-    state: { type: 'string' },
+    code: { type: 'string', description: 'The code the provider gives after the login.' },
+    state: {
+      type: 'string',
+      description: 'The state the app sent; the provider returns it unchanged.',
+    },
 
-    error: { type: 'string' },
-    error_description: { type: 'string' },
-    error_uri: { type: 'string' },
+    error: { type: 'string', description: 'What the provider says when the login was refused.' },
+    error_description: {
+      type: 'string',
+      description: 'The words of the provider about the error.',
+    },
+    error_uri: { type: 'string', description: 'A page of the provider about the error.' },
   },
   // a provider sends either the code with the state, or an error when the login was refused
   anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
@@ -104,12 +116,18 @@ const authLinkedInCallbackQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    code: { type: 'string' },
-    state: { type: 'string' },
+    code: { type: 'string', description: 'The code the provider gives after the login.' },
+    state: {
+      type: 'string',
+      description: 'The state the app sent; the provider returns it unchanged.',
+    },
 
-    error: { type: 'string' },
-    error_description: { type: 'string' },
-    error_uri: { type: 'string' },
+    error: { type: 'string', description: 'What the provider says when the login was refused.' },
+    error_description: {
+      type: 'string',
+      description: 'The words of the provider about the error.',
+    },
+    error_uri: { type: 'string', description: 'A page of the provider about the error.' },
   },
   // a provider sends either the code with the state, or an error when the login was refused
   anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
@@ -180,7 +198,7 @@ const authVerifyEmailQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    token: { type: 'string', minLength: 10 },
+    token: { type: 'string', minLength: 10, description: 'The token from the link in the mail.' },
   },
   required: ['token'],
 } as const;
@@ -200,7 +218,7 @@ const authPasswordResetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    token: { type: 'string' },
+    token: { type: 'string', description: 'The token from the link in the mail.' },
   },
   required: ['token'],
 } as const;
@@ -240,7 +258,7 @@ const authSessionIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    sessionId: { type: 'string', format: 'uuid' },
+    sessionId: { type: 'string', format: 'uuid', description: 'The id of the session to close.' },
   },
   required: ['sessionId'],
 } as const;

@@ -58,8 +58,8 @@ async function writeLogs(db: DbSession) {
     product.id,
   );
   await db.rows(
-    `select 1 as done from cartlify.log_product_price_change($1::int, 10, 12, 'fixed', 2, 'price.set')`,
-    product.id,
+    `select 1 as done from cartlify.log_variant_price_change($1::int, 10, 12, 'fixed', 2, 'price.set')`,
+    product.variantId,
   );
 }
 
@@ -114,12 +114,12 @@ describe('the logs', () => {
           admin.id,
         ),
         await db.attempt(
-          `update cartlify.product_price_change_logs set "newPrice" = 1 where "productId" = $1 returning id`,
-          product.id,
+          `update cartlify.product_price_change_logs set "newPrice" = 1 where "variantId" = $1 returning id`,
+          product.variantId,
         ),
         await db.attempt(
-          'delete from cartlify.product_price_change_logs where "productId" = $1 returning id',
-          product.id,
+          'delete from cartlify.product_price_change_logs where "variantId" = $1 returning id',
+          product.variantId,
         ),
       ];
     });

@@ -25,6 +25,26 @@ npm run migrate:deploy
 # lint
 npm run lint
 
+# the structure of a database against the reference db/tools/structure_snapshot.txt (read only):
+# check compares the test container, check:db the database of DATABASE_URL; save writes a new
+# reference from the test container and is committed together with the change of a script or a
+# migration
+npm run db:snapshot:check
+npm run db:snapshot:check:db
+npm run db:snapshot:save
+
+# the sql scripts on dev and prod, in this order after the migrations: 02 as a superuser, then 05,
+# 03, 04, 06 as cartlify_owner (here, or the workflow "DB — run SQL script"), then 01 as a
+# superuser, last: it hands out the rights on what the others made. Every script runs again without
+# a change, so the whole order runs every time. 01 and 02 run only by hand, the address of a
+# superuser stays off GitHub
+psql -v ON_ERROR_STOP=1 -f db/schema/02_extensions.sql "<superuser address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/05_fn_and_triggers.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/03_policies_and_rls.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/04_views.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/06_indexes_and_constraints.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/01_roles_and_schemas.sql "<superuser address>"
+
 # format
 npm run format
 
@@ -41,8 +61,21 @@ npm test
 # keep the test database running after the tests to look inside
 npm test -- api:orders --keep-db
 
+# the test database alone, built from the Prisma migrations and the SQL scripts exactly as a
+# deployment does it (then compared with the reference of the structure); the integration tests
+# connect only to it, a run stops before the app is imported if the addresses are others
+npm run db:test:up
+npm run db:test:down
+
 # tests by part name or group (all, unit, integration, api)
 npm test -- unit api:orders
+
+# options of Jest go after a second --; one file or a few: the path is taken as it is
+# (--runTestsByPath), without it a path is joined with the folder of the part and runs the whole part
+npm test -- api:products --workers=2 -- --runTestsByPath tests/integration/api/products/variantCard.test.ts
+
+# the whole suite on two workers, with the deprecation notices traced to the line that causes them
+NODE_OPTIONS=--trace-deprecation npm test -- all --workers=2
 
 # rerun only the tests that failed last time
 npm test -- --failed
@@ -55,6 +88,21 @@ npm test -- --workers=1
 # force) is named *.shopwide.test.ts: it runs after the others and alone
 # (tests/setup/sequencer.mjs, tests/setup/integration.shopState.ts)
 
+# Jest gives every test file its own copy of the modules, and V8 keeps the copy of a finished file
+# reachable from its caches of compiled code until a last resort collection: without one a worker
+# grew by the size of the app (about 70 MB) a file and met the heap limit of Node after some forty
+# files. tests/setup/integration.gc.ts makes that collection after every integration file (the
+# runner starts node with --expose-gc), so a worker stays at the size of a file or two. A worker
+# over 1500 MB (workerIdleMemoryLimit in jest.config.js) is still replaced after its file, the
+# fallback for Jest started without --expose-gc; one worker is --maxWorkers=1 for this reason
+# (a runner told --runInBand has no worker to replace)
+
+# the driver of postgres takes one statement at a time on a connection and a transaction has one
+# connection: statements of one transaction sent side by side (Promise.all over its queries, or a
+# query of Prisma that asks for three relations or more) make the driver give a deprecation notice
+# (pg 8; pg 9 refuses the statement). tests/setup/integration.driver.ts fails the test that got
+# the notice, so a place of this kind is found by the test that runs it
+
 # external services answer from mocks unless the run names them (the Services checkboxes,
 # or service:<name>). Real SendGrid takes SENDGRID_API_TEST_KEY and EMAIL_FROM, EMAIL_FROM_NAME,
 # EMAIL_REPLY_TO from .env (never SENDGRID_API_KEY); the tests send every mail in sandbox mode,
@@ -63,7 +111,10 @@ npm test -- api:auth service:sendgrid
 
 # real Cloudinary takes CLOUDINARY_* from .env: Cloudinary has no test mode, the upload tests
 # upload into the test/ folder of the account and delete what they uploaded. GitHub Actions
-# takes the CLOUDINARY_URL secret
+# takes the CLOUDINARY_URL secret. The tests read the files they check through the admin api,
+# which answers a few hundred calls an hour (500 on the free plan): the launcher asks what is
+# left before the run, stops when a run of the same parts took more the last time, and names
+# what the run took in the summary
 npm test -- api:users api:products service:cloudinary
 
 # Stripe answers from a mock of the test sandbox unless the run takes it for real: then the
@@ -86,9 +137,10 @@ npm test -- api:chat api:products service:openai
 npm run test:unit
 npm run test:integration
 
-# demo data through the routes of a running api: a tree of categories, 16 products with images,
-# their stock by a delivery, sales, three buyers with carts, orders, reviews and favorites; what
-# is there stays, a run adds only what is missing. The shop lets a buyer in only with a confirmed
+# demo data through the routes of a running api: a tree of categories, 16 products with one, two or
+# three variants each (26 in all, every variant with its pictures, price and article number), the
+# stock of each variant by a delivery, sales, three buyers with carts, orders, reviews and
+# favorites of variants; what is there stays, a run adds only what is missing. The shop lets a buyer in only with a confirmed
 # email: the first run registers the buyers, confirm the mails, the next run gives them their
 # orders. DEMO_EMAIL_DOMAIN is the domain of their addresses (example.com reaches nobody)
 DEMO_API_URL='<api url>' DEMO_ADMIN_EMAIL='<admin email>' DEMO_ADMIN_PASSWORD='<password>' \

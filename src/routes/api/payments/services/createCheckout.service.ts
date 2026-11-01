@@ -18,6 +18,8 @@ import {
   isAppError,
 } from '@utils/errors.js';
 
+import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
+
 import { getPaymentProvider } from '../providers/index.js';
 
 import type { UnavailableOrderItem } from '@routes/api/orders/services/helpers/confirmOrder.helper.js';
@@ -95,16 +97,12 @@ export async function createCheckoutSession({
             orderBy: { id: 'asc' },
             select: {
               id: true,
-              productId: true,
+              variantId: true,
               quantity: true,
               unitPrice: true,
               productName: true,
-              product: {
-                select: {
-                  name: true,
-                  deletedAt: true,
-                },
-              },
+              product: { select: { name: true } },
+              variant: { select: { deletedAt: true } },
             },
           },
         },
@@ -151,14 +149,15 @@ export async function createCheckoutSession({
         throw new BadRequestError('ORDER_ITEMS_REQUIRED');
       }
 
-      // an item removed from the catalog after the confirmation is named the way the confirmation
-      // names it: the buyer cancels the payment, changes the order and confirms it again. Its own
-      // reservation is in the stock numbers, so only a removed product is unavailable here
+      // an item whose variant was taken out of sale after the confirmation (a removed product takes
+      // its variants with it) is named the way the confirmation names it: the buyer cancels the
+      // payment, changes the order and confirms it again. Its own reservation is in the stock
+      // numbers, so only a removed variant is unavailable here
       const removed: UnavailableOrderItem[] = order.items
-        .filter((item) => item.product.deletedAt)
+        .filter((item) => item.variant.deletedAt)
         .map((item) => ({
           itemId: item.id,
-          productId: item.productId,
+          variantId: item.variantId,
           reason: 'deleted',
           available: 0,
           requested: item.quantity,
@@ -188,9 +187,10 @@ export async function createCheckoutSession({
         userId: order.userId,
         total: totalRaw,
         reservationExpiresAt: order.reservationExpiresAt,
-        // the name each item was confirmed with, the page shows what is bought
+        // the name each item was confirmed with (the name of its variant), the page shows what is
+        // bought
         items: order.items.map((item) => ({
-          name: item.productName ?? item.product.name,
+          name: itemNameOf(item),
           unitPrice: Number(item.unitPrice),
           quantity: item.quantity,
         })),

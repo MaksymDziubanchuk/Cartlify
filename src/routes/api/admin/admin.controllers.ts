@@ -10,11 +10,13 @@ import type {
   AdminAlertThresholdBodyDto,
   GetAdminAlertsQueryDto,
   AdminAuditLogQueryDto,
+  AdminStockLogQueryDto,
   AdminConsentLogQueryDto,
   AdminLoginLogQueryDto,
   AdminPriceLogQueryDto,
   GetAdminAlertsResponseDto,
   GetAdminAuditLogResponseDto,
+  GetAdminStockLogResponseDto,
   GetAdminConsentLogResponseDto,
   GetAdminLoginLogResponseDto,
   GetAdminLogEventsResponseDto,
@@ -31,6 +33,7 @@ import type {
   GetAdminAccountingResponseDto,
   GetAdminReportCategoriesResponseDto,
   GetAdminReportProductsResponseDto,
+  GetAdminReportVariantsResponseDto,
   GetAdminReportTimelineResponseDto,
   GetAdminStatsResponseDto,
   GetAdminStockBatchesResponseDto,
@@ -39,10 +42,11 @@ import type {
 import { BadRequestError, UnauthorizedError } from '@utils/errors.js';
 import { isDbYear } from '@helpers/dbDate.js';
 import { adminServices } from './admin.services.js';
-import { parseProductIds } from './services/helpers/accountingReport.helper.js';
+import { parseProductIds, parseVariantIds } from './services/helpers/accountingReport.helper.js';
 import { stockBatchesArgsOf } from './services/stockBatches.service.js';
 import { stockMovementsArgsOf } from './services/stockMovements.service.js';
 import { auditLogArgsOf } from './services/auditLog.service.js';
+import { stockLogArgsOf } from './services/stockLog.service.js';
 import { priceLogArgsOf } from './services/priceLog.service.js';
 import { loginLogArgsOf } from './services/loginLog.service.js';
 import { consentLogArgsOf } from './services/consentLog.service.js';
@@ -104,8 +108,8 @@ const getAllStats: ControllerRouter<{}, {}, AdminStatsQueryDto, GetAdminStatsRes
   return reply.code(200).send(result);
 };
 
-// the money of a period [from, to): all time until now when no period is given, the products
-// asked for or all of them
+// the money of a period [from, to): all time until now when no period is given, the products or
+// the variants asked for or all of them
 const getAccountingReport: ControllerRouter<
   {},
   {},
@@ -118,10 +122,12 @@ const getAccountingReport: ControllerRouter<
 
   const period = normalizeStatsQuery(req.query, req.user);
   const productIds = parseProductIds(req.query.productIds);
+  const variantIds = parseVariantIds(req.query.variantIds);
 
   const result = await adminServices.buildAccountingReport({
     ...period,
     ...(productIds ? { productIds } : {}),
+    ...(variantIds ? { variantIds } : {}),
     ...scopeOf(req.query),
   });
 
@@ -142,7 +148,25 @@ const sendCsv = (reply: FastifyReply, file: { fileName: string; body: string }) 
     .header('content-disposition', `attachment; filename="${file.fileName}"`)
     .send(file.body);
 
-// the money of each product, sorted and paged; the csv has every product
+// the arguments of the report by product and of the report by variant: the period, the products
+// or the variants asked for, the category, the sort and the page
+const productReportArgsOf = (q: AdminReportProductsQueryDto, user: User) => {
+  const productIds = parseProductIds(q.productIds);
+  const variantIds = parseVariantIds(q.variantIds);
+
+  return {
+    ...normalizeStatsQuery(q, user),
+    ...(productIds ? { productIds } : {}),
+    ...(variantIds ? { variantIds } : {}),
+    ...scopeOf(q),
+    sortBy: q.sortBy ?? 'revenue',
+    sortOrder: q.sortOrder ?? 'desc',
+    limit: q.limit ?? 20,
+    cursor: q.cursor,
+  };
+};
+
+// the money of each product (all its variants added up), sorted and paged; the csv has every product
 const getAccountingProducts: ControllerRouter<
   {},
   {},
@@ -151,18 +175,29 @@ const getAccountingProducts: ControllerRouter<
 > = async (req, reply) => {
   if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
 
-  const q = req.query;
-  const args = {
-    ...normalizeStatsQuery(q, req.user),
-    ...scopeOf(q),
-    sortBy: q.sortBy ?? 'revenue',
-    sortOrder: q.sortOrder ?? 'desc',
-    limit: q.limit ?? 20,
-    cursor: q.cursor,
-  };
+  const args = productReportArgsOf(req.query, req.user);
 
-  if (q.format === 'csv') return sendCsv(reply, await adminServices.reportProductsCsv(args));
+  if (req.query.format === 'csv') {
+    return sendCsv(reply, await adminServices.reportProductsCsv(args));
+  }
   return reply.code(200).send(await adminServices.reportProducts(args));
+};
+
+// the money of each variant (with its product), sorted and paged; the csv has every variant
+const getAccountingVariants: ControllerRouter<
+  {},
+  {},
+  AdminReportProductsQueryDto,
+  GetAdminReportVariantsResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = productReportArgsOf(req.query, req.user);
+
+  if (req.query.format === 'csv') {
+    return sendCsv(reply, await adminServices.reportVariantsCsv(args));
+  }
+  return reply.code(200).send(await adminServices.reportVariants(args));
 };
 
 // the money of each category, with its branch or its own products only
@@ -199,12 +234,14 @@ const getAccountingTimeline: ControllerRouter<
   const q = req.query;
   const period = normalizeStatsQuery(q, req.user);
   const productIds = parseProductIds(q.productIds);
+  const variantIds = parseVariantIds(q.variantIds);
   const args = {
     actorId: period.actorId,
     actorRole: period.actorRole,
     to: period.to,
     from: q.from === undefined ? undefined : period.from,
     ...(productIds ? { productIds } : {}),
+    ...(variantIds ? { variantIds } : {}),
     ...scopeOf(q),
     step: q.step ?? 'month',
     sortBy: q.sortBy ?? 'period',
@@ -254,6 +291,21 @@ const getAuditLog: ControllerRouter<
   if (req.query.format === 'csv') return sendCsv(reply, await adminServices.auditLogCsv(args));
 
   return reply.code(200).send(await adminServices.listAuditLog(args));
+};
+
+// the stock log with its filters; the csv has every line of them
+const getStockLog: ControllerRouter<
+  {},
+  {},
+  AdminStockLogQueryDto,
+  GetAdminStockLogResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = stockLogArgsOf(req.query, req.user);
+  if (req.query.format === 'csv') return sendCsv(reply, await adminServices.stockLogCsv(args));
+
+  return reply.code(200).send(await adminServices.listStockLog(args));
 };
 
 // the log of prices of every product, the same way
@@ -427,11 +479,13 @@ export const adminController = {
   getAllStats,
   getAccountingReport,
   getAccountingProducts,
+  getAccountingVariants,
   getAccountingCategories,
   getAccountingTimeline,
   getStockBatches,
   getStockMovements,
   getAuditLog,
+  getStockLog,
   getPriceLog,
   getLoginLog,
   getConsentLog,

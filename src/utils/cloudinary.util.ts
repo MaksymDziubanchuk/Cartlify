@@ -123,6 +123,12 @@ export type ImageStreamOpts = {
   emptyCode: string;
 };
 
+// a pdf starts with %PDF-: the first bytes of the file itself, the type a form names is only the
+// word of the client
+export function isPdf(head: Buffer): boolean {
+  return head.length >= 5 && head.toString('latin1', 0, 5) === '%PDF-';
+}
+
 // the type of an image by its first bytes, null for anything else: the type a form names is only
 // the word of the client, these bytes are the file itself
 export function detectImageType(head: Buffer): (typeof DEFAULT_ALLOWED_MIME)[number] | null {
@@ -148,6 +154,46 @@ export function detectImageType(head: Buffer): (typeof DEFAULT_ALLOWED_MIME)[num
 export async function requireImageStream(
   stream: NodeJS.ReadableStream,
   opts: ImageStreamOpts,
+): Promise<NodeJS.ReadableStream> {
+  return requireFileStream(stream, opts, {
+    notAllowedCode: 'IMAGE_TYPE_NOT_ALLOWED',
+    typeAllowed: (mimetype) => {
+      try {
+        assertImageFile({ mimetype });
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    bytesAllowed: (head) => detectImageType(head) !== null,
+  });
+}
+
+// the same for the PDF file of a document: the type the form names is application/pdf and the file
+// starts as a pdf does
+export async function requirePdfStream(
+  stream: NodeJS.ReadableStream,
+  opts: ImageStreamOpts,
+): Promise<NodeJS.ReadableStream> {
+  return requireFileStream(stream, opts, {
+    notAllowedCode: 'DOCUMENT_TYPE_NOT_ALLOWED',
+    typeAllowed: (mimetype) => mimetype.trim().toLowerCase() === 'application/pdf',
+    bytesAllowed: isPdf,
+  });
+}
+
+type FileStreamRule = {
+  // the code of a file that is not of the kind
+  notAllowedCode: string;
+  // the type the form names, and the first bytes of the file itself
+  typeAllowed: (mimetype: string) => boolean;
+  bytesAllowed: (head: Buffer) => boolean;
+};
+
+async function requireFileStream(
+  stream: NodeJS.ReadableStream,
+  opts: ImageStreamOpts,
+  rule: FileStreamRule,
 ): Promise<NodeJS.ReadableStream> {
   const s = stream as NodeJS.ReadableStream & { destroyed?: boolean; readableEnded?: boolean };
 
@@ -183,12 +229,8 @@ export async function requireImageStream(
         if (!size) return refuse(opts.emptyCode, ended);
 
         const head = Buffer.concat(chunks);
-        try {
-          assertImageFile({ mimetype: opts.mimetype });
-        } catch {
-          return refuse('IMAGE_TYPE_NOT_ALLOWED', ended);
-        }
-        if (!detectImageType(head)) return refuse('IMAGE_TYPE_NOT_ALLOWED', ended);
+        if (!rule.typeAllowed(opts.mimetype)) return refuse(rule.notAllowedCode, ended);
+        if (!rule.bytesAllowed(head)) return refuse(rule.notAllowedCode, ended);
 
         const out = new PassThrough();
         out.write(head);
@@ -415,6 +457,68 @@ export async function moveImage(
 // remove an image by public_id, for example the avatar of a deleted account;
 // an image that is already gone is not an error, cloudinary answers "not found" for it
 export async function deleteImage(publicId: string): Promise<void> {
+  if (!publicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
+
+  try {
+    await cloudinary.uploader.destroy(
+      publicId,
+      withCallTimeout({ resource_type: 'image' as const, invalidate: true }),
+    );
+  } catch (err) {
+    throw outOfReach(err) ?? new InternalError({ reason: 'CLOUDINARY_DELETE_UNEXPECTED' }, err);
+  }
+}
+
+// how long the upload of a document may take: a file is up to DOCUMENT_MAX_BYTES, more than a picture
+const DOCUMENT_UPLOAD_TIMEOUT_MS = 60_000;
+
+// the public id of a document file; the id is new for every upload, so a file a page shows is never
+// replaced
+export function makeDocumentPublicId(): string {
+  return `${ENV_FOLDER}/documents/${randomUUID()}`;
+}
+
+export type UploadDocumentResult = { publicId: string; url: string; sizeBytes: number };
+
+// cloudinary reads the structure of a pdf it is given: a file that starts as a pdf does but has no
+// page to read is the file of the client ("Invalid PDF file", checked 31.10.2026)
+function refusedDocument(err: unknown): BadRequestError | null {
+  const e = err as { http_code?: unknown; message?: unknown } | null;
+  if (e?.http_code !== 400 || typeof e.message !== 'string') return null;
+
+  return /invalid pdf file/i.test(e.message)
+    ? new BadRequestError('DOCUMENT_INVALID', undefined, err)
+    : null;
+}
+
+// keeps the PDF file of a document (checked by requirePdfStream) in the account, the way
+// Cloudinary keeps a pdf, and gives what the row of the document stores
+export async function uploadDocument(args: {
+  file: Buffer | NodeJS.ReadableStream;
+}): Promise<UploadDocumentResult> {
+  const options: UploadApiOptions = {
+    resource_type: 'image',
+    allowed_formats: ['pdf'],
+    public_id: makeDocumentPublicId(),
+    timeout: DOCUMENT_UPLOAD_TIMEOUT_MS,
+  };
+
+  try {
+    const res = await uploadViaStream(toReadable(args.file), options);
+
+    return { publicId: res.public_id, url: res.secure_url, sizeBytes: res.bytes };
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    const refused = refusedDocument(err);
+    if (refused) throw refused;
+
+    throw outOfReach(err) ?? new InternalError({ reason: 'CLOUDINARY_UPLOAD_UNEXPECTED' }, err);
+  }
+}
+
+// removes the file of a document; one that is gone already is not an error
+export async function deleteDocument(publicId: string): Promise<void> {
   if (!publicId.trim()) throw new BadRequestError('PUBLIC_ID_REQUIRED');
 
   try {

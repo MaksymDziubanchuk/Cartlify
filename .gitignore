@@ -5,7 +5,6 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-
 # TypeScript
 dist/
 *.tsbuildinfo
@@ -64,3 +63,4 @@ db/restore/
 
 # Claude Code instructions
 CLAUDE.md
+notes/

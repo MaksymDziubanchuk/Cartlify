@@ -26,13 +26,27 @@ import {
   assertDeliveryOfShop,
   findUnavailableItems,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
   scheduleOrderReservationExpiry,
 } from './helpers/index.js';
 
 import type { ConfirmCurrentOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 import type { UserId } from 'types/ids.js';
+
+// what the check of the items reads of a variant: whether it is for sale, its free units, and
+// whether it shows a picture (one is enough to tell)
+const UNAVAILABLE_VARIANT_SELECT = {
+  select: {
+    deletedAt: true,
+    stock: true,
+    reservedStock: true,
+    price: true,
+    salePrice: true,
+    saleEndsAt: true,
+    images: { select: { imageId: true }, take: 1 },
+  },
+} as const;
 
 // the items of an unconfirmed order of the user the order cannot be confirmed with now
 async function unavailableItemsOf(actorId: UserId, orderId: number) {
@@ -42,9 +56,10 @@ async function unavailableItemsOf(actorId: UserId, orderId: number) {
       where: { orderId, order: { userId: actorId as any, confirmed: false } },
       select: {
         id: true,
-        productId: true,
+        variantId: true,
         quantity: true,
-        product: { select: { deletedAt: true, stock: true, reservedStock: true } },
+        product: { select: { deletedAt: true } },
+        variant: UNAVAILABLE_VARIANT_SELECT,
       },
       orderBy: { id: 'asc' },
     });
@@ -52,9 +67,35 @@ async function unavailableItemsOf(actorId: UserId, orderId: number) {
       items,
       await expiredUnitsOf(
         db,
-        items.map((item) => item.productId),
+        items.map((item) => item.variantId),
       ),
     );
+  });
+}
+
+// the items of an unconfirmed order of the user whose price is not the one their variant sells at
+// now (the sale price while a sale lasts), from a fresh read: the refusal of a confirmation names them
+async function changedPricesOf(actorId: UserId, orderId: number) {
+  return prisma.$transaction(async (db) => {
+    await setUserContext(db, { userId: actorId, role: 'USER' });
+    const items = await db.orderItem.findMany({
+      where: { orderId, order: { userId: actorId as any, confirmed: false } },
+      select: {
+        id: true,
+        variantId: true,
+        unitPrice: true,
+        variant: { select: { price: true, salePrice: true, saleEndsAt: true } },
+      },
+      orderBy: { id: 'asc' },
+    });
+
+    return items.flatMap((item) => {
+      const price = currentPrice(item.variant);
+      const unitPrice = Number(item.unitPrice);
+      return unitPrice === price
+        ? []
+        : [{ itemId: item.id, variantId: item.variantId, unitPrice, price }];
+    });
   });
 }
 
@@ -141,26 +182,19 @@ export async function confirmOrder({
           if (written) assertDeliveryOfShop(written.method, written.country);
         }
 
-        // name every item the order cannot be confirmed with, a product deleted from the catalog or
-        // not enough free stock: the page shows them, the owner changes the order and confirms
-        // again. The database refuses such an order on its own, this only says which items.
+        // name every item the order cannot be confirmed with, a variant a buyer does not see (taken
+        // out of sale, its product removed, no picture) or not enough free stock: the page shows
+        // them, the owner changes the order and confirms again. The database refuses such an order
+        // on its own, this only says which items.
         // A confirmed order is left to confirm_order, its own reservation is in the stock numbers
         const items = await db.orderItem.findMany({
           where: { orderId: Number(orderId), order: { userId: actorId as any, confirmed: false } },
           select: {
             id: true,
-            productId: true,
+            variantId: true,
             quantity: true,
-            product: {
-              select: {
-                deletedAt: true,
-                stock: true,
-                reservedStock: true,
-                price: true,
-                salePrice: true,
-                saleEndsAt: true,
-              },
-            },
+            product: { select: { deletedAt: true } },
+            variant: UNAVAILABLE_VARIANT_SELECT,
           },
           orderBy: { id: 'asc' },
         });
@@ -169,7 +203,7 @@ export async function confirmOrder({
           items,
           await expiredUnitsOf(
             db,
-            items.map((item) => item.productId),
+            items.map((item) => item.variantId),
           ),
         );
         if (unavailable.length) {
@@ -179,13 +213,13 @@ export async function confirmOrder({
         // no payment provider takes a smaller payment: refused before the stock is held, the page
         // tells the buyer the smallest total. The buyer picks the provider after this, so only a
         // total below the minimum of every one of them is refused here; the payment page checks the
-        // one picked. The total is what the buyer pays: the items at the prices the products sell
+        // one picked. The total is what the buyer pays: the items at the prices the variants sell
         // at now (the sale price while a sale lasts), the ones confirm_order takes, and the
         // delivery by the settings of the shop. An empty order is left to confirm_order
         // (ORDER_ITEMS_REQUIRED), an order without a delivery too (ORDER_DELIVERY_REQUIRED)
         const minimum = lowestMinimumTotal();
         const itemsCents = items.reduce(
-          (sum, item) => sum + Math.round(currentPrice(item.product) * 100) * item.quantity,
+          (sum, item) => sum + Math.round(currentPrice(item.variant) * 100) * item.quantity,
           0,
         );
         const method =
@@ -222,7 +256,7 @@ export async function confirmOrder({
 
         await recordConsents(db, Number(actorId), legalVersions, 'consent.order', order.id);
 
-        const response = mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        const response = mapOrderRowToResponse(order, await orderContextOf(db, [order]));
 
         // schedule expiry before commit so a redis failure rolls the confirmation back
         await scheduleOrderReservationExpiry(response.id, order.reservationExpiresAt);
@@ -270,9 +304,13 @@ export async function confirmOrder({
         });
       }
 
-      // some item price differs from current product price
-      // nothing is reserved; client reloads the order to get fresh prices and confirms again
-      if (msg.includes('ORDER_PRICES_CHANGED')) throw new ConflictError('ORDER_PRICES_CHANGED');
+      // some item price differs from current variant price: nothing is reserved; the items are named
+      // (details.items), the client reloads the order to get fresh prices and confirms again
+      if (msg.includes('ORDER_PRICES_CHANGED')) {
+        throw new ConflictError('ORDER_PRICES_CHANGED', {
+          items: await changedPricesOf(actorId, Number(orderId)),
+        });
+      }
       // another buyer took the last free units between the check and the reserve: the items are
       // named the way the check names them, from a fresh read
       if (msg.includes('INSUFFICIENT_AVAILABLE_STOCK')) {
@@ -280,7 +318,12 @@ export async function confirmOrder({
           items: await unavailableItemsOf(actorId, Number(orderId)),
         });
       }
-      if (msg.includes('PRODUCT_NOT_FOUND')) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      // a variant the items hold is gone between the check and the reserve: named like the check does
+      if (msg.includes('VARIANT_NOT_FOUND')) {
+        throw new ConflictError('ORDER_ITEMS_UNAVAILABLE', {
+          items: await unavailableItemsOf(actorId, Number(orderId)),
+        });
+      }
       if (msg.includes('ORDER_RESERVATION_DURATION_INVALID'))
         throw new BadRequestError('ORDER_RESERVATION_DURATION_INVALID');
     }

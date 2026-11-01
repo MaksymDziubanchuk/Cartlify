@@ -1,9 +1,9 @@
-// The events of the four journals: admin_audit_log, product_price_change_logs, login_logs and
-// legal_acceptances. An event says what made the line, finer than an action or a role: the route
-// that wrote it, or the condition it was written under. Two lines of the same action from two
-// routes have two events. The database keeps the shape (domain.name, lower case, db/06); this file
-// is the list the app writes from and the journals can be filtered by. A line from before the
-// events has legacy.unknown.
+// The events of the five journals: admin_audit_log, product_price_change_logs, login_logs,
+// legal_acceptances and stock_log. An event says what made the line, finer than an action or a
+// role: the route that wrote it, or the condition it was written under. Two lines of the same
+// action from two routes have two events. The database keeps the shape (domain.name, lower case,
+// db/06); this file is the list the app writes from and the journals can be filtered by. A line
+// from before the events has legacy.unknown (the stock log has none: it began with its events).
 
 export const LEGACY_EVENT = 'legacy.unknown';
 
@@ -24,7 +24,17 @@ export const AUDIT_EVENTS = [
   'product.sale_set_with_price',
   'product.sale_remove_with_price',
   'product.sale_end_by_price',
-  // the stock
+  // the gallery of a product: pictures added, a picture taken out (the variants that showed it lose it)
+  'product.gallery_add',
+  'product.gallery_remove',
+  // a variant of a product: made, changed (by its own route, or by a route of many), taken out of
+  // sale, put back
+  'variant.create',
+  'variant.update',
+  'variant.update_batch',
+  'variant.delete',
+  'variant.restore',
+  // the stock: one line for a whole delivery or write-off (the line of each variant is in the stock log)
   'stock.delivery',
   'stock.write_off',
   // reviews
@@ -36,6 +46,32 @@ export const AUDIT_EVENTS = [
   'category.reparent_on_delete',
   'category.image_set',
   'category.image_remove',
+  // the characteristics a category asks for, written whole
+  'category.attributes_set',
+  // the directory of the manufacturers and of the persons responsible in the EU
+  'party.create',
+  'party.update',
+  'party.delete',
+  // the directory of the documents (PDF files of instructions and certificates)
+  'document.create',
+  'document.update',
+  'document.delete',
+  // the directory of characteristics: groups, characteristics, the values of a choice; a reorder is
+  // a line for each row that moved
+  'attribute_group.create',
+  'attribute_group.update',
+  'attribute_group.delete',
+  'attribute_group.reorder',
+  'attribute.create',
+  'attribute.update',
+  'attribute.delete',
+  'attribute.reorder',
+  'attribute_option.create',
+  'attribute_option.update',
+  'attribute_option.delete',
+  'attribute_option.reorder',
+  // one value put in the place of another in every variant that has it (one line with how many changed)
+  'attribute_option.replace',
   // orders: a step of shipping, one at a time or in bulk, and a step back: a manual order is shipped
   // to a carrier and delivered, a pickup is ready and collected
   'order.ship',
@@ -75,7 +111,7 @@ export const AUDIT_EVENTS = [
 ] as const;
 
 export const PRICE_LOG_EVENTS = [
-  // a new price of one product, of many in one request, of a selection (the bulk change)
+  // a new price of one variant, of many in one request, of a selection (the bulk change)
   'price.set',
   'price.set_batch',
   'price.bulk',
@@ -108,10 +144,22 @@ export const CONSENT_EVENTS = [
   LEGACY_EVENT,
 ] as const;
 
+export const STOCK_LOG_EVENTS = [
+  // goods taken in, with a delivery id
+  'stock.delivery',
+  // units written off, with a write-off id
+  'stock.write_off',
+  // the units a paid order took at its payment, with the order (the work of the system, no actor)
+  'stock.sale',
+  // the units a cancelled paid order gave back, with the order
+  'stock.cancel_return',
+] as const;
+
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];
 export type PriceLogEvent = (typeof PRICE_LOG_EVENTS)[number];
 export type LoginEvent = (typeof LOGIN_EVENTS)[number];
 export type ConsentEvent = (typeof CONSENT_EVENTS)[number];
+export type StockLogEvent = (typeof STOCK_LOG_EVENTS)[number];
 
 // the events a line is written with: all but the one of the lines from before the events
 export type WrittenEvent<T extends string> = Exclude<T, typeof LEGACY_EVENT>;

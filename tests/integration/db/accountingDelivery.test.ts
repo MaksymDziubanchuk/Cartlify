@@ -66,7 +66,7 @@ const diff = (after: Numbers, before: Numbers): Numbers =>
 // an order of two units at 40 that waits for its payment, its cart made and committed before
 async function waitingOrder(rule: DeliveryRule = {}) {
   const product = await createProduct({ stock: 5, price: 40 });
-  return inCommittedTx((db) => waitingOrderOf(db, buyer.id, [[product.id, 2]], rule));
+  return inCommittedTx((db) => waitingOrderOf(db, buyer.id, [[product.variantId, 2]], rule));
 }
 
 // a send of the order the way an admin records it: the order is shipped, the send has the carrier

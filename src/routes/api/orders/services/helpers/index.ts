@@ -13,3 +13,5 @@ export * from './unconfirmedOrder.helper.js';
 export * from './getOrders.helper.js';
 
 export * from './orderTimeoutQueue.helper.js';
+
+export * from './itemName.helper.js';

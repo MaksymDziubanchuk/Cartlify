@@ -14,7 +14,7 @@ import {
 import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
 import {
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
   shipmentLogOf,
 } from './helpers/index.js';
@@ -135,6 +135,8 @@ export async function cancelPaidOrder(
           action: 'ORDER_STATUS_CHANGE',
           event,
           changes: [
+            // the id of the order, as the lines of the stock log of its units back carry it
+            { field: 'orderId', old: null, new: id },
             { field: 'status', old: before.status, new: 'cancelled' },
             {
               field: 'refund',
@@ -159,7 +161,7 @@ export async function cancelPaidOrder(
         const deleted = user.deletedAt !== null;
 
         return {
-          ...mapOrderRowToResponse(row, await expiredOfOrders(db, [row]), 'admin'),
+          ...mapOrderRowToResponse(row, await orderContextOf(db, [row]), 'admin'),
           user: { id: user.id as any, deleted, ...(deleted ? {} : { email: user.email }) },
         };
       },

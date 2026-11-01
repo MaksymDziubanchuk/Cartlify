@@ -88,6 +88,11 @@ isolateEnv(
     // the same for the limits of the login, the registration, the mails and the payment page;
     // tests/integration/api/auth/limits.test.ts checks them as the server has them
     REQUEST_LIMITS_SCALE: '1000',
+    // a document may be bigger than a picture (UPLOAD_MAX_BYTES, 5 MB): the tests give the routes of
+    // the documents 6 MB, which a test of the limit of 413 fills
+    DOCUMENT_MAX_BYTES: '6000000',
+    // a characteristic of a choice holds 5 values at most here, so a test of the limit stays short
+    ATTRIBUTE_OPTIONS_MAX: '5',
     ...(realSendGrid ? {} : MOCK_SENDGRID),
     ...(realCloudinary ? {} : MOCK_CLOUDINARY),
   },

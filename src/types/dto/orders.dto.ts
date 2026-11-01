@@ -2,50 +2,30 @@ import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { DeliveryQuote } from '@helpers/deliveryPrice.js';
 import type { UserId, ProductId, OrderId, CategoryId, IdParam } from 'types/ids.js';
 import type { Role } from 'types/user.js';
+import type { VariantOfItemDto } from './variants.dto.js';
 
 // types
 export type OrderStatus =
-  | 'pending'
-  | 'unconfirmed'
-  | 'waiting'
-  | 'paid'
-  | 'shipped'
-  | 'delivered'
-  | 'cancelled';
+  'pending' | 'unconfirmed' | 'waiting' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
 export type ConfirmedStatus = true | false;
 
 // shared response shapes
+
+// the product of a position: what the page needs to link to it
 export interface OrderItemProductDto {
   id: ProductId;
   name: string;
   categoryId: CategoryId;
-
-  // the primary image; null for a product without one
-  images: {
-    url200: string;
-    url400: string;
-    url800: string;
-  } | null;
-
-  availableStock: number;
-  deletedAt?: Date | null;
-
-  // an order that is not paid: the price of the product now and its sale while it lasts, the
-  // way the catalog shows them
-  price?: number;
-  salePrice?: number;
-  saleEndsAt?: string;
-  salePriorPrice?: number;
 }
 
+// a position of a cart or an order: the variant that is bought (the name, the price, the free units
+// and the main picture of THAT variant, and whether it is still for sale) and its product. The
+// name and the price of a confirmed order are the ones of the confirmation, the copies it keeps
 export interface OrderItemDto {
   // order item id, used as itemId in PATCH/DELETE /current/items/:itemId
   id: number;
-  productId: ProductId;
-  // the name of the item: the one the product had when the order was confirmed, the one of now
-  // for a cart
-  name: string;
   product: OrderItemProductDto;
+  variant: VariantOfItemDto;
   quantity: number;
   unitPrice: number;
   totalPrice: number;
@@ -128,7 +108,7 @@ export interface OrderResponseDto {
   deliverySuggestion?: OrderDeliverySuggestionDto;
   // admin and root: every send of the order, the latest first
   shipments?: OrderShipmentAdminDto[];
-  // admin and root: what the order weighs; not complete when a product of it has no weight
+  // admin and root: what the order weighs (the weights of its variants times the units); not complete when a variant of it has no weight
   weight?: { grams: number; complete: boolean };
 }
 
@@ -140,7 +120,8 @@ export interface GetCurrentOrderDto {
 
 // POST /current/items
 export interface CurrentAddItemBodyDto {
-  productId: ProductId;
+  // the variant to buy; the same variant again adds units to its position
+  variantId: number;
   quantity: number;
 }
 
@@ -269,8 +250,9 @@ export interface GetOrdersQueryDto {
   // the orders changed last from updatedFrom and before updatedTo, iso date-times
   updatedFrom?: string;
   updatedTo?: string;
-  // the orders that hold the product
+  // the orders that hold a variant of the product, or the variant itself
   productId?: number;
+  variantId?: number;
 
   // the desk of an admin: the orders of a buyer, a text of a buyer or a recipient, a csv
   userId?: number;
@@ -279,7 +261,7 @@ export interface GetOrdersQueryDto {
 
   // the delivery filters of the desk: the methods and the countries through commas, a part of the
   // name of the carrier of the send on its way, the orders shipped without a number, with a
-  // delivery the buyer pays for or not, with a product that has no weight, whose send has no cost
+  // delivery the buyer pays for or not, with a variant that has no weight, whose send has no cost
   deliveryMethod?: string;
   country?: string;
   carrier?: string;
@@ -308,6 +290,7 @@ export interface FindOrdersDto {
   updatedFrom?: Date;
   updatedTo?: Date;
   productId?: number;
+  variantId?: number;
   userId?: number;
   q?: string;
   format?: 'json' | 'csv';

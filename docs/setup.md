@@ -107,3 +107,12 @@ Raw OpenAPI JSON is available at:
 ```bash
 http://localhost:3000/documentation/json
 ```
+
+### 10. Fill the catalog
+
+An empty shop has no products. Either load the demo data through the routes of the running API (see [commands](commands.md): a tree of categories, 16 products with one to three variants each, the stock, three buyers with orders), or fill the catalog by hand as an admin. The order that works, with the rules of each step in [Products, variants and characteristics](variants.md):
+
+1. the directory of characteristics: groups, characteristics (mark the ones that tell variants apart as main) and the values of the lists (`/api/admin/attribute-groups`, `/api/admin/attributes`, `.../options`);
+2. the categories, and for each the characteristics it asks for (`PUT /api/categories/:categoryId/attributes`);
+3. the manufacturers and the persons responsible in the EU, and the documents of the products (`/api/admin/parties`, `/api/admin/documents`);
+4. the products with their variants and pictures (`POST /api/products`), then the stock of the variants by a delivery (`POST /api/products/stock/deliveries`). A variant is shown to buyers when it shows a picture; its free units are what a delivery took in.

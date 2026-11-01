@@ -14,7 +14,7 @@ import {
 import {
   buildShipmentData,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
   shipmentLogOf,
 } from './helpers/index.js';
@@ -252,6 +252,6 @@ async function readOrder(
     const order = await readOrderResponse(db, orderId);
     if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_STATUS_UPDATE' });
 
-    return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]), 'admin');
+    return mapOrderRowToResponse(order, await orderContextOf(db, [order]), 'admin');
   });
 }

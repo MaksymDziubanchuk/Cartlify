@@ -91,6 +91,8 @@ describe('thresholdOf', () => {
     'paid_orders_waiting',
     'out_of_stock',
     'products_without_shipping_data',
+    'variants_missing_required',
+    'products_hidden_from_buyers',
     'expired_batches',
     'chats_waiting',
   ] as const)('gives %s no threshold', (kind) => {
@@ -213,24 +215,52 @@ describe('alertListOf', () => {
     });
   });
 
-  it('sends to the products that lack the weight or the sizes, the most popular first', () => {
+  // the cases of these alerts are variants: the list gives each variant a row of its own (group=false),
+  // not the groups a buyer gets, so the alert counts what its list shows
+  it('sends to the variants that lack the weight or the sizes, the most popular first', () => {
     expect(listOf('products_without_shipping_data', null)).toEqual({
       path: '/api/products',
-      query: { withoutShippingData: 'true', sort: 'popularity', order: 'desc' },
+      query: { withoutShippingData: 'true', group: 'false', sort: 'popularity', order: 'desc' },
     });
   });
 
-  it('sends to the products with no free units, the most popular first', () => {
+  it('sends to the variants that lack a required characteristic, a row for each variant', () => {
+    expect(listOf('variants_missing_required', null)).toEqual({
+      path: '/api/products',
+      query: { missingRequired: 'true', group: 'false', sort: 'popularity', order: 'desc' },
+    });
+  });
+
+  // the rows are products here: the cases are products, and the list counts products
+  it('sends to the products a buyer does not see, the most popular first', () => {
+    expect(listOf('products_hidden_from_buyers', null)).toEqual({
+      path: '/api/products',
+      query: { hiddenFromBuyers: 'true', sort: 'popularity', order: 'desc' },
+    });
+  });
+
+  it('puts the two kinds of the gaps after the shipping data in the order of the kinds', () => {
+    const kinds = alertKindsOf('ADMIN');
+
+    expect(kinds.indexOf('variants_missing_required')).toBe(
+      kinds.indexOf('products_without_shipping_data') + 1,
+    );
+    expect(kinds.indexOf('products_hidden_from_buyers')).toBe(
+      kinds.indexOf('variants_missing_required') + 1,
+    );
+  });
+
+  it('sends to the variants with no free units, the most popular first', () => {
     expect(listOf('out_of_stock', null)).toEqual({
       path: '/api/products',
-      query: { maxStock: '0', sort: 'popularity', order: 'desc' },
+      query: { maxStock: '0', group: 'false', sort: 'popularity', order: 'desc' },
     });
   });
 
-  it('sends to the products with some free units up to the threshold, the fewest first', () => {
+  it('sends to the variants with some free units up to the threshold, the fewest first', () => {
     expect(listOf('low_stock', 5)).toEqual({
       path: '/api/products',
-      query: { inStock: 'true', maxStock: '5', sort: 'stock', order: 'asc' },
+      query: { inStock: 'true', maxStock: '5', group: 'false', sort: 'stock', order: 'asc' },
     });
   });
 

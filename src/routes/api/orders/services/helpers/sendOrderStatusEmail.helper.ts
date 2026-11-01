@@ -9,6 +9,7 @@ import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js
 import { sendOrderNoticeEmail } from './sendOrderNoticeEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
+import { itemNameOf } from './itemName.helper.js';
 
 export type OrderStatusMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -66,6 +67,7 @@ function loadOrder(orderId: number) {
             quantity: true,
             totalPrice: true,
             productName: true,
+            variantId: true,
             product: { select: { id: true, name: true } },
           },
         },
@@ -117,13 +119,17 @@ export async function sendOrderStatusEmail(
       appName: env.SHOP_NAME,
       orderId: order.id,
       orderUrl: orderPage(order.id),
-      // a delivered order asks the buyer to rate each product
-      items: order.items.map((item) => ({
-        // the name the product had when the order was confirmed
-        name: item.productName ?? item.product.name,
+      // a delivered order asks the buyer to rate each product: a review is of the product, so
+      // two variants of one product are one line to rate, named by the product
+      items: order.items.map((item, index) => ({
+        // the name the variant had when the order was confirmed
+        name: itemNameOf(item),
         quantity: item.quantity,
         totalPrice: item.totalPrice.toString(),
-        ...(status === 'delivered' ? { reviewUrl: reviewsPage(item.product.id) } : {}),
+        ...(status === 'delivered' &&
+        order.items.findIndex((other) => other.product.id === item.product.id) === index
+          ? { reviewUrl: reviewsPage(item.product.id), reviewName: item.product.name }
+          : {}),
       })),
       total: order.total.toString(),
       // what the buyer paid for the delivery, none for a pickup

@@ -2,7 +2,7 @@ import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js'
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
 
 // an id or a quantity in the body: a whole number from 1 to the largest int of the database.
-// A plain number type lets 1.5 through and the database cuts it to 1, another product or another
+// A plain number type lets 1.5 through and the database cuts it to 1, another variant or another
 // quantity than sent; a bigger number is an error of the database, not of the request
 const wholeNumberField = (description: string) =>
   ({
@@ -180,47 +180,13 @@ const ordersOrderItemProductSchema = {
   $id: 'ordersOrderItemProductSchema',
   type: 'object',
   additionalProperties: false,
+  description: 'The product of the position; the variant that is bought is in variant.',
   properties: {
     id: { type: 'integer' },
     name: { type: 'string' },
     categoryId: { type: 'integer' },
-
-    images: {
-      type: 'object',
-      nullable: true,
-      additionalProperties: false,
-      description: 'The primary image of the product; null for a product without one.',
-      properties: {
-        url200: { type: 'string' },
-        url400: { type: 'string' },
-        url800: { type: 'string' },
-      },
-      required: ['url200', 'url400', 'url800'],
-    },
-
-    // computed in API: stock - reservedStock (clamp to 0)
-    availableStock: { type: 'integer', minimum: 0 },
-
-    deletedAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
-
-    // an order that is not paid (a cart, unconfirmed, waiting for its payment)
-    price: {
-      type: 'number',
-      description:
-        'The price of the product now, for an order that is not paid; a paid order shows what ' +
-        'it was paid at in unitPrice.',
-    },
-    salePrice: {
-      type: 'number',
-      description: 'The sale price of the product while its sale lasts, for an order not paid.',
-    },
-    saleEndsAt: { type: 'string', format: 'date-time', description: 'The end of that sale.' },
-    salePriorPrice: {
-      type: 'number',
-      description: 'The lowest price of the 30 days before that sale.',
-    },
   },
-  required: ['id', 'name', 'categoryId', 'images', 'availableStock'],
+  required: ['id', 'name', 'categoryId'],
 } as const;
 
 const ordersOrderItemSchema = {
@@ -230,20 +196,23 @@ const ordersOrderItemSchema = {
   properties: {
     // order item id, used as itemId in cart item routes
     id: { type: 'integer' },
-    productId: { type: 'integer' },
-    name: {
-      type: 'string',
-      description:
-        'The name of the item: the one the product had when the order was confirmed, kept after ' +
-        'a rename; the name the product has now for a cart or an unconfirmed order.',
-    },
     product: { $ref: 'ordersOrderItemProductSchema#' },
+    variant: {
+      $ref: 'variantOfItemSchema#',
+      description:
+        'The variant that is bought, with its own price, free units, main picture and forSale. ' +
+        'Its name is the one the variant had when the order was confirmed, kept after a rename ' +
+        '(the name of now for a cart or an unconfirmed order). While the order is not paid the ' +
+        'price and the sale are the ones of now; a paid order shows the price it was bought at ' +
+        'and no sale. forSale is false for a variant that is not for sale any more: a confirmed ' +
+        'order keeps it as history (a cart and an unconfirmed order drop it).',
+    },
 
     quantity: { type: 'number' },
     unitPrice: { type: 'number' },
     totalPrice: { type: 'number' },
   },
-  required: ['id', 'productId', 'name', 'product', 'quantity', 'unitPrice', 'totalPrice'],
+  required: ['id', 'product', 'variant', 'quantity', 'unitPrice', 'totalPrice'],
 } as const;
 
 const ordersOrderResponseSchema = {
@@ -271,8 +240,8 @@ const ordersOrderResponseSchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'Admin and root: what the order weighs in grams (the items that have a weight), whole ' +
-        'only when every item has one.',
+        'Admin and root: what the order weighs in grams (the weights of the variants times the ' +
+        'units ordered), whole only when every variant has a weight.',
       properties: { grams: { type: 'integer' }, complete: { type: 'boolean' } },
       required: ['grams', 'complete'],
     },
@@ -340,10 +309,10 @@ const ordersCurrentAddItemBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    productId: wholeNumberField('Id of the product'),
+    variantId: wholeNumberField('Id of the variant'),
     quantity: wholeNumberField('Units to add'),
   },
-  required: ['productId', 'quantity'],
+  required: ['variantId', 'quantity'],
 } as const;
 
 const ordersCurrentItemIdParamsSchema = {
@@ -489,7 +458,12 @@ const ordersGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most rows a page holds, from 1 to 100.',
+    },
     cursor: {
       type: 'string',
       minLength: 1,
@@ -503,6 +477,7 @@ const ordersGetQuerySchema = {
     status: {
       type: 'string',
       enum: ['waiting', 'unconfirmed', 'paid', 'shipped', 'delivered', 'cancelled'],
+      description: 'Only the orders in this status.',
     },
     statuses: {
       type: 'string',
@@ -513,7 +488,13 @@ const ordersGetQuerySchema = {
       type: 'integer',
       minimum: 1,
       maximum: MAX_ID,
-      description: 'Only the orders that hold the product.',
+      description: 'Only the orders that hold a variant of the product.',
+    },
+    variantId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description: 'Only the orders that hold the variant.',
     },
     userId: {
       type: 'integer',
@@ -538,7 +519,11 @@ const ordersGetQuerySchema = {
         'Admin and root only (FILTER_FORBIDDEN for a buyer): csv gives every order of the ' +
         'filters as a file for the courier, without pages.',
     },
-    confirmed: { type: 'boolean' },
+    confirmed: {
+      type: 'boolean',
+      description:
+        'true: only the orders that were confirmed (they have a reservation or a payment).',
+    },
     paidFrom: {
       type: 'string',
       format: 'date-time',
@@ -599,7 +584,7 @@ const ordersGetQuerySchema = {
     },
     withoutWeight: {
       type: 'boolean',
-      description: 'Admin and root: true lists the orders that hold a product without a weight.',
+      description: 'Admin and root: true lists the orders that hold a variant without a weight.',
     },
     shippingCostMissing: {
       type: 'boolean',
@@ -639,6 +624,7 @@ const ordersGetQuerySchema = {
     sortDir: {
       type: 'string',
       enum: ['asc', 'desc'],
+      description: 'The direction of sortBy, desc (the newest first) by default.',
     },
   },
 } as const;

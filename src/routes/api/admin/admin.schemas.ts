@@ -63,6 +63,20 @@ const adminStatsResponseExample = {
         quantitySold: 30,
       },
     ],
+    topVariantsByRevenue: [
+      {
+        product: { id: 10, name: 'Wireless headphones', deleted: false },
+        variant: {
+          id: 31,
+          position: 2,
+          name: 'Wireless headphones \u2014 black',
+          sku: 'WH-BLK',
+          deleted: false,
+        },
+        revenue: 899.82,
+        quantitySold: 18,
+      },
+    ],
     topCategoriesByRevenue: [
       {
         id: 1,
@@ -79,6 +93,11 @@ const adminStatsResponseExample = {
     avgRating: 4.4,
     negativeCount: 3,
   },
+  money: {
+    income: { items: 3095.5, delivery: 105, total: 3200.5 },
+    expenses: { costOfGoods: 1650.25, writeOffs: 42.5, shipping: 60, total: 1752.75 },
+    margin: { items: 1445.25, delivery: 45, total: 1447.75 },
+  },
   createdAt: '2026-01-31T23:59:59.999Z',
 };
 
@@ -92,7 +111,11 @@ const getStatsSchema = {
     'and the tops count the orders paid in it (paidAt) and not cancelled, the reviews and the ' +
     'users the ones made in it. The users are the accounts of buyers, admins and root are left ' +
     'out. `money` is the income, the expenses and the margins of the period, counted the way ' +
-    '`summary` of GET /api/admin/reports/accounting counts them, in the same snapshot as the rest.',
+    '`summary` of GET /api/admin/reports/accounting counts them, in the same snapshot as the rest. ' +
+    'The top of products (`topProductsByRevenue`) counts a product as the sum of all its ' +
+    'variants; the top of variants (`topVariantsByRevenue`) lists the variants of the most money, ' +
+    'each as `{ product, variant, revenue, quantitySold }`, so a product sold in two variants is ' +
+    'one line of the first top and two lines of the second.',
 
   querystring: {
     $ref: 'adminStatsQuerySchema#',
@@ -149,9 +172,11 @@ const getAccountingReportSchema = {
     'sends, together) and the margins (the items, the delivery, all of it); the batches taken in ' +
     'during it by source; the units written off in it by reason, at the costs of their batches; ' +
     'and what the batches have left now. An order cancelled later is taken out of the period it ' +
-    'was paid in: the report of that period changes. `productIds` keeps only these products, `categoryId` the products of a category, with its whole branch unless `branch=false`. All of it comes from one snapshot. ' +
+    'was paid in: the report of that period changes. `productIds` keeps only the variants of ' +
+    'these products, `variantIds` only these variants, `categoryId` the products of a category, ' +
+    'with its whole branch unless `branch=false`. All of it comes from one snapshot. ' +
     'The `delivery` is of all orders and of no product, so it is none (null) in a report of some ' +
-    'products or of a category: what the orders paid in the period and not cancelled paid for ' +
+    'products, variants or of a category: what the orders paid in the period and not cancelled paid for ' +
     'it (by the time of the payment), told apart what went back with the cancels (by the time of ' +
     'the cancel), what the sends ' +
     'cost the shop (by the time they were sent; the ones whose cost is not written are counted ' +
@@ -206,9 +231,9 @@ const getAccountingReportSchema = {
     },
     400: {
       description:
-        'Invalid query: a date that is not a date or product ids that are not ids ' +
+        'Invalid query: a date that is not a date or product or variant ids that are not ids ' +
         '(VALIDATION_ERROR), a period that ends before it starts (INVALID_STATS_PERIOD), an id ' +
-        'past the largest or more than 100 ids (PRODUCT_IDS_INVALID).',
+        'past the largest or more than 100 ids (PRODUCT_IDS_INVALID, VARIANT_IDS_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -230,11 +255,16 @@ const getAccountingReportSchema = {
   },
 } satisfies FastifySchema;
 
-const reportErrors = (what: string) => ({
+// ids: the report takes productIds and variantIds; cursor: it is paged (a report of every row has none)
+const reportErrors = (what: string, { ids = false, cursor = true } = {}) => ({
   400: {
     description:
       'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
-      '(INVALID_STATS_PERIOD), a cursor of another sort (CURSOR_INVALID).',
+      '(INVALID_STATS_PERIOD)' +
+      (cursor ? ', a cursor of another sort (CURSOR_INVALID)' : '') +
+      (ids
+        ? ', ids that are too many or too large (PRODUCT_IDS_INVALID, VARIANT_IDS_INVALID).'
+        : '.'),
     $ref: 'errorResponseSchema#',
   },
   401: {
@@ -277,12 +307,18 @@ const getAccountingProductsSchema = {
   description:
     'The money of each product of a period, from `from` (taken in, all time without it) to ' +
     '`to` (left out, now without it): every product of the filter that sold, was cancelled, ' +
-    'written off or taken in during it, or has stock left. ' +
+    'written off or taken in during it, or has stock left. A row is a PRODUCT (`{ product, ' +
+    'category, ... }`): the money of all its variants of the filter added up, so a product ' +
+    'with three variants is one row. GET /api/admin/reports/accounting/variants has a row for ' +
+    'each variant, and its rows add up to these. ' +
     MONEY_TEXT +
     'And what the batches of the product have left now. A product removed from the catalog ' +
-    'stays with its history (`deleted`). `categoryId` keeps a category, with its whole ' +
-    'branch unless `branch=false`. Sorted by `sortBy` (revenue by default) and `sortOrder`, a ' +
-    'page at a time with `nextCursor`; `totals` are of every product of the filter. ' +
+    'stays with its history (`product.deleted`). `productIds` keeps the variants of those ' +
+    'products, `variantIds` only those variants (the product is the sum of the variants asked ' +
+    'for; both: the variants of those products among them), `categoryId` a category, with its ' +
+    'whole branch unless `branch=false`. Sorted by `sortBy` (revenue by default; `name` is the ' +
+    'name of the product) and `sortOrder`, a page at a time with `nextCursor`; `totals` are of ' +
+    'every product of the filter. ' +
     CSV_TEXT +
     ' The totals are its last line. This operation is restricted to privileged users.',
 
@@ -299,7 +335,47 @@ const getAccountingProductsSchema = {
         'text/csv': { schema: CSV_FILE_SCHEMA },
       },
     },
-    ...reportErrors('the report by product'),
+    ...reportErrors('the report by product', { ids: true }),
+  },
+} satisfies FastifySchema;
+
+// Schema for the money of each variant, with its product
+const getAccountingVariantsSchema = {
+  operationId: 'getAccountingVariants',
+  summary: 'Get the accounting by variant',
+  description:
+    'The money of each VARIANT of a period, the breakdown of GET ' +
+    '/api/admin/reports/accounting/products: the same columns, filters (`productIds`, ' +
+    '`variantIds`, `categoryId`, `branch`), period, sorts, pages and csv file, with the variant ' +
+    'in every row (`{ product, variant, category, ... }`: the id, the place, the name and the ' +
+    'article number of the variant, whether it is taken out of sale). Every variant of the ' +
+    'filter that sold, was cancelled, written off or taken in during the period, or has stock ' +
+    'left, is a row; the money of a whole product is the sum of its rows, and `totals` are those ' +
+    'of the report by product. ' +
+    MONEY_TEXT +
+    'And what the batches of the variant have left now. A product removed from the catalog ' +
+    'stays with its history (`product.deleted`; its variants are `variant.deleted`). Sorted by ' +
+    '`sortBy` (revenue by default; `name` is the name of the variant) and `sortOrder`, a page ' +
+    'at a time with `nextCursor` (a cursor of the report by product is CURSOR_INVALID here). ' +
+    CSV_TEXT +
+    ' The totals are its last line. This operation is restricted to privileged users.',
+
+  querystring: {
+    $ref: 'adminReportProductsQuerySchema#',
+    examples: [
+      { from: '2026-10-01T00:00:00.000Z', productIds: '10', sortBy: 'revenue', sortOrder: 'desc' },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The variants of the page and the totals; a csv file with format=csv.',
+      content: {
+        'application/json': { schema: { $ref: 'adminReportVariantsResponseSchema#' } },
+        'text/csv': { schema: CSV_FILE_SCHEMA },
+      },
+    },
+    ...reportErrors('the report by variant', { ids: true }),
   },
 } satisfies FastifySchema;
 
@@ -308,9 +384,10 @@ const getAccountingCategoriesSchema = {
   operationId: 'getAccountingCategories',
   summary: 'Get the accounting by category',
   description:
-    'The money of each category of a period: by default with its whole branch, so a parent has ' +
-    'the money of its children in it and the rows are not added up; `branch=false` counts the ' +
-    'own products of each category only. `categoryId` gives that one category. ' +
+    'The money of each category of a period, the sum of the variants of its products: by ' +
+    'default with its whole branch, so a parent has the money of its children in it and the rows ' +
+    'are not added up; `branch=false` counts the own products of each category only. ' +
+    '`categoryId` gives that one category. ' +
     MONEY_TEXT +
     'And what the batches have left now. Every category, with nothing in the period too, sorted ' +
     'by `sortBy` and `sortOrder`. ' +
@@ -330,7 +407,7 @@ const getAccountingCategoriesSchema = {
         'text/csv': { schema: CSV_FILE_SCHEMA },
       },
     },
-    ...reportErrors('the report by category'),
+    ...reportErrors('the report by category', { cursor: false }),
   },
 } satisfies FastifySchema;
 
@@ -344,9 +421,10 @@ const getAccountingTimelineSchema = {
     'period, up to 400 steps (REPORT_PERIOD_TOO_LONG, `details.maxSteps`). Without `from` the ' +
     'period is the step of `to` and the eleven before it. ' +
     MONEY_TEXT +
-    'Each step in the order of time, or by `sortBy`; the products of `productIds` or of a ' +
-    'category. The `delivery` of each step is of all orders, and none (null) with `productIds` ' +
-    'or `categoryId`; the csv has its columns empty then. `summary` of each step is its income, ' +
+    'Each step in the order of time, or by `sortBy`; the sum of the variants of `productIds` ' +
+    '(the products), of `variantIds` or of a category. The `delivery` of each step is of all ' +
+    'orders, and none (null) with `productIds`, `variantIds` or `categoryId`; the csv has its ' +
+    'columns empty then. `summary` of each step is its income, ' +
     'its expenses and its margins, as in the report of the period. ' +
     CSV_TEXT +
     ' This operation is restricted to privileged users.',
@@ -364,23 +442,26 @@ const getAccountingTimelineSchema = {
         'text/csv': { schema: CSV_FILE_SCHEMA },
       },
     },
-    ...reportErrors('the report by time'),
+    ...reportErrors('the report by time', { cursor: false }),
     400: {
       description:
         'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
         '(INVALID_STATS_PERIOD), more than 400 steps (REPORT_PERIOD_TOO_LONG), ids that are ' +
-        'too many or too large (PRODUCT_IDS_INVALID).',
+        'too many or too large (PRODUCT_IDS_INVALID, VARIANT_IDS_INVALID).',
       $ref: 'errorResponseSchema#',
     },
   },
 } satisfies FastifySchema;
 
-const stockErrors = (what: string) => ({
+// period: the list is filtered by from and to; expiresBy: by the last good day of a batch
+const stockErrors = (what: string, filter: 'period' | 'expiresBy') => ({
   400: {
     description:
-      'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts or a ' +
-      'date of the year 0 (INVALID_STATS_PERIOD), a last day of the year 0 (EXPIRES_BY_INVALID), a ' +
-      'cursor of another order or past the ids (CURSOR_INVALID).',
+      'Invalid query: a wrong field (VALIDATION_ERROR), ' +
+      (filter === 'period'
+        ? 'a period that ends before it starts or a date of the year 0 (INVALID_STATS_PERIOD), '
+        : 'a last day of the year 0 (EXPIRES_BY_INVALID), ') +
+      'a cursor of another order or past the ids (CURSOR_INVALID).',
     $ref: 'errorResponseSchema#',
   },
   401: {
@@ -402,13 +483,15 @@ const getStockBatchesSchema = {
   operationId: 'getStockBatches',
   summary: 'List the batches of the stock',
   description:
-    'Each batch with what it came in with (`quantity`, `unitCost`), what is left of it ' +
+    'Each batch of a variant (`variant`, with its `product`) with what it came in with ' +
+    '(`quantity`, `unitCost`), what is left of it ' +
     '(`remaining`, `value` at its cost), the units of the paid orders (`sold`, a cancel puts ' +
     'them back) and the units written off; the delivery it came with (`deliveryId`, the ' +
     'supplier, the invoice, the note and the admin who took it in); `expired` when its last ' +
     'good day is behind the day of the shop (SHOP_TIME_ZONE): such units are not sold and wait ' +
-    'for a write-off. A page at a time, newest first unless sorted otherwise. This operation is ' +
-    'restricted to privileged users.',
+    'for a write-off. `productId` keeps the batches of all the variants of a product, ' +
+    '`variantId` those of one variant. A page at a time, newest first unless sorted ' +
+    'otherwise. This operation is restricted to privileged users.',
 
   querystring: {
     $ref: 'adminStockBatchesQuerySchema#',
@@ -417,7 +500,7 @@ const getStockBatchesSchema = {
 
   response: {
     200: { description: 'A page of batches.', $ref: 'adminStockBatchesResponseSchema#' },
-    ...stockErrors('the batches'),
+    ...stockErrors('the batches', 'expiresBy'),
   },
 } satisfies FastifySchema;
 
@@ -426,12 +509,14 @@ const getStockMovementsSchema = {
   operationId: 'getStockMovements',
   summary: 'List the steps of the stock',
   description:
-    'Every step of the stock of a product in one list: a delivery and a write-off (a line ' +
-    'for each product, with the admin), a sale (the units a paid order took, at the payment) ' +
+    'Every step of the stock of a variant (`variant`, with its `product`) in one list: a ' +
+    'delivery and a write-off (a line for each variant, with the admin), a sale (the units a ' +
+    'paid order took, at the payment) ' +
     'and a cancel (the same units back in the same batches, at the cancel of the paid order). ' +
     '`quantity` and `value` are the change: in above 0, out below; `batches` are the batches ' +
-    'in the order the units were taken. Newest first unless asked; a page at a time. This ' +
-    'operation is restricted to privileged users.',
+    'in the order the units were taken. `productId` keeps the steps of all the variants of a ' +
+    'product, `variantId` those of one variant. Newest first unless asked; a page at a time. ' +
+    'This operation is restricted to privileged users.',
 
   querystring: {
     $ref: 'adminStockMovementsQuerySchema#',
@@ -440,7 +525,7 @@ const getStockMovementsSchema = {
 
   response: {
     200: { description: 'A page of steps.', $ref: 'adminStockMovementsResponseSchema#' },
-    ...stockErrors('the journal of the stock'),
+    ...stockErrors('the journal of the stock', 'period'),
   },
 } satisfies FastifySchema;
 
@@ -536,16 +621,45 @@ const getPriceLogSchema = {
   operationId: 'getAdminPriceLog',
   summary: 'Get the log of prices',
   description:
-    'Every change of the price of every product: the old and the new price, how it was given ' +
-    '(`mode`, `value`), who did it and the `event` that made the line (a price of one product, ' +
-    'of many, of a selection, the start of a sale, its end). A line with `endsAt` starts a ' +
-    'sale. Filters: `productId`, `actorId`, `mode`. ' +
+    'Every change of the price of every variant, a line for each variant with its product: the ' +
+    'old and the new price, how it was given (`mode`, `value`), who did it and the `event` that ' +
+    'made the line (a price of one variant, of many, of a selection, the start of a sale, its ' +
+    'end). A line with `endsAt` starts a sale. Filters: `productId`, `variantId`, `actorId`, ' +
+    '`mode`. ' +
     JOURNAL_TEXT,
   querystring: {
     $ref: 'adminPriceLogQuerySchema#',
-    examples: [{ productId: 10, events: 'price.set,price.bulk', sortBy: 'newPrice' }],
+    examples: [{ variantId: 31, events: 'price.set,price.bulk', sortBy: 'newPrice' }],
   },
   response: journalResponse('the log of prices', 'adminPriceLogResponseSchema'),
+} satisfies FastifySchema;
+
+// Schema for the stock log
+const getStockLogSchema = {
+  operationId: 'getAdminStockLog',
+  summary: 'Get the stock log',
+  description:
+    'Every change of the quantity of a variant, a line for each variant for each change: how ' +
+    'many units came in (above 0) or went out (below 0), the stock after it (`stockAfter`), the ' +
+    '`event` that made it (`stock.delivery`, `stock.write_off`, `stock.sale` at the payment of an ' +
+    'order, `stock.cancel_return` for the units a cancelled paid order gave back), the operation ' +
+    'it belongs to (`deliveryId` of a delivery, `writeOffId` of a write-off, `orderId` of an ' +
+    'order: every operation that touched many variants carries one id in all its lines, the same ' +
+    'id its answer or the admin log line gives), who did it (none for the sale at a payment, which ' +
+    'the system makes), the address and the browser of the request, and what the change was made ' +
+    'of (`changes`: the batches with their costs, the reason, the supplier, the invoice, the ' +
+    'note). A reserve of units and its release do not change the stock and have no line. For a ' +
+    'variant whose stock only moved through the routes of the shop, the sum of its `quantityChange` ' +
+    'is its stock and the last `stockAfter` is its stock. Filters: `productId` (all its ' +
+    'variants), `variantId`, `deliveryId`, `writeOffId`, `orderId`. ' +
+    JOURNAL_TEXT,
+  querystring: {
+    $ref: 'adminStockLogQuerySchema#',
+    examples: [
+      { variantId: 31, events: 'stock.sale,stock.cancel_return', sortBy: 'quantityChange' },
+    ],
+  },
+  response: journalResponse('the stock log', 'adminStockLogResponseSchema'),
 } satisfies FastifySchema;
 
 // Schema for the log of logins
@@ -586,9 +700,9 @@ const getLogEventsSchema = {
   operationId: 'getAdminLogEvents',
   summary: 'Get the events of the journals',
   description:
-    'The events every journal writes (the admin log, the log of prices, of logins and of ' +
-    'consents): what the checkboxes of a page of a journal list. A line from before the events ' +
-    'has `legacy.unknown`.',
+    'The events every journal writes (the admin log, the log of prices, of logins, of consents ' +
+    'and the stock log): what the checkboxes of a page of a journal list. A line from before the ' +
+    'events has `legacy.unknown` (the stock log has none: it began with its events).',
   response: {
     200: {
       description: 'The events of each journal.',
@@ -620,8 +734,11 @@ const getAlertsSchema = {
     'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
     'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
     'written for some days (`shipped_without_cost`), products of the catalog with no free ' +
-    'units (`out_of_stock`) or with a few (`low_stock`), products that lack the weight or the ' +
-    'sizes (`products_without_shipping_data`), batches whose last good ' +
+    'units (`out_of_stock`) or with a few (`low_stock`), variants that lack the weight or the ' +
+    'sizes (`products_without_shipping_data`), variants that lack a characteristic their ' +
+    'category requires (`variants_missing_required`), products of the catalog a buyer sees none ' +
+    'of the variants of (`products_hidden_from_buyers`; a product removed on purpose is not ' +
+    'one), batches whose last good ' +
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
     'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
     'some last days (`refunded_payments`), a reservation worker that has not run for some ' +
@@ -870,11 +987,13 @@ const taggedAdminSchema = withOpenApiTag(
     getStatsSchema,
     getAccountingReportSchema,
     getAccountingProductsSchema,
+    getAccountingVariantsSchema,
     getAccountingCategoriesSchema,
     getAccountingTimelineSchema,
     getStockBatchesSchema,
     getStockMovementsSchema,
     getAuditLogSchema,
+    getStockLogSchema,
     getPriceLogSchema,
     getLoginLogSchema,
     getConsentLogSchema,

@@ -30,6 +30,9 @@ function connectChatWs(socket: WebSocket, req: FastifyRequest): void {
         socket,
         actorId,
         actorRole,
+        // the address of the handshake (the one the proxy names): the bot counts the turns of a
+        // customer who is no confirmed account by it
+        ip: req.ip || null,
     });
 
     // notify client about connection

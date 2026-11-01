@@ -1,4 +1,5 @@
 import { prisma } from '@db/client.js';
+import { visibleVariantWhere } from '@routes/api/products/services/helpers/variant.helper.js';
 import { categoryImageUrlsOf } from './helpers/categories.helper.js';
 import { InternalError } from '@utils/errors.js';
 
@@ -7,8 +8,9 @@ import type { CategoryId } from 'types/ids.js';
 
 // the whole tree of the categories for the menu of the catalog: each category with the ones right
 // below it, by name, and the products of the catalog of its whole branch, the ones the catalog
-// lists (with an image). Every role reads the categories and the products (db/03), so the tree is
-// the same for everyone
+// lists: the ones that are not deleted and have a variant a buyer sees (alive, with a picture).
+// Every role reads the categories, the products and the variants (db/03), so the tree is the same
+// for everyone
 export async function getCategoryTree(): Promise<CategoryTreeResponseDto> {
   try {
     const [categories, counts] = await prisma.$transaction([
@@ -18,7 +20,7 @@ export async function getCategoryTree(): Promise<CategoryTreeResponseDto> {
       }),
       prisma.product.groupBy({
         by: ['categoryId'],
-        where: { deletedAt: null, images: { some: { isPrimary: true } } },
+        where: { deletedAt: null, variants: { some: visibleVariantWhere } },
         _count: { _all: true },
       }),
     ]);

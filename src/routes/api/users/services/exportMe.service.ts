@@ -1,5 +1,7 @@
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { variantNamesOf } from '@db/variantNames.helper.js';
+import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { InternalError, isAppError, NotFoundError } from '@utils/errors.js';
 
 import type { Role } from 'types/user.js';
@@ -78,6 +80,7 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
             orderBy: { id: 'asc' },
             select: {
               productId: true,
+              variantId: true,
               quantity: true,
               unitPrice: true,
               totalPrice: true,
@@ -112,7 +115,12 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
       const favorites = await tx.favorite.findMany({
         where: { userId },
         orderBy: { id: 'asc' },
-        select: { productId: true, createdAt: true, product: { select: { name: true } } },
+        select: {
+          productId: true,
+          variantId: true,
+          createdAt: true,
+          product: { select: { name: true } },
+        },
       });
 
       const reviews = await tx.review.findMany({
@@ -175,6 +183,14 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
         },
       });
 
+      // the names the variants have now: a cart and the favorites show them
+      const liveNames = await variantNamesOf(tx, [
+        ...orders
+          .filter((order) => order.status === 'pending' || order.status === 'unconfirmed')
+          .flatMap((order) => order.items.map((item) => item.variantId)),
+        ...favorites.map((favorite) => favorite.variantId),
+      ]);
+
       return {
         exportedAt: new Date(),
         profile,
@@ -182,17 +198,22 @@ export async function exportMe({ userId, role }: ExportMeDto): Promise<ExportMeR
           ...order,
           total: total.toString(),
           delivery: delivery && { ...delivery, price: delivery.price.toString() },
+          // a position is a variant of a product: both ids, the name of the variant and the prices
+          // the confirmation kept (the name and the price of now for a cart)
           items: items.map(({ product, productName, unitPrice, totalPrice, ...item }) => ({
             ...item,
-            // the name the item was confirmed with, the one of now for a cart
-            name: (order.status !== 'pending' && order.status !== 'unconfirmed' && productName) || product.name,
+            name:
+              order.status === 'pending' || order.status === 'unconfirmed'
+                ? (liveNames.get(item.variantId)?.name ?? product.name)
+                : itemNameOf({ productName, variantId: item.variantId, product }),
             unitPrice: unitPrice.toString(),
             totalPrice: totalPrice.toString(),
           })),
         })),
+        // a favorite is a variant of a product: both ids and the name of the variant
         favorites: favorites.map(({ product, ...favorite }) => ({
           ...favorite,
-          name: product.name,
+          name: liveNames.get(favorite.variantId)?.name ?? product.name,
         })),
         reviews,
         reviewVotes,

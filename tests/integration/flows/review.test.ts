@@ -75,7 +75,7 @@ describe('a review from the delivery to its removal', () => {
 
     // the product counts both, the most helpful comes first
     const card = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
-    expect(card.json()).toMatchObject({ reviewsCount: 2, avgRating: 3.5 });
+    expect(card.json().product).toMatchObject({ reviewsCount: 2, avgRating: 3.5 });
     const helpful = await app.inject({
       method: 'GET',
       url: `/api/products/${product.id}/reviews?sort=helpful`,
@@ -104,7 +104,7 @@ describe('a review from the delivery to its removal', () => {
     });
     expect(removed.statusCode).toBe(200);
     const after = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
-    expect(after.json()).toMatchObject({ reviewsCount: 1, avgRating: 5 });
+    expect(after.json().product).toMatchObject({ reviewsCount: 1, avgRating: 5 });
     const lines = await asAdmin((tx) =>
       tx.adminAuditLog.findMany({
         where: { action: 'REVIEW_DELETE', entityId: doubtId },

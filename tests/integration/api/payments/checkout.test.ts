@@ -11,11 +11,13 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   type TestProduct,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
-import { loseReservation, orderRowOf, placeOrder } from '../../../helpers/orders.js';
+import { loseReservation, orderRowOf, placeOrder, placeOrderOf } from '../../../helpers/orders.js';
+import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 import {
   CHECKOUT_URL,
   checkout,
@@ -261,9 +263,51 @@ describe('POST /api/payments/checkout/sessions', () => {
       expect(res.statusCode).toBe(409);
       expect(res.json()).toMatchObject({
         errorCode: 'ORDER_ITEMS_UNAVAILABLE',
-        details: { items: [expect.objectContaining({ productId: product.id, reason: 'deleted' })] },
+        details: {
+          items: [expect.objectContaining({ variantId: product.variantId, reason: 'deleted' })],
+        },
       });
       expect((await redisStateOf(orderId)).pageLink).toBeNull();
+    });
+
+    // a variant taken out of sale after the confirmation: the page of the order names it and
+    // only it, the sibling the order holds is no matter; the order keeps its reservation
+    it('answers ORDER_ITEMS_UNAVAILABLE naming a variant taken out of sale and not its sibling', async () => {
+      const buyer = await newUser();
+      const product = await newProduct();
+      const sibling = await createVariant(product.id, { price: 12, stock: 5 });
+      const orderId = await placeOrderOf(
+        app,
+        csrf,
+        buyer,
+        [{ item: product }, { item: { variantId: sibling.id }, quantity: 2 }],
+        'waiting',
+      );
+      await markVariantDeleted(product.variantId);
+
+      const res = await checkout(app, csrf, buyer, orderId);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        errorCode: 'ORDER_ITEMS_UNAVAILABLE',
+        details: {
+          items: [{ variantId: product.variantId, reason: 'deleted', available: 0, requested: 1 }],
+        },
+      });
+      expect(res.json().details.items).toHaveLength(1);
+      expect(await orderStateOf(orderId)).toMatchObject({ status: 'waiting', confirmed: true });
+      expect((await redisStateOf(orderId)).pageLink).toBeNull();
+    });
+
+    // the reservation is the order's own: a variant that only lost its pictures can still be paid
+    // for, the order shows it as not for sale
+    it('opens the page of an order whose variant lost its pictures after the confirmation', async () => {
+      const { user, product, orderId } = await waitingOrder();
+      await stripVariantImages(product.variantId);
+
+      const res = await checkout(app, csrf, user, orderId);
+
+      expect(res.statusCode).toBe(201);
     });
 
     it('names the item with its id and the units ordered', async () => {
@@ -274,7 +318,13 @@ describe('POST /api/payments/checkout/sessions', () => {
       const res = await checkout(app, csrf, user, orderId);
 
       expect(res.json().details.items).toEqual([
-        { itemId: item!.id, productId: product.id, reason: 'deleted', available: 0, requested: 2 },
+        {
+          itemId: item!.id,
+          variantId: product.variantId,
+          reason: 'deleted',
+          available: 0,
+          requested: 2,
+        },
       ]);
       // the order keeps waiting with its reservation, the buyer decides what to do
       expect(await orderStateOf(orderId)).toMatchObject({ status: 'waiting', confirmed: true });

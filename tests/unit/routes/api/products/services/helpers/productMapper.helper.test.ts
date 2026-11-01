@@ -2,50 +2,58 @@ import { Prisma } from '@prisma/client';
 import { describe, expect, it } from '@jest/globals';
 
 import {
-  mapProductRowToResponse,
+  mapGallery,
+  mapProductCard,
+  mapProductPart,
   productViewOf,
+  type ProductResponseRow,
 } from '@routes/api/products/services/helpers/productMapper.helper.js';
 
 const imageUrl = 'https://res.cloudinary.com/demo/image/upload/v1/products/1/0.jpg';
 
-const product = {
+const product: ProductResponseRow = {
   id: 1,
   name: 'Desk lamp',
-  description: 'Warm light' as string | null,
-  sku: 'DL-1' as string | null,
-  price: new Prisma.Decimal('25.50'),
-  salePrice: null as unknown,
-  saleEndsAt: null as Date | null,
-  salePriorPrice: null as unknown,
-  stock: 10,
-  reservedStock: 3,
-  expiredStock: 0,
+  description: 'Warm light',
   category: { id: 2, name: 'Lamps', slug: 'lamps' },
   views: 40,
   popularity: 7,
-  weightGrams: null as number | null,
-  lengthMm: null as number | null,
-  widthMm: null as number | null,
-  heightMm: null as number | null,
-  popularityOverride: null as number | null,
-  popularityOverrideUntil: null as Date | null,
-  avgRating: new Prisma.Decimal('4.25') as unknown,
+  popularityOverride: null,
+  popularityOverrideUntil: null,
+  avgRating: new Prisma.Decimal('4.25'),
   reviewsCount: 4,
-  deletedAt: null as Date | null,
+  manufacturerId: 7,
+  euResponsibleId: null,
+  warnings: null,
+  deletedAt: null,
   createdAt: new Date('2026-01-01T10:00:00.000Z'),
   updatedAt: new Date('2026-01-05T10:00:00.000Z'),
 };
 
-const map = (patch: Partial<typeof product> = {}, view: 'buyer' | 'admin' = 'buyer') =>
-  mapProductRowToResponse({
+// the parties of the directory a card gives: read apart by the ids of the row
+const manufacturer = {
+  id: 7,
+  name: 'Lampwerk',
+  address: 'Berlin',
+  email: 'a@b.de',
+  country: 'DE',
+};
+let euResponsible: typeof manufacturer | null = null;
+
+const documents = [
+  { id: 3, title: 'Manual', kind: 'instruction' as const, url: 'https://x/m.pdf' },
+];
+
+const map = (patch: Partial<ProductResponseRow> = {}, view: 'buyer' | 'admin' = 'buyer') =>
+  mapProductCard({
     product: { ...product, ...patch },
-    images: [{ url: imageUrl, position: 0 }],
     categoryPath: [{ id: 1 as never, name: 'Home', slug: 'home' }],
+    extras: { manufacturer, euResponsible, documents },
     view,
   });
 
-// the card of a product page: a buyer sees what helps to buy it, an admin sees the counters, the
-// whole stock and the override of the popularity on top
+// the product of a card: a buyer sees what helps to buy it, an admin sees the counters and the
+// override of the popularity on top. The price, the stock and the picture are the variant's
 describe('productViewOf', () => {
   it.each([
     ['GUEST', 'buyer'],
@@ -57,51 +65,42 @@ describe('productViewOf', () => {
   });
 });
 
-describe('mapProductRowToResponse', () => {
+describe('mapProductCard', () => {
   it('turns decimals into numbers and dates into iso strings', () => {
     expect(map()).toMatchObject({
       id: 1,
       name: 'Desk lamp',
       description: 'Warm light',
-      price: 25.5,
       avgRating: 4.25,
+      reviewsCount: 4,
       createdAt: '2026-01-01T10:00:00.000Z',
     });
   });
 
-  it('shows only the units that are not reserved by orders', () => {
-    expect(map().stock).toBe(7);
-  });
-
-  // the units of batches whose last good day is over are not sold
-  it('leaves the units that are over out of the free units, and shows them to an admin', () => {
-    expect(map({ expiredStock: 4 }).stock).toBe(3);
-    expect(map({ expiredStock: 4 }, 'admin')).toMatchObject({
-      stock: 3,
-      totalStock: 10,
-      reservedStock: 3,
-      expiredStock: 4,
-    });
-    expect(map({ expiredStock: 9 }).stock).toBe(0);
-    expect(map({ expiredStock: 4 })).not.toHaveProperty('expiredStock');
-  });
-
-  it('never shows a negative stock, even if reservations exceed it', () => {
-    expect(map({ stock: 2, reservedStock: 5 }).stock).toBe(0);
-  });
-
-  // what the product weighs and measures packed: the card of every role has it, null while unknown
-  it('shows the weight and the sizes on the card of a buyer and of an admin, null where unknown', () => {
-    const known = { weightGrams: 350, lengthMm: 200, widthMm: 100, heightMm: 50 };
-
+  // the variant carries these now
+  it('has no price, no stock, no sale, no weight and no pictures of its own', () => {
     for (const view of ['buyer', 'admin'] as const) {
-      expect(map(known, view)).toMatchObject(known);
-      expect(map({}, view)).toMatchObject({
-        weightGrams: null,
-        lengthMm: null,
-        widthMm: null,
-        heightMm: null,
-      });
+      const out = map({}, view);
+
+      for (const field of [
+        'price',
+        'sku',
+        'stock',
+        'totalStock',
+        'reservedStock',
+        'expiredStock',
+        'lastUnitCost',
+        'salePrice',
+        'saleEndsAt',
+        'salePriorPrice',
+        'weightGrams',
+        'lengthMm',
+        'widthMm',
+        'heightMm',
+        'images',
+      ]) {
+        expect(out).not.toHaveProperty(field);
+      }
     }
   });
 
@@ -116,12 +115,6 @@ describe('mapProductRowToResponse', () => {
     expect(map()).not.toHaveProperty('categoryId');
   });
 
-  it('gives each image its sized urls', () => {
-    const [image] = map().images;
-
-    expect(Object.keys(image!)).toEqual(['url200', 'url400', 'url800']);
-  });
-
   it('leaves out an empty description', () => {
     expect(map({ description: null })).not.toHaveProperty('description');
   });
@@ -130,64 +123,23 @@ describe('mapProductRowToResponse', () => {
     expect(map({ avgRating: null, reviewsCount: 0 }).avgRating).toBe(0);
   });
 
-  // the price stays the usual one, the sale goes next to it while it lasts
-  it('shows the sale next to the price while it lasts', () => {
-    const saleEndsAt = new Date(Date.now() + 60_000);
+  // the description is plain text; the manufacturer, the person in the EU, the warnings and the
+  // documents come apart from it
+  it('gives the text of the description, and the parties, the warnings and the documents apart', () => {
+    euResponsible = { ...manufacturer, id: 8, name: 'EU Rep', country: 'CZ' };
 
-    expect(map({ salePrice: new Prisma.Decimal('19.90'), saleEndsAt })).toMatchObject({
-      price: 25.5,
-      salePrice: 19.9,
-      saleEndsAt: saleEndsAt.toISOString(),
-    });
-  });
-
-  it('leaves out a sale past its end and a product without one', () => {
-    const over = map({
-      salePrice: new Prisma.Decimal('19.90'),
-      saleEndsAt: new Date(Date.now() - 1),
-      salePriorPrice: new Prisma.Decimal('25.50'),
-    });
-
-    for (const out of [over, map()]) {
-      expect(out).not.toHaveProperty('salePrice');
-      expect(out).not.toHaveProperty('saleEndsAt');
-      expect(out).not.toHaveProperty('salePriorPrice');
+    try {
+      expect(map({ warnings: 'Hot.', euResponsibleId: 8 })).toMatchObject({
+        description: 'Warm light',
+        manufacturer,
+        euResponsible,
+        warnings: 'Hot.',
+        documents,
+      });
+    } finally {
+      euResponsible = null;
     }
-  });
-
-  // the price a reduction is compared with; a sale from before it was written has none
-  it('shows the lowest price of the 30 days before a sale next to it', () => {
-    const saleEndsAt = new Date(Date.now() + 60_000);
-    const sale = { salePrice: new Prisma.Decimal('19.90'), saleEndsAt };
-
-    expect(map({ ...sale, salePriorPrice: new Prisma.Decimal('22.00') })).toMatchObject({
-      salePriorPrice: 22,
-    });
-    expect(map(sale)).not.toHaveProperty('salePriorPrice');
-    expect(map({ ...sale, salePriorPrice: new Prisma.Decimal('22.00') }, 'admin')).toMatchObject({
-      salePriorPrice: 22,
-    });
-    expect(map({}, 'admin')).toMatchObject({ salePriorPrice: null });
-  });
-
-  // the description keeps its text and the safety data; the card gives them apart
-  it('gives the text of the description and the safety data apart', () => {
-    const safety = {
-      manufacturer: { name: 'Lampwerk', address: 'Berlin', email: 'a@b.de', country: 'DE' },
-      responsiblePerson: null,
-      warnings: 'Hot.',
-    };
-
-    expect(
-      map({ description: JSON.stringify({ v: 1, text: 'Warm light', safety }) }),
-    ).toMatchObject({ description: 'Warm light', safety });
-    expect(map({ description: 'Plain text' })).toMatchObject({
-      description: 'Plain text',
-      safety: null,
-    });
-    expect(map({ description: JSON.stringify({ v: 1, text: null, safety }) })).not.toHaveProperty(
-      'description',
-    );
+    expect(map({})).toMatchObject({ manufacturer, euResponsible: null, warnings: null });
   });
 
   // the list shows a buyer the popularity it sorts by, the card does not
@@ -198,30 +150,38 @@ describe('mapProductRowToResponse', () => {
       'popularity',
       'views',
       'updatedAt',
-      'totalStock',
-      'reservedStock',
       'popularityOverride',
       'popularityOverrideUntil',
       'deletedAt',
+      'gallery',
     ]) {
       expect(out).not.toHaveProperty(field);
     }
   });
 
-  it('shows an admin the counters, the whole stock, the override and the delete date', () => {
-    const out = map(
-      {
+  it('shows an admin the counters, the override, the delete date and the gallery', () => {
+    const gallery = mapGallery(
+      [
+        { id: 5, url: imageUrl, position: 0 },
+        { id: 6, url: imageUrl, position: 1 },
+      ],
+      new Map([[5, [31, 32]]]),
+    );
+
+    const out = mapProductCard({
+      product: {
+        ...product,
         popularityOverride: 500,
         popularityOverrideUntil: new Date('2026-03-01T00:00:00.000Z'),
         deletedAt: new Date('2026-02-01T00:00:00.000Z'),
       },
-      'admin',
-    );
+      categoryPath: [],
+      extras: { manufacturer, euResponsible: null, documents: [] },
+      gallery,
+      view: 'admin',
+    });
 
     expect(out).toMatchObject({
-      stock: 7,
-      totalStock: 10,
-      reservedStock: 3,
       popularity: 7,
       views: 40,
       updatedAt: '2026-01-05T10:00:00.000Z',
@@ -229,25 +189,26 @@ describe('mapProductRowToResponse', () => {
       popularityOverrideUntil: '2026-03-01T00:00:00.000Z',
       deletedAt: '2026-02-01T00:00:00.000Z',
     });
+    expect(out.gallery).toEqual([
+      expect.objectContaining({ id: 5, position: 0, variantIds: [31, 32] }),
+      expect.objectContaining({ id: 6, position: 1, variantIds: [] }),
+    ]);
   });
 
   // an empty field of an admin is null, so every field is there
-  it('shows an admin an empty override, sale and delete date as null', () => {
+  it('shows an admin an empty override and delete date as null, and an empty gallery as a list', () => {
     expect(map({}, 'admin')).toMatchObject({
       popularityOverride: null,
       popularityOverrideUntil: null,
-      salePrice: null,
-      saleEndsAt: null,
       deletedAt: null,
+      gallery: [],
     });
   });
 
-  // an admin sees the row as it is: a sale and an override past their end too
-  it('shows an admin a sale and an override past their end', () => {
+  // an admin sees the row as it is: an override past its end too
+  it('shows an admin an override past its end', () => {
     const out = map(
       {
-        salePrice: new Prisma.Decimal('19.90'),
-        saleEndsAt: new Date('2026-01-10T00:00:00.000Z'),
         popularityOverride: 70,
         popularityOverrideUntil: new Date('2026-01-10T00:00:00.000Z'),
       },
@@ -255,10 +216,45 @@ describe('mapProductRowToResponse', () => {
     );
 
     expect(out).toMatchObject({
-      salePrice: 19.9,
-      saleEndsAt: '2026-01-10T00:00:00.000Z',
       popularityOverride: 70,
       popularityOverrideUntil: '2026-01-10T00:00:00.000Z',
     });
+  });
+});
+
+// the product of a row of an answer that names a variant: the card adds its own fields to this
+describe('mapProductPart', () => {
+  it('gives a buyer the fields that help to buy, and an admin the counters on top', () => {
+    const buyer = mapProductPart(product, 'buyer');
+
+    expect(buyer).toEqual({
+      id: 1,
+      name: 'Desk lamp',
+      description: 'Warm light',
+      category: { id: 2, name: 'Lamps', slug: 'lamps' },
+      avgRating: 4.25,
+      reviewsCount: 4,
+      createdAt: '2026-01-01T10:00:00.000Z',
+    });
+    expect(mapProductPart(product, 'admin')).toEqual({
+      ...buyer,
+      popularity: 7,
+      views: 40,
+      updatedAt: '2026-01-05T10:00:00.000Z',
+      popularityOverride: null,
+      popularityOverrideUntil: null,
+      deletedAt: null,
+    });
+  });
+});
+
+describe('mapGallery', () => {
+  it('gives each picture its sized urls, its place and the variants that show it', () => {
+    const [first] = mapGallery([{ id: 5, url: imageUrl, position: 2 }], new Map());
+
+    expect(Object.keys(first!).sort()).toEqual(
+      ['id', 'position', 'url200', 'url400', 'url800', 'variantIds'].sort(),
+    );
+    expect(first).toMatchObject({ id: 5, position: 2, variantIds: [] });
   });
 });

@@ -141,7 +141,7 @@ describe('GET /api/auth/verify', () => {
     const product = await createProduct();
     const added = await app.inject({
       method: 'POST',
-      url: `/api/favorites/${product.id}`,
+      url: `/api/favorites/${product.variantId}`,
       headers: withCsrf(csrf),
     });
     const guestId = cookieJar(added).guestId!;
@@ -176,7 +176,7 @@ describe('GET /api/auth/verify', () => {
     const product = await createProduct();
     const added = await app.inject({
       method: 'POST',
-      url: `/api/favorites/${product.id}`,
+      url: `/api/favorites/${product.variantId}`,
       headers: withCsrf(csrf),
     });
     const guestId = cookieJar(added).guestId!;

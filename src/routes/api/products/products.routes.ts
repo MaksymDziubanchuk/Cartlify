@@ -5,6 +5,8 @@ import validateId from '@middlewares/validateId.js';
 import { requestLimits } from '../../../plugins/requestLimits.js';
 import { productController } from './product.controllers.js';
 import { productSchemas } from './product.schemas.js';
+import { variantController } from './variant.controllers.js';
+import { variantSchemas } from './variant.schemas.js';
 
 export default async function productsRouter(app: FastifyInstance) {
   app.get(
@@ -23,6 +25,16 @@ export default async function productsRouter(app: FastifyInstance) {
       schema: productSchemas.getProductSuggestionsRouterSchema,
     },
     productController.getProductSuggestions,
+  );
+
+  // the filter of a category; a path of its own wins over :productId
+  app.get(
+    '/filters',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER'])],
+      schema: productSchemas.getCatalogFiltersRouterSchema,
+    },
+    productController.getCatalogFilters,
   );
 
   app.get(
@@ -94,7 +106,7 @@ export default async function productsRouter(app: FastifyInstance) {
         if (req.isMultipart()) (req as any).body = {};
       },
       schema: productSchemas.updateProductByIdRouterSchema,
-      // the swagger lists the form with the images next to the json body
+      // the swagger lists the form with the text fields next to the json body
       config: { formBodySchema: 'productUpdateFormSchema' },
     },
     productController.updateProductById,
@@ -194,5 +206,117 @@ export default async function productsRouter(app: FastifyInstance) {
       schema: productSchemas.deleteProductReviewRouterSchema,
     },
     productController.deleteProductReview,
+  );
+
+  // the variants of a product: one variant on its own (every role), the writes (admin and root)
+  app.get(
+    '/:productId/variants/:variantId',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'GUEST', 'ROOT', 'USER']),
+        validateId('productId'),
+        validateId('variantId'),
+      ],
+      schema: variantSchemas.getVariantRouterSchema,
+    },
+    variantController.getVariant,
+  );
+
+  app.post(
+    '/:productId/variants',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: variantSchemas.postVariantsRouterSchema,
+    },
+    variantController.postVariants,
+  );
+
+  app.patch(
+    '/:productId/variants/:variantId',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('productId'),
+        validateId('variantId'),
+      ],
+      schema: variantSchemas.patchVariantRouterSchema,
+    },
+    variantController.patchVariant,
+  );
+
+  // the same change for several variants of a product
+  app.patch(
+    '/:productId/variants',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: variantSchemas.patchVariantsRouterSchema,
+    },
+    variantController.patchVariants,
+  );
+
+  // many variants of any products, each with the fields of its own; a path of its own wins over
+  // :productId
+  app.patch(
+    '/variants/batch',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: variantSchemas.patchVariantsBatchRouterSchema,
+    },
+    variantController.patchVariantsBatch,
+  );
+
+  app.delete(
+    '/:productId/variants/:variantId',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('productId'),
+        validateId('variantId'),
+      ],
+      schema: variantSchemas.deleteVariantRouterSchema,
+    },
+    variantController.deleteVariant,
+  );
+
+  app.post(
+    '/:productId/variants/:variantId/restore',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('productId'),
+        validateId('variantId'),
+      ],
+      schema: variantSchemas.restoreVariantRouterSchema,
+    },
+    variantController.restoreVariant,
+  );
+
+  // the gallery of a product: more pictures (a form of files), a picture out
+  app.post(
+    '/:productId/images',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('productId')],
+      schema: variantSchemas.postGalleryImagesRouterSchema,
+      config: { formBodySchema: 'galleryUploadFormSchema' },
+    },
+    variantController.postGalleryImages,
+  );
+
+  app.delete(
+    '/:productId/images/:imageId',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        validateId('productId'),
+        validateId('imageId'),
+      ],
+      schema: variantSchemas.deleteGalleryImageRouterSchema,
+    },
+    variantController.deleteGalleryImage,
   );
 }

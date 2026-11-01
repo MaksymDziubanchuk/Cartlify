@@ -33,11 +33,11 @@ const newProduct = async () => {
   return product;
 };
 
-// a guest adding a product to its favorites; returns the guest cookie
-async function guestWithFavorite(productId: number, cookie = '') {
+// a guest adding a variant to its favorites; returns the guest cookie
+async function guestWithFavorite(variantId: number, cookie = '') {
   const res = await app.inject({
     method: 'POST',
-    url: `/api/favorites/${productId}`,
+    url: `/api/favorites/${variantId}`,
     headers: withCsrf(csrf, cookie),
   });
   expect(res.statusCode).toBe(200);
@@ -230,7 +230,7 @@ describe('POST /api/auth/login', () => {
   it('moves the favorites of the guest to the account and ends the guest cookie', async () => {
     const user = await newUser();
     const product = await newProduct();
-    const guest = await guestWithFavorite(product.id);
+    const guest = await guestWithFavorite(product.variantId);
 
     const res = await logIn(
       app,
@@ -255,8 +255,8 @@ describe('POST /api/auth/login', () => {
     const user = await newUser();
     const product = await newProduct();
     const session = await signIn(app, csrf, user);
-    await guestWithFavorite(product.id, sessionCookie(session));
-    const guest = await guestWithFavorite(product.id);
+    await guestWithFavorite(product.variantId, sessionCookie(session));
+    const guest = await guestWithFavorite(product.variantId);
 
     await logIn(app, csrf, { email: user.email, password: user.password }, { cookie: guest });
 

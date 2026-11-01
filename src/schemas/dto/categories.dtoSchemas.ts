@@ -13,10 +13,23 @@ export const categoriesGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most rows a page holds, from 1 to 100.',
+    },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description: 'The nextCursor of the previous page, with the same filters and sort.',
+    },
 
-    search: { type: 'string' },
+    search: {
+      type: 'string',
+      description: 'A part of the name or the slug of the category, letter case ignored.',
+    },
     parentId: { ...parentIdField, description: 'Only the direct children of this category.' },
   },
 } as const;
@@ -97,7 +110,8 @@ const categoryTreeNodeSchema = {
       minimum: 0,
       description:
         'The products the catalog lists in the category and in every category below it: the ones ' +
-        'taken out of the catalog and the ones without an image are not counted.',
+        'taken out of the catalog and the ones none of whose variants a buyer sees (a variant ' +
+        'is seen when it is for sale and shows a picture) are not counted.',
     },
     children: {
       type: 'array',

@@ -1,15 +1,20 @@
 import type { Prisma } from '@prisma/client';
 
 import env from '@config/env.js';
-import { expiredUnitsOf, freeUnits } from '@db/expiredStock.helper.js';
+import { expiredUnitsOf } from '@db/expiredStock.helper.js';
+import { variantNamesOf, type VariantNameInfo } from '@db/variantNames.helper.js';
 
 import { deliveryPriceOf, deliveryQuotesOf } from '@helpers/deliveryPrice.js';
-import { saleFieldsOf } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import {
+  isVariantVisible,
+  variantRowSelect,
+  variantShortOf,
+} from '@routes/api/products/services/helpers/variant.helper.js';
 
 import type {
   OrderDeliveryDto,
+  OrderItemDto,
   OrderResponseDto,
   OrderShipmentAdminDto,
 } from 'types/dto/orders.dto.js';
@@ -31,32 +36,17 @@ export const orderResponseSelect = {
     select: {
       id: true,
       productId: true,
+      variantId: true,
       quantity: true,
       unitPrice: true,
       totalPrice: true,
       productName: true,
 
-      // include minimal product snapshot for order ui
-      product: {
-        select: {
-          id: true,
-          name: true,
-          price: true,
-          salePrice: true,
-          saleEndsAt: true,
-          salePriorPrice: true,
-          categoryId: true,
-          weightGrams: true,
-          stock: true,
-          reservedStock: true,
-          deletedAt: true,
-          images: {
-            select: { url: true, position: true, isPrimary: true },
-            orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
-            take: 1,
-          },
-        },
-      },
+      // the product of the position, and its variant as the catalog reads it (the price, the sale,
+      // the stock, the weight and the pictures of THIS variant); a query reads at most two
+      // relations side by side
+      product: { select: { id: true, name: true, categoryId: true, deletedAt: true } },
+      variant: { select: variantRowSelect },
     },
     orderBy: { id: 'asc' },
   },
@@ -156,18 +146,37 @@ export async function readOrderResponse(
   return full;
 }
 
-// the units of batches that are over of the products of the orders, by the day of the shop the
-// transaction carries: the free units of an item leave them out
-export const expiredOfOrders = (
+// what the items of orders need besides their rows: the units of batches that are over of their
+// variants, by the day of the shop the transaction carries (the free units of an item leave them
+// out), and the names the variants have now, for the items that do not carry a name of the
+// confirmation
+export type OrderContext = {
+  expired: Map<number, number>;
+  names: Map<number, VariantNameInfo>;
+};
+
+export async function orderContextOf(
   db: Prisma.TransactionClient,
-  rows: { items: { productId: number }[] }[],
-) =>
-  expiredUnitsOf(
+  rows: { confirmed: boolean; items: { variantId: number; productName: string | null }[] }[],
+): Promise<OrderContext> {
+  const expired = await expiredUnitsOf(
     db,
-    rows.flatMap((row) => row.items.map((item) => item.productId)),
+    rows.flatMap((row) => row.items.map((item) => item.variantId)),
+  );
+  // the name of a confirmed item is its copy; every other item shows the name of now
+  const names = await variantNamesOf(
+    db,
+    rows.flatMap((row) =>
+      row.items
+        .filter((item) => !(row.confirmed && item.productName))
+        .map((item) => item.variantId),
+    ),
   );
 
-// the orders the buyer has not paid yet: the price of their products is still the one of now
+  return { expired, names };
+}
+
+// the orders the buyer has not paid yet: the price of their variants is still the one of now
 const UNPAID_STATUSES = new Set(['pending', 'unconfirmed', 'waiting']);
 
 // what the items of the row cost, to the cent
@@ -229,12 +238,82 @@ const mapShipments = (row: OrderResponseRow): OrderShipmentAdminDto[] =>
     rolledBackAt: s.rolledBackAt,
   }));
 
-// what the order weighs: the items that have a weight add up to it, and it is whole only when every
-// item has one
+// what the order weighs: the variants that have a weight add up to it (the weight of one times the
+// units ordered), and it is whole only when every variant has one
 const weightOf = (row: OrderResponseRow) => ({
-  grams: row.items.reduce((sum, item) => sum + (item.product.weightGrams ?? 0) * item.quantity, 0),
-  complete: row.items.every((item) => item.product.weightGrams !== null),
+  grams: row.items.reduce((sum, item) => sum + (item.variant.weightGrams ?? 0) * item.quantity, 0),
+  complete: row.items.every((item) => item.variant.weightGrams !== null),
 });
+
+// a position of the order as the answers show it: the product, and the variant that was bought.
+// While the buyer has not paid, the variant shows what it sells at now (the price, the sale while
+// it lasts, the name of now until the confirmation fixes it); a position of a paid order shows the
+// copies of the confirmation, the name and the price it was bought at, and no sale. A variant a
+// buyer does not see any more (taken out of sale, its product removed, its pictures taken away)
+// stays in an order that is confirmed and says so with forSale: false
+function mapItem(
+  row: OrderResponseRow,
+  it: OrderResponseRow['items'][number],
+  context: OrderContext,
+  unpaid: boolean,
+): OrderItemDto {
+  // an item that keeps its name needs none of now
+  const named = context.names.get(it.variantId) ?? {
+    name: it.productName ?? it.product.name,
+    values: [],
+  };
+  const live = variantShortOf(
+    it.variant,
+    {
+      expired: context.expired,
+      names: new Map([[it.variantId, named]]),
+      costs: new Map(),
+      attributes: new Map(),
+    },
+    'buyer',
+  );
+  const forSale = isVariantVisible(it.variant) && it.product.deletedAt === null;
+
+  // the name kept at the confirmation; a cart and an unconfirmed order follow the variant, an item
+  // from before the name was kept shows the name of now
+  const name = (row.confirmed && it.productName) || live.name;
+  const unitPrice = decimalToNumber(it.unitPrice);
+
+  return {
+    // order item id, cart item routes take it as itemId
+    id: it.id,
+    product: {
+      id: it.product.id as any,
+      name: it.product.name,
+      categoryId: it.product.categoryId as any,
+    },
+    variant: unpaid
+      ? {
+          id: live.id,
+          position: live.position,
+          name,
+          price: live.price,
+          ...(live.salePrice !== undefined ? { salePrice: live.salePrice } : {}),
+          ...(live.saleEndsAt !== undefined ? { saleEndsAt: live.saleEndsAt } : {}),
+          ...(live.salePriorPrice !== undefined ? { salePriorPrice: live.salePriorPrice } : {}),
+          stock: live.stock,
+          image: live.image,
+          forSale,
+        }
+      : {
+          id: live.id,
+          position: live.position,
+          name,
+          price: unitPrice,
+          stock: live.stock,
+          image: live.image,
+          forSale,
+        },
+    quantity: it.quantity,
+    unitPrice,
+    totalPrice: decimalToNumber(it.totalPrice),
+  };
+}
 
 // the admin and the root see the sends of an order with what the shop pays for them and what it
 // weighs; the buyer does not
@@ -242,7 +321,7 @@ export type OrderView = 'buyer' | 'admin';
 
 export function mapOrderRowToResponse(
   row: OrderResponseRow,
-  expired: Map<number, number>,
+  context: OrderContext,
   view: OrderView = 'buyer',
 ): OrderResponseDto {
   const unpaid = UNPAID_STATUSES.has(row.status);
@@ -261,41 +340,7 @@ export function mapOrderRowToResponse(
       ? decimalToNumber(row.total)
       : Math.round((itemsTotal + (delivery?.price ?? 0)) * 100) / 100,
     delivery,
-    items: row.items.map((it) => {
-      // a product without an image opens by its id and goes into a cart: no images then
-      const primaryUrl = it.product.images?.[0]?.url;
-
-      // the free units: the stock less what the waiting orders hold and what is over
-      const availableStock = freeUnits(
-        it.product.stock,
-        it.product.reservedStock,
-        expired.get(it.productId) ?? 0,
-      );
-
-      return {
-        // order item id, cart item routes take it as itemId
-        id: it.id,
-        productId: it.productId as any,
-        // the name kept at the confirm; a cart and an unconfirmed order follow the product, an
-        // item from before the name was kept shows the name of now
-        name: (row.confirmed && it.productName) || it.product.name,
-        product: {
-          id: it.product.id as any,
-          name: it.product.name,
-          categoryId: it.product.categoryId as any,
-          images: primaryUrl ? buildImageUrls(primaryUrl, 'product') : null,
-          availableStock,
-          deletedAt: it.product.deletedAt,
-          // what the product sells at now, for an order still to pay: the sale while it lasts
-          ...(unpaid
-            ? { price: decimalToNumber(it.product.price), ...saleFieldsOf(it.product) }
-            : {}),
-        },
-        quantity: it.quantity,
-        unitPrice: decimalToNumber(it.unitPrice),
-        totalPrice: decimalToNumber(it.totalPrice),
-      };
-    }),
+    items: row.items.map((it) => mapItem(row, it, context, unpaid)),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     // a field the order does not have yet is left out

@@ -8,6 +8,7 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   setProductPrice,
   type TestProduct,
@@ -20,6 +21,7 @@ import {
   placeUnconfirmedOrder,
   shippingData,
 } from '../../../helpers/orders.js';
+import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/orders: the order history. The cart is not an order and is not listed; the newest come
 // first. A paid order shows what was paid, an unconfirmed one what confirming it again would cost
@@ -54,7 +56,11 @@ type ListedOrder = {
   status: string;
   total: number;
   paidAt?: string;
-  items: { productId: number; unitPrice: number }[];
+  items: {
+    product: { id: number };
+    variant: { id: number; forSale: boolean };
+    unitPrice: number;
+  }[];
 };
 
 const idsOf = (res: { json: () => { items: ListedOrder[] } }) =>
@@ -66,15 +72,15 @@ const listed = (res: { json: () => { items: ListedOrder[] } }, id: number) => {
   return order;
 };
 
-// an order of several products that lost its reservation
-async function unconfirmedOrderOf(user: TestUser, productIds: number[]): Promise<number> {
+// an order of several variants that lost its reservation
+async function unconfirmedOrderOf(user: TestUser, variantIds: number[]): Promise<number> {
   let orderId = 0;
-  for (const productId of productIds) {
+  for (const variantId of variantIds) {
     const added = await app.inject({
       method: 'POST',
       url: '/api/orders/current/items',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId, quantity: 1 },
+      payload: { variantId, quantity: 1 },
     });
     orderId = added.json().id;
   }
@@ -299,17 +305,41 @@ describe('GET /api/orders', () => {
     const gone = await newProduct({ price: 10 });
     const kept = await newProduct({ price: 4 });
     const paidId = await placeOrder(app, csrf, user, gone, 'paid');
-    const unconfirmedId = await unconfirmedOrderOf(user, [gone.id, kept.id]);
+    const unconfirmedId = await unconfirmedOrderOf(user, [gone.variantId, kept.variantId]);
     await deleteProductFromCatalog(gone.id);
 
     const res = await list(user);
 
     expect(listed(res, unconfirmedId)).toMatchObject({
       total: 4,
-      items: [{ productId: kept.id }],
+      items: [{ variant: { id: kept.variantId } }],
     });
     expect(listed(res, unconfirmedId).items).toHaveLength(1);
-    expect(listed(res, paidId)).toMatchObject({ total: 10, items: [{ productId: gone.id }] });
+    // the paid order keeps the position and says the variant is not for sale
+    expect(listed(res, paidId)).toMatchObject({
+      total: 10,
+      items: [{ variant: { id: gone.variantId, forSale: false } }],
+    });
+  });
+
+  it('drops the position of a variant taken out of sale from an unconfirmed order, a paid one keeps it', async () => {
+    const user = await newUser();
+    const product = await newProduct({ price: 10 });
+    const sibling = await createVariant(product.id, { price: 4, stock: 5 });
+    const paidId = await placeOrder(app, csrf, user, product, 'paid');
+    const unconfirmedId = await unconfirmedOrderOf(user, [product.variantId, sibling.id]);
+    await markVariantDeleted(product.variantId);
+
+    const res = await list(user);
+
+    expect(listed(res, unconfirmedId).items).toHaveLength(1);
+    expect(listed(res, unconfirmedId)).toMatchObject({
+      total: 4,
+      items: [{ variant: { id: sibling.id, forSale: true } }],
+    });
+    expect(listed(res, paidId)).toMatchObject({
+      items: [{ variant: { id: product.variantId, forSale: false } }],
+    });
   });
 
   it('never gives the payment id', async () => {

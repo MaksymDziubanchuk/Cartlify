@@ -10,12 +10,15 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
+  stockLogOf,
   stockOf,
   type TestProduct,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail } from '../../../helpers/mail.js';
-import { loseReservation, placeOrder } from '../../../helpers/orders.js';
+import { loseReservation, orderRowOf, placeOrder, placeOrderOf } from '../../../helpers/orders.js';
+import { auditLinesOf, markVariantDeleted } from '../../../helpers/variants.js';
 import {
   openPaymentPage,
   orderStateOf,
@@ -103,6 +106,89 @@ describe('POST /api/payments/stripe/webhook: checkout.session.completed', () => 
     // the time the payment is recorded; the clock of the database may run a little apart
     expect(state!.paidAt!.getTime()).toBeGreaterThan(delivered - 5_000);
     expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
+    // the sale has a line of the stock log with the order, and no actor: the webhook is the system
+    expect(await stockLogOf({ orderId })).toEqual([
+      {
+        actorId: null,
+        actorRole: null,
+        variantId: product.variantId,
+        event: 'stock.sale',
+        quantityChange: -2,
+        stockAfter: 3,
+        deliveryId: null,
+        writeOffId: null,
+        orderId,
+        meta: [
+          {
+            field: 'batches',
+            old: null,
+            new: [{ batchId: expect.any(Number), quantity: 2, unitCost: '1' }],
+          },
+        ],
+      },
+    ]);
+    // the sale is the system's: the admin log has no line of the stock for it
+    expect(await auditLinesOf('variant', product.variantId, ['stock.sale'])).toEqual([]);
+  });
+
+  // the reserved stock is the stock of each variant of the order: the sale takes the units of the
+  // variants bought and leaves the siblings of the product alone
+  it('sells the reserved units of each variant of the order and no other', async () => {
+    const user = await createUser();
+    userIds.push(user.id);
+    const black = await createProduct({ price: 10, stock: 5 });
+    products.push(black);
+    const white = await createVariant(black.id, { price: 12, stock: 4 });
+    const untouched = await createVariant(black.id, { price: 14, stock: 6 });
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      user,
+      [
+        { item: black, quantity: 2 },
+        { item: { variantId: white.id }, quantity: 3 },
+      ],
+      'waiting',
+    );
+    const { event } = await payPage(await openPaymentPage(app, csrf, user, orderId));
+
+    const res = await deliver(app, event);
+
+    expect(res.statusCode).toBe(200);
+    expect(await orderStateOf(orderId)).toMatchObject({ status: 'paid', total: expect.anything() });
+    expect(await stockOf({ variantId: black.variantId })).toEqual({ stock: 3, reservedStock: 0 });
+    expect(await stockOf({ variantId: white.id })).toEqual({ stock: 1, reservedStock: 0 });
+    expect(await stockOf({ variantId: untouched.id })).toEqual({ stock: 6, reservedStock: 0 });
+    // a line of the stock log for each variant of the order, all with its id; none for the sibling
+    expect(
+      (await stockLogOf({ orderId })).map((line) => [
+        line.variantId,
+        line.quantityChange,
+        line.stockAfter,
+      ]),
+    ).toEqual([
+      [black.variantId, -2, 3],
+      [white.id, -3, 1],
+    ]);
+    expect(await stockLogOf({ variantId: untouched.id })).toEqual([
+      expect.objectContaining({ event: 'stock.delivery', stockAfter: 6 }),
+    ]);
+  });
+
+  // the buyer holds the units of the order: a variant taken out of sale while the page was open
+  // does not take them away, the payment is recorded and the order keeps the position as history
+  it('records the payment of an order whose variant was taken out of sale after the page opened', async () => {
+    const { product, orderId, sessionId } = await orderWithPage();
+    await markVariantDeleted(product.variantId);
+    const { event } = await payPage(sessionId);
+
+    const res = await deliver(app, event);
+
+    expect(res.statusCode).toBe(200);
+    expect(await orderStateOf(orderId)).toMatchObject({ status: 'paid' });
+    expect(await stockOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
+    const { items } = await orderRowOf(orderId);
+    expect(items.map((item) => item.variantId)).toEqual([product.variantId]);
   });
 
   // nothing waits for a paid order: the reservation timers would only touch a paid order and the

@@ -41,12 +41,12 @@ afterAll(async () => {
   }
 });
 
-const addToCart = (user: TestUser, productId: number, quantity: number) =>
+const addToCart = (user: TestUser, variantId: number, quantity: number) =>
   app.inject({
     method: 'POST',
     url: '/api/orders/current/items',
     headers: withCsrf(csrf, accessCookie(user)),
-    payload: { productId, quantity },
+    payload: { variantId, quantity },
   });
 
 const cartOf = (user: TestUser) =>
@@ -60,7 +60,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
   it('has no delivery yet and quotes each method of the shop for the items in it', async () => {
     setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 30 });
     const buyer = await newUser();
-    await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).id, 2);
+    await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).variantId, 2);
 
     const res = await cartOf(buyer);
 
@@ -82,7 +82,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
     setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 30 });
     const buyer = await newUser();
     const product = await createProduct({ price: 10, stock: 10 });
-    const added = await addToCart(buyer, product.id, 3);
+    const added = await addToCart(buyer, product.variantId, 3);
 
     expect(added.json().deliveryQuotes[0]).toEqual({
       method: 'manual',
@@ -105,7 +105,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
   it('quotes only the methods the shop has enabled, and no price when the shop names none', async () => {
     setDelivery({ DELIVERY_METHODS: ['pickup'] });
     const buyer = await newUser();
-    await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).id, 1);
+    await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).variantId, 1);
 
     const res = await cartOf(buyer);
 
@@ -122,7 +122,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
       address: { ...deliveryBody.address, apartment: '12' },
       note: 'Leave near the door.',
     });
-    await addToCart(buyer, product.id, 1);
+    await addToCart(buyer, product.variantId, 1);
 
     const res = await cartOf(buyer);
 
@@ -140,7 +140,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
     await placeOrder(app, csrf, buyer, product, 'paid');
     const { address: _address, ...person } = deliveryBody;
     await placeOrder(app, csrf, buyer, product, 'paid', 1, { ...person, method: 'pickup' });
-    await addToCart(buyer, product.id, 1);
+    await addToCart(buyer, product.variantId, 1);
 
     const res = await cartOf(buyer);
 
@@ -155,7 +155,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
     const buyer = await newUser();
     const product = await createProduct({ price: 10, stock: 10 });
     await placeOrder(app, csrf, buyer, product, 'waiting');
-    await addToCart(buyer, product.id, 1);
+    await addToCart(buyer, product.variantId, 1);
 
     const res = await cartOf(buyer);
 
@@ -167,7 +167,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
     const product = await createProduct({ price: 10, stock: 10 });
     await placeOrder(app, csrf, buyer, product, 'paid');
     const other = await newUser();
-    await addToCart(other, product.id, 1);
+    await addToCart(other, product.variantId, 1);
 
     const res = await cartOf(other);
 

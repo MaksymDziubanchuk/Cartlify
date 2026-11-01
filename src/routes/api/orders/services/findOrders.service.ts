@@ -6,7 +6,7 @@ import { InternalError, isAppError } from '@utils/errors.js';
 import {
   freshenUnconfirmedOrders,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   orderResponseSelect,
   withDeliveryAndSends,
   normalizeFindOrdersInput,
@@ -16,6 +16,7 @@ import {
   makeNextOrdersCursor,
   makeMissingCostCursor,
   ordersByMissingCost,
+  itemNameOf,
 } from './helpers/index.js';
 
 import type { FindOrdersDto, GetOrdersResponseDto, OrderBuyerDto } from 'types/dto/orders.dto.js';
@@ -49,6 +50,7 @@ const whereOf = (q: ReturnType<typeof normalizeFindOrdersInput>) =>
     updatedTo: q.updatedTo,
     userId: q.userId,
     productId: q.productId,
+    variantId: q.variantId,
     q: q.q,
     deliveryMethod: q.deliveryMethod,
     country: q.country,
@@ -81,7 +83,7 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
       // set rls session context
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
-      // unconfirmed orders of the user show current prices and no deleted products, paid ones
+      // unconfirmed orders of the user show current prices and no hidden variants, paid ones
       // keep the prices they were paid with: a confirmed order never changes its items
       if (actorRole === 'USER') await freshenUnconfirmedOrders(tx, Number(actorId));
 
@@ -123,7 +125,7 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
           )
         : new Map<number, Parameters<typeof buyerOf>[0]>();
 
-      const expired = await expiredOfOrders(tx, pageRows);
+      const context = await orderContextOf(tx, pageRows);
 
       const last = pageRows[pageRows.length - 1];
       const nextCursor =
@@ -135,7 +137,7 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
 
       return {
         items: pageRows.map((row) => ({
-          ...mapOrderRowToResponse(row, expired, isAdmin ? 'admin' : 'buyer'),
+          ...mapOrderRowToResponse(row, context, isAdmin ? 'admin' : 'buyer'),
           ...(isAdmin ? { buyer: buyerOf(buyers.get(row.userId)!) } : {}),
         })),
         limit,
@@ -174,14 +176,17 @@ type CsvOrder = {
   items: {
     quantity: number;
     productName: string | null;
-    product: { name: string; weightGrams: number | null };
+    variantId: number;
+    product: { name: string };
+    variant: { weightGrams: number | null };
   }[];
 };
 
-// the weight of the order: what the items that have a weight add up to, and whether every item has one
+// the weight of the order: what the variants that have a weight add up to (the weight of one times
+// the units), and whether every variant has one
 const weightOf = (row: CsvOrder) => ({
-  grams: row.items.reduce((sum, item) => sum + (item.product.weightGrams ?? 0) * item.quantity, 0),
-  complete: row.items.every((item) => item.product.weightGrams !== null),
+  grams: row.items.reduce((sum, item) => sum + (item.variant.weightGrams ?? 0) * item.quantity, 0),
+  complete: row.items.every((item) => item.variant.weightGrams !== null),
 });
 
 // a line for each order to pack and hand to the courier: the buyer, the recipient, where to, how, what
@@ -218,11 +223,8 @@ const CSV_COLUMNS: CsvColumn<CsvOrder>[] = [
   {
     header: 'Items',
     kind: 'text',
-    // the name an item was confirmed with
-    value: (row) =>
-      row.items
-        .map((item) => `${item.productName ?? item.product.name} x ${item.quantity}`)
-        .join('; '),
+    // the name an item was confirmed with: the name of its variant
+    value: (row) => row.items.map((item) => `${itemNameOf(item)} x ${item.quantity}`).join('; '),
   },
   { header: 'Weight g', kind: 'number', value: (row) => weightOf(row).grams },
   {
@@ -291,7 +293,9 @@ export async function findOrdersCsv(
             select: {
               quantity: true,
               productName: true,
-              product: { select: { name: true, weightGrams: true } },
+              variantId: true,
+              product: { select: { name: true } },
+              variant: { select: { weightGrams: true } },
             },
           },
         },

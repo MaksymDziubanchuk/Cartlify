@@ -32,11 +32,12 @@ afterAll(async () => {
 });
 
 const favoritesOf = (where: { userId?: number; guestId?: string }) =>
-  asAdmin((tx) => tx.favorite.findMany({ where, select: { productId: true } }));
+  asAdmin((tx) => tx.favorite.findMany({ where, select: { productId: true, variantId: true } }));
 
 describe('an account from the first visit to the logout', () => {
   it('goes through registration, confirmation, login, renewal, theft and logout', async () => {
     const product = await createProduct();
+    const likedVariant = { productId: product.id, variantId: product.variantId };
     const email = uniqueEmail('flow-account');
     const password = 'flow-password-1';
     const mails = watchMail();
@@ -44,7 +45,7 @@ describe('an account from the first visit to the logout', () => {
     // a guest likes a product and opens a chat with the bot
     const liked = await app.inject({
       method: 'POST',
-      url: `/api/favorites/${product.id}`,
+      url: `/api/favorites/${product.variantId}`,
       headers: withCsrf(csrf),
     });
     expect(liked.statusCode).toBe(200);
@@ -67,7 +68,7 @@ describe('an account from the first visit to the logout', () => {
     });
     expect(registered.statusCode).toBe(201);
     userIds.push(registered.json().id);
-    expect(await favoritesOf({ guestId })).toEqual([{ productId: product.id }]);
+    expect(await favoritesOf({ guestId })).toEqual([likedVariant]);
 
     // a login waits for the confirmation of the email
     const early = await logIn(app, csrf, { email, password });
@@ -85,7 +86,7 @@ describe('an account from the first visit to the logout', () => {
     });
     expect(verified.statusCode).toBe(200);
     const userId = registered.json().id as number;
-    expect(await favoritesOf({ userId })).toEqual([{ productId: product.id }]);
+    expect(await favoritesOf({ userId })).toEqual([likedVariant]);
     expect(await favoritesOf({ guestId })).toEqual([]);
 
     // the login: the profile, the favorite and the chat of the account
@@ -104,9 +105,14 @@ describe('an account from the first visit to the logout', () => {
       url: '/api/favorites',
       headers: { cookie },
     });
-    expect(favorites.json().items.map((i: { product: { id: number } }) => i.product.id)).toEqual([
-      product.id,
-    ]);
+    expect(
+      favorites
+        .json()
+        .items.map((i: { product: { id: number }; variant: { id: number } }) => [
+          i.product.id,
+          i.variant.id,
+        ]),
+    ).toEqual([[product.id, product.variantId]]);
     const chat = await app.inject({
       method: 'GET',
       url: '/api/chat/thread/current',

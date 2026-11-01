@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals'
 import { rejectedBy } from '../../../../../../helpers/errors.js';
 import { jsonResponse, stubFetch, textResponse } from '../../../../../../helpers/fetchStub.js';
 import { importWithEnv } from '../../../../../../helpers/freshImport.js';
+import { shopLogoFile, shopLogoName, shopLogoType } from '../../../../../../helpers/shopLogo.js';
 
 // the verify and the reset mails differ only in the page the link opens and in the error
 // code, so both test files run these cases
@@ -36,7 +37,7 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-const logo = readFileSync(path.join(process.cwd(), 'src', 'static', 'images', 'logo3.png'));
+const logo = readFileSync(path.resolve(process.cwd(), shopLogoFile()));
 
 // the plain text part of the first mail sendgrid got
 const sentText = (body: string) => JSON.parse(body).content[0].value as string;
@@ -94,8 +95,8 @@ export function describeLinkEmail(name: string, c: LinkEmailCase): void {
       expect(payload.attachments).toEqual([
         {
           content: logo.toString('base64'),
-          type: 'image/png',
-          filename: 'logo3.png',
+          type: shopLogoType(),
+          filename: shopLogoName(),
           disposition: 'inline',
           content_id: 'cartlify-logo',
         },

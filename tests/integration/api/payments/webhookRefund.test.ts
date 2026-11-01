@@ -10,6 +10,7 @@ import {
   createProduct,
   createUser,
   receiveBatch,
+  stockLogOf,
   stockOf,
   writeOffStock,
   type TestProduct,
@@ -133,6 +134,9 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
       paymentId: null,
     });
     expect(await stockOf(product.id)).toEqual({ stock: 1, reservedStock: 0 });
+    // the payment was refused before it took a unit, and the refund gives none back: the order has
+    // no line in the stock log
+    expect(await stockLogOf({ orderId })).toEqual([]);
     expect(await refundAuditOf(orderId)).toEqual([
       refundRecord(user, {
         reason: 'OUT_OF_STOCK',
@@ -172,6 +176,10 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
       paymentProvider: 'stripe',
       paymentId: second.paymentId,
     });
+    // the second payment sold the units once; the refund of the first took none and gave none back
+    expect(
+      (await stockLogOf({ orderId })).map((line) => [line.event, line.quantityChange]),
+    ).toEqual([['stock.sale', -2]]);
     expect(await refundAuditOf(orderId)).toEqual([
       refundRecord(user, {
         reason,
@@ -189,7 +197,7 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
       method: 'POST',
       url: `/api/orders/${orderId}/items`,
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId: product.id, quantity: 1 },
+      payload: { variantId: product.variantId, quantity: 1 },
     });
     expect(added.statusCode).toBe(200);
     const { paymentId, event } = await payPage(sessionId);

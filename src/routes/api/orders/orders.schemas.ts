@@ -8,19 +8,27 @@ const orderProductExample = {
   id: 10,
   name: 'Wireless headphones',
   categoryId: 1,
-  images: {
-    url200: 'https://example.com/products/headphones-200.webp',
-    url400: 'https://example.com/products/headphones-400.webp',
-    url800: 'https://example.com/products/headphones-800.webp',
+};
+
+// the variant that is bought, with its own price, free units and main picture
+const orderVariantExample = {
+  id: 21,
+  position: 2,
+  name: 'Wireless headphones',
+  price: 49.99,
+  stock: 15,
+  image: {
+    url200: 'https://example.com/products/headphones-black-200.webp',
+    url400: 'https://example.com/products/headphones-black-400.webp',
+    url800: 'https://example.com/products/headphones-black-800.webp',
   },
-  availableStock: 15,
-  deletedAt: null,
+  forSale: true,
 };
 
 const orderItemExample = {
   id: 1,
-  productId: 10,
   product: orderProductExample,
+  variant: orderVariantExample,
   quantity: 2,
   unitPrice: 49.99,
   totalPrice: 99.98,
@@ -125,7 +133,7 @@ const ordersListResponseExample = {
 };
 
 const addCurrentOrderItemBodyExample = {
-  productId: 10,
+  variantId: 21,
   quantity: 2,
 };
 
@@ -170,7 +178,7 @@ const getCurrentOrderSchema = {
   operationId: 'getCurrentOrder',
   summary: 'Get current order',
   description:
-    'Returns the current authenticated user order or cart state. Item prices are brought to current product prices before the order is returned, and the items of products deleted from the catalog are removed from the cart for good: the page shows only what can be confirmed.',
+    'Returns the current authenticated user order or cart state. Item prices are brought to current variant prices before the order is returned, and the items of variants a buyer does not see (taken out of sale, their product removed, without a picture) are removed from the cart for good: the page shows only what can be confirmed.',
 
   response: {
     200: {
@@ -207,7 +215,7 @@ const postCurrentItemsSchema = {
   operationId: 'addCurrentOrderItem',
   summary: 'Add item to current order',
   description:
-    'Adds a product item to the current authenticated user order. The answer is the cart at current prices, without the items of products deleted from the catalog: they are removed from it for good.',
+    'Adds a variant to the current authenticated user order (the same variant again adds units to its position). The answer is the cart at current prices, without the items of variants a buyer does not see: they are removed from it for good.',
 
   body: {
     $ref: 'ordersCurrentAddItemBodySchema#',
@@ -235,12 +243,12 @@ const postCurrentItemsSchema = {
     },
     404: {
       description:
-        '`PRODUCT_NOT_FOUND`: the product does not exist or is removed from the catalog, `details.productId`.',
+        '`VARIANT_NOT_FOUND`: the variant does not exist or a buyer does not see it (taken out of sale, its product removed, no picture), `details.variantId`.',
       $ref: 'errorResponseSchema#',
     },
     409: {
       description:
-        '`OUT_OF_STOCK`: fewer free units than the cart would hold, `details: { productId, available, requested }`. ' +
+        '`OUT_OF_STOCK`: fewer free units than the cart would hold, `details: { variantId, available, requested }`. ' +
         '`ORDER_NOT_EDITABLE`: another request confirmed the cart meanwhile. ' +
         '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
@@ -257,7 +265,7 @@ const patchCurrentItemsSchema = {
   operationId: 'updateCurrentOrderItem',
   summary: 'Update current order item',
   description:
-    'Updates quantity for an item in the current authenticated user order. The answer is the cart at current prices, without the items of products deleted from the catalog: they are removed from it for good.',
+    'Updates quantity for an item in the current authenticated user order. The answer is the cart at current prices, without the items of variants a buyer does not see: they are removed from it for good.',
 
   params: {
     $ref: 'ordersCurrentItemIdParamsSchema#',
@@ -303,12 +311,12 @@ const patchCurrentItemsSchema = {
     404: {
       description:
         '`ORDER_ITEM_NOT_FOUND`: no such item in the cart, `details.itemId`. ' +
-        '`PRODUCT_NOT_FOUND`: the product of the item was removed from the catalog, remove the item.',
+        '`VARIANT_NOT_FOUND`: the variant of the item is not for sale any more, remove the item.',
       $ref: 'errorResponseSchema#',
     },
     409: {
       description:
-        '`OUT_OF_STOCK`: fewer free units than the new quantity, `details: { productId, available, requested }`. ' +
+        '`OUT_OF_STOCK`: fewer free units than the new quantity, `details: { variantId, available, requested }`. ' +
         '`ORDER_NOT_EDITABLE`: another request confirmed the cart meanwhile. ' +
         '`RESOURCE_BUSY`: the order is being changed by another request, try again.',
       $ref: 'errorResponseSchema#',
@@ -325,7 +333,7 @@ const deleteCurrentItemsSchema = {
   operationId: 'deleteCurrentOrderItem',
   summary: 'Delete current order item',
   description:
-    'Removes an item from the current authenticated user order. The answer is the cart at current prices, without the items of products deleted from the catalog: they are removed from it for good.',
+    'Removes an item from the current authenticated user order. The answer is the cart at current prices, without the items of variants a buyer does not see: they are removed from it for good.',
 
   params: {
     $ref: 'ordersCurrentItemIdParamsSchema#',
@@ -383,7 +391,7 @@ const postCurrentConfirmSchema = {
     'The `delivery` says where and to whom the order goes: the method the shop has enabled (`manual`: the shop sends it to an address; `pickup`: the buyer collects it at the shop, GET /api/delivery/methods lists them), the recipient and, for `manual`, the address (a country the shop delivers to, the postal code in the form of its country, the city, the street, the house, the apartment if there is one). A buyer is a person, not a company. It is whole when sent and replaces what the order has; an order that lost its reservation (`unconfirmed`) keeps it, so confirming it again needs only `orderId`. A confirmation that fails stores nothing. ' +
     'A page can take the first name and the phone from the profile, the last name is asked from the person, and the cart offers the delivery of the last order (`deliverySuggestion`) to start from. `note` is optional. After the confirmation the order keeps the delivery as it is. ' +
     'The confirmation fixes the price of the delivery by the rule of the shop (a flat price for `manual`, free from a sum of the items, nothing for `pickup`); `total` is the items and that price. `expectedDeliveryPrice` (required) is the price the page showed: another price now refuses the confirmation (`DELIVERY_PRICE_CHANGED`), the page shows the price now and the buyer confirms again. ' +
-    'When an item price differs from the current product price, the order is not confirmed and `ORDER_PRICES_CHANGED` is returned: reload the order to get fresh prices and confirm again.',
+    'When an item price differs from the current price of its variant, the order is not confirmed and `ORDER_PRICES_CHANGED` is returned: reload the order to get fresh prices and confirm again.',
 
   body: {
     $ref: 'ordersCurrentConfirmBodySchema#',
@@ -421,17 +429,16 @@ const postCurrentConfirmSchema = {
     },
     404: {
       description:
-        '`ORDER_NOT_FOUND`: there is no cart, or no own unconfirmed order with the `orderId` of the body. ' +
-        '`PRODUCT_NOT_FOUND`: a product of the order is gone from the catalog.',
+        '`ORDER_NOT_FOUND`: there is no cart, or no own unconfirmed order with the `orderId` of the body.',
       $ref: 'errorResponseSchema#',
     },
     409: {
       description:
-        'Order state, product stock or changed item prices do not allow confirmation. ' +
+        'Order state, variant stock or changed item prices do not allow confirmation. ' +
         '`ORDER_ITEMS_UNAVAILABLE`: some items cannot be confirmed, `details.items` names each: ' +
-        '`{ itemId, productId, reason: deleted | out_of_stock, available, requested }`; the owner removes or changes them and confirms again. ' +
+        '`{ itemId, variantId, reason: deleted | out_of_stock, available, requested }` (deleted: the variant is not for sale any more, taken out of sale, its product removed or without a picture); the owner removes or changes them and confirms again. ' +
         'The same code names the items when another buyer took the last free units at the same moment. ' +
-        '`ORDER_PRICES_CHANGED`: reload the order and confirm again. ' +
+        '`ORDER_PRICES_CHANGED`: the price of an item is not the price its variant sells at now, `details.items` names them `[{ itemId, variantId, unitPrice, price }]` (`price` is the one now); reload the order and confirm again. ' +
         '`DELIVERY_PRICE_CHANGED`: the price of the delivery the page showed (`expectedDeliveryPrice`) is not the price now, `details.price` is the price now; the page shows it and the buyer confirms again. `ORDER_ALREADY_CONFIRMED`: the order is confirmed already, it waits for its payment or is paid, shipped, delivered or cancelled. ' +
         '`ORDER_STATUS_NOT_ALLOWED`: the order is not a cart nor an unconfirmed order. ' +
         '`LEGAL_ACCEPTANCE_REQUIRED`: the customer did not accept a version in force of the terms ' +
@@ -459,9 +466,9 @@ const getOrdersSchema = {
   description:
     'Returns orders visible to the authenticated user, admin or root role, newest first by default (`sortBy=createdAt`). ' +
     'The cart (`pending`) is not an order and is not listed, GET /api/orders/current gives it. ' +
-    'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of products deleted from the catalog are removed from it. ' +
+    'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of variants a buyer does not see are removed from it. ' +
     '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment. ' +
-    '`statuses` takes a few statuses, `productId` the orders that hold a product. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages.',
+    '`statuses` takes a few statuses, `productId` the orders that hold a variant of a product, `variantId` the orders that hold the variant. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages.',
 
   querystring: {
     $ref: 'ordersGetQuerySchema#',
@@ -512,9 +519,9 @@ const getOrderByIdSchema = {
   operationId: 'getOrderById',
   summary: 'Get order by id',
   description:
-    'Returns one order by id if it is visible to the authenticated user. For the owner of an order that is not confirmed (the cart or an order that lost its reservation, `unconfirmed`), item prices are brought to current product prices before the order is returned, ' +
-    'and the order loses the items of products deleted from the catalog; an order waiting for its payment keeps them, its payment page names them. ' +
-    'Each item shows `product.availableStock`, so the page can mark the items there is not enough of before the order is confirmed again.',
+    'Returns one order by id if it is visible to the authenticated user. For the owner of an order that is not confirmed (the cart or an order that lost its reservation, `unconfirmed`), item prices are brought to current variant prices before the order is returned, ' +
+    'and the order loses the items of variants a buyer does not see; an order waiting for its payment keeps them (`variant.forSale: false`), its payment page names the ones taken out of sale. ' +
+    'Each item shows `variant.stock`, so the page can mark the items there is not enough of before the order is confirmed again.',
 
   params: {
     $ref: 'ordersGetByIdParamsSchema#',
@@ -684,7 +691,7 @@ const postOrdersStatusSchema = {
 // what the item routes of an unconfirmed order share
 const UNCONFIRMED_ITEMS =
   'Works on an own order that lost its reservation (`unconfirmed`), the same way the cart item routes work on the cart. ' +
-  'The answer is the order at current prices, without items of products deleted from the catalog; confirm it again with POST /api/orders/current/confirm and its `orderId`.';
+  'The answer is the order at current prices, without the items of variants a buyer does not see; confirm it again with POST /api/orders/current/confirm and its `orderId`.';
 
 const orderItemsErrorResponses = {
   401: {
@@ -697,7 +704,7 @@ const orderItemsErrorResponses = {
   },
   409: {
     description:
-      '`OUT_OF_STOCK` with `details { productId, available, requested }`: not enough free stock. ' +
+      '`OUT_OF_STOCK` with `details { variantId, available, requested }`: not enough free stock. ' +
       '`ORDER_NOT_EDITABLE`: the order was confirmed by another request meanwhile. `RESOURCE_BUSY`: try again.',
     $ref: 'errorResponseSchema#',
   },
@@ -711,7 +718,7 @@ const orderItemsErrorResponses = {
 const postOrderItemsSchema = {
   operationId: 'addOrderItem',
   summary: 'Add item to an unconfirmed order',
-  description: `Adds a product item to an own unconfirmed order. ${UNCONFIRMED_ITEMS}`,
+  description: `Adds a variant to an own unconfirmed order. ${UNCONFIRMED_ITEMS}`,
 
   params: {
     $ref: 'ordersGetByIdParamsSchema#',
@@ -735,7 +742,7 @@ const postOrderItemsSchema = {
     },
     404: {
       description:
-        '`ORDER_NOT_FOUND`: no own unconfirmed order with this id. `PRODUCT_NOT_FOUND`: the product is not in the catalog.',
+        '`ORDER_NOT_FOUND`: no own unconfirmed order with this id. `VARIANT_NOT_FOUND`: the variant is not in the catalog or a buyer does not see it.',
       $ref: 'errorResponseSchema#',
     },
     ...orderItemsErrorResponses,
@@ -770,7 +777,7 @@ const patchOrderItemsSchema = {
     },
     404: {
       description:
-        '`ORDER_ITEM_NOT_FOUND`: no such item in an own unconfirmed order with this id. `PRODUCT_NOT_FOUND`: the product of the item was deleted from the catalog, remove the item.',
+        '`ORDER_ITEM_NOT_FOUND`: no such item in an own unconfirmed order with this id. `VARIANT_NOT_FOUND`: the variant of the item is not for sale any more, remove the item.',
       $ref: 'errorResponseSchema#',
     },
     ...orderItemsErrorResponses,
@@ -866,7 +873,7 @@ const postCancelOrderSchema = {
   summary: 'Cancel a paid order',
   description:
     'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full by the payment provider that took it, ' +
-    'the stock of its items comes back and the buyer gets a mail, unless the account is deleted. The order is cancelled only together with its refund: ' +
+    'the stock of its items comes back (a line `stock.cancel_return` of the stock log for each variant, with the order, in the name of the admin; the admin log keeps one line with the same `orderId`) and the buyer gets a mail, unless the account is deleted. The order is cancelled only together with its refund: ' +
     'when the provider refuses the refund nothing changes. A delivered order is not cancelled. ' +
     'A manual order that was shipped has a send on its way: `shippingPaid` says whether the carrier was paid already, true keeps the cost of the send as owed (an expense of the shop), false makes it 0 (nothing is owed; the cost it had stays in the admin log). It is needed then, and not allowed otherwise. ' +
     'The answer gives how to reach the buyer: the order holds the delivery (the address or the pickup, the recipient and the phone), `user` tells whether the account is deleted and its email while it is not.',

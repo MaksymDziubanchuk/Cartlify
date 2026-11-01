@@ -4,22 +4,31 @@ import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
 
+import { EXAMPLE_VARIANT_NAME, EXAMPLE_VARIANT_VALUES } from '../products/variantValues.docs.js';
+
 const favoriteProductExample = {
   id: 10,
   name: 'Wireless headphones',
   description: 'Bluetooth headphones with noise cancellation.',
-  price: 49.99,
-  stock: 15,
   category: { id: 1, name: 'Headphones', slug: 'headphones' },
-  images: {
-    url200: 'https://example.com/products/headphones-200.webp',
-    url400: 'https://example.com/products/headphones-400.webp',
-    url800: 'https://example.com/products/headphones-800.webp',
-  },
   popularity: 120,
   avgRating: 4.7,
   reviewsCount: 18,
   createdAt: '2026-01-01T10:00:00.000Z',
+};
+
+const favoriteVariantExample = {
+  id: 31,
+  position: 2,
+  name: EXAMPLE_VARIANT_NAME,
+  values: EXAMPLE_VARIANT_VALUES,
+  price: 49.99,
+  stock: 15,
+  image: {
+    url200: 'https://example.com/products/headphones-200.webp',
+    url400: 'https://example.com/products/headphones-400.webp',
+    url800: 'https://example.com/products/headphones-800.webp',
+  },
 };
 
 const favoritesQueryExample = {
@@ -30,23 +39,24 @@ const favoritesGetResponseExample = {
   items: [
     {
       product: favoriteProductExample,
+      variant: favoriteVariantExample,
       addedAt: '2026-01-02T10:00:00.000Z',
     },
   ],
   nextCursor: null,
 };
 
-const favoriteProductParamsExample = {
-  productId: '10',
+const favoriteVariantParamsExample = {
+  variantId: '31',
 };
 
 const addFavoriteResponseExample = {
-  productId: 10,
+  variantId: 31,
   isFavorite: true,
 };
 
 const deleteFavoriteResponseExample = {
-  productId: 10,
+  variantId: 31,
   isFavorite: false,
 };
 
@@ -55,9 +65,13 @@ const getFavoritesSchema = {
   operationId: 'getFavorites',
   summary: 'Get favorites',
   description:
-    'Returns the current guest or authenticated user favorite products, each as a product of the ' +
-    'list of a buyer: with its popularity, without the fields of an admin. A product taken out of ' +
-    'the catalog or without an image stays a favorite but is not in the list.',
+    'Returns the favorites of the current guest or authenticated user, newest first. A favorite is a ' +
+    'variant of a product, so each row is { product, variant, addedAt }: the product as a list of a ' +
+    'buyer shows it (with its popularity, without the fields of an admin) and the short variant ' +
+    '(its name, price, the sale while it lasts, the free units, the main picture). A person who ' +
+    'likes two variants of one product has two rows. A variant a buyer does not see (taken out of ' +
+    'sale, without a picture, or of a product taken out of the catalog) stays a favorite but is not ' +
+    'in the list; it comes back with the variant.',
 
   querystring: {
     $ref: 'favoritesGetQuerySchema#',
@@ -95,16 +109,18 @@ const getFavoritesSchema = {
 const postAddFavoriteSchema = {
   operationId: 'addFavorite',
   summary: 'Add favorite',
-  description: 'Adds a product to the current guest or authenticated user favorites.',
+  description:
+    'Adds a variant of a product to the favorites of the current guest or authenticated user. The ' +
+    'same variant again answers 200 as the first time and is kept once.',
 
   params: {
     $ref: 'favoritesAddParamsSchema#',
-    examples: [favoriteProductParamsExample],
+    examples: [favoriteVariantParamsExample],
   },
 
   response: {
     200: {
-      description: 'Product was added to favorites successfully.',
+      description: 'The variant was added to the favorites successfully.',
       $ref: 'favoritesAddResponseSchema#',
       examples: [addFavoriteResponseExample],
     },
@@ -123,8 +139,8 @@ const postAddFavoriteSchema = {
     },
     404: {
       description:
-        '`PRODUCT_NOT_FOUND`: there is no such product, or it was taken out of the catalog. A ' +
-        'product among the favorites already answers 200 as the first time.',
+        '`VARIANT_NOT_FOUND`: there is no such variant, or a buyer does not see it: it was taken ' +
+        'out of sale, it shows no picture, or its product was taken out of the catalog.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -138,16 +154,18 @@ const postAddFavoriteSchema = {
 const deleteFavoriteSchema = {
   operationId: 'deleteFavorite',
   summary: 'Delete favorite',
-  description: 'Removes a product from the current guest or authenticated user favorites.',
+  description:
+    'Removes a variant from the favorites of the current guest or authenticated user. A variant ' +
+    'that is not among them answers 200 as well.',
 
   params: {
     $ref: 'favoritesDeleteParamsSchema#',
-    examples: [favoriteProductParamsExample],
+    examples: [favoriteVariantParamsExample],
   },
 
   response: {
     200: {
-      description: 'Product was removed from favorites successfully.',
+      description: 'The variant was removed from the favorites successfully.',
       $ref: 'favoritesDeleteResponseSchema#',
       examples: [deleteFavoriteResponseExample],
     },

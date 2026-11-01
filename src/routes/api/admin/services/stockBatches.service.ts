@@ -21,10 +21,10 @@ import type { ProductId, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 import { isDbYear } from '@helpers/dbDate.js';
 
-// the batches of the stock for an admin: what each came in with, what is left of it, what the
-// paid orders took and what was written off, the delivery it came with (its line in the admin
-// log) and whether it is over by the day of the shop. A page at a time, sorted the way the admin
-// asks; equal values go by id
+// the batches of the stock for an admin: the variant each belongs to (with its product), what it
+// came in with, what is left of it, what the paid orders took and what was written off, the
+// delivery it came with (its line in the stock log) and whether it is over by the day of the shop.
+// A page at a time, sorted the way the admin asks; equal values go by id
 
 type BatchRow = {
   id: number;
@@ -34,6 +34,11 @@ type BatchRow = {
   productId: number;
   productName: string;
   productDeleted: boolean;
+  variantId: number;
+  variantPosition: number;
+  variantName: string;
+  variantSku: string | null;
+  variantDeleted: boolean;
   unitCost: Prisma.Decimal;
   quantity: number;
   remaining: number;
@@ -73,6 +78,7 @@ export type StockBatchesArgs = {
   actorId: UserId;
   actorRole: Role;
   productId?: number | undefined;
+  variantId?: number | undefined;
   deliveryId?: string | undefined;
   source?: StockSourceName | undefined;
   inStock?: boolean | undefined;
@@ -99,6 +105,7 @@ export const stockBatchesArgsOf = (
   actorId: actor.id,
   actorRole: actor.role,
   productId: query.productId,
+  variantId: query.variantId,
   deliveryId: query.deliveryId?.toLowerCase(),
   source: query.source,
   inStock: query.inStock,
@@ -132,6 +139,7 @@ function filtersOf(args: StockBatchesArgs): Prisma.Sql {
   const parts: Prisma.Sql[] = [Prisma.sql`true`];
 
   if (args.productId !== undefined) parts.push(Prisma.sql`b."productId" = ${args.productId}::int`);
+  if (args.variantId !== undefined) parts.push(Prisma.sql`b."variantId" = ${args.variantId}::int`);
   if (args.deliveryId !== undefined) {
     parts.push(Prisma.sql`b."deliveryId" = ${args.deliveryId}::uuid`);
   }
@@ -211,6 +219,13 @@ const toItem = (row: BatchRow): AdminStockBatchDto => ({
   source: row.source,
   supplierBatchNumber: row.supplierBatchNumber,
   product: { id: row.productId as ProductId, name: row.productName, deleted: row.productDeleted },
+  variant: {
+    id: row.variantId,
+    position: row.variantPosition,
+    name: row.variantName,
+    sku: row.variantSku,
+    deleted: row.variantDeleted,
+  },
   unitCost: decimalToNumber(row.unitCost),
   quantity: row.quantity,
   remaining: row.remaining,
@@ -246,6 +261,11 @@ export async function listStockBatches(
           b."productId",
           p.name as "productName",
           p."deletedAt" is not null as "productDeleted",
+          b."variantId",
+          v.position as "variantPosition",
+          cartlify.variant_display_name(b."variantId") as "variantName",
+          v.sku as "variantSku",
+          v."deletedAt" is not null as "variantDeleted",
           b."unitCost",
           b.quantity,
           b.remaining,
@@ -262,6 +282,7 @@ export async function listStockBatches(
           b."createdAt"
         from cartlify.product_batches as b
         join cartlify.products as p on p.id = b."productId"
+        join cartlify.product_variants as v on v.id = b."variantId"
         -- the units of the paid orders; a cancel put its units back into the batch
         cross join lateral (
           select coalesce(sum(a.quantity), 0)::int as sold
@@ -276,12 +297,15 @@ export async function listStockBatches(
             ${deliveryField('supplier')} as supplier,
             ${deliveryField('document')} as document,
             ${deliveryField('note')} as note
-          from cartlify.admin_audit_log as l
-          where l."entityType" = 'product'
-            and l."entityId" = b."productId"
-            and l.action = 'STOCK_DELIVERY'
+          from cartlify.stock_log as l
+          where l."variantId" = b."variantId"
+            and l."deliveryId" = b."deliveryId"
+            and l.event = 'stock.delivery'
             and l.meta @> jsonb_build_array(
-              jsonb_build_object('field', 'batch', 'new', jsonb_build_object('id', b.id))
+              jsonb_build_object(
+                'field', 'batches',
+                'new', jsonb_build_array(jsonb_build_object('batchId', b.id))
+              )
             )
           order by l.id
           limit 1

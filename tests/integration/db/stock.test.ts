@@ -22,7 +22,7 @@ import {
   fieldOf,
   receive,
   setShopDay,
-  stockLinesOf,
+  stockLogOf,
   utcDay,
   writeOff,
 } from '../../helpers/dbStock.js';
@@ -30,23 +30,27 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
 
-// the stock of a product is what its batches have left. A batch comes in through
-// cartlify.receive_product_batch, units go out through cartlify.write_off_product_stock and
+// the stock of a variant is what its batches have left. A batch comes in through
+// cartlify.receive_variant_batch, units go out through cartlify.write_off_variant_stock and
 // through the payment of an order, which keeps what it took from each batch
 // (order_batch_allocations); a cancel of the paid order puts the units back into the same
-// batches. Each of these functions acts as the owner for a signed-in admin, the admin log keeps
-// the line in their name. A plain statement changes none of it
+// batches. Each of these functions acts as the owner for a signed-in admin and writes the line of
+// the stock log in their name (tests/integration/db/stockLog.test.ts). A plain statement changes none
+// of it
 
 let owner: TestUser;
 let admin: TestUser;
 let root: TestUser;
 // products without stock: each test takes in its own batches, rolled back after it
 let product: TestProduct;
+// a second variant of the product, and another product with its own variant
+let sibling: { id: number; productId: number };
 let other: TestProduct;
 let removed: TestProduct;
 
@@ -55,6 +59,7 @@ beforeAll(async () => {
   admin = await createUser({ role: 'ADMIN' });
   root = await createUser({ role: 'ROOT' });
   product = await createProduct({ price: 10, stock: 0 });
+  sibling = await createVariant(product.id, { price: 12, stock: 0 });
   other = await createProduct({ price: 4, stock: 0 });
   removed = await createProduct({ price: 7, stock: 0 });
   await deleteProductFromCatalog(removed.id);
@@ -72,10 +77,10 @@ const asAdmin = (): Actor => ({ role: 'ADMIN', userId: admin.id });
 // the system: the admin context without a user id, the way setAdminContext sets it
 const asSystem = (): Actor => ({ role: 'ADMIN' });
 
-describe('cartlify.receive_product_batch', () => {
+describe('cartlify.receive_variant_batch', () => {
   it('takes in a batch: the stock grows by it, the batch keeps its cost, number and end', async () => {
     const { batchId, batches, stock, check } = await inRolledBackTx(async (db) => {
-      const batchId = await batchIdOf(db, asAdmin(), product.id, {
+      const batchId = await batchIdOf(db, asAdmin(), product.variantId, {
         quantity: 7,
         unitCost: '3.25',
         expiresAt: utcDay(30),
@@ -83,8 +88,8 @@ describe('cartlify.receive_product_batch', () => {
       });
       return {
         batchId,
-        batches: await batchesOf(db, admin.id, product.id),
-        stock: await stockOf(db, admin.id, product.id),
+        batches: await batchesOf(db, admin.id, product.variantId),
+        stock: await stockOf(db, admin.id, product.variantId),
         check: await checkDeferredNow(db),
       };
     });
@@ -104,12 +109,12 @@ describe('cartlify.receive_product_batch', () => {
     expect(check.ok).toBe(true);
   });
 
-  it('keeps the line of the delivery in the admin log in the name of the admin', async () => {
+  it('keeps the line of the delivery in the stock log in the name of the admin', async () => {
     const deliveryId = randomUUID();
 
     const { batchId, lines } = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 2 });
-      const batchId = await batchIdOf(db, asAdmin(), product.id, {
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 2 });
+      const batchId = await batchIdOf(db, asAdmin(), product.variantId, {
         deliveryId,
         quantity: 3,
         unitCost: '1.50',
@@ -117,48 +122,52 @@ describe('cartlify.receive_product_batch', () => {
         document: 'INV-7',
         note: 'Second box',
       });
-      return { batchId, lines: await stockLinesOf(db, admin.id, product.id, 'STOCK_DELIVERY') };
+      return {
+        batchId,
+        lines: await stockLogOf(db, admin.id, product.variantId, 'stock.delivery'),
+      };
     });
 
     expect(lines).toHaveLength(2);
     expect(lines[1]).toEqual({
+      id: expect.any(Number),
       actorId: admin.id,
       actorRole: 'ADMIN',
+      productId: product.id,
+      variantId: product.variantId,
+      event: 'stock.delivery',
+      quantityChange: 3,
+      stockAfter: 5,
       meta: [
-        { field: 'stock', old: 2, new: 5 },
-        {
-          field: 'batch',
-          old: null,
-          new: {
-            id: batchId,
-            source: 'supplier',
-            quantity: 3,
-            unitCost: '1.5',
-            expiresAt: null,
-            supplierBatchNumber: null,
-          },
-        },
-        { field: 'delivery', old: null, new: deliveryId },
+        { field: 'batches', old: null, new: [{ batchId, quantity: 3, unitCost: '1.5' }] },
+        { field: 'source', old: null, new: 'supplier' },
         { field: 'supplier', old: null, new: 'Acme' },
         { field: 'document', old: null, new: 'INV-7' },
         { field: 'note', old: null, new: 'Second box' },
       ],
+      deliveryId,
+      writeOffId: null,
+      orderId: null,
     });
   });
 
   it('leaves the empty texts out of the line', async () => {
     const lines = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { supplier: '  ', document: '', note: null });
-      return stockLinesOf(db, admin.id, product.id, 'STOCK_DELIVERY');
+      await batchIdOf(db, asAdmin(), product.variantId, {
+        supplier: '  ',
+        document: '',
+        note: null,
+      });
+      return stockLogOf(db, admin.id, product.variantId, 'stock.delivery');
     });
 
-    expect(lines[0]!.meta.map((change) => change.field)).toEqual(['stock', 'batch', 'delivery']);
+    expect(lines[0]!.meta!.map((change) => change.field)).toEqual(['batches', 'source']);
   });
 
   it.each(['surplus', 'customer_return'])('takes in a batch of %s', async (source) => {
     const batches = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { source, unitCost: '0' });
-      return batchesOf(db, admin.id, product.id);
+      await batchIdOf(db, asAdmin(), product.variantId, { source, unitCost: '0' });
+      return batchesOf(db, admin.id, product.variantId);
     });
 
     expect(batches).toEqual([expect.objectContaining({ source, unitCost: '0.00' })]);
@@ -166,7 +175,7 @@ describe('cartlify.receive_product_batch', () => {
 
   it('takes in a batch that is good until today', async () => {
     const outcome = await inRolledBackTx((db) =>
-      receive(db, asAdmin(), product.id, { expiresAt: utcDay(0) }),
+      receive(db, asAdmin(), product.variantId, { expiresAt: utcDay(0) }),
     );
 
     expect(outcome.ok).toBe(true);
@@ -174,7 +183,7 @@ describe('cartlify.receive_product_batch', () => {
 
   it('lets root take in a batch too', async () => {
     const outcome = await inRolledBackTx((db) =>
-      receive(db, { role: 'ROOT', userId: root.id }, product.id),
+      receive(db, { role: 'ROOT', userId: root.id }, product.variantId),
     );
 
     expect(outcome.ok).toBe(true);
@@ -191,11 +200,11 @@ describe('cartlify.receive_product_batch', () => {
     ['a note over 500 characters', { note: 'x'.repeat(501) }, 'STOCK_TEXT_TOO_LONG'],
   ])('refuses a batch with %s and changes nothing', async (_case, args, error) => {
     const { outcome, batches, stock } = await inRolledBackTx(async (db) => {
-      const outcome = await receive(db, asAdmin(), product.id, args);
+      const outcome = await receive(db, asAdmin(), product.variantId, args);
       return {
         outcome,
-        batches: await batchesOf(db, admin.id, product.id),
-        stock: await stockOf(db, admin.id, product.id),
+        batches: await batchesOf(db, admin.id, product.variantId),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -206,21 +215,37 @@ describe('cartlify.receive_product_batch', () => {
 
   it('refuses a number of the supplier over 100 characters', async () => {
     const outcome = await inRolledBackTx((db) =>
-      receive(db, asAdmin(), product.id, { supplierBatchNumber: 'x'.repeat(101) }),
+      receive(db, asAdmin(), product.variantId, { supplierBatchNumber: 'x'.repeat(101) }),
     );
 
     expect(outcome).toMatchObject({ ok: false, code: '23514' });
   });
 
   it.each([
-    ['a product removed from the catalog', () => removed.id],
-    ['a product that does not exist', () => 2_000_000_000],
-  ])('refuses %s', async (_case, productId) => {
-    const outcome = await inRolledBackTx((db) => receive(db, asAdmin(), productId()));
+    ['a variant of a product removed from the catalog', () => removed.variantId],
+    ['a variant that does not exist', () => 2_000_000_000],
+  ])('refuses %s', async (_case, variantId) => {
+    const outcome = await inRolledBackTx((db) => receive(db, asAdmin(), variantId()));
 
     expect(outcome).toMatchObject({
       ok: false,
-      message: expect.stringContaining('PRODUCT_NOT_FOUND'),
+      message: expect.stringContaining('VARIANT_NOT_FOUND'),
+    });
+  });
+
+  it('refuses a variant an admin took out of sale', async () => {
+    const outcome = await inRolledBackTx(async (db) => {
+      await db.as(asAdmin());
+      await db.rows(
+        'update cartlify.product_variants set "deletedAt" = now() where id = $1 returning id',
+        sibling.id,
+      );
+      return receive(db, asAdmin(), sibling.id);
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('VARIANT_NOT_FOUND'),
     });
   });
 
@@ -230,7 +255,7 @@ describe('cartlify.receive_product_batch', () => {
     ['a user', (): Actor => ({ role: 'USER', userId: owner.id })],
     ['a guest', (): Actor => ({ role: 'GUEST', guestId: randomUUID() })],
   ])('refuses %s', async (_who, actor) => {
-    const outcome = await inRolledBackTx((db) => receive(db, actor(), product.id));
+    const outcome = await inRolledBackTx((db) => receive(db, actor(), product.variantId));
 
     expect(outcome).toMatchObject({
       ok: false,
@@ -239,15 +264,21 @@ describe('cartlify.receive_product_batch', () => {
   });
 });
 
-describe('cartlify.write_off_product_stock', () => {
+describe('cartlify.write_off_variant_stock', () => {
   it('writes off units of the batch an admin names, the line keeps the reason and the cost', async () => {
     const writeOffId = randomUUID();
 
     const { first, second, outcome, batches, stock, lines, check } = await inRolledBackTx(
       async (db) => {
-        const first = await batchIdOf(db, asAdmin(), product.id, { quantity: 4, unitCost: '2' });
-        const second = await batchIdOf(db, asAdmin(), product.id, { quantity: 5, unitCost: '3' });
-        const outcome = await writeOff(db, asAdmin(), product.id, {
+        const first = await batchIdOf(db, asAdmin(), product.variantId, {
+          quantity: 4,
+          unitCost: '2',
+        });
+        const second = await batchIdOf(db, asAdmin(), product.variantId, {
+          quantity: 5,
+          unitCost: '3',
+        });
+        const outcome = await writeOff(db, asAdmin(), product.variantId, {
           writeOffId,
           batchId: second,
           quantity: 2,
@@ -258,9 +289,9 @@ describe('cartlify.write_off_product_stock', () => {
           first,
           second,
           outcome,
-          batches: await batchesOf(db, admin.id, product.id),
-          stock: await stockOf(db, admin.id, product.id),
-          lines: await stockLinesOf(db, admin.id, product.id, 'STOCK_WRITE_OFF'),
+          batches: await batchesOf(db, admin.id, product.variantId),
+          stock: await stockOf(db, admin.id, product.variantId),
+          lines: await stockLogOf(db, admin.id, product.variantId, 'stock.write_off'),
           check: await checkDeferredNow(db),
         };
       },
@@ -275,15 +306,22 @@ describe('cartlify.write_off_product_stock', () => {
     expect(stock).toEqual({ stock: 7, reserved: 0 });
     expect(lines).toEqual([
       {
+        id: expect.any(Number),
         actorId: admin.id,
         actorRole: 'ADMIN',
+        productId: product.id,
+        variantId: product.variantId,
+        event: 'stock.write_off',
+        quantityChange: -2,
+        stockAfter: 7,
         meta: [
-          { field: 'stock', old: 9, new: 7 },
           { field: 'reason', old: null, new: 'damaged' },
           { field: 'batches', old: null, new: taken },
-          { field: 'writeOff', old: null, new: writeOffId },
           { field: 'note', old: null, new: 'Wet box' },
         ],
+        deliveryId: null,
+        writeOffId,
+        orderId: null,
       },
     ]);
     expect(check.ok).toBe(true);
@@ -293,24 +331,24 @@ describe('cartlify.write_off_product_stock', () => {
   it('writes off from the batches in the order a sale takes them when no batch is named', async () => {
     const { ids, outcome, batches } = await inRolledBackTx(async (db) => {
       const ids = {
-        noEndOld: await batchIdOf(db, asAdmin(), product.id, { quantity: 2, unitCost: '1' }),
-        late: await batchIdOf(db, asAdmin(), product.id, {
+        noEndOld: await batchIdOf(db, asAdmin(), product.variantId, { quantity: 2, unitCost: '1' }),
+        late: await batchIdOf(db, asAdmin(), product.variantId, {
           quantity: 2,
           unitCost: '2',
           expiresAt: utcDay(60),
         }),
-        soon: await batchIdOf(db, asAdmin(), product.id, {
+        soon: await batchIdOf(db, asAdmin(), product.variantId, {
           quantity: 2,
           unitCost: '3',
           expiresAt: utcDay(5),
         }),
-        noEndNew: await batchIdOf(db, asAdmin(), product.id, { quantity: 2, unitCost: '4' }),
+        noEndNew: await batchIdOf(db, asAdmin(), product.variantId, { quantity: 2, unitCost: '4' }),
       };
-      const outcome = await writeOff(db, asAdmin(), product.id, {
+      const outcome = await writeOff(db, asAdmin(), product.variantId, {
         quantity: 7,
         reason: 'shortage',
       });
-      return { ids, outcome, batches: await batchesOf(db, admin.id, product.id) };
+      return { ids, outcome, batches: await batchesOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome.ok && outcome.rows[0]!.taken).toEqual([
@@ -324,10 +362,10 @@ describe('cartlify.write_off_product_stock', () => {
 
   it('keeps the units the waiting orders hold and changes nothing', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      await waitingOrderOf(db, owner.id, [[product.id, 3]]);
-      const outcome = await writeOff(db, asAdmin(), product.id, { quantity: 3 });
-      return { outcome, stock: await stockOf(db, admin.id, product.id) };
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      await waitingOrderOf(db, owner.id, [[product.variantId, 3]]);
+      const outcome = await writeOff(db, asAdmin(), product.variantId, { quantity: 3 });
+      return { outcome, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome).toMatchObject({
@@ -339,10 +377,13 @@ describe('cartlify.write_off_product_stock', () => {
 
   it('refuses more than the batch named has left', async () => {
     const { outcome, batches } = await inRolledBackTx(async (db) => {
-      const small = await batchIdOf(db, asAdmin(), product.id, { quantity: 1 });
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      const outcome = await writeOff(db, asAdmin(), product.id, { batchId: small, quantity: 2 });
-      return { outcome, batches: await batchesOf(db, admin.id, product.id) };
+      const small = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 1 });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      const outcome = await writeOff(db, asAdmin(), product.variantId, {
+        batchId: small,
+        quantity: 2,
+      });
+      return { outcome, batches: await batchesOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome).toMatchObject({
@@ -352,11 +393,14 @@ describe('cartlify.write_off_product_stock', () => {
     expect(batches.map((b) => b.remaining)).toEqual([1, 5]);
   });
 
-  it('refuses a batch of another product', async () => {
+  it.each([
+    ['a variant of another product', () => other.variantId],
+    ['another variant of the same product', () => sibling.id],
+  ])('refuses a batch of %s', async (_case, foreignVariant) => {
     const outcome = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      const foreign = await batchIdOf(db, asAdmin(), other.id, { quantity: 5 });
-      return writeOff(db, asAdmin(), product.id, { batchId: foreign, quantity: 1 });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      const foreign = await batchIdOf(db, asAdmin(), foreignVariant(), { quantity: 5 });
+      return writeOff(db, asAdmin(), product.variantId, { batchId: foreign, quantity: 1 });
     });
 
     expect(outcome).toMatchObject({
@@ -365,7 +409,7 @@ describe('cartlify.write_off_product_stock', () => {
     });
   });
 
-  it('writes off what a product removed from the catalog has left', async () => {
+  it('writes off what a variant of a product removed from the catalog has left', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
       // the batch came before the product left the catalog
       await db.as(asAdmin());
@@ -373,13 +417,13 @@ describe('cartlify.write_off_product_stock', () => {
         'update cartlify.products set "deletedAt" = null where id = $1 returning id',
         removed.id,
       );
-      await batchIdOf(db, asAdmin(), removed.id, { quantity: 3 });
+      await batchIdOf(db, asAdmin(), removed.variantId, { quantity: 3 });
       await db.rows(
         'update cartlify.products set "deletedAt" = now() where id = $1 returning id',
         removed.id,
       );
-      const outcome = await writeOff(db, asAdmin(), removed.id, { quantity: 3 });
-      return { outcome, stock: await stockOf(db, admin.id, removed.id) };
+      const outcome = await writeOff(db, asAdmin(), removed.variantId, { quantity: 3 });
+      return { outcome, stock: await stockOf(db, admin.id, removed.variantId) };
     });
 
     expect(outcome.ok).toBe(true);
@@ -390,8 +434,8 @@ describe('cartlify.write_off_product_stock', () => {
     'takes the reason %s',
     async (reason) => {
       const outcome = await inRolledBackTx(async (db) => {
-        await batchIdOf(db, asAdmin(), product.id, { quantity: 1 });
-        return writeOff(db, asAdmin(), product.id, { reason });
+        await batchIdOf(db, asAdmin(), product.variantId, { quantity: 1 });
+        return writeOff(db, asAdmin(), product.variantId, { reason });
       });
 
       expect(outcome.ok).toBe(true);
@@ -400,8 +444,11 @@ describe('cartlify.write_off_product_stock', () => {
 
   it('takes the reason other with a note that says what it is', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 1 });
-      return writeOff(db, asAdmin(), product.id, { reason: 'other', note: 'Sample for a blogger' });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 1 });
+      return writeOff(db, asAdmin(), product.variantId, {
+        reason: 'other',
+        note: 'Sample for a blogger',
+      });
     });
 
     expect(outcome.ok).toBe(true);
@@ -414,8 +461,8 @@ describe('cartlify.write_off_product_stock', () => {
     ['a note over 500 characters', { note: 'x'.repeat(501) }, 'STOCK_TEXT_TOO_LONG'],
   ])('refuses %s', async (_case, args, error) => {
     const outcome = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 1 });
-      return writeOff(db, asAdmin(), product.id, args);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 1 });
+      return writeOff(db, asAdmin(), product.variantId, args);
     });
 
     expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining(error) });
@@ -426,8 +473,8 @@ describe('cartlify.write_off_product_stock', () => {
     ['a user', (): Actor => ({ role: 'USER', userId: owner.id })],
   ])('refuses %s', async (_who, actor) => {
     const outcome = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 1 });
-      return writeOff(db, actor(), product.id);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 1 });
+      return writeOff(db, actor(), product.variantId);
     });
 
     expect(outcome).toMatchObject({
@@ -441,15 +488,15 @@ describe('a sale takes from the batches', () => {
   it('takes the units of a paid order from the batch that ends first and keeps what it took', async () => {
     const { late, soon, orderId, allocations, batches, stock, check } = await inRolledBackTx(
       async (db) => {
-        const late = await batchIdOf(db, asAdmin(), product.id, {
+        const late = await batchIdOf(db, asAdmin(), product.variantId, {
           quantity: 3,
           expiresAt: utcDay(60),
         });
-        const soon = await batchIdOf(db, asAdmin(), product.id, {
+        const soon = await batchIdOf(db, asAdmin(), product.variantId, {
           quantity: 2,
           expiresAt: utcDay(5),
         });
-        const orderId = await waitingOrderOf(db, owner.id, [[product.id, 3]]);
+        const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 3]]);
         const result = await pay(db, admin.id, orderId);
         if (result !== 'PAID') throw new Error(`pay_order answered ${result}`);
         return {
@@ -457,8 +504,8 @@ describe('a sale takes from the batches', () => {
           soon,
           orderId,
           allocations: await allocationsOf(db, admin.id, orderId),
-          batches: await batchesOf(db, admin.id, product.id),
-          stock: await stockOf(db, admin.id, product.id),
+          batches: await batchesOf(db, admin.id, product.variantId),
+          stock: await stockOf(db, admin.id, product.variantId),
           check: await checkDeferredNow(db),
         };
       },
@@ -466,8 +513,8 @@ describe('a sale takes from the batches', () => {
 
     expect(orderId).toEqual(expect.any(Number));
     expect(allocations).toEqual([
-      { productId: product.id, batchId: late, quantity: 1 },
-      { productId: product.id, batchId: soon, quantity: 2 },
+      { productId: product.id, variantId: product.variantId, batchId: late, quantity: 1 },
+      { productId: product.id, variantId: product.variantId, batchId: soon, quantity: 2 },
     ]);
     expect(batches.map((b) => [b.id, b.remaining])).toEqual([
       [late, 2],
@@ -477,28 +524,38 @@ describe('a sale takes from the batches', () => {
     expect(check.ok).toBe(true);
   });
 
-  it('keeps what an order of several products took from each of them', async () => {
+  it('keeps what an order of several variants of several products took from each of them', async () => {
     const allocations = await inRolledBackTx(async (db) => {
-      const mine = await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      const theirs = await batchIdOf(db, asAdmin(), other.id, { quantity: 5 });
+      const mine = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      const theirs = await batchIdOf(db, asAdmin(), other.variantId, { quantity: 5 });
       const orderId = await waitingOrderOf(db, owner.id, [
-        [product.id, 2],
-        [other.id, 1],
+        [product.variantId, 2],
+        [other.variantId, 1],
       ]);
       await pay(db, admin.id, orderId);
       return { mine, theirs, rows: await allocationsOf(db, admin.id, orderId) };
     });
 
     expect(allocations.rows).toEqual([
-      { productId: product.id, batchId: allocations.mine, quantity: 2 },
-      { productId: other.id, batchId: allocations.theirs, quantity: 1 },
+      {
+        productId: product.id,
+        variantId: product.variantId,
+        batchId: allocations.mine,
+        quantity: 2,
+      },
+      {
+        productId: other.id,
+        variantId: other.variantId,
+        batchId: allocations.theirs,
+        quantity: 1,
+      },
     ]);
   });
 
   it('takes a late payment from the batches too', async () => {
     const { batchId, allocations } = await inRolledBackTx(async (db) => {
-      const batchId = await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const batchId = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       await db.as(asSystem());
       await db.rows('select 1 as done from cartlify.unconfirm_order($1::int)', orderId);
       const result = await pay(db, admin.id, orderId);
@@ -506,39 +563,41 @@ describe('a sale takes from the batches', () => {
       return { batchId, allocations: await allocationsOf(db, admin.id, orderId) };
     });
 
-    expect(allocations).toEqual([{ productId: product.id, batchId, quantity: 2 }]);
+    expect(allocations).toEqual([
+      { productId: product.id, variantId: product.variantId, batchId, quantity: 2 },
+    ]);
   });
 
   it('puts the units of a cancelled paid order back into the batches they came from', async () => {
     const { late, soon, allocations, batches, stock, check } = await inRolledBackTx(async (db) => {
-      const late = await batchIdOf(db, asAdmin(), product.id, {
+      const late = await batchIdOf(db, asAdmin(), product.variantId, {
         quantity: 3,
         expiresAt: utcDay(60),
       });
-      const soon = await batchIdOf(db, asAdmin(), product.id, {
+      const soon = await batchIdOf(db, asAdmin(), product.variantId, {
         quantity: 2,
         expiresAt: utcDay(5),
       });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 3]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 3]]);
       await pay(db, admin.id, orderId);
       // a later delivery does not take the units back
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 4 });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 4 });
       await db.as(asAdmin());
       await db.rows('select 1 as done from cartlify.cancel_paid_order($1::int)', orderId);
       return {
         late,
         soon,
         allocations: await allocationsOf(db, admin.id, orderId),
-        batches: await batchesOf(db, admin.id, product.id),
-        stock: await stockOf(db, admin.id, product.id),
+        batches: await batchesOf(db, admin.id, product.variantId),
+        stock: await stockOf(db, admin.id, product.variantId),
         check: await checkDeferredNow(db),
       };
     });
 
     // the lines stay for the reports: the cost of the cancelled sale goes back on its day
     expect(allocations).toEqual([
-      { productId: product.id, batchId: late, quantity: 1 },
-      { productId: product.id, batchId: soon, quantity: 2 },
+      { productId: product.id, variantId: product.variantId, batchId: late, quantity: 1 },
+      { productId: product.id, variantId: product.variantId, batchId: soon, quantity: 2 },
     ]);
     expect(batches.map((b) => b.remaining)).toEqual([3, 2, 4]);
     expect(stock).toEqual({ stock: 9, reserved: 0 });
@@ -547,40 +606,47 @@ describe('a sale takes from the batches', () => {
 });
 
 describe('the stock and the batches under plain statements', () => {
-  it('lets an admin create a product without stock only', async () => {
+  it('lets an admin create a variant without stock only', async () => {
     const { empty, stocked } = await inRolledBackTx(async (db) => {
       await db.as(asAdmin());
-      const insert = (stock: number) =>
+      const insert = (stock: number, position: number) =>
         db.attempt(
-          `insert into cartlify.products (name, price, stock, "categoryId", "updatedAt")
-           values ('Boxed', 5, $2, $1, now()) returning id`,
-          product.categoryId,
+          `insert into cartlify.product_variants ("productId", position, price, stock, "updatedAt")
+           values ($1, $2, 5, $3, now()) returning id`,
+          product.id,
+          position,
           stock,
         );
-      return { empty: await insert(0), stocked: await insert(3) };
+      return { empty: await insert(0, 8), stocked: await insert(3, 9) };
     });
 
     expect(empty.ok).toBe(true);
     expect(stocked.ok).toBe(false);
   });
 
-  it('does not let an admin change the stock of a product, up or down', async () => {
+  it('does not let an admin change the stock of a variant, up or down', async () => {
     const { up, down, stock } = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
       await db.as(asAdmin());
       const up = await db.attempt(
-        'update cartlify.products set stock = 9 where id = $1 returning id',
-        product.id,
+        'update cartlify.product_variants set stock = 9 where id = $1 returning id',
+        product.variantId,
       );
       const down = await db.attempt(
-        'update cartlify.products set stock = 1 where id = $1 returning id',
-        product.id,
+        'update cartlify.product_variants set stock = 1 where id = $1 returning id',
+        product.variantId,
       );
-      return { up, down, stock: await stockOf(db, admin.id, product.id) };
+      return { up, down, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
-    expect(up.ok).toBe(false);
-    expect(down.ok).toBe(false);
+    expect(up).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('VARIANT_UPDATE_FORBIDDEN'),
+    });
+    expect(down).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('VARIANT_UPDATE_FORBIDDEN'),
+    });
     expect(stock).toEqual({ stock: 5, reserved: 0 });
   });
 
@@ -588,24 +654,25 @@ describe('the stock and the batches under plain statements', () => {
     [
       'take in a batch with a plain insert',
       `insert into cartlify.product_batches
-         ("productId", "deliveryId", source, "unitCost", quantity, remaining)
-       values ($1, gen_random_uuid(), 'supplier', 1, 5, 5) returning id`,
+         ("productId", "variantId", "deliveryId", source, "unitCost", quantity, remaining)
+       select v."productId", v.id, gen_random_uuid(), 'supplier', 1, 5, 5
+       from cartlify.product_variants as v where v.id = $1 returning id`,
     ],
     [
       'change what a batch has left',
-      'update cartlify.product_batches set remaining = 0 where "productId" = $1 returning id',
+      'update cartlify.product_batches set remaining = 0 where "variantId" = $1 returning id',
     ],
     [
       'change the cost of a batch',
-      'update cartlify.product_batches set "unitCost" = 0 where "productId" = $1 returning id',
+      'update cartlify.product_batches set "unitCost" = 0 where "variantId" = $1 returning id',
     ],
-    ['delete a batch', 'delete from cartlify.product_batches where "productId" = $1 returning id'],
+    ['delete a batch', 'delete from cartlify.product_batches where "variantId" = $1 returning id'],
   ])('does not let an admin %s', async (_case, statement) => {
     const { outcome, batches } = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5, unitCost: '2' });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5, unitCost: '2' });
       await db.as(asAdmin());
-      const outcome = await db.attempt(statement, product.id);
-      return { outcome, batches: await batchesOf(db, admin.id, product.id) };
+      const outcome = await db.attempt(statement, product.variantId);
+      return { outcome, batches: await batchesOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome.ok && outcome.rows.length > 0).toBe(false);
@@ -623,8 +690,8 @@ describe('the stock and the batches under plain statements', () => {
     ],
   ])('does not let an admin %s', async (_case, statement) => {
     const { outcome, allocations } = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       await pay(db, admin.id, orderId);
       await db.as(asAdmin());
       const outcome = await db.attempt(statement, orderId);
@@ -640,14 +707,14 @@ describe('the stock and the batches under plain statements', () => {
     ['a guest', (): Actor => ({ role: 'GUEST', guestId: randomUUID() })],
   ])('shows %s no batch and nothing an order took', async (_who, actor) => {
     const seen = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       await pay(db, admin.id, orderId);
       await db.as(actor());
       return {
         batches: await db.rows(
-          'select id from cartlify.product_batches where "productId" = $1',
-          product.id,
+          'select id from cartlify.product_batches where "variantId" = $1',
+          product.variantId,
         ),
         allocations: await db.rows(
           'select id from cartlify.order_batch_allocations where "orderId" = $1',
@@ -661,9 +728,9 @@ describe('the stock and the batches under plain statements', () => {
 
   it('keeps the line of a write-off with the cost of each batch', async () => {
     const line = await inRolledBackTx(async (db) => {
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 2, unitCost: '1.10' });
-      await writeOff(db, asAdmin(), product.id, { quantity: 1, reason: 'expired' });
-      return (await stockLinesOf(db, admin.id, product.id, 'STOCK_WRITE_OFF'))[0];
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 2, unitCost: '1.10' });
+      await writeOff(db, asAdmin(), product.variantId, { quantity: 1, reason: 'expired' });
+      return (await stockLogOf(db, admin.id, product.variantId, 'stock.write_off'))[0];
     });
 
     expect(fieldOf(line, 'batches')).toEqual([expect.objectContaining({ unitCost: '1.1' })]);
@@ -693,12 +760,15 @@ describe('a batch that is over', () => {
   it('counts the units of the batches that are over, until the last good day they are good', async () => {
     const counted = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 3, expiresAt: DAY });
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 4, expiresAt: dayAfter(DAY, 5) });
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 2 });
-      const onTheDay = await expiredUnitsOf(db, product.id);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3, expiresAt: DAY });
+      await batchIdOf(db, asAdmin(), product.variantId, {
+        quantity: 4,
+        expiresAt: dayAfter(DAY, 5),
+      });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 2 });
+      const onTheDay = await expiredUnitsOf(db, product.variantId);
       await setShopDay(db, dayAfter(DAY));
-      return { onTheDay, dayAfter: await expiredUnitsOf(db, product.id) };
+      return { onTheDay, dayAfter: await expiredUnitsOf(db, product.variantId) };
     });
 
     expect(counted).toEqual({ onTheDay: 0, dayAfter: 3 });
@@ -708,8 +778,10 @@ describe('a batch that is over', () => {
     const { today, yesterday } = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
       return {
-        today: await receive(db, asAdmin(), product.id, { expiresAt: DAY }),
-        yesterday: await receive(db, asAdmin(), product.id, { expiresAt: dayAfter(DAY, -1) }),
+        today: await receive(db, asAdmin(), product.variantId, { expiresAt: DAY }),
+        yesterday: await receive(db, asAdmin(), product.variantId, {
+          expiresAt: dayAfter(DAY, -1),
+        }),
       };
     });
 
@@ -726,11 +798,11 @@ describe('a batch that is over', () => {
   it('refuses to write off a good batch the reserve of a waiting order needs', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5, expiresAt: DAY });
-      const good = await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5, expiresAt: DAY });
+      const good = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
       await setShopDay(db, dayAfter(DAY));
-      await waitingOrderOf(db, owner.id, [[product.id, 5]]);
-      return writeOff(db, asAdmin(), product.id, { batchId: good, quantity: 5 });
+      await waitingOrderOf(db, owner.id, [[product.variantId, 5]]);
+      return writeOff(db, asAdmin(), product.variantId, { batchId: good, quantity: 5 });
     });
 
     expect(outcome).toMatchObject({
@@ -742,11 +814,18 @@ describe('a batch that is over', () => {
   it('writes off a batch that is over while a waiting order holds the good units', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      const over = await batchIdOf(db, asAdmin(), product.id, { quantity: 5, expiresAt: DAY });
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 5 });
+      const over = await batchIdOf(db, asAdmin(), product.variantId, {
+        quantity: 5,
+        expiresAt: DAY,
+      });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
       await setShopDay(db, dayAfter(DAY));
-      await waitingOrderOf(db, owner.id, [[product.id, 5]]);
-      return writeOff(db, asAdmin(), product.id, { batchId: over, quantity: 5, reason: 'expired' });
+      await waitingOrderOf(db, owner.id, [[product.variantId, 5]]);
+      return writeOff(db, asAdmin(), product.variantId, {
+        batchId: over,
+        quantity: 5,
+        reason: 'expired',
+      });
     });
 
     expect(outcome.ok).toBe(true);
@@ -755,13 +834,13 @@ describe('a batch that is over', () => {
   it('does not reserve the units of a batch that is over', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 3, expiresAt: DAY });
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 1 });
-      const orderId = await cartOf(db, owner.id, [[product.id, 2]]);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3, expiresAt: DAY });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 1 });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 2]]);
       await setShopDay(db, dayAfter(DAY));
       return {
         outcome: await confirm(db, owner.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -775,9 +854,12 @@ describe('a batch that is over', () => {
   it('sells the good batches of a payment and leaves the ones that are over', async () => {
     const { good, allocations } = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 3, expiresAt: dayAfter(DAY, 1) });
-      const good = await batchIdOf(db, asAdmin(), product.id, { quantity: 3 });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      await batchIdOf(db, asAdmin(), product.variantId, {
+        quantity: 3,
+        expiresAt: dayAfter(DAY, 1),
+      });
+      const good = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       // the first batch is over by the payment, the good one gives the units
       await setShopDay(db, dayAfter(DAY, 2));
       const result = await pay(db, admin.id, orderId);
@@ -785,21 +867,23 @@ describe('a batch that is over', () => {
       return { good, allocations: await allocationsOf(db, admin.id, orderId) };
     });
 
-    expect(allocations).toEqual([{ productId: product.id, batchId: good, quantity: 2 }]);
+    expect(allocations).toEqual([
+      { productId: product.id, variantId: product.variantId, batchId: good, quantity: 2 },
+    ]);
   });
 
   // the units were held while they were good; what is over is never sold, the money goes back
   it('refuses a payment of held units whose batch is over since, and changes nothing', async () => {
     const { result, state, stock, allocations } = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 3, expiresAt: DAY });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3, expiresAt: DAY });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       await setShopDay(db, dayAfter(DAY));
       const result = await pay(db, admin.id, orderId);
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
         allocations: await allocationsOf(db, admin.id, orderId),
       };
     });
@@ -813,8 +897,8 @@ describe('a batch that is over', () => {
   it('refuses a late payment when only units that are over are there', async () => {
     const result = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 3, expiresAt: DAY });
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3, expiresAt: DAY });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       await db.as(asSystem());
       await db.rows('select 1 as done from cartlify.unconfirm_order($1::int)', orderId);
       await setShopDay(db, dayAfter(DAY));
@@ -827,13 +911,160 @@ describe('a batch that is over', () => {
   it('writes off the units of a batch that is over first', async () => {
     const { over, taken } = await inRolledBackTx(async (db) => {
       await setShopDay(db, DAY);
-      await batchIdOf(db, asAdmin(), product.id, { quantity: 2 });
-      const over = await batchIdOf(db, asAdmin(), product.id, { quantity: 2, expiresAt: DAY });
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 2 });
+      const over = await batchIdOf(db, asAdmin(), product.variantId, {
+        quantity: 2,
+        expiresAt: DAY,
+      });
       await setShopDay(db, dayAfter(DAY));
-      const outcome = await writeOff(db, asAdmin(), product.id, { quantity: 2, reason: 'expired' });
+      const outcome = await writeOff(db, asAdmin(), product.variantId, {
+        quantity: 2,
+        reason: 'expired',
+      });
       return { over, taken: outcome.ok ? outcome.rows[0]!.taken : outcome };
     });
 
     expect(taken).toEqual([{ batchId: over, quantity: 2, unitCost: '2.5' }]);
+  });
+});
+
+// the variants of one product are separate goods: each one has its own batches, stock, reserve and
+// lines of the log, and a sale takes the units of the variant it names
+describe('the variants of one product', () => {
+  it('keep the batches, the stock and the lines of the log apart', async () => {
+    const { first, second, stocks, batches, lines, check } = await inRolledBackTx(async (db) => {
+      const first = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3 });
+      const second = await batchIdOf(db, asAdmin(), sibling.id, { quantity: 4 });
+      return {
+        first,
+        second,
+        stocks: [
+          await stockOf(db, admin.id, product.variantId),
+          await stockOf(db, admin.id, sibling.id),
+        ],
+        batches: [
+          await batchesOf(db, admin.id, product.variantId),
+          await batchesOf(db, admin.id, sibling.id),
+        ],
+        lines: [
+          await stockLogOf(db, admin.id, product.variantId, 'stock.delivery'),
+          await stockLogOf(db, admin.id, sibling.id, 'stock.delivery'),
+        ],
+        check: await checkDeferredNow(db),
+      };
+    });
+
+    expect(stocks).toEqual([
+      { stock: 3, reserved: 0 },
+      { stock: 4, reserved: 0 },
+    ]);
+    expect(batches.map((list) => list.map((b) => b.id))).toEqual([[first], [second]]);
+    expect(lines.map((list) => list.map((line) => line.stockAfter))).toEqual([[3], [4]]);
+    expect(check.ok).toBe(true);
+  });
+
+  it('write off only what their own batches have, whatever the others of the product hold', async () => {
+    const { outcome, stocks } = await inRolledBackTx(async (db) => {
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3 });
+      await batchIdOf(db, asAdmin(), sibling.id, { quantity: 4 });
+      const outcome = await writeOff(db, asAdmin(), product.variantId, { quantity: 4 });
+      return {
+        outcome,
+        stocks: [
+          await stockOf(db, admin.id, product.variantId),
+          await stockOf(db, admin.id, sibling.id),
+        ],
+      };
+    });
+
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('INSUFFICIENT_AVAILABLE_STOCK'),
+    });
+    expect(stocks).toEqual([
+      { stock: 3, reserved: 0 },
+      { stock: 4, reserved: 0 },
+    ]);
+  });
+
+  it('hold the reserve of an order apart: a waiting order of one leaves the other free', async () => {
+    const { outcome, stocks } = await inRolledBackTx(async (db) => {
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3 });
+      await batchIdOf(db, asAdmin(), sibling.id, { quantity: 4 });
+      await waitingOrderOf(db, owner.id, [[product.variantId, 3]]);
+      const outcome = await writeOff(db, asAdmin(), sibling.id, { quantity: 4 });
+      return {
+        outcome,
+        stocks: [
+          await stockOf(db, admin.id, product.variantId),
+          await stockOf(db, admin.id, sibling.id),
+        ],
+      };
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(stocks).toEqual([
+      { stock: 3, reserved: 3 },
+      { stock: 0, reserved: 0 },
+    ]);
+  });
+
+  it('are sold from their own batches by an order of both, and a cancel gives them back there', async () => {
+    const { mine, theirs, allocations, paid, cancelled, check } = await inRolledBackTx(
+      async (db) => {
+        const mine = await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5 });
+        const theirs = await batchIdOf(db, asAdmin(), sibling.id, { quantity: 5 });
+        const orderId = await waitingOrderOf(db, owner.id, [
+          [product.variantId, 2],
+          [sibling.id, 3],
+        ]);
+        const result = await pay(db, admin.id, orderId);
+        if (result !== 'PAID') throw new Error(`pay_order answered ${result}`);
+        const allocations = await allocationsOf(db, admin.id, orderId);
+        const paid = [
+          await stockOf(db, admin.id, product.variantId),
+          await stockOf(db, admin.id, sibling.id),
+        ];
+        await db.as(asAdmin());
+        await db.rows('select 1 as done from cartlify.cancel_paid_order($1::int)', orderId);
+        return {
+          mine,
+          theirs,
+          allocations,
+          paid,
+          cancelled: [
+            await stockOf(db, admin.id, product.variantId),
+            await stockOf(db, admin.id, sibling.id),
+          ],
+          check: await checkDeferredNow(db),
+        };
+      },
+    );
+
+    expect(allocations).toEqual([
+      { productId: product.id, variantId: product.variantId, batchId: mine, quantity: 2 },
+      { productId: product.id, variantId: sibling.id, batchId: theirs, quantity: 3 },
+    ]);
+    expect(paid).toEqual([
+      { stock: 3, reserved: 0 },
+      { stock: 2, reserved: 0 },
+    ]);
+    expect(cancelled).toEqual([
+      { stock: 5, reserved: 0 },
+      { stock: 5, reserved: 0 },
+    ]);
+    expect(check.ok).toBe(true);
+  });
+
+  it('count the units of their own batches that are over', async () => {
+    const counted = await inRolledBackTx(async (db) => {
+      await setShopDay(db, '2030-06-10');
+      await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3, expiresAt: '2030-06-10' });
+      await batchIdOf(db, asAdmin(), sibling.id, { quantity: 4, expiresAt: '2030-06-10' });
+      await setShopDay(db, '2030-06-11');
+      return [await expiredUnitsOf(db, product.variantId), await expiredUnitsOf(db, sibling.id)];
+    });
+
+    expect(counted).toEqual([3, 4]);
   });
 });

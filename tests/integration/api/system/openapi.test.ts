@@ -66,7 +66,7 @@ describe('GET /documentation/json', () => {
   it.each([
     ['post', '/api/auth/login'],
     ['post', '/api/auth/refresh'],
-    ['delete', '/api/favorites/{productId}'],
+    ['delete', '/api/favorites/{variantId}'],
     ['patch', '/api/users/me'],
     ['delete', '/api/users/me'],
   ])('asks the csrf header of %s %s', (method, path) => {
@@ -208,8 +208,9 @@ describe('the users routes', () => {
 });
 
 describe('the product routes', () => {
-  // the create route takes only a form: its images are files, a json body never had them
-  it('lists only the form of POST /api/products/, with its image files', () => {
+  // the create route takes only a form: its images are files, a json body never had them; the
+  // variants are a JSON text in a field of it
+  it('lists only the form of POST /api/products/, with its image files and its variants', () => {
     const content = operation('post', '/api/products/').requestBody!.content;
 
     expect(Object.keys(content)).toEqual(['multipart/form-data']);
@@ -217,23 +218,22 @@ describe('the product routes', () => {
     expect(Object.keys(form).sort()).toEqual([
       'categoryId',
       'description',
-      'heightMm',
+      'documentIds',
+      'euResponsible.address',
+      'euResponsible.country',
+      'euResponsible.email',
+      'euResponsible.name',
+      'euResponsibleId',
       'images',
-      'lengthMm',
+      'manufacturer.address',
+      'manufacturer.country',
+      'manufacturer.email',
+      'manufacturer.name',
+      'manufacturerId',
       'name',
-      'price',
-      'safety.manufacturer.address',
-      'safety.manufacturer.country',
-      'safety.manufacturer.email',
-      'safety.manufacturer.name',
-      'safety.responsiblePerson.address',
-      'safety.responsiblePerson.email',
-      'safety.responsiblePerson.name',
-      'safety.warnings',
-      'sku',
-      'weightGrams',
-      'widthMm',
-      'withoutShippingData',
+      'stock',
+      'variants',
+      'warnings',
     ]);
     expect(form.images).toMatchObject({
       type: 'array',
@@ -241,11 +241,26 @@ describe('the product routes', () => {
     });
   });
 
-  it('lists the json body and the form of PATCH /api/products/{productId}, images only in the form', () => {
+  // the pictures of a product are its gallery (POST /api/products/{productId}/images); the price,
+  // the article number and the weight are the variant's
+  it('lists the json body and the form of PATCH /api/products/{productId}, no pictures in either, no field of a variant', () => {
     const content = operation('patch', '/api/products/{productId}').requestBody!.content;
 
     expect(Object.keys(content).sort()).toEqual(['application/json', 'multipart/form-data']);
-    expect(propertiesOf(content['application/json']!.schema)).not.toHaveProperty('images');
+    for (const type of ['application/json', 'multipart/form-data']) {
+      const fields = propertiesOf(content[type]!.schema);
+
+      for (const field of ['images', 'price', 'sku', 'weightGrams', 'sale']) {
+        expect(fields).not.toHaveProperty(field);
+      }
+      expect(fields).toHaveProperty('name');
+    }
+  });
+
+  it('lists the form of POST /api/products/{productId}/images with its image files', () => {
+    const content = operation('post', '/api/products/{productId}/images').requestBody!.content;
+
+    expect(Object.keys(content)).toEqual(['multipart/form-data']);
     expect(propertiesOf(content['multipart/form-data']!.schema).images).toMatchObject({
       type: 'array',
       items: { type: 'string', format: 'binary' },
@@ -262,6 +277,11 @@ describe('the product routes', () => {
       'patch',
       '/api/products/{productId}',
       ['200', '400', '401', '403', '404', '409', '413', '415', '429', '500', '503'],
+    ],
+    [
+      'post',
+      '/api/products/{productId}/images',
+      ['201', '400', '401', '403', '404', '409', '413', '429', '500', '503'],
     ],
     [
       'patch',
@@ -288,7 +308,139 @@ describe('the product routes', () => {
     expect(shapes.sort()).toEqual(['amount,endsAt', 'endsAt,percent', 'null']);
   });
 
-  it('shows the sale of a product next to its price, only while it lasts', () => {
+  // the variants named are the ones of the product; without them every variant for sale
+  it('takes the variants to put on sale in the body of PATCH /api/products/{productId}/sale', () => {
+    const body = resolve(
+      operation('patch', '/api/products/{productId}/sale').requestBody!.content['application/json']!
+        .schema,
+    );
+
+    expect(Object.keys(propertiesOf(body)).sort()).toEqual(['sale', 'variantIds']);
+    expect(requiredOf(body)).toEqual(['sale']);
+  });
+
+  it('answers the state of each variant to the routes of a sale', () => {
+    for (const [method, path] of [
+      ['patch', '/api/products/{productId}/sale'],
+      ['post', '/api/products/sales'],
+    ] as const) {
+      const answer = resolve(
+        (
+          operation(method, path).responses?.['200']?.content?.['application/json'] as {
+            schema: Schema;
+          }
+        ).schema,
+      );
+      const variants = propertiesOf(answer).variants as unknown as { items: Schema };
+
+      expect(Object.keys(propertiesOf(answer))).toEqual(['variants']);
+      expect(Object.keys(propertiesOf(variants.items)).sort()).toEqual(
+        [
+          'id',
+          'name',
+          'price',
+          'productId',
+          'salePriorPrice',
+          'salePrice',
+          'saleEndsAt',
+          'status',
+        ].sort(),
+      );
+    }
+  });
+
+  it('takes a variant or a product in each item of POST /api/products/sales', () => {
+    const body = resolve(
+      operation('post', '/api/products/sales').requestBody!.content['application/json']!.schema,
+    );
+    const items = propertiesOf(body).items as unknown as { items: Schema };
+
+    expect(Object.keys(propertiesOf(items.items)).sort()).toEqual([
+      'productId',
+      'sale',
+      'variantId',
+    ]);
+    expect(requiredOf(items.items)).toEqual(['sale']);
+  });
+
+  describe('the change of the price of variants', () => {
+    it('takes the price and the word on the sale in the body of the change of a variant', () => {
+      const body = resolve(
+        operation('patch', '/api/products/{productId}/variants/{variantId}').requestBody!.content[
+          'application/json'
+        ]!.schema,
+      );
+
+      expect(Object.keys(propertiesOf(body))).toEqual(
+        expect.arrayContaining(['price', 'sale', 'sku', 'weightGrams', 'position', 'images']),
+      );
+      expect(requiredOf(body)).toEqual([]);
+    });
+
+    // the pictures are one list for every variant named (the plan: pictures for the whole product or
+    // the variants chosen); an article number, a barcode and a place are of one variant alone
+    it('lists PATCH /api/products/{productId}/variants with the names of the variants and no field of one variant alone', () => {
+      const route = operation('patch', '/api/products/{productId}/variants');
+      const body = resolve(route.requestBody!.content['application/json']!.schema);
+
+      expect(Object.keys(propertiesOf(body)).sort()).toEqual(
+        [
+          'variantIds',
+          'price',
+          'sale',
+          'weightGrams',
+          'lengthMm',
+          'widthMm',
+          'heightMm',
+          'withoutShippingData',
+          'attributes',
+          'images',
+          'stock',
+        ].sort(),
+      );
+      expect(Object.keys(route.responses ?? {})).toEqual(
+        expect.arrayContaining(['200', '400', '401', '403', '404', '409', '500']),
+      );
+    });
+
+    it('lists PATCH /api/products/variants/batch with up to 100 items and the variant of each', () => {
+      const route = operation('patch', '/api/products/variants/batch');
+      const body = resolve(route.requestBody!.content['application/json']!.schema);
+      const items = propertiesOf(body).items as unknown as { items: Schema; maxItems: number };
+
+      expect(requiredOf(body)).toEqual(['items']);
+      expect(items.maxItems).toBe(100);
+      expect(requiredOf(items.items)).toEqual(['variantId']);
+      expect(Object.keys(propertiesOf(items.items))).toEqual(
+        expect.arrayContaining(['variantId', 'price', 'sale', 'weightGrams']),
+      );
+      expect(route.security).toEqual([{ accessTokenCookie: [], csrfTokenHeader: [] }]);
+    });
+
+    it.each([
+      ['patch', '/api/products/{productId}/variants'],
+      ['patch', '/api/products/variants/batch'],
+    ])('names VARIANTS_INVALID among the refusals of %s %s', (method, path) => {
+      const responses = (operation(method, path).responses ?? {}) as Record<string, Description>;
+
+      for (const status of ['400', '404', '409']) {
+        expect(responses[status]?.description).toContain('VARIANTS_INVALID');
+      }
+    });
+  });
+
+  it('asks the variant in the query of the price history of a product', () => {
+    const query = operation('get', '/api/products/{productId}/price-history').parameters ?? [];
+
+    expect(
+      query
+        .filter((parameter) => parameter.in === 'query')
+        .map((p) => p.name)
+        .sort(),
+    ).toEqual(['cursor', 'limit', 'variantId']);
+  });
+
+  it('shows the sale of a variant next to its price, only while it lasts', () => {
     const answerOf = (path: string) =>
       resolve(
         (
@@ -297,12 +449,17 @@ describe('the product routes', () => {
           }
         ).schema,
       );
-    const card = answerOf('/api/products/{productId}');
-    const item = resolve(
-      (propertiesOf(answerOf('/api/products/')).items as { items: Schema }).items,
+    const cardVariant = resolve(
+      propertiesOf(answerOf('/api/products/{productId}')).variant as Schema,
     );
+    const variantOnItsOwn = answerOf('/api/products/{productId}/variants/{variantId}');
+    // the rows of the list carry the short form of the variant the same way
+    const listRow = resolve(
+      (propertiesOf(answerOf('/api/products/')).items as unknown as { items: Schema }).items,
+    );
+    const rowVariant = resolve(propertiesOf(listRow).variant as Schema);
 
-    for (const schema of [card, item]) {
+    for (const schema of [cardVariant, variantOnItsOwn, rowVariant]) {
       // a buyer gets them while the sale lasts, an admin always, null without a sale
       expect(Object.keys(propertiesOf(schema))).toEqual(
         expect.arrayContaining(['salePrice', 'saleEndsAt']),
@@ -313,50 +470,89 @@ describe('the product routes', () => {
   });
 
   // a buyer and an admin get other fields of a product: the fields of an admin are optional, and
-  // the card of a buyer has no popularity
-  it('requires of a product only the fields every role gets, with its category', () => {
-    const answerOf = (path: string) =>
-      resolve(
-        (
-          operation('get', path).responses?.['200']?.content?.['application/json'] as {
-            schema: Schema;
-          }
-        ).schema,
-      );
-    const card = answerOf('/api/products/{productId}');
-    const item = resolve(
-      (propertiesOf(answerOf('/api/products/')).items as { items: Schema }).items,
+  // the card of a buyer has no popularity. The price, the stock and the picture are the variant's
+  it('requires of the product of the card only the fields every role gets, with its category', () => {
+    const card = resolve(
+      propertiesOf(
+        resolve(
+          (
+            operation('get', '/api/products/{productId}').responses?.['200']?.content?.[
+              'application/json'
+            ] as { schema: Schema }
+          ).schema,
+        ),
+      ).product as Schema,
     );
-    const every = [
+
+    expect(requiredOf(card).sort()).toEqual([
       'avgRating',
       'category',
       'createdAt',
+      'documents',
+      'euResponsible',
       'id',
-      'images',
+      'manufacturer',
       'name',
-      'price',
       'reviewsCount',
+      'warnings',
+    ]);
+    expect(propertiesOf(card)).not.toHaveProperty('categoryId');
+    for (const field of ['price', 'stock', 'sku', 'images']) {
+      expect(propertiesOf(card)).not.toHaveProperty(field);
+    }
+    expect(Object.keys(propertiesOf(card))).toEqual(
+      expect.arrayContaining([
+        'popularity',
+        'views',
+        'updatedAt',
+        'popularityOverride',
+        'popularityOverrideUntil',
+        'deletedAt',
+        'gallery',
+      ]),
+    );
+  });
+
+  it('requires of the variant of the card only the fields every role gets', () => {
+    const variant = resolve(
+      propertiesOf(
+        resolve(
+          (
+            operation('get', '/api/products/{productId}').responses?.['200']?.content?.[
+              'application/json'
+            ] as { schema: Schema }
+          ).schema,
+        ),
+      ).variant as Schema,
+    );
+
+    expect(requiredOf(variant).sort()).toEqual([
+      'attributes',
+      'heightMm',
+      'id',
+      'image',
+      'images',
+      'lengthMm',
+      'name',
+      'position',
+      'price',
       'sku',
       'stock',
-    ];
-
-    expect(requiredOf(card).sort()).toEqual(every);
-    expect(requiredOf(item).sort()).toEqual(every);
-    for (const schema of [card, item]) {
-      expect(propertiesOf(schema)).not.toHaveProperty('categoryId');
-      expect(Object.keys(propertiesOf(schema))).toEqual(
-        expect.arrayContaining([
-          'popularity',
-          'views',
-          'updatedAt',
-          'totalStock',
-          'reservedStock',
-          'popularityOverride',
-          'popularityOverrideUntil',
-          'deletedAt',
-        ]),
-      );
-    }
+      'values',
+      'weightGrams',
+      'widthMm',
+    ]);
+    expect(Object.keys(propertiesOf(variant))).toEqual(
+      expect.arrayContaining([
+        'barcode',
+        'totalStock',
+        'reservedStock',
+        'expiredStock',
+        'lastUnitCost',
+        'visible',
+        'deletedAt',
+      ]),
+    );
   });
 
   it('lists the flags of an admin among the query of GET /api/products/', () => {
@@ -491,9 +687,10 @@ describe('the refusals every route shares', () => {
       .map(({ method, path }) => `${method} ${path}`);
 
     expect(naming.sort()).toEqual([
-      'patch /api/products/{productId}',
       'patch /api/users/me',
+      'post /api/admin/documents/',
       'post /api/products/',
+      'post /api/products/{productId}/images',
       'put /api/categories/{categoryId}/image',
     ]);
   });
@@ -549,6 +746,7 @@ describe('the refusals every route shares', () => {
   it('gives a csv report as text/csv next to its json', () => {
     for (const path of [
       '/api/admin/reports/accounting/products',
+      '/api/admin/reports/accounting/variants',
       '/api/admin/reports/accounting/categories',
       '/api/admin/reports/accounting/timeline',
     ]) {

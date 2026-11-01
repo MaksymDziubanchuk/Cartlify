@@ -10,6 +10,9 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
+  receiveBatch,
+  stockLogOf,
   stockOf,
   type TestProduct,
   type TestUser,
@@ -22,7 +25,7 @@ import {
   placeUnconfirmedOrder,
   deliveryAnswer,
 } from '../../../helpers/orders.js';
-import { placePaidOrder } from '../../../helpers/payments.js';
+import { placePaidOrder, placePaidOrderOf } from '../../../helpers/payments.js';
 import { refundsOf, stripeRequestsDuring, withStripeOutOfReach } from '../../../helpers/stripe.js';
 
 // POST /api/orders/:orderId/cancel: an admin cancels a paid or shipped order, for example one that
@@ -131,6 +134,80 @@ describe('POST /api/orders/:orderId/cancel', () => {
       expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
     });
 
+    // a sale takes the units from the batches of the variant that is bought, the batch that ends
+    // first before the others; the cancel puts each unit back into the batch it came from, and the
+    // other variant of the product, with its own batches, is left as it was
+    it('puts the units back into the same batches of the right variant', async () => {
+      const black = await createProduct({ price: 10, stock: 0 });
+      products.push(black);
+      const white = await createVariant(black.id, { price: 12, stock: 0 });
+      const blackBatch = await receiveBatch({ variantId: black.variantId }, { quantity: 3 });
+      const whiteEnding = await receiveBatch(
+        { variantId: white.id },
+        { quantity: 2, expiresAt: '2099-01-01' },
+      );
+      const whiteOpen = await receiveBatch({ variantId: white.id }, { quantity: 4 });
+      const untouched = await createVariant(black.id, { price: 14, stock: 6 });
+      const batchIds = [blackBatch, whiteEnding, whiteOpen];
+      const remaining = async () =>
+        Object.fromEntries(
+          (
+            await asAdmin((tx) =>
+              tx.productBatch.findMany({
+                where: { id: { in: batchIds } },
+                select: { id: true, remaining: true },
+              }),
+            )
+          ).map((batch) => [batch.id, batch.remaining]),
+        );
+
+      const { orderId } = await placePaidOrderOf(app, csrf, await newUser(), [
+        { item: black, quantity: 2 },
+        { item: { variantId: white.id }, quantity: 3 },
+      ]);
+
+      expect(await remaining()).toEqual({ [blackBatch]: 1, [whiteEnding]: 0, [whiteOpen]: 3 });
+      expect(await stockOf({ variantId: untouched.id })).toEqual({ stock: 6, reservedStock: 0 });
+
+      const res = await cancel(admin, orderId);
+
+      expect(res.statusCode).toBe(200);
+      expect(await remaining()).toEqual({ [blackBatch]: 3, [whiteEnding]: 2, [whiteOpen]: 4 });
+      expect(await stockOf({ variantId: black.variantId })).toEqual({ stock: 3, reservedStock: 0 });
+      expect(await stockOf({ variantId: white.id })).toEqual({ stock: 6, reservedStock: 0 });
+      expect(await stockOf({ variantId: untouched.id })).toEqual({ stock: 6, reservedStock: 0 });
+      // the cancelled order still names what was bought, each variant with its own copy
+      expect(res.json().items).toHaveLength(2);
+
+      // the stock log: the sale at the payment (no actor) and the units back at the cancel (the
+      // admin who cancelled), a line for each variant, all with the order; none for the sibling
+      const lines = await stockLogOf({ orderId });
+      expect(
+        lines.map((line) => [line.variantId, line.event, line.quantityChange, line.stockAfter]),
+      ).toEqual([
+        [black.variantId, 'stock.sale', -2, 1],
+        [white.id, 'stock.sale', -3, 3],
+        [black.variantId, 'stock.cancel_return', 2, 3],
+        [white.id, 'stock.cancel_return', 3, 6],
+      ]);
+      expect(lines.map((line) => line.actorId)).toEqual([null, null, admin.id, admin.id]);
+      // the white units came from the batch that ends first, then the open one; they go back there
+      expect(lines[3]!.meta).toEqual([
+        {
+          field: 'batches',
+          old: null,
+          new: [
+            { batchId: whiteEnding, quantity: 2, unitCost: '1' },
+            { batchId: whiteOpen, quantity: 1, unitCost: '1' },
+          ],
+        },
+      ]);
+      expect(lines[3]!.meta).toEqual(lines[1]!.meta);
+      expect(await stockLogOf({ variantId: untouched.id })).toEqual([
+        expect.objectContaining({ event: 'stock.delivery', stockAfter: 6 }),
+      ]);
+    });
+
     it('answers the admin how to reach the buyer', async () => {
       const buyer = await newUser();
       const { orderId } = await paidOrder(buyer);
@@ -157,6 +234,8 @@ describe('POST /api/orders/:orderId/cancel', () => {
       ]);
       expect(records[0]!.meta).toEqual(
         expect.arrayContaining([
+          // the id of the order, the id its lines of the stock log carry
+          { field: 'orderId', old: null, new: orderId },
           { field: 'status', old: 'paid', new: 'cancelled' },
           expect.objectContaining({
             field: 'refund',

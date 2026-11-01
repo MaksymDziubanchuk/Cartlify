@@ -103,7 +103,7 @@ async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArg
 
 type StepMoney = MoneyColumns & { n: bigint };
 
-// the money of each step: the products of the scope, a step by its number
+// the money of each step: the variants of the scope, a step by its number
 async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, steps: Step[]) {
   const froms = steps.map((step) => step.from.toISOString());
   const tos = steps.map((step) => step.to.toISOString());
@@ -120,7 +120,7 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
         from steps as b
         join cartlify.orders as o on ${inStep(time)} ${sales}
         join cartlify.order_items as oi on oi."orderId" = o.id
-        where oi."productId" in (select id from scope)
+        where oi."variantId" in (select id from scope)
         group by b.n
       ),
       ${Prisma.raw(`${name}_cost`)} as (
@@ -129,7 +129,7 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
         join cartlify.orders as o on ${inStep(time)} ${sales}
         join cartlify.order_batch_allocations as a on a."orderId" = o.id
         join cartlify.product_batches as pb on pb.id = a."batchId"
-        where a."productId" in (select id from scope)
+        where a."variantId" in (select id from scope)
         group by b.n
       )
     `;
@@ -148,22 +148,21 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
              sum((e->>'quantity')::int)::bigint as units,
              sum((e->>'quantity')::int * (e->>'unitCost')::numeric) as value
       from steps as b
-      join cartlify.admin_audit_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
+      join cartlify.stock_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
       cross join lateral jsonb_array_elements(l.meta) as c
       cross join lateral jsonb_array_elements(
         case when c->>'field' = 'batches' and jsonb_typeof(c->'new') = 'array'
              then c->'new' else '[]'::jsonb end
       ) as e
-      where l.action = 'STOCK_WRITE_OFF'::cartlify."AdminAuditAction"
-        and l."entityType" = 'product'::cartlify."AdminAuditEntityType"
-        and l."entityId" in (select id from scope)
+      where l.event = 'stock.write_off'
+        and l."variantId" in (select id from scope)
       group by b.n
     ),
     bought as (
       select b.n, sum(pb.quantity)::bigint as units, sum(pb.quantity * pb."unitCost") as value
       from steps as b
       join cartlify.product_batches as pb on ${inStep(Prisma.sql`pb."createdAt"`)}
-      where pb."productId" in (select id from scope)
+      where pb."variantId" in (select id from scope)
       group by b.n
     )
     select b.n,
@@ -216,7 +215,7 @@ export async function reportTimeline(
       }
 
       const money = steps.length ? await moneyOfSteps(db, args, steps) : [];
-      // the delivery is of the whole shop: a report of some products or of a category has none
+      // the delivery is of the whole shop: a report of some products, variants or of a category has none
       const delivery =
         steps.length && isWholeShop(args)
           ? await db.$queryRaw<(DeliveryColumns & { n: bigint })[]>(deliveryOfStepsSql(steps))

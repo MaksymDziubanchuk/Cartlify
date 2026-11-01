@@ -11,7 +11,7 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse, expiredOfOrders, readOrderResponse } from './helpers/index.js';
+import { mapOrderRowToResponse, orderContextOf, readOrderResponse } from './helpers/index.js';
 import { sendOrderNoticeEmail } from './helpers/sendOrderNoticeEmail.helper.js';
 import type { OrderStatusMailLogger } from './helpers/sendOrderStatusEmail.helper.js';
 
@@ -177,7 +177,7 @@ export async function updateShipment(
       const row = await readOrderResponse(db, orderId);
       if (!row) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_SHIPMENT_UPDATE' });
 
-      return mapOrderRowToResponse(row, await expiredOfOrders(db, [row]), 'admin');
+      return mapOrderRowToResponse(row, await orderContextOf(db, [row]), 'admin');
     });
 
     // the change is committed; the mail never undoes it, a failure is only logged

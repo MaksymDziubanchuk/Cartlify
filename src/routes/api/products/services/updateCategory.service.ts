@@ -1,5 +1,3 @@
-import { expiredUnitsNow } from '@db/expiredStock.helper.js';
-import { lastUnitCostsNow } from '@db/lastUnitCost.helper.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -9,12 +7,9 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
 import {
-  mapProductRowToResponse,
-  productResponseSelect,
-  readCategoryPath,
-  readProductImageUrls,
-  normalizeFindProductByIdInput,
   assertCategoryExists,
+  normalizeFindProductByIdInput,
+  readAdminCard,
 } from './helpers/index.js';
 
 import type {
@@ -42,7 +37,7 @@ export async function updateProductCategory({
 
   try {
     // update category and write admin audit log in the same tx
-    const updated = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
@@ -57,7 +52,7 @@ export async function updateProductCategory({
       const product = await tx.product.update({
         where: { id: productIdRaw },
         data: { categoryId: categoryIdRaw },
-        select: productResponseSelect,
+        select: { id: true, categoryId: true },
       });
 
       // build audit changes only for category update
@@ -76,25 +71,6 @@ export async function updateProductCategory({
         event: 'product.category_change',
         changes,
       });
-
-      return product;
-    });
-
-    // fetch all product images and map urls
-    const images = await readProductImageUrls(updated.id);
-    const expired = await expiredUnitsNow([updated.id]);
-    const costs = await lastUnitCostsNow({ actorId, actorRole }, [updated.id]);
-
-    // map db row into api dto
-    return mapProductRowToResponse({
-      product: {
-        ...updated,
-        expiredStock: expired.get(updated.id) ?? 0,
-        lastUnitCost: costs.get(updated.id) ?? null,
-      },
-      images,
-      categoryPath: await readCategoryPath(updated.category.id),
-      view: 'admin',
     });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
@@ -102,4 +78,7 @@ export async function updateProductCategory({
 
     throw new InternalError({ reason: 'PRODUCTS_UPDATE_CATEGORY_UNEXPECTED' }, err);
   }
+
+  // the card of an admin after the move
+  return readAdminCard({ actorId, actorRole }, productIdRaw);
 }

@@ -1,9 +1,27 @@
-import { describe, expect, it } from '@jest/globals';
+import { copyFileSync, rmSync } from 'node:fs';
+import path from 'node:path';
+
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { rejectedBy } from '../../helpers/errors.js';
 import { importWithEnv } from '../../helpers/freshImport.js';
 
 type Env = (typeof import('@config/env.js'))['default'];
+
+// a logo is a file inside src/static: the pictures of the tests are put there as copies for the
+// time of this file
+const JPEG_LOGO = `src/static/images/env-test-${process.pid}.jpg`;
+const WEBP_LOGO = `src/static/images/env-test-${process.pid}.webp`;
+
+beforeAll(() => {
+  copyFileSync('tests/fixtures/images/jpeg-baseline.jpg', JPEG_LOGO);
+  copyFileSync('tests/fixtures/images/webp-lossy.webp', WEBP_LOGO);
+});
+
+afterAll(() => {
+  rmSync(JPEG_LOGO, { force: true });
+  rmSync(WEBP_LOGO, { force: true });
+});
 
 const loadEnv = async (values: Record<string, string> = {}) =>
   (await importWithEnv<typeof import('@config/env.js')>('@config/env.js', values)).default as Env;
@@ -23,12 +41,17 @@ const SHOP_DEFAULTS = {
   LIMIT_REVIEW_PER_USER: 30,
   LOGIN_FAILURES_BEFORE_PAUSE: 5,
   UPLOAD_MAX_BYTES: 5_000_000,
-  PRODUCT_IMAGES_MAX: 10,
+  PRODUCT_IMAGES_MAX: 50,
+  PRODUCT_VARIANTS_MAX: 200,
+  VARIANT_IMAGES_MAX: 10,
+  DOCUMENT_MAX_BYTES: 20_000_000,
+  PRODUCT_DOCUMENTS_MAX: 20,
+  ATTRIBUTE_OPTIONS_MAX: 500,
   VERIFY_TTL_MS: 86_400_000,
   ORDER_RESERVATION_MINUTES: 15,
   STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 30,
   REVIEW_CHECK_ENABLED: true,
-  SHOP_LOGO_PATH: 'src/static/images/logo3.png',
+  SHOP_LOGO_PATH: 'src/static/images/logo-mail.png',
   WEB_PAGE_OAUTH_CALLBACK: '/auth/callback',
   WEB_PAGE_LOGIN: '/web/login',
   WEB_PAGE_VERIFY_EMAIL: '/web/login',
@@ -258,11 +281,16 @@ describe('the settings of the shop', () => {
         LOGIN_FAILURES_BEFORE_PAUSE: '8',
         UPLOAD_MAX_BYTES: '10000000',
         PRODUCT_IMAGES_MAX: '20',
+        PRODUCT_VARIANTS_MAX: '30',
+        VARIANT_IMAGES_MAX: '4',
+        DOCUMENT_MAX_BYTES: '30000000',
+        PRODUCT_DOCUMENTS_MAX: '5',
+        ATTRIBUTE_OPTIONS_MAX: '40',
         VERIFY_TTL_MS: '7200000',
         ORDER_RESERVATION_MINUTES: '20',
         STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '45',
         REVIEW_CHECK_ENABLED: 'false',
-        SHOP_LOGO_PATH: ' tests/fixtures/images/jpeg-baseline.jpg ',
+        SHOP_LOGO_PATH: ` ${JPEG_LOGO} `,
         WEB_PAGE_OAUTH_CALLBACK: '/login/done',
         WEB_PAGE_LOGIN: '/sign-in',
         WEB_PAGE_VERIFY_EMAIL: '/account/verify',
@@ -285,11 +313,16 @@ describe('the settings of the shop', () => {
       LOGIN_FAILURES_BEFORE_PAUSE: 8,
       UPLOAD_MAX_BYTES: 10_000_000,
       PRODUCT_IMAGES_MAX: 20,
+      PRODUCT_VARIANTS_MAX: 30,
+      VARIANT_IMAGES_MAX: 4,
+      DOCUMENT_MAX_BYTES: 30_000_000,
+      PRODUCT_DOCUMENTS_MAX: 5,
+      ATTRIBUTE_OPTIONS_MAX: 40,
       VERIFY_TTL_MS: 7_200_000,
       ORDER_RESERVATION_MINUTES: 20,
       STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 45,
       REVIEW_CHECK_ENABLED: false,
-      SHOP_LOGO_PATH: 'tests/fixtures/images/jpeg-baseline.jpg',
+      SHOP_LOGO_PATH: JPEG_LOGO,
       WEB_PAGE_OAUTH_CALLBACK: '/login/done',
       WEB_PAGE_LOGIN: '/sign-in',
       WEB_PAGE_VERIFY_EMAIL: '/account/verify',
@@ -325,6 +358,11 @@ describe('the settings of the shop', () => {
       'LOGIN_FAILURES_BEFORE_PAUSE',
       'UPLOAD_MAX_BYTES',
       'PRODUCT_IMAGES_MAX',
+      'PRODUCT_VARIANTS_MAX',
+      'VARIANT_IMAGES_MAX',
+      'DOCUMENT_MAX_BYTES',
+      'PRODUCT_DOCUMENTS_MAX',
+      'ATTRIBUTE_OPTIONS_MAX',
       'VERIFY_TTL_MS',
       'ORDER_RESERVATION_MINUTES',
       'STRIPE_PAGE_AFTER_RESERVATION_MINUTES',
@@ -339,6 +377,29 @@ describe('the settings of the shop', () => {
     // the start error lands in the hosting logs, the value stays out of it
     expect((err as Error).message).not.toContain(`: ${value}`);
   });
+
+  // a limit of the catalog or of its files with a zero too many would let a request write thousands
+  // of rows or hold a transaction for minutes: the start stops above the bound, the bound itself is
+  // let through
+  it.each([
+    ['UPLOAD_MAX_BYTES', 100_000_000],
+    ['PRODUCT_IMAGES_MAX', 1_000],
+    ['PRODUCT_VARIANTS_MAX', 10_000],
+    ['VARIANT_IMAGES_MAX', 100],
+    ['DOCUMENT_MAX_BYTES', 100_000_000],
+    ['PRODUCT_DOCUMENTS_MAX', 100],
+    ['ATTRIBUTE_OPTIONS_MAX', 10_000],
+  ] as const)(
+    'stops the start when %s is over %p, and takes the bound itself',
+    async (key, max) => {
+      const err = await rejectedBy(() => loadEnv({ [key]: String(max + 1) }));
+
+      expect((err as Error).message).toBe(`Invalid env variable: ${key} must be at most ${max}`);
+      // the start error lands in the hosting logs: the bound is named, the value is not
+      expect((err as Error).message).not.toContain(String(max + 1));
+      expect((await loadEnv({ [key]: String(max) }))[key]).toBe(max);
+    },
+  );
 
   // stripe keeps a page at least 30 minutes and at most 24 hours from its opening; the page is
   // opened in the reservation and closes the minutes after its end
@@ -378,14 +439,27 @@ describe('the settings of the shop', () => {
   // would break each one of them
   it.each([
     ['a file that is not there', 'src/static/images/no-such-logo.png'],
-    ['a file that is no png or jpeg', 'tests/fixtures/images/webp-lossy.webp'],
+    ['a file that is no png or jpeg', WEBP_LOGO],
     ['a folder', 'src/static/images'],
+    // the logo is public at /static: a file outside src/static is not
+    ['a file outside src/static', 'tests/fixtures/images/jpeg-baseline.jpg'],
+    ['a path that leaves src/static', 'src/static/../../tests/fixtures/images/jpeg-baseline.jpg'],
+    [
+      'an absolute path outside src/static',
+      path.resolve('tests/fixtures/images/jpeg-baseline.jpg'),
+    ],
   ])('stops the start when SHOP_LOGO_PATH names %s', async (_case, value) => {
     const err = await rejectedBy(() => loadEnv({ SHOP_LOGO_PATH: value }));
 
     expect((err as Error).message).toBe(
-      'Invalid env variable: SHOP_LOGO_PATH must be a png or jpeg file',
+      'Invalid env variable: SHOP_LOGO_PATH must be a png or jpeg file inside src/static',
     );
+  });
+
+  it('takes a logo inside src/static named by its absolute path', async () => {
+    const logo = path.resolve(JPEG_LOGO);
+
+    expect((await loadEnv({ SHOP_LOGO_PATH: logo })).SHOP_LOGO_PATH).toBe(logo);
   });
 
   // the links of the mails and the redirect after a login go to these pages: a value that leaves

@@ -27,10 +27,24 @@ describe('chatWsConnectionManager', () => {
       socketId: id,
       actorId: 3,
       actorRole: 'USER',
+      // the address the socket was opened from: none when the request has none
+      ip: null,
       joinedThreads: new Set(),
       // the counts of what it sends, against the limits of a socket (chatWs.limits.ts)
       limits: expect.anything(),
     });
+  });
+
+  // the bot counts the turns of a guest by the address the socket came from
+  it('keeps the address the socket was opened from', () => {
+    const id = manager.add({
+      socket: socket(),
+      actorId: 3,
+      actorRole: 'USER',
+      ip: '203.0.113.7',
+    });
+
+    expect(manager.getContext(id)?.ip).toBe('203.0.113.7');
   });
 
   it('gives every connection its own id, also two tabs of the same user', () => {

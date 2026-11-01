@@ -5,9 +5,11 @@ import { startApp, stopApp } from '../../../helpers/app.js';
 import {
   createCategory,
   createProduct,
+  createVariant,
   deleteProductFromCatalog,
   uniqueTag,
 } from '../../../helpers/factories.js';
+import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 
 // the branches of the tree in the catalog: a parent category shows the products of its children, the
 // card names the way to its category from the top, the tree comes with the products of each branch
@@ -33,10 +35,10 @@ async function tree() {
   return { top, kitchen, kettles, pan, kettle };
 }
 
-const idsOf = (res: { json: () => { items: Array<{ id: number }> } }) =>
+const idsOf = (res: { json: () => { items: Array<{ product: { id: number } }> } }) =>
   res
     .json()
-    .items.map((item) => item.id)
+    .items.map((item) => item.product.id)
     .sort((a, b) => a - b);
 
 describe('GET /api/products by a category', () => {
@@ -68,7 +70,7 @@ describe('GET /api/products/:productId', () => {
 
     const res = await app.inject({ method: 'GET', url: `/api/products/${kettle.id}` });
 
-    expect(res.json().category).toEqual({
+    expect(res.json().product.category).toEqual({
       id: kettles.id,
       name: kettles.name,
       slug: expect.any(String),
@@ -85,7 +87,7 @@ describe('GET /api/products/:productId', () => {
 
     const res = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
 
-    expect(res.json().category).toMatchObject({ id: top.id, path: [] });
+    expect(res.json().product.category).toMatchObject({ id: top.id, path: [] });
   });
 });
 
@@ -120,5 +122,47 @@ describe('GET /api/categories/tree', () => {
         },
       ],
     });
+  });
+});
+
+// a product is counted when a buyer sees a variant of it (alive, with a picture), once whatever the
+// number of its variants
+describe('GET /api/categories/tree and the variants of the products', () => {
+  it('counts a product once, whatever the number of its variants', async () => {
+    const { top, kitchen, pan } = await tree();
+    await createVariant(pan.id, { price: 11 });
+    await createVariant(pan.id, { price: 12 });
+
+    const res = await app.inject({ method: 'GET', url: '/api/categories/tree' });
+
+    const nodes = res.json().items as Node[];
+    expect(nodeOf(nodes, kitchen.id)?.productCount).toBe(2);
+    expect(nodeOf(nodes, top.id)?.productCount).toBe(2);
+  });
+
+  it('leaves out a product none of whose variants a buyer sees', async () => {
+    const { top, kitchen, pan } = await tree();
+    // the variants of the pan: one taken out of sale, one with no picture
+    const removed = await createVariant(pan.id, { price: 11 });
+    await markVariantDeleted(removed.id);
+    await markVariantDeleted(pan.variantId);
+    const bare = await createVariant(pan.id, { price: 12 });
+    await stripVariantImages(bare.id);
+
+    const res = await app.inject({ method: 'GET', url: '/api/categories/tree' });
+
+    const nodes = res.json().items as Node[];
+    expect(nodeOf(nodes, kitchen.id)?.productCount).toBe(1);
+    expect(nodeOf(nodes, top.id)?.productCount).toBe(1);
+  });
+
+  it('counts a product that keeps one variant a buyer sees', async () => {
+    const { kitchen, pan } = await tree();
+    await markVariantDeleted(pan.variantId);
+    await createVariant(pan.id, { price: 11 });
+
+    const res = await app.inject({ method: 'GET', url: '/api/categories/tree' });
+
+    expect(nodeOf(res.json().items as Node[], kitchen.id)?.productCount).toBe(2);
   });
 });

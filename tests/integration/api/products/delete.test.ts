@@ -114,7 +114,27 @@ describe('DELETE /api/products/:productId', () => {
     const res = await cardOf(product.id, accessCookie(admin));
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: product.id, deletedAt: expect.any(String) });
+    expect(res.json().product).toMatchObject({ id: product.id, deletedAt: expect.any(String) });
+    // the variants went out of sale with the product, at the same time
+    expect(res.json().variant).toMatchObject({
+      id: product.variantId,
+      deletedAt: res.json().product.deletedAt,
+      visible: false,
+    });
+  });
+
+  it('takes the variants of the product out of sale with it', async () => {
+    const product = await newProduct();
+
+    await removeProduct(product.id);
+
+    const variant = await asAdmin((tx) =>
+      tx.productVariant.findUniqueOrThrow({
+        where: { id: product.variantId },
+        select: { deletedAt: true },
+      }),
+    );
+    expect(variant.deletedAt).toBeInstanceOf(Date);
   });
 
   it('answers 409 the second time and writes no second line', async () => {

@@ -9,16 +9,22 @@ import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
   closeSessions,
+  createAttribute,
+  createCategory,
   createChatThread,
   createProduct,
   createUser,
+  createVariant,
+  createVariantValue,
+  deleteProductFromCatalog,
   receiveBatch,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
 import { moveClock } from '../../../helpers/payments.js';
-import { testTx } from '../../../helpers/db.js';
+import { asAdmin, testTx } from '../../../helpers/db.js';
+import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 
 // the alerts of an admin (GET /api/admin/alerts): each kind of the work of an admin with how many
 // cases wait, its threshold and the ready request to the list of the app that shows the cases;
@@ -82,6 +88,8 @@ const ADMIN_KINDS = [
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
+  'variants_missing_required',
+  'products_hidden_from_buyers',
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
@@ -128,6 +136,14 @@ const listOf = async (actor: TestUser, kind: string, narrow: Record<string, stri
 };
 
 const idsIn = (page: { items: Array<{ id: number | string }> }) => page.items.map((row) => row.id);
+
+// the cases of the stock are variants: the list of the app gives rows { product, variant }
+const variantIdsIn = (page: { items: unknown[] }) =>
+  (page.items as Array<{ variant: { id: number } }>).map((row) => row.variant.id);
+
+// the same for the lists of products: the rows are { product, variant }
+const productIdsIn = (page: { items: unknown[] }) =>
+  (page.items as Array<{ product: { id: number } }>).map((row) => row.product.id);
 
 // the order looked for in a list narrowed by its number: a number in the search finds the order of
 // that number and also the orders of other files whose postal code or tracking number holds those
@@ -235,6 +251,25 @@ describe('GET /api/admin/alerts', () => {
     expect(alerts.find((alert) => alert.kind === 'worker_stalled')).toMatchObject({
       threshold: 180,
       list: null,
+    });
+    // the cases of the gaps are variants (a row each) and products
+    expect(alerts.find((alert) => alert.kind === 'variants_missing_required')).toMatchObject({
+      subscribed: true,
+      dismissed: 0,
+      threshold: null,
+      list: {
+        path: '/api/products',
+        query: { missingRequired: 'true', group: 'false', sort: 'popularity', order: 'desc' },
+      },
+    });
+    expect(alerts.find((alert) => alert.kind === 'products_hidden_from_buyers')).toMatchObject({
+      subscribed: true,
+      dismissed: 0,
+      threshold: null,
+      list: {
+        path: '/api/products',
+        query: { hiddenFromBuyers: 'true', sort: 'popularity', order: 'desc' },
+      },
     });
   });
 
@@ -426,7 +461,9 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     await expectNotCounted(someone, 'shipped_without_cost', sent);
   });
 
-  it('products of the catalog that lack the weight or the sizes', async () => {
+  // the cases of the kinds about the stock and the shipping data are variants: a product with three
+  // variants without stock is three cases, a variant taken out of sale is none
+  it('variants of the catalog that lack the weight or the sizes', async () => {
     const someone = await newUser({ role: 'ADMIN' });
     const bare = await createProduct({ price: 10, stock: 3 });
     const whole = await createProduct({
@@ -437,52 +474,226 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     });
 
     expect(
-      idsIn(
+      variantIdsIn(
         await listOf(someone, 'products_without_shipping_data', { categoryIds: bare.categoryId }),
       ),
-    ).toEqual([bare.id]);
+    ).toEqual([bare.variantId]);
     expect(
-      idsIn(
+      variantIdsIn(
         await listOf(someone, 'products_without_shipping_data', { categoryIds: whole.categoryId }),
       ),
     ).toEqual([]);
-    await expectCounted(someone, 'products_without_shipping_data', bare.id);
-    await expectNotCounted(someone, 'products_without_shipping_data', whole.id);
+    await expectCounted(someone, 'products_without_shipping_data', bare.variantId);
+    await expectNotCounted(someone, 'products_without_shipping_data', whole.variantId);
   });
 
-  it('products of the catalog with no free units', async () => {
+  it('counts the shipping data of each variant of a product on its own', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({
+      price: 10,
+      stock: 3,
+      weightGrams: 100,
+      sizesMm: { length: 10, width: 10, height: 10 },
+    });
+    const bare = await createVariant(product.id, { price: 10, stock: 3 });
+    const gone = await createVariant(product.id, { price: 10, stock: 3 });
+    await markVariantDeleted(gone.id);
+
+    expect(
+      variantIdsIn(
+        await listOf(someone, 'products_without_shipping_data', {
+          categoryIds: product.categoryId,
+        }),
+      ),
+    ).toEqual([bare.id]);
+    await expectCounted(someone, 'products_without_shipping_data', bare.id);
+    await expectNotCounted(someone, 'products_without_shipping_data', product.variantId);
+    // a variant taken out of sale is no case, whatever it lacks
+    await expectNotCounted(someone, 'products_without_shipping_data', gone.id);
+  });
+
+  // the set of a category marks a characteristic required (an admin sets it by PUT
+  // /api/categories/{categoryId}/attributes); a variant that has no value of it is a case
+  async function requiredIn(categoryId: number) {
+    const attribute = await createAttribute({ type: 'text' });
+    await asAdmin((tx) =>
+      tx.categoryAttribute.create({
+        data: { categoryId, attributeId: attribute.id, required: true },
+      }),
+    );
+    return attribute;
+  }
+
+  it('variants that lack a characteristic their category requires', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { id: categoryId } = await createCategory();
+    const colour = await requiredIn(categoryId);
+    const lacks = await createProduct({ categoryId, price: 10, stock: 3 });
+    const has = await createProduct({ categoryId, price: 10, stock: 3 });
+    await createVariantValue(has.variantId, colour.id, { text: 'red' });
+    const page = await listOf(someone, 'variants_missing_required', { categoryIds: categoryId });
+
+    expect(variantIdsIn(page)).toEqual([lacks.variantId]);
+    expect(page.total).toBe(1);
+    await expectCounted(someone, 'variants_missing_required', lacks.variantId);
+    await expectNotCounted(someone, 'variants_missing_required', has.variantId);
+  });
+
+  it('counts the variants of a product that lack it one by one, and not those taken out of sale', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { id: categoryId } = await createCategory();
+    await requiredIn(categoryId);
+    const product = await createProduct({ categoryId, price: 10, stock: 3 });
+    const second = await createVariant(product.id, { price: 10, stock: 3 });
+    const gone = await createVariant(product.id, { price: 10, stock: 3 });
+    await markVariantDeleted(gone.id);
+    const page = await listOf(someone, 'variants_missing_required', { categoryIds: categoryId });
+
+    expect(variantIdsIn(page).sort((a, b) => a - b)).toEqual(
+      [product.variantId, second.id].sort((a, b) => a - b),
+    );
+    expect(page.total).toBe(2);
+    await expectCounted(someone, 'variants_missing_required', second.id);
+    await expectNotCounted(someone, 'variants_missing_required', gone.id);
+  });
+
+  it('counts the variants of a category that inherits the requirement of its parent', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { id: parentId } = await createCategory();
+    const { id: childId } = await createCategory({ parentId });
+    await requiredIn(parentId);
+    const child = await createProduct({ categoryId: childId, price: 10, stock: 3 });
+
+    await expectCounted(someone, 'variants_missing_required', child.variantId);
+  });
+
+  it('does not count the variants of a product removed from the catalog as lacking a required characteristic', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { id: categoryId } = await createCategory();
+    await requiredIn(categoryId);
+    const removed = await createProduct({ categoryId, price: 10, stock: 3 });
+    await deleteProductFromCatalog(removed.id);
+
+    await expectNotCounted(someone, 'variants_missing_required', removed.variantId);
+  });
+
+  it('products none of whose variants a buyer sees', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const { id: categoryId } = await createCategory();
+    const noPicture = await createProduct({ categoryId, price: 10, stock: 3 });
+    await stripVariantImages(noPicture.variantId);
+    const allRemoved = await createProduct({ categoryId, price: 10, stock: 3 });
+    await markVariantDeleted(allRemoved.variantId);
+    const seen = await createProduct({ categoryId, price: 10, stock: 3 });
+    // one variant that is seen is enough
+    const mixed = await createProduct({ categoryId, price: 10, stock: 3 });
+    await createVariant(mixed.id, { price: 10, stock: 3 });
+    await stripVariantImages(mixed.variantId);
+    const page = await listOf(someone, 'products_hidden_from_buyers', { categoryIds: categoryId });
+
+    expect(productIdsIn(page).sort((a, b) => a - b)).toEqual(
+      [noPicture.id, allRemoved.id].sort((a, b) => a - b),
+    );
+    expect(page.total).toBe(2);
+    await expectCounted(someone, 'products_hidden_from_buyers', noPicture.id);
+    await expectCounted(someone, 'products_hidden_from_buyers', allRemoved.id);
+    await expectNotCounted(someone, 'products_hidden_from_buyers', seen.id);
+    await expectNotCounted(someone, 'products_hidden_from_buyers', mixed.id);
+  });
+
+  it('does not count a product removed from the catalog as hidden from buyers: it was removed on purpose', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const removed = await createProduct({ price: 10, stock: 3 });
+    await deleteProductFromCatalog(removed.id);
+
+    await expectNotCounted(someone, 'products_hidden_from_buyers', removed.id);
+  });
+
+  it('variants of the catalog with no free units', async () => {
     const someone = await newUser({ role: 'ADMIN' });
     const none = await createProduct({ price: 10, stock: 0 });
     const some = await createProduct({ price: 10, stock: 3 });
 
-    expect(idsIn(await listOf(someone, 'out_of_stock', { categoryIds: none.categoryId }))).toEqual([
-      none.id,
-    ]);
-    expect(idsIn(await listOf(someone, 'out_of_stock', { categoryIds: some.categoryId }))).toEqual(
-      [],
-    );
-    await expectCounted(someone, 'out_of_stock', none.id);
-    await expectNotCounted(someone, 'out_of_stock', some.id);
+    expect(
+      variantIdsIn(await listOf(someone, 'out_of_stock', { categoryIds: none.categoryId })),
+    ).toEqual([none.variantId]);
+    expect(
+      variantIdsIn(await listOf(someone, 'out_of_stock', { categoryIds: some.categoryId })),
+    ).toEqual([]);
+    await expectCounted(someone, 'out_of_stock', none.variantId);
+    await expectNotCounted(someone, 'out_of_stock', some.variantId);
   });
 
-  it('products of the catalog with free units up to the threshold', async () => {
+  it('counts a product with three variants without stock as three cases, the ones in sale only', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({ price: 10, stock: 0 });
+    const second = await createVariant(product.id, { price: 10, stock: 0 });
+    const third = await createVariant(product.id, { price: 10, stock: 0 });
+    const stocked = await createVariant(product.id, { price: 10, stock: 4 });
+    const gone = await createVariant(product.id, { price: 10, stock: 0 });
+    await markVariantDeleted(gone.id);
+    const page = await listOf(someone, 'out_of_stock', { categoryIds: product.categoryId });
+
+    expect(variantIdsIn(page).sort((a, b) => a - b)).toEqual(
+      [product.variantId, second.id, third.id].sort((a, b) => a - b),
+    );
+    expect(page.total).toBe(3);
+    for (const id of [product.variantId, second.id, third.id]) {
+      await expectCounted(someone, 'out_of_stock', id);
+    }
+    await expectNotCounted(someone, 'out_of_stock', stocked.id);
+    // the variant taken out of sale is no case of this kind
+    await expectNotCounted(someone, 'out_of_stock', gone.id);
+  });
+
+  it('counts the variants of a product removed from the catalog in none of the kinds of the stock', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const none = await createProduct({ price: 10, stock: 0 });
+    const few = await createProduct({ price: 10, stock: 2 });
+    await deleteProductFromCatalog(none.id);
+    await deleteProductFromCatalog(few.id);
+
+    await expectNotCounted(someone, 'out_of_stock', none.variantId);
+    await expectNotCounted(someone, 'low_stock', few.variantId);
+    await expectNotCounted(someone, 'products_without_shipping_data', few.variantId);
+  });
+
+  it('variants of the catalog with free units up to the threshold', async () => {
     const someone = await newUser({ role: 'ADMIN' });
     const few = await createProduct({ price: 10, stock: 2 });
     const more = await createProduct({ price: 10, stock: 8 });
 
-    expect(idsIn(await listOf(someone, 'low_stock', { categoryIds: few.categoryId }))).toEqual([
-      few.id,
-    ]);
-    expect(idsIn(await listOf(someone, 'low_stock', { categoryIds: more.categoryId }))).toEqual([]);
-    await expectCounted(someone, 'low_stock', few.id);
-    await expectNotCounted(someone, 'low_stock', more.id);
+    expect(
+      variantIdsIn(await listOf(someone, 'low_stock', { categoryIds: few.categoryId })),
+    ).toEqual([few.variantId]);
+    expect(
+      variantIdsIn(await listOf(someone, 'low_stock', { categoryIds: more.categoryId })),
+    ).toEqual([]);
+    await expectCounted(someone, 'low_stock', few.variantId);
+    await expectNotCounted(someone, 'low_stock', more.variantId);
 
     await setThreshold(someone, 'low_stock', 10);
 
-    expect(idsIn(await listOf(someone, 'low_stock', { categoryIds: more.categoryId }))).toEqual([
-      more.id,
-    ]);
-    await expectCounted(someone, 'low_stock', more.id);
+    expect(
+      variantIdsIn(await listOf(someone, 'low_stock', { categoryIds: more.categoryId })),
+    ).toEqual([more.variantId]);
+    await expectCounted(someone, 'low_stock', more.variantId);
+  });
+
+  it('counts the free units of each variant on its own, and not those of a variant taken out of sale', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    // the product has plenty in all, but one variant has few
+    const product = await createProduct({ price: 10, stock: 20 });
+    const few = await createVariant(product.id, { price: 10, stock: 2 });
+    const goneFew = await createVariant(product.id, { price: 10, stock: 1 });
+    await markVariantDeleted(goneFew.id);
+
+    expect(
+      variantIdsIn(await listOf(someone, 'low_stock', { categoryIds: product.categoryId })),
+    ).toEqual([few.id]);
+    await expectCounted(someone, 'low_stock', few.id);
+    await expectNotCounted(someone, 'low_stock', product.variantId);
+    await expectNotCounted(someone, 'low_stock', goneFew.id);
   });
 
   it('batches whose last good day is within the days of the threshold', async () => {
@@ -517,6 +728,41 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     ]);
     await expectCounted(someone, 'expired_batches', over);
     await expectNotCounted(someone, 'expired_batches', good);
+  });
+
+  it('shows the batches of a variant taken out of sale, in the kinds of the batches', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({ price: 10, stock: 0 });
+    const soon = await receiveBatch(product.id, { quantity: 3, expiresAt: day(3) });
+    const over = await receiveBatch(product.id, { quantity: 3, expiresAt: day(1) });
+    await markVariantDeleted(product.variantId);
+
+    runClock(2 * DAY);
+
+    // the batch that ends in three days is still to come, the one of tomorrow is over
+    expect(idsIn(await listOf(someone, 'expiring_batches', { productId: product.id }))).toEqual([
+      soon,
+    ]);
+    expect(idsIn(await listOf(someone, 'expired_batches', { productId: product.id }))).toEqual([
+      over,
+    ]);
+    await expectCounted(someone, 'expiring_batches', soon);
+    await expectCounted(someone, 'expired_batches', over);
+  });
+
+  it('shows the batches of a variant by its id in the lists of the kinds of the batches', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({ price: 10, stock: 0 });
+    const other = await createVariant(product.id, { price: 10, stock: 0 });
+    const ofFirst = await receiveBatch(product.id, { quantity: 1, expiresAt: day(2) });
+    const ofOther = await receiveBatch({ variantId: other.id }, { quantity: 1, expiresAt: day(2) });
+
+    const onlyOther = await listOf(someone, 'expiring_batches', { variantId: other.id });
+    const both = await listOf(someone, 'expiring_batches', { productId: product.id });
+
+    expect(idsIn(onlyOther)).toEqual([ofOther]);
+    expect(idsIn(both).sort()).toEqual([ofFirst, ofOther].sort());
+    expect((both.items[0] as unknown as { variant: { id: number } }).variant.id).toBeGreaterThan(0);
   });
 
   it('chats with a message that waits for an admin', async () => {
@@ -652,6 +898,28 @@ describe('the subscriptions to the alerts', () => {
     expect(await alertOf(first, 'low_stock')).toMatchObject({ subscribed: true, threshold: 12 });
   });
 
+  it.each(['variants_missing_required', 'products_hidden_from_buyers'])(
+    'turns %s off and on for one admin, and it has no threshold',
+    async (kind) => {
+      const first = await newUser({ role: 'ADMIN' });
+      const second = await newUser({ role: 'ADMIN' });
+      expect(await itemOf(first, kind)).toEqual({ kind, subscribed: true, threshold: null });
+
+      const off = await turn(first, kind, false);
+
+      expect(off.statusCode).toBe(200);
+      expect(off.json()).toEqual({ kind, subscribed: false, threshold: null });
+      expect((await alertOf(first, kind)).subscribed).toBe(false);
+      expect((await alertOf(second, kind)).subscribed).toBe(true);
+      // the notifications ask for the kinds that are on
+      const followed = await alertsOf(first, '?subscribed=true');
+      expect(followed.alerts.map((alert) => alert.kind)).not.toContain(kind);
+
+      expect((await turn(first, kind, true)).json()).toMatchObject({ kind, subscribed: true });
+      expect((await alertOf(first, kind)).subscribed).toBe(true);
+    },
+  );
+
   it('takes a kind turned off twice as off', async () => {
     const someone = await newUser({ role: 'ADMIN' });
     await turn(someone, 'chats_waiting', false);
@@ -729,12 +997,15 @@ describe('PUT /api/admin/alerts/subscriptions/:kind/threshold', () => {
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
   });
 
-  it('answers ALERT_THRESHOLD_NOT_FOUND for a kind without a threshold', async () => {
-    const res = await setThreshold(await newUser({ role: 'ADMIN' }), 'paid_orders_waiting', 3);
+  it.each(['paid_orders_waiting', 'variants_missing_required', 'products_hidden_from_buyers'])(
+    'answers ALERT_THRESHOLD_NOT_FOUND for %s, a kind without a threshold',
+    async (kind) => {
+      const res = await setThreshold(await newUser({ role: 'ADMIN' }), kind, 3);
 
-    expect(res.statusCode).toBe(404);
-    expect(res.json()).toMatchObject({ errorCode: 'ALERT_THRESHOLD_NOT_FOUND' });
-  });
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ errorCode: 'ALERT_THRESHOLD_NOT_FOUND' });
+    },
+  );
 
   it('answers ALERT_KIND_NOT_FOUND for a kind of root for an admin', async () => {
     const res = await setThreshold(await newUser({ role: 'ADMIN' }), 'admin_actions', 3);

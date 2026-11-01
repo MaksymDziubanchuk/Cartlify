@@ -101,7 +101,7 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
       status: 'unconfirmed',
       confirmed: false,
       delivery: deliveryAnswer,
-      items: [{ productId: product.id, quantity: 2 }],
+      items: [{ variant: { id: product.variantId }, quantity: 2 }],
     });
     expect(res.json()).not.toHaveProperty('reservationExpiresAt');
     expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });

@@ -23,7 +23,8 @@ const codeOf = (fn: () => unknown) => {
   return (err as BadRequestError).errorCode;
 };
 
-const validProduct = { name: 'Desk lamp', price: 25.5, categoryId: 3 };
+// the price of a product is the price of its variants: a new product is the name, the text and the category
+const validProduct = { name: 'Desk lamp', categoryId: 3 };
 
 // a price is whole cents from 0 up to what numeric(10, 2) holds
 describe('isPrice', () => {
@@ -72,12 +73,14 @@ describe('isSkuTaken', () => {
     expect(
       isSkuTaken(
         unique({
-          driverAdapterError: { cause: { constraint: { index: 'products_sku_catalog_uidx' } } },
+          driverAdapterError: {
+            cause: { constraint: { index: 'product_variants_sku_catalog_uidx' } },
+          },
         }),
       ),
     ).toBe(true);
     expect(isSkuTaken(unique({ target: ['id'] }))).toBe(false);
-    expect(isSkuTaken(new Error('products_sku_catalog_uidx'))).toBe(false);
+    expect(isSkuTaken(new Error('product_variants_sku_catalog_uidx'))).toBe(false);
   });
 
   // a raw query fails with P2010 and the code of postgres inside (getPgCode)
@@ -89,7 +92,7 @@ describe('isSkuTaken', () => {
         driverAdapterError: {
           cause: {
             originalCode: '23505',
-            originalMessage: 'duplicate key value violates "products_sku_catalog_uidx"',
+            originalMessage: 'duplicate key value violates "product_variants_sku_catalog_uidx"',
           },
         },
       },
@@ -100,7 +103,7 @@ describe('isSkuTaken', () => {
 
   it('finds the index named in the text of the error when the details do not name it', () => {
     const named = new Prisma.PrismaClientKnownRequestError(
-      'Unique constraint failed on the constraint: `products_sku_catalog_uidx`',
+      'Unique constraint failed on the constraint: `product_variants_sku_catalog_uidx`',
       { code: 'P2002', clientVersion: 'test', meta: {} },
     );
 
@@ -111,12 +114,12 @@ describe('isSkuTaken', () => {
     const other = new Prisma.PrismaClientKnownRequestError('Foreign key failed', {
       code: 'P2003',
       clientVersion: 'test',
-      meta: { constraint: 'products_sku_catalog_uidx' },
+      meta: { constraint: 'product_variants_sku_catalog_uidx' },
     });
 
     expect(isSkuTaken(other)).toBe(false);
     expect(
-      isSkuTaken(Object.assign(new Error('products_sku_catalog_uidx'), { code: 'P2002' })),
+      isSkuTaken(Object.assign(new Error('product_variants_sku_catalog_uidx'), { code: 'P2002' })),
     ).toBe(false);
   });
 });
@@ -143,7 +146,6 @@ describe('normalizeCreateProductInput', () => {
     expect(out).toEqual({
       nameNorm: 'Desk lamp',
       descriptionNorm: 'Warm light',
-      priceRaw: 25.5,
       categoryIdRaw: 3,
     });
   });
@@ -157,16 +159,19 @@ describe('normalizeCreateProductInput', () => {
   it('reads multipart field objects', () => {
     const out = normalizeCreateProductInput({
       name: { value: 'Mug' },
-      price: { value: '4.99' },
       categoryId: { value: '2' },
     });
 
-    expect(out).toMatchObject({ nameNorm: 'Mug', priceRaw: 4.99, categoryIdRaw: 2 });
+    expect(out).toMatchObject({ nameNorm: 'Mug', categoryIdRaw: 2 });
   });
 
-  it('allows a free product', () => {
-    expect(normalizeCreateProductInput({ ...validProduct, price: 0 })).toMatchObject({
-      priceRaw: 0,
+  // the price is no field of a product any more: it is a price of its variants, so one sent here
+  // is not read at all
+  it('does not read a price', () => {
+    expect(normalizeCreateProductInput({ ...validProduct, price: 'free' } as never)).toEqual({
+      nameNorm: 'Desk lamp',
+      descriptionNorm: undefined,
+      categoryIdRaw: 3,
     });
   });
 
@@ -180,14 +185,9 @@ describe('normalizeCreateProductInput', () => {
   it.each([
     ['the name is blank', { name: '   ' }, 'PRODUCT_NAME_INVALID'],
     ['the name is missing', { name: undefined }, 'PRODUCT_NAME_INVALID'],
-    ['the price is negative', { price: -1 }, 'PRODUCT_PRICE_INVALID'],
-    ['the price is a word', { price: 'free' }, 'PRODUCT_PRICE_INVALID'],
-    // a blank multipart field must not turn into a price of 0
-    ['the price is blank', { price: '  ' }, 'PRODUCT_PRICE_INVALID'],
     ['the category is zero', { categoryId: 0 }, 'CATEGORY_ID_INVALID'],
     ['the category is missing', { categoryId: undefined }, 'CATEGORY_ID_INVALID'],
     ['the category is a fraction', { categoryId: 1.5 }, 'CATEGORY_ID_INVALID'],
-    ['the price has a part of a cent', { price: 10.004 }, 'PRODUCT_PRICE_INVALID'],
   ])('throws when %s', (_case, patch, code) => {
     expect(codeOf(() => normalizeCreateProductInput({ ...validProduct, ...patch }))).toBe(code);
   });
@@ -198,7 +198,6 @@ describe('normalizeUpdateProductInput', () => {
     expect(normalizeUpdateProductInput({})).toEqual({
       nameNorm: undefined,
       descriptionNorm: undefined,
-      priceRaw: undefined,
       categoryIdRaw: undefined,
       popularityOverrideRaw: undefined,
       popularityOverrideUntilDate: undefined,
@@ -218,7 +217,6 @@ describe('normalizeUpdateProductInput', () => {
       normalizeUpdateProductInput({
         name: '  Floor lamp ',
         description: '  Warm light  ',
-        price: '12.50',
         categoryId: '4',
         popularityOverride: '7',
         popularityOverrideUntil: until,
@@ -226,7 +224,6 @@ describe('normalizeUpdateProductInput', () => {
     ).toEqual({
       nameNorm: 'Floor lamp',
       descriptionNorm: 'Warm light',
-      priceRaw: 12.5,
       categoryIdRaw: 4,
       popularityOverrideRaw: 7,
       popularityOverrideUntilDate: new Date(until),
@@ -238,9 +235,8 @@ describe('normalizeUpdateProductInput', () => {
     expect(normalizeUpdateProductInput({ description: '   ' }).descriptionNorm).toBe('');
   });
 
-  it('takes a free product and a popularity override of 0', () => {
-    expect(normalizeUpdateProductInput({ price: 0, popularityOverride: 0 })).toMatchObject({
-      priceRaw: 0,
+  it('takes a popularity override of 0', () => {
+    expect(normalizeUpdateProductInput({ popularityOverride: 0 })).toMatchObject({
       popularityOverrideRaw: 0,
     });
   });
@@ -278,10 +274,6 @@ describe('normalizeUpdateProductInput', () => {
 
   it.each([
     ['the name is blank', { name: ' ' }, 'PRODUCT_NAME_INVALID'],
-    ['the price is negative', { price: -0.01 }, 'PRODUCT_PRICE_INVALID'],
-    ['the price is a word', { price: 'cheap' }, 'PRODUCT_PRICE_INVALID'],
-    ['the price has a part of a cent', { price: '10.004' }, 'PRODUCT_PRICE_INVALID'],
-    ['the price is above the highest one', { price: MAX_PRICE + 1 }, 'PRODUCT_PRICE_INVALID'],
     ['the category is negative', { categoryId: -4 }, 'CATEGORY_ID_INVALID'],
     ['the category is zero', { categoryId: 0 }, 'CATEGORY_ID_INVALID'],
     ['the category is a fraction', { categoryId: 2.5 }, 'CATEGORY_ID_INVALID'],
@@ -329,15 +321,52 @@ describe('assertPopularityOverridePair', () => {
 });
 
 describe('normalizeBulkUpdateProductsPriceInput', () => {
-  // the server always sets deleted to false unless the request says otherwise
-  it('changes every product that is not deleted when no scope is given', () => {
+  // the filter picks variants: the server always sets deleted to false unless the request says
+  // otherwise, and a variant taken out of sale (the ones of a deleted product too) is a deleted one
+  it('changes every variant that is not deleted when no scope is given', () => {
     const out = normalizeBulkUpdateProductsPriceInput({ mode: 'percent', value: 10 });
 
     expect(out).toEqual({
       mode: 'percent',
       value: 10,
       where: { AND: [{ deletedAt: null }] },
+      characteristics: [],
       dryRun: false,
+    });
+  });
+
+  describe('the characteristics of the scope (scope.f)', () => {
+    const scope = (f: unknown) =>
+      normalizeBulkUpdateProductsPriceInput({ mode: 'fixed', value: 1, scope: { f } });
+
+    it('has none when the scope names none', () => {
+      expect(scope(undefined).characteristics).toEqual([]);
+    });
+
+    it('reads a text and a list of texts the way the filter of the catalog does', () => {
+      expect(scope('12:45,46').characteristics).toEqual([
+        { kind: 'values', attributeId: 12, optionIds: [45, 46], entry: '12:45,46' },
+      ]);
+      expect(scope(['15:128..512', '20:yes']).characteristics.map((entry) => entry.kind)).toEqual([
+        'range',
+        'boolean',
+      ]);
+    });
+
+    it('leaves the other filters of the scope as they were', () => {
+      expect(scope('12:45').where).toEqual({ AND: [{ deletedAt: null }] });
+    });
+
+    it('refuses an entry that is wrong as the catalog does', () => {
+      expect(thrownBy(() => scope('black'))).toMatchObject({
+        statusCode: 400,
+        errorCode: 'FILTER_INVALID',
+        details: { reason: 'ENTRY_INVALID' },
+      });
+      expect(thrownBy(() => scope(['12:1', '12:2']))).toMatchObject({
+        errorCode: 'FILTER_INVALID',
+        details: { reason: 'ATTRIBUTE_REPEATED' },
+      });
     });
   });
 
@@ -354,23 +383,23 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
     );
   });
 
-  it('changes every product that is not deleted when the scope is empty', () => {
+  it('changes every variant that is not deleted when the scope is empty', () => {
     const out = normalizeBulkUpdateProductsPriceInput({ mode: 'percent', value: 10, scope: {} });
 
     expect(out.where).toEqual({ AND: [{ deletedAt: null }] });
   });
 
-  it('skips deleted products when the scope does not mention them', () => {
+  it('skips deleted variants when the scope does not mention them', () => {
     const out = normalizeBulkUpdateProductsPriceInput({
       mode: 'fixed',
       value: 1,
       scope: { categoryId: 3 },
     });
 
-    expect(out.where).toEqual({ AND: [{ categoryId: 3 }, { deletedAt: null }] });
+    expect(out.where).toEqual({ AND: [{ product: { categoryId: 3 } }, { deletedAt: null }] });
   });
 
-  it('changes only deleted products when the scope asks for them', () => {
+  it('changes only deleted variants when the scope asks for them', () => {
     const out = normalizeBulkUpdateProductsPriceInput({
       mode: 'fixed',
       value: 1,
@@ -389,6 +418,7 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
       scope: {
         categoryId: 4,
         productIds: [3, '3', 8],
+        variantIds: [9, '9', 12],
         minPrice: 10,
         maxPrice: 50,
         inStock: true,
@@ -404,10 +434,12 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
       dryRun: true,
       reason: 'winter sale',
       inStock: true,
+      characteristics: [],
       where: {
         AND: [
-          { categoryId: 4 },
-          { id: { in: [3, 8] } },
+          { product: { categoryId: 4 } },
+          { productId: { in: [3, 8] } },
+          { id: { in: [9, 12] } },
           { price: { gte: new Prisma.Decimal(10), lte: new Prisma.Decimal(50) } },
           { deletedAt: null },
         ],
@@ -488,6 +520,10 @@ describe('normalizeBulkUpdateProductsPriceInput', () => {
     ['a product id is 0', { scope: { productIds: [0] } }, 'PRODUCT_IDS_INVALID'],
     ['a product id is a fraction', { scope: { productIds: [1.5] } }, 'PRODUCT_IDS_INVALID'],
     ['a product id is a word', { scope: { productIds: ['x'] } }, 'PRODUCT_IDS_INVALID'],
+    ['a variant id is invalid', { scope: { variantIds: [1, -2] } }, 'VARIANT_IDS_INVALID'],
+    ['a variant id is 0', { scope: { variantIds: [0] } }, 'VARIANT_IDS_INVALID'],
+    ['a variant id is a fraction', { scope: { variantIds: [1.5] } }, 'VARIANT_IDS_INVALID'],
+    ['a variant id is a word', { scope: { variantIds: ['x'] } }, 'VARIANT_IDS_INVALID'],
     ['the min price is negative', { scope: { minPrice: -1 } }, 'MIN_PRICE_INVALID'],
     ['the min price is a word', { scope: { minPrice: 'low' } }, 'MIN_PRICE_INVALID'],
     ['the max price is negative', { scope: { maxPrice: -1 } }, 'MAX_PRICE_INVALID'],
