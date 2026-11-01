@@ -1,8 +1,11 @@
 // demo data of the shop made through its own routes, so it passes every check real data passes
-// and keeps working while the database changes: a tree of categories, products with images and
-// the data of safety, their stock by a delivery in batches, sales, a few buyers with carts,
-// confirmed orders, reviews and favorites. What is there already stays: categories are found by
-// slug, products by sku, a buyer with orders gets no more; a run adds only what is missing.
+// and keeps working while the database changes: a tree of categories, products with their variants
+// (one, two or three each, every variant with its pictures of the gallery, its price and its
+// article number, and the values of the characteristics that tell it from the others) and the data
+// of safety, the stock of each variant by a delivery in batches,
+// sales, a few buyers with carts, confirmed orders, reviews and favorites. What is there already
+// stays: categories are found by slug, products by name, a buyer with orders gets no more; a run
+// adds only what is missing.
 // The shop lets a buyer in only with a confirmed email, so the buyers take two runs: the first
 // registers them, each confirms the email by the link of the mail, the next run logs them in and
 // gives them their orders, reviews and favorites. A buyer accepts the versions of the terms and
@@ -92,7 +95,6 @@ const MAKERS = {
   },
 };
 
-// sale - a percent off for 14 days; expiresIn - the last good day of the batch, days from today
 // what a product of a category weighs and measures packed: grams, then length, width and height in
 // millimetres; the shop needs them to send an order
 const PACKAGES = {
@@ -104,172 +106,190 @@ const PACKAGES = {
   books: [600, 240, 170, 40],
 };
 
+// The characteristics the variants of a product are told apart by (no two variants of a product
+// have the same values of all of them). They go to the directory once, by name; a variant names
+// its values by the key: a value of a list by its name, a number or a text as it is.
+const GROUP = 'Demo characteristics';
+const CHARACTERISTICS = {
+  colour: {
+    name: 'Colour',
+    type: 'option',
+    isMain: true,
+    options: [
+      { name: 'Black', colorCode: '#000000' },
+      { name: 'White', colorCode: '#ffffff' },
+      { name: 'Silver', colorCode: '#c0c0c0' },
+      { name: 'Green', colorCode: '#2e8b57' },
+    ],
+  },
+  storage: { name: 'Storage', type: 'number', unit: 'GB', decimals: 0 },
+  size: { name: 'Size', type: 'text' },
+};
+
+// A product has one, two or three variants; what a buyer picks (memory, color, size) is a variant.
+// values - what tells the variant from the others of its product (see CHARACTERISTICS).
+// code - the number of the product, the article number of its variants is <code>-<their place>.
+// A variant has: price; units - what a delivery brings; cost - what a unit cost the shop;
+// sale - a percent off for 14 days; expiresIn - the last good day of the batch, days from today
 const PRODUCTS = [
   {
-    sku: 'DEMO-001',
+    code: 'DEMO-001',
     name: 'Aurora X1 smartphone',
     category: 'phones',
-    price: 499,
-    units: 25,
-    cost: 320,
     maker: 'devices',
     warnings: 'Keep the battery away from heat.',
+    variants: [
+      { price: 499, units: 25, cost: 320, values: { storage: 128 } },
+      { price: 549, units: 18, cost: 350, values: { storage: 256 } },
+      { price: 629, units: 10, cost: 410, values: { storage: 512 } },
+    ],
   },
   {
-    sku: 'DEMO-002',
+    code: 'DEMO-002',
     name: 'Aurora X1 Mini smartphone',
     category: 'phones',
-    price: 379,
-    units: 30,
-    cost: 240,
     maker: 'devices',
-    sale: 10,
+    variants: [
+      { price: 379, units: 30, cost: 240, sale: 10, values: { storage: 64 } },
+      { price: 429, units: 20, cost: 275, sale: 10, values: { storage: 128 } },
+    ],
   },
   {
-    sku: 'DEMO-003',
+    code: 'DEMO-003',
     name: 'Nimbus Fold smartphone',
     category: 'phones',
-    price: 1099,
-    units: 8,
-    cost: 760,
     maker: 'devices',
+    variants: [{ price: 1099, units: 8, cost: 760 }],
   },
   {
-    sku: 'DEMO-004',
+    code: 'DEMO-004',
     name: 'Vertex 14 laptop',
     category: 'laptops',
-    price: 1199,
-    units: 12,
-    cost: 850,
     maker: 'devices',
-    sale: 15,
+    variants: [
+      { price: 1199, units: 12, cost: 850, sale: 15, values: { storage: 512 } },
+      { price: 1499, units: 7, cost: 1080, sale: 15, values: { storage: 1024 } },
+    ],
   },
   {
-    sku: 'DEMO-005',
+    code: 'DEMO-005',
     name: 'Vertex 16 Pro laptop',
     category: 'laptops',
-    price: 1799,
-    units: 6,
-    cost: 1300,
     maker: 'devices',
+    variants: [{ price: 1799, units: 6, cost: 1300 }],
   },
   {
-    sku: 'DEMO-006',
+    code: 'DEMO-006',
     name: 'Echo Buds wireless earbuds',
     category: 'headphones',
-    price: 89.9,
-    units: 60,
-    cost: 41,
     maker: 'devices',
     warnings: 'Small parts, keep away from children.',
+    variants: [
+      { price: 89.9, units: 60, cost: 41, values: { colour: 'Black' } },
+      { price: 89.9, units: 45, cost: 41, values: { colour: 'White' } },
+      { price: 94.9, units: 30, cost: 44, values: { colour: 'Green' } },
+    ],
   },
   {
-    sku: 'DEMO-007',
+    code: 'DEMO-007',
     name: 'Echo Studio over-ear headphones',
     category: 'headphones',
-    price: 199,
-    units: 20,
-    cost: 120,
     maker: 'devices',
-    sale: 20,
+    variants: [
+      { price: 199, units: 20, cost: 120, sale: 20, values: { colour: 'Black' } },
+      { price: 219, units: 14, cost: 132, sale: 20, values: { colour: 'Silver' } },
+    ],
   },
   {
-    sku: 'DEMO-008',
+    code: 'DEMO-008',
     name: 'Barista espresso machine',
     category: 'kitchen',
-    price: 349,
-    units: 10,
-    cost: 210,
     maker: 'home',
     warnings: 'Hot surfaces while in use.',
+    variants: [{ price: 349, units: 10, cost: 210 }],
   },
   {
-    sku: 'DEMO-009',
+    code: 'DEMO-009',
     name: 'Ceramic chef knife',
     category: 'kitchen',
-    price: 59.9,
-    units: 40,
-    cost: 22,
     maker: 'home',
     warnings: 'Sharp blade.',
+    variants: [
+      { price: 59.9, units: 40, cost: 22, values: { size: '15 cm' } },
+      { price: 69.9, units: 25, cost: 27, values: { size: '20 cm' } },
+    ],
   },
   {
-    sku: 'DEMO-010',
-    name: 'Single origin coffee beans, 1 kg',
+    code: 'DEMO-010',
+    name: 'Single origin coffee beans',
     category: 'kitchen',
-    price: 24.5,
-    units: 80,
-    cost: 11,
     maker: 'home',
-    expiresIn: 120,
+    variants: [
+      { price: 24.5, units: 80, cost: 11, expiresIn: 120, values: { size: '1 kg' } },
+      { price: 7.5, units: 120, cost: 3.4, expiresIn: 120, values: { size: '250 g' } },
+    ],
   },
   {
-    sku: 'DEMO-011',
+    code: 'DEMO-011',
     name: 'Green tea, 100 bags',
     category: 'kitchen',
-    price: 8.9,
-    units: 120,
-    cost: 3.2,
     maker: 'home',
-    expiresIn: 5,
+    variants: [{ price: 8.9, units: 120, cost: 3.2, expiresIn: 5 }],
   },
   {
-    sku: 'DEMO-012',
+    code: 'DEMO-012',
     name: 'Arc floor lamp',
     category: 'lighting',
-    price: 129,
-    units: 15,
-    cost: 70,
     maker: 'home',
+    variants: [
+      { price: 129, units: 15, cost: 70, values: { colour: 'Black' } },
+      { price: 139, units: 9, cost: 76, values: { colour: 'White' } },
+    ],
   },
   {
-    sku: 'DEMO-013',
+    code: 'DEMO-013',
     name: 'Smart bulb E27, two pack',
     category: 'lighting',
-    price: 29.9,
-    units: 100,
-    cost: 12,
     maker: 'home',
-    sale: 25,
+    variants: [{ price: 29.9, units: 100, cost: 12, sale: 25 }],
   },
   {
-    sku: 'DEMO-014',
+    code: 'DEMO-014',
     name: 'The Pragmatic Shopkeeper, paperback',
     category: 'books',
-    price: 19.9,
-    units: 50,
-    cost: 7,
     maker: 'books',
+    variants: [{ price: 19.9, units: 50, cost: 7 }],
   },
   {
-    sku: 'DEMO-015',
+    code: 'DEMO-015',
     name: 'Databases in Depth, hardcover',
     category: 'books',
-    price: 44,
-    units: 25,
-    cost: 18,
     maker: 'books',
+    variants: [{ price: 44, units: 25, cost: 18 }],
   },
   {
-    sku: 'DEMO-016',
+    code: 'DEMO-016',
     name: 'A Short History of Trade',
     category: 'books',
-    price: 14.5,
-    units: 35,
-    cost: 5.5,
     maker: 'books',
+    variants: [{ price: 14.5, units: 35, cost: 5.5 }],
   },
 ];
 
-// what each buyer does: a confirmed order, and a cart left after it
+// the article number of the variant at the place n (from 1) of a product
+const skuOf = (product, n) => `${product.code}-${n}`;
+
+// what each buyer does: a confirmed order, and a cart left after it. An item of an order and a
+// favorite name a variant by its article number; a review names a product by its code. Olena keeps
+// two variants of one laptop among her favorites: the product counts her once
 const BUYERS = [
   {
     name: 'Olena',
     orders: [
       {
         items: [
-          ['DEMO-001', 1],
-          ['DEMO-006', 2],
+          ['DEMO-001-2', 1],
+          ['DEMO-006-1', 2],
         ],
         confirm: true,
       },
@@ -279,33 +299,33 @@ const BUYERS = [
       ['DEMO-006', 4, 'Good sound for the price.'],
       ['DEMO-014', 5, 'Read it in one evening.'],
     ],
-    favorites: ['DEMO-004', 'DEMO-008'],
+    favorites: ['DEMO-004-1', 'DEMO-004-2', 'DEMO-008-1'],
   },
   {
     name: 'Marco',
     orders: [
       {
         items: [
-          ['DEMO-008', 1],
-          ['DEMO-010', 2],
+          ['DEMO-008-1', 1],
+          ['DEMO-010-1', 2],
         ],
         confirm: true,
       },
-      { items: [['DEMO-013', 3]], confirm: false },
+      { items: [['DEMO-013-1', 3]], confirm: false },
     ],
     reviews: [
       ['DEMO-008', 5, 'Makes a proper espresso.'],
       ['DEMO-010', 4, 'Fruity and fresh.'],
     ],
-    favorites: ['DEMO-005', 'DEMO-012', 'DEMO-007'],
+    favorites: ['DEMO-005-1', 'DEMO-012-2', 'DEMO-007-1'],
   },
   {
     name: 'Sofia',
     orders: [
       {
         items: [
-          ['DEMO-015', 1],
-          ['DEMO-016', 1],
+          ['DEMO-015-1', 1],
+          ['DEMO-016-1', 1],
         ],
         confirm: false,
       },
@@ -314,7 +334,7 @@ const BUYERS = [
       ['DEMO-015', 4, 'Dense, but worth it.'],
       ['DEMO-012', 3, 'Nice light, the cable is short.'],
     ],
-    favorites: ['DEMO-002', 'DEMO-011'],
+    favorites: ['DEMO-002-1', 'DEMO-011-1'],
   },
 ];
 
@@ -524,10 +544,13 @@ async function makeCategories(admin) {
   return new Map(CATEGORIES.map((category) => [category.slug, found.get(category.slug)]));
 }
 
-// the products of the demo the catalog has, by sku; the catalog a guest sees, every product of it
+// the products of the demo the catalog has, by name (the code of a product is the article number
+// of its variants, which a buyer does not see in the catalog); the catalog a guest sees, every
+// product of it
 async function demoProductsIn(base, categoryIds) {
   const guest = new Session(base);
-  const bySku = new Map();
+  const names = new Set(PRODUCTS.map((product) => product.name));
+  const byName = new Map();
   let cursor = null;
   do {
     const query = new URLSearchParams({ categoryIds: categoryIds.join(','), limit: '100' });
@@ -537,21 +560,127 @@ async function demoProductsIn(base, categoryIds) {
       [200],
       'the catalog',
     );
-    for (const product of res.body.items) {
-      if (product.sku?.startsWith('DEMO-')) bySku.set(product.sku, product.id);
+    for (const row of res.body.items) {
+      if (names.has(row.product.name)) byName.set(row.product.name, row.product.id);
     }
     cursor = res.body.nextCursor ?? null;
   } while (cursor);
-  return bySku;
+  return byName;
 }
 
-async function makeProducts(admin, base, categories) {
-  const bySku = await demoProductsIn(base, [...categories.values()]);
+// the manufacturers go to the directory once, a product names one by its id; a manufacturer the
+// directory has already (a second run) gives its id with the refusal
+async function makeManufacturers(admin) {
+  const ids = new Map();
+
+  for (const [key, maker] of Object.entries(MAKERS)) {
+    const res = await admin.send('POST', '/api/admin/parties', { json: maker });
+    expectStatus(res, [201, 409], `the manufacturer ${maker.name}`);
+    ids.set(key, res.status === 201 ? res.body.id : res.body.details.partyId);
+  }
+
+  step(`manufacturers: ${ids.size} in the directory`);
+  return ids;
+}
+
+// The characteristics of the demo go to the directory once: found by name, made when there is none
+// (a group of their own holds them), each choice with its values. Gives the id of each characteristic
+// by its key, and the id of each value of a list by its name
+async function makeCharacteristics(admin) {
+  const groups = expectStatus(
+    await admin.send('GET', '/api/admin/attribute-groups'),
+    [200],
+    'the groups',
+  );
+  let groupId = groups.body.items.find((group) => group.name === GROUP)?.id;
+  if (groupId === undefined) {
+    const res = await admin.send('POST', '/api/admin/attribute-groups', { json: { name: GROUP } });
+    groupId = expectStatus(res, [201], 'the group of the characteristics').body.id;
+  }
+
+  const found = new Map();
+  for (const [key, spec] of Object.entries(CHARACTERISTICS)) {
+    const query = new URLSearchParams({ q: spec.name });
+    const list = expectStatus(
+      await admin.send('GET', `/api/admin/attributes?${query}`),
+      [200],
+      `the characteristic ${spec.name}`,
+    );
+    let attribute = list.body.items.find(
+      (item) => item.name.toLowerCase() === spec.name.toLowerCase(),
+    );
+    if (!attribute) {
+      const res = await admin.send('POST', '/api/admin/attributes', {
+        json: {
+          name: spec.name,
+          type: spec.type,
+          groupId,
+          ...(spec.unit ? { unit: spec.unit } : {}),
+          ...(spec.isMain ? { isMain: true } : {}),
+          ...(spec.decimals !== undefined ? { decimals: spec.decimals } : {}),
+        },
+      });
+      attribute = expectStatus(res, [201], `the characteristic ${spec.name}`).body;
+    }
+
+    const options = new Map();
+    for (const option of spec.options ?? []) {
+      const listed = expectStatus(
+        await admin.send('GET', `/api/admin/attributes/${attribute.id}/options`),
+        [200],
+        `the values of ${spec.name}`,
+      );
+      let value = listed.body.items.find(
+        (item) => item.name.toLowerCase() === option.name.toLowerCase(),
+      );
+      if (!value) {
+        const res = await admin.send('POST', `/api/admin/attributes/${attribute.id}/options`, {
+          json: option,
+        });
+        value = expectStatus(res, [201], `the value ${option.name}`).body;
+      }
+      options.set(option.name, value.id);
+    }
+
+    found.set(key, { id: attribute.id, type: spec.type, options });
+  }
+
+  step(`characteristics: ${found.size} in the directory`);
+  return found;
+}
+
+// the values of a variant as the form of a product sends them
+function attributesOf(variant, characteristics) {
+  return Object.entries(variant.values ?? {}).map(([key, value]) => {
+    const characteristic = characteristics.get(key);
+    return {
+      attributeId: characteristic.id,
+      value: characteristic.type === 'option' ? characteristic.options.get(value) : value,
+    };
+  });
+}
+
+// The pictures of a product are uploaded once, to its gallery, and each variant picks its own from
+// it: the first file is shown by every variant (as its second picture), and each variant has a
+// file of its own (its first, the main one). The variants are told apart by their place.
+async function makeProducts(admin, base, categories, manufacturers, characteristics) {
+  const found = await demoProductsIn(base, [...categories.values()]);
+  const ids = new Map();
+  // the variants of each product by their article numbers
+  const variantIds = new Map();
   const made = [];
 
+  const keepVariants = (product, variants) => {
+    for (const [n, variant] of variants.entries())
+      variantIds.set(skuOf(product, n + 1), variant.id);
+  };
+
   for (const [index, product] of PRODUCTS.entries()) {
-    if (bySku.has(product.sku)) continue;
-    const maker = MAKERS[product.maker];
+    if (found.has(product.name)) {
+      ids.set(product.code, found.get(product.name));
+      continue;
+    }
+
     const res = await admin.send('POST', '/api/products', {
       form: () => {
         const form = new FormData();
@@ -560,70 +689,104 @@ async function makeProducts(admin, base, categories) {
           'description',
           `${product.name}: a product of the demo catalog of the shop, made to show its pages.`,
         );
-        form.append('sku', product.sku);
-        form.append('price', product.price.toFixed(2));
         form.append('categoryId', String(categories.get(product.category)));
+        form.append('manufacturerId', String(manufacturers.get(product.maker)));
+        if (product.warnings) form.append('warnings', product.warnings);
+
         const [weight, length, width, height] = PACKAGES[product.category];
-        form.append('weightGrams', String(weight));
-        form.append('lengthMm', String(length));
-        form.append('widthMm', String(width));
-        form.append('heightMm', String(height));
-        form.append('safety.manufacturer.name', maker.name);
-        form.append('safety.manufacturer.address', maker.address);
-        form.append('safety.manufacturer.email', maker.email);
-        form.append('safety.manufacturer.country', maker.country);
-        if (product.warnings) form.append('safety.warnings', product.warnings);
-        for (const n of [0, 1]) {
-          const image = new Blob([pngImage(index * 2 + n + 1)], { type: 'image/png' });
-          form.append('images', image, `${product.sku.toLowerCase()}-${n + 1}.png`);
+        form.append(
+          'variants',
+          JSON.stringify(
+            product.variants.map((variant, n) => ({
+              sku: skuOf(product, n + 1),
+              price: variant.price,
+              weightGrams: weight,
+              lengthMm: length,
+              widthMm: width,
+              heightMm: height,
+              images: [
+                { file: n + 1, position: 1 },
+                { file: 0, position: 2 },
+              ],
+              attributes: attributesOf(variant, characteristics),
+            })),
+          ),
+        );
+
+        // file 0 is the picture all the variants share, file n + 1 belongs to the variant n
+        for (let n = 0; n <= product.variants.length; n++) {
+          const image = new Blob([pngImage(index * 4 + n + 1)], { type: 'image/png' });
+          form.append('images', image, `${product.code.toLowerCase()}-${n}.png`);
         }
         return form;
       },
     });
-    expectStatus(res, [201], `the product ${product.sku}`);
-    bySku.set(product.sku, res.body.id);
+    expectStatus(res, [201], `the product ${product.code}`);
+    ids.set(product.code, res.body.product.id);
+    keepVariants(product, res.body.variants);
     made.push(product);
   }
 
+  // the variants of the products that were there: the card of an admin lists them by their place
+  for (const product of PRODUCTS) {
+    if (variantIds.has(skuOf(product, 1))) continue;
+    const card = expectStatus(
+      await admin.send('GET', `/api/products/${ids.get(product.code)}`),
+      [200],
+      `the card of ${product.code}`,
+    );
+    keepVariants(product, card.body.variants);
+  }
+
   step(`products: ${made.length} made, ${PRODUCTS.length - made.length} there already`);
-  return { bySku, made };
+  return { ids, variantIds, made };
 }
 
-// the stock of the new products comes the way real stock comes: a delivery of a supplier
-async function deliverStock(admin, bySku, made) {
+// the stock of the new products comes the way real stock comes: a delivery of a supplier, a batch
+// for each variant
+async function deliverStock(admin, variantIds, made) {
   if (!made.length) return;
+  const items = made.flatMap((product) =>
+    product.variants.map((variant, n) => ({
+      variantId: variantIds.get(skuOf(product, n + 1)),
+      quantity: variant.units,
+      unitCost: variant.cost,
+      ...(variant.expiresIn ? { expiresAt: dayFromToday(variant.expiresIn) } : {}),
+    })),
+  );
   const res = await admin.send('POST', '/api/products/stock/deliveries', {
     json: {
       source: 'supplier',
       supplier: 'Demo Wholesale Ltd',
       document: `DEMO-${randomBytes(3).toString('hex').toUpperCase()}`,
       note: 'The stock of the demo catalog.',
-      items: made.map((product) => ({
-        productId: bySku.get(product.sku),
-        quantity: product.units,
-        unitCost: product.cost,
-        ...(product.expiresIn ? { expiresAt: dayFromToday(product.expiresIn) } : {}),
-      })),
+      items,
     },
   });
   expectStatus(res, [201], 'the delivery of the stock');
-  step(`stock: ${made.length} products delivered`);
+  step(`stock: ${items.length} variants of ${made.length} products delivered`);
 }
 
-async function putOnSale(admin, bySku, made) {
-  const onSale = made.filter((product) => product.sale);
+async function putOnSale(admin, variantIds, made) {
+  const onSale = made.flatMap((product) =>
+    product.variants.flatMap((variant, n) =>
+      variant.sale
+        ? [{ variantId: variantIds.get(skuOf(product, n + 1)), percent: variant.sale }]
+        : [],
+    ),
+  );
   if (!onSale.length) return;
   const endsAt = new Date(Date.now() + 14 * 86_400_000).toISOString();
   const res = await admin.send('POST', '/api/products/sales', {
     json: {
-      items: onSale.map((product) => ({
-        productId: bySku.get(product.sku),
-        sale: { percent: product.sale, endsAt },
+      items: onSale.map((one) => ({
+        variantId: one.variantId,
+        sale: { percent: one.percent, endsAt },
       })),
     },
   });
   expectStatus(res, [200, 201], 'the sales');
-  step(`sales: ${onSale.length} products on sale for 14 days`);
+  step(`sales: ${onSale.length} variants on sale for 14 days`);
 }
 
 // the ids of the versions of the terms and of the contract in force; none while root published none
@@ -744,7 +907,7 @@ async function deliveryOfDemo(base) {
   );
 }
 
-async function placeOrders(session, index, buyer, bySku, delivery) {
+async function placeOrders(session, index, buyer, variantIds, delivery) {
   let placed = 0;
   for (const order of buyer.orders) {
     // the cart the items went into, the answer of each item names it with the price of each
@@ -753,7 +916,7 @@ async function placeOrders(session, index, buyer, bySku, delivery) {
     let quotes = [];
     for (const [sku, quantity] of order.items) {
       const res = await session.send('POST', '/api/orders/current/items', {
-        json: { productId: bySku.get(sku), quantity },
+        json: { variantId: variantIds.get(sku), quantity },
       });
       expectStatus(res, [200, 201], `the cart of buyer ${index + 1}`);
       orderId = res.body.id;
@@ -782,18 +945,18 @@ async function placeOrders(session, index, buyer, bySku, delivery) {
 }
 
 // a review or a favorite given before answers 409: it is there already
-async function reviewAndFavor(session, index, buyer, bySku) {
+async function reviewAndFavor(session, index, buyer, productIds, variantIds) {
   let reviews = 0;
   let favorites = 0;
-  for (const [sku, rating, comment] of buyer.reviews) {
-    const res = await session.send('POST', `/api/products/${bySku.get(sku)}/reviews`, {
+  for (const [code, rating, comment] of buyer.reviews) {
+    const res = await session.send('POST', `/api/products/${productIds.get(code)}/reviews`, {
       json: { rating, comment },
     });
     expectStatus(res, [201, 409], `a review of buyer ${index + 1}`);
     if (res.status === 201) reviews++;
   }
   for (const sku of buyer.favorites) {
-    const res = await session.send('POST', `/api/favorites/${bySku.get(sku)}`);
+    const res = await session.send('POST', `/api/favorites/${variantIds.get(sku)}`);
     expectStatus(res, [200, 201, 409], `a favorite of buyer ${index + 1}`);
     if (res.status !== 409) favorites++;
   }
@@ -835,9 +998,15 @@ async function main() {
     stop('the account of DEMO_ADMIN_EMAIL is no admin');
 
   const categories = await makeCategories(admin);
-  const { bySku, made } = await makeProducts(admin, base, categories);
-  await deliverStock(admin, bySku, made);
-  await putOnSale(admin, bySku, made);
+  const manufacturers = await makeManufacturers(admin);
+  const characteristics = await makeCharacteristics(admin);
+  const {
+    ids: productIds,
+    variantIds,
+    made,
+  } = await makeProducts(admin, base, categories, manufacturers, characteristics);
+  await deliverStock(admin, variantIds, made);
+  await putOnSale(admin, variantIds, made);
 
   const inForce = await versionsInForce(base);
   const delivery = await deliveryOfDemo(base);
@@ -856,9 +1025,9 @@ async function main() {
     consents += accepted;
     if (!session) continue;
     if (!(await hasOrders(session, index))) {
-      orders += await placeOrders(session, index, buyer, bySku, delivery);
+      orders += await placeOrders(session, index, buyer, variantIds, delivery);
     }
-    const given = await reviewAndFavor(session, index, buyer, bySku);
+    const given = await reviewAndFavor(session, index, buyer, productIds, variantIds);
     reviews += given.reviews;
     favorites += given.favorites;
   }

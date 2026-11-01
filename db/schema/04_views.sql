@@ -295,7 +295,7 @@ WITH
             AND o."paidAt" < prm.to_ts
     ),
     -- Products: all, in the catalog (not deleted), deleted, and catalog products with no free
-    -- unit.
+    -- unit in any live variant.
     products_stats AS (
         SELECT
             COUNT(*)::int AS total,
@@ -310,16 +310,25 @@ WITH
             COUNT(*) FILTER (
                 WHERE
                     p."deletedAt" IS NULL
-                    -- free units: stock minus reserved minus the units of batches that are over
-                    -- (those are not for sale)
-                    AND (p.stock - p."reservedStock" - cartlify.product_expired_units(p.id)) <= 0
+                    -- no live variant has a free unit: free units are the stock minus reserved
+                    -- minus the units of batches that are over (those are not for sale)
+                    AND NOT EXISTS (
+                        SELECT
+                            1
+                        FROM
+                            cartlify.product_variants v
+                        WHERE
+                            v."productId" = p.id
+                            AND v."deletedAt" IS NULL
+                            AND (v.stock - v."reservedStock" - cartlify.variant_expired_units(v.id)) > 0
+                    )
             )::int AS out_of_stock_total
         FROM
             cartlify.products p
     ),
     -- The 5 products with the highest revenue from their items in the period (a tie goes to
-    -- more units sold, then to the lower id). Delivery is not part of it; deleted products are
-    -- counted.
+    -- more units sold, then to the lower id); the items of all the variants of a product count
+    -- for it. Delivery is not part of it; deleted products are counted.
     top_products AS (
         SELECT
             p.id,
@@ -374,6 +383,93 @@ WITH
             ) AS items
         FROM
             top_products tp
+    ),
+    -- The same by variant: the 5 variants with the highest revenue (a tie goes to more units sold,
+    -- then to the lower id). A product sold in two variants is one row of the top of products and
+    -- two rows here. The name is the name of the variant now, taken for the five that are left.
+    top_variants AS (
+        SELECT
+            v.id,
+            v."productId",
+            p.name AS product_name,
+            p."deletedAt" IS NOT NULL AS product_deleted,
+            v."position",
+            v.sku,
+            v."deletedAt" IS NOT NULL AS variant_deleted,
+            COALESCE(SUM(oi."totalPrice"), 0)::numeric AS revenue,
+            COALESCE(SUM(oi.quantity), 0)::int AS quantity_sold
+        FROM
+            cartlify.order_items oi
+            JOIN cartlify.orders o ON o.id = oi."orderId"
+            JOIN cartlify.product_variants v ON v.id = oi."variantId"
+            JOIN cartlify.products p ON p.id = v."productId"
+            CROSS JOIN params prm
+        WHERE
+            o.confirmed IS TRUE
+            AND o.status IN (
+                'paid'::cartlify."OrderStatus",
+                'shipped'::cartlify."OrderStatus",
+                'delivered'::cartlify."OrderStatus"
+            )
+            AND o."paidAt" >= prm.from_ts
+            AND o."paidAt" < prm.to_ts
+        GROUP BY
+            v.id,
+            v."productId",
+            p.name,
+            p."deletedAt",
+            v."position",
+            v.sku,
+            v."deletedAt"
+        ORDER BY
+            revenue DESC,
+            quantity_sold DESC,
+            v.id ASC
+        LIMIT
+            5
+    ),
+    -- The top of variants as a JSON list in the same order, [] when there are no sales.
+    top_variants_json AS (
+        SELECT
+            COALESCE(
+                jsonb_agg(
+                    jsonb_build_object(
+                        'product',
+                        jsonb_build_object(
+                            'id',
+                            tv."productId",
+                            'name',
+                            tv.product_name,
+                            'deleted',
+                            tv.product_deleted
+                        ),
+                        'variant',
+                        jsonb_build_object(
+                            'id',
+                            tv.id,
+                            'position',
+                            tv."position",
+                            'name',
+                            cartlify.variant_display_name(tv.id),
+                            'sku',
+                            tv.sku,
+                            'deleted',
+                            tv.variant_deleted
+                        ),
+                        'revenue',
+                        tv.revenue,
+                        'quantitySold',
+                        tv.quantity_sold
+                    )
+                    ORDER BY
+                        tv.revenue DESC,
+                        tv.quantity_sold DESC,
+                        tv.id ASC
+                ),
+                '[]'::jsonb
+            ) AS items
+        FROM
+            top_variants tv
     ),
     -- The same for categories: a sale counts for the category its product has now, and only for
     -- that category, not for its parents.
@@ -550,6 +646,8 @@ SELECT
         ps.out_of_stock_total,
         'topProductsByRevenue',
         tpj.items,
+        'topVariantsByRevenue',
+        tvj.items,
         'topCategoriesByRevenue',
         tcj.items
     ) AS products,
@@ -573,6 +671,7 @@ FROM
     CROSS JOIN items_sold_stats iss
     CROSS JOIN products_stats ps
     CROSS JOIN top_products_json tpj
+    CROSS JOIN top_variants_json tvj
     CROSS JOIN top_categories_json tcj
     CROSS JOIN reviews_stats rs;
 
@@ -582,5 +681,104 @@ ALTER VIEW cartlify.admin_stats_view OWNER TO cartlify_owner;
 GRANT
 SELECT
     ON cartlify.admin_stats_view TO cartlify_app;
+
+------------------------------------------------------------
+-- REQUIRED CHARACTERISTICS: which variants lack a value a category requires
+------------------------------------------------------------
+-- The rule lives only here. The admin list (GET /api/products?missingRequired=true) and the alert
+-- variants_missing_required read variants_missing_required, so they count the same variants.
+-- Both views are security_invoker: they read with the rights and the row level security of the
+-- caller (an admin, the server sets the context first). They are dropped and created again on
+-- every run, so the owner and the grants are set again at the end.
+DROP VIEW IF EXISTS cartlify.variants_missing_required;
+
+DROP VIEW IF EXISTS cartlify.category_required_attributes;
+
+-- The characteristics a category requires: its own set and the sets of its parents up the tree
+-- (the same walk as readCategorySetRows in the app, at most 50 levels). For one characteristic the
+-- nearest category wins, so a child that does not require what its parent requires does not need
+-- it, and neither do the categories below the child that say nothing about it.
+CREATE VIEW cartlify.category_required_attributes
+WITH
+    (security_invoker = true) AS
+WITH RECURSIVE
+    up (category_id, ancestor_id, depth) AS (
+        SELECT
+            c.id,
+            c.id,
+            0
+        FROM
+            cartlify.categories c
+        UNION ALL
+        SELECT
+            up.category_id,
+            a."parentId",
+            up.depth + 1
+        FROM
+            up
+            JOIN cartlify.categories a ON a.id = up.ancestor_id
+        WHERE
+            a."parentId" IS NOT NULL
+            AND up.depth < 50
+    ),
+    nearest AS (
+        SELECT DISTINCT
+            ON (up.category_id, ca."attributeId") up.category_id,
+            ca."attributeId" AS attribute_id,
+            ca.required
+        FROM
+            up
+            JOIN cartlify.category_attributes ca ON ca."categoryId" = up.ancestor_id
+        ORDER BY
+            up.category_id,
+            ca."attributeId",
+            up.depth
+    )
+SELECT
+    n.category_id,
+    n.attribute_id
+FROM
+    nearest n
+WHERE
+    n.required;
+
+-- A row for every live variant and every characteristic its category requires that it has no
+-- value of. A variant taken out of sale is none of them (the variants of a product removed from the
+-- catalog are taken out of sale with it).
+CREATE VIEW cartlify.variants_missing_required
+WITH
+    (security_invoker = true) AS
+SELECT
+    v.id AS variant_id,
+    v."productId" AS product_id,
+    r.attribute_id
+FROM
+    cartlify.product_variants v
+    JOIN cartlify.products p ON p.id = v."productId"
+    JOIN cartlify.category_required_attributes r ON r.category_id = p."categoryId"
+WHERE
+    v."deletedAt" IS NULL
+    AND NOT EXISTS (
+        SELECT
+            1
+        FROM
+            cartlify.variant_attribute_values vv
+        WHERE
+            vv."variantId" = v.id
+            AND vv."attributeId" = r.attribute_id
+    );
+
+ALTER VIEW cartlify.category_required_attributes OWNER TO cartlify_owner;
+
+ALTER VIEW cartlify.variants_missing_required OWNER TO cartlify_owner;
+
+-- The app reads the views with the context of an admin (see security_invoker above).
+GRANT
+SELECT
+    ON cartlify.category_required_attributes TO cartlify_app;
+
+GRANT
+SELECT
+    ON cartlify.variants_missing_required TO cartlify_app;
 
 COMMIT;

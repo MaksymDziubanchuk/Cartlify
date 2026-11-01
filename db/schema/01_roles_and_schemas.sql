@@ -259,17 +259,19 @@ BEGIN
     'cartlify.cleanup_guest_data(integer)',
     'cartlify.cleanup_deleted_accounts_chats(integer)',
     -- admin only: the price journal, deliveries and write-offs of stock
-    'cartlify.log_product_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
-    'cartlify.receive_product_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
-    'cartlify.write_off_product_stock(uuid, integer, integer, integer, text, text)',
-    -- helpers: refresh_order_prices, product_current_price, shop_today and log_admin_action run
-    -- with the rights of the caller, so row level security applies; product_expired_units and
-    -- units_sold_in_period run as the owner, because a buyer cannot read the batches or the orders
-    -- of others
+    'cartlify.log_variant_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
+    'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
+    'cartlify.write_off_variant_stock(uuid, integer, integer, integer, text, text)',
+    -- helpers: refresh_order_prices, product_current_price, variant_display_name, variant_names, shop_today and
+    -- log_admin_action run with the rights of the caller, so row level security applies;
+    -- variant_expired_units and units_sold_in_period run as the owner, because a buyer cannot read
+    -- the batches or the orders of others
     'cartlify.refresh_order_prices(integer)',
     'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
+    'cartlify.variant_display_name(integer)',
+    'cartlify.variant_names(integer[])',
     'cartlify.shop_today()',
-    'cartlify.product_expired_units(integer)',
+    'cartlify.variant_expired_units(integer)',
     'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
     'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)'
   ]

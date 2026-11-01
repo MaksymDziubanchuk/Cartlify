@@ -312,12 +312,214 @@ WITH
 CREATE POLICY categories_delete ON cartlify.categories FOR DELETE USING (cartlify.is_admin ());
 
 ----------------------------------------
+-- PARTIES
+----------------------------------------
+-- The manufacturers and the persons responsible in the EU a product names. The product card shows
+-- them to everybody (GPSR), so everybody reads; admin/root write. A party a product names cannot be
+-- deleted: the foreign keys of products refuse it.
+ALTER TABLE cartlify.parties ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.parties FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS parties_select ON cartlify.parties;
+
+DROP POLICY IF EXISTS parties_insert ON cartlify.parties;
+
+DROP POLICY IF EXISTS parties_update ON cartlify.parties;
+
+DROP POLICY IF EXISTS parties_delete ON cartlify.parties;
+
+CREATE POLICY parties_select ON cartlify.parties FOR
+SELECT
+  USING (true);
+
+CREATE POLICY parties_insert ON cartlify.parties FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY parties_update ON cartlify.parties
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY parties_delete ON cartlify.parties FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
+-- DOCUMENTS AND THE DOCUMENTS OF PRODUCTS
+----------------------------------------
+-- The directory of the documents (instructions, certificates) and the documents a product names.
+-- The card of a product shows them to everybody, so everybody reads; admin/root write. A document
+-- changes its title and kind (db/05 guard); the documents of a product are written whole, a row
+-- is made or deleted, never changed, so there is no UPDATE policy on product_documents.
+ALTER TABLE cartlify.documents ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.documents FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS documents_select ON cartlify.documents;
+
+DROP POLICY IF EXISTS documents_insert ON cartlify.documents;
+
+DROP POLICY IF EXISTS documents_update ON cartlify.documents;
+
+DROP POLICY IF EXISTS documents_delete ON cartlify.documents;
+
+CREATE POLICY documents_select ON cartlify.documents FOR
+SELECT
+  USING (true);
+
+CREATE POLICY documents_insert ON cartlify.documents FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY documents_update ON cartlify.documents
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY documents_delete ON cartlify.documents FOR DELETE USING (cartlify.is_admin ());
+
+ALTER TABLE cartlify.product_documents ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.product_documents FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS product_documents_select ON cartlify.product_documents;
+
+DROP POLICY IF EXISTS product_documents_insert ON cartlify.product_documents;
+
+DROP POLICY IF EXISTS product_documents_delete ON cartlify.product_documents;
+
+CREATE POLICY product_documents_select ON cartlify.product_documents FOR
+SELECT
+  USING (true);
+
+CREATE POLICY product_documents_insert ON cartlify.product_documents FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY product_documents_delete ON cartlify.product_documents FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
+-- CHARACTERISTICS: groups, characteristics, values of a choice, the characteristics of categories
+----------------------------------------
+-- The directory a variant of a product is described by. The card and the panel of filters show it
+-- to everybody, so everybody reads; admin/root write. What a row may change is the business of the
+-- guards (db/05); the characteristics of a category are written whole, a row is made or deleted,
+-- never changed, so there is no UPDATE policy on category_attributes.
+
+ALTER TABLE cartlify.attribute_groups ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.attribute_groups FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS attribute_groups_select ON cartlify.attribute_groups;
+
+DROP POLICY IF EXISTS attribute_groups_insert ON cartlify.attribute_groups;
+
+DROP POLICY IF EXISTS attribute_groups_update ON cartlify.attribute_groups;
+
+DROP POLICY IF EXISTS attribute_groups_delete ON cartlify.attribute_groups;
+
+CREATE POLICY attribute_groups_select ON cartlify.attribute_groups FOR
+SELECT
+  USING (true);
+
+CREATE POLICY attribute_groups_insert ON cartlify.attribute_groups FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY attribute_groups_update ON cartlify.attribute_groups
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY attribute_groups_delete ON cartlify.attribute_groups FOR DELETE USING (cartlify.is_admin ());
+
+ALTER TABLE cartlify.attributes ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.attributes FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS attributes_select ON cartlify.attributes;
+
+DROP POLICY IF EXISTS attributes_insert ON cartlify.attributes;
+
+DROP POLICY IF EXISTS attributes_update ON cartlify.attributes;
+
+DROP POLICY IF EXISTS attributes_delete ON cartlify.attributes;
+
+CREATE POLICY attributes_select ON cartlify.attributes FOR
+SELECT
+  USING (true);
+
+CREATE POLICY attributes_insert ON cartlify.attributes FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY attributes_update ON cartlify.attributes
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY attributes_delete ON cartlify.attributes FOR DELETE USING (cartlify.is_admin ());
+
+ALTER TABLE cartlify.attribute_options ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.attribute_options FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS attribute_options_select ON cartlify.attribute_options;
+
+DROP POLICY IF EXISTS attribute_options_insert ON cartlify.attribute_options;
+
+DROP POLICY IF EXISTS attribute_options_update ON cartlify.attribute_options;
+
+DROP POLICY IF EXISTS attribute_options_delete ON cartlify.attribute_options;
+
+CREATE POLICY attribute_options_select ON cartlify.attribute_options FOR
+SELECT
+  USING (true);
+
+CREATE POLICY attribute_options_insert ON cartlify.attribute_options FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY attribute_options_update ON cartlify.attribute_options
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY attribute_options_delete ON cartlify.attribute_options FOR DELETE USING (cartlify.is_admin ());
+
+ALTER TABLE cartlify.category_attributes ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.category_attributes FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS category_attributes_select ON cartlify.category_attributes;
+
+DROP POLICY IF EXISTS category_attributes_insert ON cartlify.category_attributes;
+
+DROP POLICY IF EXISTS category_attributes_delete ON cartlify.category_attributes;
+
+CREATE POLICY category_attributes_select ON cartlify.category_attributes FOR
+SELECT
+  USING (true);
+
+CREATE POLICY category_attributes_insert ON cartlify.category_attributes FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY category_attributes_delete ON cartlify.category_attributes FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
 -- PRODUCTS
 ----------------------------------------
--- Read by everybody. Written by admin/root, except the numbers the database keeps itself: stock,
--- reservedStock, avgRating, reviewsCount and popularity move only through system functions and
--- triggers, and a view of the product adds one to views. Which columns each role may change:
--- trg_products_update_columns.
+-- Read by everybody. Written by admin/root, except the numbers the database keeps itself:
+-- avgRating, reviewsCount and popularity move only through system functions and triggers, and a
+-- view of the product adds one to views. Which columns each role may change:
+-- trg_products_update_columns. The price, the sale and the stock are the variant's (PRODUCT
+-- VARIANTS below).
 ALTER TABLE cartlify.products ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.products FORCE ROW LEVEL SECURITY;
@@ -338,28 +540,21 @@ CREATE POLICY products_select ON cartlify.products FOR
 SELECT
   USING (true);
 
--- INSERT: admin/root. A new product starts with no stock, reserve, rating, reviews, popularity or
--- views: the database counts them from what happens to it (the stock comes with the batches of a
--- delivery, receive_product_batch). It starts with no sale either: a sale is set on a product that
--- is in the catalog (the check of the end of a sale in db/05 runs on UPDATE only).
+-- INSERT: admin/root. A new product starts with no rating, reviews, popularity or views: the
+-- database counts them from what happens to it.
 CREATE POLICY products_insert ON cartlify.products FOR INSERT
 WITH
   CHECK (
     cartlify.is_admin ()
-    AND "stock" = 0
-    AND "reservedStock" = 0
     AND "avgRating" = 0
     AND "reviewsCount" = 0
     AND popularity = 0
     AND views = 0
-    AND "salePrice" IS NULL
-    AND "saleEndsAt" IS NULL
   );
 
--- UPDATE (who): admin/root. The guard leaves out what the database counts: stock (what the
--- batches have left: a delivery, a sale, a write-off, a cancel), reservedStock (what the waiting
--- orders hold), avgRating and reviewsCount (the reviews), popularity (what people do; an admin
--- sets popularityOverride instead). views may grow by one, as for anybody.
+-- UPDATE (who): admin/root. The guard leaves out what the database counts: avgRating and
+-- reviewsCount (the reviews), popularity (what people do; an admin sets popularityOverride
+-- instead). views may grow by one, as for anybody.
 CREATE POLICY products_update_admin ON cartlify.products
 FOR UPDATE
   USING (cartlify.is_admin ())
@@ -377,7 +572,7 @@ WITH
   CHECK (true);
 
 -- UPDATE for the system functions: the numbers the database counts, one group at a time (rating
--- and reviews, stock and reserve, popularity)
+-- and reviews, popularity, and the removal of a product with its variants)
 CREATE POLICY products_update_owner ON cartlify.products
 FOR UPDATE
   TO cartlify_owner USING (true)
@@ -509,6 +704,134 @@ WITH
   CHECK (cartlify.is_admin ());
 
 CREATE POLICY product_images_delete ON cartlify.product_images FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
+-- PRODUCT VARIANTS
+----------------------------------------
+-- Read by everybody (what a buyer sees of a deleted variant is decided by the server). Written by
+-- admin/root, except the numbers the database keeps itself: stock and reservedStock move only
+-- through system functions (a delivery, a sale, a write-off, a cancel, a reservation). Which
+-- columns each role may change: trg_product_variants_update_columns.
+ALTER TABLE cartlify.product_variants ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.product_variants FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS product_variants_select ON cartlify.product_variants;
+
+DROP POLICY IF EXISTS product_variants_insert ON cartlify.product_variants;
+
+DROP POLICY IF EXISTS product_variants_update_admin ON cartlify.product_variants;
+
+DROP POLICY IF EXISTS product_variants_update_owner ON cartlify.product_variants;
+
+DROP POLICY IF EXISTS product_variants_delete ON cartlify.product_variants;
+
+CREATE POLICY product_variants_select ON cartlify.product_variants FOR
+SELECT
+  USING (true);
+
+-- INSERT: admin/root. A new variant starts with no stock and no reserve (the stock comes with the
+-- batches of a delivery, receive_product_batch). It starts with no sale either: a sale is set on a
+-- variant that is in the catalog (the check of the end of a sale in db/05 runs on UPDATE only).
+CREATE POLICY product_variants_insert ON cartlify.product_variants FOR INSERT
+WITH
+  CHECK (
+    cartlify.is_admin ()
+    AND "stock" = 0
+    AND "reservedStock" = 0
+    AND "salePrice" IS NULL
+    AND "saleEndsAt" IS NULL
+  );
+
+-- UPDATE (who): admin/root. The guard leaves out what the database counts: stock (what the
+-- batches have left: a delivery, a sale, a write-off, a cancel) and reservedStock (what the waiting
+-- orders hold).
+CREATE POLICY product_variants_update_admin ON cartlify.product_variants
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  -- the columns an update may change: trg_product_variants_update_columns (db/05)
+  CHECK (true);
+
+-- UPDATE for the system functions: stock and reserve, and the removal of the variants of a
+-- product that is removed
+CREATE POLICY product_variants_update_owner ON cartlify.product_variants
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  -- the columns an update may change: trg_product_variants_update_columns (db/05)
+  CHECK (true);
+
+CREATE POLICY product_variants_delete ON cartlify.product_variants FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
+-- VARIANT IMAGES
+----------------------------------------
+-- The pictures of the gallery a variant shows, with their places. Read by everybody, written by
+-- admin/root.
+ALTER TABLE cartlify.variant_images ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.variant_images FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS variant_images_select ON cartlify.variant_images;
+
+DROP POLICY IF EXISTS variant_images_insert ON cartlify.variant_images;
+
+DROP POLICY IF EXISTS variant_images_update ON cartlify.variant_images;
+
+DROP POLICY IF EXISTS variant_images_delete ON cartlify.variant_images;
+
+CREATE POLICY variant_images_select ON cartlify.variant_images FOR
+SELECT
+  USING (true);
+
+CREATE POLICY variant_images_insert ON cartlify.variant_images FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY variant_images_update ON cartlify.variant_images
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY variant_images_delete ON cartlify.variant_images FOR DELETE USING (cartlify.is_admin ());
+
+----------------------------------------
+-- VALUES OF CHARACTERISTICS OF VARIANTS
+----------------------------------------
+-- What a variant has of each characteristic of the directory (a text, a number, yes/no, one or
+-- several values of a list), one row for a value. The card, the name of a variant and the panel of
+-- filters show it to everybody, so everybody reads; admin/root write. A value stays within the type
+-- of its characteristic and a row changes only its value (trg_variant_attribute_values_before_write
+-- and trg_variant_attribute_values_update_columns, db/05).
+ALTER TABLE cartlify.variant_attribute_values ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.variant_attribute_values FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS variant_attribute_values_select ON cartlify.variant_attribute_values;
+
+DROP POLICY IF EXISTS variant_attribute_values_insert ON cartlify.variant_attribute_values;
+
+DROP POLICY IF EXISTS variant_attribute_values_update ON cartlify.variant_attribute_values;
+
+DROP POLICY IF EXISTS variant_attribute_values_delete ON cartlify.variant_attribute_values;
+
+CREATE POLICY variant_attribute_values_select ON cartlify.variant_attribute_values FOR
+SELECT
+  USING (true);
+
+CREATE POLICY variant_attribute_values_insert ON cartlify.variant_attribute_values FOR INSERT
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY variant_attribute_values_update ON cartlify.variant_attribute_values
+FOR UPDATE
+  USING (cartlify.is_admin ())
+WITH
+  CHECK (cartlify.is_admin ());
+
+CREATE POLICY variant_attribute_values_delete ON cartlify.variant_attribute_values FOR DELETE USING (cartlify.is_admin ());
 
 ----------------------------------------
 -- REVIEWS
@@ -1682,5 +2005,56 @@ WITH
 
 -- DELETE: denied to every role
 CREATE POLICY aal_delete_deny ON cartlify.admin_audit_log FOR DELETE USING (false);
+
+----------------------------------------
+-- STOCK LOG
+----------------------------------------
+-- The journal of the stock: a line for every change of the quantity of a variant. Read: admin/root.
+-- A line is written by the system functions that move the stock (cartlify.log_stock_change, called
+-- from receive_variant_batch, write_off_variant_stock, consume_variant_stock and
+-- return_order_stock, which run as the owner) and never changed or removed.
+ALTER TABLE cartlify.stock_log ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.stock_log FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS stock_log_select ON cartlify.stock_log;
+
+DROP POLICY IF EXISTS stock_log_insert_owner ON cartlify.stock_log;
+
+DROP POLICY IF EXISTS stock_log_update_deny ON cartlify.stock_log;
+
+DROP POLICY IF EXISTS stock_log_delete_deny ON cartlify.stock_log;
+
+CREATE POLICY stock_log_select ON cartlify.stock_log FOR
+SELECT
+  USING (cartlify.is_admin ());
+
+-- INSERT for the system functions: a line names who did it. A signed-in admin or root is named
+-- with their own role; the system (the admin context without a user id, the payment webhook) has
+-- no actor and no role. The app role has no insert policy: it writes nothing here.
+CREATE POLICY stock_log_insert_owner ON cartlify.stock_log FOR INSERT TO cartlify_owner
+WITH
+  CHECK (
+    (
+      cartlify.is_system ()
+      AND "actorId" IS NULL
+      AND "actorRole" IS NULL
+    )
+    OR (
+      cartlify.is_admin ()
+      AND "actorId" = cartlify.current_actor_id ()
+      AND "actorRole" = cartlify.current_actor_role ()
+    )
+  );
+
+-- UPDATE: denied to every role
+CREATE POLICY stock_log_update_deny ON cartlify.stock_log
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- DELETE: denied to every role
+CREATE POLICY stock_log_delete_deny ON cartlify.stock_log FOR DELETE USING (false);
 
 COMMIT;

@@ -55,20 +55,186 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- PRODUCTS: price, counters, sale, article number
+-- PARTIES: the manufacturers and the persons responsible in the EU; the warnings of a product
 ----------------------------------------
--- The price and the counters (views, popularity, reviewsCount) are not negative, the average
--- rating is 0 to 5, a popularity set by hand is not negative.
+-- A party has a name, a postal address, an email and a country, kept as the service trims them
+-- (nothing empty, no space at an end), within the lengths the API gives; the country is two
+-- capitals. One name, address and country is one row, letter case ignored: a second one would only
+-- leave two entries for one party.
 DO $$
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_price_non_negative'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'parties_values_chk') THEN
+    ALTER TABLE cartlify.parties
+      ADD CONSTRAINT parties_values_chk
+      CHECK (
+        name = btrim(name) AND name <> '' AND char_length(name) <= 200
+        AND address = btrim(address) AND address <> '' AND char_length(address) <= 500
+        AND email = btrim(email) AND char_length(email) <= 254
+        AND email ~ '^[^[:space:]@]+@[^[:space:]@]+[.][^[:space:]@]+$'
+        AND country ~ '^[A-Z]{2}$'
+      );
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS parties_identity_uidx
+  ON cartlify.parties (lower(name), lower(address), country);
+
+-- The warnings of a product are text that is kept as it was trimmed, not empty, within 2000 signs.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_warnings_chk') THEN
     ALTER TABLE cartlify.products
-      ADD CONSTRAINT products_price_non_negative
-      CHECK (price >= 0);
+      ADD CONSTRAINT products_warnings_chk
+      CHECK (
+        warnings IS NULL
+        OR (warnings = btrim(warnings) AND warnings <> '' AND char_length(warnings) <= 2000)
+      );
+  END IF;
+END $$;
+
+----------------------------------------
+-- DOCUMENTS: the title, the file; the place of a document in a product
+----------------------------------------
+-- A document has a title kept as the service trims it (nothing empty, no space at an end, up to 200
+-- signs), a file with its url, public id and a size above zero.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'documents_values_chk') THEN
+    ALTER TABLE cartlify.documents
+      ADD CONSTRAINT documents_values_chk
+      CHECK (
+        title = btrim(title) AND title <> '' AND char_length(title) <= 200
+        AND url <> '' AND "publicId" <> '' AND "sizeBytes" > 0
+      );
+  END IF;
+END $$;
+
+-- The documents of a product are numbered from 1, a number once (the unique key of the table).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'product_documents_position_chk') THEN
+    ALTER TABLE cartlify.product_documents
+      ADD CONSTRAINT product_documents_position_chk CHECK (position >= 1);
+  END IF;
+END $$;
+
+----------------------------------------
+-- CHARACTERISTICS: names, units, numbers, places
+----------------------------------------
+-- A group, a characteristic and a value have a name kept as the service trims it (nothing empty,
+-- no space at an end, up to 100 signs), one name once in its scope, letter case ignored. A place is
+-- 1 or more and once in its scope; the unique keys of the places are checked at the end of a
+-- transaction (DEFERRABLE INITIALLY DEFERRED), so that a new order can be written row by row.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'attribute_groups_values_chk') THEN
+    ALTER TABLE cartlify.attribute_groups
+      ADD CONSTRAINT attribute_groups_values_chk
+      CHECK (
+        name = btrim(name) AND name <> '' AND char_length(name) <= 100
+        AND position >= 1
+      );
   END IF;
 
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'attribute_groups_position_key') THEN
+    ALTER TABLE cartlify.attribute_groups
+      ADD CONSTRAINT attribute_groups_position_key UNIQUE (position) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'attributes_values_chk') THEN
+    ALTER TABLE cartlify.attributes
+      ADD CONSTRAINT attributes_values_chk
+      CHECK (
+        name = btrim(name) AND name <> '' AND char_length(name) <= 100
+        AND (unit IS NULL OR (unit = btrim(unit) AND unit <> '' AND char_length(unit) <= 20))
+        AND position >= 1
+        -- the settings of a number: its digits after the point and its bounds, and only a number has them
+        AND ((type = 'number') = (decimals IS NOT NULL))
+        AND (decimals IS NULL OR decimals BETWEEN 0 AND 3)
+        AND (type = 'number' OR ("minValue" IS NULL AND "maxValue" IS NULL))
+        AND ("minValue" IS NULL OR "maxValue" IS NULL OR "minValue" <= "maxValue")
+        -- a text and a set of values cannot split the rows of a list
+        AND (NOT "isMain" OR type IN ('number', 'boolean', 'option'))
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'attributes_group_position_key') THEN
+    ALTER TABLE cartlify.attributes
+      ADD CONSTRAINT attributes_group_position_key UNIQUE ("groupId", position) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'attribute_options_values_chk') THEN
+    ALTER TABLE cartlify.attribute_options
+      ADD CONSTRAINT attribute_options_values_chk
+      CHECK (
+        name = btrim(name) AND name <> '' AND char_length(name) <= 100
+        AND position >= 1
+        AND ("colorCode" IS NULL OR "colorCode" ~ '^#[0-9A-Fa-f]{6}$')
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'attribute_options_position_key') THEN
+    ALTER TABLE cartlify.attribute_options
+      ADD CONSTRAINT attribute_options_position_key UNIQUE ("attributeId", position) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS attribute_groups_name_uidx
+  ON cartlify.attribute_groups (lower(name));
+
+CREATE UNIQUE INDEX IF NOT EXISTS attributes_name_uidx
+  ON cartlify.attributes (lower(name));
+
+CREATE UNIQUE INDEX IF NOT EXISTS attribute_options_name_uidx
+  ON cartlify.attribute_options ("attributeId", lower(name));
+
+----------------------------------------
+-- VALUES OF CHARACTERISTICS OF VARIANTS
+----------------------------------------
+-- A row holds one value in exactly one of the four columns (the type of the characteristic decides
+-- which one: db/05), a text is trimmed, not empty and up to 500 signs. A variant has one row for a
+-- characteristic, or one row for each value it has of a set: the unique index treats the empty
+-- value of a list as a value (NULLS NOT DISTINCT), so a text, a number and yes/no are held once,
+-- and a set holds each of its values once (a choice of one value is held by the trigger of db/05).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'variant_attribute_values_value_chk') THEN
+    ALTER TABLE cartlify.variant_attribute_values
+      ADD CONSTRAINT variant_attribute_values_value_chk
+      CHECK (
+        num_nonnulls("textValue", "numberValue", "boolValue", "optionId") = 1
+        AND (
+          "textValue" IS NULL
+          OR ("textValue" = btrim("textValue") AND "textValue" <> '' AND char_length("textValue") <= 500)
+        )
+      );
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS variant_attribute_values_value_uidx
+  ON cartlify.variant_attribute_values ("variantId", "attributeId", "optionId") NULLS NOT DISTINCT;
+
+-- The filter of the catalog by characteristics (f) and its panel look for the variants that have a
+-- value of a characteristic: a value of a list among some, a number in a range. The unique index
+-- above answers "the values of one variant"; these two answer "the variants of one value": the
+-- choices with the variant in the index (an index-only scan, the Prisma index on attributeId and
+-- optionId has no variant), and the numbers by range (nothing indexed them: a range read every
+-- value of the characteristic).
+CREATE INDEX IF NOT EXISTS variant_attribute_values_choice_idx
+  ON cartlify.variant_attribute_values ("attributeId", "optionId", "variantId")
+  WHERE "optionId" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS variant_attribute_values_number_idx
+  ON cartlify.variant_attribute_values ("attributeId", "numberValue", "variantId")
+  WHERE "numberValue" IS NOT NULL;
+
+----------------------------------------
+-- PRODUCTS: counters
+----------------------------------------
+-- The counters (views, popularity, reviewsCount) are not negative, the average rating is 0 to 5,
+-- a popularity set by hand is not negative.
+DO $$
+BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'products_counters_non_negative'
   ) THEN
@@ -90,15 +256,34 @@ BEGIN
       ADD CONSTRAINT products_pop_override_non_negative
       CHECK ("popularityOverride" IS NULL OR "popularityOverride" >= 0);
   END IF;
+END $$;
 
-  -- A sale has a price and an end, or neither. The sale price is 0 (free) or more, and below
-  -- the price. A price lowered to the sale price or below ends the sale first
-  -- (products_before_price_change, db/05), so this check does not stop that update.
+----------------------------------------
+-- PRODUCT_VARIANTS: price, sale, article number, barcode, place
+----------------------------------------
+-- The price is not negative.
+-- A sale has a price and an end, or neither. The sale price is 0 (free) or more, and below
+-- the price. A price lowered to the sale price or below ends the sale first
+-- (product_variants_before_price_change, db/05), so this check does not stop that update.
+-- The lowest price of the 30 days before a sale exists only while there is a sale. A sale may
+-- have none.
+-- An article number and a barcode are trimmed and not empty (the server turns an empty one into
+-- none). A barcode is 8, 12, 13 or 14 digits; the check digit is the server's to check.
+DO $$
+BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_chk'
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_price_non_negative'
   ) THEN
-    ALTER TABLE cartlify.products
-      ADD CONSTRAINT products_sale_chk
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_price_non_negative
+      CHECK (price >= 0);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_sale_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_sale_chk
       CHECK (
         ("salePrice" IS NULL AND "saleEndsAt" IS NULL)
         OR (
@@ -110,26 +295,74 @@ BEGIN
       );
   END IF;
 
-  -- The lowest price of the 30 days before a sale exists only while there is a sale. A sale may
-  -- have none.
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_sale_prior_price_chk'
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_sale_prior_price_chk'
   ) THEN
-    ALTER TABLE cartlify.products
-      ADD CONSTRAINT products_sale_prior_price_chk
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_sale_prior_price_chk
       CHECK (
         "salePriorPrice" IS NULL
         OR ("salePrice" IS NOT NULL AND "salePriorPrice" >= 0)
       );
   END IF;
 
-  -- An article number is trimmed and not empty (the server turns an empty one into none).
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_sku_chk'
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_sku_chk'
   ) THEN
-    ALTER TABLE cartlify.products
-      ADD CONSTRAINT products_sku_chk
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_sku_chk
       CHECK (sku IS NULL OR (sku = btrim(sku) AND length(sku) > 0));
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_barcode_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_barcode_chk
+      CHECK (barcode IS NULL OR barcode ~ '^([0-9]{8}|[0-9]{12,14})$');
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_position_chk'
+  ) THEN
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_position_chk
+      CHECK (position >= 1);
+  END IF;
+END $$;
+
+-- Two live variants of the catalog cannot share an article number or a barcode; the case of the
+-- letters does not count. A variant taken out of sale frees both. Deliveries and write-offs name a
+-- variant by its article number or its barcode.
+CREATE UNIQUE INDEX IF NOT EXISTS product_variants_sku_catalog_uidx ON cartlify.product_variants (lower(sku))
+WHERE
+  sku IS NOT NULL
+  AND "deletedAt" IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS product_variants_barcode_catalog_uidx ON cartlify.product_variants (barcode)
+WHERE
+  barcode IS NOT NULL
+  AND "deletedAt" IS NULL;
+
+-- The place of a variant among the variants of its product, and the place of a picture among the
+-- pictures of a variant. A key is checked at the end of the transaction, so a reorder can write
+-- the places one after another.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_position_key') THEN
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_position_key UNIQUE ("productId", position) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'variant_images_position_key') THEN
+    ALTER TABLE cartlify.variant_images
+      ADD CONSTRAINT variant_images_position_key UNIQUE ("variantId", position) DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'variant_images_position_chk') THEN
+    ALTER TABLE cartlify.variant_images
+      ADD CONSTRAINT variant_images_position_chk
+      CHECK (position >= 1);
   END IF;
 END $$;
 
@@ -537,33 +770,30 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- PRODUCTS: the weight and the sizes of a packed product
+-- PRODUCT_VARIANTS: the weight and the sizes of a packed variant
 ----------------------------------------
 -- The weight is in grams, above 0 and up to 1 000 000 (a ton). A size is in millimetres, above
--- 0 and up to 10 000 (ten metres). The three sizes come together or not at all. A product may
+-- 0 and up to 10 000 (ten metres). The three sizes come together or not at all. A variant may
 -- have no weight and no sizes.
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_shipping_data_chk'
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_shipping_data_chk'
   ) THEN
-    ALTER TABLE cartlify.products
-      DROP CONSTRAINT products_shipping_data_chk;
-  END IF;
-
-  ALTER TABLE cartlify.products
-    ADD CONSTRAINT products_shipping_data_chk
-    CHECK (
-      ("weightGrams" IS NULL OR ("weightGrams" > 0 AND "weightGrams" <= 1000000))
-      AND (
-        ("lengthMm" IS NULL AND "widthMm" IS NULL AND "heightMm" IS NULL)
-        OR (
-          "lengthMm" IS NOT NULL AND "lengthMm" > 0 AND "lengthMm" <= 10000
-          AND "widthMm" IS NOT NULL AND "widthMm" > 0 AND "widthMm" <= 10000
-          AND "heightMm" IS NOT NULL AND "heightMm" > 0 AND "heightMm" <= 10000
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_shipping_data_chk
+      CHECK (
+        ("weightGrams" IS NULL OR ("weightGrams" > 0 AND "weightGrams" <= 1000000))
+        AND (
+          ("lengthMm" IS NULL AND "widthMm" IS NULL AND "heightMm" IS NULL)
+          OR (
+            "lengthMm" IS NOT NULL AND "lengthMm" > 0 AND "lengthMm" <= 10000
+            AND "widthMm" IS NOT NULL AND "widthMm" > 0 AND "widthMm" <= 10000
+            AND "heightMm" IS NOT NULL AND "heightMm" > 0 AND "heightMm" <= 10000
+          )
         )
-      )
-    );
+      );
+  END IF;
 END $$;
 
 ----------------------------------------
@@ -655,32 +885,26 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- PRODUCTS: stock and reserved stock
+-- PRODUCT_VARIANTS: stock and reserved stock
 ----------------------------------------
 -- The stock is not negative. The reserved stock is not negative and not above the stock.
 DO $$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_stock_non_negative'
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_stock_non_negative'
   ) THEN
-    ALTER TABLE cartlify.products
-      DROP CONSTRAINT products_stock_non_negative;
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_stock_non_negative
+      CHECK ("stock" >= 0);
   END IF;
 
-  ALTER TABLE cartlify.products
-    ADD CONSTRAINT products_stock_non_negative
-    CHECK ("stock" >= 0);
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'products_reserved_stock_within_stock'
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'product_variants_reserved_stock_within_stock'
   ) THEN
-    ALTER TABLE cartlify.products
-      DROP CONSTRAINT products_reserved_stock_within_stock;
+    ALTER TABLE cartlify.product_variants
+      ADD CONSTRAINT product_variants_reserved_stock_within_stock
+      CHECK ("reservedStock" >= 0 AND "reservedStock" <= "stock");
   END IF;
-
-  ALTER TABLE cartlify.products
-    ADD CONSTRAINT products_reserved_stock_within_stock
-    CHECK ("reservedStock" >= 0 AND "reservedStock" <= "stock");
 END $$;
 
 ----------------------------------------
@@ -783,28 +1007,6 @@ BEGIN
     ADD CONSTRAINT chat_messages_content_not_blank_chk
     CHECK (length(btrim(content)) > 0);
 END $$;
-
-----------------------------------------
--- PRODUCT_IMAGES: one primary image per product
-----------------------------------------
--- The cart, the orders and the lists show the primary image of a product. An image update
--- deletes the old images before it writes the new ones, so the index never sees two primaries.
--- Old rows are not cleaned: if a product already has two primary images, creating the index
--- fails until one of them is fixed by hand.
-CREATE UNIQUE INDEX IF NOT EXISTS product_images_one_primary_idx ON cartlify.product_images ("productId")
-WHERE
-  "isPrimary";
-
-----------------------------------------
--- PRODUCTS: one product of the catalog per article number
-----------------------------------------
--- Two products of the catalog cannot share an article number; the case of the letters does
--- not count. A product taken out of the catalog frees its number. Deliveries and write-offs name
--- a product by this number.
-CREATE UNIQUE INDEX IF NOT EXISTS products_sku_catalog_uidx ON cartlify.products (lower(sku))
-WHERE
-  sku IS NOT NULL
-  AND "deletedAt" IS NULL;
 
 ----------------------------------------
 -- CHAT_THREADS: one open thread per actor
@@ -955,7 +1157,7 @@ END $$;
 -- JOURNALS: the event of a line is written domain.name
 ----------------------------------------
 -- Lower case with one dot, for example product.update_batch or login.google. The same check is
--- on the four journals below. The events the app writes are listed in
+-- on the five journals below. The events the app writes are listed in
 -- src/config/journalEvents.ts.
 DO $$
 DECLARE
@@ -967,7 +1169,8 @@ BEGIN
         ('admin_audit_log', 'admin_audit_log_event_chk'),
         ('product_price_change_logs', 'product_price_change_logs_event_chk'),
         ('login_logs', 'login_logs_event_chk'),
-        ('legal_acceptances', 'legal_acceptances_event_chk')
+        ('legal_acceptances', 'legal_acceptances_event_chk'),
+        ('stock_log', 'stock_log_event_chk')
     ) AS j (table_name, constraint_name)
   LOOP
     IF NOT EXISTS (
@@ -982,3 +1185,52 @@ BEGIN
     END IF;
   END LOOP;
 END $$;
+
+----------------------------------------
+-- STOCK_LOG: the actor, the change, the operation, the changes, the indexes of the operations
+----------------------------------------
+-- stock_log_actor_chk: a line has an actor and a role together, or none of them (the system).
+-- stock_log_change_chk: a line is a change (not 0) and the stock after it is not below 0.
+-- stock_log_operation_chk: a line belongs to one operation at most: a delivery, a write-off or an
+--   order.
+-- stock_log_meta_chk: the changes are a list of {field, old, new}.
+-- The three operations are found by their id in the lines of one delivery, write-off or order;
+-- most lines have none of them, so the indexes hold the lines that have the id.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'stock_log_actor_chk') THEN
+    ALTER TABLE cartlify.stock_log
+      ADD CONSTRAINT stock_log_actor_chk
+      CHECK (("actorId" IS NULL) = ("actorRole" IS NULL));
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'stock_log_change_chk') THEN
+    ALTER TABLE cartlify.stock_log
+      ADD CONSTRAINT stock_log_change_chk
+      CHECK ("quantityChange" <> 0 AND "stockAfter" >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'stock_log_operation_chk') THEN
+    ALTER TABLE cartlify.stock_log
+      ADD CONSTRAINT stock_log_operation_chk
+      CHECK (num_nonnulls("deliveryId", "writeOffId", "orderId") <= 1);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'stock_log_meta_chk') THEN
+    ALTER TABLE cartlify.stock_log
+      ADD CONSTRAINT stock_log_meta_chk
+      CHECK (meta IS NULL OR jsonb_typeof(meta) = 'array');
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS stock_log_delivery_idx
+  ON cartlify.stock_log ("deliveryId", id)
+  WHERE "deliveryId" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS stock_log_write_off_idx
+  ON cartlify.stock_log ("writeOffId", id)
+  WHERE "writeOffId" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS stock_log_order_idx
+  ON cartlify.stock_log ("orderId", id)
+  WHERE "orderId" IS NOT NULL;
