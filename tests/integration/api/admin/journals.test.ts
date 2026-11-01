@@ -10,6 +10,7 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { testTx } from '../../../helpers/db.js';
@@ -127,24 +128,29 @@ async function auditLine(who: TestUser, line: AuditSeed, userAgent: string | nul
   await sleep(5);
 }
 
+// the ids of the things the seed lines are about are far past any row of the other test files: the
+// lines of the other files are read by the id of a product or an order, and a seed line with a small
+// id would be taken for one of theirs
+const FAR = 2_000_000_000;
+
 const AUDIT_LINES: AuditSeed[] = [
   {
     entityType: 'product',
-    entityId: 11,
+    entityId: FAR + 11,
     action: 'PRODUCT_UPDATE',
     event: 'product.update',
     ip: '203.0.113.1',
   },
   {
     entityType: 'order',
-    entityId: 22,
+    entityId: FAR + 22,
     action: 'ORDER_STATUS_CHANGE',
     event: 'order.ship',
     ip: null,
   },
   {
     entityType: 'product',
-    entityId: 33,
+    entityId: FAR + 33,
     action: 'PRODUCT_DELETE',
     event: 'product.delete',
     ip: '203.0.113.9',
@@ -208,11 +214,13 @@ const PRICE_LINES = [
   },
 ];
 
-async function priceLine(who: TestUser, productId: number, line: (typeof PRICE_LINES)[number]) {
+// a line of the log of prices, written the way the app writes it: by the function of the database,
+// about a variant, in the name of the actor
+async function priceLine(who: TestUser, variantId: number, line: (typeof PRICE_LINES)[number]) {
   await testTx(async (tx) => {
     await setUserContext(tx, { userId: who.id, role: who.role });
-    await tx.$executeRaw`select cartlify.log_product_price_change(
-      ${productId}::int, ${line.oldPrice}::numeric, ${line.newPrice}::numeric,
+    await tx.$executeRaw`select cartlify.log_variant_price_change(
+      ${variantId}::int, ${line.oldPrice}::numeric, ${line.newPrice}::numeric,
       ${line.mode}::cartlify."PriceChangeMode", ${line.value}::numeric, ${line.event},
       (${line.endsAt}::timestamptz at time zone 'UTC'))`;
   });
@@ -226,6 +234,7 @@ const PRICE: Journal = {
     'id',
     'createdAt',
     'productId',
+    'variantId',
     'actorId',
     'event',
     'oldPrice',
@@ -239,6 +248,8 @@ const PRICE: Journal = {
     'createdAt',
     'productId',
     'product',
+    'variantId',
+    'variant',
     'actorId',
     'actor',
     'event',
@@ -251,7 +262,7 @@ const PRICE: Journal = {
   seed: async () => {
     const owner = await newUser({ role: 'ADMIN' });
     const product = await createProduct({ price: 10 });
-    for (const line of PRICE_LINES) await priceLine(owner, product.id, line);
+    for (const line of PRICE_LINES) await priceLine(owner, product.variantId, line);
     return {
       narrow: `productId=${product.id}&actorId=${owner.id}`,
       events: PRICE_LINES.map((line) => line.event),
@@ -261,6 +272,7 @@ const PRICE: Journal = {
     columns
       .flatMap((column) => {
         if (column === 'product') return ['productName'];
+        if (column === 'variant') return ['variantName', 'variantSku'];
         if (column === 'actor') return ['actorName', 'actorEmail'];
         return [column];
       })
@@ -613,7 +625,7 @@ describe('what the journals say of root', () => {
 
   it('hides who root is in the log of prices from an admin, and finds its lines by the account', async () => {
     const product = await createProduct({ price: 10 });
-    await priceLine(root, product.id, PRICE_LINES[0]!);
+    await priceLine(root, product.variantId, PRICE_LINES[0]!);
     const query = `productId=${product.id}`;
 
     const seenByAdmin = (await all('price-log', query)).items[0]!;
@@ -627,7 +639,7 @@ describe('what the journals say of root', () => {
 
   it('hides who root is in the history of the price of a product from an admin, the role stays', async () => {
     const product = await createProduct({ price: 10 });
-    await priceLine(root, product.id, PRICE_LINES[0]!);
+    await priceLine(root, product.variantId, PRICE_LINES[0]!);
     const history = (actor: TestUser) =>
       app.inject({
         method: 'GET',
@@ -675,22 +687,118 @@ describe('what the journals say of root', () => {
   });
 });
 
+// a line of the log of prices is about a variant: it names the variant and its product, and the log
+// is read by either of them
+describe('GET /api/admin/price-log and the variants', () => {
+  it('gives each line with the variant and the product it is about', async () => {
+    const owner = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({ price: 10, name: `Priced ${Date.now()}` });
+    const second = await createVariant(product.id, { price: 20, sku: `PRICE-LOG-${Date.now()}` });
+    await priceLine(owner, second.id, PRICE_LINES[0]!);
+
+    const [line] = (await all('price-log', `actorId=${owner.id}`)).items;
+
+    expect(line).toMatchObject({
+      productId: product.id,
+      product: { id: product.id, name: expect.stringContaining('Priced') },
+      variantId: second.id,
+      variant: {
+        id: second.id,
+        position: 2,
+        name: expect.any(String),
+        sku: expect.stringMatching(/^PRICE-LOG-/),
+      },
+      event: 'price.set',
+    });
+  });
+
+  it('is read by the product, which lists a line for each of its variants, or by one variant', async () => {
+    const owner = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({ price: 10 });
+    const second = await createVariant(product.id, { price: 20 });
+    const other = await createProduct({ price: 10 });
+    await priceLine(owner, product.variantId, PRICE_LINES[0]!);
+    await priceLine(owner, second.id, PRICE_LINES[1]!);
+    await priceLine(owner, other.variantId, PRICE_LINES[2]!);
+
+    const ofProduct = await all('price-log', `actorId=${owner.id}&productId=${product.id}`);
+    const ofVariant = await all('price-log', `actorId=${owner.id}&variantId=${second.id}`);
+    const ofBoth = await all(
+      'price-log',
+      `actorId=${owner.id}&productId=${other.id}&variantId=${second.id}`,
+    );
+
+    expect(ofProduct.items.map((item) => item.variantId).sort()).toEqual(
+      [product.variantId, second.id].sort(),
+    );
+    expect(ofVariant.items.map((item) => item.event)).toEqual(['price.set_batch']);
+    // the two filters together keep the lines that fit both
+    expect(ofBoth.total).toBe(0);
+  });
+
+  it('gives the name and the article number of the variant in the csv', async () => {
+    const owner = await newUser({ role: 'ADMIN' });
+    const product = await createProduct({ price: 10, sku: `CSV-${Date.now()}` });
+    await priceLine(owner, product.variantId, PRICE_LINES[0]!);
+
+    const csv = await read('price-log', `variantId=${product.variantId}&format=csv`);
+
+    const lines = csv.body
+      .replace(/^\uFEFF/, '')
+      .trim()
+      .split('\r\n');
+    expect(lines[0]).toContain('variantId,variantName,variantSku');
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toContain(`,${product.variantId},`);
+    expect(lines[1]).toContain('CSV-');
+  });
+
+  it('refuses a variant that is no id', async () => {
+    const res = await read('price-log', 'variantId=0');
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+});
+
 describe('GET /api/admin/log-events', () => {
   it('lists the events of each journal, the one of the old lines among them', async () => {
     const res = await read('log-events', '');
 
     expect(res.statusCode).toBe(200);
     const body = res.json() as Record<string, string[]>;
-    expect(Object.keys(body).sort()).toEqual(['auditLog', 'consentLog', 'loginLog', 'priceLog']);
+    expect(Object.keys(body).sort()).toEqual([
+      'auditLog',
+      'consentLog',
+      'loginLog',
+      'priceLog',
+      'stockLog',
+    ]);
     expect(body.auditLog).toEqual(
       expect.arrayContaining(['product.update_batch', 'order.ship_bulk']),
+    );
+    // the stock is the stock of a variant: its lines name these events, with the lines of a variant
+    expect(body.auditLog).toEqual(
+      expect.arrayContaining(['stock.delivery', 'stock.write_off', 'variant.update']),
     );
     expect(body.priceLog).toEqual(expect.arrayContaining(['price.set', 'price.bulk']));
     expect(body.loginLog).toEqual(
       expect.arrayContaining(['login.password', 'login.google', 'login.github', 'login.linkedin']),
     );
     expect(body.consentLog).toEqual(expect.arrayContaining(['consent.register', 'consent.order']));
-    for (const events of Object.values(body)) expect(events).toContain('legacy.unknown');
+    // the stock log began with its events: no line of it is from before them
+    expect(body.stockLog).toEqual(
+      expect.arrayContaining([
+        'stock.delivery',
+        'stock.write_off',
+        'stock.sale',
+        'stock.cancel_return',
+      ]),
+    );
+    expect(body.stockLog).not.toContain('legacy.unknown');
+    for (const [journal, events] of Object.entries(body)) {
+      if (journal !== 'stockLog') expect(events).toContain('legacy.unknown');
+    }
   });
 
   it('refuses a customer', async () => {

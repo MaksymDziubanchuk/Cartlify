@@ -6,6 +6,7 @@ import env from '@config/env.js';
 import { accessCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createChatThread,
@@ -14,10 +15,12 @@ import {
   createProduct,
   createReview,
   createUser,
+  createVariant,
+  setProductPrice,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { addShipment, placeOrder } from '../../../helpers/orders.js';
+import { addShipment, placeOrder, placeOrderOf } from '../../../helpers/orders.js';
 
 // GET /api/users/me/export: everything the shop keeps of the person, read with the rights of the
 // person, as one file; once an hour
@@ -105,12 +108,27 @@ describe('GET /api/users/me/export', () => {
             price: expect.any(String),
           }),
           shipments: [],
+          // a position is a variant of a product, with the name and the prices of the confirmation
           items: [
-            expect.objectContaining({ productId: product.id, name: productName, quantity: 1 }),
+            {
+              productId: product.id,
+              variantId: product.variantId,
+              name: productName,
+              quantity: 1,
+              unitPrice: '10',
+              totalPrice: '10',
+            },
           ],
         }),
       ],
-      favorites: [expect.objectContaining({ productId: product.id })],
+      favorites: [
+        {
+          productId: product.id,
+          variantId: product.variantId,
+          name: productName,
+          createdAt: expect.any(String),
+        },
+      ],
       reviews: [expect.objectContaining({ productId: product.id, rating: 5, comment: 'Good mug' })],
       chats: [
         expect.objectContaining({
@@ -127,6 +145,109 @@ describe('GET /api/users/me/export', () => {
     expect(JSON.stringify(data)).not.toContain(other.user.email);
     // what is no data of the person stays out: the hash of the password, the id of the payment
     expect(JSON.stringify(data)).not.toMatch(/passwordHash|paymentId|pi_test_/);
+  });
+
+  // the name and the price of a position are the ones of the confirmation: the shop renaming the
+  // product or changing the price later does not rewrite what the person bought
+  it('keeps the name and the price an order was confirmed with when the product changes after', async () => {
+    const user = await newUser();
+    const name = `Export lamp ${user.id}`;
+    const product = await createProduct({ stock: 5, name, price: 10 });
+    products.push(product);
+    await placeOrder(app, csrf, user, product, 'paid', 2);
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: product.id }, data: { name: `Renamed ${name}` } }),
+    );
+    await setProductPrice(product.id, 99);
+
+    const [order] = (await exportOf(accessCookie(user))).json().orders;
+
+    expect(order.items).toEqual([
+      {
+        productId: product.id,
+        variantId: product.variantId,
+        name,
+        quantity: 2,
+        unitPrice: '10',
+        totalPrice: '20',
+      },
+    ]);
+  });
+
+  it('names the variant of each position of an order that has several', async () => {
+    const user = await newUser();
+    const product = await createProduct({ stock: 5, price: 10 });
+    const second = await createVariant(product.id, { price: 15, stock: 5 });
+    products.push(product);
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      user,
+      [
+        { item: product, quantity: 1 },
+        { item: { variantId: second.id }, quantity: 3 },
+      ],
+      'paid',
+    );
+
+    const data = (await exportOf(accessCookie(user))).json();
+
+    const order = data.orders.find((o: { id: number }) => o.id === orderId);
+    expect(
+      order.items.map(
+        (i: { productId: number; variantId: number; quantity: number; unitPrice: string }) => [
+          i.productId,
+          i.variantId,
+          i.quantity,
+          i.unitPrice,
+        ],
+      ),
+    ).toEqual([
+      [product.id, product.variantId, 1, '10'],
+      [product.id, second.id, 3, '15'],
+    ]);
+  });
+
+  // the cart is no order yet, it shows what the variant is now
+  it('gives the item of a cart the name and the price of the variant now', async () => {
+    const user = await newUser();
+    const name = `Cart lamp ${user.id}`;
+    const product = await createProduct({ stock: 5, name, price: 10 });
+    products.push(product);
+    await placeOrder(app, csrf, user, product, 'cart', 1);
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: product.id }, data: { name: `Renamed ${name}` } }),
+    );
+
+    const [order] = (await exportOf(accessCookie(user))).json().orders;
+
+    expect(order.status).toBe('pending');
+    expect(order.items[0]).toMatchObject({
+      productId: product.id,
+      variantId: product.variantId,
+      name: `Renamed ${name}`,
+    });
+  });
+
+  // a favorite is a variant: two variants of one product are two favorites, a hidden one stays
+  it('gives each favorite with its variant, also one a buyer sees no more', async () => {
+    const user = await newUser();
+    const name = `Favorite lamp ${user.id}`;
+    const product = await createProduct({ stock: 5, name });
+    const second = await createVariant(product.id, { stock: 2 });
+    products.push(product);
+    await createFavorite(user.id, { variantId: product.variantId });
+    await createFavorite(user.id, { variantId: second.id });
+    await asAdmin((tx) =>
+      tx.productVariant.update({ where: { id: second.id }, data: { deletedAt: new Date() } }),
+    );
+
+    const { favorites } = (await exportOf(accessCookie(user))).json();
+
+    expect(favorites).toEqual([
+      expect.objectContaining({ productId: product.id, variantId: product.variantId, name }),
+      expect.objectContaining({ productId: product.id, variantId: second.id, name }),
+    ]);
   });
 
   it('gives the sends of an order with the carrier and the number, not what they cost the shop', async () => {

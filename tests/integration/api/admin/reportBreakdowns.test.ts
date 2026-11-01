@@ -10,6 +10,7 @@ import {
   createCategory,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   receiveBatch,
   uniqueTag,
@@ -18,13 +19,16 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { placeOrder } from '../../../helpers/orders.js';
+import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/admin/reports/accounting/products, /categories and /timeline: the money of a period by
-// product, by category (with its whole branch, or only its own products) and by day, week or month
-// of the shop (SHOP_TIME_ZONE, Europe/Madrid unless given), each sorted the way the admin asks and
-// as a csv file for the accountant. The margin is of the sales; the write-offs are a column of
-// their own. Other test files make orders and batches at the same time, so each test reads only
-// its own categories
+// product (a row is a product, the money of its variants added up; the breakdown by variant is
+// /variants, reportVariants.test.ts), by category (with its whole branch, or only its own
+// products) and by day, week or month of the shop (SHOP_TIME_ZONE, Europe/Madrid unless given),
+// each sorted the way the admin asks and as a csv file for the accountant. A category and a step
+// add up the variants. The margin is of the sales; the write-offs are a column of their
+// own. Other test files make orders and batches at the same time, so each test reads only its own
+// categories
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -153,35 +157,32 @@ type Step = {
   purchases: { value: number };
 };
 const idsOf = (res: { json: () => { items: Row[] } }) => res.json().items.map((row) => row.id);
+const productIdsOf = (res: { json: () => { items: Array<{ product: { id: number } }> } }) =>
+  res.json().items.map((row) => row.product.id);
 
 describe('GET /api/admin/reports/accounting/products', () => {
+  // a row is a product: the money of all its variants added up (the breakdown by variant is
+  // GET /api/admin/reports/accounting/variants, reportVariants.test.ts)
+  const rowOf = (
+    product: TestProduct,
+    name: string,
+    category: { id: number; name: string },
+    money: object,
+  ) => ({
+    product: { id: product.id, name, deleted: false },
+    category: { id: category.id, name: category.name },
+    ...money,
+  });
+
   it('gives each product of the branch with its money, the most revenue first', async () => {
     const res = await get('products', { ...period(), categoryId: String(top.id) });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ currency: 'eur', limit: 20, nextCursor: null });
     expect(res.json().items).toEqual([
-      {
-        id: beta.id,
-        name: `Beta ${tag}`,
-        deleted: false,
-        category: { id: child.id, name: child.name },
-        ...BETA,
-      },
-      {
-        id: alpha.id,
-        name: `Alpha ${tag}`,
-        deleted: false,
-        category: { id: top.id, name: top.name },
-        ...ALPHA,
-      },
-      {
-        id: zeta.id,
-        name: `Zeta, the "quoted" ${tag}`,
-        deleted: false,
-        category: { id: child.id, name: child.name },
-        ...ZETA,
-      },
+      rowOf(beta, `Beta ${tag}`, child, BETA),
+      rowOf(alpha, `Alpha ${tag}`, top, ALPHA),
+      rowOf(zeta, `Zeta, the "quoted" ${tag}`, child, ZETA),
     ]);
   });
 
@@ -195,8 +196,8 @@ describe('GET /api/admin/reports/accounting/products', () => {
     const own = await get('products', { ...period(), categoryId: String(top.id), branch: 'false' });
     const ofChild = await get('products', { ...period(), categoryId: String(child.id) });
 
-    expect(idsOf(own)).toEqual([alpha.id]);
-    expect(idsOf(ofChild)).toEqual([beta.id, zeta.id]);
+    expect(productIdsOf(own)).toEqual([alpha.id]);
+    expect(productIdsOf(ofChild)).toEqual([beta.id, zeta.id]);
   });
 
   it.each([
@@ -220,7 +221,7 @@ describe('GET /api/admin/reports/accounting/products', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(idsOf(res)).toEqual(expected());
+    expect(productIdsOf(res)).toEqual(expected());
   });
 
   it.each([
@@ -230,14 +231,14 @@ describe('GET /api/admin/reports/accounting/products', () => {
     ['name', 'asc'],
   ])('pages by %s %s with the cursor, each product once', async (sortBy, sortOrder) => {
     const query = { ...period(), categoryId: String(top.id), sortBy, sortOrder };
-    const whole = idsOf(await get('products', query));
+    const whole = productIdsOf(await get('products', query));
 
     const seen: number[] = [];
     let cursor: string | null = null;
     for (let page = 0; page < 5; page += 1) {
       const res = await get('products', { ...query, limit: '1', ...(cursor ? { cursor } : {}) });
       expect(res.statusCode).toBe(200);
-      seen.push(...idsOf(res));
+      seen.push(...productIdsOf(res));
       cursor = res.json().nextCursor;
       if (!cursor) break;
     }
@@ -259,6 +260,21 @@ describe('GET /api/admin/reports/accounting/products', () => {
     expect(res.json()).toMatchObject({ errorCode: 'CURSOR_INVALID' });
   });
 
+  // the cursor of the breakdown by variant names the id of a variant, this one the id of a product
+  it('refuses a cursor of the breakdown by variant', async () => {
+    const first = await get('variants', { ...period(), categoryId: String(top.id), limit: '1' });
+    expect(first.json().nextCursor).not.toBeNull();
+
+    const res = await get('products', {
+      ...period(),
+      categoryId: String(top.id),
+      cursor: first.json().nextCursor,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'CURSOR_INVALID' });
+  });
+
   it('lists a product removed from the catalog with what it sold', async () => {
     const category = await createCategory();
     const gone = await createProduct({ stock: 0, price: 10, categoryId: category.id });
@@ -270,8 +286,7 @@ describe('GET /api/admin/reports/accounting/products', () => {
 
     expect(res.json().items).toEqual([
       expect.objectContaining({
-        id: gone.id,
-        deleted: true,
+        product: expect.objectContaining({ id: gone.id, deleted: true }),
         sales: expect.objectContaining({ revenue: 10 }),
       }),
     ]);
@@ -295,7 +310,8 @@ describe('GET /api/admin/reports/accounting/products', () => {
       .trimEnd()
       .split('\r\n');
     expect(lines[0]).toBe(
-      'id,name,category,deleted,sold_units,sold_revenue,sold_cost,sold_margin,' +
+      'product_id,product_name,category,deleted,' +
+        'sold_units,sold_revenue,sold_cost,sold_margin,' +
         'sold_margin_percent,cancelled_units,cancelled_revenue,cancelled_cost,' +
         'written_off_units,written_off_value,margin_after_write_offs,' +
         'margin_after_write_offs_percent,purchased_units,purchased_value,stock_units,stock_value',
@@ -324,7 +340,250 @@ describe('GET /api/admin/reports/accounting/products', () => {
       format: 'csv',
     });
 
-    expect(res.body).toContain(`${odd.id},'=SUM(A1) ${tag},`);
+    expect(res.body).toContain(`${odd.id},'=SUM(A1) ${tag},${category.name},`);
+  });
+
+  // a product with variants is ONE row, the money of its variants added up. A: 6 in at 2, 2 sold at
+  // 10; B (sku): 4 in at 5, 1 sold at 30, 1 written off; C: nothing at all; D: 1 in at 3 and taken
+  // out of sale
+  describe('with the variants of a product', () => {
+    async function productWithVariants() {
+      const category = await createCategory();
+      const name = `Shirt ${uniqueTag()}`;
+      const product = await createProduct({ stock: 0, price: 10, categoryId: category.id, name });
+      const sku = `RB-${uniqueTag()}`;
+      const b = await createVariant(product.id, { price: 30, stock: 0, sku });
+      const c = await createVariant(product.id, { price: 40, stock: 0 });
+      const d = await createVariant(product.id, { price: 50, stock: 0 });
+      await receiveBatch({ variantId: product.variantId }, { quantity: 6, unitCost: 2 });
+      const batchB = await receiveBatch({ variantId: b.id }, { quantity: 4, unitCost: 5 });
+      await receiveBatch({ variantId: d.id }, { quantity: 1, unitCost: 3 });
+      const buyer = await newUser();
+      await placeOrder(app, csrf, buyer, product, 'paid', 2);
+      await placeOrder(app, csrf, buyer, { ...product, variantId: b.id }, 'paid', 1);
+      await writeOffStock({ variantId: b.id }, 1, { batchId: batchB, reason: 'damaged' });
+      await markVariantDeleted(d.id);
+      return { category, product, name, a: product.variantId, b: b.id, c: c.id, d: d.id, sku };
+    }
+
+    const SUM = {
+      sales: { units: 3, revenue: 50, cost: 9, margin: 41, marginPercent: 82 },
+      cancellations: { units: 0, revenue: 0, cost: 0 },
+      writeOffs: { units: 1, value: 5 },
+      afterWriteOffs: { margin: 36, marginPercent: 72 },
+      purchases: { units: 11, value: 35 },
+      stock: { units: 7, value: 21 },
+    };
+
+    it('gives one row for the product, the money of its variants added up', async () => {
+      const { category, product } = await productWithVariants();
+
+      const res = await get('products', { ...period(), categoryId: String(category.id) });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().items).toEqual([
+        {
+          product: { id: product.id, name: expect.any(String), deleted: false },
+          category: { id: category.id, name: category.name },
+          ...SUM,
+        },
+      ]);
+      // no variant in the row of a product, the breakdown by variant has them
+      expect(Object.keys(res.json().items[0])).not.toContain('variant');
+    });
+
+    it('is the sum of the rows of its variants in the breakdown by variant', async () => {
+      const { category } = await productWithVariants();
+      const query = { ...period(), categoryId: String(category.id) };
+
+      const products = await get('products', query);
+      const variants = await get('variants', query);
+
+      const rows = variants.json().items as Array<{
+        sales: { units: number; revenue: number; cost: number };
+        writeOffs: { units: number; value: number };
+        purchases: { units: number; value: number };
+        stock: { units: number; value: number };
+      }>;
+      expect(rows).toHaveLength(3);
+      const total = (pick: (row: (typeof rows)[number]) => number) =>
+        rows.reduce((sum, row) => sum + pick(row), 0);
+      const [only] = products.json().items;
+      expect(only.sales).toMatchObject({
+        units: total((row) => row.sales.units),
+        revenue: total((row) => row.sales.revenue),
+        cost: total((row) => row.sales.cost),
+      });
+      expect(only.writeOffs).toMatchObject({
+        units: total((row) => row.writeOffs.units),
+        value: total((row) => row.writeOffs.value),
+      });
+      expect(only.purchases).toMatchObject({
+        units: total((row) => row.purchases.units),
+        value: total((row) => row.purchases.value),
+      });
+      expect(only.stock).toMatchObject({
+        units: total((row) => row.stock.units),
+        value: total((row) => row.stock.value),
+      });
+      expect(products.json().totals).toEqual(variants.json().totals);
+    });
+
+    it('adds the variants up in the totals, in the category and in the steps of time', async () => {
+      const { category } = await productWithVariants();
+
+      const products = await get('products', {
+        ...period(),
+        categoryId: String(category.id),
+        limit: '1',
+      });
+      const categories = await get('categories', {
+        ...period(),
+        categoryId: String(category.id),
+      });
+      const timeline = await get('timeline', {
+        ...period(),
+        step: 'month',
+        categoryId: String(category.id),
+      });
+
+      expect(products.json().totals).toMatchObject({
+        sales: SUM.sales,
+        writeOffs: SUM.writeOffs,
+        afterWriteOffs: SUM.afterWriteOffs,
+        purchases: SUM.purchases,
+        stock: SUM.stock,
+      });
+      // one product, one row: the page of one holds it, there is no next one
+      expect(products.json().items).toHaveLength(1);
+      expect(products.json().nextCursor).toBeNull();
+      expect(categories.json().items).toEqual([
+        expect.objectContaining({ id: category.id, ...SUM }),
+      ]);
+      const months = timeline.json().items as Array<{
+        sales: { revenue: number; units: number };
+        purchases: { value: number };
+        writeOffs: { value: number };
+      }>;
+      expect(months.reduce((total, item) => total + item.sales.revenue, 0)).toBe(50);
+      expect(months.reduce((total, item) => total + item.sales.units, 0)).toBe(3);
+      expect(months.reduce((total, item) => total + item.purchases.value, 0)).toBe(35);
+      expect(months.reduce((total, item) => total + item.writeOffs.value, 0)).toBe(5);
+    });
+
+    // the products are the rows: sorted by the name of the product, the ties by the id of the product
+    it('sorts the products by name, the ties by the id of the product', async () => {
+      const category = await createCategory();
+      const name = `Twin ${uniqueTag()}`;
+      const first = await createProduct({ stock: 0, categoryId: category.id, name });
+      const second = await createProduct({ stock: 0, categoryId: category.id, name });
+      const other = await createProduct({ stock: 0, categoryId: category.id, name: `Aaa ${name}` });
+      for (const product of [first, second, other]) {
+        await receiveBatch(product.id, { quantity: 1, unitCost: 1 });
+      }
+      await createVariant(first.id, { stock: 1 });
+
+      const asc = await get('products', {
+        ...period(),
+        categoryId: String(category.id),
+        sortBy: 'name',
+        sortOrder: 'asc',
+      });
+      const desc = await get('products', {
+        ...period(),
+        categoryId: String(category.id),
+        sortBy: 'name',
+        sortOrder: 'desc',
+      });
+
+      expect(productIdsOf(asc)).toEqual([other.id, first.id, second.id]);
+      expect(productIdsOf(desc)).toEqual([second.id, first.id, other.id]);
+    });
+
+    it.each([
+      ['revenue', 'desc'],
+      ['name', 'asc'],
+      ['name', 'desc'],
+      ['marginPercent', 'asc'],
+    ])('pages the products by %s %s, each product once', async (sortBy, sortOrder) => {
+      const { category } = await productWithVariants();
+      // a second product of the category, with a variant of its own
+      const second = await createProduct({ stock: 0, price: 5, categoryId: category.id });
+      await receiveBatch(second.id, { quantity: 2, unitCost: 1 });
+      await placeOrder(app, csrf, await newUser(), second, 'paid', 1);
+      const query = { ...period(), categoryId: String(category.id), sortBy, sortOrder };
+      const whole = productIdsOf(await get('products', query));
+
+      const seen: number[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 4; page += 1) {
+        const res = await get('products', { ...query, limit: '1', ...(cursor ? { cursor } : {}) });
+        expect(res.statusCode).toBe(200);
+        seen.push(...productIdsOf(res));
+        cursor = res.json().nextCursor;
+        if (!cursor) break;
+      }
+
+      expect(whole).toHaveLength(2);
+      expect(seen).toEqual(whole);
+    });
+
+    it('gives one csv row for the product', async () => {
+      const { category, product, name } = await productWithVariants();
+
+      const res = await get('products', {
+        ...period(),
+        categoryId: String(category.id),
+        format: 'csv',
+      });
+
+      const lines = res.body
+        .replace(/^\uFEFF/, '')
+        .trimEnd()
+        .split('\r\n');
+      expect(lines).toHaveLength(3);
+      expect(lines[1]).toBe(
+        `${product.id},${name},${category.name},no,3,50.00,9.00,41.00,82.00,0,0.00,0.00,1,5.00,36.00,72.00,11,35.00,7,21.00`,
+      );
+      expect(lines[2]!.startsWith(',Total,,,3,50.00,')).toBe(true);
+    });
+
+    it('takes the variants it is asked for, whatever the other variants did', async () => {
+      const { category, product, a, b } = await productWithVariants();
+      const query = { ...period(), categoryId: String(category.id) };
+
+      const onlyB = await get('products', { ...query, variantIds: String(b) });
+      const aAndB = await get('products', { ...query, variantIds: `${a},${b}` });
+      const none = await get('products', { ...query, variantIds: '2000000000' });
+
+      expect(productIdsOf(onlyB)).toEqual([product.id]);
+      expect(onlyB.json().items[0]).toMatchObject({
+        sales: { units: 1, revenue: 30 },
+        writeOffs: { units: 1, value: 5 },
+        purchases: { units: 4, value: 20 },
+        stock: { units: 2, value: 10 },
+      });
+      expect(aAndB.json().items[0]).toMatchObject({ sales: { units: 3, revenue: 50 } });
+      expect(none.json().items).toEqual([]);
+      expect(none.json().totals).toMatchObject({ sales: { units: 0 }, stock: { units: 0 } });
+    });
+
+    it('takes the products it is asked for, and the variants of those among the variants asked for', async () => {
+      const { category, product, b } = await productWithVariants();
+      const query = { ...period(), categoryId: String(category.id) };
+
+      const byProduct = await get('products', { ...query, productIds: String(product.id) });
+      const other = await get('products', { ...query, productIds: String(alpha.id) });
+      const both = await get('products', {
+        ...query,
+        productIds: String(product.id),
+        variantIds: String(b),
+      });
+
+      expect(productIdsOf(byProduct)).toEqual([product.id]);
+      expect(other.json().items).toEqual([]);
+      expect(both.json().items[0]).toMatchObject({ sales: { units: 1, revenue: 30 } });
+    });
   });
 
   it('answers 404 for a category that does not exist', async () => {
@@ -338,11 +597,37 @@ describe('GET /api/admin/reports/accounting/products', () => {
     ['an unknown sort', { sortBy: 'popularity' }],
     ['an unknown format', { format: 'xlsx' }],
     ['a page of 101', { limit: '101' }],
+    ['ids that are no list', { productIds: 'a,b' }],
+    ['variant ids that are no list', { variantIds: '1,,2' }],
   ])('refuses %s', async (_case, query) => {
     const res = await get('products', query);
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+
+  it('refuses a product id past the largest id and more than 100 product ids', async () => {
+    const past = await get('products', { productIds: '2147483648' });
+    const many = await get('products', {
+      productIds: Array.from({ length: 101 }, (_, n) => n + 1).join(','),
+    });
+
+    for (const res of [past, many]) {
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_IDS_INVALID' });
+    }
+  });
+
+  it('refuses a variant id past the largest id and more than 100 variant ids', async () => {
+    const past = await get('products', { variantIds: '2147483648' });
+    const many = await get('products', {
+      variantIds: Array.from({ length: 101 }, (_, n) => n + 1).join(','),
+    });
+
+    for (const res of [past, many]) {
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VARIANT_IDS_INVALID' });
+    }
   });
 
   it('refuses a user', async () => {

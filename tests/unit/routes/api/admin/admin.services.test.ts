@@ -54,6 +54,14 @@ const viewRow = () => ({
     deletedTotal: 1,
     outOfStockTotal: 1,
     topProductsByRevenue: [{ id: 2, name: 'Mug', revenue: 60, quantitySold: 3 }],
+    topVariantsByRevenue: [
+      {
+        product: { id: 2, name: 'Mug', deleted: false },
+        variant: { id: 7, position: 2, name: 'Mug \u2014 blue', sku: 'MUG-B', deleted: false },
+        revenue: 40,
+        quantitySold: 2,
+      },
+    ],
     topCategoriesByRevenue: [{ id: 1, name: 'Kitchen', revenue: 60, quantitySold: 3 }],
   },
   reviews: { total: 2, ratedTotal: 2, newInPeriod: 1, avgRating: 4.5, negativeCount: 0 },
@@ -201,6 +209,69 @@ describe('adminServices.showAllStats', () => {
         products: { ...r.products, topProductsByRevenue: [{ id: 2, revenue: 1, quantitySold: 1 }] },
       }),
       'products.topProductsByRevenue.name',
+    ],
+    [
+      'a top of variants that is not a list',
+      (r: Row) => ({ ...r, products: { ...r.products, topVariantsByRevenue: {} } }),
+      'products.topVariantsByRevenue',
+    ],
+    [
+      'a top of variants that is missing',
+      (r: Row) => ({ ...r, products: { ...r.products, topVariantsByRevenue: undefined } }),
+      'products.topVariantsByRevenue',
+    ],
+    [
+      'a variant of the top without a name',
+      (r: Row) => ({
+        ...r,
+        products: {
+          ...r.products,
+          topVariantsByRevenue: [
+            {
+              product: { id: 2, name: 'Mug', deleted: false },
+              variant: { id: 7, position: 1, sku: null, deleted: false },
+              revenue: 1,
+              quantitySold: 1,
+            },
+          ],
+        },
+      }),
+      'products.topVariantsByRevenue.variant.name',
+    ],
+    [
+      'a variant of the top without its product',
+      (r: Row) => ({
+        ...r,
+        products: {
+          ...r.products,
+          topVariantsByRevenue: [
+            {
+              variant: { id: 7, position: 1, name: 'Mug', sku: null, deleted: false },
+              revenue: 1,
+              quantitySold: 1,
+            },
+          ],
+        },
+      }),
+      'products.topVariantsByRevenue.product',
+    ],
+    [
+      'a variant of the top with a sku that is a number',
+      (r: Row) => ({
+        ...r,
+        products: {
+          ...r.products,
+          topVariantsByRevenue: [
+            {
+              product: { id: 2, name: 'Mug', deleted: false },
+              variant: { id: 7, position: 1, name: 'Mug', sku: 12, deleted: false },
+              revenue: 1,
+              quantitySold: 1,
+            },
+          ],
+        },
+      }),
+      'products.topVariantsByRevenue.variant.sku',
     ],
     [
       'a category of the top without a name',

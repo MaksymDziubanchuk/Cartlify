@@ -9,11 +9,12 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   uniqueTag,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { watchMail } from '../../../helpers/mail.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { placeOrder, placeOrderOf } from '../../../helpers/orders.js';
 
 // the desk of the orders of an admin: the steps shipped and delivered go to the admin log and a
 // double click mails once; the list finds orders by the buyer, the statuses, the text of a buyer
@@ -235,6 +236,78 @@ describe('GET /api/orders for an admin', () => {
     const res = await listAs(admin, `userId=${buyer.id}&productId=${products[1]!.id}`);
 
     expect(idsOf(res)).toEqual([shipped]);
+  });
+
+  // the black and the white of one product are two variants: the desk finds the orders that hold
+  // the variant, or any variant of the product
+  it('finds the orders that hold a variant, and the orders that hold any variant of a product', async () => {
+    const buyer = await newUser();
+    const black = await createProduct({ price: 10, stock: 5 });
+    const white = await createVariant(black.id, { price: 12, stock: 5 });
+    const other = await createProduct({ price: 9, stock: 5 });
+    const blackOrder = await placeOrder(app, csrf, buyer, black, 'paid');
+    const whiteOrder = await placeOrder(app, csrf, buyer, { variantId: white.id }, 'paid');
+    const otherOrder = await placeOrder(app, csrf, buyer, other, 'paid');
+
+    const ofBlack = await listAs(admin, `userId=${buyer.id}&variantId=${black.variantId}`);
+    const ofWhite = await listAs(admin, `userId=${buyer.id}&variantId=${white.id}`);
+    const ofProduct = await listAs(admin, `userId=${buyer.id}&productId=${black.id}`);
+    const both = await listAs(
+      admin,
+      `userId=${buyer.id}&productId=${black.id}&variantId=${white.id}`,
+    );
+    const mismatch = await listAs(
+      admin,
+      `userId=${buyer.id}&productId=${other.id}&variantId=${white.id}`,
+    );
+
+    expect(idsOf(ofBlack)).toEqual([blackOrder]);
+    expect(idsOf(ofWhite)).toEqual([whiteOrder]);
+    expect(idsOf(ofProduct)).toEqual([blackOrder, whiteOrder].sort((a, b) => a - b));
+    expect(idsOf(both)).toEqual([whiteOrder]);
+    expect(idsOf(mismatch)).toEqual([]);
+    expect(otherOrder).toBeGreaterThan(0);
+  });
+
+  it('finds the orders of a variant that holds more than one variant of the product', async () => {
+    const buyer = await newUser();
+    const black = await createProduct({ price: 10, stock: 5 });
+    const white = await createVariant(black.id, { price: 12, stock: 5 });
+    const both = await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [{ item: black }, { item: { variantId: white.id } }],
+      'paid',
+    );
+
+    expect(idsOf(await listAs(admin, `userId=${buyer.id}&variantId=${white.id}`))).toEqual([both]);
+    expect(idsOf(await listAs(admin, `userId=${buyer.id}&variantId=${black.variantId}`))).toEqual([
+      both,
+    ]);
+  });
+
+  it.each(['variantId=0', 'variantId=2147483648', 'variantId=1.5', 'variantId=abc'])(
+    'refuses %s',
+    async (query) => {
+      const res = await listAs(admin, query);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    },
+  );
+
+  it('lets a buyer filter their own orders by a variant', async () => {
+    const buyer = await newUser();
+    const black = await createProduct({ price: 10, stock: 5 });
+    const white = await createVariant(black.id, { price: 12, stock: 5 });
+    await placeOrder(app, csrf, buyer, black, 'paid');
+    const whiteOrder = await placeOrder(app, csrf, buyer, { variantId: white.id }, 'paid');
+
+    const res = await listAs(buyer, `variantId=${white.id}`);
+
+    expect(res.statusCode).toBe(200);
+    expect(idsOf(res)).toEqual([whiteOrder]);
   });
 
   it('names the buyer in each row', async () => {

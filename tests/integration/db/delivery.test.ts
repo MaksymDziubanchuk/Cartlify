@@ -123,7 +123,7 @@ const moveTo = async (db: DbSession, orderId: number, status: string) => {
 describe('order_deliveries: who writes where an order goes', () => {
   it('lets a buyer write the person and the address of an own cart, and nobody else read it', async () => {
     const { row, seenByOther } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       await writeDelivery(db, owner.id, orderId, { apartment: '12', note: 'ring twice' });
       const row = await deliveryOf(db, orderId);
 
@@ -153,7 +153,7 @@ describe('order_deliveries: who writes where an order goes', () => {
 
   it('refuses a buyer to write where the order of another user goes', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       await db.as({ role: 'USER', userId: other.id });
       return insertDelivery(db, orderId, {});
     });
@@ -163,7 +163,7 @@ describe('order_deliveries: who writes where an order goes', () => {
 
   it('refuses a buyer to set the price of the delivery, on a new row and on a written one', async () => {
     const { inserted, updated, row } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       await db.as({ role: 'USER', userId: owner.id });
       const inserted = await insertDelivery(db, orderId, { price: 4.99 });
       await writeDelivery(db, owner.id, orderId);
@@ -179,7 +179,7 @@ describe('order_deliveries: who writes where an order goes', () => {
 
   it('keeps one row for an order', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       await db.as({ role: 'USER', userId: owner.id });
       return insertDelivery(db, orderId, {});
     });
@@ -189,7 +189,7 @@ describe('order_deliveries: who writes where an order goes', () => {
 
   it('lets a buyer change the method and the address while the order is a cart, not once it is confirmed', async () => {
     const { before, after, confirmedChange } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       await writeDelivery(db, owner.id, orderId, PICKUP);
       const before = await deliveryOf(db, orderId);
 
@@ -242,7 +242,7 @@ describe('order_deliveries: the form of the data', () => {
 
   it.each(cases)('refuses %s', async (_name, data, constraint) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       await db.as({ role: 'USER', userId: owner.id });
       return insertDelivery(db, orderId, data);
     });
@@ -252,7 +252,7 @@ describe('order_deliveries: the form of the data', () => {
 
   it('takes a manual delivery without a postal code and without an apartment', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       await db.as({ role: 'USER', userId: owner.id });
       return insertDelivery(db, orderId, { postalCode: null, apartment: null });
     });
@@ -268,7 +268,7 @@ describe('cartlify.confirm_order: the price of the delivery', () => {
     quantity = 2,
   ) =>
     inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, quantity]], { delivery });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, quantity]], { delivery });
       const outcome = await confirm(db, owner.id, orderId, '15 minutes', rule);
       return {
         outcome,
@@ -279,12 +279,12 @@ describe('cartlify.confirm_order: the price of the delivery', () => {
 
   it('refuses an order without where it goes, and reserves nothing', async () => {
     const { outcome, reserved } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 2]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 2]], { delivery: false });
       const outcome = await confirm(db, owner.id, orderId);
       await db.as({ role: 'ADMIN', userId: admin.id });
       const [row] = await db.rows<{ reserved: number }>(
-        'select "reservedStock" as reserved from cartlify.products where id = $1',
-        product.id,
+        'select "reservedStock" as reserved from cartlify.product_variants where id = $1',
+        product.variantId,
       );
       return { outcome, reserved: row!.reserved };
     });
@@ -356,7 +356,7 @@ describe('cartlify.confirm_order: the price of the delivery', () => {
 describe('cartlify.pay_order: the delivery is paid with the items', () => {
   it('takes the items and the price of the delivery, and the total holds both', async () => {
     const { result, order } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]], { flat: 4.99 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]], { flat: 4.99 });
       const result = await pay(db, admin.id, orderId);
       return { result, order: await orderStateOf(db, admin.id, orderId) };
     });
@@ -367,7 +367,7 @@ describe('cartlify.pay_order: the delivery is paid with the items', () => {
 
   it('refuses the amount of the items alone while the delivery costs something', async () => {
     const { result, order } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]], { flat: 4.99 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]], { flat: 4.99 });
       const result = await pay(db, admin.id, orderId, { amount: '20.00' });
       return { result, order: await orderStateOf(db, admin.id, orderId) };
     });
@@ -378,7 +378,7 @@ describe('cartlify.pay_order: the delivery is paid with the items', () => {
 
   it('refuses the amount with the delivery when the delivery is free', async () => {
     const { result } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]], {
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]], {
         flat: 4.99,
         freeFrom: 20,
       });
@@ -397,7 +397,7 @@ describe('an order that goes back to unconfirmed', () => {
 
   it('costs its items again, keeps where it goes, and is priced again at the next confirmation', async () => {
     const { total, delivery, again, afterAgain } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]], { flat: 4.99 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]], { flat: 4.99 });
       expect(await cancelPayment(db, orderId)).toMatchObject({ ok: true });
       const total = (await orderStateOf(db, admin.id, orderId))!.total;
       const delivery = await deliveryOf(db, orderId);
@@ -414,7 +414,7 @@ describe('an order that goes back to unconfirmed', () => {
 
   it('lets a buyer change the kept price delivery to a pickup, which costs nothing, and no price besides', async () => {
     const { toPickup, afterPickup, setPrice } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]], { flat: 4.99 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]], { flat: 4.99 });
       expect(await cancelPayment(db, orderId)).toMatchObject({ ok: true });
       expect((await deliveryOf(db, orderId))!.price).toBe(4.99);
 
@@ -438,7 +438,7 @@ describe('an order that goes back to unconfirmed', () => {
 
   it('is paid by a late payment of the price it was confirmed with, and holds it in the total', async () => {
     const { result, order } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]], { flat: 4.99 });
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]], { flat: 4.99 });
       await db.as({ role: 'ADMIN' });
       await db.rows('select 1 as done from cartlify.unconfirm_order($1::int)', orderId);
       const result = await pay(db, admin.id, orderId, { amount: '24.99' });
@@ -451,7 +451,7 @@ describe('an order that goes back to unconfirmed', () => {
 
   it('is not payable when it was never confirmed: it has not where to go', async () => {
     const result = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       return pay(db, admin.id, orderId);
     });
 
@@ -460,7 +460,7 @@ describe('an order that goes back to unconfirmed', () => {
 });
 
 describe('the shipping steps of an admin', () => {
-  const paid = (db: DbSession) => paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+  const paid = (db: DbSession) => paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
 
   it('goes one step on from paid to shipped and from shipped to delivered', async () => {
     const { shipped, delivered, state } = await inRolledBackTx(async (db) => {
@@ -532,7 +532,9 @@ describe('an admin corrects where a paid order goes', () => {
 
   it('changes the person and the address of a paid order', async () => {
     const { outcome, row } = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]], { flat: 4.99 });
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]], {
+        flat: 4.99,
+      });
       await db.as({ role: 'ADMIN', userId: admin.id });
       return { outcome: await correct(db, orderId), row: await deliveryOf(db, orderId) };
     });
@@ -549,7 +551,9 @@ describe('an admin corrects where a paid order goes', () => {
 
   it('keeps the method and the price: those change only with a cancel', async () => {
     const { method, price } = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]], { flat: 4.99 });
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]], {
+        flat: 4.99,
+      });
       await db.as({ role: 'ADMIN', userId: admin.id });
       return {
         method: await updateDelivery(db, orderId, `method = 'pickup'`),
@@ -563,7 +567,7 @@ describe('an admin corrects where a paid order goes', () => {
 
   it('leaves a sent order as it is', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       await moveTo(db, orderId, 'shipped');
       await db.as({ role: 'ADMIN', userId: admin.id });
       return correct(db, orderId);
@@ -574,7 +578,7 @@ describe('an admin corrects where a paid order goes', () => {
 
   it('leaves the order of a buyer who has paid to the buyer: the buyer changes nothing of it', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       await db.as({ role: 'USER', userId: owner.id });
       return correct(db, orderId);
     });
@@ -585,7 +589,7 @@ describe('an admin corrects where a paid order goes', () => {
 
 describe('order_shipments: the sends of an order', () => {
   const shippedOrder = async (db: DbSession) => {
-    const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+    const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
     await moveTo(db, orderId, 'shipped');
     return orderId;
   };
@@ -653,7 +657,7 @@ describe('order_shipments: the sends of an order', () => {
 
   it('refuses a send of an order that is not shipped, and a send by a buyer', async () => {
     const { paidOrder, byBuyer } = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       await db.as({ role: 'ADMIN', userId: admin.id });
       const paidOrder = await send(db, orderId, { carrier: 'DHL' });
 
@@ -813,13 +817,13 @@ describe('order_shipments: the sends of an order', () => {
   });
 });
 
-describe('products: the weight and the sizes', () => {
+describe('variants: the weight and the sizes', () => {
   const write = async (set: string) =>
     inRolledBackTx(async (db) => {
       await db.as({ role: 'ADMIN', userId: admin.id });
       return db.attempt(
-        `update cartlify.products set ${set} where id = $1 returning id`,
-        product.id,
+        `update cartlify.product_variants set ${set} where id = $1 returning id`,
+        product.variantId,
       );
     });
 
@@ -835,8 +839,8 @@ describe('products: the weight and the sizes', () => {
   });
 
   it('refuses sizes that are not all three', async () => {
-    refused(await write('"lengthMm" = 200'), 'products_shipping_data_chk');
-    refused(await write('"lengthMm" = 200, "widthMm" = 100'), 'products_shipping_data_chk');
+    refused(await write('"lengthMm" = 200'), 'product_variants_shipping_data_chk');
+    refused(await write('"lengthMm" = 200, "widthMm" = 100'), 'product_variants_shipping_data_chk');
   });
 
   it.each([
@@ -845,7 +849,7 @@ describe('products: the weight and the sizes', () => {
     ['a size of zero', '"lengthMm" = 0, "widthMm" = 10, "heightMm" = 10'],
     ['a size over ten metres', '"lengthMm" = 10001, "widthMm" = 10, "heightMm" = 10'],
   ])('refuses %s', async (_name, set) => {
-    refused(await write(set), 'products_shipping_data_chk');
+    refused(await write(set), 'product_variants_shipping_data_chk');
   });
 
   it('takes a ton and ten metres', async () => {

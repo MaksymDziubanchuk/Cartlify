@@ -84,14 +84,16 @@ const setStatus = async (db: DbSession, orderId: number, status: string) => {
   );
 };
 
-describe('an update of a product while a payment holds its row', () => {
+describe('an update of a product or a variant while a payment holds its row', () => {
   // the update waits for the row and then changes the version the payment left. A policy that
   // read the old row again saw the version from the start of the statement: the stock the payment
-  // took looked changed by the update, and it failed with 42501. A view of the card and a cart
-  // that counts the popularity again write the row with a single statement like that
-  async function whilePaymentHoldsTheRow(update: (db: DbSession, productId: number) => Promise<unknown>) {
+  // took looked changed by the update, and it failed with 42501. A view of the card, a cart that
+  // counts the popularity again and a new price write the row with a single statement like that
+  async function whilePaymentHoldsTheRow(
+    update: (db: DbSession, own: TestProduct) => Promise<unknown>,
+  ) {
     const own = await createProduct({ price: 10, stock: 5 });
-    const paying = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.id, 1]]));
+    const paying = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.variantId, 1]]));
     const amount = await inCommittedTx((db) => itemsTotalOf(db, admin.id, paying));
 
     let paid!: () => void;
@@ -107,7 +109,7 @@ describe('an update of a product while a payment holds its row', () => {
     });
     await paidNow;
 
-    const other = inCommittedTx((db) => update(db, own.id));
+    const other = inCommittedTx((db) => update(db, own));
 
     for (let tries = 0; tries < 100; tries += 1) {
       const [waiting] = await prisma.$queryRaw<{ n: number }[]>`
@@ -119,15 +121,15 @@ describe('an update of a product while a payment holds its row', () => {
     }
     release();
 
-    return { payment: await payment, other: await other, productId: own.id };
+    return { payment: await payment, other: await other, own };
   }
 
   it('counts the view of a buyer', async () => {
-    const outcome = await whilePaymentHoldsTheRow(async (db, productId) => {
+    const outcome = await whilePaymentHoldsTheRow(async (db, own) => {
       await db.as({ role: 'GUEST', guestId: randomUUID() });
       return db.attempt(
         'update cartlify.products set views = views + 1 where id = $1 returning views',
-        productId,
+        own.id,
       );
     });
 
@@ -136,22 +138,38 @@ describe('an update of a product while a payment holds its row', () => {
   });
 
   it('takes an item into a cart, counting the popularity again', async () => {
-    const outcome = await whilePaymentHoldsTheRow(async (db, productId) => {
+    const outcome = await whilePaymentHoldsTheRow(async (db, own) => {
       await db.as({ role: 'USER', userId: other.id });
       const [order] = await db.rows<{ id: number }>(
         'insert into cartlify.orders ("userId", total) values ($1, 0) returning id',
         other.id,
       );
       return db.attempt(
-        `insert into cartlify.order_items ("orderId", "productId", quantity, "unitPrice", "totalPrice")
-         values ($1, $2, 1, 0, 0) returning id`,
+        `insert into cartlify.order_items ("orderId", "productId", "variantId", quantity, "unitPrice", "totalPrice")
+         values ($1, $2, $3, 1, 0, 0) returning id`,
         order!.id,
-        productId,
+        own.id,
+        own.variantId,
       );
     });
 
     expect(outcome.payment).toBe('PAID');
     expect(outcome.other).toMatchObject({ ok: true });
+  });
+
+  // the payment holds the row of the variant (the stock it took); an admin who sets a new price
+  // meanwhile waits for it and then changes the version the payment left
+  it('sets the price of the variant the payment sells', async () => {
+    const outcome = await whilePaymentHoldsTheRow(async (db, own) => {
+      await db.as(asAdmin());
+      return db.attempt(
+        'update cartlify.product_variants set price = 12 where id = $1 returning price::float8 as price',
+        own.variantId,
+      );
+    });
+
+    expect(outcome.payment).toBe('PAID');
+    expect(outcome.other).toMatchObject({ ok: true, rows: [{ price: 12 }] });
   });
 });
 
@@ -162,9 +180,9 @@ describe('cartlify.confirm_order', () => {
   // popularity looked changed by the confirmation and it failed with 42501
   it('reserves a product while a payment of the same product holds its row', async () => {
     const own = await createProduct({ price: 10, stock: 5 });
-    const paying = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.id, 1]]));
+    const paying = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.variantId, 1]]));
     const amount = await inCommittedTx((db) => itemsTotalOf(db, admin.id, paying));
-    const cart = await inCommittedTx((db) => cartOf(db, other.id, [[own.id, 1]]));
+    const cart = await inCommittedTx((db) => cartOf(db, other.id, [[own.variantId, 1]]));
 
     let paid!: () => void;
     let release!: () => void;
@@ -194,7 +212,7 @@ describe('cartlify.confirm_order', () => {
 
     expect(await payment).toBe('PAID');
     expect(await confirmation).toMatchObject({ ok: true });
-    expect(await inCommittedTx((db) => stockOf(db, admin.id, own.id))).toEqual({
+    expect(await inCommittedTx((db) => stockOf(db, admin.id, own.variantId))).toEqual({
       stock: 4,
       reserved: 1,
     });
@@ -203,8 +221,8 @@ describe('cartlify.confirm_order', () => {
   it('confirms an own cart: it waits for its payment for the time asked, the stock is reserved', async () => {
     const { outcome, state, left, stock } = await inRolledBackTx(async (db) => {
       const orderId = await cartOf(db, owner.id, [
-        [product.id, 2],
-        [cheap.id, 1],
+        [product.variantId, 2],
+        [cheap.variantId, 1],
       ]);
       const outcome = await confirm(db, owner.id, orderId);
       const state = await orderStateOf(db, admin.id, orderId);
@@ -217,7 +235,7 @@ describe('cartlify.confirm_order', () => {
         outcome,
         state,
         left: left!.seconds,
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -230,7 +248,7 @@ describe('cartlify.confirm_order', () => {
 
   it('confirms again an order that lost its reservation', async () => {
     const { outcome, state } = await inRolledBackTx(async (db) => {
-      const orderId = await unconfirmedOrderOf(db, [[product.id, 1]]);
+      const orderId = await unconfirmedOrderOf(db, [[product.variantId, 1]]);
       const outcome = await confirm(db, owner.id, orderId);
       return { outcome, state: await orderStateOf(db, admin.id, orderId) };
     });
@@ -241,9 +259,9 @@ describe('cartlify.confirm_order', () => {
 
   it('refuses the order of another user as not found, and reserves nothing', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, other.id, [[product.id, 2]]);
+      const orderId = await cartOf(db, other.id, [[product.variantId, 2]]);
       const outcome = await confirm(db, owner.id, orderId);
-      return { outcome, stock: await stockOf(db, admin.id, product.id) };
+      return { outcome, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome).toMatchObject({
@@ -259,7 +277,7 @@ describe('cartlify.confirm_order', () => {
     ['a guest', (): Actor => ({ role: 'GUEST', guestId: randomUUID() })],
   ])('refuses %s', async (_who, actor) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       return call(
         db,
         actor(),
@@ -276,9 +294,9 @@ describe('cartlify.confirm_order', () => {
 
   it('refuses an order without where it goes, and reserves nothing', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 2]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 2]], { delivery: false });
       const outcome = await confirm(db, owner.id, orderId);
-      return { outcome, stock: await stockOf(db, admin.id, product.id) };
+      return { outcome, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome).toMatchObject({
@@ -303,11 +321,11 @@ describe('cartlify.confirm_order', () => {
   it('refuses more than the free stock and reserves nothing of the other items', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
       const orderId = await cartOf(db, owner.id, [
-        [product.id, 2],
-        [scarce.id, 3],
+        [product.variantId, 2],
+        [scarce.variantId, 3],
       ]);
       const outcome = await confirm(db, owner.id, orderId);
-      return { outcome, stock: await stockOf(db, admin.id, product.id) };
+      return { outcome, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome).toMatchObject({
@@ -319,11 +337,11 @@ describe('cartlify.confirm_order', () => {
 
   it('refuses an order whose prices changed since the items went in', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       await db.as(asAdmin());
       await db.rows(
-        'update cartlify.products set price = 12 where id = $1 returning id',
-        product.id,
+        'update cartlify.product_variants set price = 12 where id = $1 returning id',
+        product.variantId,
       );
       return confirm(db, owner.id, orderId);
     });
@@ -336,7 +354,7 @@ describe('cartlify.confirm_order', () => {
 
   it('refuses a product removed from the catalog since it went in', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[removed.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[removed.variantId, 1]]);
       await db.as(asAdmin());
       await db.rows(
         'update cartlify.products set "deletedAt" = now() where id = $1 returning id',
@@ -347,13 +365,13 @@ describe('cartlify.confirm_order', () => {
 
     expect(outcome).toMatchObject({
       ok: false,
-      message: expect.stringContaining('PRODUCT_NOT_FOUND'),
+      message: expect.stringContaining('VARIANT_NOT_FOUND'),
     });
   });
 
   it('refuses an order that is confirmed already', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return confirm(db, owner.id, orderId);
     });
 
@@ -365,7 +383,7 @@ describe('cartlify.confirm_order', () => {
 
   it.each(['0 seconds', '-1 minute'])('refuses a reservation of %s', async (reserveFor) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       return confirm(db, owner.id, orderId, reserveFor);
     });
 
@@ -379,7 +397,7 @@ describe('cartlify.confirm_order', () => {
 describe('cartlify.cancel_order_payment', () => {
   it('lets the owner cancel the payment: the order is unconfirmed, its reserve goes back', async () => {
     const { outcome, state, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       const outcome = await call(
         db,
         asOwner(),
@@ -389,7 +407,7 @@ describe('cartlify.cancel_order_payment', () => {
       return {
         outcome,
         state: await orderStateOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -400,14 +418,14 @@ describe('cartlify.cancel_order_payment', () => {
 
   it('refuses the order of another user as not found, and its reserve stays', async () => {
     const { outcome, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, other.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, other.id, [[product.variantId, 2]]);
       const outcome = await call(
         db,
         asOwner(),
         'select 1 as done from cartlify.cancel_order_payment($1::int)',
         orderId,
       );
-      return { outcome, stock: await stockOf(db, admin.id, product.id) };
+      return { outcome, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
     expect(outcome).toMatchObject({ ok: false, error: expect.stringContaining('ORDER_NOT_FOUND') });
@@ -416,7 +434,7 @@ describe('cartlify.cancel_order_payment', () => {
 
   it('refuses a paid order', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       return call(
         db,
         asOwner(),
@@ -433,7 +451,7 @@ describe('cartlify.cancel_order_payment', () => {
 
   it('refuses an order that does not wait for a payment', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       return call(
         db,
         asOwner(),
@@ -450,7 +468,7 @@ describe('cartlify.cancel_order_payment', () => {
 
   it.each(['ADMIN', 'ROOT'] as const)('refuses an %s', async (role) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return call(
         db,
         { role, userId: owner.id },
@@ -469,7 +487,7 @@ describe('cartlify.cancel_order_payment', () => {
 describe('cartlify.unconfirm_order', () => {
   it('lets the system take back a reservation: the order is unconfirmed, its reserve goes back', async () => {
     const { outcome, state, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       const outcome = await call(
         db,
         asSystem(),
@@ -479,7 +497,7 @@ describe('cartlify.unconfirm_order', () => {
       return {
         outcome,
         state: await orderStateOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -490,7 +508,7 @@ describe('cartlify.unconfirm_order', () => {
 
   it('refuses a user, also the owner', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return call(
         db,
         asOwner(),
@@ -508,7 +526,7 @@ describe('cartlify.unconfirm_order', () => {
   // the system is the admin context without an id; a signed-in admin or root has one
   it.each(['ADMIN', 'ROOT'] as const)('refuses a signed-in %s', async (role) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return call(
         db,
         { role, userId: admin.id },
@@ -530,8 +548,8 @@ describe('cartlify.unconfirm_order', () => {
     const outcome = await inRolledBackTx(async (db) => {
       const orderId =
         stage === 'a cart'
-          ? await cartOf(db, owner.id, [[product.id, 1]])
-          : await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+          ? await cartOf(db, owner.id, [[product.variantId, 1]])
+          : await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       return call(
         db,
         asSystem(),
@@ -547,7 +565,7 @@ describe('cartlify.unconfirm_order', () => {
 describe('cartlify.expire_order_reservation', () => {
   it('releases a reservation whose time is over', async () => {
     const { outcome, state, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 2]]);
       await confirm(db, owner.id, orderId, '1 millisecond');
       await db.rows('select 1 as done from pg_sleep(0.05)');
       const outcome = await call(
@@ -559,7 +577,7 @@ describe('cartlify.expire_order_reservation', () => {
       return {
         outcome,
         state: await orderStateOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -570,7 +588,7 @@ describe('cartlify.expire_order_reservation', () => {
 
   it('leaves a reservation whose time is not over', async () => {
     const { outcome, state, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       const outcome = await call(
         db,
         asSystem(),
@@ -580,7 +598,7 @@ describe('cartlify.expire_order_reservation', () => {
       return {
         outcome,
         state: await orderStateOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -591,7 +609,7 @@ describe('cartlify.expire_order_reservation', () => {
 
   it('leaves a paid order', async () => {
     const { outcome, state } = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       const outcome = await call(
         db,
         asSystem(),
@@ -617,7 +635,7 @@ describe('cartlify.expire_order_reservation', () => {
 
   it('refuses a user', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return call(db, asOwner(), 'select cartlify.expire_order_reservation($1::int)', orderId);
     });
 
@@ -629,7 +647,7 @@ describe('cartlify.expire_order_reservation', () => {
 
   it.each(['ADMIN', 'ROOT'] as const)('refuses a signed-in %s', async (role) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]]);
       await confirm(db, owner.id, orderId, '1 millisecond');
       await db.rows('select 1 as done from pg_sleep(0.05)');
       return call(
@@ -650,12 +668,12 @@ describe('cartlify.expire_order_reservation', () => {
 describe('cartlify.pay_order', () => {
   it('pays an order that waits: the payment is written, the reserved stock is sold', async () => {
     const { result, state, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       const result = await pay(db, admin.id, orderId, { paymentId: 'pi_db_paid' });
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -674,7 +692,7 @@ describe('cartlify.pay_order', () => {
   // the reports of a period count a sale from the time it was paid
   it('stamps the time of the payment, the time of its transaction in utc', async () => {
     const dates = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       const before = await orderDatesOf(db, admin.id, orderId);
       await pay(db, admin.id, orderId);
       return { before, after: await orderDatesOf(db, admin.id, orderId) };
@@ -690,13 +708,13 @@ describe('cartlify.pay_order', () => {
 
   it('refuses an amount other than the one of the items, and changes nothing', async () => {
     const { result, state, dates, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       const result = await pay(db, admin.id, orderId, { amount: '19.99' });
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
         dates: await orderDatesOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -708,10 +726,10 @@ describe('cartlify.pay_order', () => {
 
   it('takes a repeated delivery of the same payment once', async () => {
     const { again, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       await pay(db, admin.id, orderId, { paymentId: 'pi_db_once' });
       const again = await pay(db, admin.id, orderId, { paymentId: 'pi_db_once', amount: '20' });
-      return { again, stock: await stockOf(db, admin.id, product.id) };
+      return { again, stock: await stockOf(db, admin.id, product.variantId) };
     });
 
     expect(again).toBe('ALREADY_PAID_SAME_PAYMENT');
@@ -723,7 +741,7 @@ describe('cartlify.pay_order', () => {
     ['the same id at another provider', { paymentId: 'pi_db_first', provider: 'liqpay' }],
   ])('tells %s of a paid order apart', async (_case, second) => {
     const result = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       await pay(db, admin.id, orderId, { paymentId: 'pi_db_first' });
       return pay(db, admin.id, orderId, { ...second, amount: '10' });
     });
@@ -733,13 +751,13 @@ describe('cartlify.pay_order', () => {
 
   it('takes a late payment of an order that lost its reservation while the stock is there', async () => {
     const { result, state, dates, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await unconfirmedOrderOf(db, [[product.id, 2]]);
+      const orderId = await unconfirmedOrderOf(db, [[product.variantId, 2]]);
       const result = await pay(db, admin.id, orderId);
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
         dates: await orderDatesOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, product.id),
+        stock: await stockOf(db, admin.id, product.variantId),
       };
     });
 
@@ -751,14 +769,14 @@ describe('cartlify.pay_order', () => {
 
   it('refuses a late payment when the stock is gone, and changes nothing', async () => {
     const { result, state, dates, stock } = await inRolledBackTx(async (db) => {
-      const orderId = await unconfirmedOrderOf(db, [[scarce.id, 2]]);
-      await waitingOrderOf(db, other.id, [[scarce.id, 2]]);
+      const orderId = await unconfirmedOrderOf(db, [[scarce.variantId, 2]]);
+      await waitingOrderOf(db, other.id, [[scarce.variantId, 2]]);
       const result = await pay(db, admin.id, orderId);
       return {
         result,
         state: await orderStateOf(db, admin.id, orderId),
         dates: await orderDatesOf(db, admin.id, orderId),
-        stock: await stockOf(db, admin.id, scarce.id),
+        stock: await stockOf(db, admin.id, scarce.variantId),
       };
     });
 
@@ -770,7 +788,7 @@ describe('cartlify.pay_order', () => {
 
   it('refuses a cart without where it goes', async () => {
     const result = await inRolledBackTx(async (db) => {
-      const orderId = await cartOf(db, owner.id, [[product.id, 1]], { delivery: false });
+      const orderId = await cartOf(db, owner.id, [[product.variantId, 1]], { delivery: false });
       return pay(db, admin.id, orderId);
     });
 
@@ -779,8 +797,8 @@ describe('cartlify.pay_order', () => {
 
   it('refuses a payment id that paid another order already', async () => {
     const result = await inRolledBackTx(async (db) => {
-      const first = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
-      const second = await waitingOrderOf(db, owner.id, [[cheap.id, 1]]);
+      const first = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
+      const second = await waitingOrderOf(db, owner.id, [[cheap.variantId, 1]]);
       await pay(db, admin.id, first, { paymentId: 'pi_db_shared' });
       return pay(db, admin.id, second, { paymentId: 'pi_db_shared' });
     });
@@ -793,7 +811,7 @@ describe('cartlify.pay_order', () => {
     ['a payment id of spaces', { paymentId: '   ' }, 'ORDER_PAYMENT_ID_REQUIRED'],
   ])('refuses %s', async (_case, opts, error) => {
     const result = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return pay(db, admin.id, orderId, opts);
     });
 
@@ -802,7 +820,7 @@ describe('cartlify.pay_order', () => {
 
   it('refuses a payment without its provider', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       return call(
         db,
         asSystem(),
@@ -830,9 +848,9 @@ describe('cartlify.pay_order', () => {
   it('answers a delivery of the same payment at the same moment as a repeated one', async () => {
     // the payment is committed: a product of its own, the others of the file keep their stock
     const own = await createProduct({ price: 10, stock: 3 });
-    const orderId = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.id, 1]]));
+    const orderId = await inCommittedTx((db) => waitingOrderOf(db, owner.id, [[own.variantId, 1]]));
     const amount = await inCommittedTx((db) => itemsTotalOf(db, admin.id, orderId));
-    const before = await inCommittedTx((db) => stockOf(db, admin.id, own.id));
+    const before = await inCommittedTx((db) => stockOf(db, admin.id, own.variantId));
     const paymentId = `pi_db_twice_${orderId}`;
 
     let paidFirst!: () => void;
@@ -867,7 +885,7 @@ describe('cartlify.pay_order', () => {
 
     const after = await inCommittedTx(async (db) => ({
       state: await orderStateOf(db, admin.id, orderId),
-      stock: await stockOf(db, admin.id, own.id),
+      stock: await stockOf(db, admin.id, own.variantId),
     }));
     expect(after.state).toMatchObject({ status: 'paid', paymentId });
     // the unit is sold once
@@ -882,7 +900,7 @@ describe('cartlify.pay_order', () => {
     ['a signed-in root', (): Actor => ({ role: 'ROOT', userId: admin.id })],
   ])('refuses %s', async (_who, actor) => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, owner.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       const amount = await itemsTotalOf(db, admin.id, orderId);
       return call(
         db,
@@ -905,7 +923,7 @@ describe('cartlify.cancel_paid_order', () => {
     'cancels a %s order and puts its stock back',
     async (stage) => {
       const { outcome, state, dates, stock } = await inRolledBackTx(async (db) => {
-        const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 2]]);
+        const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 2]]);
         if (stage === 'shipped') await setStatus(db, orderId, 'shipped');
         const outcome = await call(
           db,
@@ -917,7 +935,7 @@ describe('cartlify.cancel_paid_order', () => {
           outcome,
           state: await orderStateOf(db, admin.id, orderId),
           dates: await orderDatesOf(db, admin.id, orderId),
-          stock: await stockOf(db, admin.id, product.id),
+          stock: await stockOf(db, admin.id, product.variantId),
         };
       });
 
@@ -937,9 +955,9 @@ describe('cartlify.cancel_paid_order', () => {
     const { outcome, stock, dates } = await inRolledBackTx(async (db) => {
       let orderId: number;
       if (stage === 'waiting') {
-        orderId = await waitingOrderOf(db, owner.id, [[product.id, 2]]);
+        orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
       } else {
-        orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 2]]);
+        orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 2]]);
         if (stage === 'delivered') {
           await setStatus(db, orderId, 'shipped');
           await setStatus(db, orderId, 'delivered');
@@ -952,7 +970,7 @@ describe('cartlify.cancel_paid_order', () => {
             orderId,
           );
       }
-      const before = await stockOf(db, admin.id, product.id);
+      const before = await stockOf(db, admin.id, product.variantId);
       const datesBefore = await orderDatesOf(db, admin.id, orderId);
       const outcome = await call(
         db,
@@ -960,7 +978,7 @@ describe('cartlify.cancel_paid_order', () => {
         'select 1 as done from cartlify.cancel_paid_order($1::int)',
         orderId,
       );
-      const after = await stockOf(db, admin.id, product.id);
+      const after = await stockOf(db, admin.id, product.variantId);
       return {
         outcome,
         stock: { before, after },
@@ -975,7 +993,7 @@ describe('cartlify.cancel_paid_order', () => {
 
   it('refuses a user, also the owner', async () => {
     const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.id, 1]]);
+      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
       return call(
         db,
         asOwner(),
@@ -994,11 +1012,11 @@ describe('cartlify.cancel_paid_order', () => {
 describe('cartlify.refresh_order_prices', () => {
   it('takes the prices of the catalog for an own unconfirmed order and counts its total again', async () => {
     const { outcome, state } = await inRolledBackTx(async (db) => {
-      const orderId = await unconfirmedOrderOf(db, [[product.id, 2]]);
+      const orderId = await unconfirmedOrderOf(db, [[product.variantId, 2]]);
       await db.as(asAdmin());
       await db.rows(
-        'update cartlify.products set price = 12 where id = $1 returning id',
-        product.id,
+        'update cartlify.product_variants set price = 12 where id = $1 returning id',
+        product.variantId,
       );
       const outcome = await call(
         db,
@@ -1020,12 +1038,12 @@ describe('cartlify.refresh_order_prices', () => {
     const { outcome, state } = await inRolledBackTx(async (db) => {
       const orderId =
         stage === 'waiting'
-          ? await waitingOrderOf(db, owner.id, [[product.id, 2]])
-          : await cartOf(db, other.id, [[product.id, 2]]);
+          ? await waitingOrderOf(db, owner.id, [[product.variantId, 2]])
+          : await cartOf(db, other.id, [[product.variantId, 2]]);
       await db.as(asAdmin());
       await db.rows(
-        'update cartlify.products set price = 12 where id = $1 returning id',
-        product.id,
+        'update cartlify.product_variants set price = 12 where id = $1 returning id',
+        product.variantId,
       );
       const outcome = await call(
         db,

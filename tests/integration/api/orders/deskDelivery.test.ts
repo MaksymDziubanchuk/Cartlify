@@ -9,14 +9,15 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { asAdmin } from '../../../helpers/db.js';
-import { addShipment, deliveryBody, placeOrder } from '../../../helpers/orders.js';
+import { addShipment, deliveryBody, placeOrder, placeOrderOf } from '../../../helpers/orders.js';
 
 // the desk of an admin by what the orders have to do with their delivery: how it goes (by hand or a
 // pickup), to which country and city, by which carrier, whether its cost is written, whether it is
-// paid by the buyer, whether a product of it has no weight; the same filters and sorts for the csv
+// paid by the buyer, whether a variant of it has no weight; the same filters and sorts for the csv
 // the courier gets. Other files make orders at the same time: a test looks at the orders of its own
 // buyer only
 
@@ -180,7 +181,7 @@ describe('GET /api/orders: the delivery filters of an admin', () => {
     ]);
   });
 
-  it('lists the orders with a product that has no weight', async () => {
+  it('lists the orders with a variant that has no weight', async () => {
     const { buyer, berlin } = await buyerWithOrders();
 
     expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&withoutWeight=true`))).toEqual([
@@ -540,5 +541,92 @@ describe('GET /api/orders?format=csv: the delivery for the courier', () => {
       warsaw,
       kyiv,
     ]);
+  });
+});
+
+// the weight of an order is what the variants bought weigh, each times its units: the variants of
+// one product weigh each its own. An order lacks a weight when a variant of it does, not when
+// another variant of its product does
+describe('the weight of an order of the variants of one product', () => {
+  async function product() {
+    const light = await createProduct({ price: 10, stock: 20, weightGrams: 200 });
+    const heavy = await createVariant(light.id, { price: 12, stock: 20, weightGrams: 900 });
+    const bare = await createVariant(light.id, { price: 14, stock: 20 });
+    return { light, heavy, bare };
+  }
+
+  const adminOrder = async (orderId: number) =>
+    (
+      await app.inject({
+        method: 'GET',
+        url: `/api/orders/${orderId}`,
+        headers: { cookie: accessCookie(admin) },
+      })
+    ).json();
+
+  it('adds up the weight of each variant times its units and says it is whole', async () => {
+    const { light, heavy } = await product();
+    const buyer = await newUser();
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [
+        { item: light, quantity: 3 },
+        { item: { variantId: heavy.id }, quantity: 1 },
+      ],
+      'paid',
+    );
+
+    expect((await adminOrder(orderId)).weight).toEqual({ grams: 1500, complete: true });
+    expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&withoutWeight=true`))).toEqual([]);
+  });
+
+  it('says it is not whole when a variant of the order has no weight, and leaves it out of the sum', async () => {
+    const { light, bare } = await product();
+    const buyer = await newUser();
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [
+        { item: light, quantity: 2 },
+        { item: { variantId: bare.id }, quantity: 5 },
+      ],
+      'paid',
+    );
+
+    expect((await adminOrder(orderId)).weight).toEqual({ grams: 400, complete: false });
+    expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&withoutWeight=true`))).toEqual([
+      orderId,
+    ]);
+  });
+
+  it('does not take an order of the weighed variants for one without a weight', async () => {
+    const { light } = await product();
+    const buyer = await newUser();
+    const orderId = await placeOrder(app, csrf, buyer, light, 'paid', 2);
+
+    expect((await adminOrder(orderId)).weight).toEqual({ grams: 400, complete: true });
+    expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&withoutWeight=true`))).toEqual([]);
+  });
+
+  it('gives the weight of the variants in the csv', async () => {
+    const { light, heavy } = await product();
+    const buyer = await newUser();
+    await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [
+        { item: light, quantity: 3 },
+        { item: { variantId: heavy.id }, quantity: 1 },
+      ],
+      'paid',
+    );
+
+    const res = await listAs(admin, `userId=${buyer.id}&format=csv`);
+
+    expect(res.body).toContain(',1500,yes,');
   });
 });

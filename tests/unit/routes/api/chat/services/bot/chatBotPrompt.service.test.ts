@@ -2,10 +2,12 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   buildChatBotPrompt,
+  MAX_VARIANTS_PER_PRODUCT,
   type BuildChatBotPromptDto,
   type ChatBotHistoryMessageDto,
   type ChatBotOrderContextItemDto,
   type ChatBotProductContextItemDto,
+  type ChatBotVariantContextItemDto,
 } from '@routes/api/chat/services/bot/chatBotPrompt.service.js';
 import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
 
@@ -18,17 +20,26 @@ const said = (
   createdAt: new Date('2026-05-01T10:00:00Z'),
 });
 
+const variant = (
+  patch: Partial<ChatBotVariantContextItemDto> = {},
+): ChatBotVariantContextItemDto => ({
+  id: 7,
+  name: 'Mug',
+  price: 9.99,
+  sale: null,
+  stock: 5,
+  ...patch,
+});
+
 const product = (
   patch: Partial<ChatBotProductContextItemDto> = {},
 ): ChatBotProductContextItemDto => ({
   id: 4,
   name: 'Mug',
-  price: 9.99,
   categoryName: 'Kitchen',
   description: 'Holds 300 ml',
   popularity: 12,
-  sale: null,
-  stock: 5,
+  variants: [variant()],
   ...patch,
 });
 
@@ -229,12 +240,36 @@ describe('buildChatBotPrompt', () => {
   });
 
   describe('product context', () => {
-    it('comes first, as a developer message with one line per product', () => {
+    it('comes first, as a developer message with a line for each product and one for each variant of it', () => {
       const first = build({ productContext: [product()] }).messages[0];
 
       expect(first?.role).toBe('developer');
       expect(first?.content).toContain(
-        '- id: 4; name: Mug; price: 9.99 EUR; in stock: 5; category: Kitchen; description: Holds 300 ml; popularity: 12',
+        [
+          '- product id: 4; name: Mug; category: Kitchen; description: Holds 300 ml; popularity: 12',
+          '  variants:',
+          '  - variant id: 7; name: Mug; price: 9.99 EUR; in stock: 5',
+        ].join('\n'),
+      );
+    });
+
+    it('names every variant of a product with its own name, price and free units', () => {
+      const content = build({
+        productContext: [
+          product({
+            variants: [
+              variant({ id: 7, name: 'Mug, white', price: 9.99, stock: 5 }),
+              variant({ id: 8, name: 'Mug, black', price: 11.5, stock: 2 }),
+            ],
+          }),
+        ],
+      }).messages[0]?.content;
+
+      expect(content).toContain(
+        '  - variant id: 7; name: Mug, white; price: 9.99 EUR; in stock: 5\n',
+      );
+      expect(content).toContain(
+        '  - variant id: 8; name: Mug, black; price: 11.5 EUR; in stock: 2',
       );
     });
 
@@ -242,7 +277,7 @@ describe('buildChatBotPrompt', () => {
       const productContext = Array.from({ length: 9 }, (_, n) => product({ id: n + 1 }));
       const lines = build({ productContext }).messages[0]?.content.split('\n') ?? [];
 
-      expect(lines.filter((line) => line.startsWith('- id:'))).toHaveLength(6);
+      expect(lines.filter((line) => line.startsWith('- product id:'))).toHaveLength(6);
     });
 
     it('says the category is unknown and leaves out an empty description', () => {
@@ -250,9 +285,7 @@ describe('buildChatBotPrompt', () => {
         productContext: [product({ categoryName: null, description: '   ', popularity: null })],
       }).messages[0]?.content;
 
-      expect(content).toContain(
-        '- id: 4; name: Mug; price: 9.99 EUR; in stock: 5; category: unknown\n',
-      );
+      expect(content).toContain('- product id: 4; name: Mug; category: unknown\n  variants:\n');
     });
 
     it('keeps a popularity of zero', () => {
@@ -261,26 +294,63 @@ describe('buildChatBotPrompt', () => {
       ).toContain('popularity: 0');
     });
 
+    // a description is a paid input of every turn, and an admin can write a long one
+    it('cuts a long description', () => {
+      const content = build({
+        productContext: [product({ description: 'x'.repeat(2000) })],
+      }).messages[0]?.content;
+
+      expect(content).toContain(`description: ${'x'.repeat(500)}...;`);
+      expect(content).not.toContain('x'.repeat(501));
+    });
+
     it('sends no product message when there are no products', () => {
       expect(build().messages.some((message) => message.role === 'developer')).toBe(false);
     });
 
     // the buyer pays the sale price; the usual price stays next to it, as the catalog shows it
-    it('names the sale price and its end next to the price of a product on sale', () => {
+    it('names the sale price and its end next to the price of a variant on sale', () => {
       const content = build({
-        productContext: [product({ sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z' } })],
+        productContext: [
+          product({
+            variants: [variant({ sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z' } })],
+          }),
+        ],
       }).messages[0]?.content;
 
       expect(content).toContain(
-        '- id: 4; name: Mug; price: 9.99 EUR; sale price: 7.5 EUR until 2026-11-01T10:00:00.000Z (UTC); in stock: 5; category: Kitchen',
+        '  - variant id: 7; name: Mug; price: 9.99 EUR; sale price: 7.5 EUR until 2026-11-01T10:00:00.000Z (UTC); in stock: 5',
       );
+    });
+
+    // the sale is the variant's: its neighbour sells at the price
+    it('names a sale on the variant that has it, not on the others of its product', () => {
+      const content = build({
+        productContext: [
+          product({
+            variants: [
+              variant({ id: 7, sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z' } }),
+              variant({ id: 8 }),
+            ],
+          }),
+        ],
+      }).messages[0]?.content;
+
+      expect(content).toContain('variant id: 7; name: Mug; price: 9.99 EUR; sale price: 7.5 EUR');
+      expect(content).toContain('  - variant id: 8; name: Mug; price: 9.99 EUR; in stock: 5');
     });
 
     // the price a reduction is compared with, the way the card shows it
     it('names the lowest price of the 30 days before a sale', () => {
       const content = build({
         productContext: [
-          product({ sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z', priorPrice: 8.99 } }),
+          product({
+            variants: [
+              variant({
+                sale: { price: 7.5, endsAt: '2026-11-01T10:00:00.000Z', priorPrice: 8.99 },
+              }),
+            ],
+          }),
         ],
       }).messages[0]?.content;
 
@@ -290,24 +360,128 @@ describe('buildChatBotPrompt', () => {
     });
 
     // the units free to buy now: the stock that confirmed orders do not hold
-    it('names the free units of a product, none too', () => {
-      expect(build({ productContext: [product({ stock: 0 })] }).messages[0]?.content).toContain(
-        'in stock: 0;',
-      );
+    it('names the free units of a variant, none too', () => {
+      expect(
+        build({ productContext: [product({ variants: [variant({ stock: 0 })] })] }).messages[0]
+          ?.content,
+      ).toContain('in stock: 0');
     });
 
     it('tells the model to promise no more units than are free', () => {
       expect(build().instructions).toContain(
-        'in stock is the number of units free to buy now; never promise more of a product',
+        'in stock is the number of units of the variant free to buy now; never promise more of a variant',
       );
     });
 
-    it('tells the model a product on sale sells at its sale price until the end of the sale', () => {
+    it('tells the model a variant on sale sells at its sale price until the end of the sale', () => {
       const { instructions } = build();
 
       expect(instructions).toContain(
-        'A product with a sale price sells at the sale price until the end of the sale',
+        'A variant with a sale price sells at the sale price until the end of the sale',
       );
+    });
+
+    // the customer buys a variant: the answer names one, one that is listed and in stock
+    it('tells the model to recommend a concrete variant that is listed and in stock', () => {
+      const { instructions, messages } = build({ productContext: [product()] });
+
+      expect(instructions).toContain('the customer buys a variant');
+      expect(instructions).toContain('name a concrete variant by its name and its price');
+      expect(instructions).toContain('recommend only a variant that is listed and in stock');
+      expect(messages[0]?.content).toContain(
+        'Use only this product context when recommending specific products and variants.',
+      );
+    });
+
+    describe('a product with many variants', () => {
+      const many = (
+        count: number,
+        over: (n: number) => Partial<ChatBotVariantContextItemDto> = () => ({}),
+      ) =>
+        Array.from({ length: count }, (_, n) =>
+          variant({ id: 100 + n, name: `Mug ${n + 1}`, price: 10 + n, ...over(n) }),
+        );
+
+      const variantLines = (lines: string) =>
+        lines.split('\n').filter((line) => line.startsWith('  - variant id:'));
+
+      it('names up to 20 of its variants one by one', () => {
+        const content = build({
+          productContext: [product({ variants: many(MAX_VARIANTS_PER_PRODUCT) })],
+        }).messages[0]!.content;
+
+        expect(MAX_VARIANTS_PER_PRODUCT).toBe(20);
+        expect(variantLines(content)).toHaveLength(20);
+        expect(content).not.toContain('more variants');
+      });
+
+      it('names the first 20 and sums up the rest: how many, how many are in stock, the prices', () => {
+        const content = build({
+          productContext: [product({ variants: many(25) })],
+        }).messages[0]!.content;
+
+        // 25 variants of 10 to 34 EUR: the last 5 are left out
+        expect(variantLines(content).map((line) => /variant id: (\d+)/.exec(line)![1])).toEqual(
+          Array.from({ length: 20 }, (_, n) => String(100 + n)),
+        );
+        expect(content).toContain(
+          '  - 5 more variants are not listed (5 of them in stock), they sell at 30 to 34 EUR; name no detail of them',
+        );
+      });
+
+      // a customer asks for what is there: the variants with free units come first
+      it('names the variants with free units before the sold out ones when it has to leave some out', () => {
+        const content = build({
+          productContext: [product({ variants: many(25, (n) => ({ stock: n < 10 ? 0 : 3 })) })],
+        }).messages[0]!.content;
+
+        const named = variantLines(content).map((line) =>
+          Number(/variant id: (\d+)/.exec(line)![1]),
+        );
+        // the 15 with units (ids 110 to 124) and then the first 5 sold out ones (100 to 104)
+        expect(named).toEqual([
+          ...Array.from({ length: 15 }, (_, n) => 110 + n),
+          ...Array.from({ length: 5 }, (_, n) => 100 + n),
+        ]);
+        expect(content).toContain('5 more variants are not listed (0 of them in stock)');
+        // none of the sold out ones that are left out is named
+        expect(content).not.toContain('variant id: 105;');
+      });
+
+      it('sums up the rest at the sale price while a sale lasts', () => {
+        const content = build({
+          productContext: [
+            product({
+              variants: [
+                ...many(20),
+                variant({
+                  id: 200,
+                  price: 50,
+                  sale: { price: 5, endsAt: '2026-11-01T10:00:00.000Z' },
+                }),
+                variant({ id: 201, price: 60 }),
+              ],
+            }),
+          ],
+        }).messages[0]!.content;
+
+        expect(content).toContain(
+          '2 more variants are not listed (2 of them in stock), they sell at 5 to 60 EUR',
+        );
+      });
+
+      it('lists the variants of each product apart', () => {
+        const content = build({
+          productContext: [
+            product({ id: 4, variants: many(22) }),
+            product({ id: 5, variants: [variant({ id: 900 })] }),
+          ],
+        }).messages[0]!.content;
+
+        expect(content).toContain('- product id: 5;');
+        expect(content).toContain('  - variant id: 900;');
+        expect(content).toContain('2 more variants are not listed');
+      });
     });
   });
 

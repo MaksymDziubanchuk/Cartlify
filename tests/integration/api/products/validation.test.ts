@@ -8,15 +8,15 @@ import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
+  createCategory,
   createProduct,
   createUser,
   deleteProductFromCatalog,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { imageField, pngImage } from '../../../helpers/cloudinary.js';
-import { multipartBody } from '../../../helpers/multipart.js';
-import { safetyFormFields, shippingFormFields } from '../../../helpers/productSafety.js';
+import { removeUploads } from '../../../helpers/cloudinary.js';
 import { moveClock } from '../../../helpers/payments.js';
+import { createProductForm, formVariant } from '../../../helpers/productForm.js';
 
 // what the routes of products and categories refuse before the database fails on it: a category
 // that does not exist, money past the cent or past what the column holds, a sale on a product
@@ -25,6 +25,8 @@ import { moveClock } from '../../../helpers/payments.js';
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
+// the category of the products the form makes
+let formCategoryId: number;
 
 const MISSING = 2_000_000_000;
 
@@ -32,12 +34,17 @@ beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
   admin = await createUser({ role: 'ADMIN' });
+  ({ id: formCategoryId } = await createCategory());
 });
 
-// the products stay: a change of a price writes the price log, and a product with a log cannot be
-// deleted; the test database goes after the run
+// the products of the factory stay: the test database goes after the run
 afterAll(async () => {
   try {
+    await removeUploads();
+    await asAdmin(async (tx) => {
+      await tx.product.deleteMany({ where: { categoryId: formCategoryId } });
+      await tx.category.deleteMany({ where: { id: formCategoryId } });
+    });
     await closeSessions([admin.id]);
   } finally {
     await stopApp();
@@ -56,27 +63,24 @@ const patchProduct = (productId: number, payload: Record<string, unknown>) =>
     payload,
   });
 
+const patchVariant = (
+  product: { id: number; variantId: number },
+  payload: Record<string, unknown>,
+) =>
+  app.inject({
+    method: 'PATCH',
+    url: `/api/products/${product.id}/variants/${product.variantId}`,
+    headers: withCsrf(csrf, accessCookie(admin)),
+    payload,
+  });
+
 const adminGet = (url: string) =>
   app.inject({ method: 'GET', url, headers: { cookie: accessCookie(admin) } });
 
 // the category of a product is a choice of the page: a stale one failed with 500
 describe('a category that does not exist', () => {
   it('is 404 CATEGORY_NOT_FOUND for a new product', async () => {
-    const { payload, headers } = multipartBody([
-      { name: 'name', value: 'No category product' },
-      { name: 'price', value: '10' },
-      { name: 'categoryId', value: String(MISSING) },
-      ...safetyFormFields(),
-      ...shippingFormFields(),
-      imageField('images', pngImage(30, 20)),
-    ]);
-
-    const res = await app.inject({
-      method: 'POST',
-      url: '/api/products',
-      headers: { ...withCsrf(csrf, accessCookie(admin)), ...headers },
-      payload,
-    });
+    const res = await createProductForm(app, csrf, admin, { categoryId: MISSING });
 
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ errorCode: 'CATEGORY_NOT_FOUND' });
@@ -106,7 +110,37 @@ describe('a category that does not exist', () => {
   });
 });
 
+// the price is the price of a variant now; a new product brings it with each of its variants
 describe('money', () => {
+  // 10.004 went through as more than 10.00, the database kept 10.00 and ended the sale
+  it.each([
+    ['past the cent', 10.004],
+    ['past what the column holds', 100_000_000],
+  ])('refuses a price %s', async (_case, price) => {
+    const res = await createProductForm(app, csrf, admin, {
+      categoryId: formCategoryId,
+      variants: [formVariant({ price })],
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      errorCode: 'VARIANTS_INVALID',
+      details: { variants: [{ index: 0, errorCode: 'PRODUCT_PRICE_INVALID' }] },
+    });
+  });
+
+  it('takes the highest price the column holds', async () => {
+    const res = await createProductForm(app, csrf, admin, {
+      categoryId: formCategoryId,
+      variants: [formVariant({ price: 99_999_999.99 })],
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().variant).toMatchObject({ price: 99_999_999.99 });
+  });
+});
+
+describe('the price of a variant through its change', () => {
   // 10.004 went through as more than 10.00, the database kept 10.00 and ended the sale
   it.each([
     ['past the cent', 10.004],
@@ -114,28 +148,28 @@ describe('money', () => {
   ])('refuses a price %s', async (_case, price) => {
     const product = await newProduct();
 
-    const res = await patchProduct(product.id, { price });
+    const res = await patchVariant(product, { price });
 
     expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_PRICE_INVALID' });
   });
 
   it('takes the highest price the column holds', async () => {
     const product = await newProduct();
 
-    const res = await patchProduct(product.id, { price: 99_999_999.99 });
+    const res = await patchVariant(product, { price: 99_999_999.99 });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ price: 99_999_999.99 });
+    expect(res.json().variant).toMatchObject({ price: 99_999_999.99 });
   });
 });
 
-describe('a sale through the change of a product', () => {
+describe('a sale through the change of a variant', () => {
   it('is 404 for a product taken out of the catalog, as on the route of the sale', async () => {
     const product = await newProduct();
     await deleteProductFromCatalog(product.id);
 
-    const res = await patchProduct(product.id, {
+    const res = await patchVariant(product, {
       price: 30,
       sale: { percent: 10, endsAt: new Date(Date.now() + 86_400_000).toISOString() },
     });
@@ -152,7 +186,7 @@ describe('a sale through the change of a product', () => {
     const clock = moveClock(-60_000);
 
     try {
-      const res = await patchProduct(product.id, { price: 30, sale: { percent: 10, endsAt } });
+      const res = await patchVariant(product, { price: 30, sale: { percent: 10, endsAt } });
 
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_SALE_ENDS_AT_INVALID' });

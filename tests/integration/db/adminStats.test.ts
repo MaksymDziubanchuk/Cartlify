@@ -6,14 +6,16 @@ import { shopToday } from '@helpers/shopDay.js';
 
 import { inCommittedTx, inRolledBackTx, type DbSession } from '../../helpers/db.js';
 import { pay, waitingOrderOf, type DeliveryRule } from '../../helpers/dbOrders.js';
-import { dayAfter, setShopDay } from '../../helpers/dbStock.js';
+import { batchIdOf, dayAfter, setShopDay } from '../../helpers/dbStock.js';
 import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   receiveBatch,
   type TestUser,
 } from '../../helpers/factories.js';
+import { tellApart } from '../../helpers/variants.js';
 
 // cartlify.admin_stats_view: the numbers of the dashboard of an admin (GET /api/admin/stats) for a
 // period the session names (cartlify.stats_from, cartlify.stats_to). Other files make users and
@@ -32,6 +34,12 @@ let admin: TestUser;
 let root: TestUser;
 
 type Top = { id: number; name: string; revenue: number; quantitySold: number };
+type TopVariant = {
+  product: { id: number; name: string; deleted: boolean };
+  variant: { id: number; position: number; name: string; sku: string | null; deleted: boolean };
+  revenue: number;
+  quantitySold: number;
+};
 type Stats = {
   users: { total: number; newInPeriod: number; new7d: number; new30d: number };
   orders: {
@@ -44,6 +52,7 @@ type Stats = {
   products: {
     outOfStockTotal: number;
     topProductsByRevenue: Top[];
+    topVariantsByRevenue: TopVariant[];
     topCategoriesByRevenue: Top[];
   };
   reviews: { newInPeriod: number; avgRating: number };
@@ -94,7 +103,7 @@ async function afterCartOf(db: DbSession, orderId: number): Promise<string> {
 async function waitingOrder(quantity = 2, rule: DeliveryRule = {}) {
   const product = await createProduct({ stock: 5, price: 40 });
   const orderId = await inCommittedTx((db) =>
-    waitingOrderOf(db, buyer.id, [[product.id, quantity]], rule),
+    waitingOrderOf(db, buyer.id, [[product.variantId, quantity]], rule),
   );
   return { product, orderId };
 }
@@ -112,6 +121,9 @@ async function momentOf(db: DbSession, table: 'orders' | 'reviews', column: stri
 }
 
 const topOf = (list: Top[], id: number) => list.find((item) => item.id === id);
+
+const wholeShopStats = () =>
+  inRolledBackTx((db) => statsOf(db, FAR_PAST, FAR_FUTURE), REPEATABLE_READ);
 
 describe('cartlify.admin_stats_view', () => {
   it('counts a paid order in the revenue of the period it was paid in', async () => {
@@ -216,6 +228,147 @@ describe('cartlify.admin_stats_view', () => {
     });
   });
 
+  // the top of products is the sum over the variants of a product, the top of variants has a line
+  // for each. The prices are high so the lines stay among the five best of the shop
+  describe('the top of variants', () => {
+    const twoVariantOrder = async () => {
+      const product = await createProduct({ stock: 5, price: 3000 });
+      const second = await createVariant(product.id, { price: 2000, stock: 5 });
+      await tellApart([product.variantId, second.id]);
+      const orderId = await inCommittedTx((db) =>
+        waitingOrderOf(
+          db,
+          buyer.id,
+          [
+            [product.variantId, 1],
+            [second.id, 2],
+          ],
+          {},
+        ),
+      );
+      return { product, second, orderId };
+    };
+
+    const linesOf = (stats: Stats, productId: number) =>
+      stats.products.topVariantsByRevenue.filter((line) => line.product.id === productId);
+
+    it('has a line for each variant sold, with its product, and one line of the product in the top of products', async () => {
+      const { product, second, orderId } = await twoVariantOrder();
+
+      const { after, name } = await inRolledBackTx(async (db) => {
+        const from = await afterCartOf(db, orderId);
+        await pay(db, admin.id, orderId);
+        const after = await statsOf(db, from, FAR_FUTURE);
+        const [row] = await db.rows<{ name: string }>(
+          'select cartlify.variant_display_name($1::int) as name',
+          second.id,
+        );
+        return { after, name: row!.name };
+      }, REPEATABLE_READ);
+
+      // the more money first
+      expect(linesOf(after, product.id)).toEqual([
+        {
+          product: { id: product.id, name: expect.any(String), deleted: false },
+          variant: { id: second.id, position: 2, name, sku: null, deleted: false },
+          revenue: 4000,
+          quantitySold: 2,
+        },
+        {
+          product: { id: product.id, name: expect.any(String), deleted: false },
+          variant: {
+            id: product.variantId,
+            position: 1,
+            name: expect.any(String),
+            sku: null,
+            deleted: false,
+          },
+          revenue: 3000,
+          quantitySold: 1,
+        },
+      ]);
+      expect(name).toContain('Kind 2');
+      expect(after.products.topProductsByRevenue.filter((line) => line.id === product.id)).toEqual([
+        { id: product.id, name: expect.any(String), revenue: 7000, quantitySold: 3 },
+      ]);
+    });
+
+    it('is of the period: a payment after it is none of its lines', async () => {
+      const { product, orderId } = await twoVariantOrder();
+
+      const before = await inRolledBackTx(async (db) => {
+        const from = await afterCartOf(db, orderId);
+        await pay(db, admin.id, orderId);
+        return statsOf(db, FAR_PAST, from);
+      }, REPEATABLE_READ);
+
+      expect(linesOf(before, product.id)).toEqual([]);
+    });
+
+    it('takes a cancelled order out of both tops', async () => {
+      const { product, orderId } = await twoVariantOrder();
+
+      const cancelled = await inRolledBackTx(async (db) => {
+        const from = await afterCartOf(db, orderId);
+        await pay(db, admin.id, orderId);
+        await db.as({ role: 'ADMIN' });
+        await db.rows(`select 1 as done from cartlify.cancel_paid_order($1::int)`, orderId);
+        return statsOf(db, from, FAR_FUTURE);
+      }, REPEATABLE_READ);
+
+      expect(linesOf(cancelled, product.id)).toEqual([]);
+      expect(topOf(cancelled.products.topProductsByRevenue, product.id)).toBeUndefined();
+    });
+
+    it('keeps a variant that was taken out of sale, and says so', async () => {
+      const { product, second, orderId } = await twoVariantOrder();
+
+      const after = await inRolledBackTx(async (db) => {
+        const from = await afterCartOf(db, orderId);
+        await pay(db, admin.id, orderId);
+        await db.as({ role: 'ADMIN', userId: admin.id });
+        await db.rows(
+          `update cartlify.product_variants set "deletedAt" = now() at time zone 'utc'
+           where id = $1 returning id`,
+          second.id,
+        );
+        return statsOf(db, from, FAR_FUTURE);
+      }, REPEATABLE_READ);
+
+      const lines = linesOf(after, product.id);
+      expect(lines.find((line) => line.variant.id === second.id)?.variant.deleted).toBe(true);
+      expect(lines.find((line) => line.variant.id === product.variantId)?.variant.deleted).toBe(
+        false,
+      );
+    });
+
+    it('keeps the variants of a product removed from the catalog, and says so', async () => {
+      const { product, orderId } = await twoVariantOrder();
+
+      const after = await inRolledBackTx(async (db) => {
+        const from = await afterCartOf(db, orderId);
+        await pay(db, admin.id, orderId);
+        await db.as({ role: 'ADMIN', userId: admin.id });
+        await db.rows(
+          `update cartlify.products set "deletedAt" = now() at time zone 'utc'
+           where id = $1 returning id`,
+          product.id,
+        );
+        return statsOf(db, from, FAR_FUTURE);
+      }, REPEATABLE_READ);
+
+      const lines = linesOf(after, product.id);
+      expect(lines).toHaveLength(2);
+      expect(lines.every((line) => line.product.deleted && line.variant.deleted)).toBe(true);
+    });
+
+    it('has at most five lines', async () => {
+      const after = await wholeShopStats();
+
+      expect(after.products.topVariantsByRevenue.length).toBeLessThanOrEqual(5);
+    });
+  });
+
   it('counts the money of the last 7 and 30 days from the payment', async () => {
     const { orderId } = await waitingOrder();
 
@@ -293,6 +446,24 @@ describe('cartlify.admin_stats_view', () => {
     expect(after.products.outOfStockTotal - before.products.outOfStockTotal).toBeGreaterThanOrEqual(
       1,
     );
+  });
+
+  // a product is out of stock when none of its variants in sale has a free unit: a unit in one of
+  // them is enough
+  it('counts a product out of stock until one of its variants has a free unit', async () => {
+    const product = await createProduct({ stock: 0 });
+    const second = await createVariant(product.id, { stock: 0 });
+
+    const { before, oneIn, bothIn } = await inRolledBackTx(async (db) => {
+      const before = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await batchIdOf(db, { role: 'ADMIN', userId: admin.id }, product.variantId, { quantity: 1 });
+      const oneIn = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await batchIdOf(db, { role: 'ADMIN', userId: admin.id }, second.id, { quantity: 1 });
+      return { before, oneIn, bothIn: await statsOf(db, FAR_PAST, FAR_FUTURE) };
+    }, REPEATABLE_READ);
+
+    expect(oneIn.products.outOfStockTotal - before.products.outOfStockTotal).toBe(-1);
+    expect(bothIn.products.outOfStockTotal - before.products.outOfStockTotal).toBe(-1);
   });
 
   it.each(['ADMIN', 'ROOT'])('leaves an account out of the users once it is %s', async (role) => {

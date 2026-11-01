@@ -1,5 +1,7 @@
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+
+import { shopToday } from '@helpers/shopDay.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -12,10 +14,12 @@ import {
   createUser,
   deleteProductFromCatalog,
   putOnSale,
+  receiveBatch,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { placeOrder } from '../../../helpers/orders.js';
+import { moveClock } from '../../../helpers/payments.js';
 
 // the catalog for a buyer and for an admin (GET /api/products, GET /api/products/:productId). A
 // buyer (guest, user) sees what helps to buy: the price, the sale, the free units, the rating,
@@ -24,8 +28,9 @@ import { placeOrder } from '../../../helpers/orders.js';
 // top. An admin sorts by any field; a field only some products have (deleted, on sale, with an
 // override that is on) comes with its flag: without any flag the list has only the plain products,
 // a flag lists the products of its condition whatever else they have. A buyer sorts by the sale:
-// the products on sale first by the end of the sale, the rest by popularity. A visit of an admin
-// is no view of the product
+// the variants on sale first by the end of the sale, the rest by popularity. A visit of an admin
+// is no view of the product. Every product here has one variant, so a row is the same product
+// whether the rows are products or variants (the tests of the rows are in catalogRows.test.ts)
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -33,6 +38,7 @@ let admin: TestUser;
 let root: TestUser;
 const userIds: number[] = [];
 const products: TestProduct[] = [];
+let clock: { restore: () => void } | null = null;
 
 const DAY = 86_400_000;
 
@@ -60,12 +66,17 @@ const list = (query: Record<string, string>, actor?: TestUser) =>
 const card = (productId: number, actor?: TestUser) =>
   app.inject({ method: 'GET', url: `/api/products/${productId}`, headers: headersOf(actor) });
 
+type Row = { product: { id: number }; variant: { id: number } };
+
+// the products of the rows of a list, and their variants
 const idsOf = (res: LightMyRequestResponse) =>
-  (res.json().items as Array<{ id: number }>).map((item) => item.id);
+  (res.json().items as Row[]).map((item) => item.product.id);
+const variantIdsOf = (res: LightMyRequestResponse) =>
+  (res.json().items as Row[]).map((item) => item.variant.id);
 
 const categoriesOf = (...of: TestProduct[]) => of.map((product) => product.categoryId).join(',');
 
-// every page of a list, one product a page
+// every page of a list, one row a page
 async function pagesOf(query: Record<string, string>, actor?: TestUser) {
   const seen: number[] = [];
   let cursor: string | undefined;
@@ -95,13 +106,22 @@ const viewsOf = async (productId: number) =>
     )
   ).views;
 
-const ADMIN_FIELDS = [
+// what only an admin sees of a product, and of a variant
+const PRODUCT_ADMIN_FIELDS = [
   'views',
   'updatedAt',
-  'totalStock',
-  'reservedStock',
   'popularityOverride',
   'popularityOverrideUntil',
+  'deletedAt',
+];
+const VARIANT_ADMIN_FIELDS = [
+  'barcode',
+  'totalStock',
+  'reservedStock',
+  'expiredStock',
+  'lastUnitCost',
+  'updatedAt',
+  'visible',
   'deletedAt',
 ];
 
@@ -110,6 +130,11 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await newUser('ADMIN');
   root = await newUser('ROOT');
+});
+
+afterEach(() => {
+  clock?.restore();
+  clock = null;
 });
 
 // products with orders, favorites or logs stay: they leave the catalog
@@ -126,10 +151,8 @@ describe('the answers of a buyer and of an admin', () => {
   let product: TestProduct;
   let category: { id: number; name: string; slug: string };
 
-  // five units, two of them reserved by an order that waits for its payment
   beforeAll(async () => {
     product = await newProduct({ stock: 5 });
-    await placeOrder(app, csrf, await newUser(), product, 'waiting', 2);
     category = await asAdmin((tx) =>
       tx.category.findUniqueOrThrow({
         where: { id: product.categoryId },
@@ -147,9 +170,16 @@ describe('the answers of a buyer and of an admin', () => {
       const res = await card(product.id, await actorOf());
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ id: product.id, stock: 3, category });
-      for (const field of ['popularity', 'categoryId', ...ADMIN_FIELDS]) {
-        expect(res.json()).not.toHaveProperty(field);
+      const { product: shown, variant, variants } = res.json();
+      expect(shown).toMatchObject({ id: product.id, category });
+      expect(variant).toMatchObject({ id: product.variantId, stock: 5 });
+      expect(variants).toEqual([expect.objectContaining({ id: product.variantId })]);
+      for (const field of ['popularity', 'categoryId', ...PRODUCT_ADMIN_FIELDS]) {
+        expect(shown).not.toHaveProperty(field);
+      }
+      for (const field of VARIANT_ADMIN_FIELDS) {
+        expect(variant).not.toHaveProperty(field);
+        expect(variants[0]).not.toHaveProperty(field);
       }
     },
   );
@@ -160,12 +190,17 @@ describe('the answers of a buyer and of an admin', () => {
     expect(res.statusCode).toBe(200);
     const [item] = res.json().items;
     expect(item).toMatchObject({
-      id: product.id,
-      stock: 3,
-      category,
-      popularity: expect.any(Number),
+      product: { id: product.id, category, popularity: expect.any(Number) },
+      variant: { id: product.variantId, stock: 5, price: 10 },
+      minPrice: 10,
+      maxPrice: 10,
+      stock: 5,
     });
-    for (const field of ['categoryId', ...ADMIN_FIELDS]) expect(item).not.toHaveProperty(field);
+    for (const field of ['categoryId', ...PRODUCT_ADMIN_FIELDS]) {
+      expect(item.product).not.toHaveProperty(field);
+    }
+    for (const field of VARIANT_ADMIN_FIELDS) expect(item.variant).not.toHaveProperty(field);
+    expect(res.json().total).toBe(1);
   });
 
   it('gives the favorites of a buyer the fields of the list of a buyer', async () => {
@@ -179,9 +214,14 @@ describe('the answers of a buyer and of an admin', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const [{ product: item }] = res.json().items;
+    const [{ product: item, variant }] = res.json().items;
     expect(item).toMatchObject({ id: product.id, category, popularity: expect.any(Number) });
-    for (const field of ADMIN_FIELDS) expect(item).not.toHaveProperty(field);
+    for (const field of PRODUCT_ADMIN_FIELDS) expect(item).not.toHaveProperty(field);
+    // the variant is the short one of a buyer: nothing of the stock of an admin, no shipping data
+    expect(variant).toMatchObject({ id: product.variantId, position: 1, price: 10, stock: 5 });
+    for (const field of [...VARIANT_ADMIN_FIELDS, 'sku', 'weightGrams', 'images']) {
+      expect(variant).not.toHaveProperty(field);
+    }
   });
 
   it.each([
@@ -190,19 +230,25 @@ describe('the answers of a buyer and of an admin', () => {
   ])(
     'gives %s the card and the list with the counters and the whole stock',
     async (_who, actorOf) => {
-      const shown = {
+      const shownProduct = {
         id: product.id,
         category,
-        stock: 3,
-        totalStock: 5,
-        reservedStock: 2,
         popularity: expect.any(Number),
         views: expect.any(Number),
         updatedAt: expect.any(String),
         popularityOverride: null,
         popularityOverrideUntil: null,
+        deletedAt: null,
+      };
+      const shownVariant = {
+        id: product.variantId,
+        stock: 5,
+        totalStock: 5,
+        reservedStock: 0,
+        expiredStock: 0,
         salePrice: null,
         saleEndsAt: null,
+        visible: true,
         deletedAt: null,
       };
 
@@ -210,8 +256,15 @@ describe('the answers of a buyer and of an admin', () => {
       const many = await list({ categoryIds: String(product.categoryId) }, actorOf());
 
       expect(one.statusCode).toBe(200);
-      expect(one.json()).toMatchObject(shown);
-      expect(many.json().items).toEqual([expect.objectContaining(shown)]);
+      expect(one.json().product).toMatchObject(shownProduct);
+      expect(one.json().variant).toMatchObject(shownVariant);
+      expect(many.json().items).toEqual([
+        expect.objectContaining({
+          product: expect.objectContaining(shownProduct),
+          variant: expect.objectContaining(shownVariant),
+          stock: 5,
+        }),
+      ]);
     },
   );
 
@@ -224,12 +277,33 @@ describe('the answers of a buyer and of an admin', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
+    expect(res.json().product).toMatchObject({
       category,
-      totalStock: 5,
-      reservedStock: 2,
       views: expect.any(Number),
+      popularity: expect.any(Number),
     });
+    expect(res.json().variant).toMatchObject({ totalStock: 5, reservedStock: 0 });
+  });
+});
+
+// the units held by an order that waits for its payment are not free: the card and the list show
+// the free ones, an admin sees the reserve apart
+describe('the units an order holds', () => {
+  it('shows the free units to a buyer and the reserve to an admin', async () => {
+    const product = await newProduct({ stock: 5 });
+    await placeOrder(app, csrf, await newUser(), product, 'waiting', 2);
+
+    const buyerCard = await card(product.id);
+    const buyerList = await list({ categoryIds: String(product.categoryId) });
+    const adminCard = await card(product.id, admin);
+    const adminList = await list({ categoryIds: String(product.categoryId) }, admin);
+
+    expect(buyerCard.json().variant.stock).toBe(3);
+    expect(buyerList.json().items[0]).toMatchObject({ stock: 3, variant: { stock: 3 } });
+    for (const res of [adminCard, adminList]) {
+      const variant = res.json().variant ?? res.json().items[0].variant;
+      expect(variant).toMatchObject({ stock: 3, totalStock: 5, reservedStock: 2 });
+    }
   });
 });
 
@@ -286,7 +360,7 @@ describe('the sorts and the flags of a buyer', () => {
   });
 
   // the products of the file only: other files delete theirs meanwhile
-  it.each(['createdAt', 'price', 'popularity', 'avgRating', 'name', 'saleEndsAt'])(
+  it.each(['createdAt', 'price', 'popularity', 'avgRating', 'name', 'saleEndsAt', 'discount'])(
     'sorts by %s',
     async (sort) => {
       const product = await newProduct();
@@ -304,9 +378,11 @@ describe('the sorts and the flags of a buyer', () => {
   it.each([
     ['onSale', 'FILTER_FORBIDDEN'],
     ['popularityOverridden', 'FILTER_FORBIDDEN'],
+    ['maxStock', 'FILTER_FORBIDDEN'],
+    ['withoutShippingData', 'FILTER_FORBIDDEN'],
     ['deleted', 'DELETED_PRODUCTS_FORBIDDEN'],
   ])('refuses the flag %s of an admin', async (flag, errorCode) => {
-    const res = await list({ [flag]: 'true' });
+    const res = await list({ [flag]: flag === 'maxStock' ? '3' : 'true' });
 
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ errorCode });
@@ -334,7 +410,7 @@ describe('the sorts and the flags of a buyer', () => {
     let quiet: TestProduct;
     let categoryIds: string;
 
-    // two products on sale and two without, one of them in the favorites of two users
+    // two variants on sale and two without, one product in the favorites of two users
     beforeAll(async () => {
       [soon, late, popular, quiet] = [
         await newProduct(),
@@ -352,12 +428,14 @@ describe('the sorts and the flags of a buyer', () => {
       ['asc', () => [soon.id, late.id, popular.id, quiet.id]],
       ['desc', () => [late.id, soon.id, popular.id, quiet.id]],
     ])(
-      'gives the products on sale first going %s, then the rest by popularity',
+      'gives the variants on sale first going %s, then the rest by popularity',
       async (order, ids) => {
         const res = await list({ categoryIds, sort: 'saleEndsAt', order });
 
         expect(res.statusCode).toBe(200);
         expect(idsOf(res)).toEqual(ids());
+        // the rows are variants (groups of one variant): the one price is the range of prices
+        expect(res.json().items[0]).toMatchObject({ minPrice: 5, maxPrice: 5 });
       },
     );
 
@@ -468,6 +546,7 @@ describe('the flags and the sorts of an admin', () => {
 
   it.each([
     ['saleEndsAt', 'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE'],
+    ['discount', 'SORT_DISCOUNT_REQUIRES_ON_SALE'],
     ['popularityOverride', 'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN'],
     ['popularityOverrideUntil', 'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN'],
     ['deletedAt', 'SORT_DELETED_AT_REQUIRES_DELETED'],
@@ -509,36 +588,67 @@ describe('the flags and the sorts of an admin', () => {
     expect(await pagesOf(query, admin)).toEqual(ids());
   });
 
+  // the free units are the stock less the units of batches that are over: five units, four of them
+  // good until today, and three units of a batch without an end; the clock is moved two days on
   describe('by the stock', () => {
-    let mostlyReserved: TestProduct;
+    let mostlyOver: TestProduct;
     let free: TestProduct;
 
-    // five units with four reserved (one free), and three units with none reserved
     beforeAll(async () => {
-      mostlyReserved = await newProduct({ stock: 5 });
+      mostlyOver = await newProduct({ stock: 0 });
       free = await newProduct({ stock: 3 });
-      await placeOrder(app, csrf, await newUser(), mostlyReserved, 'waiting', 4);
+      await receiveBatch(mostlyOver.id, { quantity: 4, expiresAt: shopToday() });
+      await receiveBatch(mostlyOver.id, { quantity: 1 });
     });
 
     it.each([
-      ['the free units', 'stock', 'asc', () => [mostlyReserved.id, free.id]],
-      ['the whole stock', 'totalStock', 'asc', () => [free.id, mostlyReserved.id]],
-      ['the reserve', 'reservedStock', 'desc', () => [mostlyReserved.id, free.id]],
+      ['the free units', 'stock', 'asc', () => [mostlyOver.id, free.id]],
+      ['the units that are over', 'expiredStock', 'desc', () => [mostlyOver.id, free.id]],
     ])('sorts by %s', async (_case, sort, order, ids) => {
-      const res = await list(
-        { categoryIds: categoriesOf(mostlyReserved, free), sort, order },
-        admin,
-      );
+      clock = moveClock(2 * DAY);
+
+      const res = await list({ categoryIds: categoriesOf(mostlyOver, free), sort, order }, admin);
 
       expect(res.statusCode).toBe(200);
       expect(idsOf(res)).toEqual(ids());
+    });
+
+    it('sorts by the whole stock, the units that are over too', async () => {
+      clock = moveClock(2 * DAY);
+
+      const res = await list(
+        { categoryIds: categoriesOf(mostlyOver, free), sort: 'totalStock', order: 'asc' },
+        admin,
+      );
+
+      expect(idsOf(res)).toEqual([free.id, mostlyOver.id]);
+    });
+  });
+
+  // four of five units held by an order: one free unit, and a reserve of four
+  describe('by the reserve', () => {
+    it('sorts by the reserve', async () => {
+      const mostlyReserved = await newProduct({ stock: 5 });
+      const free = await newProduct({ stock: 3 });
+      await placeOrder(app, csrf, await newUser(), mostlyReserved, 'waiting', 4);
+
+      const res = await list(
+        {
+          categoryIds: categoriesOf(mostlyReserved, free),
+          sort: 'reservedStock',
+          order: 'desc',
+        },
+        admin,
+      );
+
+      expect(idsOf(res)).toEqual([mostlyReserved.id, free.id]);
     });
   });
 });
 
 // an admin sees two prices, the usual one and the sale price: a price sort and the price filters
 // take the usual price the field shows, the sale price has a sort of its own in the list of the
-// products on sale. A buyer sorts and filters by the price a product sells at now
+// variants on sale. A buyer sorts and filters by the price a variant sells at now
 describe('the prices of an admin', () => {
   let deepSale: TestProduct;
   let smallSale: TestProduct;
@@ -553,13 +663,17 @@ describe('the prices of an admin', () => {
     categoryIds = categoriesOf(deepSale, smallSale);
   });
 
-  it('shows an admin both prices of a product on sale', async () => {
+  it('shows an admin both prices of a variant on sale', async () => {
     const res = await list({ categoryIds, onSale: 'true' }, admin);
 
     expect(res.json().items).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: deepSale.id, price: 30, salePrice: 5 }),
-        expect.objectContaining({ id: smallSale.id, price: 20, salePrice: 15 }),
+        expect.objectContaining({
+          variant: expect.objectContaining({ id: deepSale.variantId, price: 30, salePrice: 5 }),
+        }),
+        expect.objectContaining({
+          variant: expect.objectContaining({ id: smallSale.variantId, price: 20, salePrice: 15 }),
+        }),
       ]),
     );
   });
@@ -567,7 +681,7 @@ describe('the prices of an admin', () => {
   it.each([
     ['the usual price', 'price', () => [smallSale.id, deepSale.id]],
     ['the sale price', 'salePrice', () => [deepSale.id, smallSale.id]],
-  ])('sorts the products on sale by %s', async (_case, sort, ids) => {
+  ])('sorts the variants on sale by %s', async (_case, sort, ids) => {
     const query = { categoryIds, onSale: 'true', sort, order: 'asc' };
 
     expect(idsOf(await list(query, admin))).toEqual(ids());
@@ -587,11 +701,11 @@ describe('the prices of an admin', () => {
     expect(idsOf(res)).toEqual([smallSale.id]);
   });
 
-  it('sorts and filters the prices of a buyer by the price a product sells at', async () => {
+  it('sorts and filters the prices of a buyer by the price a variant sells at', async () => {
     const sorted = await list({ categoryIds, sort: 'price', order: 'asc' });
     const cheap = await list({ categoryIds, maxPrice: '10' });
 
-    expect(idsOf(sorted)).toEqual([deepSale.id, smallSale.id]);
-    expect(idsOf(cheap)).toEqual([deepSale.id]);
+    expect(variantIdsOf(sorted)).toEqual([deepSale.variantId, smallSale.variantId]);
+    expect(variantIdsOf(cheap)).toEqual([deepSale.variantId]);
   });
 });

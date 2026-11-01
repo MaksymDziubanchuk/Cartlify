@@ -6,13 +6,16 @@ import { shopToday } from '@helpers/shopDay.js';
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { keepApart } from '../../../helpers/characteristics.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createFavorite,
   createProduct,
   createUser,
+  createVariant,
   receiveBatch,
+  stockOf,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
@@ -66,12 +69,12 @@ const listOf = (product: TestProduct, query = '') =>
     url: `/api/products?categoryIds=${product.categoryId}${query}`,
   });
 
-const addToCart = (user: TestUser, productId: number, quantity: number) =>
+const addToCart = (user: TestUser, variantId: number, quantity: number) =>
   app.inject({
     method: 'POST',
     url: '/api/orders/current/items',
     headers: withCsrf(csrf, accessCookie(user)),
-    payload: { productId, quantity },
+    payload: { variantId, quantity },
   });
 
 beforeAll(async () => {
@@ -104,8 +107,10 @@ describe('a batch that is over', () => {
     twoDaysOn();
     const later = await getCard(product.id);
 
-    expect(today.json().stock).toBe(5);
-    expect(later.json().stock).toBe(1);
+    expect(today.json().variant.stock).toBe(5);
+    expect(later.json().variant.stock).toBe(1);
+    // the short forms of the card say the same
+    expect(later.json().variants[0].stock).toBe(1);
   });
 
   it('shows a buyer only the good units in the list and in the favorites', async () => {
@@ -121,8 +126,40 @@ describe('a batch that is over', () => {
       headers: { cookie: accessCookie(user) },
     });
 
-    expect(list.json().items).toEqual([expect.objectContaining({ id: product.id, stock: 1 })]);
-    expect(favorites.json().items[0].product).toMatchObject({ id: product.id, stock: 1 });
+    expect(list.json().items).toEqual([
+      expect.objectContaining({
+        product: expect.objectContaining({ id: product.id }),
+        variant: expect.objectContaining({ id: product.variantId, stock: 1 }),
+        stock: 1,
+      }),
+    ]);
+    expect(favorites.json().items[0].variant).toMatchObject({ id: product.variantId, stock: 1 });
+  });
+
+  it('shows the good units of the variants of a product apart in a list of variants', async () => {
+    const product = await productWithBatchOfToday();
+    const second = await createVariant(product.id, { price: 12, stock: 0 });
+    await receiveBatch({ variantId: second.id }, { quantity: 3, expiresAt: shopToday() });
+    twoDaysOn();
+
+    const products = await listOf(product);
+    // the variants of a product with no main characteristic are one group: the sum of their units
+    const grouped = await listOf(product, '&sort=price&order=asc');
+    await keepApart([product.variantId, second.id]);
+    const variants = await listOf(product, '&sort=price&order=asc');
+
+    // the sum over the variants, and the stock of each
+    expect(products.json().items).toEqual([expect.objectContaining({ stock: 1 })]);
+    expect(grouped.json().items).toEqual([expect.objectContaining({ stock: 1 })]);
+    expect(
+      (variants.json().items as Array<{ variant: { id: number }; stock: number }>).map((row) => [
+        row.variant.id,
+        row.stock,
+      ]),
+    ).toEqual([
+      [product.variantId, 1],
+      [second.id, 0],
+    ]);
   });
 
   it('shows an admin the units that are over apart from the free ones', async () => {
@@ -131,12 +168,30 @@ describe('a batch that is over', () => {
 
     const res = await getCard(product.id, admin);
 
-    expect(res.json()).toMatchObject({
+    expect(res.json().variant).toMatchObject({
       stock: 1,
       totalStock: 5,
       reservedStock: 0,
       expiredStock: 4,
     });
+  });
+
+  it('shows an admin the units that are over in the list too', async () => {
+    const product = await productWithBatchOfToday();
+    twoDaysOn();
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/products?categoryIds=${product.categoryId}`,
+      headers: { cookie: accessCookie(admin) },
+    });
+
+    expect(res.json().items).toEqual([
+      expect.objectContaining({
+        variant: expect.objectContaining({ stock: 1, totalStock: 5, expiredStock: 4 }),
+        stock: 1,
+      }),
+    ]);
   });
 
   it('lists a product with only units that are over as out of stock', async () => {
@@ -148,7 +203,10 @@ describe('a batch that is over', () => {
 
     expect(inStock.json().items).toEqual([]);
     expect(outOfStock.json().items).toEqual([
-      expect.objectContaining({ id: product.id, stock: 0 }),
+      expect.objectContaining({
+        product: expect.objectContaining({ id: product.id }),
+        stock: 0,
+      }),
     ]);
   });
 
@@ -156,12 +214,12 @@ describe('a batch that is over', () => {
     const product = await productWithBatchOfToday();
     twoDaysOn();
 
-    const res = await addToCart(await newUser(), product.id, 2);
+    const res = await addToCart(await newUser(), product.variantId, 2);
 
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({
       errorCode: 'OUT_OF_STOCK',
-      details: { productId: product.id, available: 1, requested: 2 },
+      details: { variantId: product.variantId, available: 1, requested: 2 },
     });
   });
 
@@ -182,7 +240,9 @@ describe('a batch that is over', () => {
     expect(res.json()).toMatchObject({
       errorCode: 'ORDER_ITEMS_UNAVAILABLE',
       details: {
-        items: [{ productId: product.id, reason: 'out_of_stock', available: 1, requested: 3 }],
+        items: [
+          { variantId: product.variantId, reason: 'out_of_stock', available: 1, requested: 3 },
+        ],
       },
     });
   });
@@ -223,7 +283,10 @@ describe('a batch that is over', () => {
         method: 'POST',
         url: '/api/products/stock/write-offs',
         headers: withCsrf(csrf, accessCookie(admin)),
-        payload: { reason: 'expired', items: [{ productId: product.id, batchId, quantity: 4 }] },
+        payload: {
+          reason: 'expired',
+          items: [{ variantId: product.variantId, batchId, quantity: 4 }],
+        },
       });
 
     const refused = await writeOff(good);
@@ -231,7 +294,7 @@ describe('a batch that is over', () => {
     expect(refused.statusCode).toBe(409);
     expect(refused.json()).toMatchObject({
       errorCode: 'INSUFFICIENT_AVAILABLE_STOCK',
-      details: { products: [{ productId: product.id, available: 0, requested: 4 }] },
+      details: { variants: [{ variantId: product.variantId, available: 0, requested: 4 }] },
     });
 
     // the batch that is over goes, the good units stay held
@@ -246,12 +309,71 @@ describe('a batch that is over', () => {
       method: 'POST',
       url: '/api/products/stock/deliveries',
       headers: withCsrf(csrf, accessCookie(admin)),
-      payload: { source: 'supplier', items: [{ productId: product.id, quantity: 2, unitCost: 1 }] },
+      payload: {
+        source: 'supplier',
+        items: [{ variantId: product.variantId, quantity: 2, unitCost: 1 }],
+      },
     });
 
     expect(res.statusCode).toBe(201);
-    expect(res.json().products).toEqual([
-      { id: product.id, stock: 3, totalStock: 7, reservedStock: 0, expiredStock: 4 },
+    expect(res.json().variants).toEqual([
+      {
+        variantId: product.variantId,
+        productId: product.id,
+        stock: 3,
+        totalStock: 7,
+        reservedStock: 0,
+        expiredStock: 4,
+      },
     ]);
+  });
+
+  // the units that are over are a thing of a variant: a sibling variant of the product has none
+  it('counts the units that are over for the variant that has them, not for its siblings', async () => {
+    const product = await productWithBatchOfToday();
+    const second = await createVariant(product.id, { stock: 0 });
+    await receiveBatch({ variantId: second.id }, { quantity: 2 });
+    twoDaysOn();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/products/stock/deliveries',
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: {
+        source: 'supplier',
+        items: [
+          { variantId: second.id, quantity: 1, unitCost: 1 },
+          { variantId: product.variantId, quantity: 1, unitCost: 1 },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().variants).toEqual([
+      expect.objectContaining({ variantId: product.variantId, stock: 2, expiredStock: 4 }),
+      expect.objectContaining({ variantId: second.id, stock: 3, expiredStock: 0 }),
+    ]);
+  });
+
+  it('writes off the units that are over by the name of their variant, whatever its siblings hold', async () => {
+    const product = await productWithBatchOfToday({ good: 0 });
+    const second = await createVariant(product.id, { stock: 5 });
+    twoDaysOn();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/products/stock/write-offs',
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: {
+        reason: 'expired',
+        items: [{ variantId: product.variantId, quantity: 4 }],
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().variants).toEqual([
+      expect.objectContaining({ variantId: product.variantId, totalStock: 0, expiredStock: 0 }),
+    ]);
+    expect(await stockOf({ variantId: second.id })).toEqual({ stock: 5, reservedStock: 0 });
   });
 });

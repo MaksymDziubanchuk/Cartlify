@@ -9,19 +9,22 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   receiveBatch,
   writeOffStock,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { orderRowOf, placeOrder } from '../../../helpers/orders.js';
+import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/admin/reports/accounting: what the shop sold in a period and what it cost, the cancels
 // that took sales back, what came in and what was written off, and the value of the stock left.
 // A sale counts from the time it was paid, its cost from the batches it took; an order cancelled
 // later is taken out of the period it was paid in, its cancel is told apart in the period of the
-// cancel. Other test files make orders and batches at the same time, so
-// each test reads only its own products (productIds)
+// cancel. The money is the money of the variants: a report of a product is the sum of its
+// variants, one of some variants (variantIds) is theirs only. Other test files make orders and
+// batches at the same time, so each test reads only its own products (productIds) or variants
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -91,6 +94,7 @@ describe('GET /api/admin/reports/accounting', () => {
 
     const whole = await report(past);
     const some = await report({ ...past, productIds: String(product.id) });
+    const variants = await report({ ...past, variantIds: String(product.variantId) });
     const category = await report({ ...past, categoryId: String(product.categoryId) });
     const ofProducts = await reportOf([product], startedAt);
 
@@ -100,7 +104,7 @@ describe('GET /api/admin/reports/accounting', () => {
       shipping: { sends: 0, cost: 0, withoutCost: 0 },
       result: 0,
     });
-    for (const res of [some, category, ofProducts]) {
+    for (const res of [some, variants, category, ofProducts]) {
       expect(res.statusCode).toBe(200);
       expect(res.json().delivery).toBeNull();
     }
@@ -326,6 +330,133 @@ describe('GET /api/admin/reports/accounting', () => {
     expect(res.json().stock.units).toBeGreaterThanOrEqual(2);
   });
 
+  describe('with the variants of a product', () => {
+    // the product has two variants: A (price 10) takes in 5 at 4 and sells 2; B (price 25) takes in 3
+    // at 6, sells 1 and has 1 written off
+    async function productWithTwoVariants() {
+      const startedAt = Date.now();
+      const product = await newProduct(10);
+      const second = await createVariant(product.id, { price: 25, stock: 0 });
+      const b = { ...product, variantId: second.id };
+      await receiveBatch({ variantId: product.variantId }, { quantity: 5, unitCost: 4 });
+      const batchB = await receiveBatch({ variantId: second.id }, { quantity: 3, unitCost: 6 });
+      const buyer = await newUser();
+      await placeOrder(app, csrf, buyer, product, 'paid', 2);
+      await placeOrder(app, csrf, buyer, b, 'paid', 1);
+      await writeOffStock({ variantId: second.id }, 1, { batchId: batchB, reason: 'damaged' });
+      return { startedAt, product, second };
+    }
+
+    const ofVariants = (
+      startedAt: number,
+      variantIds: number[],
+      extra: Record<string, string> = {},
+    ) =>
+      report({
+        from: new Date(startedAt - 60_000).toISOString(),
+        to: new Date(Date.now() + 60_000).toISOString(),
+        variantIds: variantIds.join(','),
+        ...extra,
+      });
+
+    it('sums the variants for the product and gives the money of one variant alone', async () => {
+      const { startedAt, product, second } = await productWithTwoVariants();
+
+      const whole = await reportOf([product], startedAt);
+      const first = await ofVariants(startedAt, [product.variantId]);
+      const other = await ofVariants(startedAt, [second.id]);
+
+      expect(whole.json()).toMatchObject({
+        sales: { orders: 2, units: 3, revenue: 45, cost: 14, margin: 31 },
+        purchases: { units: 8, value: 38 },
+        writeOffs: { units: 1, value: 6 },
+        // what is left: 3 at 4 and 1 at 6
+        stock: { units: 4, value: 18 },
+        delivery: null,
+      });
+      expect(first.json()).toMatchObject({
+        sales: { orders: 1, units: 2, revenue: 20, cost: 8, margin: 12 },
+        purchases: { units: 5, value: 20 },
+        writeOffs: { units: 0, value: 0 },
+        stock: { units: 3, value: 12 },
+        delivery: null,
+      });
+      expect(other.json()).toMatchObject({
+        sales: { orders: 1, units: 1, revenue: 25, cost: 6, margin: 19 },
+        purchases: { units: 3, value: 18 },
+        writeOffs: { units: 1, value: 6 },
+        stock: { units: 1, value: 6 },
+      });
+    });
+
+    it('takes the variants of the products asked for that are among the variants asked for', async () => {
+      const { startedAt, product, second } = await productWithTwoVariants();
+      const stranger = await newProduct(10);
+      await receiveBatch(stranger.id, { quantity: 2, unitCost: 1 });
+
+      const both = await ofVariants(startedAt, [product.variantId, second.id]);
+      const asked = await ofVariants(startedAt, [product.variantId, second.id], {
+        productIds: String(product.id),
+      });
+      const justFirst = await ofVariants(startedAt, [product.variantId], {
+        productIds: String(product.id),
+      });
+      const wrongProduct = await ofVariants(startedAt, [product.variantId], {
+        productIds: String(stranger.id),
+      });
+      const strangers = await ofVariants(startedAt, [stranger.variantId, product.variantId]);
+
+      for (const section of ['sales', 'purchases', 'writeOffs', 'stock', 'summary'] as const) {
+        expect(asked.json()[section]).toEqual(both.json()[section]);
+      }
+      expect(both.json().sales).toMatchObject({ units: 3, revenue: 45 });
+      expect(justFirst.json().sales).toMatchObject({ units: 2, revenue: 20 });
+      // no variant of that product is among those asked for
+      expect(wrongProduct.json().sales).toMatchObject({ orders: 0, units: 0, revenue: 0 });
+      expect(wrongProduct.json().purchases).toMatchObject({ units: 0, value: 0 });
+      expect(wrongProduct.json().stock).toEqual(NOTHING);
+      expect(strangers.json().purchases).toMatchObject({ units: 7, value: 22 });
+    });
+
+    it('keeps the history of a variant taken out of sale in the report of its product', async () => {
+      const { startedAt, product, second } = await productWithTwoVariants();
+      await markVariantDeleted(second.id);
+
+      const whole = await reportOf([product], startedAt);
+      const other = await ofVariants(startedAt, [second.id]);
+
+      expect(whole.json()).toMatchObject({
+        sales: { units: 3, revenue: 45 },
+        stock: { units: 4, value: 18 },
+      });
+      expect(other.json().sales).toMatchObject({ units: 1, revenue: 25 });
+    });
+
+    it('counts the cancel of a sale of a variant in its own report', async () => {
+      const startedAt = Date.now();
+      const product = await newProduct(10);
+      const second = await createVariant(product.id, { price: 25, stock: 0 });
+      await receiveBatch({ variantId: product.variantId }, { quantity: 2, unitCost: 1 });
+      await receiveBatch({ variantId: second.id }, { quantity: 2, unitCost: 3 });
+      const orderId = await placeOrder(
+        app,
+        csrf,
+        await newUser(),
+        { ...product, variantId: second.id },
+        'paid',
+        2,
+      );
+      await cancelPaid(orderId);
+
+      const first = await ofVariants(startedAt, [product.variantId]);
+      const other = await ofVariants(startedAt, [second.id]);
+
+      expect(first.json().cancellations).toEqual({ orders: 0, units: 0, revenue: 0, cost: 0 });
+      expect(other.json().cancellations).toEqual({ orders: 1, units: 2, revenue: 50, cost: 6 });
+      expect(other.json().stock).toEqual({ units: 2, value: 6 });
+    });
+  });
+
   it('counts from the start of all time until now when no period is given', async () => {
     const before = Date.now();
 
@@ -348,6 +479,9 @@ describe('GET /api/admin/reports/accounting', () => {
     ['product ids that are not ids', { productIds: '1,abc' }],
     ['a product id of zero', { productIds: '0' }],
     ['an empty product id', { productIds: '1,,2' }],
+    ['variant ids that are not ids', { variantIds: '1,abc' }],
+    ['a variant id of zero', { variantIds: '0' }],
+    ['an empty variant id', { variantIds: '1,,2' }],
   ])('refuses %s', async (_case, query) => {
     const res = await report(query);
 
@@ -360,6 +494,18 @@ describe('GET /api/admin/reports/accounting', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_IDS_INVALID' });
+  });
+
+  it('refuses a variant id past the largest id, and more than 100 variant ids', async () => {
+    const past = await report({ variantIds: '2147483648' });
+    const many = await report({
+      variantIds: Array.from({ length: 101 }, (_, n) => n + 1).join(','),
+    });
+
+    for (const res of [past, many]) {
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VARIANT_IDS_INVALID' });
+    }
   });
 
   it('refuses more than 100 product ids', async () => {

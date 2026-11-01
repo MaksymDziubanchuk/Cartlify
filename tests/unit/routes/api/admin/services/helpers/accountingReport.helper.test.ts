@@ -5,15 +5,16 @@ import { Prisma } from '@prisma/client';
 import {
   marginPercentOf,
   parseProductIds,
+  parseVariantIds,
   summarizeWriteOffs,
 } from '@routes/api/admin/services/helpers/accountingReport.helper.js';
 import { InternalError } from '@utils/errors.js';
 
 import { thrownBy } from '../../../../../../helpers/errors.js';
 
-// the report of the accounting reads only the products asked for, and counts the write-offs from
-// the lines of the admin log (STOCK_WRITE_OFF): each line has the reason and the batches with
-// their units and costs, as cartlify.write_off_product_stock writes them (db/05)
+// the report of the accounting reads only the products or the variants asked for, and counts the
+// write-offs from the lines of the admin log (STOCK_WRITE_OFF): each line has the reason and the
+// batches with their units and costs, as cartlify.write_off_variant_stock writes them (db/05)
 
 const dec = (value: string) => new Prisma.Decimal(value);
 
@@ -58,6 +59,34 @@ describe('parseProductIds', () => {
     expect(thrownBy(() => parseProductIds(ids(101)))).toMatchObject({
       statusCode: 400,
       errorCode: 'PRODUCT_IDS_INVALID',
+    });
+  });
+});
+
+describe('parseVariantIds', () => {
+  it('reads no filter when none is given', () => {
+    expect(parseVariantIds(undefined)).toBeUndefined();
+  });
+
+  it('takes each id once, in order', () => {
+    expect(parseVariantIds('9,2,9,5')).toEqual([2, 5, 9]);
+  });
+
+  it('refuses an id past the largest int of the database with its own code', () => {
+    expect(thrownBy(() => parseVariantIds('1,2147483648'))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'VARIANT_IDS_INVALID',
+      details: { maxIds: 100, maxId: 2_147_483_647 },
+    });
+  });
+
+  it('takes 100 ids and refuses more', () => {
+    const ids = (count: number) => Array.from({ length: count }, (_, n) => n + 1).join(',');
+
+    expect(parseVariantIds(ids(100))).toHaveLength(100);
+    expect(thrownBy(() => parseVariantIds(ids(101)))).toMatchObject({
+      statusCode: 400,
+      errorCode: 'VARIANT_IDS_INVALID',
     });
   });
 });

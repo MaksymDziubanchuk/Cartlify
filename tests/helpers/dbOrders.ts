@@ -5,7 +5,9 @@ import type { DbSession, Outcome } from './db.js';
 // a cart and adds items (the database takes the prices), writes the shipping data and confirms
 // through cartlify.confirm_order; the payment goes through cartlify.pay_order as the webhook does
 
-export type Items = [productId: number, quantity: number][];
+// the items of an order: the id of a variant and how many of it (the item names its product too,
+// addItem looks it up)
+export type Items = [variantId: number, quantity: number][];
 
 // where and to whom an order goes, the way a buyer writes it (order_deliveries)
 export type DeliveryData = {
@@ -98,13 +100,15 @@ export async function writeDelivery(
 export async function addItem(db: DbSession, userId: number, orderId: number, item: Items[number]) {
   await db.as({ role: 'USER', userId });
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.order_items ("orderId", "productId", quantity, "unitPrice", "totalPrice")
-     values ($1, $2, $3, 0, 0) returning id`,
+    `insert into cartlify.order_items ("orderId", "productId", "variantId", quantity, "unitPrice", "totalPrice")
+     select $1::int, v."productId", v.id, $3::int, 0, 0 from cartlify.product_variants as v where v.id = $2::int
+     returning id`,
     orderId,
     item[0],
     item[1],
   );
-  return row!.id;
+  if (!row) throw new Error(`no variant ${item[0]} to put into the order`);
+  return row.id;
 }
 
 // a cart of the user with the items, with where it goes unless asked not to
@@ -255,11 +259,12 @@ export async function orderDatesOf(db: DbSession, adminId: number, orderId: numb
   return row!;
 }
 
-export async function stockOf(db: DbSession, adminId: number, productId: number) {
+// the stock and the reserve of a variant
+export async function stockOf(db: DbSession, adminId: number, variantId: number) {
   await db.as({ role: 'ADMIN', userId: adminId });
   const [row] = await db.rows<{ stock: number; reserved: number }>(
-    'select stock, "reservedStock" as reserved from cartlify.products where id = $1',
-    productId,
+    'select stock, "reservedStock" as reserved from cartlify.product_variants where id = $1',
+    variantId,
   );
   return row;
 }

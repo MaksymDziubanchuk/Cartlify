@@ -9,16 +9,17 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  defaultPartyId,
   deleteProductFromCatalog,
   uniqueTag,
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
 
-// the catalog under each role: categories, products, their images, the favorites and the log of
-// prices. Everybody reads the catalog, only an admin changes it. The rating, the count of reviews,
-// the popularity and the views of a product are counted by the database itself (triggers); an
-// admin sets a popularity of their own through popularityOverride for a time
+// the catalog under each role: categories, products, their variants and images, the favorites and
+// the log of prices. Everybody reads the catalog, only an admin changes it. The rating, the count
+// of reviews, the popularity and the views of a product are counted by the database itself
+// (triggers); an admin sets a popularity of their own through popularityOverride for a time
 
 let user: TestUser;
 let other: TestUser;
@@ -49,7 +50,7 @@ const asUser = (who: TestUser = user): Actor => ({ role: 'USER', userId: who.id 
 const asAdmin = (): Actor => ({ role: 'ADMIN', userId: admin.id });
 const asGuest = (guestId: string = randomUUID()): Actor => ({ role: 'GUEST', guestId });
 
-// a product of its own in a category of its own, with nothing done to it yet
+// a product of its own in a category of its own, with one variant and nothing done to it yet
 async function freshProduct(db: DbSession, price = 10) {
   await db.as(asAdmin());
   const tag = uniqueTag();
@@ -59,12 +60,19 @@ async function freshProduct(db: DbSession, price = 10) {
     `db-category-${tag}`,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.products (name, price, "categoryId") values ($1, $2, $3) returning id`,
+    `insert into cartlify.products (name, "categoryId", "manufacturerId")
+     values ($1, $2, $3) returning id`,
     `Db product ${tag}`,
-    price,
     category!.id,
+    await defaultPartyId(),
   );
-  return { id: row!.id, categoryId: category!.id };
+  const [variant] = await db.rows<{ id: number }>(
+    `insert into cartlify.product_variants ("productId", position, price)
+     values ($1, 1, $2) returning id`,
+    row!.id,
+    price,
+  );
+  return { id: row!.id, categoryId: category!.id, variantId: variant!.id };
 }
 
 type Counters = { views: number; popularity: number; avgRating: number; reviewsCount: number };
@@ -83,6 +91,13 @@ const updateProduct = (db: DbSession, set: string, productId: number, ...values:
   db.attempt(
     `update cartlify.products set ${set} where id = $1 returning id`,
     productId,
+    ...values,
+  );
+
+const updateVariant = (db: DbSession, set: string, variantId: number, ...values: unknown[]) =>
+  db.attempt(
+    `update cartlify.product_variants set ${set} where id = $1 returning id`,
+    variantId,
     ...values,
   );
 
@@ -180,27 +195,41 @@ describe('products', () => {
       await db.as(actor());
       return [
         await db.attempt(
-          `insert into cartlify.products (name, price, "categoryId") values ('Forged', 1, $1) returning id`,
+          `insert into cartlify.products (name, "categoryId", "manufacturerId")
+           values ('Forged', $1, $2) returning id`,
           product.categoryId,
+          await defaultPartyId(),
         ),
-        await updateProduct(db, 'price = 0.01', product.id),
         await updateProduct(db, `name = 'Renamed'`, product.id),
         await updateProduct(db, '"deletedAt" = now()', product.id),
         await db.attempt('delete from cartlify.products where id = $1 returning id', product.id),
+        await db.attempt(
+          `insert into cartlify.product_variants ("productId", position, price)
+           values ($1, 9, 1) returning id`,
+          product.id,
+        ),
+        await updateVariant(db, 'price = 0.01', product.variantId),
+        await db.attempt(
+          'delete from cartlify.product_variants where id = $1 returning id',
+          product.variantId,
+        ),
       ];
     });
 
-    expect(outcomes.map(changedRows)).toEqual([false, false, false, false, false]);
+    expect(outcomes.map(changedRows)).toEqual([false, false, false, false, false, false, false]);
   });
 
-  // the stock comes with the batches (stock.test.ts)
-  it('let an admin create a product and change its price and description', async () => {
-    const outcome = await inRolledBackTx(async (db) => {
+  // the stock comes with the batches (stock.test.ts), the price with the variant
+  it('let an admin create a product with a variant and change the description and the price', async () => {
+    const outcomes = await inRolledBackTx(async (db) => {
       const fresh = await freshProduct(db);
-      return updateProduct(db, `price = 12, description = 'New'`, fresh.id);
+      return [
+        await updateProduct(db, `description = 'New'`, fresh.id),
+        await updateVariant(db, 'price = 12', fresh.variantId),
+      ];
     });
 
-    expect(changedRows(outcome)).toBe(true);
+    expect(outcomes.map(changedRows)).toEqual([true, true]);
   });
 
   // the rating and the count of reviews come from the reviews, the popularity from what people do,
@@ -225,25 +254,25 @@ describe('products', () => {
     ['a count of reviews', '"reviewsCount"', 100],
     ['a popularity', 'popularity', 1000],
     ['views', 'views', 100000],
-    ['a reserve', '"reservedStock"', 3],
   ])('does not let an admin create a product that has %s already', async (_what, column, value) => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as(asAdmin());
       return db.attempt(
-        `insert into cartlify.products (name, price, stock, "categoryId", ${column})
-         values ('Forged', 1, 0, $1, $2) returning id`,
+        `insert into cartlify.products (name, "categoryId", "manufacturerId", ${column})
+         values ('Forged', $1, $3, $2) returning id`,
         product.categoryId,
         value,
+        await defaultPartyId(),
       );
     });
 
     expect(outcome.ok).toBe(false);
   });
 
-  it('refuses a negative price', async () => {
+  it('refuses a negative price of a variant', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as(asAdmin());
-      return updateProduct(db, 'price = -1', product.id);
+      return updateVariant(db, 'price = -1', product.variantId);
     });
 
     expect(outcome).toMatchObject({ ok: false, code: '23514' });
@@ -298,7 +327,7 @@ describe('the views of a product', () => {
     const outcome = await inRolledBackTx(async (db) => {
       const fresh = await freshProduct(db);
       await db.as(asGuest());
-      return updateProduct(db, 'views = views + 1, price = 0.01', fresh.id);
+      return updateProduct(db, `views = views + 1, name = 'Forged'`, fresh.id);
     });
 
     expect(changedRows(outcome)).toBe(false);
@@ -313,9 +342,10 @@ describe('the popularity of a product', () => {
       const before = (await countersOf(db, fresh.id)).popularity;
       await db.as(asUser());
       await db.rows(
-        'insert into cartlify.favorites ("userId", "productId") values ($1, $2) returning id',
+        'insert into cartlify.favorites ("userId", "productId", "variantId") values ($1, $2, $3) returning id',
         user.id,
         fresh.id,
+        fresh.variantId,
       );
       const added = (await countersOf(db, fresh.id)).popularity;
       await db.as(asUser());
@@ -363,7 +393,7 @@ describe('the popularity of a product', () => {
   it('leaves the product row alone when the quantity of an item in a cart changes', async () => {
     const versions = await inRolledBackTx(async (db) => {
       const fresh = await freshProduct(db);
-      const orderId = await cartOf(db, user.id, [[fresh.id, 1]]);
+      const orderId = await cartOf(db, user.id, [[fresh.variantId, 1]]);
       const before = await rowVersionOf(db, fresh.id);
       await db.as(asUser());
       await db.rows(
@@ -402,7 +432,7 @@ describe('the popularity of a product', () => {
   // a purchase counts once the order is confirmed; shipping it changes nothing the score counts
   it('leaves the product row alone when a paid order is shipped', async () => {
     const versions = await inRolledBackTx(async (db) => {
-      const orderId = await waitingOrderOf(db, user.id, [[product.id, 1]]);
+      const orderId = await waitingOrderOf(db, user.id, [[product.variantId, 1]]);
       const result = await pay(db, admin.id, orderId);
       if (result !== 'PAID') throw new Error(`pay_order answered ${result}`);
       const before = await rowVersionOf(db, product.id);
@@ -428,9 +458,10 @@ describe('the popularity of a product', () => {
       );
       await db.as(asUser());
       await db.rows(
-        'insert into cartlify.favorites ("userId", "productId") values ($1, $2) returning id',
+        'insert into cartlify.favorites ("userId", "productId", "variantId") values ($1, $2, $3) returning id',
         user.id,
         fresh.id,
+        fresh.variantId,
       );
       return (await countersOf(db, fresh.id)).popularity;
     });
@@ -440,13 +471,12 @@ describe('the popularity of a product', () => {
 });
 
 describe('product images', () => {
-  const insertImage = (db: DbSession, productId: number, isPrimary: boolean, position: number) =>
+  const insertImage = (db: DbSession, productId: number, position: number) =>
     db.attempt(
-      `insert into cartlify.product_images ("productId", url, position, "isPrimary")
-       values ($1, 'https://res.cloudinary.com/demo/image/upload/v1/test/p.jpg', $2, $3) returning id`,
+      `insert into cartlify.product_images ("productId", url, position)
+       values ($1, 'https://res.cloudinary.com/demo/image/upload/v1/test/p.jpg', $2) returning id`,
       productId,
       position,
-      isPrimary,
     );
 
   it('let a guest read them and only an admin add one', async () => {
@@ -457,9 +487,9 @@ describe('product images', () => {
         product.id,
       );
       await db.as(asUser());
-      const byUser = await insertImage(db, product.id, false, 5);
+      const byUser = await insertImage(db, product.id, 5);
       await db.as(asAdmin());
-      const byAdmin = await insertImage(db, product.id, false, 5);
+      const byAdmin = await insertImage(db, product.id, 5);
       return { seen, byUser, byAdmin };
     });
 
@@ -485,31 +515,21 @@ describe('product images', () => {
 
     expect(outcomes.map(changedRows)).toEqual([false, false]);
   });
-
-  // the cart, the orders and the lists show the primary image of a product: one per product
-  it('keep one primary image per product', async () => {
-    const outcome = await inRolledBackTx(async (db) => {
-      const fresh = await freshProduct(db);
-      await db.as(asAdmin());
-      await insertImage(db, fresh.id, true, 0);
-      return insertImage(db, fresh.id, true, 1);
-    });
-
-    expect(outcome.ok).toBe(false);
-  });
 });
 
 describe('favorites', () => {
   const insertFavorite = (
     db: DbSession,
     owner: { userId?: number; guestId?: string },
-    productId: number,
+    item: { id: number; variantId: number },
   ) =>
     db.attempt(
-      `insert into cartlify.favorites ("userId", "guestId", "productId") values ($1, $2::uuid, $3) returning id`,
+      `insert into cartlify.favorites ("userId", "guestId", "productId", "variantId")
+       values ($1, $2::uuid, $3, $4) returning id`,
       owner.userId ?? null,
       owner.guestId ?? null,
-      productId,
+      item.id,
+      item.variantId,
     );
 
   it('let a user and a guest keep their own, each sees only their own', async () => {
@@ -517,11 +537,11 @@ describe('favorites', () => {
 
     const seen = await inRolledBackTx(async (db) => {
       await db.as(asUser());
-      await insertFavorite(db, { userId: user.id }, product.id);
+      await insertFavorite(db, { userId: user.id }, product);
       await db.as(asUser(other));
-      await insertFavorite(db, { userId: other.id }, product.id);
+      await insertFavorite(db, { userId: other.id }, product);
       await db.as(asGuest(guestId));
-      await insertFavorite(db, { guestId }, product.id);
+      await insertFavorite(db, { guestId }, product);
 
       const result: Record<string, number> = {};
       for (const [who, actor] of [
@@ -550,17 +570,17 @@ describe('favorites', () => {
   ])('refuse %s', async (_case, actor, owner) => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as(actor());
-      return insertFavorite(db, owner(), product.id);
+      return insertFavorite(db, owner(), product);
     });
 
     expect(outcome.ok).toBe(false);
   });
 
-  it('keep a product once in the favorites of a user', async () => {
+  it('keep a variant once in the favorites of a user', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as(asUser());
-      await insertFavorite(db, { userId: user.id }, product.id);
-      return insertFavorite(db, { userId: user.id }, product.id);
+      await insertFavorite(db, { userId: user.id }, product);
+      return insertFavorite(db, { userId: user.id }, product);
     });
 
     expect(outcome.ok).toBe(false);
@@ -569,12 +589,13 @@ describe('favorites', () => {
   it('let nobody change a favorite, and only its owner delete it', async () => {
     const { change, byAdmin, byOther, byOwner } = await inRolledBackTx(async (db) => {
       await db.as(asUser());
-      await insertFavorite(db, { userId: user.id }, product.id);
+      await insertFavorite(db, { userId: user.id }, product);
       const where = `"userId" = ${user.id} and "productId" = ${product.id}`;
 
       const change = await db.attempt(
-        `update cartlify.favorites set "productId" = $1 where ${where} returning id`,
+        `update cartlify.favorites set "productId" = $1, "variantId" = $2 where ${where} returning id`,
         removed.id,
+        removed.variantId,
       );
       await db.as(asAdmin());
       const byAdmin = await db.attempt(
@@ -601,15 +622,20 @@ describe('favorites', () => {
   it.each([
     ['a user', () => asUser(), () => ({ userId: user.id })],
     ['a guest', (guestId: string) => asGuest(guestId), (guestId: string) => ({ guestId })],
-  ])('let %s add no product removed from the catalog', async (_who, actor, owner) => {
+  ])('let %s add no variant of a product removed from the catalog', async (_who, actor, owner) => {
     const guestId = randomUUID();
 
     const outcome = await inRolledBackTx(async (db) => {
       await db.as(actor(guestId));
-      return insertFavorite(db, owner(guestId), removed.id);
+      return insertFavorite(db, owner(guestId), removed);
     });
 
-    expect(outcome.ok).toBe(false);
+    // the product is gone, so its own rule answers (the rule of the variant answers for a variant
+    // taken out of sale alone: variants.test.ts)
+    expect(outcome).toMatchObject({
+      ok: false,
+      message: expect.stringContaining('PRODUCT_NOT_FOUND'),
+    });
   });
 });
 
@@ -618,15 +644,16 @@ describe('favorites', () => {
 describe('the log of prices', () => {
   const logPrice = (db: DbSession) =>
     db.attempt(
-      `select 1 as done from cartlify.log_product_price_change($1::int, 10, 12, 'fixed', 2, 'price.set')`,
-      product.id,
+      `select 1 as done from cartlify.log_variant_price_change($1::int, 10, 12, 'fixed', 2, 'price.set')`,
+      product.variantId,
     );
 
   const insertLine = (db: DbSession, actorId: number) =>
     db.attempt(
-      `insert into cartlify.product_price_change_logs ("productId", "actorId", "oldPrice", "newPrice", mode, value, event)
-       values ($1, $2, 10, 12, 'fixed', 2, 'price.set') returning id`,
+      `insert into cartlify.product_price_change_logs ("productId", "variantId", "actorId", "oldPrice", "newPrice", mode, value, event)
+       values ($1, $2, $3, 10, 12, 'fixed', 2, 'price.set') returning id`,
       product.id,
+      product.variantId,
       actorId,
     );
 
@@ -636,8 +663,8 @@ describe('the log of prices', () => {
       const written = await logPrice(db);
       const actors = await db.rows<{ actorId: number }>(
         `select "actorId" from cartlify.product_price_change_logs
-         where "productId" = $1 order by id desc limit 1`,
-        product.id,
+         where "variantId" = $1 order by id desc limit 1`,
+        product.variantId,
       );
       return { written, actors };
     });
@@ -679,8 +706,8 @@ describe('the log of prices', () => {
       return {
         written: await logPrice(db),
         seen: await db.rows(
-          'select id from cartlify.product_price_change_logs where "productId" = $1',
-          product.id,
+          'select id from cartlify.product_price_change_logs where "variantId" = $1',
+          product.variantId,
         ),
       };
     });

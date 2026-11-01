@@ -9,6 +9,7 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  defaultPartyId,
   deleteProductFromCatalog,
   uniqueTag,
   type TestProduct,
@@ -56,9 +57,11 @@ async function freshProduct(db: DbSession) {
     `db-category-${tag}`,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.products (name, price, "categoryId") values ($1, 10, $2) returning id`,
+    `insert into cartlify.products (name, "categoryId", "manufacturerId")
+     values ($1, $2, $3) returning id`,
     `Db product ${tag}`,
     category!.id,
+    await defaultPartyId(),
   );
   return row!.id;
 }

@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { accessCookie } from './actors.js';
 import { withCsrf, type Csrf } from './csrf.js';
 import { asAdmin } from './db.js';
-import type { TestProduct, TestUser } from './factories.js';
+import { variantOf, type TestProduct, type TestUser, type VariantRef } from './factories.js';
 
 export type OrderStage = 'cart' | 'waiting' | 'paid' | 'shipped';
 
@@ -52,28 +52,57 @@ export const deliveryAnswer = {
   },
 };
 
+// what a test buys: a product made by createProduct (its first variant, the one it has), a variant by
+// its id ({ variantId }, also a second variant of a product), or the id of a product (its first
+// variant). The cart takes the id of a variant
+export type Buyable = TestProduct | VariantRef | number;
+
+export async function variantIdOf(item: Buyable): Promise<number> {
+  if (typeof item === 'number') return (await variantOf(item)).id;
+  return item.variantId;
+}
+
 // an order of the user taken as far as the stage, the way the app takes it there: the cart and the
 // confirmation go through the api, the payment through the database function the stripe webhook
 // calls (a made-up payment id), the shipping as an admin. Returns the order id
-export async function placeOrder(
+export const placeOrder = (
   app: FastifyInstance,
   csrf: Csrf,
   user: TestUser,
-  product: TestProduct,
+  product: Buyable,
   stage: OrderStage,
   quantity = 1,
   // where the order goes, when a test needs it other than the usual one
   delivery: Record<string, unknown> = deliveryBody,
+): Promise<number> => placeOrderOf(app, csrf, user, [{ item: product, quantity }], stage, delivery);
+
+// what an order holds: a variant (or a product, meaning its first variant) and how many of it
+export type OrderLine = { item: Buyable; quantity?: number };
+
+// the same for an order of several lines, the variants of one product among them
+export async function placeOrderOf(
+  app: FastifyInstance,
+  csrf: Csrf,
+  user: TestUser,
+  lines: OrderLine[],
+  stage: OrderStage,
+  delivery: Record<string, unknown> = deliveryBody,
 ): Promise<number> {
   const headers = withCsrf(csrf, accessCookie(user));
 
-  const added = await app.inject({
-    method: 'POST',
-    url: '/api/orders/current/items',
-    headers,
-    payload: { productId: product.id, quantity },
-  });
-  if (added.statusCode !== 200) throw new Error(`adding to the cart answered ${added.statusCode}`);
+  let added;
+  for (const line of lines) {
+    added = await app.inject({
+      method: 'POST',
+      url: '/api/orders/current/items',
+      headers,
+      payload: { variantId: await variantIdOf(line.item), quantity: line.quantity ?? 1 },
+    });
+    if (added.statusCode !== 200) {
+      throw new Error(`adding to the cart answered ${added.statusCode}`);
+    }
+  }
+  if (!added) throw new Error('an order needs at least one line');
 
   const { id: orderId } = await asAdmin((tx) =>
     tx.order.findFirstOrThrow({
@@ -135,7 +164,7 @@ export async function placeUnconfirmedOrder(
   app: FastifyInstance,
   csrf: Csrf,
   user: TestUser,
-  product: TestProduct,
+  product: Buyable,
   quantity = 1,
 ): Promise<number> {
   const orderId = await placeOrder(app, csrf, user, product, 'waiting', quantity);

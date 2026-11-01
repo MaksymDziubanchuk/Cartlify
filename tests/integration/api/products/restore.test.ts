@@ -64,7 +64,13 @@ describe('POST /api/products/:productId/restore', () => {
     const res = await restore(product.id);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: product.id, deletedAt: null });
+    // the answer is the card of an admin: the product and the variants that came back with it
+    expect(res.json().product).toMatchObject({ id: product.id, deletedAt: null });
+    expect(res.json().variant).toMatchObject({
+      id: product.variantId,
+      deletedAt: null,
+      visible: true,
+    });
     expect((await cardOf(product.id)).statusCode).toBe(200);
     const lines = await asAdmin((tx) =>
       tx.adminAuditLog.findMany({
@@ -121,7 +127,10 @@ describe('a product taken out of the catalog', () => {
 
     // the search forgives a typo and finds names with some of the words too, the whole name first
     expect(res.statusCode).toBe(200);
-    expect(res.json().items[0]).toMatchObject({ id: product.id, deletedAt: expect.any(String) });
+    expect(res.json().items[0].product).toMatchObject({
+      id: product.id,
+      deletedAt: expect.any(String),
+    });
   });
 
   // the person bought it: the order shows what it held, the catalog does not show it
@@ -137,7 +146,9 @@ describe('a product taken out of the catalog', () => {
     });
 
     expect(order.statusCode).toBe(200);
-    expect(order.json().items).toEqual([expect.objectContaining({ productId: product.id })]);
+    expect(order.json().items).toEqual([
+      expect.objectContaining({ product: expect.objectContaining({ id: product.id }) }),
+    ]);
     expect((await cardOf(product.id, buyer)).statusCode).toBe(404);
   });
 });

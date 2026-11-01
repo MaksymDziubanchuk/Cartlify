@@ -108,7 +108,10 @@ describe('PATCH /api/products/:productId and the popularity override', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ popularityOverride: 500, popularityOverrideUntil: until });
+    expect(res.json().product).toMatchObject({
+      popularityOverride: 500,
+      popularityOverrideUntil: until,
+    });
     expect(await overrideOf(product.id)).toMatchObject({
       popularityOverride: 500,
       popularityOverrideUntil: until,

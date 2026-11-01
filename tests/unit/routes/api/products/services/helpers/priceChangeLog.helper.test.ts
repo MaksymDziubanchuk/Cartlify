@@ -3,10 +3,10 @@ import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   computeFixedDelta,
-  writeProductPriceChangeLog,
+  writeVariantPriceChangeLog,
 } from '@routes/api/products/services/helpers/priceChangeLog.helper.js';
 
-type Tx = Parameters<typeof writeProductPriceChangeLog>[0];
+type Tx = Parameters<typeof writeVariantPriceChangeLog>[0];
 type RawQuery = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<number>;
 
 const fakeTx = () => {
@@ -33,10 +33,10 @@ describe('computeFixedDelta', () => {
   });
 });
 
-describe('writeProductPriceChangeLog', () => {
+describe('writeVariantPriceChangeLog', () => {
   // no actor: the database function takes it from the context of the transaction
   const change = {
-    productId: 4,
+    variantId: 4,
     mode: 'fixed' as const,
     value: 2.5,
     event: 'price.set' as const,
@@ -48,7 +48,7 @@ describe('writeProductPriceChangeLog', () => {
   ])('writes nothing for %s that leaves the price as it was', async (_case, endsAt) => {
     const { tx, $executeRaw } = fakeTx();
 
-    await writeProductPriceChangeLog(tx, {
+    await writeVariantPriceChangeLog(tx, {
       ...change,
       beforePrice: new Prisma.Decimal('9.90'),
       afterPrice: new Prisma.Decimal('9.9'),
@@ -61,22 +61,22 @@ describe('writeProductPriceChangeLog', () => {
   it('passes the old and the new price as numbers to the database function', async () => {
     const { tx, $executeRaw } = fakeTx();
 
-    await writeProductPriceChangeLog(tx, {
+    await writeVariantPriceChangeLog(tx, {
       ...change,
       beforePrice: new Prisma.Decimal('10.00'),
       afterPrice: new Prisma.Decimal('12.50'),
     });
 
     const [strings, ...values] = $executeRaw.mock.calls[0]!;
-    expect(strings.join('?')).toContain('cartlify.log_product_price_change(');
+    expect(strings.join('?')).toContain('cartlify.log_variant_price_change(');
     expect(values).toEqual([4, 10, 12.5, 'fixed', 2.5, 'price.set', null]);
   });
 
   it('passes a change down with its negative value', async () => {
     const { tx, $executeRaw } = fakeTx();
 
-    await writeProductPriceChangeLog(tx, {
-      productId: 4,
+    await writeVariantPriceChangeLog(tx, {
+      variantId: 4,
       mode: 'percent',
       value: -10,
       event: 'price.bulk',
@@ -92,8 +92,8 @@ describe('writeProductPriceChangeLog', () => {
   it('passes the end of a sale as an utc time', async () => {
     const { tx, $executeRaw } = fakeTx();
 
-    await writeProductPriceChangeLog(tx, {
-      productId: 4,
+    await writeVariantPriceChangeLog(tx, {
+      variantId: 4,
       mode: 'percent',
       value: -25,
       event: 'price.sale_start',

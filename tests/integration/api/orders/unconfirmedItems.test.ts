@@ -8,6 +8,7 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   setProductPrice,
   type TestProduct,
@@ -19,10 +20,11 @@ import {
   placeUnconfirmedOrder,
   deliveryAnswer,
 } from '../../../helpers/orders.js';
+import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 
 // the items of an order that lost its reservation (unconfirmed): the owner changes them the way
 // the cart items are changed, by the id of the order, and confirms the order again. The answer
-// is the order at the prices of the catalog, without products deleted from it
+// is the order at the prices of the catalog, without variants a buyer does not see
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -99,19 +101,19 @@ describe('POST /api/orders/:orderId/items', () => {
     const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct({ price: 10 }));
     const mug = await newProduct({ price: 4 });
 
-    const res = await addItem(user, orderId, { productId: mug.id, quantity: 2 });
+    const res = await addItem(user, orderId, { variantId: mug.variantId, quantity: 2 });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ id: orderId, status: 'unconfirmed', total: 18 });
     expect(res.json().items).toHaveLength(2);
   });
 
-  it('adds the quantity to the item the order already has for the product', async () => {
+  it('adds the quantity to the item the order already has for the variant', async () => {
     const user = await newUser();
     const product = await newProduct();
     const orderId = await placeUnconfirmedOrder(app, csrf, user, product);
 
-    const res = await addItem(user, orderId, { productId: product.id, quantity: 2 });
+    const res = await addItem(user, orderId, { variantId: product.variantId, quantity: 2 });
 
     expect(res.json().items).toEqual([expect.objectContaining({ quantity: 3 })]);
   });
@@ -121,7 +123,7 @@ describe('POST /api/orders/:orderId/items', () => {
     const product = await newProduct({ stock: 5 });
     const orderId = await placeUnconfirmedOrder(app, csrf, user, product, 2);
 
-    const res = await addItem(user, orderId, { productId: product.id, quantity: 4 });
+    const res = await addItem(user, orderId, { variantId: product.variantId, quantity: 4 });
 
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({
@@ -133,31 +135,69 @@ describe('POST /api/orders/:orderId/items', () => {
   // the same body as the cart: whole numbers from 1 to the largest int of the database
   it.each([
     ['a quantity of 1.5', { quantity: 1.5 }],
-    ['a product id of 1.5', { quantity: 1, productIdShift: 0.5 }],
-    ['a product id over the largest id', { quantity: 1, productId: 2_147_483_648 }],
+    ['a variant id of 1.5', { quantity: 1, variantIdShift: 0.5 }],
+    ['a variant id over the largest id', { quantity: 1, variantId: 2_147_483_648 }],
   ])('refuses %s and keeps the order', async (_case, patch) => {
     const user = await newUser();
     const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct());
     const product = await newProduct();
-    const { productIdShift, ...rest } = { productIdShift: 0, ...patch };
+    const { variantIdShift, ...rest } = { variantIdShift: 0, ...patch };
 
-    const res = await addItem(user, orderId, { productId: product.id + productIdShift, ...rest });
+    const res = await addItem(user, orderId, {
+      variantId: product.variantId + variantIdShift,
+      ...rest,
+    });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
     expect((await orderRowOf(orderId)).items).toHaveLength(1);
   });
 
-  it('refuses a product deleted from the catalog', async () => {
+  it('refuses a variant of a product deleted from the catalog', async () => {
     const user = await newUser();
     const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct());
     const gone = await newProduct();
     await deleteProductFromCatalog(gone.id);
 
-    const res = await addItem(user, orderId, { productId: gone.id, quantity: 1 });
+    const res = await addItem(user, orderId, { variantId: gone.variantId, quantity: 1 });
 
     expect(res.statusCode).toBe(404);
-    expect(res.json()).toMatchObject({ errorCode: 'PRODUCT_NOT_FOUND' });
+    expect(res.json()).toMatchObject({ errorCode: 'VARIANT_NOT_FOUND' });
+  });
+
+  it('refuses a variant taken out of sale or showing no picture, and takes its sibling', async () => {
+    const user = await newUser();
+    const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct());
+    const product = await newProduct();
+    const sibling = await createVariant(product.id, { stock: 5 });
+    const bare = await createVariant(product.id, { stock: 5 });
+    await markVariantDeleted(product.variantId);
+    await stripVariantImages(bare.id);
+
+    const gone = await addItem(user, orderId, { variantId: product.variantId, quantity: 1 });
+    const noPicture = await addItem(user, orderId, { variantId: bare.id, quantity: 1 });
+    const kept = await addItem(user, orderId, { variantId: sibling.id, quantity: 1 });
+
+    expect(gone.statusCode).toBe(404);
+    expect(gone.json()).toMatchObject({ errorCode: 'VARIANT_NOT_FOUND' });
+    expect(noPicture.statusCode).toBe(404);
+    expect(kept.statusCode).toBe(200);
+  });
+
+  it('keeps a position for each variant of one product', async () => {
+    const user = await newUser();
+    const black = await newProduct({ price: 10 });
+    const white = await createVariant(black.id, { price: 12, stock: 5 });
+    const orderId = await placeUnconfirmedOrder(app, csrf, user, black);
+
+    const res = await addItem(user, orderId, { variantId: white.id, quantity: 2 });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ total: 34 });
+    expect(res.json().items.map((it: { variant: { id: number } }) => it.variant.id)).toEqual([
+      black.variantId,
+      white.id,
+    ]);
   });
 
   it('answers with the order at current prices and without products deleted from the catalog', async () => {
@@ -168,9 +208,12 @@ describe('POST /api/orders/:orderId/items', () => {
     const mug = await newProduct({ price: 4 });
     await setProductPrice(mug.id, 6);
 
-    const res = await addItem(user, orderId, { productId: mug.id, quantity: 1 });
+    const res = await addItem(user, orderId, { variantId: mug.variantId, quantity: 1 });
 
-    expect(res.json()).toMatchObject({ total: 6, items: [{ productId: mug.id, unitPrice: 6 }] });
+    expect(res.json()).toMatchObject({
+      total: 6,
+      items: [{ variant: { id: mug.variantId }, unitPrice: 6 }],
+    });
     expect(res.json().items).toHaveLength(1);
   });
 
@@ -183,7 +226,10 @@ describe('POST /api/orders/:orderId/items', () => {
     const orderId = await placeOrder(app, csrf, user, await newProduct(), stage);
     const before = (await orderRowOf(orderId)).items;
 
-    const res = await addItem(user, orderId, { productId: (await newProduct()).id, quantity: 1 });
+    const res = await addItem(user, orderId, {
+      variantId: (await newProduct()).variantId,
+      quantity: 1,
+    });
 
     expect(res.statusCode).toBe(404);
     expect(res.json()).toMatchObject({ errorCode: 'ORDER_NOT_FOUND' });
@@ -194,7 +240,7 @@ describe('POST /api/orders/:orderId/items', () => {
     const orderId = await placeUnconfirmedOrder(app, csrf, await newUser(), await newProduct());
 
     const res = await addItem(await newUser(), orderId, {
-      productId: (await newProduct()).id,
+      variantId: (await newProduct()).variantId,
       quantity: 1,
     });
 
@@ -208,7 +254,7 @@ describe('POST /api/orders/:orderId/items', () => {
     const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct());
     const cartId = await placeOrder(app, csrf, user, await newProduct(), 'cart');
 
-    await addItem(user, orderId, { productId: (await newProduct()).id, quantity: 1 });
+    await addItem(user, orderId, { variantId: (await newProduct()).variantId, quantity: 1 });
 
     expect((await orderRowOf(cartId)).items).toHaveLength(1);
   });
@@ -217,7 +263,7 @@ describe('POST /api/orders/:orderId/items', () => {
     const orderId = await placeUnconfirmedOrder(app, csrf, await newUser(), await newProduct());
 
     const res = await addItem(await newUser({ role: 'ADMIN' }), orderId, {
-      productId: (await newProduct()).id,
+      variantId: (await newProduct()).variantId,
       quantity: 1,
     });
 
@@ -294,8 +340,10 @@ describe('DELETE /api/orders/:orderId/items/:itemId', () => {
     const user = await newUser();
     const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct({ price: 10 }));
     const mug = await newProduct({ price: 4 });
-    const added = await addItem(user, orderId, { productId: mug.id, quantity: 1 });
-    const mugItem = added.json().items.find((it: { productId: number }) => it.productId === mug.id);
+    const added = await addItem(user, orderId, { variantId: mug.variantId, quantity: 1 });
+    const mugItem = added
+      .json()
+      .items.find((it: { variant: { id: number } }) => it.variant.id === mug.variantId);
 
     const res = await removeItem(user, orderId, mugItem.id);
 
@@ -320,7 +368,10 @@ describe('confirming a changed unconfirmed order again', () => {
   it('confirms it with only its id, at the new items and total', async () => {
     const user = await newUser();
     const orderId = await placeUnconfirmedOrder(app, csrf, user, await newProduct({ price: 10 }));
-    await addItem(user, orderId, { productId: (await newProduct({ price: 4 })).id, quantity: 2 });
+    await addItem(user, orderId, {
+      variantId: (await newProduct({ price: 4 })).variantId,
+      quantity: 2,
+    });
 
     const res = await confirm(user, orderId);
 

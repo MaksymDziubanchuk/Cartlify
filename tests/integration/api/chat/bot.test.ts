@@ -1,16 +1,24 @@
 import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance } from 'fastify';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from '@jest/globals';
 
 import env from '@config/env.js';
+import { botLimits } from '@routes/api/chat/services/bot/chatBotLimits.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { closeChatSockets, openChatSocket, type ChatSocket } from '../../../helpers/chatSocket.js';
 import { getCsrf, withCsrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
-import { closeSessions, createProduct, createUser } from '../../../helpers/factories.js';
+import {
+  closeSessions,
+  createProduct,
+  createUser,
+  createVariant,
+  deleteProductFromCatalog,
+  putOnSale,
+} from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import {
   answerAsModel,
@@ -35,6 +43,9 @@ beforeAll(async () => {
 
 afterEach(stopModel);
 
+// the counts of the addresses and of the shop are of the process: each test starts from none
+beforeEach(() => botLimits.reset());
+
 afterAll(async () => {
   closeChatSockets();
 
@@ -49,7 +60,7 @@ type Chat = { userId: number | null; cookie: string; threadId: string; socket: C
 
 // a customer with the chat open the way the widget opens it: the current chat through the api,
 // then its socket joined to the thread
-async function openChat(kind: 'user' | 'unverified' | 'guest'): Promise<Chat> {
+async function openChat(kind: 'user' | 'unverified' | 'guest', address?: string): Promise<Chat> {
   let cookie = `guestId=${randomUUID()}`;
   let userId: number | null = null;
 
@@ -68,7 +79,7 @@ async function openChat(kind: 'user' | 'unverified' | 'guest'): Promise<Chat> {
   expect(res.statusCode).toBe(200);
   const threadId = res.json().thread.id as string;
 
-  const socket = await openChatSocket(app, { cookie });
+  const socket = await openChatSocket(app, { cookie }, address);
   await socket.join(threadId);
 
   return { userId, cookie, threadId, socket };
@@ -575,6 +586,412 @@ describe('what the bot knows of the customer', () => {
 
     expect(ordersMessageOf(calls[0]!)).toBeNull();
     expect(calls[0]!.request.instructions).toContain('A guest has no orders');
+  });
+});
+
+// the product context of the prompt: the products a buyer sees, each with its variants
+describe('what the bot knows of the products', () => {
+  const productsMessageOf = (call: ModelCall) =>
+    call.request.input.find((m) => m.content.startsWith('Available product context'))?.content ??
+    null;
+
+  // the bot searches the catalog by the words of the customer: a word of its own finds one product
+  const wordOf = () => `quokka${randomUUID().replace(/-/g, '').slice(0, 8)}`;
+
+  const named = async (word: string, opts: Parameters<typeof createProduct>[0] = {}) =>
+    createProduct({ name: `Lamp ${word}`, ...opts });
+
+  const askAbout = async (word: string) => {
+    const calls = answerAsModel();
+    const chat = await openChat('user');
+    await ask(chat, `${word}?`);
+
+    return productsMessageOf(calls[0]!);
+  };
+
+  it('names the variants a buyer sees, each with its price, the sale while it lasts and the free units', async () => {
+    const word = wordOf();
+    const product = await named(word, { price: 10, stock: 3 });
+    const second = await createVariant(product.id, { price: 12, stock: 2 });
+    await putOnSale({ variantId: second.id }, 9);
+
+    const context = await askAbout(word);
+
+    expect(context).toContain(`- product id: ${product.id}; name: Lamp ${word};`);
+    expect(context).toContain(
+      `  - variant id: ${product.variantId}; name: Lamp ${word}; price: 10 EUR; in stock: 3`,
+    );
+    expect(context).toMatch(
+      new RegExp(
+        `  - variant id: ${second.id}; name: Lamp ${word}; price: 12 EUR; sale price: 9 EUR until \\S+ \\(UTC\\); in stock: 2`,
+      ),
+    );
+    expect(context).toContain('Use only this product context when recommending specific products');
+  });
+
+  it('counts the free units of a variant: what a waiting order holds is not free', async () => {
+    const word = wordOf();
+    const product = await named(word, { price: 10, stock: 5 });
+    const second = await createVariant(product.id, { price: 11, stock: 4 });
+    const csrf = await getCsrf(app);
+    const buyer = await createUser();
+    userIds.push(buyer.id);
+    await placeOrder(app, csrf, buyer, product, 'waiting', 2);
+
+    const context = await askAbout(word);
+
+    expect(context).toContain(`variant id: ${product.variantId};`);
+    expect(context).toMatch(new RegExp(`variant id: ${product.variantId};[^\\n]*in stock: 3`));
+    expect(context).toMatch(new RegExp(`variant id: ${second.id};[^\\n]*in stock: 4`));
+  });
+
+  it('names a variant that is sold out as sold out, while another one has units', async () => {
+    const word = wordOf();
+    const product = await named(word, { price: 10, stock: 0 });
+    const second = await createVariant(product.id, { price: 11, stock: 2 });
+
+    const context = await askAbout(word);
+
+    expect(context).toMatch(new RegExp(`variant id: ${product.variantId};[^\\n]*in stock: 0`));
+    expect(context).toMatch(new RegExp(`variant id: ${second.id};[^\\n]*in stock: 2`));
+    // the variant with units is named first
+    expect(context!.indexOf(`variant id: ${second.id};`)).toBeLessThan(
+      context!.indexOf(`variant id: ${product.variantId};`),
+    );
+  });
+
+  it('knows nothing of a variant taken out of sale or one that shows no picture', async () => {
+    const word = wordOf();
+    const product = await named(word, { price: 10, stock: 3 });
+    const gone = await createVariant(product.id, { price: 11, stock: 3 });
+    const bare = await createVariant(product.id, { price: 12, stock: 3 });
+    await asAdmin((tx) =>
+      tx.productVariant.update({ where: { id: gone.id }, data: { deletedAt: new Date() } }),
+    );
+    await asAdmin((tx) => tx.variantImage.deleteMany({ where: { variantId: bare.id } }));
+
+    const context = await askAbout(word);
+
+    expect(context).toContain(`variant id: ${product.variantId};`);
+    expect(context).not.toContain(`variant id: ${gone.id};`);
+    expect(context).not.toContain(`variant id: ${bare.id};`);
+  });
+
+  it.each([
+    [
+      'a product taken out of the catalog',
+      async (word: string) => {
+        const product = await named(word, { stock: 3 });
+        await deleteProductFromCatalog(product.id);
+      },
+    ],
+    [
+      'a product whose variants show no picture',
+      async (word: string) => {
+        const product = await named(word, { stock: 3 });
+        await asAdmin((tx) =>
+          tx.variantImage.deleteMany({ where: { variant: { productId: product.id } } }),
+        );
+      },
+    ],
+    [
+      'a product with no unit free to buy',
+      async (word: string) => {
+        await named(word, { stock: 0 });
+      },
+    ],
+  ])('does not recommend %s', async (_case, make) => {
+    const word = wordOf();
+    await make(word);
+
+    expect(await askAbout(word)).not.toContain(word);
+  });
+
+  // the prompt is a paid input of every turn: it does not grow with the variants of a shop
+  it('names 20 variants of a product at most and sums up the rest', async () => {
+    const word = wordOf();
+    const product = await named(word, { price: 10, stock: 2 });
+    const ids = [product.variantId];
+    for (let n = 1; n < 22; n += 1) {
+      ids.push((await createVariant(product.id, { price: 10 + n, stock: 2 })).id);
+    }
+
+    const context = (await askAbout(word))!;
+
+    const listed = [...context.matchAll(/ {2}- variant id: (\d+);/g)].map((m) => Number(m[1]));
+    expect(listed).toEqual(ids.slice(0, 20));
+    expect(context).toContain(
+      '  - 2 more variants are not listed (2 of them in stock), they sell at 30 to 31 EUR; name no detail of them',
+    );
+  });
+
+  it('keeps a long description out of the prompt', async () => {
+    const word = wordOf();
+    const product = await named(word, { stock: 2 });
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: product.id }, data: { description: 'y'.repeat(3000) } }),
+    );
+
+    const context = (await askAbout(word))!;
+
+    expect(context).toContain(`description: ${'y'.repeat(500)}...`);
+    expect(context).not.toContain('y'.repeat(501));
+  });
+});
+
+// the names of the items of an order are the copies of the confirmation, not the names of now
+describe('what the bot knows of the items of the orders', () => {
+  it('tells the model the name an item was confirmed with, not the name of its product now', async () => {
+    const csrf = await getCsrf(app);
+    const chat = await openChat('user');
+    const user = { id: chat.userId!, role: 'USER' as const, email: '', password: '' };
+    const tag = randomUUID().slice(0, 8);
+    const product = await createProduct({ name: `Alpha mug ${tag}`, stock: 5 });
+    const orderId = await placeOrder(app, csrf, user, product, 'waiting', 2);
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: product.id }, data: { name: `Beta mug ${tag}` } }),
+    );
+    const calls = answerAsModel();
+
+    await ask(chat, 'Where is my order now?');
+
+    const orders = calls[0]!.request.input.find((m) =>
+      m.content.startsWith('Orders of the customer'),
+    )!.content;
+    expect(orders).toContain(`- order ${orderId}: waiting`);
+    expect(orders).toContain(`items: Alpha mug ${tag} x 2`);
+    expect(orders).not.toContain('Beta mug');
+  });
+});
+
+// each turn is a paid call of the model; a new cookie, a new account or a crowd of addresses does not
+// lift the limits
+describe('the limits of the bot against abuse', () => {
+  const IP_A = '203.0.113.10';
+  const IP_B = '203.0.113.11';
+
+  const GUEST_LIMIT_TEXT =
+    'I have answered as many messages as I can today. Please come back tomorrow.';
+  const FALLBACK_TEXT =
+    'I cannot answer reliably right now. Please try again later or ask for admin support.';
+
+  let limits: Pick<
+    typeof env,
+    | 'CHAT_BOT_GUEST_DAILY_TURNS'
+    | 'CHAT_BOT_USER_DAILY_TURNS'
+    | 'CHAT_BOT_IP_DAILY_TURNS'
+    | 'CHAT_BOT_SHOP_DAILY_TURNS'
+  >;
+
+  beforeEach(() => {
+    limits = {
+      CHAT_BOT_GUEST_DAILY_TURNS: env.CHAT_BOT_GUEST_DAILY_TURNS,
+      CHAT_BOT_USER_DAILY_TURNS: env.CHAT_BOT_USER_DAILY_TURNS,
+      CHAT_BOT_IP_DAILY_TURNS: env.CHAT_BOT_IP_DAILY_TURNS,
+      CHAT_BOT_SHOP_DAILY_TURNS: env.CHAT_BOT_SHOP_DAILY_TURNS,
+    };
+  });
+
+  afterEach(() => {
+    Object.assign(env, limits);
+  });
+
+  describe('by the address', () => {
+    // the limit of a guest is by its guest id: a new cookie started the day again
+    it('stops a guest who takes a new cookie for each question, the address stays the same', async () => {
+      env.CHAT_BOT_IP_DAILY_TURNS = 3;
+      const calls = answerAsModel();
+
+      const answers: string[] = [];
+      for (const question of ['one?', 'two?', 'three?', 'four?', 'five?']) {
+        answers.push((await ask(await openChat('guest', IP_A), question)).content);
+      }
+
+      expect(answers).toEqual([
+        'Bot answer to: one?',
+        'Bot answer to: two?',
+        'Bot answer to: three?',
+        GUEST_LIMIT_TEXT,
+        GUEST_LIMIT_TEXT,
+      ]);
+      expect(calls).toHaveLength(3);
+    });
+
+    it('counts another address on its own', async () => {
+      env.CHAT_BOT_IP_DAILY_TURNS = 1;
+      const calls = answerAsModel();
+
+      await ask(await openChat('guest', IP_A), 'one?');
+      const blocked = await ask(await openChat('guest', IP_A), 'two?');
+      const other = await ask(await openChat('guest', IP_B), 'three?');
+
+      expect(blocked.content).toBe(GUEST_LIMIT_TEXT);
+      expect(other.content).toBe('Bot answer to: three?');
+      expect(calls).toHaveLength(2);
+    });
+
+    // an account made for the purpose is no confirmed account: its address counts the same
+    it('counts the turns of users who have not confirmed the email together with the guests', async () => {
+      env.CHAT_BOT_IP_DAILY_TURNS = 2;
+      const calls = answerAsModel();
+
+      await ask(await openChat('guest', IP_A), 'one?');
+      await ask(await openChat('unverified', IP_A), 'two?');
+      const blocked = await ask(await openChat('unverified', IP_A), 'three?');
+
+      expect(blocked.content).toBe(GUEST_LIMIT_TEXT);
+      expect(calls).toHaveLength(2);
+    });
+
+    it('leaves a user with a confirmed email alone, whoever else writes from the address', async () => {
+      env.CHAT_BOT_IP_DAILY_TURNS = 1;
+      const calls = answerAsModel();
+
+      await ask(await openChat('guest', IP_A), 'one?');
+      const blocked = await ask(await openChat('guest', IP_A), 'two?');
+      const first = await ask(await openChat('user', IP_A), 'three?');
+      const second = await ask(await openChat('user', IP_A), 'four?');
+
+      expect(blocked.content).toBe(GUEST_LIMIT_TEXT);
+      expect([first.content, second.content]).toEqual([
+        'Bot answer to: three?',
+        'Bot answer to: four?',
+      ]);
+      expect(calls).toHaveLength(3);
+    });
+
+    it('counts the addresses of one IPv6 network as one', async () => {
+      env.CHAT_BOT_IP_DAILY_TURNS = 1;
+      const calls = answerAsModel();
+
+      await ask(await openChat('guest', '2001:db8:aa:bb::1'), 'one?');
+      const blocked = await ask(await openChat('guest', '2001:db8:aa:bb:cc::2'), 'two?');
+
+      expect(blocked.content).toBe(GUEST_LIMIT_TEXT);
+      expect(calls).toHaveLength(1);
+    });
+
+    // asking for a person costs the bill nothing but the fixed text, and it is the way out
+    it('still tells a guest the answer to a request for a person, with the text of the app as it is', async () => {
+      env.CHAT_BOT_IP_DAILY_TURNS = 1;
+      const calls = answerAsModel();
+
+      await ask(await openChat('guest', IP_A), 'one?');
+      const bot = await ask(await openChat('guest', IP_A), 'I need a human please');
+
+      expect(bot.content).toContain(
+        'Only logged-in customers with a confirmed email can talk to an admin.',
+      );
+      expect(calls).toHaveLength(1);
+    });
+  });
+
+  describe('by the account that has not confirmed the email', () => {
+    it('gives it the limit of a guest, a user with a confirmed email has the limit of users', async () => {
+      env.CHAT_BOT_GUEST_DAILY_TURNS = 1;
+      env.CHAT_BOT_USER_DAILY_TURNS = 3;
+      const calls = answerAsModel();
+      const unverified = await openChat('unverified');
+      const confirmed = await openChat('user');
+
+      const unverifiedAnswers = [
+        (await ask(unverified, 'one?')).content,
+        (await ask(unverified, 'two?')).content,
+      ];
+      const confirmedAnswers = [
+        (await ask(confirmed, 'one?')).content,
+        (await ask(confirmed, 'two?')).content,
+      ];
+
+      expect(unverifiedAnswers).toEqual(['Bot answer to: one?', GUEST_LIMIT_TEXT]);
+      expect(confirmedAnswers).toEqual(['Bot answer to: one?', 'Bot answer to: two?']);
+      expect(calls).toHaveLength(3);
+    });
+
+    it('does not offer it the admin in the text past the limit, it cannot talk to one', async () => {
+      env.CHAT_BOT_GUEST_DAILY_TURNS = 1;
+      answerAsModel();
+      const chat = await openChat('unverified');
+
+      await ask(chat, 'one?');
+      const past = await ask(chat, 'two?');
+
+      expect(past.content).toBe(GUEST_LIMIT_TEXT);
+      expect(past.content).not.toContain('real person');
+    });
+  });
+
+  describe('by the whole shop', () => {
+    it('answers with the fallback text and asks the model nothing once the shop used up its day', async () => {
+      env.CHAT_BOT_SHOP_DAILY_TURNS = 2;
+      const calls = answerAsModel();
+
+      const answers = [
+        (await ask(await openChat('guest', IP_A), 'one?')).content,
+        (await ask(await openChat('user', IP_B), 'two?')).content,
+        (await ask(await openChat('user', IP_B), 'three?')).content,
+        (await ask(await openChat('guest', '203.0.113.99'), 'four?')).content,
+      ];
+
+      expect(answers).toEqual([
+        'Bot answer to: one?',
+        'Bot answer to: two?',
+        FALLBACK_TEXT,
+        FALLBACK_TEXT,
+      ]);
+      expect(calls).toHaveLength(2);
+    });
+
+    // a customer past their own limit takes no turn of the shop: the model is not asked for them
+    it('counts only the turns that call the model', async () => {
+      env.CHAT_BOT_SHOP_DAILY_TURNS = 2;
+      env.CHAT_BOT_GUEST_DAILY_TURNS = 1;
+      const calls = answerAsModel();
+      const chat = await openChat('guest', IP_A);
+
+      await ask(chat, 'one?');
+      for (const question of ['two?', 'three?', 'four?']) {
+        expect((await ask(chat, question)).content).toBe(GUEST_LIMIT_TEXT);
+      }
+      const other = await ask(await openChat('guest', IP_B), 'five?');
+
+      expect(other.content).toBe('Bot answer to: five?');
+      expect(calls).toHaveLength(2);
+    });
+
+    it('still takes a user with a confirmed email to an admin, with the text of the app as it is', async () => {
+      env.CHAT_BOT_SHOP_DAILY_TURNS = 1;
+      const calls = answerAsModel();
+      await ask(await openChat('user'), 'one?');
+      const chat = await openChat('user');
+
+      const bot = await ask(chat, 'I need a human please');
+
+      expect(bot.content).toBe(
+        'Please describe your issue for the admin. An admin will be able to reply here later. The bot will stop replying in this thread now.',
+      );
+      expect(calls).toHaveLength(1);
+      expect((await threadRowOf(chat.threadId)).type).toBe('admin');
+    });
+  });
+
+  // the most the model may write in an answer: the bill of an answer is bounded whatever it is asked
+  describe('the length of the answer of the model', () => {
+    it('is bounded in every request the bot makes', async () => {
+      const calls = answerAsModel();
+      const chat = await openChat('user');
+
+      await ask(chat, 'Do you have mugs?');
+      await ask(chat, 'I need a human please');
+
+      // the answer of the bot has the ceiling of the setting, a fixed text a smaller one of its own
+      expect(env.OPENAI_MAX_OUTPUT_TOKENS).toBeGreaterThan(0);
+      expect(env.OPENAI_MAX_OUTPUT_TOKENS).toBeLessThanOrEqual(1000);
+      expect(calls.map((call) => [call.purpose, call.request.max_output_tokens])).toEqual([
+        ['answer', env.OPENAI_MAX_OUTPUT_TOKENS],
+        ['fixed_text', 120],
+      ]);
+    });
   });
 });
 

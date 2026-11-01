@@ -10,6 +10,7 @@ import {
   createProduct,
   createResetToken,
   createUser,
+  createVariant,
   createVerifyToken,
   uniqueTag,
   type TestProduct,
@@ -269,9 +270,10 @@ describe('cartlify.migrate_guest_data_to_user', () => {
     await db.as(asGuest(guestId));
     for (const product of [first, second]) {
       await db.rows(
-        'insert into cartlify.favorites ("guestId", "productId") values ($1::uuid, $2) returning id',
+        'insert into cartlify.favorites ("guestId", "productId", "variantId") values ($1::uuid, $2, $3) returning id',
         guestId,
         product.id,
+        product.variantId,
       );
     }
     const threadId = randomUUID();
@@ -295,8 +297,8 @@ describe('cartlify.migrate_guest_data_to_user', () => {
 
   const stateOf = async (db: DbSession, guestId: string, userId: number, threadId: string) => {
     await db.as({ role: 'ADMIN', userId: admin.id });
-    const favorites = await db.rows<{ productId: number }>(
-      'select "productId" from cartlify.favorites where "userId" = $1 order by "productId"',
+    const favorites = await db.rows<{ variantId: number }>(
+      'select "variantId" from cartlify.favorites where "userId" = $1 order by "variantId"',
       userId,
     );
     const leftToGuest = await db.rows(
@@ -312,7 +314,7 @@ describe('cartlify.migrate_guest_data_to_user', () => {
        from cartlify.chat_threads where id = $1::uuid`,
       threadId,
     );
-    return { favorites: favorites.map((row) => row.productId), leftToGuest, thread };
+    return { favorites: favorites.map((row) => row.variantId), leftToGuest, thread };
   };
 
   it('gives the user the favorites and the open chat of the guest, a favorite once', async () => {
@@ -323,9 +325,10 @@ describe('cartlify.migrate_guest_data_to_user', () => {
       const threadId = await guestWithData(db, guestId);
       await db.as(asUser(user));
       await db.rows(
-        'insert into cartlify.favorites ("userId", "productId") values ($1, $2) returning id',
+        'insert into cartlify.favorites ("userId", "productId", "variantId") values ($1, $2, $3) returning id',
         user.id,
         first.id,
+        first.variantId,
       );
       const outcome = await migrate(db, asUser(user), guestId, user.id);
       return { outcome, state: await stateOf(db, guestId, user.id, threadId) };
@@ -333,10 +336,44 @@ describe('cartlify.migrate_guest_data_to_user', () => {
 
     expect(outcome.ok).toBe(true);
     expect(state).toEqual({
-      favorites: [first.id, second.id].sort((a, b) => a - b),
+      favorites: [first.variantId, second.variantId].sort((a, b) => a - b),
       leftToGuest: [],
       thread: { userId: user.id, guestId: null, status: 'open' },
     });
+  });
+
+  // the favorites of a person are variants: two variants of one product are two favorites, and the
+  // user keeps the one they have already once
+  it('gives the user the variants of a product the guest liked, each once', async () => {
+    const user = await createUser();
+    const guestId = randomUUID();
+    const sibling = await createVariant(first.id, { stock: 0 });
+
+    const { outcome, state } = await inRolledBackTx(async (db) => {
+      const threadId = await guestWithData(db, guestId);
+      await db.as(asGuest(guestId));
+      await db.rows(
+        'insert into cartlify.favorites ("guestId", "productId", "variantId") values ($1::uuid, $2, $3) returning id',
+        guestId,
+        first.id,
+        sibling.id,
+      );
+      await db.as(asUser(user));
+      await db.rows(
+        'insert into cartlify.favorites ("userId", "productId", "variantId") values ($1, $2, $3) returning id',
+        user.id,
+        first.id,
+        sibling.id,
+      );
+      const outcome = await migrate(db, asUser(user), guestId, user.id);
+      return { outcome, state: await stateOf(db, guestId, user.id, threadId) };
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(state.favorites).toEqual(
+      [first.variantId, sibling.id, second.variantId].sort((a, b) => a - b),
+    );
+    expect(state.leftToGuest).toEqual([]);
   });
 
   // a user has one open chat: the one of the guest comes closed

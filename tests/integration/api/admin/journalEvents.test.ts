@@ -5,7 +5,6 @@ import { setUserContext } from '@db/dbContext.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { imageField, pngImage } from '../../../helpers/cloudinary.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin, testTx } from '../../../helpers/db.js';
 import {
@@ -14,15 +13,12 @@ import {
   createProduct,
   createReview,
   createUser,
-  receiveBatch,
   uniqueTag,
-  writeOffStock,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { multipartBody } from '../../../helpers/multipart.js';
 import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
 import { placePaidOrder } from '../../../helpers/payments.js';
-import { safetyFormFields, shippingFormFields } from '../../../helpers/productSafety.js';
+import { createProductForm } from '../../../helpers/productForm.js';
 
 // the admin log and the log of prices name what made each line: the route that wrote it, or the
 // condition it was written under (src/config/journalEvents.ts). Two lines of the same action from
@@ -70,7 +66,7 @@ const send = (
 
 // the lines of an entity as action and event, in the order they were written
 const linesOf = (
-  entityType: 'product' | 'category' | 'order' | 'review' | 'user',
+  entityType: 'product' | 'variant' | 'category' | 'order' | 'review' | 'user',
   entityId: number,
 ) =>
   asAdmin(async (tx) =>
@@ -83,11 +79,12 @@ const linesOf = (
     ).map((line) => `${line.action} ${line.event}`),
   );
 
-const pricesOf = (productId: number) =>
+// the events of the log of prices of a variant
+const pricesOf = (variantId: number) =>
   asAdmin(async (tx) =>
     (
       await tx.productPriceChangeLog.findMany({
-        where: { productId },
+        where: { variantId },
         orderBy: { id: 'asc' },
         select: { event: true },
       })
@@ -99,22 +96,12 @@ const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOS
 describe('the events of the lines of a product', () => {
   it('names the create, the change, the change of many, the move, the delete and the restore', async () => {
     const category = await createCategory();
-    const { payload, headers } = multipartBody([
-      { name: 'name', value: `Event product ${uniqueTag()}` },
-      { name: 'price', value: '10' },
-      { name: 'categoryId', value: String(category.id) },
-      ...safetyFormFields(),
-      ...shippingFormFields(),
-      imageField('images', pngImage(30, 20)),
-    ]);
-    const created = await app.inject({
-      method: 'POST',
-      url: '/api/products',
-      headers: { ...withCsrf(csrf, accessCookie(admin)), ...headers },
-      payload,
+    const created = await createProductForm(app, csrf, admin, {
+      categoryId: category.id,
+      name: `Event product ${uniqueTag()}`,
     });
     expect(created.statusCode).toBe(201);
-    const productId = created.json().id as number;
+    const productId = created.json().product.id as number;
     const other = await createCategory();
 
     await send('PATCH', `/api/products/${productId}`, { name: `Renamed ${uniqueTag()}` });
@@ -135,16 +122,23 @@ describe('the events of the lines of a product', () => {
     ]);
   });
 
-  it('names the price of one product and of many, in the log of prices too', async () => {
+  it('names the price of one variant and of many, in the log of prices too', async () => {
     const product = await createProduct({ price: 10 });
 
-    await send('PATCH', `/api/products/${product.id}`, { price: 11 });
-    await send('PATCH', '/api/products/batch', { items: [{ productId: product.id, price: 12 }] });
+    await send('PATCH', `/api/products/${product.id}/variants/${product.variantId}`, { price: 11 });
+    await send('PATCH', `/api/products/${product.id}/variants`, { price: 12 });
+    await send('PATCH', '/api/products/variants/batch', {
+      items: [{ variantId: product.variantId, price: 13 }],
+    });
 
     expect(
-      await linesOf('product', product.id).then((l) => l.filter((x) => x.includes('UPDATE'))),
-    ).toEqual(['PRODUCT_UPDATE product.update', 'PRODUCT_UPDATE product.update_batch']);
-    expect(await pricesOf(product.id)).toEqual(['price.set', 'price.set_batch']);
+      await linesOf('variant', product.variantId).then((l) => l.filter((x) => x.includes('OTHER'))),
+    ).toEqual(['OTHER variant.update', 'OTHER variant.update_batch', 'OTHER variant.update_batch']);
+    expect(await pricesOf(product.variantId)).toEqual([
+      'price.set',
+      'price.set_batch',
+      'price.set_batch',
+    ]);
   });
 
   it('names a sale put on and taken off by its own route', async () => {
@@ -155,23 +149,27 @@ describe('the events of the lines of a product', () => {
     });
     await send('PATCH', `/api/products/${product.id}/sale`, { sale: null });
 
-    expect(await linesOf('product', product.id)).toEqual([
+    // the sale is the variant's: the lines are about it
+    expect(await linesOf('product', product.id)).toEqual([]);
+    expect(await linesOf('variant', product.variantId)).toEqual([
       'PRODUCT_SALE product.sale_set',
       'PRODUCT_SALE product.sale_remove',
     ]);
-    expect(await pricesOf(product.id)).toEqual(['price.sale_start', 'price.sale_end']);
+    expect(await pricesOf(product.variantId)).toEqual(['price.sale_start', 'price.sale_end']);
   });
 
   it('names a sale put on by the route of many sales', async () => {
     const product = await createProduct({ price: 100, stock: 0 });
 
     const res = await send('POST', '/api/products/sales', {
-      items: [{ productId: product.id, sale: { percent: 10, endsAt: inDays(2) } }],
+      items: [{ variantId: product.variantId, sale: { percent: 10, endsAt: inDays(2) } }],
     });
 
     expect(res.statusCode).toBe(200);
-    expect(await linesOf('product', product.id)).toEqual(['PRODUCT_SALE product.sale_set_bulk']);
-    expect(await pricesOf(product.id)).toEqual(['price.sale_start']);
+    expect(await linesOf('variant', product.variantId)).toEqual([
+      'PRODUCT_SALE product.sale_set_bulk',
+    ]);
+    expect(await pricesOf(product.variantId)).toEqual(['price.sale_start']);
   });
 
   it('names a sale that goes or comes together with a price, apart from the sale routes', async () => {
@@ -181,19 +179,19 @@ describe('the events of the lines of a product', () => {
     });
 
     // the sale goes with the new price, a new one comes with it
-    const res = await send('PATCH', `/api/products/${product.id}`, {
+    const res = await send('PATCH', `/api/products/${product.id}/variants/${product.variantId}`, {
       price: 120,
       sale: { percent: 5, endsAt: inDays(3) },
     });
     expect(res.statusCode).toBe(200);
 
-    expect(await linesOf('product', product.id)).toEqual([
+    expect(await linesOf('variant', product.variantId)).toEqual([
       'PRODUCT_SALE product.sale_set',
       'PRODUCT_SALE product.sale_remove_with_price',
-      'PRODUCT_UPDATE product.update',
+      'OTHER variant.update',
       'PRODUCT_SALE product.sale_set_with_price',
     ]);
-    expect(await pricesOf(product.id)).toEqual([
+    expect(await pricesOf(product.variantId)).toEqual([
       'price.sale_start',
       'price.sale_end',
       'price.set',
@@ -201,30 +199,30 @@ describe('the events of the lines of a product', () => {
     ]);
   });
 
-  it('names a sale taken off with the prices of many products', async () => {
+  it('names a sale taken off with the prices of many variants', async () => {
     const product = await createProduct({ price: 100, stock: 0 });
     await send('PATCH', `/api/products/${product.id}/sale`, {
       sale: { percent: 10, endsAt: inDays(2) },
     });
 
-    const res = await send('PATCH', '/api/products/batch', {
-      items: [{ productId: product.id, price: 130, sale: null }],
+    const res = await send('PATCH', '/api/products/variants/batch', {
+      items: [{ variantId: product.variantId, price: 130, sale: 'remove' }],
     });
     expect(res.statusCode).toBe(200);
 
-    expect(await linesOf('product', product.id)).toEqual([
+    expect(await linesOf('variant', product.variantId)).toEqual([
       'PRODUCT_SALE product.sale_set',
       'PRODUCT_SALE product.sale_remove_with_price',
-      'PRODUCT_UPDATE product.update_batch',
+      'OTHER variant.update_batch',
     ]);
-    expect(await pricesOf(product.id)).toEqual([
+    expect(await pricesOf(product.variantId)).toEqual([
       'price.sale_start',
       'price.sale_end',
       'price.set_batch',
     ]);
   });
 
-  it('names the bulk change of prices, its line for the whole change and its line for each product', async () => {
+  it('names the bulk change of prices, its line for the whole change and its line for each variant', async () => {
     const product = await createProduct({ price: 100, stock: 0 });
     await send('PATCH', `/api/products/${product.id}/sale`, {
       sale: { percent: 10, endsAt: inDays(2) },
@@ -233,16 +231,16 @@ describe('the events of the lines of a product', () => {
     const res = await send('PATCH', '/api/products', {
       mode: 'percent',
       value: 10,
-      scope: { productIds: [product.id] },
+      scope: { variantIds: [product.variantId] },
       sale: 'remove',
     });
     expect(res.statusCode).toBe(200);
 
-    expect(await linesOf('product', product.id)).toEqual([
+    expect(await linesOf('variant', product.variantId)).toEqual([
       'PRODUCT_SALE product.sale_set',
       'PRODUCT_SALE product.sale_remove_with_price',
     ]);
-    expect(await pricesOf(product.id)).toEqual([
+    expect(await pricesOf(product.variantId)).toEqual([
       'price.sale_start',
       'price.sale_end',
       'price.bulk',
@@ -258,20 +256,29 @@ describe('the events of the lines of a product', () => {
     expect(whole).toEqual({ event: 'product.price_bulk' });
   });
 
-  it('names the lines the database writes: a delivery, a write-off, a sale a price ended', async () => {
+  it('names the lines of a delivery, a write-off and a sale a price ended', async () => {
     const product = await createProduct({ price: 100, stock: 0 });
-    await receiveBatch(product.id, { quantity: 5, unitCost: 3 });
-    await writeOffStock(product.id, 1, { reason: 'damaged' });
+    // the stock is the work of the routes of the stock: each writes one line for the whole
+    // operation (the line of each variant is in the stock log)
+    const delivery = await send('POST', '/api/products/stock/deliveries', {
+      source: 'supplier',
+      items: [{ variantId: product.variantId, quantity: 5, unitCost: 3 }],
+    });
+    const writeOff = await send('POST', '/api/products/stock/write-offs', {
+      reason: 'damaged',
+      items: [{ variantId: product.variantId, quantity: 1 }],
+    });
+    expect([delivery.statusCode, writeOff.statusCode]).toEqual([201, 201]);
     await send('PATCH', `/api/products/${product.id}/sale`, {
       sale: { percent: 10, endsAt: inDays(2) },
     });
     // a price down to the sale price, not through the api: the database ends the sale itself
     await testTx(async (tx) => {
       await setUserContext(tx, { userId: admin.id, role: 'ADMIN' });
-      await tx.$executeRaw`update cartlify.products set price = 90 where id = ${product.id}`;
+      await tx.$executeRaw`update cartlify.product_variants set price = 90 where id = ${product.variantId}`;
     });
 
-    expect(await linesOf('product', product.id)).toEqual([
+    expect(await linesOf('variant', product.variantId)).toEqual([
       'STOCK_DELIVERY stock.delivery',
       'STOCK_WRITE_OFF stock.write_off',
       'PRODUCT_SALE product.sale_set',

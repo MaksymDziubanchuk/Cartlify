@@ -14,7 +14,9 @@ const statement = async <T>(value: T): Promise<T> => {
 };
 
 const tx = {
-  product: { findUnique: jest.fn(async () => ({ id: 3, deletedAt: null })) },
+  product: {
+    findUnique: jest.fn(async () => ({ id: 3, deletedAt: null, variants: [{ id: 30 }] })),
+  },
   review: {
     findMany: jest.fn(() => statement([])),
     count: jest.fn(() => statement(0)),

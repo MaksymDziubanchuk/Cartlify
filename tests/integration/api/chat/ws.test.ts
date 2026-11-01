@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type WebSocket from 'ws';
+import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import env from '@config/env.js';
@@ -154,19 +155,24 @@ describe('the session of a socket', () => {
     expect(refreshed.statusCode).toBe(200);
   });
 
-  // a socket would outlive a role taken away or a logout by hours
+  // a socket would outlive a role taken away or a logout by hours. A token counts its life in whole
+  // seconds: one of 1 s lives 0 to 1 s after it is signed, less than the opening of a socket takes
+  // on a busy machine; one of 3 s lives 2 to 3 s
   it('closes the socket when its access token runs out', async () => {
     const user = await createUser();
     userIds.push(user.id);
     const ttl = env.JWT_ACCESS_TTL_SHORT;
-    env.JWT_ACCESS_TTL_SHORT = 1;
+    env.JWT_ACCESS_TTL_SHORT = 3;
     const cookie = accessCookie(user);
     env.JWT_ACCESS_TTL_SHORT = ttl;
+    const { exp } = jwt.decode(cookie.slice('accessToken='.length)) as { exp: number };
 
     const { socket, firstEvent } = await connect({ cookie });
     expect(firstEvent.type).toBe('connection:ready');
 
     expect(await closeOf(socket)).toEqual({ code: 4401, reason: 'SESSION_EXPIRED' });
+    // not before the token ran out (a timer of node may fire a millisecond early)
+    expect(Date.now()).toBeGreaterThanOrEqual(exp * 1000 - 5);
   });
 
   // root took the role away; the access token of the admin still names the old one for minutes

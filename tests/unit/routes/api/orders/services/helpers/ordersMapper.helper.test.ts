@@ -12,23 +12,39 @@ afterEach(resetDelivery);
 
 const primaryUrl = 'https://res.cloudinary.com/demo/image/upload/v1/products/4/0.jpg';
 
+// a variant as variantRowSelect reads it: the pictures come by their place in the variant
+const variantRow = (patch: Record<string, unknown> = {}) => ({
+  id: 21,
+  productId: 4,
+  position: 2,
+  sku: null,
+  barcode: null,
+  price: new Prisma.Decimal('9.99'),
+  stock: 5,
+  reservedStock: 2,
+  weightGrams: null,
+  lengthMm: null,
+  widthMm: null,
+  heightMm: null,
+  salePrice: null,
+  saleEndsAt: null,
+  salePriorPrice: null,
+  deletedAt: null,
+  updatedAt: new Date('2026-01-01T00:00:00Z'),
+  images: [{ position: 1, image: { id: 7, url: primaryUrl } }],
+  ...patch,
+});
+
 const item = (patch: Record<string, unknown> = {}) => ({
   id: 31,
   productId: 4,
+  variantId: 21,
   quantity: 2,
   unitPrice: new Prisma.Decimal('9.99'),
   totalPrice: new Prisma.Decimal('19.98'),
-  product: {
-    id: 4,
-    name: 'Mug',
-    categoryId: 1,
-    weightGrams: null,
-    stock: 5,
-    reservedStock: 2,
-    deletedAt: null,
-    // queries order images primary first
-    images: [{ url: primaryUrl, position: 0, isPrimary: true }],
-  },
+  productName: null,
+  product: { id: 4, name: 'Mug', categoryId: 1, deletedAt: null },
+  variant: variantRow(),
   ...patch,
 });
 
@@ -80,10 +96,15 @@ const send = (patch: Record<string, unknown> = {}) => ({
 });
 
 type Row = Parameters<typeof mapOrderRowToResponse>[0];
-const map = (patch: Record<string, unknown> = {}, expired = new Map<number, number>()) =>
-  mapOrderRowToResponse(row(patch) as unknown as Row, expired);
+// the name the variant has now comes with the context (cartlify.variant_names)
+const names = new Map([[21, { name: 'Mug', values: [] }]]);
+const map = (
+  patch: Record<string, unknown> = {},
+  expired = new Map<number, number>(),
+  currentNames = names,
+) => mapOrderRowToResponse(row(patch) as unknown as Row, { expired, names: currentNames });
 const mapFor = (view: 'buyer' | 'admin', patch: Record<string, unknown> = {}) =>
-  mapOrderRowToResponse(row(patch) as unknown as Row, new Map(), view);
+  mapOrderRowToResponse(row(patch) as unknown as Row, { expired: new Map(), names }, view);
 
 describe('mapOrderRowToResponse', () => {
   it('turns money decimals into numbers', () => {
@@ -93,31 +114,145 @@ describe('mapOrderRowToResponse', () => {
     expect(out.items[0]).toMatchObject({ unitPrice: 9.99, totalPrice: 19.98, quantity: 2 });
   });
 
-  it('gives the item id, which cart item routes take as itemId', () => {
-    expect(map().items[0]).toMatchObject({ id: 31, productId: 4 });
+  it('gives the item id, which cart item routes take as itemId, and the product and the variant', () => {
+    expect(map().items[0]).toMatchObject({
+      id: 31,
+      product: { id: 4, name: 'Mug', categoryId: 1 },
+      variant: { id: 21, position: 2 },
+    });
+    expect(map().items[0]).not.toHaveProperty('productId');
   });
 
-  it('shows the units of the product that are still free', () => {
-    expect(map().items[0]?.product.availableStock).toBe(3);
+  it('shows the units of the variant that are still free', () => {
+    expect(map().items[0]?.variant.stock).toBe(3);
   });
 
-  // the units of batches whose last good day is over are not sold
+  // the units of batches whose last good day is over are not sold; the units are those of the
+  // variant, not of its product
   it('leaves the units that are over out of the free units of an item', () => {
-    expect(map({}, new Map([[4, 2]])).items[0]?.product.availableStock).toBe(1);
-    expect(map({}, new Map([[4, 9]])).items[0]?.product.availableStock).toBe(0);
-    expect(map({}, new Map([[5, 2]])).items[0]?.product.availableStock).toBe(3);
+    expect(map({}, new Map([[21, 2]])).items[0]?.variant.stock).toBe(1);
+    expect(map({}, new Map([[21, 9]])).items[0]?.variant.stock).toBe(0);
+    expect(map({}, new Map([[4, 2]])).items[0]?.variant.stock).toBe(3);
+    expect(map({}, new Map([[22, 2]])).items[0]?.variant.stock).toBe(3);
   });
 
   it('never shows a negative free stock', () => {
     const out = map({
-      items: [item({ product: { ...item().product, stock: 1, reservedStock: 4 } })],
+      items: [item({ variant: variantRow({ stock: 1, reservedStock: 4 }) })],
     });
 
-    expect(out.items[0]?.product.availableStock).toBe(0);
+    expect(out.items[0]?.variant.stock).toBe(0);
   });
 
-  it('builds the product image urls from the primary image', () => {
-    expect(map().items[0]?.product.images?.url200).toContain('/upload/c_fit,w_200');
+  it('builds the image urls from the first picture of the variant', () => {
+    expect(map().items[0]?.variant.image?.url200).toContain('/upload/c_fit,w_200');
+  });
+
+  it('takes the picture of the variant that has the lowest place, not one of another variant', () => {
+    const second = 'https://res.cloudinary.com/demo/image/upload/v1/products/4/1.jpg';
+    const out = map({
+      items: [
+        item({
+          variant: variantRow({
+            images: [
+              { position: 1, image: { id: 8, url: second } },
+              { position: 2, image: { id: 7, url: primaryUrl } },
+            ],
+          }),
+        }),
+      ],
+    });
+
+    expect(out.items[0]?.variant.image?.url800).toContain('/products/4/1.jpg');
+  });
+
+  // a cart and an order waiting for its payment show what the variant sells at now
+  it('shows the price and the sale of the variant while the order is not paid', () => {
+    const sale = {
+      salePrice: new Prisma.Decimal('7.50'),
+      saleEndsAt: new Date(Date.now() + 86_400_000),
+      salePriorPrice: new Prisma.Decimal('9.00'),
+    };
+    const sells = item({ variant: variantRow(sale) });
+
+    for (const status of ['pending', 'unconfirmed', 'waiting']) {
+      const out = map({ status, confirmed: status === 'waiting', items: [sells] });
+
+      expect(out.items[0]?.variant).toMatchObject({
+        price: 9.99,
+        salePrice: 7.5,
+        salePriorPrice: 9,
+        forSale: true,
+      });
+    }
+  });
+
+  // the order a buyer paid keeps what it was bought at: the copy of the price, no sale
+  it('shows the copy of the price and no sale once the order is paid', () => {
+    const sale = {
+      salePrice: new Prisma.Decimal('7.50'),
+      saleEndsAt: new Date(Date.now() + 86_400_000),
+    };
+    const bought = item({
+      unitPrice: new Prisma.Decimal('8.00'),
+      totalPrice: new Prisma.Decimal('16.00'),
+      variant: variantRow({ price: new Prisma.Decimal('12.00'), ...sale }),
+    });
+
+    for (const status of ['paid', 'shipped', 'delivered', 'cancelled']) {
+      const variant = map({ status, confirmed: true, items: [bought] }).items[0]?.variant;
+
+      expect(variant).toMatchObject({ price: 8, forSale: true });
+      expect(variant).not.toHaveProperty('salePrice');
+    }
+  });
+
+  // the name of the confirmation is a copy, a cart follows the variant
+  it('keeps the copy of the name once the order is confirmed and follows the variant before', () => {
+    const named = item({ productName: 'Mug (old name)' });
+
+    expect(map({ confirmed: true, status: 'waiting', items: [named] }).items[0]?.variant.name).toBe(
+      'Mug (old name)',
+    );
+    expect(map({ confirmed: true, status: 'paid', items: [named] }).items[0]?.variant.name).toBe(
+      'Mug (old name)',
+    );
+    expect(map({ items: [named] }).items[0]?.variant.name).toBe('Mug');
+    // an item from before the names were kept shows the name of now
+    expect(map({ confirmed: true, status: 'paid' }).items[0]?.variant.name).toBe('Mug');
+    // the name of now is the one the database writes with the values that tell the variants apart
+    const renamed = new Map([[21, { name: 'Mug — black', values: [] }]]);
+    expect(map({ items: [named] }, new Map(), renamed).items[0]?.variant.name).toBe('Mug — black');
+    expect(
+      map({ confirmed: true, status: 'paid' }, new Map(), renamed).items[0]?.variant.name,
+    ).toBe('Mug — black');
+    expect(
+      map({ confirmed: true, status: 'paid', items: [named] }, new Map(), renamed).items[0]?.variant
+        .name,
+    ).toBe('Mug (old name)');
+  });
+
+  // a variant a buyer does not see stays in an order that is confirmed and says it is not for sale
+  it.each([
+    ['taken out of sale', { variant: variantRow({ deletedAt: new Date() }) }],
+    ['showing no picture', { variant: variantRow({ images: [] }) }],
+    [
+      'of a removed product',
+      { product: { id: 4, name: 'Mug', categoryId: 1, deletedAt: new Date() } },
+    ],
+  ])('marks a variant %s as not for sale', (_case, patch) => {
+    const out = map({ confirmed: true, status: 'paid', items: [item(patch)] });
+
+    expect(out.items[0]?.variant.forSale).toBe(false);
+    expect(
+      map({ confirmed: true, status: 'paid', items: [item()] }).items[0]?.variant.forSale,
+    ).toBe(true);
+  });
+
+  it('gives a variant that shows no picture a null image', () => {
+    const out = map({ items: [item({ variant: variantRow({ images: [] }) })] });
+
+    expect(out.items[0]?.variant.image).toBeNull();
   });
 
   it('gives no delivery while the order has none', () => {
@@ -284,8 +419,8 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('gives an admin every send with its cost, the weight of the order and whether it is whole', () => {
-    const heavy = item({ product: { ...item().product, weightGrams: 350 }, quantity: 2 });
-    const bare = item({ id: 32, productId: 5, product: { ...item().product, id: 5 } });
+    const heavy = item({ variant: variantRow({ weightGrams: 350 }), quantity: 2 });
+    const bare = item({ id: 32, variantId: 22, variant: variantRow({ id: 22 }) });
     const out = mapFor('admin', {
       status: 'shipped',
       confirmed: true,
@@ -303,10 +438,27 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('gives the weight of an order whole when every item has one', () => {
-    const heavy = item({ product: { ...item().product, weightGrams: 350 }, quantity: 2 });
+    const heavy = item({ variant: variantRow({ weightGrams: 350 }), quantity: 2 });
 
     expect(mapFor('admin', { items: [heavy] }).weight).toEqual({ grams: 700, complete: true });
     expect(mapFor('buyer', { items: [heavy] })).not.toHaveProperty('weight');
+  });
+
+  // the weight is the weight of each variant bought, times its units: two variants of one product
+  // weigh what each weighs
+  it('adds up the weights of the variants of one product, each times its units', () => {
+    const light = item({ id: 31, variant: variantRow({ id: 21, weightGrams: 200 }), quantity: 3 });
+    const heavy = item({
+      id: 32,
+      variantId: 22,
+      variant: variantRow({ id: 22, weightGrams: 900 }),
+      quantity: 1,
+    });
+
+    expect(mapFor('admin', { items: [light, heavy] }).weight).toEqual({
+      grams: 1500,
+      complete: true,
+    });
   });
 
   it('gives the times of the payment and of the cancel of an order that has them', () => {
@@ -339,10 +491,18 @@ describe('mapOrderRowToResponse', () => {
     expect(map({ items: [], total: new Prisma.Decimal(0) })).toMatchObject({ items: [], total: 0 });
   });
 
-  // a product without an image opens by its id and goes into a cart: the item shows no images
-  it('gives the product of an item without an image no images', () => {
-    const noImage = item({ product: { ...item().product, images: [] } });
+  it('reads the variant of an item with its pictures, its price, its stock and its weight', () => {
+    const items = (orderResponseSelect.items as { select: Record<string, unknown> }).select;
 
-    expect(map({ items: [noImage] }).items[0]?.product.images).toBeNull();
+    expect(items).toMatchObject({ variantId: true, productName: true });
+    expect(items.variant).toMatchObject({
+      select: {
+        price: true,
+        stock: true,
+        reservedStock: true,
+        weightGrams: true,
+        images: expect.anything(),
+      },
+    });
   });
 });

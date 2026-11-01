@@ -10,11 +10,12 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
 import { watchMail } from '../../../helpers/mail.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { placeOrder, placeOrderOf } from '../../../helpers/orders.js';
 
 // the mail the stripe webhook sends once an order is paid; the order is a real order of a user
 // paid the way the webhook pays it, the mail goes to the SendGrid mock (tests/helpers/mail.ts).
@@ -81,6 +82,36 @@ describe('sendOrderPaidEmail', () => {
       timeZone: 'UTC',
     }).format(paidAt!);
     expect(mails[0]!.text).toContain(`${shown} UTC`);
+  });
+
+  // the mail names the variants of the order as the confirmation named them (the copies), a line
+  // for each variant, whatever the product is called since
+  it('names a line for each variant by the name the confirmation kept', async () => {
+    const buyer = await createUser({ name: 'Boris' });
+    userIds.push(buyer.id);
+    const lamp = await createProduct({ price: 10, stock: 5, name: 'Desk lamp' });
+    const second = await createVariant(lamp.id, { price: 12, stock: 5 });
+    const paidId = await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [
+        { item: lamp, quantity: 1 },
+        { item: { variantId: second.id }, quantity: 2 },
+      ],
+      'paid',
+    );
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: lamp.id }, data: { name: 'Desk lamp, renamed' } }),
+    );
+    const mails = watchMail();
+
+    await sendOrderPaidEmail(paidId, log());
+
+    expect(mails[0]!.text).toContain('Desk lamp x 1 = €10.00');
+    expect(mails[0]!.text).toContain('Desk lamp x 2 = €24.00');
+    expect(mails[0]!.text).not.toContain('renamed');
+    expect(mails[0]!.text).toContain('Total: €34.00');
   });
 
   it('skips an order that is not paid with a warning', async () => {

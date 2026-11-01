@@ -10,6 +10,7 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   deleteProductFromCatalog,
   setProductPrice,
   stockOf,
@@ -23,6 +24,7 @@ import {
   placeOrder,
   shippingData,
 } from '../../../helpers/orders.js';
+import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 
 // the delivery of an order: where it goes and to whom come with the confirmation and stay on the
 // order as they were confirmed, the price of the delivery is fixed with them; every order answer
@@ -670,7 +672,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
       method: 'POST',
       url: '/api/orders/current/items',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId: product.id, quantity: 1 },
+      payload: { variantId: product.variantId, quantity: 1 },
     });
 
     const res = await confirm(user, {
@@ -692,7 +694,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
       method: 'POST',
       url: '/api/orders/current/items',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId: product.id, quantity: 1 },
+      payload: { variantId: product.variantId, quantity: 1 },
     });
 
     const res = await confirm(user, { orderId: added.json().id, delivery: deliveryBody });
@@ -717,19 +719,19 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
 });
 
 describe('POST /api/orders/current/confirm, the order itself', () => {
-  const addItem = (user: TestUser, productId: number, quantity: number) =>
+  const addItem = (user: TestUser, variantId: number, quantity: number) =>
     app.inject({
       method: 'POST',
       url: '/api/orders/current/items',
       headers: withCsrf(csrf, accessCookie(user)),
-      payload: { productId, quantity },
+      payload: { variantId, quantity },
     });
 
   it('holds the stock of the items for the payment and the cart is gone', async () => {
     const user = await newUser();
     const product = await createProduct({ stock: 5 });
     products.push(product);
-    const added = await addItem(user, product.id, 2);
+    const added = await addItem(user, product.variantId, 2);
 
     const res = await confirm(user, { orderId: added.json().id, ...shippingData });
 
@@ -746,7 +748,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
   it('refuses an order without items', async () => {
     const user = await newUser();
     const product = await newProduct();
-    const added = await addItem(user, product.id, 1);
+    const added = await addItem(user, product.variantId, 1);
     await app.inject({
       method: 'DELETE',
       url: `/api/orders/current/items/${added.json().items[0].id}`,
@@ -768,7 +770,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     const user = await newUser();
     const product = await createProduct({ price, stock: 5 });
     products.push(product);
-    const added = await addItem(user, product.id, 1);
+    const added = await addItem(user, product.variantId, 1);
 
     const res = await confirm(user, { orderId: added.json().id, ...shippingData });
 
@@ -793,7 +795,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     const user = await newUser();
     const product = await createProduct({ price, stock: 5 });
     products.push(product);
-    const added = await addItem(user, product.id, quantity);
+    const added = await addItem(user, product.variantId, quantity);
 
     const res = await confirm(user, { orderId: added.json().id, ...shippingData });
 
@@ -806,7 +808,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
   it('counts the prices of the catalog, not the ones the cart was read at', async () => {
     const user = await newUser();
     const product = await newProduct();
-    const added = await addItem(user, product.id, 1);
+    const added = await addItem(user, product.variantId, 1);
     await setProductPrice(product.id, 0.3);
 
     const res = await confirm(user, { orderId: added.json().id, ...shippingData });
@@ -818,7 +820,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
   it('names an item whose product was deleted from the catalog and keeps the cart', async () => {
     const user = await newUser();
     const product = await newProduct();
-    const added = await addItem(user, product.id, 1);
+    const added = await addItem(user, product.variantId, 1);
     await deleteProductFromCatalog(product.id);
 
     const res = await confirm(user, { orderId: added.json().id, ...shippingData });
@@ -830,7 +832,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
         items: [
           {
             itemId: added.json().items[0].id,
-            productId: product.id,
+            variantId: product.variantId,
             reason: 'deleted',
             available: 0,
             requested: 1,
@@ -845,7 +847,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     const user = await newUser();
     const product = await createProduct({ stock: 5 });
     products.push(product);
-    const added = await addItem(user, product.id, 2);
+    const added = await addItem(user, product.variantId, 2);
     // another buyer confirms first and holds 4 of the 5
     await placeOrder(app, csrf, await newUser(), product, 'waiting', 4);
 
@@ -855,7 +857,9 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     expect(res.json()).toMatchObject({
       errorCode: 'ORDER_ITEMS_UNAVAILABLE',
       details: {
-        items: [{ productId: product.id, reason: 'out_of_stock', available: 1, requested: 2 }],
+        items: [
+          { variantId: product.variantId, reason: 'out_of_stock', available: 1, requested: 2 },
+        ],
       },
     });
     expect(await stockOf(product.id)).toEqual({ stock: 5, reservedStock: 4 });
@@ -867,26 +871,125 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
     const gone = await newProduct();
     const scarce = await createProduct({ stock: 2 });
     products.push(scarce);
-    await addItem(user, fine.id, 1);
-    await addItem(user, gone.id, 1);
-    const added = await addItem(user, scarce.id, 2);
+    await addItem(user, fine.variantId, 1);
+    await addItem(user, gone.variantId, 1);
+    const added = await addItem(user, scarce.variantId, 2);
     await deleteProductFromCatalog(gone.id);
     await placeOrder(app, csrf, await newUser(), scarce, 'waiting', 1);
 
     const res = await confirm(user, { orderId: added.json().id, ...shippingData });
 
     expect(res.statusCode).toBe(409);
-    const items = res.json().details.items as { productId: number; reason: string }[];
-    expect(items.map(({ productId, reason }) => ({ productId, reason }))).toEqual([
-      { productId: gone.id, reason: 'deleted' },
-      { productId: scarce.id, reason: 'out_of_stock' },
+    const items = res.json().details.items as { variantId: number; reason: string }[];
+    expect(items.map(({ variantId, reason }) => ({ variantId, reason }))).toEqual([
+      { variantId: gone.variantId, reason: 'deleted' },
+      { variantId: scarce.variantId, reason: 'out_of_stock' },
     ]);
+  });
+
+  // the variants of one product are items of their own: one taken out of sale is named, its
+  // sibling is not
+  it('names the variant taken out of sale and not its sibling', async () => {
+    const user = await newUser();
+    const product = await newProduct();
+    const sibling = await createVariant(product.id, { stock: 5 });
+    await addItem(user, product.variantId, 1);
+    const added = await addItem(user, sibling.id, 1);
+    await markVariantDeleted(product.variantId);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_ITEMS_UNAVAILABLE',
+      details: {
+        items: [{ variantId: product.variantId, reason: 'deleted', available: 0, requested: 1 }],
+      },
+    });
+    expect(res.json().details.items).toHaveLength(1);
+    expect(await stockOf({ variantId: sibling.id })).toEqual({ stock: 5, reservedStock: 0 });
+  });
+
+  it('names a variant that shows no picture any more as one that is not for sale', async () => {
+    const user = await newUser();
+    const product = await newProduct();
+    const added = await addItem(user, product.variantId, 1);
+    await stripVariantImages(product.variantId);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_ITEMS_UNAVAILABLE',
+      details: { items: [{ variantId: product.variantId, reason: 'deleted' }] },
+    });
+  });
+
+  // the stock is the stock of the variant: the sibling with free units does not make up for the
+  // variant there is not enough of
+  it('names the variant there is not enough of although its sibling has the stock', async () => {
+    const user = await newUser();
+    const product = await createProduct({ stock: 5 });
+    products.push(product);
+    const sibling = await createVariant(product.id, { stock: 9 });
+    const added = await addItem(user, product.variantId, 2);
+    // another buyer confirms first and holds 4 of the 5 of the variant
+    await placeOrder(app, csrf, await newUser(), product, 'waiting', 4);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_ITEMS_UNAVAILABLE',
+      details: {
+        items: [
+          { variantId: product.variantId, reason: 'out_of_stock', available: 1, requested: 2 },
+        ],
+      },
+    });
+    expect(await stockOf({ variantId: sibling.id })).toEqual({ stock: 9, reservedStock: 0 });
+  });
+
+  it('holds the stock of each variant of the order apart', async () => {
+    const user = await newUser();
+    const black = await newProduct();
+    const white = await createVariant(black.id, { price: 12, stock: 4 });
+    await addItem(user, black.variantId, 2);
+    const added = await addItem(user, white.id, 3);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(200);
+    expect(await stockOf({ variantId: black.variantId })).toEqual({ stock: 5, reservedStock: 2 });
+    expect(await stockOf({ variantId: white.id })).toEqual({ stock: 4, reservedStock: 3 });
+    expect(res.json()).toMatchObject({ total: 56 });
+  });
+
+  it('names the variant the price of which changed', async () => {
+    const user = await newUser();
+    const product = await newProduct();
+    const sibling = await createVariant(product.id, { price: 12, stock: 5 });
+    await addItem(user, product.variantId, 1);
+    const added = await addItem(user, sibling.id, 1);
+    await setProductPrice({ variantId: sibling.id }, 9);
+
+    const res = await confirm(user, { orderId: added.json().id, ...shippingData });
+
+    expect(res.statusCode).toBe(409);
+    const itemId = added
+      .json()
+      .items.find((item: { variant: { id: number } }) => item.variant.id === sibling.id).id;
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_PRICES_CHANGED',
+      details: { items: [{ itemId, variantId: sibling.id, unitPrice: 12, price: 9 }] },
+    });
+    expect(await stockOf({ variantId: product.variantId })).toEqual({ stock: 5, reservedStock: 0 });
   });
 
   it('refuses a price that changed after the cart was read, then confirms the new one', async () => {
     const user = await newUser();
     const product = await newProduct();
-    const added = await addItem(user, product.id, 2);
+    const added = await addItem(user, product.variantId, 2);
     await setProductPrice(product.id, 8);
 
     const refused = await confirm(user, { orderId: added.json().id, ...shippingData });
@@ -907,7 +1010,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
 
   it('does not confirm the cart of another user', async () => {
     const owner = await newUser();
-    const added = await addItem(owner, (await newProduct()).id, 1);
+    const added = await addItem(owner, (await newProduct()).variantId, 1);
 
     const res = await confirm(await newUser(), { orderId: added.json().id, ...shippingData });
 
@@ -933,7 +1036,7 @@ describe('POST /api/orders/current/confirm, the order itself', () => {
   // the database would cut 1.5 to 1 and confirm another order of the user
   it('refuses an order id of 1.5 and confirms no order', async () => {
     const user = await newUser();
-    const added = await addItem(user, (await newProduct()).id, 1);
+    const added = await addItem(user, (await newProduct()).variantId, 1);
 
     const res = await confirm(user, { orderId: added.json().id + 0.5, ...shippingData });
 

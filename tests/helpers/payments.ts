@@ -8,8 +8,8 @@ import { redisKeys } from '@redis/keys.js';
 import { accessCookie } from './actors.js';
 import { withCsrf, type Csrf } from './csrf.js';
 import { asAdmin, testTx } from './db.js';
-import type { TestProduct, TestUser } from './factories.js';
-import { placeOrder } from './orders.js';
+import type { TestUser } from './factories.js';
+import { placeOrderOf, type Buyable, type OrderLine } from './orders.js';
 import { payByCard, payCheckoutSession, rememberSession, stripeEvent } from './stripe.js';
 
 export const CHECKOUT_URL = '/api/payments/checkout/sessions';
@@ -55,7 +55,7 @@ export async function placePaidOrder(
   app: FastifyInstance,
   csrf: Csrf,
   user: TestUser,
-  product: TestProduct,
+  product: Buyable,
   opts: {
     quantity?: number;
     stage?: 'paid' | 'shipped';
@@ -63,15 +63,21 @@ export async function placePaidOrder(
     delivery?: Record<string, unknown>;
   } = {},
 ): Promise<{ orderId: number; paymentId: string }> {
-  const orderId = await placeOrder(
-    app,
-    csrf,
-    user,
-    product,
-    'waiting',
-    opts.quantity ?? 1,
-    ...(opts.delivery ? [opts.delivery] : []),
-  );
+  return placePaidOrderOf(app, csrf, user, [{ item: product, quantity: opts.quantity ?? 1 }], opts);
+}
+
+// the same for an order of several lines, the variants of one product among them
+export async function placePaidOrderOf(
+  app: FastifyInstance,
+  csrf: Csrf,
+  user: TestUser,
+  lines: OrderLine[],
+  opts: {
+    stage?: 'paid' | 'shipped';
+    delivery?: Record<string, unknown>;
+  } = {},
+): Promise<{ orderId: number; paymentId: string }> {
+  const orderId = await placeOrderOf(app, csrf, user, lines, 'waiting', opts.delivery);
 
   const { total } = await asAdmin((tx) =>
     tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { total: true } }),

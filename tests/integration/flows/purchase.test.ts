@@ -5,9 +5,14 @@ import { accessCookie } from '../../helpers/actors.js';
 import { startApp, stopApp } from '../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { asAdmin } from '../../helpers/db.js';
-import { closeSessions, createProduct, createUser } from '../../helpers/factories.js';
+import {
+  closeSessions,
+  createProduct,
+  createUser,
+  createVariant,
+} from '../../helpers/factories.js';
 import { watchMail } from '../../helpers/mail.js';
-import { placeOrder } from '../../helpers/orders.js';
+import { placeOrder, placeOrderOf } from '../../helpers/orders.js';
 import { openPaymentPage, orderStateOf, payPage } from '../../helpers/payments.js';
 import { closeOpenSessions, deliver } from '../../helpers/stripe.js';
 
@@ -34,8 +39,14 @@ afterAll(async () => {
   }
 });
 
-const freeUnitsOf = async (productId: number) =>
-  (await app.inject({ method: 'GET', url: `/api/products/${productId}` })).json().stock as number;
+// the free units of a variant, read as the card of its product shows them
+const freeUnitsOf = async (productId: number, variantId?: number) =>
+  (
+    await app.inject({
+      method: 'GET',
+      url: `/api/products/${productId}${variantId === undefined ? '' : `?variantId=${variantId}`}`,
+    })
+  ).json().variant.stock as number;
 
 describe('a purchase from the cart to the review', () => {
   it('reserves, takes the payment, ships, delivers, gets a review and counts the sale', async () => {
@@ -98,7 +109,7 @@ describe('a purchase from the cart to the review', () => {
     expect(review.statusCode).toBe(201);
     expect(review.json()).toMatchObject({ rating: 5, verifiedPurchase: true });
     const card = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
-    expect(card.json()).toMatchObject({ avgRating: 5, reviewsCount: 1 });
+    expect(card.json().product).toMatchObject({ avgRating: 5, reviewsCount: 1 });
 
     // the accountant sees the sale at the cost of its batch, the journal of the stock the units
     const report = await app.inject({
@@ -117,5 +128,51 @@ describe('a purchase from the cart to the review', () => {
     expect(movements.json().items).toEqual([
       expect.objectContaining({ kind: 'sale', quantity: -2, orderId }),
     ]);
+  });
+
+  // two variants of one product in one order: each is reserved, sold and counted from its own
+  // units, the buyer pays one total, the mail of the delivery asks for one rating of the product
+  it('sells two variants of one product from their own units and asks one rating', async () => {
+    const black = await createProduct({ price: 10, stock: 4, name: 'Desk lamp' });
+    const white = await createVariant(black.id, { price: 12, stock: 3 });
+    const buyer = await createUser();
+    const admin = await createUser({ role: 'ADMIN' });
+    userIds.push(buyer.id, admin.id);
+    const mails = watchMail();
+
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      buyer,
+      [
+        { item: black, quantity: 2 },
+        { item: { variantId: white.id }, quantity: 1 },
+      ],
+      'waiting',
+    );
+    expect(await freeUnitsOf(black.id, black.variantId)).toBe(2);
+    expect(await freeUnitsOf(black.id, white.id)).toBe(2);
+
+    const { event } = await payPage(await openPaymentPage(app, csrf, buyer, orderId));
+    expect((await deliver(app, event)).statusCode).toBe(200);
+    expect(await orderStateOf(orderId)).toMatchObject({ status: 'paid' });
+    expect(await freeUnitsOf(black.id, black.variantId)).toBe(2);
+    expect(await freeUnitsOf(black.id, white.id)).toBe(2);
+
+    for (const status of ['shipped', 'delivered'] as const) {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/orders/${orderId}/status`,
+        headers: withCsrf(csrf, accessCookie(admin)),
+        payload: { status },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+
+    const delivered = mails.find((mail) => mail.subject.includes('is delivered'))!;
+    expect(delivered.text).toContain('Desk lamp x 2 = ');
+    expect(delivered.text).toContain('Desk lamp x 1 = ');
+    // a review is of the product: one line to rate, not one for each variant
+    expect(delivered.text.split('- Desk lamp: ')).toHaveLength(2);
   });
 });

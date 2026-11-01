@@ -18,10 +18,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { styleText } from 'node:util';
 
+import { cloudinaryQuota } from './setup/cloudinaryQuota.mjs';
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cacheDir = path.join(rootDir, 'node_modules', '.cache', 'cartlify-tests');
 const selectionFile = path.join(cacheDir, 'selection.json');
 const resultFile = path.join(cacheDir, 'last-run.json');
+const cloudinaryUseFile = path.join(cacheDir, 'cloudinary-use.json');
 
 // flags the launcher handles itself, they never reach jest
 const LAUNCHER_FLAGS = ['--failed', '--keep-db'];
@@ -327,6 +330,67 @@ function removeTestDatabase() {
   }
 }
 
+// Cloudinary answers a few hundred calls of its admin api an hour, and the tests read the files they
+// check through it: a run with the real service asks what is left before it starts, and stops when
+// a run of the same parts took more the last time; after the run it tells what the run took (a dev
+// server on the same account in that time counts in too)
+const partsKey = (selected) => selected.map((part) => part.name).join(',');
+const utcTime = (date) => `${date.toISOString().slice(11, 16)} UTC`;
+
+function readCloudinaryUse() {
+  try {
+    return JSON.parse(readFileSync(cloudinaryUseFile, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+async function checkCloudinaryQuota(selected) {
+  const quota = await cloudinaryQuota(rootDir);
+  if (quota.error) {
+    fail(
+      `Cloudinary did not tell what is left of its admin api: ${quota.error}\n` +
+        'Run without service:cloudinary to take its mock.',
+    );
+  }
+
+  const need = readCloudinaryUse()[partsKey(selected)];
+  console.log(
+    `> Cloudinary admin api: ${quota.remaining} of ${quota.allowed} calls left until ` +
+      utcTime(quota.resetAt) +
+      (need === undefined ? '' : `, the last run of these parts took ${need}`),
+  );
+  if (need !== undefined && quota.remaining < need) {
+    fail(
+      'Too few Cloudinary admin api calls are left for these parts: run after ' +
+        `${utcTime(quota.resetAt)}, or without service:cloudinary to take its mock.`,
+    );
+  }
+
+  return quota;
+}
+
+// the line of the summary on what the run took of the admin api
+async function cloudinaryUseOf(selected, before, { failedOnly, jestFlags }) {
+  const after = await cloudinaryQuota(rootDir);
+  if (after.error) return `Cloudinary admin api after the run: ${after.error}`;
+
+  const left = `${after.remaining} of ${after.allowed} left until ${utcTime(after.resetAt)}`;
+  // a new hour gave the account its calls back, the difference tells nothing
+  if (after.resetAt.getTime() !== before.resetAt.getTime()) return `Cloudinary admin api: ${left}`;
+
+  // the ping that asks takes none of the calls
+  const calls = before.remaining - after.remaining;
+  // only a run of whole parts tells what the next run of them takes
+  if (!failedOnly && !jestFlags.length) {
+    mkdirSync(cacheDir, { recursive: true });
+    const use = { ...readCloudinaryUse(), [partsKey(selected)]: calls };
+    writeFileSync(cloudinaryUseFile, JSON.stringify(use, null, 2));
+  }
+
+  return `Cloudinary admin api: the run took ${calls} calls, ${left}`;
+}
+
 function runJest(selected, services, { failedOnly, jestFlags, workers }) {
   const needsDb = selected.some((part) => part.integration);
 
@@ -336,14 +400,19 @@ function runJest(selected, services, { failedOnly, jestFlags, workers }) {
   const args = [
     // jest needs vm modules to run the app as native esm
     '--experimental-vm-modules',
+    // the integration files free the modules of the file before them with a collection of their own
+    // (tests/setup/integration.gc.ts), the workers get the flag from this process
+    '--expose-gc',
     '--disable-warning=ExperimentalWarning',
     path.join('node_modules', 'jest', 'bin', 'jest.js'),
     '--coverage',
     // empty folders are parts too, they must not fail the run
     '--passWithNoTests',
     // integration files share one database and redis: a few at a time (unit tests alone take
-    // every core jest gives them)
-    ...(needsDb ? [workers === 1 ? '--runInBand' : `--maxWorkers=${workers}`] : []),
+    // every core jest gives them). One at a time is one worker and not --runInBand: a worker is
+    // replaced when it has grown too big (workerIdleMemoryLimit in jest.config.js), the main
+    // process cannot be
+    ...(needsDb ? [`--maxWorkers=${workers}`] : []),
     ...(failedOnly ? ['--onlyFailures'] : []),
     '--json',
     `--outputFile=${resultFile}`,
@@ -377,7 +446,13 @@ function readResults() {
   }
 }
 
-function printSummary(selected, services, parts, results, { failedOnly, jestFlags }) {
+function printSummary(
+  selected,
+  services,
+  parts,
+  results,
+  { failedOnly, jestFlags, cloudinaryUse },
+) {
   const rows = selected.map((part) => {
     const row = { part: part.name, files: 0, passed: 0, failed: 0, skipped: 0, note: '' };
 
@@ -420,6 +495,7 @@ function printSummary(selected, services, parts, results, { failedOnly, jestFlag
 
   if (selected.some((part) => part.integration)) {
     console.log(`\nServices: ${describeServices(services)}`);
+    if (cloudinaryUse) console.log(cloudinaryUse);
   }
 
   const partial = selected.length < parts.length || failedOnly || jestFlags.length > 0;
@@ -441,14 +517,19 @@ const { selected, services } = await chooseParts(parts, options);
 if (!selected.length) fail('No test parts selected.');
 
 const needsDb = selected.some((part) => part.integration);
+const realCloudinary = needsDb && services.some((service) => service.name === 'cloudinary');
+
+const quotaBefore = realCloudinary ? await checkCloudinaryQuota(selected) : null;
 
 if (needsDb) buildTestDatabase();
 
 const status = runJest(selected, services, options);
 
+const cloudinaryUse = quotaBefore ? await cloudinaryUseOf(selected, quotaBefore, options) : null;
+
 if (needsDb && !options.keepDb) removeTestDatabase();
 
-printSummary(selected, services, parts, readResults(), options);
+printSummary(selected, services, parts, readResults(), { ...options, cloudinaryUse });
 
 if (needsDb && options.keepDb) {
   console.log('The test database is still running, remove it with: npm run db:test:down\n');

@@ -70,6 +70,29 @@ describe('buildOrderDeliveredTemplate', () => {
     expect(html).toContain('Rate Desk lamp');
   });
 
+  // the review is of the product, the line of the order is a variant: the rating line goes by the
+  // name the item says (the product), not by the name of the variant
+  it('names the rating line by the review name when the item has one', () => {
+    const { text, html } = buildOrderDeliveredTemplate(
+      order({
+        items: [
+          {
+            name: 'Desk lamp, black',
+            quantity: 1,
+            totalPrice: '25.00',
+            reviewUrl: 'https://shop.example.com/products/7#reviews',
+            reviewName: 'Desk lamp',
+          },
+        ],
+      }),
+    );
+
+    expect(text).toContain('- Desk lamp, black x 1');
+    expect(text).toContain('- Desk lamp: https://shop.example.com/products/7#reviews');
+    expect(text).not.toContain('- Desk lamp, black: https://');
+    expect(html).toContain('Rate Desk lamp');
+  });
+
   it('asks nothing when no product has the page of its reviews', () => {
     const { text, html } = buildOrderDeliveredTemplate(order());
 

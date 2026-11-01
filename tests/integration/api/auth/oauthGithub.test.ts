@@ -276,7 +276,7 @@ describe('GET /api/auth/github/callback', () => {
     products.push(product);
     const added = await app.inject({
       method: 'POST',
-      url: `/api/favorites/${product.id}`,
+      url: `/api/favorites/${product.variantId}`,
       headers: withCsrf(csrf),
     });
     const guest = cookieHeader({ guestId: cookieJar(added).guestId });

@@ -8,9 +8,11 @@ import {
   closeSessions,
   createProduct,
   createUser,
+  createVariant,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { orderRowOf, placeOrder } from '../../../helpers/orders.js';
+import { orderRowOf, placeOrder, placeOrderOf } from '../../../helpers/orders.js';
+import { tellApart } from '../../../helpers/variants.js';
 
 // GET /api/admin/stats: the numbers of the dashboard of an admin, read from
 // cartlify.admin_stats_view (its numbers are checked in db/adminStats.test.ts). The period is
@@ -94,6 +96,7 @@ describe('GET /api/admin/stats', () => {
         deletedTotal: count,
         outOfStockTotal: count,
         topProductsByRevenue: expect.any(Array),
+        topVariantsByRevenue: expect.any(Array),
         topCategoriesByRevenue: expect.any(Array),
       },
       reviews: {
@@ -147,7 +150,11 @@ describe('GET /api/admin/stats', () => {
       period: EMPTY_PERIOD,
       users: { newInPeriod: 0 },
       orders: { revenue: { inPeriod: 0 } },
-      products: { topProductsByRevenue: [], topCategoriesByRevenue: [] },
+      products: {
+        topProductsByRevenue: [],
+        topVariantsByRevenue: [],
+        topCategoriesByRevenue: [],
+      },
       reviews: { newInPeriod: 0 },
       money: {
         income: { items: 0, delivery: 0, total: 0 },
@@ -184,6 +191,65 @@ describe('GET /api/admin/stats', () => {
     // the money of the orders of the statistics is the income of the period
     expect(fromStats.orders.revenue.inPeriod).toBe(fromStats.money.income.total);
     expect(fromStats.orders.deliveryRevenue.inPeriod).toBe(fromStats.money.income.delivery);
+  });
+
+  // a product sold in two variants is one line of the top of products and two of the top of
+  // variants, each with its product and its variant
+  it('tops the products as the sum of their variants and the variants one by one', async () => {
+    const csrf = await getCsrf(app);
+    const product = await createProduct({ price: 3000, stock: 5 });
+    const second = await createVariant(product.id, { price: 2000, stock: 5 });
+    await tellApart([product.variantId, second.id]);
+    const orderId = await placeOrderOf(
+      app,
+      csrf,
+      await newUser(),
+      [{ item: product }, { item: { variantId: second.id }, quantity: 2 }],
+      'paid',
+    );
+    const { paidAt } = await orderRowOf(orderId);
+    const period = {
+      from: paidAt!.toISOString(),
+      to: new Date(paidAt!.getTime() + 1).toISOString(),
+    };
+
+    const res = await stats(period);
+
+    expect(res.statusCode).toBe(200);
+    const { topProductsByRevenue, topVariantsByRevenue } = res.json().products;
+    expect(topProductsByRevenue.filter((line: { id: number }) => line.id === product.id)).toEqual([
+      { id: product.id, name: expect.any(String), revenue: 7000, quantitySold: 3 },
+    ]);
+    expect(
+      topVariantsByRevenue.filter(
+        (line: { product: { id: number } }) => line.product.id === product.id,
+      ),
+    ).toEqual([
+      {
+        product: { id: product.id, name: expect.any(String), deleted: false },
+        variant: {
+          id: second.id,
+          position: 2,
+          name: expect.stringContaining('Kind 2'),
+          sku: null,
+          deleted: false,
+        },
+        revenue: 4000,
+        quantitySold: 2,
+      },
+      {
+        product: { id: product.id, name: expect.any(String), deleted: false },
+        variant: {
+          id: product.variantId,
+          position: 1,
+          name: expect.stringContaining('Kind 1'),
+          sku: null,
+          deleted: false,
+        },
+        revenue: 3000,
+        quantitySold: 1,
+      },
+    ]);
   });
 
   it('takes a period that starts and ends at the same time', async () => {

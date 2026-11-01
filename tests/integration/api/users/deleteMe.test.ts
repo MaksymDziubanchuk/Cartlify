@@ -19,6 +19,7 @@ import {
   createLoginLog,
   createProduct,
   createUser,
+  stockOf,
   uniqueTag,
   type TestProduct,
 } from '../../../helpers/factories.js';
@@ -307,14 +308,7 @@ describe('open orders', () => {
     expect(await isDeleted(user.id)).toBe(true);
     expect(await orderOf(waitingId)).toBeNull();
     expect(await orderOf(paidId)).toMatchObject({ status: 'paid', userId: user.id });
-    expect(
-      await asAdmin((tx) =>
-        tx.product.findUniqueOrThrow({
-          where: { id: product.id },
-          select: { stock: true, reservedStock: true },
-        }),
-      ),
-    ).toEqual({ stock: 4, reservedStock: 0 });
+    expect(await stockOf(product)).toEqual({ stock: 4, reservedStock: 0 });
   });
 
   it('checks the password before it shows the orders', async () => {

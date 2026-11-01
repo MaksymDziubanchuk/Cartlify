@@ -6,7 +6,7 @@ import { InternalError, NotFoundError } from '@utils/errors.js';
 
 import { asAdmin } from '../../helpers/db.js';
 import { rejectedBy } from '../../helpers/errors.js';
-import { uniqueTag } from '../../helpers/factories.js';
+import { defaultPartyId, uniqueTag } from '../../helpers/factories.js';
 
 // every transaction of the app has a time, 5 s unless the call names one. When it runs out, prisma
 // rolls the transaction back, and a nested write still on its way runs the rest of its statements
@@ -77,6 +77,7 @@ describe('a transaction of the app', () => {
   it('is the busy database when its time runs out inside a nested write, never a refusal of the database', async () => {
     const prefix = slugOf('nested-');
     const failures: unknown[] = [];
+    const manufacturerId = await defaultPartyId();
 
     for (let i = 0; i < 40; i += 1) {
       try {
@@ -89,13 +90,13 @@ describe('a transaction of the app', () => {
             return db.product.create({
               data: {
                 name: `Tx time ${tag} ${i}`,
-                price: 10,
                 categoryId: category.id,
+                manufacturerId,
+                variants: { create: { position: 1, price: 10 } },
                 images: {
                   create: Array.from({ length: 40 }, (_, n) => ({
                     url: `https://res.cloudinary.com/demo/image/upload/v1/tx/${tag}/${i}/${n}.jpg`,
                     position: n,
-                    isPrimary: n === 0,
                   })),
                 },
               },

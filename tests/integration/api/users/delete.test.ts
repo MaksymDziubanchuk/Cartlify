@@ -28,6 +28,7 @@ import {
   createProduct,
   createReview,
   createUser,
+  stockOf,
   uniqueTag,
   type TestProduct,
   type TestUser,
@@ -365,23 +366,19 @@ describe('what the deletion does', () => {
 
 describe('what happens around the account', () => {
   const orderOf = (id: number) => asAdmin((tx) => tx.order.findUnique({ where: { id } }));
-  const productOf = (id: number) =>
-    asAdmin((tx) =>
-      tx.product.findUniqueOrThrow({ where: { id }, select: { stock: true, reservedStock: true } }),
-    );
 
   it('cancels an order waiting for payment and gives its stock back', async () => {
     const target = await newUser();
     const product = await newProduct();
     const orderId = await placeOrder(app, csrf, target, product, 'waiting', 2);
-    expect(await productOf(product.id)).toEqual({ stock: 5, reservedStock: 2 });
+    expect(await stockOf(product)).toEqual({ stock: 5, reservedStock: 2 });
 
     const res = await deleteUser(target.id, rootCookie);
 
     expect(res.statusCode).toBe(200);
     // the order is gone: a payment that still comes for it is refunded by the webhook
     expect(await orderOf(orderId)).toBeNull();
-    expect(await productOf(product.id)).toEqual({ stock: 5, reservedStock: 0 });
+    expect(await stockOf(product)).toEqual({ stock: 5, reservedStock: 0 });
   });
 
   it('removes the cart', async () => {
@@ -407,7 +404,7 @@ describe('what happens around the account', () => {
     ).toMatchObject({ street: 'Test street', city: 'Kyiv', house: '1' });
     expect(await orderOf(shippedId)).toMatchObject({ userId: target.id, status: 'shipped' });
     // the stock the payments took stays taken
-    expect(await productOf(product.id)).toEqual({ stock: 3, reservedStock: 0 });
+    expect(await stockOf(product)).toEqual({ stock: 3, reservedStock: 0 });
   });
 
   // the popularity of a product counts them
@@ -557,5 +554,27 @@ describe('what happens around the account', () => {
     expect(mails[0]!.text).toContain(
       `Order #${waitingId}, €10.00: cancelled; if you paid for it, the payment is refunded`,
     );
+  });
+
+  // the items of an order are variants: the mail names each one as the order was confirmed with it,
+  // not as its product is called by the time the account goes
+  it('names the items of the orders in the mail with the names they were confirmed with', async () => {
+    const mails = watchMail();
+    const target = await newUser({ name: 'Anna' });
+    const name = `Account lamp ${uniqueTag()}`;
+    const product = await createProduct({ price: 10, stock: 5, name });
+    products.push(product);
+    await placeOrder(app, csrf, target, product, 'paid', 2);
+    await placeOrder(app, csrf, target, product, 'waiting');
+    await asAdmin((tx) =>
+      tx.product.update({ where: { id: product.id }, data: { name: `Renamed ${name}` } }),
+    );
+
+    await deleteUser(target.id, rootCookie);
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.text).toContain(`${name} x 2`);
+    expect(mails[0]!.text).toContain(`${name} x 1`);
+    expect(mails[0]!.text).not.toContain('Renamed');
   });
 });

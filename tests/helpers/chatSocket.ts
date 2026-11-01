@@ -8,8 +8,8 @@ const WAIT_MS = 10_000;
 
 // injectWS builds the upgrade request by hand and gives it no socket address,
 // which the rate limit needs to tell clients apart; a real connection always has one
-const upgradeRequest = (headers: Record<string, string>) =>
-  ({ headers, socket: { remoteAddress: '127.0.0.1' } }) as never;
+const upgradeRequest = (headers: Record<string, string>, address: string) =>
+  ({ headers, socket: { remoteAddress: address } }) as never;
 
 // a chat socket of a test: every event the server sends is kept, the test takes the ones it
 // waits for in any order; each event is taken once
@@ -29,15 +29,17 @@ export type ChatSocket = {
 
 const sockets: WebSocket[] = [];
 
+// the address is the one the socket seems to come from (the bot counts the turns of a guest by it)
 export async function openChatSocket(
   app: FastifyInstance,
   headers: Record<string, string>,
+  address = '127.0.0.1',
 ): Promise<ChatSocket> {
   const events: ChatEvent[] = [];
   const taken = new Set<number>();
   const waiters = new Set<() => void>();
 
-  const socket = await app.injectWS('/api/chat/ws', upgradeRequest(headers), {
+  const socket = await app.injectWS('/api/chat/ws', upgradeRequest(headers, address), {
     onInit: (ws: WebSocket) => {
       ws.on('message', (raw) => {
         events.push(JSON.parse(String(raw)) as ChatEvent);

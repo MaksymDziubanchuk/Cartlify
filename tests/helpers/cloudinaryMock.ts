@@ -7,9 +7,9 @@ import cloudinary from '@config/cloudinary.js';
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
 
 // the mock of Cloudinary (tests/helpers/cloudinary.ts puts it in place unless the run takes the
-// real service): the calls the app makes, upload_stream, rename and destroy, the read of a file
-// the tests make (api.resource), and the delivery of a file at its url. The files of a test file
-// live in memory, the way the account keeps them. Every answer and error is the one Cloudinary
+// real service): the calls the app makes, upload_stream, rename and destroy, the reads of files
+// the tests make (api.resource, api.resources_by_ids), and the delivery of a file at its url. The
+// files of a test file live in memory, the way the account keeps them. Every answer and error is the one Cloudinary
 // gives (checked against the account 21.10.2026); an option the app does not use stops the test,
 // the mock would only guess what Cloudinary does with it
 
@@ -133,8 +133,22 @@ function readWebp(data: Buffer): Size | null {
   return null;
 }
 
+// a pdf by its first page: Cloudinary reads the page and gives its size in points (checked
+// 31.10.2026: a file that only starts as a pdf, and one with no page, are "Invalid PDF file"); the
+// content of the page is not read
+function readPdf(data: Buffer): Size | null {
+  const text = data.toString('latin1');
+  const box = /\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]/.exec(text);
+  if (!box || !/\/Type\s*\/Page(?![A-Za-z])/.test(text)) return null;
+
+  const width = Math.round(Number(box[3]) - Number(box[1]));
+  const height = Math.round(Number(box[4]) - Number(box[2]));
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
 // the format Cloudinary sees in the bytes, the way it names it
 function formatOf(data: Buffer): string | null {
+  if (data.toString('latin1', 0, 5) === '%PDF-') return 'pdf';
   if (data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
     return 'png';
   }
@@ -150,6 +164,12 @@ const READERS: Record<string, (data: Buffer) => Size | null> = {
   png: readPng,
   jpg: readJpeg,
   webp: readWebp,
+  pdf: readPdf,
+};
+
+const INVALID_FILE: Record<string, string> = {
+  webp: 'Invalid webp file',
+  pdf: 'Invalid PDF file',
 };
 
 // what Cloudinary answers for the file of an upload, in the order it checks
@@ -164,8 +184,8 @@ function takeFile(data: Buffer, options: UploadApiOptions): Size & { format: str
   }
 
   const size = READERS[format]?.(data);
-  // a webp that cannot be read has an answer of its own
-  if (!size) throw uploadError(400, format === 'webp' ? 'Invalid webp file' : 'Invalid image file');
+  // a webp and a pdf that cannot be read have an answer of their own
+  if (!size) throw uploadError(400, INVALID_FILE[format] ?? 'Invalid image file');
   return { ...size, format };
 }
 
@@ -203,7 +223,7 @@ function uploadStream(...args: unknown[]): Writable {
     {}) as UploadApiOptions;
   const callback = args.find((arg) => typeof arg === 'function') as
     ((err?: unknown, res?: UploadApiResponse) => void) | undefined;
-  if (options.resource_type !== 'image') unsupported('an upload that is not an image');
+  if (options.resource_type !== 'image') unsupported('an upload that is not an image or a pdf');
   if (typeof options.public_id !== 'string') unsupported('an upload without a public id');
   const publicId = options.public_id;
 
@@ -261,12 +281,19 @@ async function rename(from: string, to: string, options: { overwrite?: boolean }
   return describeFile(moved);
 }
 
-async function destroy(publicId: string) {
+async function destroy(publicId: string, options: { resource_type?: string } = {}) {
+  if (options.resource_type !== undefined && options.resource_type !== 'image') {
+    unsupported(`the destroy of a ${options.resource_type} file`);
+  }
   return { result: files.delete(publicId) ? 'ok' : 'not found' };
 }
 
 // the admin api gives its error under error, with the request beside it
-async function resource(publicId: string) {
+async function resource(publicId: string, options: { resource_type?: string } = {}) {
+  if (options.resource_type !== undefined && options.resource_type !== 'image') {
+    unsupported(`the read of a ${options.resource_type} file`);
+  }
+
   const file = files.get(publicId);
   if (!file) {
     throw {
@@ -276,6 +303,25 @@ async function resource(publicId: string) {
     };
   }
   return describeFile(file);
+}
+
+// the files of the ids that are there; an id of no file is left out, no error, the way the admin
+// api answers
+async function resourcesByIds(
+  publicIds: string[] | string,
+  options: { resource_type?: string; type?: string } = {},
+) {
+  if (options.resource_type !== undefined && options.resource_type !== 'image') {
+    unsupported(`the read of ${options.resource_type} files`);
+  }
+
+  const ids = Array.isArray(publicIds) ? publicIds : [publicIds];
+  return {
+    resources: ids.flatMap((id) => {
+      const file = files.get(id);
+      return file ? [describeFile(file)] : [];
+    }),
+  };
 }
 
 // the file at an image url the app gives: the transforms are not applied, the file comes as it
@@ -296,10 +342,14 @@ function deliver(url: string): Response {
   return file
     ? new Response(new Uint8Array(file.data), {
         status: 200,
-        headers: { 'content-type': `image/${file.format === 'jpg' ? 'jpeg' : file.format}` },
+        headers: { 'content-type': mediaTypeOf(file.format) },
       })
     : new Response(null, { status: 404 });
 }
+
+// the type the delivery names for the format of a file (a pdf is kept as an image, and comes as a pdf)
+const mediaTypeOf = (format: string) =>
+  format === 'pdf' ? 'application/pdf' : `image/${format === 'jpg' ? 'jpeg' : format}`;
 
 // in place for the whole test file, by assignment and not jest.spyOn: restoreAllMocks of a test
 // must not take it away
@@ -309,6 +359,7 @@ export function installCloudinaryMock(): void {
   uploader.rename = rename;
   uploader.destroy = destroy;
   (cloudinary.api as unknown as Record<string, unknown>).resource = resource;
+  (cloudinary.api as unknown as Record<string, unknown>).resources_by_ids = resourcesByIds;
 
   const realFetch = globalThis.fetch;
   globalThis.fetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {

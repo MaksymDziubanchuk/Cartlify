@@ -355,8 +355,14 @@ describe('GET /api/users/:userId for an admin', () => {
         updatedAt: expect.any(String),
       },
     ]);
+    // a favorite is a variant, kept with its product
     expect(body.favorites).toEqual([
-      { id: expect.any(Number), productId: product.id, createdAt: expect.any(String) },
+      {
+        id: expect.any(Number),
+        productId: product.id,
+        variantId: product.variantId,
+        createdAt: expect.any(String),
+      },
     ]);
     expect(body.votes).toEqual([
       {

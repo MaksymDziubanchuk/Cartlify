@@ -51,9 +51,15 @@ describe('PATCH /api/products/:productId/category', () => {
     const body = res.json();
 
     expect(res.statusCode).toBe(200);
-    expect(body).toMatchObject({ id: product.id, category: { id: child.id, name: child.name } });
+    // the answer is the card of an admin
+    expect(Object.keys(body).sort()).toEqual(['product', 'variant', 'variants']);
+    expect(body.product).toMatchObject({
+      id: product.id,
+      category: { id: child.id, name: child.name },
+    });
+    expect(body.variant.id).toBe(product.variantId);
     // the path is the parents of the category, the top one first
-    expect(body.category.path.map((c: { id: number }) => c.id)).toEqual([parent.id]);
+    expect(body.product.category.path.map((c: { id: number }) => c.id)).toEqual([parent.id]);
     expect(
       (await asAdmin((tx) => tx.product.findUniqueOrThrow({ where: { id: product.id } })))
         .categoryId,
@@ -72,7 +78,7 @@ describe('PATCH /api/products/:productId/category', () => {
     const res = await move(product.id, product.categoryId);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().category.id).toBe(product.categoryId);
+    expect(res.json().product.category.id).toBe(product.categoryId);
     expect(await logOf(product.id)).toEqual([]);
   });
 

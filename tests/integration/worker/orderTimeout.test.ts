@@ -200,7 +200,9 @@ describe('the base job: the payment page at the end of the reservation', () => {
     it('gives up after the last attempt with one error', async () => {
       const { orderId } = await orderWithPage();
       await dueFirst(orderId);
-      await (await getRedis()).hSet(
+      await (
+        await getRedis()
+      ).hSet(
         `${redisKeys.orderTimeoutBaseZset}:attempts`,
         String(orderId),
         String(ORDER_TIMEOUT_MAX_ATTEMPTS - 1),
@@ -239,14 +241,16 @@ describe('the grace job: the reserved stock after the grace window', () => {
     const user = await newUser();
     const product = await newProduct();
     const orderId = await inCommittedTx(async (db) => {
-      const id = await cartOf(db, user.id, [[product.id, 1]]);
+      const id = await cartOf(db, user.id, [[product.variantId, 1]]);
       const confirmed = await confirm(db, user.id, id, '1 millisecond');
       if (!confirmed.ok) throw new Error(`confirm_order refused: ${confirmed.message}`);
       return id;
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
     // the grace job is due 2 minutes after the base one; here both are due first
-    await (await getRedis()).zAdd(redisKeys.orderTimeoutZset, [{ score: 2, value: String(orderId) }]);
+    await (
+      await getRedis()
+    ).zAdd(redisKeys.orderTimeoutZset, [{ score: 2, value: String(orderId) }]);
     const log = workerLog();
 
     expect(await processClaimedOrderReservationExpiries(log, 1)).toBe(1);
@@ -263,7 +267,9 @@ describe('the grace job: the reserved stock after the grace window', () => {
   // the owner deleted the order before its timer ran: a stale job, not a failure to repeat
   it('takes the job of an order that is gone off its queue without an error', async () => {
     const orderId = 2_000_000_004;
-    await (await getRedis()).zAdd(redisKeys.orderTimeoutZset, [{ score: 3, value: String(orderId) }]);
+    await (
+      await getRedis()
+    ).zAdd(redisKeys.orderTimeoutZset, [{ score: 3, value: String(orderId) }]);
     const log = workerLog();
 
     expect(await processClaimedOrderReservationExpiries(log, 1)).toBe(1);

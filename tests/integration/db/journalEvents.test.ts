@@ -26,12 +26,15 @@ let buyer: TestUser;
 let admin: TestUser;
 let root: TestUser;
 let productId: number;
+let variantId: number;
 
 beforeAll(async () => {
   buyer = await createUser();
   admin = await createUser({ role: 'ADMIN' });
   root = await createUser({ role: 'ROOT' });
-  productId = (await createProduct({ price: 10 })).id;
+  const product = await createProduct({ price: 10 });
+  productId = product.id;
+  variantId = product.variantId;
 });
 
 afterAll(async () => {
@@ -70,9 +73,9 @@ const auditLine = (db: DbSession, event: string | null) =>
 
 const priceLine = (db: DbSession, event: string | null) =>
   db.attempt(
-    `select 1 as done from cartlify.log_product_price_change(
+    `select 1 as done from cartlify.log_variant_price_change(
        $1::int, 10, 12, 'fixed'::cartlify."PriceChangeMode", 2, $2)`,
-    productId,
+    variantId,
     event,
   );
 
@@ -122,19 +125,23 @@ describe('the events of the admin log', () => {
   });
 
   it('writes the lines the database writes itself with their events', async () => {
-    // the line of a sale that a price ended is written by the trigger of the products
+    // the line of a sale that a price ended is written by the trigger of the variants
     const events = await inRolledBackTx(async (db) => {
       await db.as(asAdmin());
       await db.rows(
-        `update cartlify.products set "salePrice" = 5, "saleEndsAt" = (now() at time zone 'UTC') + interval '1 day'
+        `update cartlify.product_variants set "salePrice" = 5, "saleEndsAt" = (now() at time zone 'UTC') + interval '1 day'
          where id = $1 returning id`,
-        productId,
+        variantId,
       );
-      await db.rows(`update cartlify.products set price = 4 where id = $1 returning id`, productId);
+      await db.rows(
+        `update cartlify.product_variants set price = 4 where id = $1 returning id`,
+        variantId,
+      );
       return db.rows<{ event: string }>(
         `select event from cartlify.admin_audit_log
-         where "entityId" = $1 and action = 'PRODUCT_SALE' order by id desc limit 1`,
-        productId,
+         where "entityType" = 'variant' and "entityId" = $1 and action = 'PRODUCT_SALE'
+         order by id desc limit 1`,
+        variantId,
       );
     });
 
@@ -149,8 +156,8 @@ describe('the events of the log of prices', () => {
       await priceLine(db, 'price.bulk');
       return db.rows<{ event: string }>(
         `select event from cartlify.product_price_change_logs
-         where "productId" = $1 order by id desc limit 1`,
-        productId,
+         where "variantId" = $1 order by id desc limit 1`,
+        variantId,
       );
     });
 

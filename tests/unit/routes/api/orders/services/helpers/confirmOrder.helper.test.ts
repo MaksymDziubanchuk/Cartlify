@@ -229,15 +229,19 @@ describe('findUnavailableItems', () => {
       stock: number;
       reservedStock: number;
       deletedAt: Date | null;
+      productDeletedAt: Date | null;
+      pictures: number;
     }> = {},
   ) => ({
     id: 31,
-    productId: 4,
+    variantId: 4,
     quantity: patch.quantity ?? 2,
-    product: {
+    product: { deletedAt: patch.productDeletedAt ?? null },
+    variant: {
       deletedAt: patch.deletedAt ?? null,
       stock: patch.stock ?? 5,
       reservedStock: patch.reservedStock ?? 1,
+      images: Array.from({ length: patch.pictures ?? 1 }, () => ({ imageId: 1 })),
     },
   });
 
@@ -247,17 +251,49 @@ describe('findUnavailableItems', () => {
 
   it('names an item of more than the free units, the units that are over left out', () => {
     expect(findUnavailableItems([item({ quantity: 2 })], new Map([[4, 3]]))).toEqual([
-      { itemId: 31, productId: 4, reason: 'out_of_stock', available: 1, requested: 2 },
+      { itemId: 31, variantId: 4, reason: 'out_of_stock', available: 1, requested: 2 },
     ]);
+  });
+
+  it('counts the units that are over of the variant of the item, not of another one', () => {
+    expect(findUnavailableItems([item({ quantity: 2 })], new Map([[5, 9]]))).toEqual([]);
   });
 
   it('never gives fewer than no free units', () => {
     expect(findUnavailableItems([item()], new Map([[4, 9]]))[0]).toMatchObject({ available: 0 });
   });
 
-  it('names an item of a product removed from the catalog', () => {
+  it('names an item of a variant taken out of sale', () => {
     expect(findUnavailableItems([item({ deletedAt: new Date() })], new Map())).toEqual([
-      { itemId: 31, productId: 4, reason: 'deleted', available: 0, requested: 2 },
+      { itemId: 31, variantId: 4, reason: 'deleted', available: 0, requested: 2 },
+    ]);
+  });
+
+  it('names an item of a variant of a product removed from the catalog', () => {
+    expect(findUnavailableItems([item({ productDeletedAt: new Date() })], new Map())).toEqual([
+      { itemId: 31, variantId: 4, reason: 'deleted', available: 0, requested: 2 },
+    ]);
+  });
+
+  it('names an item of a variant that shows no picture, however many units it has', () => {
+    expect(findUnavailableItems([item({ pictures: 0, stock: 99 })], new Map())).toEqual([
+      { itemId: 31, variantId: 4, reason: 'deleted', available: 0, requested: 2 },
+    ]);
+  });
+
+  it('names the variants of one product apart', () => {
+    const out = findUnavailableItems(
+      [
+        { ...item(), id: 1, variantId: 4 },
+        { ...item({ deletedAt: new Date() }), id: 2, variantId: 5 },
+        { ...item({ stock: 1, reservedStock: 0, quantity: 3 }), id: 3, variantId: 6 },
+      ],
+      new Map(),
+    );
+
+    expect(out).toEqual([
+      { itemId: 2, variantId: 5, reason: 'deleted', available: 0, requested: 2 },
+      { itemId: 3, variantId: 6, reason: 'out_of_stock', available: 1, requested: 3 },
     ]);
   });
 });
@@ -266,9 +302,10 @@ describe('findUnavailableItems at the free units', () => {
   it('lets through an item of exactly the free units', () => {
     const item = {
       id: 41,
-      productId: 6,
+      variantId: 6,
       quantity: 3,
-      product: { deletedAt: null, stock: 5, reservedStock: 2 },
+      product: { deletedAt: null },
+      variant: { deletedAt: null, stock: 5, reservedStock: 2, images: [{ imageId: 1 }] },
     };
 
     expect(findUnavailableItems([item], new Map())).toEqual([]);
