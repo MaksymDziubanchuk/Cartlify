@@ -8,6 +8,7 @@ import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js
 
 import { currencyOf } from '../../providers/index.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
+import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 
 export type OrderMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -58,6 +59,7 @@ function loadOrder(orderId: number) {
             unitPrice: true,
             totalPrice: true,
             productName: true,
+            variantId: true,
             product: { select: { name: true } },
           },
         },
@@ -117,8 +119,8 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       orderId: order.id,
       orderUrl: orderPage(order.id),
       items: order.items.map((item) => ({
-        // the name the product had when the order was confirmed
-        name: item.productName ?? item.product.name,
+        // the name the variant had when the order was confirmed
+        name: itemNameOf(item),
         quantity: item.quantity,
         unitPrice: item.unitPrice.toString(),
         totalPrice: item.totalPrice.toString(),

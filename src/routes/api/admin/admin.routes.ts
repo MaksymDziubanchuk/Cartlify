@@ -33,6 +33,15 @@ export default async function adminRouter(app: FastifyInstance) {
   );
 
   app.get(
+    '/reports/accounting/variants',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getAccountingVariantsSchema,
+    },
+    adminController.getAccountingVariants,
+  );
+
+  app.get(
     '/reports/accounting/categories',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
@@ -75,6 +84,15 @@ export default async function adminRouter(app: FastifyInstance) {
       schema: adminSchema.getAuditLogSchema,
     },
     adminController.getAuditLog,
+  );
+
+  app.get(
+    '/stock-log',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getStockLogSchema,
+    },
+    adminController.getStockLog,
   );
 
   app.get(

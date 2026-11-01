@@ -10,9 +10,9 @@ import {
 } from '@utils/errors.js';
 import {
   deliverySuggestionOf,
-  dropDeletedProductItems,
+  dropHiddenVariantItems,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
 } from './helpers/index.js';
 
@@ -43,17 +43,17 @@ export async function getCurrent({
 
         if (!current) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');
 
-        // drop the items of products deleted from the catalog and bring the rest to current
-        // product prices, totals are maintained by db triggers; confirm refuses an order with
-        // outdated prices, so the cart must show what will be confirmed
-        await dropDeletedProductItems(db, Number(actorId), [current.id]);
+        // drop the items of variants a buyer does not see and bring the rest to current variant
+        // prices, totals are maintained by db triggers; confirm refuses an order with outdated
+        // prices, so the cart must show what will be confirmed
+        await dropHiddenVariantItems(db, Number(actorId), [current.id]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${current.id}::int)`;
 
         const order = await readOrderResponse(db, current.id);
 
         if (!order) throw new NotFoundError('CURRENT_ORDER_NOT_FOUND');
 
-        const response = mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        const response = mapOrderRowToResponse(order, await orderContextOf(db, [order]));
 
         // the delivery of the last order of the buyer, to start from
         const suggestion = await deliverySuggestionOf(db, Number(actorId));

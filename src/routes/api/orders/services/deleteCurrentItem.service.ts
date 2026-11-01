@@ -9,9 +9,9 @@ import {
   ResourceBusyError,
 } from '@utils/errors.js';
 import {
-  dropDeletedProductItems,
+  dropHiddenVariantItems,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
   orderTargetSql,
 } from './helpers/index.js';
@@ -19,7 +19,7 @@ import {
 import type { CurrentDeleteItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
 // removes an item from the cart, or, with orderId, from an own unconfirmed order; an item of a
-// product deleted from the catalog is removed the same way
+// variant that is taken out of sale is removed the same way
 export async function deleteCurrentItem({
   actorId,
   actorRole,
@@ -63,10 +63,10 @@ export async function deleteCurrentItem({
           select: { id: true },
         });
 
-        // bring remaining items to current product prices, the order also loses the items of
-        // products deleted from the catalog; confirm refuses an order with outdated prices, so the
+        // bring remaining items to current variant prices, the order also loses the items of
+        // variants a buyer does not see; confirm refuses an order with outdated prices, so the
         // order must show what will be confirmed
-        await dropDeletedProductItems(db, actorIdRaw, [orderId]);
+        await dropHiddenVariantItems(db, actorIdRaw, [orderId]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // fetch current order after delete
@@ -74,7 +74,7 @@ export async function deleteCurrentItem({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_DELETE' });
 
-        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        return mapOrderRowToResponse(order, await orderContextOf(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

@@ -1,15 +1,10 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
-import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
-import {
-  SAFETY_COUNTRY_PATTERN,
-  SAFETY_EMAIL_PATTERN,
-  SAFETY_LIMITS,
-} from '@helpers/productDescription.js';
+import { MAX_PRODUCT_VARIANTS, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
+import { PARTY_LIMITS, WARNINGS_MAX } from '@helpers/party.js';
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
-import { PRODUCT_SIZE_MAX_MM, PRODUCT_WEIGHT_MAX_GRAMS } from '@helpers/productShipping.js';
 
-// money of a request: whole cents up to what numeric(10, 2) holds
-const moneyField = {
+// money of a request: whole cents up to what numeric(10, 2) holds (the price of a variant)
+export const moneyField = {
   type: 'number',
   minimum: 0,
   maximum: 99_999_999.99,
@@ -19,13 +14,15 @@ const moneyField = {
 
 const MAX_IMAGE_MB = MAX_UPLOAD_SIZE_BYTES / 1_000_000;
 
-// the image files of a product form, in their order: the first is the main image
+// the image files of a product form, in their order: the gallery of the product, a variant names a
+// file by its number (from 0)
 const productImagesFormField = {
   type: 'array',
   items: { type: 'string', format: 'binary' },
   description:
-    'Product images in their order, the first is the main one: jpeg, png or webp files by their ' +
-    `content, each up to ${MAX_IMAGE_MB} MB.`,
+    'The gallery of the product: jpeg, png or webp files by their content, each up to ' +
+    `${MAX_IMAGE_MB} MB, in their order; the number of a file (from 0) is how a variant names it. ` +
+    'Every file is shown by some variant (GALLERY_IMAGE_UNUSED).',
 } as const;
 
 const getAllProductsQuerySchema = {
@@ -34,14 +31,20 @@ const getAllProductsQuerySchema = {
   additionalProperties: false,
   properties: {
     // cursor pagination
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most rows a page holds, from 1 to 100.',
+    },
     cursor: {
       type: 'string',
       minLength: 1,
       pattern: '^[A-Za-z0-9_-]+$',
       description:
-        'nextCursor of the previous page, with the same sort and order. A changed cursor, or one ' +
-        'from another sort or order, is CURSOR_INVALID.',
+        'nextCursor of the previous page, with the same sort and order and rows of the same kind ' +
+        '(products or variants, see GET /api/products). A changed cursor, or one from another ' +
+        'sort, order or kind of rows, is CURSOR_INVALID.',
     },
 
     // filters
@@ -50,7 +53,9 @@ const getAllProductsQuerySchema = {
       minLength: 1,
       description:
         'Finds a product by its name, forgiving a typo and another order of the words, by the ' +
-        'name of its category or by its article number (sku). Without a sort the best match ' +
+        'name of its category or by the article number (sku) of one of its variants, whatever the ' +
+        'case of its letters; admin and root by a barcode too. A product row then shows the ' +
+        'variant that has the code, a variant row is that variant. Without a sort the best match ' +
         'comes first (sort relevance).',
     },
     categoryIds: {
@@ -71,15 +76,17 @@ const getAllProductsQuerySchema = {
       type: 'number',
       minimum: 0,
       description:
-        'A buyer: the price a product sells at now, the sale price while its sale lasts. An ' +
-        'admin: the usual price, the one the field price shows.',
+        'The price of a variant; the rows are variants then, each variant that fits. A buyer: ' +
+        'the price a variant sells at now, the sale price while its sale lasts. An admin: the ' +
+        'usual price, the one the field price shows.',
     },
     maxPrice: {
       type: 'number',
       minimum: 0,
       description:
-        'A buyer: the price a product sells at now, the sale price while its sale lasts. An ' +
-        'admin: the usual price, the one the field price shows.',
+        'The price of a variant; the rows are variants then, each variant that fits. A buyer: ' +
+        'the price a variant sells at now, the sale price while its sale lasts. An admin: the ' +
+        'usual price, the one the field price shows.',
     },
 
     deleted: {
@@ -91,10 +98,11 @@ const getAllProductsQuerySchema = {
     onSale: {
       type: 'boolean',
       description:
-        'Admin and root only (FILTER_FORBIDDEN for a buyer): true lists only the products with ' +
-        'a sale that is on, whatever else they have. Without any flag an admin gets only the ' +
-        'plain products (not deleted, without a sale and an override that are on); with another ' +
-        'flag the sale does not filter. A buyer always gets every product of the catalog.',
+        'Admin and root only (FILTER_FORBIDDEN for a buyer): true lists only the variants with ' +
+        'a sale that is on (the rows are variants), whatever else they have. Without any flag an ' +
+        'admin gets only the plain products (not deleted, without a sale on any variant and an ' +
+        'override that are on); with another flag the sale does not filter. A buyer always gets ' +
+        'every variant of the catalog.',
     },
     popularityOverridden: {
       type: 'boolean',
@@ -107,24 +115,135 @@ const getAllProductsQuerySchema = {
     withoutShippingData: {
       type: 'boolean',
       description:
-        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: true lists every product of ' +
-        'the catalog that lacks the weight or the sizes, whatever else it has (a sale, an ' +
-        'override); the products whose data the shipping waits for.',
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: true lists every variant ' +
+        'of the catalog that lacks the weight or the sizes, whatever else it has (a sale, an ' +
+        'override); the variants whose data the shipping waits for. The rows are variants.',
+    },
+    missingRequired: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true), a flag: true lists every ' +
+        'live variant that has no value of a characteristic the set of its category marks ' +
+        'required (the set of a category is its own and its parents, the nearest category ' +
+        'winning for a characteristic: GET /api/categories/{categoryId}/attributes), whatever ' +
+        'else it has. A variant taken out of sale, and every variant of a removed product, is ' +
+        'none of them. The rows are variants (groups unless group=false). The alert ' +
+        '`variants_missing_required` counts the same variants.',
+    },
+    withoutWeight: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true), a flag: true lists every ' +
+        'live variant with no weight. The rows are variants. withoutShippingData lists the ones ' +
+        'that lack the weight or the sizes.',
+    },
+    withoutDimensions: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true), a flag: true lists every ' +
+        'live variant that lacks the length, the width or the height (the sizes are known all ' +
+        'three or none). The rows are variants.',
+    },
+    withoutBarcode: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true), a flag: true lists every ' +
+        'live variant with no barcode. The rows are variants.',
+    },
+    withoutImages: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true), a flag: true lists every ' +
+        'live variant with no picture bound, the ones a buyer does not see. The rows are variants.',
+    },
+    hiddenFromBuyers: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true; false is what a buyer ' +
+        'sees anyway), a flag: true lists the products a buyer does not see, false the products ' +
+        'he sees. A product is hidden from buyers when it is removed from the catalog or none of ' +
+        'its variants is one a buyer sees (a variant is seen when it is alive and has a ' +
+        'picture). Like every list, the removed products come only with deleted=true (all of ' +
+        'them are hidden, so false lists none there); without it the list holds the products of ' +
+        'the catalog. A row is a product, with its first variant (a product none of whose ' +
+        'variants is alive keeps its first one), unless the query asks something of a variant ' +
+        '(group=false lists the live variants of the products). The alert ' +
+        '`products_hidden_from_buyers` counts the products of the catalog that are hidden.',
+    },
+    hasDeletedVariants: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when true), a flag: true lists the ' +
+        'products that have at least one variant taken out of sale (the variants of a removed ' +
+        'product are taken out of sale with it, so deleted=true lists the removed products). ' +
+        'The rows stay products.',
+    },
+    manufacturerId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: the products of this ' +
+        'manufacturer of the directory (GET /api/admin/parties). A party that is not there is ' +
+        'MANUFACTURER_NOT_FOUND.',
+    },
+    euResponsibleId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: the products that name ' +
+        'this party of the directory as the person responsible in the EU. A party that is not ' +
+        'there is EU_RESPONSIBLE_NOT_FOUND.',
+    },
+    documentId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: the products that hold ' +
+        'this document of the directory (GET /api/admin/documents). A document that is not ' +
+        'there is DOCUMENT_NOT_FOUND.',
     },
     inStock: {
       type: 'boolean',
       description:
-        'Free units, the stock the list shows: true lists products with some free, false ' +
-        'products with none. Units reserved by confirmed orders and units of batches that are ' +
+        'Free units, the stock the list shows: true lists products with some free (a product ' +
+        'row: some variant of it has them), false products with none. With a filter or a sort ' +
+        'of a variant the rows are variants, and the filter keeps the variants with some free ' +
+        'units or with none. Units reserved by confirmed orders and units of batches that are ' +
         'over are not free.',
     },
     maxStock: {
       type: 'integer',
       minimum: 0,
       description:
-        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: lists every product of the ' +
+        'Admin and root only (FILTER_FORBIDDEN for a buyer), a flag: lists every variant of the ' +
         'catalog with no more free units than the number, whatever else it has (a sale, an ' +
-        'override); 0 the products with none. With inStock=true the ones with some.',
+        'override); 0 the variants with none. With inStock=true the ones with some. The rows ' +
+        'are variants.',
+    },
+
+    f: {
+      anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+      description:
+        'The filter by characteristics (the panel GET /api/products/filters tells which): one entry ' +
+        'for a characteristic, `<attributeId>:<value>`, the parameter may repeat: `f=12:45,46&f=15:128..512&f=20:yes`. ' +
+        'A choice from a list (a colour too) is the ids of the values separated by commas, any of ' +
+        'them fits (`12:45,46`); a number is a range with both ends included (`15:128..512`, `128..` ' +
+        'from, `..512` up to, decimals `6.1..6.7`); yes/no is `yes` or `no`. Values of one ' +
+        'characteristic are OR, different characteristics are AND; a variant without a value of the ' +
+        'characteristic fits none of its values. A filter makes the rows variants (groups, see the ' +
+        'route). A text cannot be filtered. Nothing in the entry is encoded in the url. A wrong ' +
+        'entry is FILTER_INVALID, `details.reason` says why.',
+    },
+    group: {
+      type: 'boolean',
+      description:
+        'Admin and root only (FILTER_FORBIDDEN for a buyer when false): false lists every variant on a ' +
+        'row of its own (the rows are variants, `stock` is the free units of the variant); true, ' +
+        'the default, gives the rows a buyer gets: products, or groups of variants with the same ' +
+        'main characteristics when the query asks something of a variant.',
     },
 
     // the period of the sort by sales
@@ -172,22 +291,30 @@ const getAllProductsQuerySchema = {
       description:
         'relevance (the default with a search, the best match first; without a search ' +
         'SORT_RELEVANCE_REQUIRES_SEARCH) for every role. ' +
-        'A buyer sorts by createdAt, price (the price a product sells at now), popularity ' +
-        '(the default without a search), avgRating, name, saleEndsAt and discount: the products on sale first ' +
-        'by the end of their sale (saleEndsAt) or by the part of the price the sale takes off (discount, ' +
-        'the biggest discount first with order desc) in the order asked for, then every other one by ' +
-        'popularity, the most popular first; and sales: the units sold in the period (salesFrom, salesTo), ' +
-        'the best selling first with order desc; any other sort is SORT_FORBIDDEN. An admin sorts by any field; price is the usual ' +
-        'price, salePrice the sale price, stock the free units, totalStock the whole stock, ' +
-        'expiredStock the units of batches that are over. A ' +
-        'field only some products have comes with its flag: deletedAt with deleted, saleEndsAt ' +
-        'and salePrice and discount with onSale, popularityOverride and popularityOverrideUntil with ' +
-        'popularityOverridden, otherwise SORT_DELETED_AT_REQUIRES_DELETED, ' +
-        'SORT_SALE_ENDS_AT_REQUIRES_ON_SALE, SORT_SALE_PRICE_REQUIRES_ON_SALE, ' +
-        'SORT_DISCOUNT_REQUIRES_ON_SALE, ' +
+        'A sort by price, salePrice, discount, saleEndsAt, stock, totalStock, reservedStock or ' +
+        'expiredStock is a sort of a variant: the rows are variants then. Every other sort ' +
+        'orders products, and sales orders the variants of a product by the sales of the product. ' +
+        'A buyer sorts by createdAt, price (the price a variant sells at now), popularity ' +
+        '(the default without a search), avgRating, name, saleEndsAt and discount: the variants on ' +
+        'sale first by the end of their sale (saleEndsAt) or by the part of the price the sale ' +
+        'takes off (discount, the biggest discount first with order desc) in the order asked for, ' +
+        'then every other one by the popularity of its product, the most popular first; and ' +
+        'sales: the units sold in the period (salesFrom, salesTo), ' +
+        'the best selling first with order desc; any other sort is SORT_FORBIDDEN. An admin sorts ' +
+        'by any field; price is the usual price, salePrice the sale price, stock the free units, ' +
+        'totalStock the whole stock, expiredStock the units of batches that are over (all of a ' +
+        'variant). A field only some products have comes with its flag: deletedAt with deleted, ' +
+        'saleEndsAt and salePrice and discount with onSale, popularityOverride and ' +
+        'popularityOverrideUntil with popularityOverridden, otherwise ' +
+        'SORT_DELETED_AT_REQUIRES_DELETED, SORT_SALE_ENDS_AT_REQUIRES_ON_SALE, ' +
+        'SORT_SALE_PRICE_REQUIRES_ON_SALE, SORT_DISCOUNT_REQUIRES_ON_SALE, ' +
         'SORT_POPULARITY_OVERRIDE_REQUIRES_OVERRIDDEN.',
     },
-    order: { type: 'string', enum: ['asc', 'desc'] },
+    order: {
+      type: 'string',
+      enum: ['asc', 'desc'],
+      description: 'The direction of sort: desc (the default) or asc.',
+    },
   },
 } as const;
 
@@ -221,82 +348,134 @@ const productSuggestionsResponseSchema = {
   required: ['items'],
 } as const;
 
-const imageUrlsSchema = {
+// the panel of the filter of a category: GET /api/products/filters
+const catalogFiltersQuerySchema = {
+  $id: 'catalogFiltersQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    url200: { type: 'string' },
-    url400: { type: 'string' },
-    url800: { type: 'string' },
+    categoryId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description: `The category: a whole number from 1 to ${MAX_ID}.`,
+    },
+    branch: {
+      type: 'boolean',
+      description:
+        'true (the default): the products of the category and of everything below it; false: ' +
+        'only the products of the category itself.',
+    },
   },
-  required: ['url200', 'url400', 'url800'],
+  required: ['categoryId'],
+} as const;
+
+const catalogFilterBase = {
+  id: { type: 'integer', description: 'The characteristic: the number before the colon of f.' },
+  name: { type: 'string' },
+  unit: { type: ['string', 'null'], description: 'A label of the values ("GB"); null for none.' },
+  group: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { id: { type: 'integer' }, name: { type: 'string' } },
+    required: ['id', 'name'],
+    description: 'The section of the card the characteristic belongs to.',
+  },
+} as const;
+
+const catalogChoiceFilterSchema = {
+  $id: 'catalogChoiceFilterSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...catalogFilterBase,
+    type: { type: 'string', enum: ['option', 'options'] },
+    values: {
+      type: 'array',
+      description:
+        'The values of the list that the variants of the category have, in the order the admin ' +
+        'put them (a size S, M, L, not the abc). Their ids go into f: f=<id>:<value id>,<value id>.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          name: { type: 'string' },
+          colorCode: {
+            type: ['string', 'null'],
+            description: 'The colour of the swatch, #RRGGBB; null for none.',
+          },
+          position: { type: 'integer', minimum: 1 },
+        },
+        required: ['id', 'name', 'colorCode', 'position'],
+      },
+    },
+  },
+  required: ['id', 'name', 'unit', 'group', 'type', 'values'],
+} as const;
+
+const catalogNumberFilterSchema = {
+  $id: 'catalogNumberFilterSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...catalogFilterBase,
+    type: { type: 'string', enum: ['number'] },
+    min: { type: 'number', description: 'The lowest value the variants of the category have.' },
+    max: { type: 'number', description: 'The highest value the variants of the category have.' },
+  },
+  required: ['id', 'name', 'unit', 'group', 'type', 'min', 'max'],
+} as const;
+
+const catalogBooleanFilterSchema = {
+  $id: 'catalogBooleanFilterSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    ...catalogFilterBase,
+    type: { type: 'string', enum: ['boolean'] },
+    values: {
+      type: 'array',
+      description:
+        'The answers the variants of the category have; a characteristic is in the panel when ' +
+        'both are there, so it is always yes and no. They go into f: f=<id>:yes.',
+      items: { type: 'string', enum: ['yes', 'no'] },
+    },
+  },
+  required: ['id', 'name', 'unit', 'group', 'type', 'values'],
+} as const;
+
+const catalogFiltersResponseSchema = {
+  $id: 'catalogFiltersResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      description:
+        'The characteristics that tell the variants of the category apart, in the order of the ' +
+        'card: the groups by their place, in a group the characteristics by theirs.',
+      items: {
+        anyOf: [
+          { $ref: 'catalogChoiceFilterSchema#' },
+          { $ref: 'catalogNumberFilterSchema#' },
+          { $ref: 'catalogBooleanFilterSchema#' },
+        ],
+      },
+    },
+  },
+  required: ['items'],
 } as const;
 
 const ADMIN_ONLY = 'Admin and root only.';
 
-// the fields of a product every role gets, and the ones only admin and root get; images and the
-// popularity differ between the card and a list item
+// the fields of a product every role gets, and the ones only admin and root get. The price, the
+// sale, the stock, the weight and the article number are the variant's (variants.dtoSchemas.ts)
 const productFields = {
   id: { type: 'integer' },
 
   name: { type: 'string' },
   description: { type: 'string' },
-  sku: {
-    anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }],
-    description:
-      'The article number, null without one. One product of the catalog has it at a time, ' +
-      'whatever the case of its letters; the search finds the product by it.',
-  },
-
-  price: { type: 'number' },
-  // the sale next to the price: a buyer gets it only while it lasts, an admin always
-  salePrice: {
-    anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
-    description:
-      'The product sells at it until saleEndsAt. A buyer gets it only while the sale lasts; ' +
-      'admin and root always, as the row keeps it (a sale past its end too), null without one.',
-  },
-  saleEndsAt: {
-    anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
-    description:
-      'The end of the sale. A buyer gets it only while the sale lasts; admin and root always, ' +
-      'null without a sale.',
-  },
-  salePriorPrice: {
-    anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
-    description:
-      'The lowest price the product sold at in the 30 days before the sale (a sale price of ' +
-      'that time too), the price a reduction is compared with. A sale that replaces the one ' +
-      'that is on keeps the lowest price of the first. A buyer gets it with the sale while it ' +
-      'lasts; admin and root as the row keeps it, null without a sale or for a sale from ' +
-      'before it was written.',
-  },
-  stock: {
-    type: 'integer',
-    description:
-      'Free units: the stock that confirmed orders do not hold, less the units of batches ' +
-      'whose last good day is behind the day of the shop.',
-  },
-  weightGrams: {
-    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_WEIGHT_MAX_GRAMS }, { type: 'null' }],
-    description:
-      'The weight packed, in grams; null while it is not known. The card of every role has it, ' +
-      'the list of an admin and root.',
-  },
-  lengthMm: {
-    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_SIZE_MAX_MM }, { type: 'null' }],
-    description:
-      'The length packed, in millimetres; the three sizes are known together or not at all. The ' +
-      'card of every role has them, the list of an admin and root.',
-  },
-  widthMm: {
-    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_SIZE_MAX_MM }, { type: 'null' }],
-    description: 'The width packed, in millimetres, see lengthMm.',
-  },
-  heightMm: {
-    anyOf: [{ type: 'integer', minimum: 1, maximum: PRODUCT_SIZE_MAX_MM }, { type: 'null' }],
-    description: 'The height packed, in millimetres, see lengthMm.',
-  },
   category: {
     type: 'object',
     additionalProperties: false,
@@ -315,22 +494,6 @@ const productFields = {
 
   views: { type: 'integer', description: ADMIN_ONLY },
   updatedAt: { type: 'string', format: 'date-time', description: ADMIN_ONLY },
-  totalStock: {
-    type: 'integer',
-    description: `${ADMIN_ONLY} The whole stock, the reserved units with it.`,
-  },
-  reservedStock: {
-    type: 'integer',
-    description: `${ADMIN_ONLY} The units confirmed orders hold.`,
-  },
-  expiredStock: {
-    type: 'integer',
-    description: `${ADMIN_ONLY} The units of batches whose last good day is over: not sold, so not in stock; written off by the admin.`,
-  },
-  lastUnitCost: {
-    anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }],
-    description: `${ADMIN_ONLY} The cost of a unit in the latest delivery of a supplier, in the currency of the shop: what a price or a sale is set against. A surplus an inventory found or goods a buyer brought back are no purchase; null for a product no supplier delivered.`,
-  },
   popularityOverride: {
     anyOf: [{ type: 'integer' }, { type: 'null' }],
     description: `${ADMIN_ONLY} The popularity the admin set, null when there is none; it overrides while its end is ahead.`,
@@ -348,130 +511,178 @@ const productFields = {
 const productRequired = [
   'id',
   'name',
-  'sku',
-  'price',
-  'stock',
   'category',
-  'images',
   'avgRating',
   'reviewsCount',
   'createdAt',
 ] as const;
 
-// the card of a product page: every image; a buyer gets no popularity in it
-// the safety and origin data of a product (the EU GPSR): the manufacturer with its postal and
-// electronic address and its country, a person responsible in the EU for a manufacturer outside
-// it, the warnings. The database keeps them in the description, with its text
-const safetyPersonProperties = {
-  name: { type: 'string', minLength: 1, maxLength: SAFETY_LIMITS.name },
-  address: {
-    type: 'string',
-    minLength: 1,
-    maxLength: SAFETY_LIMITS.address,
-    description: 'The postal address.',
-  },
-  email: {
-    type: 'string',
-    minLength: 3,
-    maxLength: SAFETY_LIMITS.email,
-    pattern: SAFETY_EMAIL_PATTERN.source,
-    description: 'The electronic address.',
-  },
-} as const;
-
-const safetyManufacturerSchema = {
+// the manufacturer and the person responsible in the EU a product names (the EU GPSR), as the
+// directory of parties keeps them (src/routes/api/parties); the warnings are a text of the product
+const productPartyResponseSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    ...safetyPersonProperties,
-    country: {
-      type: 'string',
-      pattern: SAFETY_COUNTRY_PATTERN.source,
-      description:
-        'The country of the manufacturer, its ISO 3166 code of two letters, DE for example; ' +
-        'outside the EU a responsible person in the EU is required (PRODUCT_EU_RESPONSIBLE_REQUIRED).',
-    },
+    id: { type: 'integer', description: 'The party in the directory.' },
+    name: { type: 'string' },
+    address: { type: 'string', description: 'The postal address.' },
+    email: { type: 'string', description: 'The electronic address.' },
+    country: { type: 'string', description: 'The ISO 3166 code of two letters, DE for example.' },
   },
-  required: ['name', 'address', 'email', 'country'],
+  required: ['id', 'name', 'address', 'email', 'country'],
 } as const;
 
-const safetyPersonSchema = {
+// a document a buyer opens from the card
+const productDocumentResponseSchema = {
   type: 'object',
   additionalProperties: false,
-  properties: safetyPersonProperties,
-  required: ['name', 'address', 'email'],
+  properties: {
+    id: { type: 'integer', description: 'The document in the directory of documents.' },
+    title: { type: 'string' },
+    kind: { type: 'string', enum: ['instruction', 'certificate', 'declaration', 'other'] },
+    url: { type: 'string', description: 'Where the PDF opens.' },
+  },
+  required: ['id', 'title', 'kind', 'url'],
+} as const;
+
+const documentsResponseField = {
+  type: 'array',
+  description:
+    'The instructions and certificates of the product, PDF files, in the order an admin gave them.',
+  items: productDocumentResponseSchema,
+} as const;
+
+// the ids of the documents of a request: the directory of documents (GET /api/admin/documents)
+const documentIdsBodyField = {
+  type: ['array', 'null'],
+  items: { type: 'integer', minimum: 1, maximum: MAX_ID },
+  description:
+    'The documents of the product by their ids, in their order; the list is written whole, null or ' +
+    '[] takes every document away. An unknown id is 404 DOCUMENTS_NOT_FOUND, an id twice 400 ' +
+    'DOCUMENT_IDS_REPEATED, more than the limit 400 PRODUCT_DOCUMENTS_TOO_MANY.',
+} as const;
+
+const documentIdsFormField = {
+  type: 'string',
+  description:
+    'The documents of the product by their ids with a comma between, in their order (1,2,3); on a ' +
+    'change an empty text takes every document away (DOCUMENT_ID_INVALID for a word that is no id).',
 } as const;
 
 const SAFETY_DESCRIPTION =
   'The safety and origin data an offer shows (the EU GPSR): the manufacturer, a person ' +
   'responsible in the EU when the manufacturer is outside it, the warnings.';
 
-// the data of a json body, whole: they replace the ones of the product
-const productSafetyBodyField = {
-  type: 'object',
-  additionalProperties: false,
-  description: `${SAFETY_DESCRIPTION} They replace the ones the product has, whole.`,
-  properties: {
-    manufacturer: safetyManufacturerSchema,
-    // a type list, not anyOf: removeAdditional would strip the fields while ajv tries a shape
-    responsiblePerson: { ...safetyPersonSchema, type: ['object', 'null'] },
-    warnings: { type: ['string', 'null'], maxLength: SAFETY_LIMITS.warnings },
-  },
-  required: ['manufacturer'],
+const manufacturerResponseField = {
+  ...productPartyResponseSchema,
+  description: 'The manufacturer of the product. ' + SAFETY_DESCRIPTION,
 } as const;
 
-const productSafetyResponseField = {
-  description: `${SAFETY_DESCRIPTION} Null for a product from before them.`,
-  anyOf: [
-    {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        manufacturer: safetyManufacturerSchema,
-        responsiblePerson: { anyOf: [safetyPersonSchema, { type: 'null' }] },
-        warnings: { anyOf: [{ type: 'string' }, { type: 'null' }] },
-      },
-      required: ['manufacturer', 'responsiblePerson', 'warnings'],
-    },
-    { type: 'null' },
-  ],
+const euResponsibleResponseField = {
+  description:
+    'The person responsible in the EU, null for a manufacturer in the EU that names none.',
+  anyOf: [productPartyResponseSchema, { type: 'null' }],
 } as const;
 
-// the same data as the text fields of a form; a new product needs those of the manufacturer
-// (PRODUCT_SAFETY_REQUIRED), a wrong value is PRODUCT_SAFETY_INVALID, both with details.fields
-const safetyFormFields = {
-  'safety.manufacturer.name': { type: 'string', maxLength: SAFETY_LIMITS.name },
-  'safety.manufacturer.address': {
+const warningsResponseField = {
+  type: ['string', 'null'],
+  description: 'The warnings of the product, null when it has none.',
+} as const;
+
+// the body of a change: a party of the directory by its id; a type list, not anyOf, because
+// removeAdditional would strip the fields while ajv tries a shape
+const manufacturerIdBodyField = {
+  type: 'integer',
+  minimum: 1,
+  maximum: MAX_ID,
+  description:
+    'A new manufacturer of the product, by its id in the directory (GET /api/admin/parties); ' +
+    'unknown is 404 MANUFACTURER_NOT_FOUND.',
+} as const;
+
+const euResponsibleIdBodyField = {
+  type: ['integer', 'null'],
+  minimum: 1,
+  maximum: MAX_ID,
+  description:
+    'The person responsible in the EU, by its id in the directory; null takes it away. A person ' +
+    'must be in the EU (EU_RESPONSIBLE_NOT_IN_EU), and a manufacturer outside the EU needs one ' +
+    '(PRODUCT_EU_RESPONSIBLE_REQUIRED).',
+} as const;
+
+const warningsBodyField = {
+  type: ['string', 'null'],
+  description: `The warnings, up to ${WARNINGS_MAX} signs; empty or null takes them away.`,
+} as const;
+
+// the same by the text fields of a form: a party of the directory by its id
+const partyIdFormFields = {
+  manufacturerId: {
     type: 'string',
-    maxLength: SAFETY_LIMITS.address,
-    description: 'The postal address of the manufacturer.',
+    description: 'The manufacturer by its id in the directory (GET /api/admin/parties).',
   },
-  'safety.manufacturer.email': {
+  euResponsibleId: {
     type: 'string',
-    maxLength: SAFETY_LIMITS.email,
-    description: 'The electronic address of the manufacturer.',
+    description:
+      'The person responsible in the EU by its id in the directory; empty takes it away on a ' +
+      'change. A manufacturer outside the EU needs one (PRODUCT_EU_RESPONSIBLE_REQUIRED).',
   },
-  'safety.manufacturer.country': {
+  warnings: {
+    type: 'string',
+    description: `The warnings, up to ${WARNINGS_MAX} signs (PRODUCT_WARNINGS_TOO_LONG); empty takes them away on a change.`,
+  },
+} as const;
+
+// a new product may name a party that is not in the directory yet: its four values, which the
+// service adds to the directory; the id or the values of a party, never both
+// (PARTY_CHOICE_AMBIGUOUS), and a manufacturer is required (MANUFACTURER_REQUIRED). A missing or
+// empty value is PARTY_FIELDS_REQUIRED, a wrong one PARTY_FIELDS_INVALID, both with details.fields
+const newPartyFormFields = {
+  'manufacturer.name': {
+    type: 'string',
+    maxLength: PARTY_LIMITS.name,
+    description: 'A manufacturer that is not in the directory yet: its name.',
+  },
+  'manufacturer.address': {
+    type: 'string',
+    maxLength: PARTY_LIMITS.address,
+    description: 'The postal address of the new manufacturer.',
+  },
+  'manufacturer.email': {
+    type: 'string',
+    maxLength: PARTY_LIMITS.email,
+    description: 'The electronic address of the new manufacturer.',
+  },
+  'manufacturer.country': {
     type: 'string',
     description: 'The ISO 3166 code of two letters, DE for example.',
   },
-  'safety.responsiblePerson.name': {
+  'euResponsible.name': {
     type: 'string',
-    maxLength: SAFETY_LIMITS.name,
-    description: 'For a manufacturer outside the EU: the person responsible in the EU.',
+    maxLength: PARTY_LIMITS.name,
+    description: 'A person responsible in the EU that is not in the directory yet: its name.',
   },
-  'safety.responsiblePerson.address': { type: 'string', maxLength: SAFETY_LIMITS.address },
-  'safety.responsiblePerson.email': { type: 'string', maxLength: SAFETY_LIMITS.email },
-  'safety.warnings': { type: 'string', maxLength: SAFETY_LIMITS.warnings },
+  'euResponsible.address': { type: 'string', maxLength: PARTY_LIMITS.address },
+  'euResponsible.email': { type: 'string', maxLength: PARTY_LIMITS.email },
+  'euResponsible.country': {
+    type: 'string',
+    description: 'The ISO 3166 code of two letters, of a country of the EU.',
+  },
 } as const;
 
+// the product of the card: the way to its category, the safety and origin data, the documents;
+// a buyer gets no popularity in it. An admin gets the gallery with the variants that show each
+// picture
 const productResponseSchema = {
   $id: 'productResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     ...productFields,
-    safety: productSafetyResponseField,
+    manufacturer: manufacturerResponseField,
+    euResponsible: euResponsibleResponseField,
+    warnings: warningsResponseField,
+    documents: documentsResponseField,
     category: {
       type: 'object',
       additionalProperties: false,
@@ -487,29 +698,78 @@ const productResponseSchema = {
       },
       required: ['id', 'name', 'slug', 'path'],
     },
-    images: { type: 'array', items: imageUrlsSchema },
     popularity: { type: 'integer', description: ADMIN_ONLY },
+    gallery: {
+      type: 'array',
+      description: `${ADMIN_ONLY} Every picture of the gallery of the product, by its place, with the variants that show it (the ones taken out of sale too).`,
+      items: { $ref: 'galleryImageSchema#' },
+    },
   },
-  required: productRequired,
+  required: [...productRequired, 'manufacturer', 'euResponsible', 'warnings', 'documents'],
 } as const;
 
-// a product of a list: the primary image only; every role gets the popularity it sorts by
+// the card: the product, the variant it opens and the variants to switch between
+const productCardResponseSchema = {
+  $id: 'productCardResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    product: { $ref: 'productResponseSchema#' },
+    variant: { $ref: 'variantFullSchema#' },
+    variants: {
+      type: 'array',
+      description:
+        'The short form of the variants to switch between, by their place: the ones for sale that show a picture; an admin gets all of them, the ones taken out of sale and the ones without a picture too (with visible and deletedAt).',
+      items: { $ref: 'variantShortSchema#' },
+    },
+  },
+  required: ['product', 'variant', 'variants'],
+} as const;
+
+// the product part of a row: a list, the favorites, a change of a variant. The price, the stock and
+// the picture of the row are the variant's. Every role gets the popularity of a list row; the card
+// of a buyer has none.
 const productItemResponseSchema = {
   $id: 'productItemResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     ...productFields,
-    images: {
-      ...imageUrlsSchema,
-      nullable: true,
-      description:
-        'The primary image. A buyer lists only the products with one; an admin lists a product ' +
-        'without one too, with null here.',
-    },
     popularity: { type: 'integer' },
   },
   required: productRequired,
+} as const;
+
+// a row of the catalog list: a product with its main variant, or a variant with its product
+const productListRowSchema = {
+  $id: 'productListRowSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    product: { $ref: 'productItemResponseSchema#' },
+    variant: {
+      $ref: 'variantListItemSchema#',
+      description:
+        'A product row: its main variant, the first by its place that has free units (the first of all when none has), or the variant a search by an article number named; a row of variants: the first variant by its place of the group the row is (a group of one is that variant). A buyer gets the short form, admin and root the full one.',
+    },
+    minPrice: {
+      type: 'number',
+      description:
+        'A product row and a group: the lowest price the variants of the row sell at now (the sale price while a sale lasts). The same as maxPrice when they sell at one price (one variant: show it as the price). A row of a single variant (group=false) has none.',
+    },
+    maxPrice: {
+      type: 'number',
+      description:
+        'A product row and a group: the highest price the variants of the row sell at now.',
+    },
+    stock: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'The free units of the row: the sum over the variants of the list for a product row, over the variants of the group that fit the query for a group, the units of the variant for a single variant (group=false).',
+    },
+  },
+  required: ['product', 'variant', 'stock'],
 } as const;
 
 const productsListResponseSchema = {
@@ -519,14 +779,19 @@ const productsListResponseSchema = {
   properties: {
     items: {
       type: 'array',
-      items: { $ref: 'productItemResponseSchema#' },
+      items: { $ref: 'productListRowSchema#' },
     },
     limit: { type: 'integer', minimum: 1, maximum: 100 },
+    total: {
+      type: 'integer',
+      minimum: 0,
+      description: 'The number of the rows the filters find, whatever the page the cursor is on.',
+    },
     nextCursor: {
       anyOf: [{ type: 'string', pattern: '^[A-Za-z0-9_-]+$', minLength: 1 }, { type: 'null' }],
     },
   },
-  required: ['items', 'limit'],
+  required: ['items', 'limit', 'total'],
 } as const;
 
 const getProductReviewsQuerySchema = {
@@ -540,7 +805,12 @@ const getProductReviewsQuerySchema = {
       pattern: '^[A-Za-z0-9_-]+$',
       description: 'nextCursor of the previous page, of the same sort (CURSOR_INVALID otherwise).',
     },
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most rows a page holds, from 1 to 100.',
+    },
     sort: {
       type: 'string',
       enum: ['newest', 'helpful', 'ratingHigh', 'ratingLow'],
@@ -642,76 +912,6 @@ const deleteProductReviewResponseSchema = {
   required: ['message'],
 } as const;
 
-// the article number of a product: one product of the catalog has it at a time
-const skuField = {
-  type: ['string', 'null'],
-  maxLength: 64,
-  description:
-    'The article number, up to 64 signs of any kind, trimmed; empty or null takes it away. One ' +
-    'product of the catalog has it at a time, whatever the case of its letters ' +
-    '(PRODUCT_SKU_TAKEN); a product taken out of the catalog lets it go. A longer one in a form ' +
-    'is PRODUCT_SKU_TOO_LONG.',
-} as const;
-
-// the weight and the sizes of a product in a json body: whole grams and whole millimetres, null
-// clears them (PRODUCT_SHIPPING_DATA_REQUIRED unless withoutShippingData is true). The three sizes
-// are known together or not at all (PRODUCT_SIZES_INCOMPLETE)
-const shippingBodyFields = {
-  weightGrams: {
-    type: ['integer', 'null'],
-    minimum: 1,
-    maximum: PRODUCT_WEIGHT_MAX_GRAMS,
-    description: `The weight packed, in grams, from 1 to ${PRODUCT_WEIGHT_MAX_GRAMS}. Null clears it, which needs withoutShippingData.`,
-  },
-  lengthMm: {
-    type: ['integer', 'null'],
-    minimum: 1,
-    maximum: PRODUCT_SIZE_MAX_MM,
-    description: `The length packed, in millimetres, from 1 to ${PRODUCT_SIZE_MAX_MM}. The three sizes are known together or not at all; null clears them, which needs withoutShippingData.`,
-  },
-  widthMm: {
-    type: ['integer', 'null'],
-    minimum: 1,
-    maximum: PRODUCT_SIZE_MAX_MM,
-    description: 'The width packed, in millimetres, see lengthMm.',
-  },
-  heightMm: {
-    type: ['integer', 'null'],
-    minimum: 1,
-    maximum: PRODUCT_SIZE_MAX_MM,
-    description: 'The height packed, in millimetres, see lengthMm.',
-  },
-  withoutShippingData: {
-    type: 'boolean',
-    description:
-      'True says that the weight and the sizes come later (or are cleared): the product is ' +
-      'changed without them. It is not kept; the products that lack them are listed with the ' +
-      'filter withoutShippingData and in an alert.',
-  },
-} as const;
-
-// the same fields in a form: text
-const shippingFormFields = {
-  weightGrams: {
-    type: 'string',
-    description: `The weight packed, in grams, a whole number from 1 to ${PRODUCT_WEIGHT_MAX_GRAMS} (PRODUCT_WEIGHT_INVALID). The word null clears it on a change.`,
-  },
-  lengthMm: {
-    type: 'string',
-    description: `The length packed, in millimetres, a whole number from 1 to ${PRODUCT_SIZE_MAX_MM} (PRODUCT_SIZES_INVALID). The three sizes come together (PRODUCT_SIZES_INCOMPLETE); the word null clears them on a change.`,
-  },
-  widthMm: { type: 'string', description: 'The width packed, in millimetres, see lengthMm.' },
-  heightMm: { type: 'string', description: 'The height packed, in millimetres, see lengthMm.' },
-  withoutShippingData: {
-    type: 'string',
-    enum: ['true', 'false'],
-    description:
-      'true says that the weight and the sizes come later: a new product is created without ' +
-      'them, a change may clear them (PRODUCT_WITHOUT_SHIPPING_DATA_INVALID for any other word). ' +
-      'Without it a new product needs the weight and the sizes (PRODUCT_SHIPPING_DATA_REQUIRED).',
-  },
-} as const;
-
 // documentation only: the form of POST /api/products. A form is not checked against a schema,
 // the controller and the service check its fields
 const productCreateFormSchema = {
@@ -721,23 +921,33 @@ const productCreateFormSchema = {
   properties: {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string', description: 'The text of the description.' },
-    sku: { ...skuField, type: 'string' },
-    ...safetyFormFields,
-    price: moneyField,
+    ...partyIdFormFields,
+    ...newPartyFormFields,
+    documentIds: documentIdsFormField,
     categoryId: { type: 'integer', minimum: 1 },
-    ...shippingFormFields,
+    variants: {
+      type: 'string',
+      description:
+        'The variants of the product, the text of a JSON list of 1 to PRODUCT_VARIANTS_MAX ' +
+        'elements; the place of a variant is its place in the list. An element: ' +
+        '{ "price": 49.99, "sku": "WH-1000", "barcode": "4006381333931", "weightGrams": 350, ' +
+        '"lengthMm": 200, "widthMm": 100, "heightMm": 50, "withoutShippingData": false, ' +
+        '"images": [{ "file": 0, "position": 1 }] }. Only price and images are required; the ' +
+        'weight and the sizes are required too unless withoutShippingData is true. `file` is the ' +
+        'number of a file of `images` (from 0), `position` the place of the picture among the ' +
+        'pictures of the variant (from 1, each place once). Every variant shows a picture ' +
+        '(VARIANT_IMAGE_REQUIRED) and every file is shown by some variant (GALLERY_IMAGE_UNUSED). ' +
+        'A variant that is wrong is named with its error (VARIANTS_INVALID, details.variants).',
+    },
+    stock: {
+      type: 'string',
+      description:
+        'Not accepted (PRODUCT_STOCK_NOT_ALLOWED): the stock comes with a delivery, POST ' +
+        '/api/products/stock/deliveries.',
+    },
     images: productImagesFormField,
   },
-  required: [
-    'name',
-    'price',
-    'categoryId',
-    'images',
-    'safety.manufacturer.name',
-    'safety.manufacturer.address',
-    'safety.manufacturer.email',
-    'safety.manufacturer.country',
-  ],
+  required: ['name', 'categoryId', 'variants', 'images'],
 } as const;
 
 const saleEndsAtField = {
@@ -749,7 +959,7 @@ const saleEndsAtField = {
 // a percent of the price or an amount off it, never both: the shapes leave out
 // additionalProperties, ajv strips an unknown field while it tries a shape of anyOf (fastify
 // removeAdditional) and would let a percent and an amount through as a percent
-const saleDiscountShapes = [
+export const saleDiscountShapes = [
   {
     type: 'object',
     properties: {
@@ -787,12 +997,12 @@ const updateProductBodySchema = {
     name: { type: 'string', minLength: 1 },
     description: {
       type: 'string',
-      description: 'The text of the description; empty takes it away, the safety data stay.',
+      description: 'The text of the description; empty takes it away.',
     },
-    sku: skuField,
-    safety: productSafetyBodyField,
-
-    price: moneyField,
+    manufacturerId: manufacturerIdBodyField,
+    euResponsibleId: euResponsibleIdBodyField,
+    warnings: warningsBodyField,
+    documentIds: documentIdsBodyField,
 
     // kept in the schema so that a stock sent is refused, not dropped without a word
     stock: {
@@ -802,8 +1012,6 @@ const updateProductBodySchema = {
     },
 
     categoryId: { type: 'integer', minimum: 1 },
-
-    ...shippingBodyFields,
 
     // a type list, not anyOf: with coerceTypes ajv turns null into 0 in the integer shape of an
     // anyOf, and null would set an override of 0 instead of taking it off
@@ -819,17 +1027,6 @@ const updateProductBodySchema = {
       format: 'date-time',
       description:
         'The end of the popularity override, in the future (POPULARITY_OVERRIDE_UNTIL_INVALID); it goes with an override. Null takes it off, together with the override.',
-    },
-
-    // null first: with coerceTypes the string shape would turn null into ""
-    sale: {
-      description:
-        'With a price, what happens to the sale that is on: keep keeps it (a price down to the ' +
-        'sale price or below cannot, PRODUCT_SALE_NOT_BELOW_PRICE), null takes it off, a new ' +
-        'sale takes the old one off and is put on from the new price. Each step writes every ' +
-        'line of the logs. A new price of a product on sale without it is ' +
-        'PRODUCT_SALE_DECISION_REQUIRED; without a price it is PRODUCT_SALE_REQUIRES_PRICE.',
-      anyOf: [{ type: 'null' }, { type: 'string', enum: ['keep'] }, ...saleDiscountShapes],
     },
   },
 } as const;
@@ -869,14 +1066,15 @@ const updateProductsBatchResponseSchema = {
     products: {
       type: 'array',
       description: 'The cards of an admin of the products changed, in the order of the items.',
-      items: { $ref: 'productResponseSchema#' },
+      items: { $ref: 'productCardResponseSchema#' },
     },
   },
   required: ['products'],
 } as const;
 
-// documentation only: the form of PATCH /api/products/:productId, the fields of the json body
-// and the images; empty or null clears a popularity override and its end, which go together
+// documentation only: the form of PATCH /api/products/:productId, the fields of the json body;
+// empty or null clears a popularity override and its end, which go together. The pictures are the
+// business of the gallery (POST and DELETE /api/products/{productId}/images)
 const productUpdateFormSchema = {
   $id: 'productUpdateFormSchema',
   type: 'object',
@@ -884,12 +1082,9 @@ const productUpdateFormSchema = {
   properties: {
     name: { type: 'string', minLength: 1 },
     description: { type: 'string' },
-    sku: { ...skuField, type: 'string' },
-    // any of them replaces the safety data whole, the ones of the manufacturer are required then
-    ...safetyFormFields,
-    price: moneyField,
+    ...partyIdFormFields,
+    documentIds: documentIdsFormField,
     categoryId: { type: 'integer', minimum: 1 },
-    ...shippingFormFields,
     popularityOverride: {
       type: 'string',
       description:
@@ -902,18 +1097,6 @@ const productUpdateFormSchema = {
         'A date-time in the future, with popularityOverride; empty or null clears it, together ' +
         'with the override.',
     },
-    sale: {
-      type: 'string',
-      enum: ['keep', 'remove'],
-      description:
-        'With a price, what happens to the sale that is on: keep it or remove it ' +
-        '(PRODUCT_SALE_ACTION_INVALID for any other word). A new sale comes as JSON or through ' +
-        'PATCH /api/products/{productId}/sale.',
-    },
-    images: {
-      ...productImagesFormField,
-      description: `${productImagesFormField.description} They replace all images of the product.`,
-    },
   },
 } as const;
 
@@ -922,20 +1105,32 @@ const productSaleBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    variantIds: {
+      type: 'array',
+      minItems: 1,
+      maxItems: MAX_PRODUCT_VARIANTS,
+      uniqueItems: true,
+      items: { type: 'integer', minimum: 1, maximum: MAX_ID },
+      description:
+        'The variants of the product to put on sale or take off, each one that is for sale ' +
+        '(VARIANT_NOT_FOUND for another). Without it every variant for sale of the product.',
+    },
     sale: {
       description:
-        'The discount until endsAt, by a percent of the price or by an amount of money off it; ' +
-        'the sale price is rounded to cents and stays below the price, 0 gives the product ' +
-        'away. A new sale writes over the one there is. null takes the sale off.',
+        'The discount until endsAt, by a percent of the price or by an amount of money off it, ' +
+        'counted from the price of each variant; the sale price is rounded to cents and stays ' +
+        'below the price, 0 gives the variant away. A new sale writes over the one there is. ' +
+        'null takes the sale off.',
       anyOf: [...saleDiscountShapes, { type: 'null' }],
     },
   },
   required: ['sale'],
 } as const;
 
-// sales of many products at once: a sale for each product, or one sale for the products of a
-// category. One of the two shapes; the fields sit on the object itself and the shapes only name
-// what they need, so that fastify removeAdditional strips nothing while ajv tries a shape
+// sales of many variants at once: a sale for each variant or product, or one sale for the variants
+// of the products of a category. One of the two shapes; the fields sit on the object itself and the
+// shapes only name what they need, so that fastify removeAdditional strips nothing while ajv tries
+// a shape
 const salesSaleField = {
   description:
     'The discount until endsAt, by a percent of the price or by an amount of money off it, the ' +
@@ -953,15 +1148,22 @@ const productSalesBodySchema = {
       minItems: 1,
       maxItems: 100,
       description:
-        'A sale for each product, each product once (SALE_PRODUCTS_REPEATED); without categoryId.',
+        'A sale for each item, without categoryId. An item names one variant (`variantId`) or a ' +
+        'product (`productId`: all its variants for sale), and a variant once in the request ' +
+        '(SALE_VARIANTS_REPEATED).',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
+          variantId: { type: 'integer', minimum: 1, maximum: MAX_ID },
           productId: { type: 'integer', minimum: 1, maximum: MAX_ID },
           sale: salesSaleField,
         },
-        required: ['productId', 'sale'],
+        required: ['sale'],
+        oneOf: [
+          { required: ['variantId'], not: { required: ['productId'] } },
+          { required: ['productId'], not: { required: ['variantId'] } },
+        ],
       },
     },
     categoryId: {
@@ -969,7 +1171,8 @@ const productSalesBodySchema = {
       minimum: 1,
       maximum: MAX_ID,
       description:
-        'One sale for the products of the catalog of the category, with sale; without items.',
+        'One sale for the variants of the products of the catalog of the category, with sale; ' +
+        'without items.',
     },
     branch: {
       type: 'boolean',
@@ -990,39 +1193,56 @@ const productSalesBodySchema = {
   ],
 } as const;
 
+// the answer of the routes of a sale: every variant with its sale now and what was done to it
 const productSalesResponseSchema = {
   $id: 'productSalesResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    products: {
+    variants: {
       type: 'array',
       description:
-        'The products of the request: in the order of the items, or by id for a category.',
+        'The variants of the request: in the order of the request (the ones named, or by their ' +
+        'place; in the order of the items; by id for a category).',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
           id: { type: 'integer' },
+          productId: { type: 'integer' },
           name: { type: 'string' },
-          price: { type: 'number' },
-          salePrice: { type: 'number' },
-          saleEndsAt: { type: 'string', format: 'date-time' },
+          price: { type: 'number', description: 'The usual price.' },
+          salePrice: {
+            anyOf: [{ type: 'number' }, { type: 'null' }],
+            description: 'The sale price while the sale lasts, null without a sale.',
+          },
+          saleEndsAt: { anyOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }] },
           salePriorPrice: {
             anyOf: [{ type: 'number' }, { type: 'null' }],
             description: 'The lowest price of the 30 days before the sale.',
           },
           status: {
             type: 'string',
-            enum: ['set', 'unchanged'],
-            description: 'set: the sale was put on; unchanged: the product had this sale already.',
+            enum: ['set', 'unchanged', 'removed'],
+            description:
+              'set: the sale was put on; unchanged: the variant had this sale already (or had ' +
+              'no sale to take off); removed: the sale was taken off.',
           },
         },
-        required: ['id', 'name', 'price', 'salePrice', 'saleEndsAt', 'salePriorPrice', 'status'],
+        required: [
+          'id',
+          'productId',
+          'name',
+          'price',
+          'salePrice',
+          'saleEndsAt',
+          'salePriorPrice',
+          'status',
+        ],
       },
     },
   },
-  required: ['products'],
+  required: ['variants'],
 } as const;
 
 const bulkUpdateProductsPriceBodySchema = {
@@ -1043,10 +1263,35 @@ const bulkUpdateProductsPriceBodySchema = {
           items: { type: 'integer', minimum: 1 },
           minItems: 1,
           uniqueItems: true,
+          description: 'The variants of these products.',
+        },
+        variantIds: {
+          type: 'array',
+          items: { type: 'integer', minimum: 1 },
+          minItems: 1,
+          uniqueItems: true,
+          description: 'These variants.',
         },
 
-        minPrice: { type: 'number', minimum: 0 },
-        maxPrice: { type: 'number', minimum: 0 },
+        minPrice: {
+          type: 'number',
+          minimum: 0,
+          description: 'The usual price of the variant at least, not the sale price.',
+        },
+        maxPrice: {
+          type: 'number',
+          minimum: 0,
+          description: 'The usual price of the variant at most, not the sale price.',
+        },
+
+        f: {
+          anyOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+          description:
+            'The variants that have these characteristics: the entries of the filter f of the ' +
+            'catalog, `<attributeId>:<value>` (`12:45,46`, `15:128..512`, `20:yes`), a text or a ' +
+            'list of them; the values of one characteristic are OR, different ones AND. A wrong ' +
+            'entry is FILTER_INVALID.',
+        },
 
         inStock: { type: 'boolean' },
         deleted: { type: 'boolean' },
@@ -1075,6 +1320,24 @@ const bulkUpdateProductsPriceResponseSchema = {
   properties: {
     message: { type: 'string' },
     updatedCount: { type: 'integer', minimum: 0 },
+    variants: {
+      type: 'array',
+      description:
+        'A dry run lists the variants it would change with their old and new price; a real run ' +
+        'leaves this out.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          productId: { type: 'integer' },
+          name: { type: 'string' },
+          oldPrice: { type: 'number' },
+          newPrice: { type: 'number' },
+        },
+        required: ['id', 'productId', 'name', 'oldPrice', 'newPrice'],
+      },
+    },
   },
   required: ['message', 'updatedCount'],
 } as const;
@@ -1114,10 +1377,11 @@ const productsUpdateCategoryBodySchema = {
 
 const productsUpdateCategoryResponseSchema = {
   $id: 'productsUpdateCategoryResponseSchema',
-  allOf: [{ $ref: 'productResponseSchema#' }],
+  allOf: [{ $ref: 'productCardResponseSchema#' }],
 } as const;
 
-// STOCK: a delivery takes in a batch of each item, a write-off takes free units out
+// STOCK: a delivery takes in a batch of each item, a write-off takes free units out. An item names
+// the variant it is about: by its id, by its article number or by its barcode
 const stockIdField = (description: string) =>
   ({
     type: 'integer',
@@ -1135,18 +1399,30 @@ const stockQuantityField = {
 
 const STOCK_SOURCES = ['supplier', 'surplus', 'customer_return'] as const;
 
-// an item names its product by the id or by the article number the papers of a supplier name,
-// one of the two
+// an item names its variant by the id, by the article number or by the barcode the papers of a
+// supplier name, one of the three
 const stockSkuField = {
   type: 'string',
   minLength: 1,
   maxLength: 64,
   description:
-    'The article number of a product of the catalog, in place of productId, whatever the case of ' +
-    'its letters; a number no product of the catalog has is PRODUCT_NOT_FOUND with details.skus.',
+    'The article number of a variant of the catalog, in place of variantId, whatever the case of ' +
+    'its letters; a number no variant of the catalog has is VARIANT_NOT_FOUND with details.skus.',
 } as const;
 
-const STOCK_PRODUCT_REF = [{ required: ['productId'] }, { required: ['sku'] }] as const;
+const stockBarcodeField = {
+  type: 'string',
+  pattern: '^[0-9]{8,14}$',
+  description:
+    'The barcode of a variant of the catalog, 8 to 14 digits, in place of variantId; a barcode ' +
+    'no variant of the catalog has is VARIANT_NOT_FOUND with details.barcodes.',
+} as const;
+
+const STOCK_VARIANT_REF = [
+  { required: ['variantId'] },
+  { required: ['sku'] },
+  { required: ['barcode'] },
+] as const;
 
 const stockDeliveryBodySchema = {
   $id: 'stockDeliveryBodySchema',
@@ -1163,6 +1439,21 @@ const stockDeliveryBodySchema = {
     supplier: { type: 'string', maxLength: 200, description: 'The supplier, for the admin log.' },
     document: { type: 'string', maxLength: 100, description: 'The number of the invoice.' },
     note: { type: 'string', maxLength: 500 },
+    unitCost: {
+      type: 'number',
+      minimum: 0,
+      maximum: 99_999_999.99,
+      description:
+        'The cost of a unit of every item that names none of its own, in the currency of the ' +
+        'shop, to the cent (finer is BATCH_UNIT_COST_INVALID).',
+    },
+    expiresAt: {
+      type: 'string',
+      format: 'date',
+      description:
+        'The last good day of every item that names none of its own (an item with null has no ' +
+        'end), yyyy-mm-dd, today or later by the calendar of the shop (BATCH_EXPIRES_AT_INVALID).',
+    },
     items: {
       type: 'array',
       minItems: 1,
@@ -1171,8 +1462,9 @@ const stockDeliveryBodySchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          productId: stockIdField('Id of the product, or sku in its place'),
+          variantId: stockIdField('Id of the variant, or sku or barcode in its place'),
           sku: stockSkuField,
+          barcode: stockBarcodeField,
           quantity: stockQuantityField,
           unitCost: {
             type: 'number',
@@ -1180,14 +1472,16 @@ const stockDeliveryBodySchema = {
             maximum: 99_999_999.99,
             description:
               'The cost of a unit in the currency of the shop, to the cent (finer is ' +
-              'BATCH_UNIT_COST_INVALID); 0 for a gift or a sample.',
+              'BATCH_UNIT_COST_INVALID); 0 for a gift or a sample. Without it the cost of the ' +
+              'delivery stands in; an item with neither is BATCH_UNIT_COST_REQUIRED.',
           },
           expiresAt: {
-            type: 'string',
+            type: ['string', 'null'],
             format: 'date',
             description:
-              'The last day the goods are good for, yyyy-mm-dd, today or later by utc ' +
-              '(BATCH_EXPIRES_AT_INVALID). A sale takes the batch that ends first.',
+              'The last day the goods are good for, yyyy-mm-dd, today or later by the calendar ' +
+              'of the shop (BATCH_EXPIRES_AT_INVALID). A sale takes the batch that ends first. ' +
+              'Without it the last day of the delivery stands in; null has no end.',
           },
           supplierBatchNumber: {
             type: 'string',
@@ -1195,19 +1489,46 @@ const stockDeliveryBodySchema = {
             description: 'The number the supplier gave the batch.',
           },
         },
-        required: ['quantity', 'unitCost'],
-        oneOf: STOCK_PRODUCT_REF,
+        required: ['quantity'],
+        oneOf: STOCK_VARIANT_REF,
       },
     },
   },
   required: ['source', 'items'],
 } as const;
 
-const stockProductSummarySchema = {
+// the product and the variant a line of an answer is about, by name
+const stockLineRefProperties = {
+  productId: { type: 'integer' },
+  variantId: { type: 'integer' },
+  product: {
+    type: 'object',
+    additionalProperties: false,
+    properties: { id: { type: 'integer' }, name: { type: 'string' } },
+    required: ['id', 'name'],
+  },
+  variant: {
+    type: 'object',
+    additionalProperties: false,
+    description: 'The variant as it is now: its place, its name and its article number.',
+    properties: {
+      id: { type: 'integer' },
+      position: { type: 'integer' },
+      name: { type: 'string' },
+      sku: { type: ['string', 'null'] },
+    },
+    required: ['id', 'position', 'name', 'sku'],
+  },
+} as const;
+
+const STOCK_LINE_REF_REQUIRED = ['productId', 'variantId', 'product', 'variant'] as const;
+
+const stockVariantSummarySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    id: { type: 'integer' },
+    variantId: { type: 'integer' },
+    productId: { type: 'integer' },
     stock: {
       type: 'integer',
       description:
@@ -1220,7 +1541,7 @@ const stockProductSummarySchema = {
       description: 'The units of batches whose last good day is over.',
     },
   },
-  required: ['id', 'stock', 'totalStock', 'reservedStock', 'expiredStock'],
+  required: ['variantId', 'productId', 'stock', 'totalStock', 'reservedStock', 'expiredStock'],
 } as const;
 
 const stockDeliveryResponseSchema = {
@@ -1231,7 +1552,8 @@ const stockDeliveryResponseSchema = {
     deliveryId: {
       type: 'string',
       format: 'uuid',
-      description: 'The delivery: its batches and the lines of the admin log carry it.',
+      description:
+        'The delivery: its batches, the lines of the stock log of its variants (GET /api/admin/stock-log, filter deliveryId) and the one line of the admin log carry it.',
     },
     batches: {
       type: 'array',
@@ -1241,7 +1563,7 @@ const stockDeliveryResponseSchema = {
         additionalProperties: false,
         properties: {
           id: { type: 'integer', description: 'The number of the batch in the shop.' },
-          productId: { type: 'integer' },
+          ...stockLineRefProperties,
           source: { type: 'string', enum: STOCK_SOURCES },
           supplierBatchNumber: { type: ['string', 'null'] },
           unitCost: { type: 'number' },
@@ -1252,7 +1574,7 @@ const stockDeliveryResponseSchema = {
         },
         required: [
           'id',
-          'productId',
+          ...STOCK_LINE_REF_REQUIRED,
           'source',
           'supplierBatchNumber',
           'unitCost',
@@ -1263,9 +1585,13 @@ const stockDeliveryResponseSchema = {
         ],
       },
     },
-    products: { type: 'array', items: stockProductSummarySchema },
+    variants: {
+      type: 'array',
+      description: 'The stock of each variant of the delivery after it, once, by the id.',
+      items: stockVariantSummarySchema,
+    },
   },
-  required: ['deliveryId', 'batches', 'products'],
+  required: ['deliveryId', 'batches', 'variants'],
 } as const;
 
 const stockWriteOffBodySchema = {
@@ -1289,16 +1615,17 @@ const stockWriteOffBodySchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          productId: stockIdField('Id of the product, or sku in its place'),
+          variantId: stockIdField('Id of the variant, or sku or barcode in its place'),
           sku: stockSkuField,
+          barcode: stockBarcodeField,
           quantity: stockQuantityField,
           batchId: stockIdField(
-            'The batch of the product to take the units from; without one they come in the ' +
+            'The batch of the variant to take the units from; without one they come in the ' +
               'order of a sale, the batch that ends first, then the oldest',
           ),
         },
         required: ['quantity'],
-        oneOf: STOCK_PRODUCT_REF,
+        oneOf: STOCK_VARIANT_REF,
       },
     },
   },
@@ -1313,7 +1640,8 @@ const stockWriteOffResponseSchema = {
     writeOffId: {
       type: 'string',
       format: 'uuid',
-      description: 'The write-off: the lines of the admin log carry it.',
+      description:
+        'The write-off: the lines of the stock log of its variants (GET /api/admin/stock-log, filter writeOffId) and the one line of the admin log carry it.',
     },
     items: {
       type: 'array',
@@ -1322,7 +1650,7 @@ const stockWriteOffResponseSchema = {
         type: 'object',
         additionalProperties: false,
         properties: {
-          productId: { type: 'integer' },
+          ...stockLineRefProperties,
           quantity: { type: 'integer' },
           batches: {
             type: 'array',
@@ -1338,12 +1666,16 @@ const stockWriteOffResponseSchema = {
             },
           },
         },
-        required: ['productId', 'quantity', 'batches'],
+        required: [...STOCK_LINE_REF_REQUIRED, 'quantity', 'batches'],
       },
     },
-    products: { type: 'array', items: stockProductSummarySchema },
+    variants: {
+      type: 'array',
+      description: 'The stock of each variant of the write-off after it, once, by the id.',
+      items: stockVariantSummarySchema,
+    },
   },
-  required: ['writeOffId', 'items', 'products'],
+  required: ['writeOffId', 'items', 'variants'],
 } as const;
 
 // the history of the price of a product
@@ -1352,8 +1684,19 @@ const priceHistoryQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    variantId: {
+      type: 'integer',
+      minimum: 1,
+      maximum: MAX_ID,
+      description: 'Only the changes of this variant of the product.',
+    },
     limit: { type: 'integer', minimum: 1, maximum: 100, description: '50 unless given.' },
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description: 'The nextCursor of the previous page.',
+    },
   },
 } as const;
 
@@ -1369,6 +1712,18 @@ const priceHistoryResponseSchema = {
         additionalProperties: false,
         properties: {
           id: { type: 'integer' },
+          variant: {
+            type: 'object',
+            additionalProperties: false,
+            description: 'The variant whose price changed, as it is now.',
+            properties: {
+              id: { type: 'integer' },
+              position: { type: 'integer' },
+              name: { type: 'string' },
+              sku: { type: ['string', 'null'] },
+            },
+            required: ['id', 'position', 'name', 'sku'],
+          },
           oldPrice: { type: 'number' },
           newPrice: { type: 'number' },
           mode: {
@@ -1409,6 +1764,7 @@ const priceHistoryResponseSchema = {
         },
         required: [
           'id',
+          'variant',
           'oldPrice',
           'newPrice',
           'mode',
@@ -1428,6 +1784,11 @@ const priceHistoryResponseSchema = {
 
 export const productDtoSchemas = [
   getAllProductsQuerySchema,
+  catalogFiltersQuerySchema,
+  catalogChoiceFilterSchema,
+  catalogNumberFilterSchema,
+  catalogBooleanFilterSchema,
+  catalogFiltersResponseSchema,
   priceHistoryQuerySchema,
   priceHistoryResponseSchema,
   productSalesBodySchema,
@@ -1444,12 +1805,14 @@ export const productDtoSchemas = [
   bulkUpdateProductsPriceResponseSchema,
   createReviewBodySchema,
   productResponseSchema,
+  productCardResponseSchema,
   getProductReviewsQuerySchema,
   reviewResponseSchema,
   reviewsResponseSchema,
   deleteProductReviewParamsSchema,
   deleteProductReviewResponseSchema,
   productsListResponseSchema,
+  productListRowSchema,
   productItemResponseSchema,
   productsUpdateCategoryParamsSchema,
   productsUpdateCategoryBodySchema,

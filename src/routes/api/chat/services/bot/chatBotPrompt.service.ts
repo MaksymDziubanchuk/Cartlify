@@ -12,18 +12,29 @@ export interface ChatBotHistoryMessageDto {
     createdAt: Date;
 }
 
+// a variant of a product that a buyer sees (alive, with a picture): what the customer buys, so the
+// price, the sale and the free units are the variant's
+export interface ChatBotVariantContextItemDto {
+    id: number;
+    // the name of the product and the values that tell its variants apart
+    name: string;
+    price: number;
+    // the sale while it lasts: the variant sells at its sale price until the end, an iso time in
+    // utc; priorPrice is the lowest price of the 30 days before it, none for an older sale
+    sale: { price: number; endsAt: string; priorPrice?: number | null } | null;
+    // the units free to buy now: the stock that confirmed orders do not hold, and no units over
+    stock: number;
+}
+
 export interface ChatBotProductContextItemDto {
     id: number;
     name: string;
-    price: number;
-    // the sale while it lasts: the product sells at its price until the end, an iso time in utc;
-    // priorPrice is the lowest price of the 30 days before it, none for an older sale
-    sale: { price: number; endsAt: string; priorPrice?: number | null } | null;
-    // the units free to buy now: the stock that confirmed orders do not hold
-    stock: number;
     categoryName: string | null;
     description: string | null;
     popularity: number | null;
+    // the variants a buyer sees, in the order of the product; the prompt names at most
+    // MAX_VARIANTS_PER_PRODUCT of them and sums up the rest
+    variants: ChatBotVariantContextItemDto[];
 }
 
 export type ChatBotOrderStatus =
@@ -74,6 +85,11 @@ export interface BuildChatBotPromptResultDto {
 
 const MAX_HISTORY_MESSAGES = 12;
 const MAX_PRODUCT_CONTEXT_ITEMS = 6;
+// the variants of a product the prompt names one by one; a product with more is summed up, so the
+// prompt (a paid input of every turn) does not grow with the variants of a shop
+export const MAX_VARIANTS_PER_PRODUCT = 20;
+// the longest description of a product the prompt carries
+const MAX_DESCRIPTION_CHARS = 500;
 
 // what a status means to the customer of a pickup: the order waits at the shop, it is not on its way
 const PICKUP_STATUS_MEANINGS: Partial<Record<ChatBotOrderStatus, string>> = {
@@ -189,8 +205,9 @@ const buildSystemInstructions = (
         `You can explain the features of the shop, help the customer understand how to use ${env.SHOP_NAME}, and consult about products when product context is provided.`,
         'Do not invent products, prices, discounts, stock status, delivery terms, or policies that are not provided in the prompt.',
         `All prices are in ${currency}; name this currency with a price, never another one.`,
-        'A product with a sale price sells at the sale price until the end of the sale; its price is the usual one, name it only next to the sale price.',
-        'in stock is the number of units free to buy now; never promise more of a product than that.',
+        'A product has one or more variants (a size, a color, a memory): the customer buys a variant, and the price, the sale and the stock are the variant\'s. When you recommend, name a concrete variant by its name and its price; recommend only a variant that is listed and in stock.',
+        'A variant with a sale price sells at the sale price until the end of the sale; its price is the usual one, name it only next to the sale price.',
+        'in stock is the number of units of the variant free to buy now; never promise more of a variant than that.',
         `Payment is by card only, ${describePaymentPage(paymentProviders)}. There are no other payment methods: no PayPal, no cash, no bank transfer.`,
         ...describeDelivery(delivery, currency),
         'If product context is missing or insufficient, say that you do not have enough product data and ask a focused follow-up question.',
@@ -237,38 +254,98 @@ const buildHistoryMessages = (
     }));
 };
 
-// formats one product for prompt context
+// formats one variant for prompt context
+const formatVariantContextItem = (
+    variant: ChatBotVariantContextItemDto,
+    currency: string,
+): string => {
+    const parts = [
+        `variant id: ${variant.id}`,
+        `name: ${variant.name}`,
+        `price: ${variant.price} ${currency}`,
+        ...(variant.sale
+            ? [
+                  `sale price: ${variant.sale.price} ${currency} until ${variant.sale.endsAt} (UTC)`,
+              ]
+            : []),
+        ...(variant.sale?.priorPrice != null
+            ? [
+                  `lowest price of the 30 days before the sale: ${variant.sale.priorPrice} ${currency}`,
+              ]
+            : []),
+        `in stock: ${variant.stock}`,
+    ];
+
+    return parts.join('; ');
+};
+
+// the price a variant sells at now: the sale price while the sale lasts
+const sellingPriceOf = (variant: ChatBotVariantContextItemDto): number =>
+    variant.sale?.price ?? variant.price;
+
+// the variants of a product that the prompt names: those with free units first, each group in the
+// order of the product, no more than MAX_VARIANTS_PER_PRODUCT; the others are summed up
+const splitVariants = (variants: ChatBotVariantContextItemDto[]) => {
+    const ordered = [
+        ...variants.filter((variant) => variant.stock > 0),
+        ...variants.filter((variant) => variant.stock <= 0),
+    ];
+
+    return {
+        listed: ordered.slice(0, MAX_VARIANTS_PER_PRODUCT),
+        left: ordered.slice(MAX_VARIANTS_PER_PRODUCT),
+    };
+};
+
+// the variants that are not named one by one: how many, how many are in stock, the prices
+const formatLeftVariants = (
+    left: ChatBotVariantContextItemDto[],
+    currency: string,
+): string | null => {
+    if (left.length === 0) return null;
+
+    const prices = left.map(sellingPriceOf);
+    const inStock = left.filter((variant) => variant.stock > 0).length;
+
+    return `  - ${left.length} more variants are not listed (${inStock} of them in stock), they sell at ${Math.min(...prices)} to ${Math.max(...prices)} ${currency}; name no detail of them`;
+};
+
+// formats one product for prompt context: the product, then its variants one per line
 const formatProductContextItem = (
     product: ChatBotProductContextItemDto,
     currency: string,
 ): string => {
     const parts = [
-        `id: ${product.id}`,
+        `product id: ${product.id}`,
         `name: ${product.name}`,
-        `price: ${product.price} ${currency}`,
-        ...(product.sale
-            ? [
-                  `sale price: ${product.sale.price} ${currency} until ${product.sale.endsAt} (UTC)`,
-              ]
-            : []),
-        ...(product.sale?.priorPrice != null
-            ? [
-                  `lowest price of the 30 days before the sale: ${product.sale.priorPrice} ${currency}`,
-              ]
-            : []),
-        `in stock: ${product.stock}`,
         `category: ${product.categoryName ?? 'unknown'}`,
     ];
 
-    if (product.description?.trim()) {
-        parts.push(`description: ${product.description.trim()}`);
+    const description = product.description?.trim();
+    if (description) {
+        parts.push(
+            `description: ${
+                description.length > MAX_DESCRIPTION_CHARS
+                    ? `${description.slice(0, MAX_DESCRIPTION_CHARS)}...`
+                    : description
+            }`,
+        );
     }
 
     if (typeof product.popularity === 'number') {
         parts.push(`popularity: ${product.popularity}`);
     }
 
-    return parts.join('; ');
+    const { listed, left } = splitVariants(product.variants);
+    const lines = [
+        parts.join('; '),
+        '  variants:',
+        ...listed.map((variant) => `  - ${formatVariantContextItem(variant, currency)}`),
+    ];
+    const summary = formatLeftVariants(left, currency);
+    if (summary) lines.push(summary);
+
+    return lines.join('\n');
 };
 
 // builds product context text for the model
@@ -289,7 +366,7 @@ const buildProductContextMessage = (
             ...products.map(
                 (product) => `- ${formatProductContextItem(product, currency)}`,
             ),
-            'Use only this product context when recommending specific products.',
+            'Use only this product context when recommending specific products and variants.',
         ].join('\n'),
     };
 };

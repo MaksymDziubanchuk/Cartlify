@@ -104,7 +104,7 @@ export async function loadProfileLists(
         result.favorites = await tx.favorite.findMany({
           where: { userId, createdAt },
           orderBy: newestFirst,
-          select: { id: true, productId: true, createdAt: true },
+          select: { id: true, productId: true, variantId: true, createdAt: true },
         });
         break;
       case 'votes': {

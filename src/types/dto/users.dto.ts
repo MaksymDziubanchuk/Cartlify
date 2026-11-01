@@ -142,6 +142,7 @@ export interface AdminProfileReviewDto {
 export interface AdminProfileFavoriteDto {
   id: number;
   productId: number;
+  variantId: number;
   createdAt: Date;
 }
 

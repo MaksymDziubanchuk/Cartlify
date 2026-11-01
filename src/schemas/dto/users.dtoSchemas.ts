@@ -109,12 +109,17 @@ const usersAdminProfileListsSchema = {
   },
   favorites: {
     type: 'array',
-    description: 'Products the user added to favorites in the period.',
+    description: 'Variants the user added to favorites in the period, with the product of each.',
     items: {
       type: 'object',
       additionalProperties: false,
-      properties: { id: { type: 'number' }, productId: { type: 'number' }, createdAt: dateTime },
-      required: ['id', 'productId', 'createdAt'],
+      properties: {
+        id: { type: 'number' },
+        productId: { type: 'number' },
+        variantId: { type: 'number' },
+        createdAt: dateTime,
+      },
+      required: ['id', 'productId', 'variantId', 'createdAt'],
     },
   },
   votes: {
@@ -599,9 +604,11 @@ const usersExportResponseSchema = {
         'id, email, name, locale, phone, avatarUrl, role, authProvider, isVerified, createdAt, updatedAt.',
     },
     orders: exportRows(
-      'The orders with their status, total, dates, items (product, name, quantity, prices), the delivery (method, recipient, address, note, price) and the sends (carrier, tracking number and link, dates).',
+      'The orders with their status, total, dates, items (productId, variantId, name, quantity, prices: the name and the prices the order was confirmed with), the delivery (method, recipient, address, note, price) and the sends (carrier, tracking number and link, dates).',
     ),
-    favorites: exportRows('The favorite products: productId, name, createdAt.'),
+    favorites: exportRows(
+      'The favorite variants: productId, variantId, name (of the variant), createdAt.',
+    ),
     reviews: exportRows('The reviews: id, productId, rating, comment, createdAt, updatedAt.'),
     reviewVotes: exportRows('The votes on reviews of others: reviewId, action, createdAt.'),
     chats: exportRows(

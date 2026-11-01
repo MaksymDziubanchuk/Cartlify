@@ -11,13 +11,15 @@ import {
   ResourceBusyError,
 } from '@utils/errors.js';
 import {
-  dropDeletedProductItems,
+  dropHiddenVariantItems,
   isOrderNotEditable,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
   orderTargetSql,
 } from './helpers/index.js';
+
+import { visibleVariantWhere } from '@routes/api/products/services/helpers/variant.helper.js';
 
 import type { CurrentUpdateItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
@@ -57,46 +59,47 @@ export async function updateCurrentItem({
         `;
         if (!locked.length) throw new NotFoundError('ORDER_ITEM_NOT_FOUND', { itemId: itemIdRaw });
 
-        // load item refs (orderId + productId)
+        // load item refs (orderId + variantId)
         const item = await db.orderItem.findUnique({
           where: { id: itemIdRaw },
-          select: { id: true, orderId: true, productId: true },
+          select: { id: true, orderId: true, variantId: true },
         });
         if (!item) throw new NotFoundError('ORDER_ITEM_NOT_FOUND', { itemId: itemIdRaw });
 
-        // load product price and availability
-        const product = await db.product.findFirst({
-          where: { id: item.productId, deletedAt: null },
+        // load the variant of the item, its price and availability; a variant a buyer does not see
+        // any more is not found
+        const variant = await db.productVariant.findFirst({
+          where: { id: item.variantId, ...visibleVariantWhere, product: { deletedAt: null } },
           select: { id: true, price: true, stock: true, reservedStock: true },
         });
-        if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND', { productId: item.productId });
+        if (!variant) throw new NotFoundError('VARIANT_NOT_FOUND', { variantId: item.variantId });
 
         // check availability: the stock less what the waiting orders hold and what is over
-        const expired = await expiredUnitsOf(db, [product.id]);
+        const expired = await expiredUnitsOf(db, [variant.id]);
         const available = freeUnits(
-          product.stock,
-          product.reservedStock,
-          expired.get(product.id) ?? 0,
+          variant.stock,
+          variant.reservedStock,
+          expired.get(variant.id) ?? 0,
         );
         if (quantity > available) {
           throw new ConflictError('OUT_OF_STOCK', {
-            productId: product.id,
+            variantId: variant.id,
             available,
             requested: quantity,
           });
         }
 
-        // always store latest product price
+        // always store latest variant price
         await db.orderItem.update({
           where: { id: itemIdRaw },
-          data: { quantity, unitPrice: product.price as any },
+          data: { quantity, unitPrice: variant.price as any },
           select: { id: true },
         });
 
-        // bring the other items to current product prices too, the order also loses the items of
-        // products deleted from the catalog; confirm refuses an order with outdated prices, so the
+        // bring the other items to current variant prices too, the order also loses the items of
+        // variants a buyer does not see; confirm refuses an order with outdated prices, so the
         // order must show what will be confirmed
-        await dropDeletedProductItems(db, actorIdRaw, [item.orderId]);
+        await dropHiddenVariantItems(db, actorIdRaw, [item.orderId]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${item.orderId}::int)`;
 
         // totals are maintained by db triggers; fetch current order
@@ -104,7 +107,7 @@ export async function updateCurrentItem({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
 
-        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        return mapOrderRowToResponse(order, await orderContextOf(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

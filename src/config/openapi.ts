@@ -21,14 +21,25 @@ export const openApiTags = [
     { name: 'system', description: 'System health, readiness and project information' },
     { name: 'auth', description: 'Registration, login, logout, refresh and OAuth flows' },
     { name: 'users', description: 'User profile and account operations' },
-    { name: 'products', description: 'Product catalog, product details and product reviews' },
+    {
+        name: 'products',
+        description:
+            'Product catalog and cards, variants, gallery, prices and sales, stock and product reviews',
+    },
     { name: 'categories', description: 'Product categories' },
+    { name: 'parties', description: 'Manufacturers and persons responsible in the EU' },
+    { name: 'documents', description: 'Instructions and certificates of products (PDF files)' },
+    { name: 'attributes', description: 'Groups, characteristics and values that describe variants' },
     { name: 'orders', description: 'Cart and order operations' },
     { name: 'payments', description: 'Checkout sessions and payment webhooks' },
-    { name: 'favorites', description: 'User favorites' },
+    { name: 'favorites', description: 'Favorite variants of a user' },
     { name: 'reviews', description: 'Review votes and review actions' },
     { name: 'chat', description: 'Bot, user and admin chat operations' },
-    { name: 'admin', description: 'Admin dashboard and management operations' },
+    {
+        name: 'admin',
+        description:
+            'Admin dashboard: statistics, accounting reports, stock, journals and alerts',
+    },
     { name: 'root', description: 'Root-only administrator management' },
     {
       name: 'legal',

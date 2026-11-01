@@ -5,11 +5,17 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError } from '@utils/errors.js';
 import { buildAccountingReport, shopMoneyOf } from './services/accountingReport.service.js';
 import { reportCategories, reportCategoriesCsv } from './services/accountingCategories.service.js';
-import { reportProducts, reportProductsCsv } from './services/accountingProducts.service.js';
+import {
+  reportProducts,
+  reportProductsCsv,
+  reportVariants,
+  reportVariantsCsv,
+} from './services/accountingProducts.service.js';
 import { reportTimeline, reportTimelineCsv } from './services/accountingTimeline.service.js';
 import { listStockBatches } from './services/stockBatches.service.js';
 import { listStockMovements } from './services/stockMovements.service.js';
 import { auditLogCsv, listAuditLog } from './services/auditLog.service.js';
+import { listStockLog, stockLogCsv } from './services/stockLog.service.js';
 import { listPriceLog, priceLogCsv } from './services/priceLog.service.js';
 import { listLoginLog, loginLogCsv } from './services/loginLog.service.js';
 import { consentLogCsv, listConsentLog } from './services/consentLog.service.js';
@@ -33,6 +39,7 @@ import type {
   AdminStatsUsersDto,
   AdminTopCategoryRevenueDto,
   AdminTopProductRevenueDto,
+  AdminTopVariantRevenueDto,
   GetAdminStatsResponseDto,
 } from 'types/dto/admin.dto.js';
 
@@ -181,6 +188,38 @@ function parseTopProductRevenue(value: unknown): AdminTopProductRevenueDto {
   };
 }
 
+function parseTopVariantRevenue(value: unknown): AdminTopVariantRevenueDto {
+  const path = 'products.topVariantsByRevenue';
+  const line = toRecord(value, `${path}.item`);
+  const product = toRecord(line.product, `${path}.product`);
+  const variant = toRecord(line.variant, `${path}.variant`);
+
+  if (typeof product.name !== 'string') invalidStatsViewShape(`${path}.product.name`);
+  if (typeof product.deleted !== 'boolean') invalidStatsViewShape(`${path}.product.deleted`);
+  if (typeof variant.name !== 'string') invalidStatsViewShape(`${path}.variant.name`);
+  if (variant.sku !== null && typeof variant.sku !== 'string') {
+    invalidStatsViewShape(`${path}.variant.sku`);
+  }
+  if (typeof variant.deleted !== 'boolean') invalidStatsViewShape(`${path}.variant.deleted`);
+
+  return {
+    product: {
+      id: toNumber(product.id, `${path}.product.id`),
+      name: product.name,
+      deleted: product.deleted,
+    },
+    variant: {
+      id: toNumber(variant.id, `${path}.variant.id`),
+      position: toNumber(variant.position, `${path}.variant.position`),
+      name: variant.name,
+      sku: variant.sku,
+      deleted: variant.deleted,
+    },
+    revenue: toNumber(line.revenue, `${path}.revenue`),
+    quantitySold: toNumber(line.quantitySold, `${path}.quantitySold`),
+  };
+}
+
 function parseTopCategoryRevenue(value: unknown): AdminTopCategoryRevenueDto {
   const category = toRecord(value, 'products.topCategoriesByRevenue.item');
 
@@ -210,6 +249,10 @@ function parseProducts(value: unknown): AdminStatsProductsDto {
       products.topProductsByRevenue,
       'products.topProductsByRevenue',
     ).map(parseTopProductRevenue),
+    topVariantsByRevenue: toArray(
+      products.topVariantsByRevenue,
+      'products.topVariantsByRevenue',
+    ).map(parseTopVariantRevenue),
     topCategoriesByRevenue: toArray(
       products.topCategoriesByRevenue,
       'products.topCategoriesByRevenue',
@@ -305,6 +348,8 @@ export const adminServices = {
   buildAccountingReport,
   reportProducts,
   reportProductsCsv,
+  reportVariants,
+  reportVariantsCsv,
   reportCategories,
   reportCategoriesCsv,
   reportTimeline,
@@ -313,6 +358,8 @@ export const adminServices = {
   listStockMovements,
   listAuditLog,
   auditLogCsv,
+  listStockLog,
+  stockLogCsv,
   listPriceLog,
   priceLogCsv,
   listLoginLog,

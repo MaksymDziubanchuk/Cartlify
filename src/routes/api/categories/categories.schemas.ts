@@ -95,7 +95,8 @@ const getCategoryTreeSchema = {
   description:
     'The whole tree of the categories for the menu of the catalog: each category with the ones ' +
     'right below it, by name, and the products of the catalog of its whole branch ' +
-    '(`productCount`, the products taken out of the catalog are not counted). ' +
+    '(`productCount`: a product counts when it has a variant a buyer sees, one that is for ' +
+    'sale and shows a picture; the products taken out of the catalog are not counted). ' +
     '`GET /api/products?categoryIds=<id>` lists the products of a branch.',
 
   response: {
@@ -110,8 +111,16 @@ const getCategoryTreeSchema = {
               name: 'Phones',
               slug: 'phones',
               productCount: 12,
+              imageUrls: null,
               children: [
-                { id: 2, name: 'Smartphones', slug: 'smartphones', productCount: 12, children: [] },
+                {
+                  id: 2,
+                  name: 'Smartphones',
+                  slug: 'smartphones',
+                  productCount: 12,
+                  imageUrls: null,
+                  children: [],
+                },
               ],
             },
           ],

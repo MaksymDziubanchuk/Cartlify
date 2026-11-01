@@ -18,7 +18,7 @@ import {
   deleteOrderPaymentPageLink,
   getOrderPaymentPageLink,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
 } from './helpers/index.js';
 
@@ -99,7 +99,7 @@ export async function cancelOrderPayment(
       const row = await readOrderResponse(db, id);
       if (!row) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_CANCEL_PAYMENT' });
 
-      return mapOrderRowToResponse(row, await expiredOfOrders(db, [row]));
+      return mapOrderRowToResponse(row, await orderContextOf(db, [row]));
     }, txOptions);
 
     // the reservation timers and the page link have nothing left to do; a leftover is harmless,

@@ -14,6 +14,10 @@ const systemHealthResponseExample = {
         checkout: 'available',
         orderTimeoutQueue: 'running',
     },
+    orderTimeoutWorker: {
+        lastRunAt: '2026-01-01T09:59:58.000Z',
+        queued: 0,
+    },
 };
 
 const systemReadyOkResponseExample = {

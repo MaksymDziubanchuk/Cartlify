@@ -108,6 +108,7 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     updatedTo,
     userId: dto.userId,
     productId: dto.productId,
+    variantId: dto.variantId,
     q,
     // the delivery filters of the desk; the schema holds the form of the lists
     deliveryMethod: dto.deliveryMethod ? dto.deliveryMethod.split(',') : undefined,
@@ -167,6 +168,7 @@ export function buildOrdersWhere(args: {
   updatedTo?: Date | undefined;
   userId?: number | undefined;
   productId?: number | undefined;
+  variantId?: number | undefined;
   q?: string | undefined;
   deliveryMethod?: string[] | undefined;
   country?: string[] | undefined;
@@ -186,7 +188,16 @@ export function buildOrdersWhere(args: {
   const status = args.status ? args.status : { not: 'pending' };
   where.status = args.statuses ? { in: args.statuses } : status;
   if (args.statuses && args.status) where.AND = [{ status: args.status }];
-  if (args.productId !== undefined) where.items = { some: { productId: args.productId } };
+  // the orders that hold a variant of the product and the variant itself: both filters name the
+  // same position when both are sent
+  if (args.productId !== undefined || args.variantId !== undefined) {
+    where.items = {
+      some: {
+        ...(args.productId !== undefined ? { productId: args.productId } : {}),
+        ...(args.variantId !== undefined ? { variantId: args.variantId } : {}),
+      },
+    };
+  }
   if (args.q) Object.assign(where, searchWhereOf(args.q));
   if (args.confirmed !== undefined) where.confirmed = args.confirmed;
 
@@ -215,7 +226,7 @@ export function buildOrdersWhere(args: {
     });
   }
   if (args.withoutWeight) {
-    and.push({ items: { some: { product: { weightGrams: null } } } });
+    and.push({ items: { some: { variant: { weightGrams: null } } } });
   }
   // a send whose cost the shop has not written, one it owes something for, and one sent before a
   // time: the parts are about the same send

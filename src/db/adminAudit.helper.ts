@@ -1,4 +1,3 @@
-import { parseProductDescription } from '@helpers/productDescription.js';
 import { isSaleOn } from '@helpers/productSale.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
@@ -42,14 +41,19 @@ export function buildSaleAuditChanges(args: {
 }
 
 // the sale and the stock are no fields here: lines of their own describe them (buildSaleAuditChanges;
-// STOCK_DELIVERY and STOCK_WRITE_OFF, written by the database, db/05)
+// STOCK_DELIVERY and STOCK_WRITE_OFF, one line for a whole delivery or write-off: stockOperationLine).
+// The price, the article number and the weight are the variant's now: a line of a variant
+// (variant.update) names them; the fields stay here for the callers that still pass them
 export function buildProductUpdateAuditChanges(
   before: {
     name: string;
     description: string | null;
     sku?: string | null;
-    price: { toString(): string };
+    price?: { toString(): string };
     categoryId: number;
+    manufacturerId?: number;
+    euResponsibleId?: number | null;
+    warnings?: string | null;
     weightGrams?: number | null;
     lengthMm?: number | null;
     widthMm?: number | null;
@@ -63,8 +67,11 @@ export function buildProductUpdateAuditChanges(
       name: string;
       description: string | null;
       sku?: string | null;
-      price: { toString(): string };
+      price?: { toString(): string };
       categoryId: number;
+      manufacturerId?: number;
+      euResponsibleId?: number | null;
+      warnings?: string | null;
       weightGrams?: number | null;
       lengthMm?: number | null;
       widthMm?: number | null;
@@ -76,7 +83,9 @@ export function buildProductUpdateAuditChanges(
     input: {
       name?: unknown;
       description?: unknown;
-      safety?: unknown;
+      manufacturerId?: unknown;
+      euResponsibleId?: unknown;
+      warnings?: unknown;
       sku?: unknown;
       price?: unknown;
       categoryId?: unknown;
@@ -97,20 +106,44 @@ export function buildProductUpdateAuditChanges(
     changes.push({ field: 'name', old: before.name, new: args.after.name });
   }
 
-  // the text of the description, without the safety data it keeps
-  const oldText = parseProductDescription(before.description).text;
-  const newText = parseProductDescription(args.after.description).text;
+  // an empty description is none: an empty one sent takes the text away, which is a change too
+  const oldText = before.description || null;
+  const newText = args.after.description || null;
   if (args.input.description != null && oldText !== newText) {
     changes.push({ field: 'description', old: oldText, new: newText });
   }
 
-  // the safety data the description keeps, whole: they are replaced whole
-  if (args.input.safety !== undefined) {
-    const old = parseProductDescription(before.description).safety;
-    const next = parseProductDescription(args.after.description).safety;
-    if (JSON.stringify(old) !== JSON.stringify(next)) {
-      changes.push({ field: 'safety', old, new: next });
-    }
+  // the manufacturer and the person in the EU by their ids in the directory, the warnings as text;
+  // null takes the person and the warnings away, and is a change too
+  if (
+    args.input.manufacturerId !== undefined &&
+    before.manufacturerId !== args.after.manufacturerId
+  ) {
+    changes.push({
+      field: 'manufacturerId',
+      old: before.manufacturerId ?? null,
+      new: args.after.manufacturerId ?? null,
+    });
+  }
+  if (
+    args.input.euResponsibleId !== undefined &&
+    (before.euResponsibleId ?? null) !== (args.after.euResponsibleId ?? null)
+  ) {
+    changes.push({
+      field: 'euResponsibleId',
+      old: before.euResponsibleId ?? null,
+      new: args.after.euResponsibleId ?? null,
+    });
+  }
+  if (
+    args.input.warnings !== undefined &&
+    (before.warnings ?? null) !== (args.after.warnings ?? null)
+  ) {
+    changes.push({
+      field: 'warnings',
+      old: before.warnings ?? null,
+      new: args.after.warnings ?? null,
+    });
   }
 
   // an empty article number takes it away: null is a change too
@@ -132,7 +165,12 @@ export function buildProductUpdateAuditChanges(
     }
   }
 
-  if (args.input.price != null && before.price.toString() !== args.after.price.toString()) {
+  if (
+    args.input.price != null &&
+    before.price !== undefined &&
+    args.after.price !== undefined &&
+    before.price.toString() !== args.after.price.toString()
+  ) {
     changes.push({
       field: 'price',
       old: before.price.toString(),
@@ -181,8 +219,19 @@ export async function writeAdminAuditLog(
   args: {
     actorId: UserId;
     actorRole: string;
-    entityType: 'product' | 'user' | 'category' | 'order' | 'review' | 'other';
-    entityId: number;
+    entityType:
+      | 'product'
+      | 'variant'
+      | 'user'
+      | 'category'
+      | 'order'
+      | 'review'
+      | 'party'
+      | 'document'
+      | 'attribute'
+      | 'other';
+    // null for a line that is about no one thing, such as a delivery of many variants (other)
+    entityId: number | null;
     // what made the line, finer than the action (src/config/journalEvents.ts)
     event: WrittenEvent<AuditEvent>;
     action:
@@ -191,6 +240,8 @@ export async function writeAdminAuditLog(
       | 'PRODUCT_DELETE'
       | 'PRODUCT_PRICE_BULK_UPDATE'
       | 'PRODUCT_SALE'
+      | 'STOCK_DELIVERY'
+      | 'STOCK_WRITE_OFF'
       | 'USER_ROLE_CHANGE'
       | 'ORDER_STATUS_CHANGE'
       | 'ORDER_SHIPMENT_CHANGE'
@@ -217,4 +268,50 @@ export async function writeAdminAuditLog(
       ${changesJson}::jsonb
     )
   `;
+}
+
+// The line of the admin log for a whole delivery or write-off of stock: one line for the operation,
+// however many variants it touched (the line of each variant is in the stock log, db/05). It points
+// at the variant when the operation touched exactly one, and at nothing (other, no id) when it
+// touched more. Its changes start with the id of the operation, the same id the lines of the stock
+// log carry (deliveryId or writeOffId), then what tells the operation (the source and the
+// supplier of a delivery, the reason of a write-off, the note), then how many variants and units it
+// moved. The empty details are left out. The stock is a thing of the admin: it is always in the
+// admin log, the system alone (the sale at a payment) writes only the stock log
+export async function writeStockOperationAuditLog(
+  tx: DbClient,
+  args: {
+    actorId: UserId;
+    actorRole: string;
+    kind: 'delivery' | 'write_off';
+    operationId: string;
+    // the variants the operation touched, a variant once however many lines it had
+    variantIds: number[];
+    // the units in all, taken in or written off
+    quantity: number;
+    details: Array<{ field: string; value: unknown }>;
+  },
+): Promise<void> {
+  const single = args.variantIds.length === 1 ? args.variantIds[0]! : null;
+
+  await writeAdminAuditLog(tx, {
+    actorId: args.actorId,
+    actorRole: args.actorRole,
+    entityType: single === null ? 'other' : 'variant',
+    entityId: single,
+    action: args.kind === 'delivery' ? 'STOCK_DELIVERY' : 'STOCK_WRITE_OFF',
+    event: args.kind === 'delivery' ? 'stock.delivery' : 'stock.write_off',
+    changes: [
+      {
+        field: args.kind === 'delivery' ? 'deliveryId' : 'writeOffId',
+        old: null,
+        new: args.operationId,
+      },
+      ...args.details
+        .filter((detail) => detail.value !== null && detail.value !== undefined)
+        .map((detail) => ({ field: detail.field, old: null, new: detail.value })),
+      { field: 'variants', old: null, new: args.variantIds.length },
+      { field: 'quantity', old: null, new: args.quantity },
+    ],
+  });
 }

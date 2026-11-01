@@ -6,9 +6,22 @@ const rootAdminsGetQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
-    cursor: { type: 'string', minLength: 1, pattern: '^[A-Za-z0-9_-]+$' },
-    search: { type: 'string' },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most rows a page holds, from 1 to 100.',
+    },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description: 'The nextCursor of the previous page.',
+    },
+    search: {
+      type: 'string',
+      description: 'A part of the email or the name, letter case ignored.',
+    },
   },
 } as const;
 

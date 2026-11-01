@@ -1,5 +1,3 @@
-import { expiredUnitsNow } from '@db/expiredStock.helper.js';
-import { lastUnitCostsNow } from '@db/lastUnitCost.helper.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -7,20 +5,19 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import {
-  isSkuTaken,
-  mapProductRowToResponse,
+  knownVariantDbError,
   normalizeFindProductByIdInput,
-  productResponseSelect,
-  readCategoryPath,
-  readProductImageUrls,
+  readAdminCard,
 } from './helpers/index.js';
 
 import type { FullProductResponseDto, RestoreProductDto } from 'types/dto/products.dto.js';
 
-// puts a product taken out of the catalog back: the catalog, the search and the cart see it again.
-// The admin log keeps the change of deletedAt (PRODUCT_UPDATE); a product of the catalog is 409
-// PRODUCT_NOT_DELETED, its article number taken by another product of the catalog meanwhile is
-// 409 PRODUCT_SKU_TAKEN
+// puts a product taken out of the catalog back: the catalog, the search and the cart see it again,
+// and so do its variants that went with it (the database puts back the ones taken out of sale
+// together with the product; a variant an admin took out of sale before stays out). The admin log
+// keeps the change of deletedAt (PRODUCT_UPDATE); a product of the catalog is 409
+// PRODUCT_NOT_DELETED, an article number or a barcode of a variant that another live variant took
+// meanwhile is 409 PRODUCT_SKU_TAKEN or VARIANT_BARCODE_TAKEN. The answer is the card of an admin
 export async function restoreProduct(dto: RestoreProductDto): Promise<FullProductResponseDto> {
   assertAdminActor(dto.actorId, dto.actorRole);
 
@@ -28,7 +25,7 @@ export async function restoreProduct(dto: RestoreProductDto): Promise<FullProduc
   const { actorId, actorRole } = dto;
 
   try {
-    const restored = await prisma.$transaction(async (tx) => {
+    await prisma.$transaction(async (tx) => {
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
       const before = await tx.product.findUnique({
@@ -41,7 +38,7 @@ export async function restoreProduct(dto: RestoreProductDto): Promise<FullProduc
       const after = await tx.product.update({
         where: { id: productId },
         data: { deletedAt: null },
-        select: productResponseSelect,
+        select: { id: true },
       });
 
       await writeAdminAuditLog(tx, {
@@ -53,30 +50,17 @@ export async function restoreProduct(dto: RestoreProductDto): Promise<FullProduc
         event: 'product.restore',
         changes: [{ field: 'deletedAt', old: before.deletedAt.toISOString(), new: null }],
       });
-
-      return after;
-    });
-
-    const images = await readProductImageUrls(restored.id);
-    const expired = await expiredUnitsNow([restored.id]);
-    const costs = await lastUnitCostsNow({ actorId, actorRole }, [restored.id]);
-
-    return mapProductRowToResponse({
-      product: {
-        ...restored,
-        expiredStock: expired.get(restored.id) ?? 0,
-        lastUnitCost: costs.get(restored.id) ?? null,
-      },
-      images,
-      categoryPath: await readCategoryPath(restored.category.id),
-      view: 'admin',
     });
   } catch (err) {
     if (isAppError(err)) throw err;
 
-    // one product of the catalog has an article number at a time
-    if (isSkuTaken(err)) throw new ConflictError('PRODUCT_SKU_TAKEN');
+    // the variants come back with the product: one whose code another live variant took meanwhile
+    // stops it (the unique indexes of db/06)
+    const known = await knownVariantDbError(err);
+    if (known) throw known;
 
     throw new InternalError({ reason: 'PRODUCTS_RESTORE_UNEXPECTED' }, err);
   }
+
+  return readAdminCard({ actorId, actorRole }, productId);
 }

@@ -6,6 +6,7 @@ import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { toNumberSafe } from '@helpers/safeNormalizer.js';
+import { visibleVariantWhere } from './helpers/variant.helper.js';
 import {
   buyersOf,
   mapReviewRowToResponse,
@@ -62,14 +63,19 @@ export async function findReviews({
         await setUserContext(tx, { userId: userId, role: actorRole });
       }
 
-      // ensure product exists for stable 404; a product taken out of the catalog is no product for
-      // a buyer, as its card: an admin still reads its reviews
+      // ensure product exists for stable 404; a product taken out of the catalog, or one with no
+      // variant a buyer sees, is no product for a buyer, as its card: an admin still reads its reviews
       const product = await tx.product.findUnique({
         where: { id: productId },
-        select: { id: true, deletedAt: true },
+        select: {
+          id: true,
+          deletedAt: true,
+          variants: { where: visibleVariantWhere, select: { id: true }, take: 1 },
+        },
       });
       const isAdmin = actorRole === 'ADMIN' || actorRole === 'ROOT';
-      if (!product || (product.deletedAt && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
+      const hidden = !product || product.deletedAt !== null || product.variants.length === 0;
+      if (!product || (hidden && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
       // read page and total, fetch limit + 1 to detect next page. One after the other: the
       // transaction has one connection, and it runs one statement at a time.

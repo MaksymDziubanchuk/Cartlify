@@ -91,6 +91,7 @@ async function handleMessageSend(
         threadId,
         content,
         log,
+        ip: context.ip,
         onSaved: (saved) => {
             // broadcast sender message
             chatWsBroadcaster.broadcastToThread(threadId, {

@@ -6,6 +6,7 @@ import { buildOrderCancelledTemplate } from '@services/email/templates/orders/or
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
+import { itemNameOf } from './itemName.helper.js';
 
 export type OrderCancelLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -37,6 +38,7 @@ function loadOrder(orderId: number) {
             quantity: true,
             totalPrice: true,
             productName: true,
+            variantId: true,
             product: { select: { name: true } },
           },
         },
@@ -75,8 +77,8 @@ export async function sendOrderCancelledEmail(
       orderId: order.id,
       orderUrl: orderPage(order.id),
       items: order.items.map((item) => ({
-        // the name the product had when the order was confirmed
-        name: item.productName ?? item.product.name,
+        // the name the variant had when the order was confirmed
+        name: itemNameOf(item),
         quantity: item.quantity,
         totalPrice: item.totalPrice.toString(),
       })),

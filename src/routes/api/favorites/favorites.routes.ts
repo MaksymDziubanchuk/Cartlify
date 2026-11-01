@@ -15,17 +15,17 @@ export default async function favoritesRouter(app: FastifyInstance) {
     favoritesController.getFavorites,
   );
   app.post(
-    '/:productId',
+    '/:variantId',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
+      preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('variantId')],
       schema: favoritesSchema.postAddFavoriteSchema,
     },
     favoritesController.postAddFavorite,
   );
   app.delete(
-    '/:productId',
+    '/:variantId',
     {
-      preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('productId')],
+      preHandler: [authGuard, requireRole(['GUEST', 'USER']), validateId('variantId')],
       schema: favoritesSchema.deleteFavoriteSchema,
     },
     favoritesController.deleteFavorite,

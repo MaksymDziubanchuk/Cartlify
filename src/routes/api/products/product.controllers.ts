@@ -8,6 +8,7 @@ import type {
   FindAllProductsDto,
   ProductsResponseDto,
   GetProductByIdParamsDto,
+  GetProductByIdQueryDto,
   FindProductByIdDto,
   FullProductResponseDto,
   GetProductReviewsParamsDto,
@@ -26,9 +27,9 @@ import type {
   UpdateProductBodyDto,
   UpdateProductDto,
   UpdateProductResponseDto,
-  ProductSaleWord,
   SetProductSaleParamsDto,
   SetProductSaleBodyDto,
+  SetProductSaleDto,
   SetProductSaleResponseDto,
   BulkUpdateProductsPriceBodyDto,
   BulkUpdateProductsPriceResponseDto,
@@ -50,6 +51,8 @@ import type {
   WriteOffStockResponseDto,
   ProductSuggestionsQueryDto,
   ProductSuggestionsResponseDto,
+  CatalogFiltersQueryDto,
+  CatalogFiltersResponseDto,
   ProductSalesBodyDto,
   ProductSalesResponseDto,
   RestoreProductParamsDto,
@@ -64,21 +67,13 @@ import pickDefined from '@helpers/parameterNormalize.js';
 import { discardUploads } from '@utils/cloudinary.util.js';
 import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
 import { BadRequestError } from '@utils/errors.js';
-import { safetyFromFormFields } from '@helpers/productDescription.js';
+import { partyFromFormFields } from '@helpers/party.js';
 import {
   reserveNextProductId,
   beginProductImageUpload,
 } from './services/uploadProductImages.service.js';
 
-// the fields of a product that tell its weight and its packed sizes, and the word that they come
-// later; a form gives them as text, the service checks them
-const SHIPPING_FORM_FIELDS = {
-  weightGrams: true,
-  lengthMm: true,
-  widthMm: true,
-  heightMm: true,
-  withoutShippingData: true,
-} as const;
+const bool = (value: unknown) => (typeof value === 'boolean' ? value : undefined);
 
 const getAllProducts: ControllerRouter<
   {},
@@ -105,11 +100,25 @@ const getAllProducts: ControllerRouter<
   const withoutShippingData =
     typeof q.withoutShippingData === 'boolean' ? q.withoutShippingData : undefined;
   const onSale = typeof q.onSale === 'boolean' ? q.onSale : undefined;
+  // the flags and the ids of an admin that find the gaps of the catalog (the schema types them)
+  const gaps = {
+    missingRequired: bool(q.missingRequired),
+    withoutWeight: bool(q.withoutWeight),
+    withoutDimensions: bool(q.withoutDimensions),
+    withoutBarcode: bool(q.withoutBarcode),
+    withoutImages: bool(q.withoutImages),
+    hiddenFromBuyers: bool(q.hiddenFromBuyers),
+    hasDeletedVariants: bool(q.hasDeletedVariants),
+    manufacturerId: typeof q.manufacturerId === 'number' ? q.manufacturerId : undefined,
+    euResponsibleId: typeof q.euResponsibleId === 'number' ? q.euResponsibleId : undefined,
+    documentId: typeof q.documentId === 'number' ? q.documentId : undefined,
+  };
   // the period of the sort by sales, as dates; a text that is no date stays an invalid date
   const salesFrom = typeof q.salesFrom === 'string' ? new Date(q.salesFrom) : undefined;
   const salesTo = typeof q.salesTo === 'string' ? new Date(q.salesTo) : undefined;
   const popularityOverridden =
     typeof q.popularityOverridden === 'boolean' ? q.popularityOverridden : undefined;
+  const group = typeof q.group === 'boolean' ? q.group : undefined;
 
   // without a sort the service takes the best match of a search, or the popularity
   const sort = q.sort as ProductsSortField | undefined;
@@ -143,10 +152,14 @@ const getAllProducts: ControllerRouter<
       inStock,
       maxStock,
       withoutShippingData,
+      ...gaps,
       salesFrom,
       salesTo,
       onSale,
       popularityOverridden,
+      // the filter by characteristics is read by the service, which names what is wrong with it
+      f: q.f,
+      group,
     },
   );
 
@@ -154,15 +167,36 @@ const getAllProducts: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// the filter of a category: what its variants are told apart by
+const getCatalogFilters: ControllerRouter<
+  {},
+  {},
+  CatalogFiltersQueryDto,
+  CatalogFiltersResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await productServices.findCatalogFilters({
+    categoryId: Number(req.query.categoryId) as CategoryId,
+    branch: req.query.branch !== false,
+    actorId,
+    actorRole,
+  });
+  return reply.code(200).send(result);
+};
+
 const getProductById: ControllerRouter<
   GetProductByIdParamsDto,
   {},
-  {},
+  GetProductByIdQueryDto,
   FullProductResponseDto
 > = async (req, reply) => {
   const productId = Number(req.params.productId);
   const { id: actorId, role: actorRole } = req.user as User;
-  const args = pickDefined<FindProductByIdDto>({ productId, actorId, actorRole }, {});
+  const args = pickDefined<FindProductByIdDto>(
+    { productId, actorId, actorRole },
+    { variantId: req.query.variantId },
+  );
   const result = await productServices.findById(args);
   return reply.code(200).send(result);
 };
@@ -193,6 +227,9 @@ const getProductReviews: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// the fields of a party a new product brings: only these four of each party are taken
+const PARTY_FORM_FIELD = /^(manufacturer|euResponsible)\.(name|address|email|country)$/;
+
 const postProduct: ControllerRouter<
   {},
   CreateProductBodyDto,
@@ -210,14 +247,19 @@ const postProduct: ControllerRouter<
   // collect scalar fields from multipart
   let name: string | undefined;
   let description: string | undefined;
-  let sku: string | undefined;
-  let priceRaw: string | undefined;
-  let stockRaw: string | undefined;
   let categoryIdRaw: string | undefined;
-  // the weight, the sizes and the word that they come later, as text; the service checks them
-  const shippingFields: Partial<Record<keyof typeof SHIPPING_FORM_FIELDS, string>> = {};
-  // the safety data as text fields: safety.manufacturer.name and so on
-  const safetyFields = new Map<string, string>();
+  // the variants: the text of a JSON list, the service reads and checks it
+  let variantsRaw: string | undefined;
+  // never taken: a stock sent is refused by the service
+  let stockRaw: string | undefined;
+  // the manufacturer and the person responsible in the EU: a party of the directory by its id, or
+  // a new one by its values as text fields (manufacturer.name and so on); the warnings
+  let manufacturerIdRaw: string | undefined;
+  let euResponsibleIdRaw: string | undefined;
+  let warnings: string | undefined;
+  // the ids of the documents of the directory the product names, with a comma between
+  let documentIdsRaw: string | undefined;
+  const partyFields = new Map<string, string>();
 
   // reserve product id lazily when we see the first image
   let productId: ProductId | null = null;
@@ -269,14 +311,15 @@ const postProduct: ControllerRouter<
       // map allowed fields only
       if (part.fieldname === 'name') name = v;
       else if (part.fieldname === 'description') description = v;
-      else if (part.fieldname === 'sku') sku = v;
-      else if (part.fieldname === 'price') priceRaw = v;
-      else if (part.fieldname === 'stock') stockRaw = v;
       else if (part.fieldname === 'categoryId') categoryIdRaw = v;
-      else if (part.fieldname.startsWith('safety.')) safetyFields.set(part.fieldname, v);
-      // an empty input of a form is no value
-      else if (part.fieldname in SHIPPING_FORM_FIELDS && v !== '') {
-        shippingFields[part.fieldname as keyof typeof SHIPPING_FORM_FIELDS] = v;
+      else if (part.fieldname === 'variants') variantsRaw = v;
+      else if (part.fieldname === 'stock') stockRaw = v;
+      else if (part.fieldname === 'manufacturerId' && v.trim()) manufacturerIdRaw = v;
+      else if (part.fieldname === 'euResponsibleId' && v.trim()) euResponsibleIdRaw = v;
+      else if (part.fieldname === 'warnings') warnings = v;
+      else if (part.fieldname === 'documentIds') documentIdsRaw = v;
+      else if (PARTY_FORM_FIELD.test(part.fieldname) && v !== '') {
+        partyFields.set(part.fieldname, v);
       }
     }
 
@@ -291,10 +334,9 @@ const postProduct: ControllerRouter<
     // required fields (and TS narrowing)
     const productIdReq = productId;
     const nameReq = name?.trim();
-    const priceReq = priceRaw?.trim();
     const categoryIdReq = categoryIdRaw?.trim();
     const descriptionReq = description?.trim();
-    if (!productIdReq || !nameReq || !priceReq || !categoryIdReq || !uploads.length) {
+    if (!productIdReq || !nameReq || !categoryIdReq || !uploads.length) {
       throw new BadRequestError('BODY_NOT_FULL');
     }
 
@@ -306,21 +348,20 @@ const postProduct: ControllerRouter<
         actorRole,
         productId: productIdReq,
         name: nameReq,
-        price: Number(priceReq),
         categoryId: Number(categoryIdReq) as CategoryId,
         images: uploads,
         log: req.log,
       },
       {
         description: descriptionReq,
-        sku,
-        safety: safetyFromFormFields(safetyFields),
+        manufacturerId: manufacturerIdRaw,
+        manufacturer: partyFromFormFields(partyFields, 'manufacturer'),
+        euResponsibleId: euResponsibleIdRaw,
+        euResponsible: partyFromFormFields(partyFields, 'euResponsible'),
+        warnings,
+        documentIds: documentIdsRaw,
+        variants: variantsRaw,
         stock: stockRaw,
-        weightGrams: shippingFields.weightGrams,
-        lengthMm: shippingFields.lengthMm,
-        widthMm: shippingFields.widthMm,
-        heightMm: shippingFields.heightMm,
-        withoutShippingData: shippingFields.withoutShippingData,
       },
     );
 
@@ -368,150 +409,86 @@ const updateProductById: ControllerRouter<
   // collect optional fields from multipart or json
   let name: string | undefined;
   let description: string | undefined;
-  // an empty one takes the article number away
-  let sku: string | null | undefined;
-  // the safety data, whole; a form gives them as text fields
-  let safety: unknown;
-  const safetyFields = new Map<string, string>();
+  // the manufacturer and the person responsible in the EU by their ids in the directory (an empty
+  // person takes it away), the warnings (empty takes them away)
+  let manufacturerId: unknown;
+  let euResponsibleId: unknown;
+  let warnings: string | null | undefined;
+  // the documents by their ids: a form gives them as text, a json body as an array or null
+  let documentIds: unknown;
 
-  let price: number | undefined;
   // never taken: a stock sent is refused, it changes only with a delivery or a write-off
   let stock: unknown;
   let categoryId: number | undefined;
 
-  // the weight and the sizes: numbers of a json body, text of a form; null clears them
-  const shippingFields: Pick<
-    UpdateProductDto,
-    'weightGrams' | 'lengthMm' | 'widthMm' | 'heightMm' | 'withoutShippingData'
-  > = {};
-
   let popularityOverride: number | null | undefined;
   let popularityOverrideUntil: string | null | undefined;
 
-  // what happens to the sale that is on with a new price; a form names keep or remove only
-  let sale: ProductSaleWord | undefined;
-  let saleWordInvalid = false;
-
-  let uploads: UploadedProductImage[] | undefined;
-
-  // start image uploads as soon as we see file parts
-  const imageUploads: Array<Promise<UploadedProductImage>> = [];
-
-  try {
-    if (req.isMultipart()) {
-      // parse multipart parts manually
-      for await (const part of req.parts()) {
-        if (part.type === 'file') {
-          // accept only images field, drain everything else
-          if (part.fieldname !== 'images' && part.fieldname !== 'images[]') {
-            part.file.resume();
-            continue;
-          }
-
-          // a product has at most so many images: the part is read to its end, the uploads begun go
-          if (imageUploads.length >= MAX_PRODUCT_IMAGES) {
-            part.file.resume();
-            throw new BadRequestError('PRODUCT_IMAGES_TOO_MANY', { max: MAX_PRODUCT_IMAGES });
-          }
-
-          // start consuming the stream immediately, the upload waits under an id of its own
-          const position = imageUploads.length;
-          const upload = beginProductImageUpload({
-            productId,
-            position,
-            image: { file: part.file, mimetype: part.mimetype, filename: part.filename },
-          });
-          // awaited after the loop; a failure before that must not stop the process
-          upload.catch(() => undefined);
-          imageUploads.push(upload);
-
-          continue;
-        }
-
-        // multipart field values are typed loosely, normalize to string
-        const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
-        if (v.includes('\u0000')) throw new BadRequestError('TEXT_NUL_FORBIDDEN');
-        const t = v.trim();
-
-        // map allowed fields only
-        if (part.fieldname === 'name') name = v;
-        else if (part.fieldname === 'description') description = v;
-        else if (part.fieldname === 'sku') sku = v;
-        else if (part.fieldname.startsWith('safety.')) safetyFields.set(part.fieldname, v);
-        else if (part.fieldname === 'price') price = t ? Number(t) : undefined;
-        else if (part.fieldname === 'stock') stock = v;
-        else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
-        else if (part.fieldname in SHIPPING_FORM_FIELDS && v !== '') {
-          Object.assign(shippingFields, { [part.fieldname]: v });
-        } else if (part.fieldname === 'popularityOverride') {
-          if (!t || t === 'null') popularityOverride = null;
-          else popularityOverride = Number(t);
-        } else if (part.fieldname === 'popularityOverrideUntil') {
-          if (!t || t === 'null') popularityOverrideUntil = null;
-          else popularityOverrideUntil = t;
-        } else if (part.fieldname === 'sale') {
-          if (t === 'keep') sale = 'keep';
-          else if (t === 'remove') sale = null;
-          else saleWordInvalid = true;
-        }
+  if (req.isMultipart()) {
+    // parse multipart parts manually; a form carries the text fields of the json body
+    for await (const part of req.parts()) {
+      if (part.type === 'file') {
+        // the pictures of a product are its gallery: POST /api/products/:productId/images
+        part.file.resume();
+        throw new BadRequestError('PRODUCT_IMAGES_NOT_ALLOWED');
       }
 
-      // a new sale needs its fields: it comes as json or through the sale route
-      if (saleWordInvalid) throw new BadRequestError('PRODUCT_SALE_ACTION_INVALID');
-      safety = safetyFromFormFields(safetyFields);
+      // multipart field values are typed loosely, normalize to string
+      const v = typeof part.value === 'string' ? part.value : String(part.value ?? '');
+      if (v.includes('\u0000')) throw new BadRequestError('TEXT_NUL_FORBIDDEN');
+      const t = v.trim();
 
-      // wait for uploads only when images were provided
-      if (imageUploads.length) uploads = await Promise.all(imageUploads);
-    } else {
-      // a json body changes the fields; images come only as files of a form
-      const b = req.body ?? {};
-      name = b.name;
-      description = b.description;
-      sku = b.sku;
-      safety = b.safety;
-      price = b.price;
-      stock = b.stock;
-      categoryId = b.categoryId;
-      for (const field of Object.keys(
-        SHIPPING_FORM_FIELDS,
-      ) as (keyof typeof SHIPPING_FORM_FIELDS)[]) {
-        if (b[field] !== undefined) Object.assign(shippingFields, { [field]: b[field] });
+      // map allowed fields only
+      if (part.fieldname === 'name') name = v;
+      else if (part.fieldname === 'description') description = v;
+      else if (part.fieldname === 'manufacturerId') manufacturerId = t;
+      else if (part.fieldname === 'euResponsibleId') euResponsibleId = t || null;
+      else if (part.fieldname === 'warnings') warnings = v;
+      else if (part.fieldname === 'documentIds') documentIds = v;
+      else if (part.fieldname === 'stock') stock = v;
+      else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
+      else if (part.fieldname === 'popularityOverride') {
+        if (!t || t === 'null') popularityOverride = null;
+        else popularityOverride = Number(t);
+      } else if (part.fieldname === 'popularityOverrideUntil') {
+        if (!t || t === 'null') popularityOverrideUntil = null;
+        else popularityOverrideUntil = t;
       }
-      popularityOverride = b.popularityOverride;
-      popularityOverrideUntil = b.popularityOverrideUntil;
-      sale = b.sale;
     }
-
-    // build service dto with only provided fields
-    const args = pickDefined<UpdateProductDto>(
-      { productId, actorId, actorRole, log: req.log },
-      {
-        name,
-        description,
-        sku,
-        safety: safety as UpdateProductDto['safety'],
-        price,
-        stock,
-        categoryId,
-        images: uploads,
-        popularityOverride,
-        popularityOverrideUntil,
-        sale,
-        weightGrams: shippingFields.weightGrams,
-        lengthMm: shippingFields.lengthMm,
-        widthMm: shippingFields.widthMm,
-        heightMm: shippingFields.heightMm,
-        withoutShippingData: shippingFields.withoutShippingData,
-      },
-    );
-
-    const result = await productServices.updateProduct(args);
-    return reply.code(200).send(result);
-  } catch (err) {
-    // a refused update leaves the images of the product as they were: its uploads are deleted
-    await discardUploads(imageUploads, req.log);
-    throw err;
+  } else {
+    // a json body changes the fields; the pictures are the business of the gallery routes
+    const b = req.body ?? {};
+    name = b.name;
+    description = b.description;
+    manufacturerId = b.manufacturerId;
+    euResponsibleId = b.euResponsibleId;
+    warnings = b.warnings;
+    documentIds = b.documentIds;
+    stock = b.stock;
+    categoryId = b.categoryId;
+    popularityOverride = b.popularityOverride;
+    popularityOverrideUntil = b.popularityOverrideUntil;
   }
+
+  // build service dto with only provided fields
+  const args = pickDefined<UpdateProductDto>(
+    { productId, actorId, actorRole },
+    {
+      name,
+      description,
+      manufacturerId: manufacturerId as UpdateProductDto['manufacturerId'],
+      euResponsibleId: euResponsibleId as UpdateProductDto['euResponsibleId'],
+      warnings,
+      documentIds: documentIds as UpdateProductDto['documentIds'],
+      stock,
+      categoryId,
+      popularityOverride,
+      popularityOverrideUntil,
+    },
+  );
+
+  const result = await productServices.updateProduct(args);
+  return reply.code(200).send(result);
 };
 
 // many products at once, each with fields of its own, all of them or none
@@ -541,12 +518,12 @@ const patchProductSale: ControllerRouter<
   const { id: actorId, role: actorRole } = req.user as User;
 
   // null takes the sale off, the schema lets through a percent or an amount with its end
-  const result = await productServices.setProductSale({
-    productId,
-    actorId,
-    actorRole,
-    sale: req.body.sale,
-  });
+  const result = await productServices.setProductSale(
+    pickDefined<SetProductSaleDto>(
+      { productId, actorId, actorRole, sale: req.body.sale },
+      { variantIds: req.body.variantIds },
+    ),
+  );
   return reply.code(200).send(result);
 };
 
@@ -622,7 +599,7 @@ const patchProductCategory: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-// sales of many products at once: a sale for each product, or one for a category
+// sales of many variants at once: a sale for each variant or product, or one for a category
 const postProductSales: ControllerRouter<
   {},
   ProductSalesBodyDto,
@@ -648,7 +625,7 @@ const getProductSuggestions: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-// the history of the price of a product, for admin and root
+// the history of the price of the variants of a product, for admin and root
 const getPriceHistory: ControllerRouter<
   PriceHistoryParamsDto,
   {},
@@ -660,7 +637,7 @@ const getPriceHistory: ControllerRouter<
   const result = await productServices.findPriceHistory(
     pickDefined<PriceHistoryDto>(
       { productId: Number(req.params.productId), actorId, actorRole },
-      { limit: req.query.limit, cursor: req.query.cursor },
+      { variantId: req.query.variantId, limit: req.query.limit, cursor: req.query.cursor },
     ),
   );
   return reply.code(200).send(result);
@@ -712,6 +689,7 @@ const postStockWriteOff: ControllerRouter<
 export const productController = {
   getAllProducts,
   getProductSuggestions,
+  getCatalogFilters,
   getProductById,
   restoreProduct,
   getPriceHistory,

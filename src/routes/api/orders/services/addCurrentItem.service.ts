@@ -11,21 +11,25 @@ import {
   ResourceBusyError,
 } from '@utils/errors.js';
 import {
-  dropDeletedProductItems,
+  dropHiddenVariantItems,
   isOrderNotEditable,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
 } from './helpers/index.js';
 
+import { visibleVariantWhere } from '@routes/api/products/services/helpers/variant.helper.js';
+
 import type { CurrentAddItemDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
-// adds an item to the cart, or, with orderId, to an own order that lost its reservation
-// (unconfirmed): its items can change before it is confirmed again
+// adds a variant to the cart, or, with orderId, to an own order that lost its reservation
+// (unconfirmed): its items can change before it is confirmed again. The same variant again adds the
+// units to its position. A variant a buyer does not see (taken out of sale, its product removed,
+// no picture) is not found
 export async function addCurrentItem({
   actorId,
   actorRole,
-  productId,
+  variantId,
   quantity,
   orderId: unconfirmedOrderId,
 }: CurrentAddItemDto): Promise<OrderResponseDto> {
@@ -80,35 +84,35 @@ export async function addCurrentItem({
               ).id;
         }
 
-        // load product price and availability
-        const product = await db.product.findFirst({
-          where: { id: productId as any, deletedAt: null },
-          select: { id: true, price: true, stock: true, reservedStock: true },
+        // load the variant, its price and availability; the one a buyer does not see is not found
+        const variant = await db.productVariant.findFirst({
+          where: { id: variantId, ...visibleVariantWhere, product: { deletedAt: null } },
+          select: { id: true, productId: true, price: true, stock: true, reservedStock: true },
         });
 
-        if (!product) throw new NotFoundError('PRODUCT_NOT_FOUND', { productId });
+        if (!variant) throw new NotFoundError('VARIANT_NOT_FOUND', { variantId });
 
         // check availability: the stock less what the waiting orders hold and what is over
-        const expired = await expiredUnitsOf(db, [product.id]);
+        const expired = await expiredUnitsOf(db, [variant.id]);
         const available = freeUnits(
-          product.stock,
-          product.reservedStock,
-          expired.get(product.id) ?? 0,
+          variant.stock,
+          variant.reservedStock,
+          expired.get(variant.id) ?? 0,
         );
 
-        // upsert item in open order
+        // upsert item in open order: one position for a variant
         const existingItem = await db.orderItem.findFirst({
-          where: { orderId, productId: productId as any },
+          where: { orderId, variantId: variant.id },
           select: { id: true, quantity: true },
         });
 
         const nextQty = (existingItem?.quantity ?? 0) + quantity;
         if (nextQty > available) {
-          throw new ConflictError('OUT_OF_STOCK', { productId, available, requested: nextQty });
+          throw new ConflictError('OUT_OF_STOCK', { variantId, available, requested: nextQty });
         }
 
-        // always store latest product price
-        const unitPrice = product.price;
+        // always store latest variant price
+        const unitPrice = variant.price;
 
         if (existingItem) {
           await db.orderItem.update({
@@ -121,7 +125,8 @@ export async function addCurrentItem({
           await db.orderItem.create({
             data: {
               orderId,
-              productId: productId as any,
+              productId: variant.productId,
+              variantId: variant.id,
               quantity: nextQty,
               unitPrice: unitPrice as any,
               totalPrice: new Prisma.Decimal(0),
@@ -130,10 +135,10 @@ export async function addCurrentItem({
           });
         }
 
-        // bring the other items to current product prices too, the order also loses the items of
-        // products deleted from the catalog; confirm refuses an order with outdated prices, so the
+        // bring the other items to current variant prices too, the order also loses the items of
+        // variants a buyer does not see; confirm refuses an order with outdated prices, so the
         // order must show what will be confirmed
-        await dropDeletedProductItems(db, Number(actorId), [orderId]);
+        await dropHiddenVariantItems(db, Number(actorId), [orderId]);
         await db.$executeRaw`select cartlify.refresh_order_prices(${orderId}::int)`;
 
         // totals are maintained by db triggers; fetch current order
@@ -141,7 +146,7 @@ export async function addCurrentItem({
 
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_UPDATE' });
 
-        return mapOrderRowToResponse(order, await expiredOfOrders(db, [order]));
+        return mapOrderRowToResponse(order, await orderContextOf(db, [order]));
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

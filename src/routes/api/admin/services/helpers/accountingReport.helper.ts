@@ -24,13 +24,13 @@ export const STOCK_SOURCES = ['supplier', 'surplus', 'customer_return'] as const
 type WriteOffReason = (typeof WRITE_OFF_REASONS)[number];
 type WriteOffs = GetAdminAccountingResponseDto['writeOffs'];
 
-// the products the report reads, each once; the schema let through ids of digits only
-export function parseProductIds(text: string | undefined): number[] | undefined {
+// the ids a report reads (products or variants), each once; the schema let through ids of digits only
+function parseIds(text: string | undefined, errorCode: string): number[] | undefined {
   if (text === undefined) return undefined;
 
   const ids = [...new Set(text.split(',').map(Number))].sort((a, b) => a - b);
   if (ids.length > MAX_REPORT_PRODUCTS || ids.some((id) => !Number.isInteger(id) || id > MAX_ID)) {
-    throw new BadRequestError('PRODUCT_IDS_INVALID', {
+    throw new BadRequestError(errorCode, {
       maxIds: MAX_REPORT_PRODUCTS,
       maxId: MAX_ID,
     });
@@ -38,6 +38,12 @@ export function parseProductIds(text: string | undefined): number[] | undefined 
 
   return ids;
 }
+
+// the products the report reads, each once
+export const parseProductIds = (text: string | undefined) => parseIds(text, 'PRODUCT_IDS_INVALID');
+
+// the variants the report reads, each once
+export const parseVariantIds = (text: string | undefined) => parseIds(text, 'VARIANT_IDS_INVALID');
 
 // money of the report as a number, to the cent
 export const money = (value: Prisma.Decimal) => value.toDecimalPlaces(2).toNumber();
@@ -58,8 +64,8 @@ const broken = (reason: string): never => {
   throw new InternalError({ reason: 'WRITE_OFF_LINE_INVALID', detail: reason });
 };
 
-// the write-offs of the lines of the admin log (STOCK_WRITE_OFF), as
-// cartlify.write_off_product_stock writes them (db/05): the reason, and the batches with their
+// the write-offs of the lines of the stock log (stock.write_off), as
+// cartlify.write_off_variant_stock writes them (db/05): the reason, and the batches with their
 // units and costs. Decimals, not floats, for the money. A line of another shape is a broken state
 // of the log, not something the report may leave out
 export function summarizeWriteOffs(lines: unknown[]): WriteOffs {

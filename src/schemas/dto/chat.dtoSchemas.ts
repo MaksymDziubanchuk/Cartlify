@@ -7,7 +7,7 @@ const chatThreadIdParamsSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    threadId: { type: 'string', format: 'uuid' },
+    threadId: { type: 'string', format: 'uuid', description: 'The id of the chat thread.' },
   },
   required: ['threadId'],
 } as const;
@@ -27,8 +27,13 @@ const adminChatThreadsQuerySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    page: { type: 'integer', minimum: 1 },
-    limit: { type: 'integer', minimum: 1, maximum: 100 },
+    page: { type: 'integer', minimum: 1, description: 'The page of the queue, from 1.' },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'The most chats a page holds, from 1 to 100.',
+    },
     queue: {
       type: 'string',
       enum: ['waiting', 'active', 'unread'],

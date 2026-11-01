@@ -1,83 +1,82 @@
-import { expiredUnitsOf } from '@db/expiredStock.helper.js';
-import { lastUnitCostsOf } from '@db/lastUnitCost.helper.js';
 import { prisma } from '@db/client.js';
 import { setActorContext } from '@db/dbContext.service.js';
 
 import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import {
-  mapProductRowToResponse,
+  buildProductCard,
   normalizeFindProductByIdInput,
-  productResponseSelect,
   productViewOf,
-  readCategoryPath,
+  readVariantContext,
+  variantFullOf,
+  variantRowSelect,
+  visibleVariantWhere,
 } from './helpers/index.js';
 
 import type { FullProductResponseDto, FindProductByIdDto } from 'types/dto/products.dto.js';
+import type { GetVariantDto, GetVariantResponseDto } from 'types/dto/variants.dto.js';
 
-// the card of a product page, as a buyer or as an admin sees it (productViewOf)
+// the card of a product page, as a buyer or as an admin sees it (productViewOf, buildProductCard):
+// the product, the variant it opens (the one asked for, or the main one) and the variants to
+// switch between. The visit of a buyer is a view of the product
 export async function findById(dto: FindProductByIdDto): Promise<FullProductResponseDto> {
   const { productId } = normalizeFindProductByIdInput(dto);
   const view = productViewOf(dto.actorRole);
 
   try {
-    const { product, images, categoryPath } = await prisma.$transaction(async (tx) => {
+    return await prisma.$transaction(async (tx) => {
       // set db session context for rls policies
       await setActorContext(tx, { actorId: dto.actorId, role: dto.actorRole });
 
-      // ensure product exists for 404; a deleted product exists only for admin and root
-      const exists = await tx.product.findUnique({
-        where: { id: productId },
-        select: { id: true, deletedAt: true },
+      return buildProductCard(tx, {
+        productId,
+        view,
+        ...(dto.variantId !== undefined ? { variantId: dto.variantId } : {}),
+        countView: true,
       });
-      if (!exists || (exists.deletedAt && view !== 'admin')) {
-        throw new NotFoundError('PRODUCT_NOT_FOUND');
-      }
-
-      // a visit of a buyer is a view of the product, the one of an admin is not. A plain update of
-      // the counter: prisma would set updatedAt too, and the last change of a product is a change
-      // an admin made
-      if (view !== 'admin') {
-        await tx.$executeRaw`
-          update cartlify.products set views = views + 1 where id = ${productId}::int
-        `;
-      }
-
-      const product = await tx.product.findUniqueOrThrow({
-        where: { id: productId },
-        select: productResponseSelect,
-      });
-
-      // load images for response mapping; a product without one opens by its id with none, the
-      // lists of a buyer leave it out
-      const imageRows = await tx.productImage.findMany({
-        where: { productId: productId },
-        select: { url: true, position: true },
-        orderBy: { position: 'asc' },
-      });
-
-      // the free units leave out the units of batches that are over
-      const expired = await expiredUnitsOf(tx, [productId]);
-      // an admin sets a price against the cost of the latest delivery
-      const costs = view === 'admin' ? await lastUnitCostsOf(tx, [productId]) : new Map();
-
-      return {
-        product: {
-          ...product,
-          expiredStock: expired.get(productId) ?? 0,
-          lastUnitCost: costs.get(productId) ?? null,
-        },
-        images: imageRows,
-        categoryPath: await readCategoryPath(product.category.id, tx),
-      };
     });
-
-    // map db row into api dto
-    return mapProductRowToResponse({ product, images, categoryPath, view });
   } catch (err) {
     // preserve known app errors and map everything else to a generic 500
     if (isAppError(err)) throw err;
 
     throw new InternalError({ reason: 'PRODUCTS_FIND_BY_ID_UNEXPECTED' }, err);
+  }
+}
+
+// one variant of a product on its own, without the product: a buyer gets a variant that is for sale
+// and shows a picture of a product that is there, an admin any. It is no view of the product
+export async function findVariant(dto: GetVariantDto): Promise<GetVariantResponseDto> {
+  const { productId } = normalizeFindProductByIdInput(dto);
+  const view = productViewOf(dto.actorRole);
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await setActorContext(tx, { actorId: dto.actorId, role: dto.actorRole });
+
+      const product = await tx.product.findUnique({
+        where: { id: productId },
+        select: { id: true, name: true, deletedAt: true },
+      });
+      if (!product || (product.deletedAt && view !== 'admin')) {
+        throw new NotFoundError('PRODUCT_NOT_FOUND');
+      }
+
+      const row = await tx.productVariant.findFirst({
+        where: {
+          id: dto.variantId,
+          productId,
+          ...(view === 'buyer' ? visibleVariantWhere : {}),
+        },
+        select: variantRowSelect,
+      });
+      if (!row) throw new NotFoundError('VARIANT_NOT_FOUND');
+
+      const context = await readVariantContext(tx, [row], view, { full: true });
+      return variantFullOf(row, context, view);
+    });
+  } catch (err) {
+    if (isAppError(err)) throw err;
+
+    throw new InternalError({ reason: 'PRODUCTS_FIND_VARIANT_UNEXPECTED' }, err);
   }
 }

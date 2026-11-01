@@ -3,9 +3,9 @@ import { tx, isRetryableTxError } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { InternalError, NotFoundError, ResourceBusyError, isAppError } from '@utils/errors.js';
 import {
-  dropDeletedProductItems,
+  dropHiddenVariantItems,
   mapOrderRowToResponse,
-  expiredOfOrders,
+  orderContextOf,
   readOrderResponse,
 } from './helpers/index.js';
 
@@ -26,12 +26,12 @@ export async function findById({
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
         // bring item prices of an own order that is not confirmed (the cart or an order that lost
-        // its reservation) to current product prices, and drop the items of products deleted from
-        // the catalog; an order that lost its reservation is no longer the current cart, so this is
+        // its reservation) to current variant prices, and drop the items of variants a buyer does not
+        // see; an order that lost its reservation is no longer the current cart, so this is
         // where it gets fresh. Rls lets the owner touch only own orders that are not confirmed, for
         // any other order nothing changes
         if (actorRole === 'USER') {
-          await dropDeletedProductItems(db, Number(actorId), [Number(orderId)]);
+          await dropHiddenVariantItems(db, Number(actorId), [Number(orderId)]);
           await db.$executeRaw`select cartlify.refresh_order_prices(${Number(orderId)}::int)`;
         }
 
@@ -42,7 +42,7 @@ export async function findById({
 
         return mapOrderRowToResponse(
           order,
-          await expiredOfOrders(db, [order]),
+          await orderContextOf(db, [order]),
           actorRole === 'ADMIN' || actorRole === 'ROOT' ? 'admin' : 'buyer',
         );
       },

@@ -21,12 +21,14 @@ import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
 // the log of prices for admin and root (GET /api/admin/price-log): every change of the price of
-// every product, with the event that made it: a new price of one product, of many in one request,
-// of a selection, the start of a sale and its end. The policies let every admin read it. An admin
-// does not see who root is in it: the lines root wrote lose the account (the role stays)
+// every variant, a line for each variant, with its product and the event that made it: a new price
+// of one variant, of many in one request, of a selection, the start of a sale and its end. The
+// policies let every admin read it. An admin does not see who root is in it: the lines root wrote
+// lose the account (the role stays)
 
 export type PriceLogArgs = JournalArgs & {
   productId?: number | undefined;
+  variantId?: number | undefined;
   filterActorId?: number | undefined;
   mode?: string | undefined;
 };
@@ -36,6 +38,10 @@ type PriceRow = {
   createdAt: Date;
   productId: number;
   productName: string;
+  variantId: number;
+  variantPosition: number;
+  variantSku: string | null;
+  variantName: string;
   actorId: number;
   actorName: string | null;
   actorEmail: string;
@@ -55,6 +61,7 @@ const PRICE_SORTS = {
   id: { sql: Prisma.sql`l.id`, kind: 'number' },
   createdAt: { sql: col('createdAt'), kind: 'date' },
   productId: { sql: col('productId'), kind: 'number' },
+  variantId: { sql: col('variantId'), kind: 'number' },
   actorId: { sql: col('actorId'), kind: 'number' },
   event: { sql: col('event'), kind: 'text' },
   oldPrice: { sql: col('oldPrice'), kind: 'number' },
@@ -72,9 +79,12 @@ const PRICE_DEF: JournalDef<PriceRow, PriceItem> = {
   fileName: 'price-log',
   from: Prisma.sql`cartlify.product_price_change_logs AS l
     JOIN cartlify.users AS a ON a.id = l."actorId"
-    JOIN cartlify.products AS p ON p.id = l."productId"`,
+    JOIN cartlify.products AS p ON p.id = l."productId"
+    JOIN cartlify.product_variants AS v ON v.id = l."variantId"`,
   select: Prisma.sql`
-    l.id, l."createdAt", l."productId", p.name AS "productName", l."actorId",
+    l.id, l."createdAt", l."productId", p.name AS "productName", l."variantId",
+    v.position AS "variantPosition", v.sku AS "variantSku",
+    cartlify.variant_display_name(l."variantId") AS "variantName", l."actorId",
     a.name AS "actorName", a.email AS "actorEmail", a.role AS "actorRoleNow",
     (a."deletedAt" IS NOT NULL) AS "actorDeleted", l.event, l."oldPrice", l."newPrice",
     l.mode::text AS mode, l.value, l."endsAt"`,
@@ -85,6 +95,8 @@ const PRICE_DEF: JournalDef<PriceRow, PriceItem> = {
     'createdAt',
     'productId',
     'product',
+    'variantId',
+    'variant',
     'actorId',
     'actor',
     'event',
@@ -105,6 +117,13 @@ const PRICE_DEF: JournalDef<PriceRow, PriceItem> = {
       createdAt: row.createdAt.toISOString(),
       productId: row.productId,
       product: { id: row.productId, name: row.productName },
+      variantId: row.variantId,
+      variant: {
+        id: row.variantId,
+        position: row.variantPosition,
+        name: row.variantName,
+        sku: row.variantSku,
+      },
       actorId: hide ? HIDDEN_ID : (row.actorId as UserId),
       actor: hide
         ? hiddenAccount(row.actorName, row.actorDeleted ? null : row.actorEmail)
@@ -131,6 +150,19 @@ const PRICE_DEF: JournalDef<PriceRow, PriceItem> = {
         header: 'productName',
         kind: 'text',
         value: (row) => (row.product as { name: string }).name,
+      },
+    ],
+    variantId: [{ header: 'variantId', kind: 'number', value: (row) => row.variantId as number }],
+    variant: [
+      {
+        header: 'variantName',
+        kind: 'text',
+        value: (row) => (row.variant as { name: string }).name,
+      },
+      {
+        header: 'variantSku',
+        kind: 'text',
+        value: (row) => (row.variant as { sku: string | null }).sku,
       },
     ],
     actorId: [{ header: 'actorId', kind: 'number', value: (row) => row.actorId as number | null }],
@@ -162,6 +194,7 @@ export function priceLogArgsOf(
   return {
     ...journalArgsOf(PRICE_DEF, query as JournalQuery, actor),
     productId: query.productId,
+    variantId: query.variantId,
     filterActorId: query.actorId,
     mode: query.mode,
   };
@@ -170,6 +203,7 @@ export function priceLogArgsOf(
 function filtersOf(args: PriceLogArgs): Prisma.Sql[] {
   const parts: Prisma.Sql[] = [];
   if (args.productId !== undefined) parts.push(Prisma.sql`l."productId" = ${args.productId}`);
+  if (args.variantId !== undefined) parts.push(Prisma.sql`l."variantId" = ${args.variantId}`);
   if (args.filterActorId !== undefined) parts.push(Prisma.sql`l."actorId" = ${args.filterActorId}`);
   if (args.mode !== undefined)
     parts.push(Prisma.sql`l.mode = ${args.mode}::cartlify."PriceChangeMode"`);

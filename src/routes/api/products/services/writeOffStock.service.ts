@@ -4,6 +4,7 @@ import { Prisma } from '@prisma/client';
 import { isRetryableTxError, tx } from '@db/client.js';
 import { shopToday } from '@helpers/shopDay.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { writeStockOperationAuditLog } from '@db/adminAudit.helper.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { InternalError, ResourceBusyError, isAppError } from '@utils/errors.js';
@@ -12,9 +13,11 @@ import {
   assertWriteOffFits,
   normalizeWriteOffInput,
   stockErrorOf,
+  stockRefsOf,
   stockSummaryOf,
+  withVariantIds,
   writeOffSteps,
-  withProductIds,
+  type WriteOffItem,
 } from './helpers/index.js';
 
 import type {
@@ -22,30 +25,26 @@ import type {
   WriteOffStockResponseDto,
   WriteOffTakenDto,
 } from 'types/dto/products.dto.js';
-import type { ProductId } from 'types/ids.js';
 
 type Taken = { batchId: number; quantity: number; unitCost: string };
 
 // writes off free units, all of the items or none: from the batch an item names, or from the
-// batches in the order of a sale (the one that ends first, then the oldest). The units the waiting
-// orders hold are not written off. The database takes the units out
-// (cartlify.write_off_product_stock, db/05) and keeps a line in the admin log for each item with
-// the reason, the batches and their costs. A product removed from the catalog keeps its units
-// until they are written off, so it is written off too
+// batches in the order of a sale (the one that ends first, then the oldest). An item names its
+// variant by its id, its article number or its barcode. The units the waiting orders hold are not
+// written off. The database takes the units out (cartlify.write_off_variant_stock, db/05) and
+// keeps a line in the stock log for each item with the reason, the batches and their costs. The
+// admin log keeps one line for the whole write-off, with the same id of the write-off. A variant
+// taken out of sale keeps its units until they are written off, so it is written off too
 export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStockResponseDto> {
   const { actorId, actorRole } = dto;
   assertAdminActor(actorId, actorRole);
 
-  const writeOff = normalizeWriteOffInput({
-    ...dto,
-    items: await withProductIds(dto.items, dto),
-  });
+  const writeOff = normalizeWriteOffInput(dto);
+  const items: WriteOffItem[] = await withVariantIds(writeOff.items, dto, { deleted: true });
+  const variantIds = [...new Set(items.map((item) => item.variantId))].sort((a, b) => a - b);
   const writeOffId = randomUUID();
-  const productIds = [...new Set(writeOff.items.map((item) => item.productId))].sort(
-    (a, b) => a - b,
-  );
   const batchIds = [
-    ...new Set(writeOff.items.flatMap((item) => (item.batchId === null ? [] : [item.batchId]))),
+    ...new Set(items.flatMap((item) => (item.batchId === null ? [] : [item.batchId]))),
   ];
 
   try {
@@ -54,47 +53,49 @@ export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStoc
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
 
-        // the products are locked by id, as every step of the stock locks them: their batches
+        // the variants are locked by id, as every step of the stock locks them: their batches
         // cannot change until the end of the request
-        const products = await db.$queryRaw<{ id: number; stock: number; reservedStock: number }[]>`
-          select id, stock, "reservedStock"
-          from cartlify.products
-          where id = any(${productIds}::int[])
+        const variants = await db.$queryRaw<
+          { id: number; productId: number; stock: number; reservedStock: number }[]
+        >`
+          select id, "productId", stock, "reservedStock"
+          from cartlify.product_variants
+          where id = any(${variantIds}::int[])
           order by id
           for update
         `;
         const batches = batchIds.length
           ? await db.productBatch.findMany({
               where: { id: { in: batchIds } },
-              select: { id: true, productId: true, remaining: true, expiresAt: true },
+              select: { id: true, variantId: true, remaining: true, expiresAt: true },
             })
           : [];
 
         // a batch is over once its last good day is behind the day of the shop
         const today = shopToday();
         assertWriteOffFits({
-          items: writeOff.items,
-          products: new Map(products.map((row) => [row.id, row])),
+          items,
+          variants: new Map(variants.map((row) => [row.id, row])),
           batches: new Map(
             batches.map((row) => [
               row.id,
               {
-                productId: row.productId,
+                variantId: row.variantId,
                 remaining: row.remaining,
                 expired: row.expiresAt !== null && row.expiresAt.toISOString().slice(0, 10) < today,
               },
             ]),
           ),
-          expired: await expiredUnitsOf(db, productIds),
+          expired: await expiredUnitsOf(db, variantIds),
         });
 
         const taken: Taken[][] = [];
-        for (const { item, index } of writeOffSteps(writeOff.items)) {
+        for (const { item, index } of writeOffSteps(items)) {
           try {
             const [row] = await db.$queryRaw<{ taken: Taken[] }[]>`
-              select cartlify.write_off_product_stock(
+              select cartlify.write_off_variant_stock(
                 ${writeOffId}::uuid,
-                ${item.productId}::int,
+                ${item.variantId}::int,
                 ${item.batchId}::int,
                 ${item.quantity}::int,
                 ${writeOff.reason}::text,
@@ -107,15 +108,30 @@ export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStoc
           }
         }
 
-        const after = await db.product.findMany({
-          where: { id: { in: productIds } },
-          select: { id: true, stock: true, reservedStock: true },
+        // one line of the admin log for the whole write-off, the id of it among its changes
+        await writeStockOperationAuditLog(db, {
+          actorId,
+          actorRole,
+          kind: 'write_off',
+          operationId: writeOffId,
+          variantIds,
+          quantity: items.reduce((sum, item) => sum + item.quantity, 0),
+          details: [
+            { field: 'reason', value: writeOff.reason },
+            { field: 'note', value: writeOff.note },
+          ],
+        });
+
+        const refs = await stockRefsOf(db, variantIds);
+        const after = await db.productVariant.findMany({
+          where: { id: { in: variantIds } },
+          select: { id: true, productId: true, stock: true, reservedStock: true },
         });
 
         return {
           writeOffId,
-          items: writeOff.items.map((item, index) => ({
-            productId: item.productId as ProductId,
+          items: items.map((item, index) => ({
+            ...refs.get(item.variantId)!,
             quantity: item.quantity,
             batches: taken[index]!.map((line): WriteOffTakenDto => ({
               batchId: line.batchId,
@@ -123,13 +139,7 @@ export async function writeOffStock(dto: WriteOffStockDto): Promise<WriteOffStoc
               unitCost: Number(line.unitCost),
             })),
           })),
-          products: stockSummaryOf(
-            after,
-            await expiredUnitsOf(
-              db,
-              after.map((row) => row.id),
-            ),
-          ),
+          variants: stockSummaryOf(after, await expiredUnitsOf(db, variantIds)),
         };
       },
       {

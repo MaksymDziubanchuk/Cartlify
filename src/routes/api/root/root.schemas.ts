@@ -29,7 +29,7 @@ const rootAdminsGetQueryExample = {
 };
 
 const rootAdminsGetResponseExample = {
-  items: [rootAdminExample],
+  items: [{ ...rootAdminExample, deletedAt: null }],
   limit: 20,
   nextCursor: null,
   total: 1,

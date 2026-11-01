@@ -74,6 +74,14 @@ export interface AdminTopProductRevenueDto {
   quantitySold: number;
 }
 
+// the product and the variant of a line of the top of variants, as the accounting names them
+export interface AdminTopVariantRevenueDto {
+  product: { id: ProductId; name: string; deleted: boolean };
+  variant: { id: number; position: number; name: string; sku: string | null; deleted: boolean };
+  revenue: number;
+  quantitySold: number;
+}
+
 export interface AdminTopCategoryRevenueDto {
   id: CategoryId;
   name: string;
@@ -85,8 +93,12 @@ export interface AdminStatsProductsDto {
   total: number;
   activeTotal: number;
   deletedTotal: number;
+  // products of the catalog none of whose variants in sale has a free unit
   outOfStockTotal: number;
+  // the products of the most money, the sales of all the variants of a product together
   topProductsByRevenue: AdminTopProductRevenueDto[];
+  // the variants of the most money, each with its product
+  topVariantsByRevenue: AdminTopVariantRevenueDto[];
   topCategoriesByRevenue: AdminTopCategoryRevenueDto[];
 }
 
@@ -111,10 +123,13 @@ export interface GetAdminStatsResponseDto {
   money: AdminMoneySummaryDto;
   createdAt: Date;
 }
-// GET /admin/reports/accounting: the money of a period, the products asked for or all of them
+// GET /admin/reports/accounting: the money of a period, the products or the variants asked for or
+// all of them
 export interface AdminAccountingQueryDto extends AdminStatsQueryDto {
-  // ids of products through commas
+  // ids of products through commas: the money of all their variants
   productIds?: string;
+  // ids of variants through commas
+  variantIds?: string;
   categoryId?: number;
   // the category with its whole branch (true by default), or its own products only
   branch?: boolean;
@@ -122,6 +137,7 @@ export interface AdminAccountingQueryDto extends AdminStatsQueryDto {
 
 export interface AdminAccountingDto extends AdminStatsDto {
   productIds?: number[];
+  variantIds?: number[];
   categoryId?: number;
   branch: boolean;
 }
@@ -231,6 +247,10 @@ export interface AdminReportScopeQueryDto extends AdminStatsQueryDto {
 }
 
 export interface AdminReportProductsQueryDto extends AdminReportScopeQueryDto {
+  // only these products / only these variants, ids through commas (both: the variants of those
+  // products that are among these)
+  productIds?: string;
+  variantIds?: string;
   sortBy?: AdminReportSortBy;
   sortOrder?: AdminReportSortOrder;
   limit?: number;
@@ -252,15 +272,22 @@ export type AdminTimelineSortBy =
 
 export interface AdminReportTimelineQueryDto extends AdminReportScopeQueryDto {
   productIds?: string;
+  variantIds?: string;
   step?: AdminReportStep;
   sortBy?: AdminTimelineSortBy;
   sortOrder?: AdminReportSortOrder;
 }
 
+// a row of the report by product is a product: the money of all its variants added up
 export interface AdminReportProductRowDto extends AdminMoneyBreakdownDto {
-  id: ProductId;
-  name: string;
-  deleted: boolean;
+  product: AdminStockProductDto;
+  category: { id: CategoryId; name: string };
+}
+
+// a row of the report by variant is a variant, named with its product
+export interface AdminReportVariantRowDto extends AdminMoneyBreakdownDto {
+  product: AdminStockProductDto;
+  variant: AdminStockVariantDto;
   category: { id: CategoryId; name: string };
 }
 
@@ -269,6 +296,16 @@ export interface GetAdminReportProductsResponseDto {
   currency: string;
   items: AdminReportProductRowDto[];
   // of every product of the filter, not only of the page
+  totals: AdminMoneyBreakdownDto;
+  limit: number;
+  nextCursor: string | null;
+}
+
+export interface GetAdminReportVariantsResponseDto {
+  period: AdminStatsPeriodDto;
+  currency: string;
+  items: AdminReportVariantRowDto[];
+  // of every variant of the filter, not only of the page: the totals of the report by product
   totals: AdminMoneyBreakdownDto;
   limit: number;
   nextCursor: string | null;
@@ -309,7 +346,10 @@ export type AdminStockBatchesSortBy =
   'createdAt' | 'expiresAt' | 'remaining' | 'unitCost' | 'value';
 
 export interface AdminStockBatchesQueryDto {
+  // the batches of all the variants of the product
   productId?: number;
+  // the batches of the variant
+  variantId?: number;
   deliveryId?: string;
   source?: StockSourceName;
   // true: the batches with units left, false: the empty ones
@@ -331,12 +371,23 @@ export interface AdminStockProductDto {
   deleted: boolean;
 }
 
+// the variant a line of the stock is about, as it is now
+export interface AdminStockVariantDto {
+  id: number;
+  position: number;
+  name: string;
+  sku: string | null;
+  // taken out of sale (so is every variant of a product removed from the catalog)
+  deleted: boolean;
+}
+
 export interface AdminStockBatchDto {
   id: number;
   deliveryId: string;
   source: StockSourceName;
   supplierBatchNumber: string | null;
   product: AdminStockProductDto;
+  variant: AdminStockVariantDto;
   unitCost: number;
   quantity: number;
   remaining: number;
@@ -368,7 +419,10 @@ export interface GetAdminStockBatchesResponseDto {
 export type AdminStockMovementKind = 'delivery' | 'writeOff' | 'sale' | 'cancel';
 
 export interface AdminStockMovementsQueryDto {
+  // the steps of all the variants of the product
   productId?: number;
+  // the steps of the variant
+  variantId?: number;
   batchId?: number;
   orderId?: number;
   deliveryId?: string;
@@ -392,6 +446,7 @@ export interface AdminStockMovementDto {
   kind: AdminStockMovementKind;
   at: Date;
   product: AdminStockProductDto;
+  variant: AdminStockVariantDto;
   // the change of the stock: units in are above 0, units out below
   quantity: number;
   // the same at the cost of the batches
@@ -417,8 +472,8 @@ export interface GetAdminStockMovementsResponseDto {
   total: number;
 }
 
-// THE JOURNALS (the admin log, the log of prices, of logins and of consents): the same query for
-// each. A journal sorts by any simple column, reads a period, takes some events and some columns
+// THE JOURNALS (the admin log, the log of prices, of logins, of consents and the stock log): the
+// same query for each. A journal sorts by any simple column, reads a period, takes some events and some columns
 export interface AdminLogQueryDto {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
@@ -482,9 +537,10 @@ export interface AdminAuditLogItemDto {
 
 export type GetAdminAuditLogResponseDto = AdminLogPageDto<AdminAuditLogItemDto>;
 
-// THE LOG OF PRICES: every change of the price of every product
+// THE LOG OF PRICES: every change of the price of every variant
 export interface AdminPriceLogQueryDto extends AdminLogQueryDto {
   productId?: number;
+  variantId?: number;
   actorId?: number;
   mode?: 'fixed' | 'percent';
 }
@@ -494,6 +550,9 @@ export interface AdminPriceLogItemDto {
   createdAt: string;
   productId: number;
   product: { id: number; name: string };
+  variantId: number;
+  // the variant as it is now: its place, its name and its article number
+  variant: { id: number; position: number; name: string; sku: string | null };
   actorId: UserId | null;
   actor: AdminLogAccountDto;
   event: string;
@@ -505,6 +564,46 @@ export interface AdminPriceLogItemDto {
 }
 
 export type GetAdminPriceLogResponseDto = AdminLogPageDto<AdminPriceLogItemDto>;
+
+// THE STOCK LOG: every change of the quantity of a variant
+export interface AdminStockLogQueryDto extends AdminLogQueryDto {
+  productId?: number;
+  variantId?: number;
+  // the lines of one delivery, one write-off, one order
+  deliveryId?: string;
+  writeOffId?: string;
+  orderId?: number;
+}
+
+export interface AdminStockLogItemDto {
+  id: number;
+  createdAt: string;
+  // who did it; none for the work of the system (the sale at the payment of an order)
+  actorId: UserId | null;
+  actor: AdminLogAccountDto | null;
+  // the role it had when it did it
+  actorRole: Role | null;
+  productId: number;
+  product: { id: number; name: string };
+  variantId: number;
+  // the variant as it is now: its place, its name and its article number
+  variant: { id: number; position: number; name: string; sku: string | null };
+  // what made the line: a delivery, a write-off, a sale, the units back at a cancel
+  event: string;
+  // units in above 0, out below 0
+  quantityChange: number;
+  stockAfter: number;
+  // the operation the line belongs to; at most one of the three
+  deliveryId: string | null;
+  writeOffId: string | null;
+  orderId: number | null;
+  ip: string | null;
+  userAgent: string | null;
+  // what the change was made of: the batches with their costs, the reason, the supplier
+  changes: Array<{ field: string; old: unknown; new: unknown }>;
+}
+
+export type GetAdminStockLogResponseDto = AdminLogPageDto<AdminStockLogItemDto>;
 
 // THE LOG OF LOGINS: who came in, how, from where
 export interface AdminLoginLogQueryDto extends AdminLogQueryDto {
@@ -558,6 +657,7 @@ export interface GetAdminLogEventsResponseDto {
   priceLog: string[];
   loginLog: string[];
   consentLog: string[];
+  stockLog: string[];
 }
 
 // ALERTS: what waits for the work of an admin, each kind with how many there are
@@ -569,6 +669,8 @@ export type AdminAlertKind =
   | 'out_of_stock'
   | 'low_stock'
   | 'products_without_shipping_data'
+  | 'variants_missing_required'
+  | 'products_hidden_from_buyers'
   | 'expiring_batches'
   | 'expired_batches'
   | 'chats_waiting'

@@ -1,114 +1,81 @@
-import { expiredUnitsNow } from '@db/expiredStock.helper.js';
-import { lastUnitCostsNow } from '@db/lastUnitCost.helper.js';
-import { Prisma } from '@prisma/client';
-import { getPgMessage, tx, isRetryableTxError } from '@db/client.js';
-import { setUserContext } from '@db/dbContext.service.js';
-import { assertAdminActor } from '@helpers/roleGuard.js';
-import { isSaleOn } from '@helpers/productSale.js';
+import { ConflictError, NotFoundError } from '@utils/errors.js';
 
 import {
-  BadRequestError,
-  ConflictError,
-  InternalError,
-  NotFoundError,
-  ResourceBusyError,
-  isAppError,
-} from '@utils/errors.js';
-
-import {
-  mapProductRowToResponse,
-  readCategoryPath,
+  applySales,
+  nothingChanged,
   normalizeFindProductByIdInput,
   normalizeSaleEnd,
-  productResponseSelect,
-  putSaleOn,
-  readProductImageUrls,
-  takeSaleOff,
+  saleRowSelect,
 } from './helpers/index.js';
+import { inVariantTx, lockVariants } from './helpers/variantTx.helper.js';
 
+import type { PlannedSale, SaleRow } from './helpers/index.js';
 import type { SetProductSaleDto, SetProductSaleResponseDto } from 'types/dto/products.dto.js';
 
-// puts a product on sale until an end in the future, or takes its sale off (sale null). The
-// database keeps the sale price: while the sale lasts the product sells at it (db/05). A new sale
-// writes over the one there is, an ended one too. The log of prices gets the start of a sale (from
-// the price to the sale price in the mode of the discount, its size negative, and the end) and a
-// sale taken off while it was on (from the sale price back to the price, by an amount); the admin
-// log gets each of them as a sale (PRODUCT_SALE): start, change or removed. A sale that was over
-// is no sale: a new one over it starts. The sale that is on already, or taking off a sale there is
-// not, is done already: 409 and nothing is written
+// puts the variants of a product on sale until an end in the future, or takes their sales off
+// (sale null). The variants are the ones named (variantIds, the ones for sale of this product), or
+// every variant for sale. The database keeps the sale price: while the sale lasts the variant sells
+// at it (db/05). A new sale writes over the one there is, an ended one too. The log of prices gets
+// the start of a sale (from the price to the sale price in the mode of the discount, its size
+// negative, and the end) and a sale taken off while it was on (from the sale price back to the
+// price, by an amount); the admin log gets each of them as a sale (PRODUCT_SALE, about the
+// variant): start, change or removed. Every sale is counted from the price of its variant, an
+// amount off is the same money for each: if it does not fit one price (above it, or nothing) the
+// whole request is refused and names those variants. A sale that was over is no sale: a new one
+// over it starts. The answer gives the state of each variant (set, unchanged, removed); a request
+// that leaves every variant as it was, the same sale that is on or no sale to take off, is done
+// already: 409 and nothing is written
 export async function setProductSale({
-  productId,
+  productId: rawProductId,
+  variantIds,
   actorId,
   actorRole,
   sale,
 }: SetProductSaleDto): Promise<SetProductSaleResponseDto> {
-  assertAdminActor(actorId, actorRole);
-
-  const { productId: id } = normalizeFindProductByIdInput({ productId });
+  const { productId } = normalizeFindProductByIdInput({ productId: rawProductId });
 
   // a sale starts right away, its end is in the future
   const endsAt = sale ? normalizeSaleEnd(sale.endsAt) : null;
 
-  try {
-    const updated = await tx(
-      async (db) => {
-        await setUserContext(db, { userId: actorId, role: actorRole });
-        await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
-
-        // the price the sale is counted from cannot change until the sale is written
-        await db.$queryRaw`SELECT id FROM cartlify.products WHERE id = ${id} FOR UPDATE`;
-
-        const before = await db.product.findUnique({
-          where: { id },
-          select: productResponseSelect,
-        });
-        // a product removed from the catalog sells no more, a sale of it is no use
-        if (!before || before.deletedAt) throw new NotFoundError('PRODUCT_NOT_FOUND');
-
-        const ctx = { db, actorId, actorRole };
-
-        // no sale to take off, a sale that is over is none: done already, nothing is written
-        if (!sale) {
-          if (!isSaleOn(before)) throw new ConflictError('PRODUCT_SALE_ALREADY_REMOVED');
-          return takeSaleOff(ctx, before);
-        }
-
-        return putSaleOn(ctx, before, sale, endsAt!);
-      },
-      {
-        // keep default isolation and retry only transient lock/conflict errors
-        maxRetries: 3,
-        isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted,
-        maxWait: 1500,
-        timeout: 10_000,
-      },
-    );
-
-    const images = await readProductImageUrls(updated.id as any);
-    const expired = await expiredUnitsNow([updated.id]);
-    const costs = await lastUnitCostsNow({ actorId, actorRole }, [updated.id]);
-
-    return mapProductRowToResponse({
-      product: {
-        ...updated,
-        expiredStock: expired.get(updated.id) ?? 0,
-        lastUnitCost: costs.get(updated.id) ?? null,
-      },
-      images,
-      categoryPath: await readCategoryPath(updated.category.id),
-      view: 'admin',
+  return inVariantTx({ actorId, actorRole }, 'PRODUCTS_SALE_UNEXPECTED', async (db) => {
+    const product = await db.product.findUnique({
+      where: { id: productId },
+      select: { id: true, deletedAt: true },
     });
-  } catch (err) {
-    if (isAppError(err)) throw err;
+    // a product removed from the catalog sells no more, a sale of it is no use
+    if (!product || product.deletedAt) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
-    // map lock/tx contention errors to a stable 409 for clients
-    if (isRetryableTxError(err)) throw new ResourceBusyError();
+    // the variants for sale: the ones named, or all of them by their place
+    const there = await db.productVariant.findMany({
+      where: { productId, deletedAt: null, ...(variantIds ? { id: { in: variantIds } } : {}) },
+      select: { id: true },
+      orderBy: [{ position: 'asc' }, { id: 'asc' }],
+    });
+    const found = new Set(there.map((row) => row.id));
+    const missing = (variantIds ?? []).filter((id) => !found.has(id));
+    if (missing.length) throw new NotFoundError('VARIANT_NOT_FOUND', { variantIds: missing });
+    if (!there.length) throw new NotFoundError('VARIANT_NOT_FOUND');
 
-    // the end went by between the check and the write, by the clock of the database (db/05)
-    if (String(getPgMessage(err) ?? '').includes('PRODUCT_SALE_ENDS_AT_INVALID')) {
-      throw new BadRequestError('PRODUCT_SALE_ENDS_AT_INVALID');
+    // the prices the sales are counted from cannot change until the sales are written
+    await lockVariants(db, [...found]);
+    const rows = await db.productVariant.findMany({
+      where: { id: { in: [...found] } },
+      select: saleRowSelect,
+    });
+    const byId = new Map<number, SaleRow>(rows.map((row) => [row.id, row]));
+
+    const order = variantIds ?? there.map((row) => row.id);
+    const planned: PlannedSale[] = order.map((variantId) => ({ variantId, sale, endsAt }));
+
+    const results = await applySales({ db, actorId, actorRole }, planned, byId);
+
+    // done already: nothing was written
+    if (nothingChanged(results.values())) {
+      throw new ConflictError(sale ? 'PRODUCT_SALE_ALREADY_SET' : 'PRODUCT_SALE_ALREADY_REMOVED', {
+        variantIds: order,
+      });
     }
 
-    throw new InternalError({ reason: 'PRODUCTS_SALE_UNEXPECTED' }, err);
-  }
+    return { variants: order.map((id) => results.get(id)!) };
+  });
 }

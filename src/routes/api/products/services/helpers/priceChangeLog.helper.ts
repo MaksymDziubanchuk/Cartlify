@@ -3,7 +3,6 @@ import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import type { PriceLogEvent, WrittenEvent } from '@config/journalEvents.js';
 
 import type { Prisma, PrismaClient } from '@prisma/client';
-import type { ProductId } from 'types/ids.js';
 
 type DbClient = Prisma.TransactionClient | PrismaClient;
 
@@ -14,15 +13,16 @@ export function computeFixedDelta(beforePrice: unknown, afterPrice: unknown): nu
   return newPriceNum - oldPriceNum;
 }
 
-// the line names the admin of the transaction context: the database function takes the actor
-// from it and refuses a context without an id, so a line in the name of someone else is no option.
+// the line is about a variant (the database function reads its product) and names the admin of the
+// transaction context: the function takes the actor from it and refuses a context without an id,
+// so a line in the name of someone else is no option.
 // The mode is how the change was given, the value its size in that mode (the percent or the
 // amount), negative for a change down. A line with an end (endsAt) is the start of a sale, from
 // the price down to the sale price; a sale taken off goes from the sale price back to the price
-export async function writeProductPriceChangeLog(
+export async function writeVariantPriceChangeLog(
   tx: DbClient,
   args: {
-    productId: ProductId;
+    variantId: number;
     beforePrice: unknown;
     afterPrice: unknown;
     mode: 'fixed' | 'percent';
@@ -44,8 +44,8 @@ export async function writeProductPriceChangeLog(
   const endsAt = args.endsAt ? args.endsAt.toISOString() : null;
 
   await tx.$executeRaw`
-    select cartlify.log_product_price_change(
-      ${args.productId}::int,
+    select cartlify.log_variant_price_change(
+      ${args.variantId}::int,
       ${oldPriceNum}::numeric,
       ${newPriceNum}::numeric,
       ${args.mode}::cartlify."PriceChangeMode",

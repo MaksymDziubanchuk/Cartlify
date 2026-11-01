@@ -93,7 +93,11 @@ const postStripeWebhookSchema = {
     additionalProperties: true,
     required: ['stripe-signature'],
     properties: {
-      'stripe-signature': { type: 'string', minLength: 1 },
+      'stripe-signature': {
+        type: 'string',
+        minLength: 1,
+        description: 'The signature Stripe puts on the event; the raw body is checked against it.',
+      },
     },
     examples: [stripeWebhookHeadersExample],
   },

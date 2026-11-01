@@ -25,19 +25,19 @@ import type {
   GetAdminAccountingResponseDto,
 } from 'types/dto/admin.dto.js';
 
-// the accounting of a period [from, to), of the products of the scope (all of them, the ids asked
-// for, a category with its branch or its own products only):
+// the accounting of a period [from, to), of the variants of the scope (all of them, the products
+// or the variants asked for, a category with its branch or its own products only):
 //  - a sale counts from the time it was paid (orders.paidAt), at the prices it was paid with, and
 //    costs what the batches it took cost (order_batch_allocations); an order cancelled later is no
 //    sale any more, the report of the period it was paid in changes with the cancel;
 //  - a cancel is told apart at the time of the cancel (orders.cancelledAt), in no margin;
 //  - what came in is the batches taken in during the period, by source;
-//  - what was written off is in the lines of the admin log (STOCK_WRITE_OFF), at the costs of the
-//    batches it took;
+//  - what was written off is in the lines of the stock log (stock.write_off, of the variant), at
+//    the costs of the batches it took;
 //  - the stock is what the batches have left now, whatever the period;
 //  - the delivery is of the whole shop, of no product: what the orders paid in the period paid for
 //    it, what went back with the cancels, what the sends cost (by the time they were sent). A report
-//    of some products or of a category has none.
+//    of some products or variants or of a category has none.
 // Everything is read from one snapshot, in the money of the shop
 
 type Totals = { orders: number; units: bigint | number; revenue: Prisma.Decimal | null };
@@ -63,7 +63,7 @@ async function ordersOf(
     from cartlify.orders as o
     join cartlify.order_items as oi on oi."orderId" = o.id
     where ${time} >= ${utcTime(from)} and ${time} < ${utcTime(to)} ${sales}
-      and oi."productId" in (select id from scope)
+      and oi."variantId" in (select id from scope)
   `;
   const [cost] = await db.$queryRaw<{ cost: Prisma.Decimal | null }[]>`
     ${scope}
@@ -72,7 +72,7 @@ async function ordersOf(
     join cartlify.orders as o on o.id = a."orderId"
     join cartlify.product_batches as b on b.id = a."batchId"
     where ${time} >= ${utcTime(from)} and ${time} < ${utcTime(to)} ${sales}
-      and a."productId" in (select id from scope)
+      and a."variantId" in (select id from scope)
   `;
 
   return {
@@ -83,16 +83,15 @@ async function ordersOf(
   };
 }
 
-// the lines of the admin log of the units written off in the period, of the products of the scope
+// the lines of the stock log of the units written off in the period, of the variants of the scope
 const writeOffLinesOf = (db: Prisma.TransactionClient, scope: Prisma.Sql, { from, to }: Period) =>
   db.$queryRaw<{ meta: unknown }[]>`
     ${scope}
     select l.meta
-    from cartlify.admin_audit_log as l
-    where l.action = 'STOCK_WRITE_OFF'::cartlify."AdminAuditAction"
+    from cartlify.stock_log as l
+    where l.event = 'stock.write_off'
       and l."createdAt" >= ${utcTime(from)} and l."createdAt" < ${utcTime(to)}
-      and l."entityType" = 'product'::cartlify."AdminAuditEntityType"
-      and l."entityId" in (select id from scope)
+      and l."variantId" in (select id from scope)
     order by l.id
   `;
 
@@ -143,7 +142,7 @@ export async function buildAccountingReport(
                sum(b.quantity * b."unitCost") as value
         from cartlify.product_batches as b
         where b."createdAt" >= ${utcTime(from)} and b."createdAt" < ${utcTime(to)}
-          and b."productId" in (select id from scope)
+          and b."variantId" in (select id from scope)
         group by b.source
       `;
 
@@ -154,7 +153,7 @@ export async function buildAccountingReport(
         select coalesce(sum(b.remaining), 0)::bigint as units,
                coalesce(sum(b.remaining * b."unitCost"), 0) as value
         from cartlify.product_batches as b
-        where b."productId" in (select id from scope)
+        where b."variantId" in (select id from scope)
       `;
 
       const [delivery] = isWholeShop(dto)

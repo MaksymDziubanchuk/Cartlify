@@ -17,9 +17,13 @@ import { commonSchemas, paramsSchemas } from '@schemas/index.js';
 import { authDtoSchemas } from '@schemas/dto/auth.dtoSchemas.js';
 import { adminDtoSchemas } from '@schemas/dto/admin.dtoSchemas.js';
 import { productDtoSchemas } from '@schemas/dto/products.dtoSchemas.js';
+import { variantDtoSchemas } from '@schemas/dto/variants.dtoSchemas.js';
 import { ordersDtoSchemas } from '@schemas/dto/orders.dtoSchemas.js';
 import { favoritesDtoSchemas } from '@schemas/dto/favorites.dtoSchemas.js';
 import { categoriesDtoSchemas } from '@schemas/dto/categories.dtoSchemas.js';
+import { partiesDtoSchemas } from '@schemas/dto/parties.dtoSchemas.js';
+import { documentsDtoSchemas } from '@schemas/dto/documents.dtoSchemas.js';
+import { attributesDtoSchemas } from '@schemas/dto/attributes.dtoSchemas.js';
 import { reviewsDtoSchemas } from '@schemas/dto/reviews.dtoSchemas.js';
 import { usersDtoSchemas } from '@schemas/dto/users.dtoSchemas.js';
 import { rootAdminsDtoSchemas } from '@schemas/dto/root.dtoSchemas.js';
@@ -161,11 +165,15 @@ for (const schema of [
   ...paramsSchemas,
   ...systemDtoSchemas,
   ...authDtoSchemas,
+  ...variantDtoSchemas,
   ...productDtoSchemas,
   ...adminDtoSchemas,
   ...ordersDtoSchemas,
   ...favoritesDtoSchemas,
   ...categoriesDtoSchemas,
+  ...partiesDtoSchemas,
+  ...documentsDtoSchemas,
+  ...attributesDtoSchemas,
   ...reviewsDtoSchemas,
   ...usersDtoSchemas,
   ...rootAdminsDtoSchemas,
