@@ -8,6 +8,7 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 - strict TypeScript boundaries between controllers, services, DTOs, and schemas
 - PostgreSQL-first design with custom SQL layer, RLS, functions, views, and indexes
 - role-based access control for `GUEST`, `USER`, `ADMIN`, and `ROOT`
+- a catalog of products with variants (a size, a colour), pictures a variant picks from the gallery of its product, a directory of characteristics, and stock in batches with a log of every change
 - consistent order flow with background timeout handling
 - real-time support chat with guest/user/admin flows
 - AI-assisted product and support conversations with fallback behavior
@@ -15,8 +16,6 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 - API design that can later support SSR, GraphQL, and additional real-time features
 
 ## Technology Stack
-
-### Implemented in the current codebase
 
 | Area                          | Technologies                                                                | Status      |
 | ----------------------------- | --------------------------------------------------------------------------- | ----------- |
@@ -37,35 +36,29 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker             | Implemented |
 | CI utilities                  | GitHub Actions for tests, DB migration and SQL execution                    | Implemented |
 
-### Planned stack / next steps
-
-| Area                     | Planned technologies                       | Status  |
-| ------------------------ | ------------------------------------------ | ------- |
-| API docs refinement      | security metadata, operation ids, examples | Planned |
-| Deployment               | Docker, AWS ECS/Fargate                    | Planned |
-| SSR delivery layer       | detachable Handlebars-based web module     | Planned |
-| Production observability | broader monitoring / metrics / reporting   | Planned |
-
 ## Project Structure
 
 ```text
 Cartlify/
 ├── db/
-│   ├── schema/                 # raw SQL run in order: roles, extensions, RLS, views, functions, indexes
+│   ├── schema/                 # raw SQL, see "The database" below: roles, extensions, RLS, views, functions, indexes
 │   ├── data/                   # the scripts that clear data stay local, not in git
-│   └── tools/                  # test database build, structure snapshot, anonymized copy of prod for dev, demo data
-├── prisma/                     # Prisma schema and migrations
+│   └── tools/                  # test database build, structure snapshot (the reference of the structure), anonymized copy of prod for dev, demo data
+├── prisma/                     # Prisma schema and migrations (tables only)
 ├── src/
 │   ├── config/                 # env and service configs
-│   ├── db/                     # Prisma context helpers, DB actor context
-│   ├── helpers/                # shared helpers / normalizers
+│   ├── db/                     # Prisma client and transactions, DB actor context, admin log writer, names of variants, expired stock, cost of the last delivery
+│   ├── helpers/                # shared helpers / normalizers (fields of variants, characteristics, parties, the filter by characteristics)
 │   ├── middlewares/            # auth, RBAC, logging, error handling, id validation
 │   ├── plugins/                # Fastify plugins, including Swagger/OpenAPI registration
 │   ├── redis/                  # Redis client and keys
 │   ├── routes/api/
 │   │   ├── auth/
 │   │   ├── users/
-│   │   ├── products/
+│   │   ├── products/           # products, variants, gallery, prices and sales, stock, reviews
+│   │   ├── attributes/         # directory of characteristics and the sets a category asks for
+│   │   ├── parties/            # manufacturers and persons responsible in the EU
+│   │   ├── documents/          # PDF documents of products
 │   │   ├── categories/
 │   │   ├── favorites/
 │   │   ├── orders/
@@ -84,7 +77,7 @@ Cartlify/
 │   └── workers/                # background workers
 ├── tests/
 │   ├── unit/                   # no database or network, mirrors src/ paths
-│   ├── integration/            # api/<module>, db, flows, worker against the Docker test stack
+│   ├── integration/            # api/<module>, db, flows, worker against the Docker test stack; every answer is held against the Swagger document
 │   ├── helpers/                # app startup for app.inject, test environment guard
 │   ├── fixtures/               # static files used by tests
 │   ├── setup/                  # per-project jest setup, keeps the local .env out of tests
@@ -94,6 +87,23 @@ Cartlify/
 ├── .github/workflows/          # tests, DB migration and SQL execution workflows
 └── package.json
 ```
+
+## The Database
+
+The database is built from the Prisma migrations (tables only) and six SQL scripts, and the rest of the rules live there, not in the server:
+
+| Script                                     | What it holds                                                                                                                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `db/schema/01_roles_and_schemas.sql`       | the schema, the roles (`cartlify_owner`, `cartlify_app`, `cartlify_readonly`), their rights, the list of functions the app may call; run first and again last, as a superuser |
+| `db/schema/02_extensions.sql`              | the extensions (`pg_trgm`, `unaccent`) and the index of the name search of products; run as a superuser after the migrations                                                  |
+| `db/schema/05_fn_and_triggers.sql`         | functions and triggers: stock and batches, orders, reviews, the names of variants, the stock log, the guards of columns                                                       |
+| `db/schema/03_policies_and_rls.sql`        | row level security policies, driven by the actor of the transaction (role, user, guest)                                                                                       |
+| `db/schema/04_views.sql`                   | views: the statistics of the admin, the required characteristics of a category, the variants that lack one                                                                    |
+| `db/schema/06_indexes_and_constraints.sql` | indexes and checks Prisma cannot express                                                                                                                                      |
+
+The order of a build is `01`, the migrations, `02`, `05`, `03`, `04`, `06`, `01` again (`db/tools/test_db_build.mjs`). Every script runs again without a change, and `npm run db:snapshot:check` compares the structure of a database with the reference `db/tools/structure_snapshot.txt`.
+
+The catalog model, in tables: `products` (what variants share), `product_variants` (price, sale, stock, codes, weight and sizes), `product_images` (the gallery) and `variant_images` (the pictures a variant shows, in its own order), `attribute_groups`, `attributes`, `attribute_options`, `category_attributes` (the directory of characteristics and the sets a category asks for) and `variant_attribute_values` (the values a variant has), `parties` and `documents` with `product_documents` (GPSR data), `product_batches` with `order_batch_allocations` (stock in batches and which batch a sale took) and `stock_log` (a line for every change of the stock of a variant, only added to). Orders, carts, favorites and the log of prices point to the variant (`variantId`) next to the product. See [Products, variants and characteristics](variants.md).
 
 ## Production Notes
 
@@ -109,10 +119,3 @@ Current production-oriented pieces already present:
 - structured backend module boundaries
 - Swagger/OpenAPI documentation deployed with the running API
 - unit and integration tests on every push in GitHub Actions
-
-Planned production improvements:
-
-- Swagger/OpenAPI refinement with full protected-route security metadata and request/response examples
-- Dockerized local/dev/prod workflow
-- AWS ECS/Fargate deployment target
-- broader monitoring, metrics, and operational reporting

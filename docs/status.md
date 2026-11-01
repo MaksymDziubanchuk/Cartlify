@@ -14,29 +14,20 @@ What this repo already shows well:
 - WebSocket-based chat flow
 - OpenAI-powered chatbot integration
 - guest-to-user chat continuity and admin escalation flow
-- Swagger/OpenAPI documentation for the REST API
-- stock in batches with expiry dates, delivery and an accounting report
+- a catalog of products with variants (a size, a colour, a memory): the price, the sale, the stock, the codes, the weight and the pictures belong to a variant, a directory of characteristics (groups, types, main characteristics, values of a list with a colour, sets a category requires) describes them, the server builds the names of variants, and a list groups variants by their main characteristics (see [products, variants and characteristics](variants.md))
+- a filter of the catalog by characteristics (`f`) and the panel of the filter of a category
+- the safety and origin data an offer needs in the EU (GPSR): manufacturers and persons responsible in the EU, warnings and PDF documents of products
+- stock in batches with expiry dates, delivery, a stock log (a line for every change of the stock of a variant) and an accounting report
+- Swagger/OpenAPI documentation for the REST API, held to the code by tests: every answer of the integration tests is checked against it, and the whole document is checked for descriptions, codes, examples and lists of values
 
 What is important to state honestly:
 
 - the project is **not feature-complete yet**
 - there is no storefront/UI layer in this repository yet; the current stage is the backend API
 - WebSocket chat and OpenAI chatbot logic are implemented, but the admin-chat workflow is still being actively refined
-- Swagger/OpenAPI is implemented and available, but route security metadata, operation ids, examples, and response descriptions are still being refined
 - unit and integration tests (Jest, a disposable PostgreSQL and Redis in Docker) run on every push to `develop` and `main`
-- Dockerized deployment and broader observability are **planned**, not done in this snapshot
+- there is no Docker image or production deployment setup in this repository yet
 
-## In Progress / Planned
-
-### In progress / partial
+## In Progress
 
 - admin chat queue behavior is implemented, but still being refined through manual testing
-- demo data goes through the routes of the shop (`db/tools/demo_data.mjs`); seeds as csv files with a check before they load come next
-- Swagger/OpenAPI documentation is implemented, but route metadata is still being refined
-
-### Planned
-
-- Swagger/OpenAPI refinement for protected routes, operation ids, examples, and response descriptions
-- detachable SSR/web layer for showcase pages without coupling business logic to the UI
-- Dockerized local/dev/prod workflow and a production deployment target on AWS ECS/Fargate
-- broader admin analytics, observability, and reporting

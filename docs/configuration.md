@@ -85,9 +85,23 @@ LIMIT_EXPORT_PER_USER=1
 LIMIT_REVIEW_PER_USER=30
 # the wrong passwords of an account before its login pauses for a minute, doubling after
 LOGIN_FAILURES_BEFORE_PAUSE=5
-# the biggest file of a form in bytes and the most pictures of a product
+# the biggest file of a form in bytes and the most pictures in the gallery of a product; the most
+# variants of a product and the most pictures of the gallery one variant shows; the biggest PDF of a
+# document in bytes and the most documents of a product. The start stops above a bound (a zero too
+# many would let one request write thousands of rows): 100000000 bytes for a file or a document,
+# 1000 pictures in a gallery, 10000 variants of a product, 100 pictures of a variant, 100 documents
+# of a product
 UPLOAD_MAX_BYTES=5000000
-PRODUCT_IMAGES_MAX=10
+PRODUCT_IMAGES_MAX=50
+PRODUCT_VARIANTS_MAX=200
+VARIANT_IMAGES_MAX=10
+DOCUMENT_MAX_BYTES=20000000
+PRODUCT_DOCUMENTS_MAX=20
+# the values one characteristic of a choice has at most (10000 at most)
+ATTRIBUTE_OPTIONS_MAX=500
+# the values of a set (a characteristic that holds several values of its list) one variant has for
+# one characteristic (1000 at most)
+ATTRIBUTE_MULTI_VALUES_MAX=50
 # the minutes a confirmed order holds its units and the minutes stripe keeps its payment page open
 # after them (at least 30); both together at most 1440, the 24 hours stripe takes
 ORDER_RESERVATION_MINUTES=15
@@ -96,8 +110,9 @@ STRIPE_PAGE_AFTER_RESERVATION_MINUTES=30
 SHOP_TIME_ZONE=Europe/Madrid
 # the name of the shop on a payment, in the mails, in the chat bot and in the documentation (Cartlify unless given)
 SHOP_NAME=Cartlify
-# the logo of every mail, a png or jpeg file from the folder of the server
-SHOP_LOGO_PATH=src/static/images/logo3.png
+# the logo of every mail, a png or jpeg file inside src/static/ (served at /static/ too); it goes
+# with every mail, so keep it small: the mails show it 160 px wide
+SHOP_LOGO_PATH=src/static/images/logo-mail.png
 
 # how the shop gets an order to its buyer: a list of manual (the shop sends it itself with a carrier
 # it works with outside the app) and pickup (the buyer collects it at the shop)
@@ -124,9 +139,16 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
 OPENAI_TIMEOUT_MS=12000
 OPENAI_MAX_OUTPUT_TOKENS=450
-# the answers of the chat bot a guest and a user get in 24 hours (30 and 100 unless given)
+# the answers of the chat bot a guest and a user get in 24 hours (30 and 100 unless given); a user
+# with an unconfirmed email counts as a guest
 CHAT_BOT_GUEST_DAILY_TURNS=30
 CHAT_BOT_USER_DAILY_TURNS=100
+# the turns of guests and unconfirmed users from one address in 24 hours (60 unless given); a new
+# cookie or a new account does not reset them
+CHAT_BOT_IP_DAILY_TURNS=60
+# the turns of the whole shop that call the model in 24 hours (3000 unless given): the ceiling of the
+# bill of the bot, past it the bot answers with its fallback text and asks the model nothing
+CHAT_BOT_SHOP_DAILY_TURNS=3000
 # the model and the moderation of openai check the comments of reviews; false publishes them unchecked
 REVIEW_CHECK_ENABLED=true
 
