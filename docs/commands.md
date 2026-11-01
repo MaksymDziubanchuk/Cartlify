@@ -33,6 +33,18 @@ npm run db:snapshot:check
 npm run db:snapshot:check:db
 npm run db:snapshot:save
 
+# the sql scripts on dev and prod, in this order after the migrations: 02 as a superuser, then 05,
+# 03, 04, 06 as cartlify_owner (here, or the workflow "DB — run SQL script"), then 01 as a
+# superuser, last: it hands out the rights on what the others made. Every script runs again without
+# a change, so the whole order runs every time. 01 and 02 run only by hand, the address of a
+# superuser stays off GitHub
+psql -v ON_ERROR_STOP=1 -f db/schema/02_extensions.sql "<superuser address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/05_fn_and_triggers.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/03_policies_and_rls.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/04_views.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/06_indexes_and_constraints.sql "<cartlify_owner address>"
+psql -v ON_ERROR_STOP=1 -f db/schema/01_roles_and_schemas.sql "<superuser address>"
+
 # format
 npm run format
 
