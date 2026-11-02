@@ -61,16 +61,16 @@ Every command: [commands](docs/commands.md).
 
 ## 📚 Documentation
 
-| Document                               | What it covers                                                |
-| -------------------------------------- | ------------------------------------------------------------- |
-| [Features](docs/features.md)           | what the API does, module by module                           |
-| [Variants](docs/variants.md)           | products, variants, characteristics, stock, lists and filters |
-| [API](docs/api.md)                     | the REST modules, Swagger / OpenAPI, the realtime chat        |
-| [Architecture](docs/architecture.md)   | goals, stack, structure of the repository, the database       |
-| [Configuration](docs/configuration.md) | every environment variable                                    |
-| [Local setup](docs/setup.md)           | the database, Redis and the app on your machine               |
-| [Commands](docs/commands.md)           | build, start, migrations, tests, demo data                    |
-| [Status](docs/status.md)               | where the project stands                                      |
+| Document                               | What it covers                                                            |
+| -------------------------------------- | ------------------------------------------------------------------------- |
+| [Features](docs/features.md)           | what the API does, module by module                                       |
+| [Variants](docs/variants.md)           | products, variants, characteristics, stock, lists and filters             |
+| [API](docs/api.md)                     | the REST modules, Swagger / OpenAPI, the realtime chat                    |
+| [Architecture](docs/architecture.md)   | goals, stack, structure of the repository, the database, production notes |
+| [Configuration](docs/configuration.md) | every environment variable                                                |
+| [Local setup](docs/setup.md)           | the database, Redis and the app on your machine                           |
+| [Commands](docs/commands.md)           | build, start, migrations, tests, demo data, a copy of prod for dev        |
+| [Status](docs/status.md)               | where the project stands                                                  |
 
 ## License
 
