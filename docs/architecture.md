@@ -28,6 +28,7 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | API documentation             | Swagger / OpenAPI                                                           | Implemented |
 | Realtime chat                 | WebSocket chat endpoint and event-based messaging                           | Implemented |
 | AI assistant                  | OpenAI-powered chatbot service with product/support context                 | Implemented |
+| Payments                      | Stripe payment pages and webhook, refunds through the provider of the order | Implemented |
 | Media                         | Cloudinary                                                                  | Implemented |
 | Email                         | SendGrid                                                                    | Implemented |
 | OAuth                         | Google, GitHub, LinkedIn                                                    | Implemented |
