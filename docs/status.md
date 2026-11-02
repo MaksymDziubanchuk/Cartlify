@@ -30,4 +30,10 @@ What is important to state honestly:
 
 ## In Progress
 
+- returns: the withdrawal from the contract within its term (with the withdrawal button EU law asks for from 19 June 2026), the cancel of an order by its buyer and the goods an admin takes back; being designed, no code yet
 - admin chat queue behavior is implemented, but still being refined through manual testing
+
+## Next
+
+- delivery through carriers, a tax model, fiscal receipts and a second payment provider (LiqPay)
+- a Docker deployment of the API, then a storefront on it
