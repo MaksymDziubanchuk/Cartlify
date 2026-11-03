@@ -20,7 +20,7 @@ export async function updateOrdersStatus(
 ): Promise<UpdateOrdersStatusResponseDto> {
   const results: UpdateOrdersStatusResultDto[] = [];
 
-  for (const { orderId, shipment, keepShippingCost } of dto.orders) {
+  for (const { orderId, shipment, keepShippingCost, deliveredAt } of dto.orders) {
     try {
       const order = await updateOrderStatus(
         {
@@ -31,10 +31,17 @@ export async function updateOrdersStatus(
           bulk: true,
           ...(shipment !== undefined ? { shipment } : {}),
           ...(keepShippingCost !== undefined ? { keepShippingCost } : {}),
+          ...(deliveredAt !== undefined ? { deliveredAt } : {}),
         },
         log,
       );
-      results.push({ orderId, ok: true, status: order.status as OrderStatus });
+      // statements that changed the items of the order mark it: the admin looks before sending
+      results.push({
+        orderId,
+        ok: true,
+        status: order.status as OrderStatus,
+        returnStatus: order.returnStatus,
+      });
     } catch (err) {
       // a refusal names the order; anything else is a failure of the server, for every order
       if (!isAppError(err) || err.statusCode >= 500) throw err;

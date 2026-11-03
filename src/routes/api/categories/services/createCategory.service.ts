@@ -5,6 +5,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { AppError, ConflictError, InternalError, isAppError } from '@utils/errors.js';
 import { normalizeCreateCategoryInput } from './helpers/index.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
+import { parseWithdrawalRule } from '@helpers/withdrawal.js';
 
 import type { AuditChange } from '@db/adminAudit.helper.js';
 
@@ -17,6 +18,7 @@ export async function createCategory({
   slug,
   description,
   parentId,
+  withdrawal,
 }: CreateCategoryDto): Promise<CreateCategoryResponseDto> {
   // validate actor context for rls and admin-only create
   assertAdminActor(actorId, actorRole);
@@ -29,12 +31,16 @@ export async function createCategory({
     parentId,
   });
 
+  // the rule of withdrawal its products follow; none when not sent, the category follows the one above
+  const withdrawalNorm = parseWithdrawalRule(withdrawal) ?? null;
+
   // prepare audit changes list for create
   const auditChanges: AuditChange[] = [
     { field: 'name', old: null, new: nameNorm },
     { field: 'slug', old: null, new: slugNorm },
     { field: 'description', old: null, new: descriptionNorm },
     { field: 'parentId', old: null, new: parentIdNorm },
+    ...(withdrawalNorm ? [{ field: 'withdrawal', old: null, new: withdrawalNorm }] : []),
   ];
 
   try {
@@ -50,6 +56,7 @@ export async function createCategory({
           slug: slugNorm,
           description: descriptionNorm,
           parentId: parentIdNorm,
+          withdrawal: withdrawalNorm,
         },
         select: {
           id: true,
@@ -57,6 +64,7 @@ export async function createCategory({
           slug: true,
           description: true,
           parentId: true,
+          withdrawal: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -85,6 +93,7 @@ export async function createCategory({
       ...(created.parentId ? { parentId: created.parentId } : {}),
       // a new category has no picture, it comes with PUT /api/categories/{categoryId}/image
       imageUrls: null,
+      withdrawal: created.withdrawal,
       createdAt: created.createdAt,
       updatedAt: created.updatedAt,
     };

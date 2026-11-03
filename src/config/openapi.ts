@@ -31,6 +31,11 @@ export const openApiTags = [
     { name: 'documents', description: 'Instructions and certificates of products (PDF files)' },
     { name: 'attributes', description: 'Groups, characteristics and values that describe variants' },
     { name: 'orders', description: 'Cart and order operations' },
+    { name: 'returns', description: 'Statements of withdrawal and of return, and the goods that come back' },
+    {
+      name: 'withdrawals',
+      description: 'The public form of withdrawal and the proof of a parcel by the code of a mail',
+    },
     { name: 'payments', description: 'Checkout sessions and payment webhooks' },
     { name: 'favorites', description: 'Favorite variants of a user' },
     { name: 'reviews', description: 'Review votes and review actions' },

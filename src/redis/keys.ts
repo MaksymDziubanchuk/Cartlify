@@ -7,4 +7,7 @@ export const redisKeys = {
   orderPaymentPageClosedAtMap: 'queue:orders:payment-page-closed-at',
   // the cases of alerts an admin or root put aside, a hash of each: <prefix><user id>
   adminAlertDismissalsPrefix: 'admin:alerts:dismissed:',
+  // a chat the bot could not answer for a customer who may talk to an admin: the mark lets the
+  // customer call an admin by the button; <prefix><thread id>
+  chatAdminCallPrefix: 'chat:admin-call:',
 } as const;

@@ -50,7 +50,7 @@ import {
 import { deleteAccount } from './services/helpers/deleteAccount.helper.js';
 import { findUsers } from './services/findUsers.service.js';
 import { removeUserAvatar } from './services/removeUserAvatar.service.js';
-import { exportMe } from './services/exportMe.service.js';
+import { exportPerson } from './services/exportPerson.service.js';
 import { countAvatarRemovals, deleteAvatarFile } from './services/helpers/avatarRemovals.helper.js';
 import { countReviewRemovals } from '@routes/api/products/services/helpers/reviewRemovals.helper.js';
 
@@ -536,6 +536,11 @@ async function findById({
         avatarRemovalsLimit: env.AVATAR_REMOVALS_LIMIT,
         reviewRemovals: await countReviewRemovals(tx, id),
         reviewRemovalsLimit: env.REVIEW_REMOVALS_LIMIT,
+        returns: {
+          total: await tx.orderReturn.count({ where: { order: { userId: id } } }),
+          open: await tx.orderReturn.count({ where: { order: { userId: id }, closedAt: null } }),
+          list: { path: '/api/returns' as const, query: { userId: String(id) } },
+        },
         period,
         ...(await loadProfileLists(tx, id, lists, period)),
       };
@@ -649,5 +654,5 @@ export const usersServices = {
   findById,
   deleteUserById,
   deleteMe,
-  exportMe,
+  exportPerson,
 };

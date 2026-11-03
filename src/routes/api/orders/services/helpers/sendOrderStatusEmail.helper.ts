@@ -3,6 +3,7 @@ import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { deliveryMailParts } from '@helpers/deliveryText.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
+import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { buildOrderShippedTemplate } from '@services/email/templates/orders/orderShipped.template.js';
 import { buildOrderDeliveredTemplate } from '@services/email/templates/orders/orderDelivered.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -10,6 +11,7 @@ import { sendOrderNoticeEmail } from './sendOrderNoticeEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { itemNameOf } from './itemName.helper.js';
+import { withdrawalEndsOf, withdrawalPeriodDaysOf } from './withdrawal.helper.js';
 
 export type OrderStatusMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -46,6 +48,8 @@ function loadOrder(orderId: number) {
         userId: true,
         total: true,
         paymentProvider: true,
+        deliveredAt: true,
+        withdrawalDays: true,
         delivery: {
           select: {
             method: true,
@@ -64,10 +68,13 @@ function loadOrder(orderId: number) {
         items: {
           orderBy: { id: 'asc' },
           select: {
+            id: true,
             quantity: true,
+            unitPrice: true,
             totalPrice: true,
             productName: true,
             variantId: true,
+            withdrawal: true,
             product: { select: { id: true, name: true } },
           },
         },
@@ -87,9 +94,32 @@ function loadOrder(orderId: number) {
       select: { carrier: true, trackingNumber: true, trackingUrl: true },
     });
 
-    return { ...order, user, shipments: send ? [send] : [] };
+    // the end of the period of a delivered order, as the contract says it (the grace is not told)
+    const endsAt = (await withdrawalEndsOf(tx, [order], 0)).get(order.id) ?? null;
+
+    // the units statements brought back to the shop (on the shelf, written off, lost): a unit
+    // withdrawn from before the sending does not travel
+    const back = await tx.orderReturnItem.findMany({
+      where: {
+        orderItem: { orderId },
+        goods: { in: ['to_stock', 'written_off', 'lost'] },
+      },
+      select: { orderItemId: true, quantity: true },
+    });
+    const backOf = new Map<number, number>();
+    for (const row of back) {
+      backOf.set(row.orderItemId, (backOf.get(row.orderItemId) ?? 0) + row.quantity);
+    }
+
+    return { ...order, user, endsAt, backOf, shipments: send ? [send] : [] };
   });
 }
+
+// a sum of money in cents without float math: the string of a decimal of the database
+const cents = (value: string) => {
+  const [whole, part = ''] = value.split('.');
+  return Number(whole) * 100 + Number(part.padEnd(2, '0').slice(0, 2));
+};
 
 // mails the buyer that an admin shipped the order or marked it delivered. The status is committed
 // before this runs, so a mail that fails is only logged, with the order id and not the address.
@@ -114,6 +144,25 @@ export async function sendOrderStatusEmail(
       return;
     }
 
+    // what really travels (7.2): the units of each item less those statements brought back
+    // before, the price of the units that stay; an item all of whose units came back is no line
+    const sent = order.items
+      .map((item) => ({ item, units: item.quantity - (order.backOf.get(item.id) ?? 0) }))
+      .filter((line) => line.units > 0);
+    const deliveryPrice =
+      order.delivery?.method === 'manual' ? order.delivery.price.toString() : null;
+    const priceCents = (line: (typeof sent)[number]) =>
+      line.units === line.item.quantity
+        ? cents(line.item.totalPrice.toString())
+        : cents(line.item.unitPrice.toString()) * line.units;
+    // the total of an order nothing came back from is what was paid; otherwise what travels
+    const total = order.backOf.size
+      ? (
+          (sent.reduce((sum, line) => sum + priceCents(line), 0) + cents(deliveryPrice ?? '0')) /
+          100
+        ).toFixed(2)
+      : order.total.toString();
+
     const { subject, text, html } = TEMPLATES[status]({
       // the name of the shop the mail is from
       appName: env.SHOP_NAME,
@@ -121,19 +170,21 @@ export async function sendOrderStatusEmail(
       orderUrl: orderPage(order.id),
       // a delivered order asks the buyer to rate each product: a review is of the product, so
       // two variants of one product are one line to rate, named by the product
-      items: order.items.map((item, index) => ({
+      items: sent.map(({ item, units }, index) => ({
         // the name the variant had when the order was confirmed
         name: itemNameOf(item),
-        quantity: item.quantity,
-        totalPrice: item.totalPrice.toString(),
+        quantity: units,
+        totalPrice: (priceCents({ item, units }) / 100).toFixed(2),
+        // the rule the item kept at the confirmation
+        withdrawal: item.withdrawal,
         ...(status === 'delivered' &&
-        order.items.findIndex((other) => other.product.id === item.product.id) === index
+        sent.findIndex((other) => other.item.product.id === item.product.id) === index
           ? { reviewUrl: reviewsPage(item.product.id), reviewName: item.product.name }
           : {}),
       })),
-      total: order.total.toString(),
+      total,
       // what the buyer paid for the delivery, none for a pickup
-      deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
+      deliveryPrice,
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),
       ...(order.user.name ? { userName: order.user.name } : {}),
@@ -144,6 +195,12 @@ export async function sendOrderStatusEmail(
             trackingNumber: order.shipments[0].trackingNumber,
             trackingUrl: order.shipments[0].trackingUrl,
           }
+        : {}),
+      // the link of the page of withdrawal, with the code of the order after the #
+      withdrawalUrl: withdrawalLinkOf(order.id),
+      withdrawalDays: withdrawalPeriodDaysOf(order.withdrawalDays),
+      ...(status === 'delivered' && order.endsAt
+        ? { withdrawalEndsAt: order.endsAt, timeZone: env.SHOP_TIME_ZONE }
         : {}),
       logoCid: SHOP_LOGO_CID,
     });

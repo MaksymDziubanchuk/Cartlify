@@ -4,7 +4,7 @@ import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
-import { getPaymentProvider } from '../../providers/index.js';
+import { refundWholePayment } from './refundWholePayment.helper.js';
 import {
   sendPaymentRefundedEmail,
   type PaymentRefundedMailLogger,
@@ -160,9 +160,11 @@ async function refundLatePayment(
   log: PaymentRefundedMailLogger,
 ): Promise<{ refundId: string | null; logged: boolean }> {
   // refund first: if the audit write fails, the event is delivered again and the refund is not repeated
-  const { refundId } = await getPaymentProvider(args.provider).refundPayment({
-    orderId: args.orderId,
+  const { refundId } = await refundWholePayment({
+    provider: args.provider,
     paymentId: args.paymentId,
+    orderId: args.orderId,
+    amount: args.amount,
   });
 
   const { logged, created, userId } = await writeOrderRefundAuditLog({ ...args, refundId });

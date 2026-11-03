@@ -18,6 +18,7 @@ export const ADMIN_ALERT_KINDS = [
   'shipped_orders_waiting',
   'pickup_not_collected',
   'shipped_without_cost',
+  'shipped_without_tracking',
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
@@ -27,6 +28,12 @@ export const ADMIN_ALERT_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'failed_refunds',
+  'returns_manual_check',
+  'returns_proof_waiting',
+  'returns_goods_not_sent',
+  'returns_money_late',
+  'returns_goods_late',
   'worker_stalled',
 ] as const satisfies readonly AdminAlertKind[];
 
@@ -46,6 +53,18 @@ const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
   pickup_not_collected: { unit: 'days', default: 7, min: 1, max: 365 },
   // a send the shop owes something for, whose cost is not written for so many days
   shipped_without_cost: { unit: 'days', default: 3, min: 1, max: 365 },
+  // an order shipped by hand, whose send has no tracking number, for so many days
+  shipped_without_tracking: { unit: 'days', default: 2, min: 1, max: 365 },
+  // statements: the proof of the parcel is told and the shop has not confirmed it for so many days
+  returns_proof_waiting: { unit: 'days', default: 2, min: 1, max: 365 },
+  // statements: the buyer told nothing of the parcel and the goods are not in, so many days after
+  // the statement (14 to send and a week on the road)
+  returns_goods_not_sent: { unit: 'days', default: 21, min: 1, max: 365 },
+  // statements: the money is due (the goods are in, or the proof confirmed) and not back, so many
+  // days after the statement
+  returns_money_late: { unit: 'days', default: 10, min: 1, max: 365 },
+  // statements: the money went back and the goods are not in, so many days after it
+  returns_goods_late: { unit: 'days', default: 14, min: 1, max: 365 },
   // at most so many free units
   low_stock: { unit: 'units', default: 5, min: 1, max: 100_000 },
   // the last good day of a batch within so many days
@@ -89,7 +108,14 @@ export function assertThreshold(kind: AdminAlertKind, value: number): void {
 
 // the window of the cases of a kind a threshold makes: changed before a time, written since one,
 // a last good day not later than one, at most some free units
-export type AlertWindow = { before?: Date; since?: Date; expiresBy?: string; units?: number };
+export type AlertWindow = {
+  before?: Date;
+  since?: Date;
+  expiresBy?: string;
+  units?: number;
+  // the days of a statement of return (the filters of the list of the statements count in days)
+  days?: number;
+};
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -114,7 +140,13 @@ export function alertWindowOf(
     case 'shipped_orders_waiting':
     case 'pickup_not_collected':
     case 'shipped_without_cost':
+    case 'shipped_without_tracking':
       return { before: new Date(now - threshold * DAY) };
+    case 'returns_proof_waiting':
+    case 'returns_goods_not_sent':
+    case 'returns_money_late':
+    case 'returns_goods_late':
+      return { days: threshold };
     case 'low_stock':
       return { units: threshold };
     case 'expiring_batches':
@@ -168,6 +200,76 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           shippingCostMissing: 'true',
           shippedTo: isoOf(window.before),
           sortBy: 'shippingCostMissingSince',
+          sortDir: 'asc',
+        },
+      };
+    case 'shipped_without_tracking':
+      return {
+        path: '/api/orders',
+        query: {
+          shippedWithoutNumber: 'true',
+          shippedTo: isoOf(window.before),
+          sortBy: 'updatedAt',
+          sortDir: 'asc',
+        },
+      };
+    // the cases of the statements of return are statements: the list of the statements counts
+    // them with the same filters (returnFilters.helper.ts)
+    case 'failed_refunds':
+      return {
+        path: '/api/returns',
+        query: { state: 'open', money: 'failed', sortBy: 'statedAt', sortDir: 'asc' },
+      };
+    case 'returns_manual_check':
+      return {
+        path: '/api/returns',
+        query: {
+          state: 'open',
+          source: 'form_manual',
+          accepted: 'false',
+          sortBy: 'statedAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'returns_proof_waiting':
+      return {
+        path: '/api/returns',
+        query: {
+          state: 'open',
+          goods: 'proof_provided',
+          proofOlderThanDays: String(window.days ?? 0),
+          sortBy: 'statedAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'returns_goods_not_sent':
+      return {
+        path: '/api/returns',
+        query: {
+          state: 'open',
+          goods: 'waiting_no_proof',
+          olderThanDays: String(window.days ?? 0),
+          sortBy: 'statedAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'returns_money_late':
+      return {
+        path: '/api/returns',
+        query: {
+          state: 'open',
+          moneyDueForDays: String(window.days ?? 0),
+          sortBy: 'statedAt',
+          sortDir: 'asc',
+        },
+      };
+    case 'returns_goods_late':
+      return {
+        path: '/api/returns',
+        query: {
+          state: 'open',
+          paidAheadForDays: String(window.days ?? 0),
+          sortBy: 'statedAt',
           sortDir: 'asc',
         },
       };
@@ -231,6 +333,7 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
         query: {
           actions: 'OTHER',
           entityType: 'order',
+          events: 'order.refund_late',
           field: 'refund',
           from: isoOf(window.since),
         },

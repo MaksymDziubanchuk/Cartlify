@@ -1,0 +1,18 @@
+Hi{{#userName}} {{userName}}{{/userName}},
+
+{{#code}}Statement {{code}}.
+{{/code}}The return for your {{appName}} order #{{orderId}} is closed.
+{{outcomeLine}}
+{{#withheldLine}}{{withheldLine}}
+{{/withheldLine}}{{#closeLine}}{{closeLine}}
+{{/closeLine}}{{#showRefunded}}
+Returned to you:
+{{#refunded}}- {{name}} x {{quantity}}
+{{/refunded}}{{/showRefunded}}{{#showDeclined}}
+Not returned:
+{{#declined}}- {{name}} x {{quantity}} ({{why}})
+{{/declined}}{{/showDeclined}}
+See your order:
+{{orderUrl}}
+
+Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.

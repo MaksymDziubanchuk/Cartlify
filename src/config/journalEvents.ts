@@ -90,21 +90,38 @@ export const AUDIT_EVENTS = [
   'order.pickup_ready_back_bulk',
   'order.pickup_collected_back',
   'order.pickup_collected_back_bulk',
-  // the cancel with its refund: before any send, of a pickup ready to be collected, of a manual
-  // order on its way with the carrier paid or not
-  'order.cancel',
-  'order.cancel_pickup_ready',
-  'order.cancel_shipped_paid',
-  'order.cancel_shipped_unpaid',
   // a payment given back late, a change of a send (the details mailed to the buyer, or the cost the
   // shop pays the carrier), of the delivery data
   'order.refund_late',
+  // a statement of withdrawal or of return: made, its goods taken in, the proof of the buyer
+  // confirmed, its money returned or failed to return, money sent outside the app, rows closed
+  // without a refund
+  'return.create',
+  'return.receive',
+  'return.proof_confirm',
+  'return.accept',
+  // the buyer wrote how they sent the goods back
+  'return.proof_provide',
+  'return.refund',
+  'return.refund_failed',
+  'return.refund_outside',
+  // root lowered what rows of a statement give back, with the reason
+  'return.amount_lower',
+  // root paid the buyer back the cost of the way back, outside the app
+  'return.shipping_reimburse',
+  // a dispute of the payment at the bank ended (root, or the webhook of the provider)
+  'return.dispute_settle',
+  'return.close',
+  // the shop paid to carry the goods back: a parcel recorded, its cost written
+  'return.shipment_record',
+  'return.shipment_cost',
   'order.shipment_tracking_change',
   'order.shipment_cost_change',
   'order.delivery_change',
   // accounts
   'user.avatar_remove',
   'user.delete',
+  'user.export',
   'user.role_grant',
   'user.role_revoke',
   LEGACY_EVENT,
@@ -151,8 +168,11 @@ export const STOCK_LOG_EVENTS = [
   'stock.write_off',
   // the units a paid order took at its payment, with the order (the work of the system, no actor)
   'stock.sale',
-  // the units a cancelled paid order gave back, with the order
-  'stock.cancel_return',
+  // the units that came back with a statement of return, with the order and the row of the statement
+  'stock.return',
+  // the units that came back with a statement and went out of the stock at once (written off or
+  // lost), the line after the one of their return
+  'stock.return_write_off',
 ] as const;
 
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];

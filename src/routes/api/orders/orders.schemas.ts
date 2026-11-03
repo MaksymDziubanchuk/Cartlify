@@ -32,6 +32,7 @@ const orderItemExample = {
   quantity: 2,
   unitPrice: 49.99,
   totalPrice: 99.98,
+  withdrawal: { rule: 'allowed', right: 'full' },
 };
 
 // where and to whom a confirmed order goes
@@ -68,6 +69,8 @@ const orderExample = {
   createdAt: '2026-01-01T10:00:00.000Z',
   updatedAt: '2026-01-01T10:00:00.000Z',
   confirmed: false,
+  withdrawalOpen: false,
+  returnStatus: 'none',
 };
 
 // a confirmed order waits for the payment until reservationExpiresAt
@@ -84,6 +87,7 @@ const waitingOrderExample = {
 const shippedOrderExample = {
   ...waitingOrderExample,
   status: 'shipped',
+  withdrawalOpen: true,
   reservationExpiresAt: undefined,
   delivery: {
     ...deliveryExample,
@@ -115,14 +119,6 @@ const unconfirmedOrderExample = {
   status: 'unconfirmed',
   confirmed: false,
   delivery: deliveryExample,
-};
-
-// what an admin cancel answers: the order and how to reach its buyer
-const cancelledOrderExample = {
-  ...shippedOrderExample,
-  status: 'cancelled',
-  cancelledAt: '2026-01-02T09:30:00.000Z',
-  user: { id: 1, deleted: false, email: 'anna@example.com' },
 };
 
 const ordersListResponseExample = {
@@ -495,7 +491,7 @@ const getOrdersSchema = {
 
     400: {
       description:
-        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`) a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`), such a period of the last change (`UPDATED_PERIOD_INVALID`) and the sort by the send without a cost without its filter (`SORT_SHIPPING_COST_MISSING_REQUIRES_FILTER`).',
+        'Invalid orders query parameters, including `CURSOR_INVALID` (a cursor of another sort or direction too), a status the list has not (`STATUS_INVALID`), a period of the payment that does not end after it starts (`PAID_PERIOD_INVALID`), such a period of the last change (`UPDATED_PERIOD_INVALID`) and the sort by the send without a cost without its filter (`SORT_SHIPPING_COST_MISSING_REQUIRES_FILTER`).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -571,7 +567,7 @@ const patchOrderStatusSchema = {
     'Shipping a manual order records the send (`shipment`: the carrier, the tracking number, the link, what the shop pays the carrier, each only if known; a number and a link each need the carrier, a link may come without a number); a pickup is shipped when it is ready to be collected, delivered when it is collected, and has no send. ' +
     'The step back of a manual order takes the send back (it stays as history) and needs `keepShippingCost`: true keeps its cost as owed to the carrier, false makes it 0 (a mistake; the cost it had stays in the admin log). ' +
     'Every step is written to the admin log with what it did. The buyer is mailed after each step, unless the account is deleted: a shipped order (a pickup: ready for pickup), a delivered one (a pickup: collected), and a short notice for a step back that says nothing of the reason, the admin explains it in the chat; a mail that fails is only logged and never undoes the status. ' +
-    'This operation is restricted to privileged users. A cancel returns the money and the stock, it is POST /api/orders/{orderId}/cancel.',
+    'This operation is restricted to privileged users. A cancel is a statement of return: POST /api/returns with the reason `shop_cancel` for a paid order not sent (or a pickup not collected), `refused` for a parcel the buyer refused.',
 
   params: {
     $ref: 'ordersUpdateStatusParamsSchema#',
@@ -596,7 +592,8 @@ const patchOrderStatusSchema = {
         '`STATUS_INVALID`: not a status an admin sets (the request schema refuses it first). ' +
         '`SHIPMENT_NOT_ALLOWED`: a send with any step but shipped, or for a pickup. ' +
         '`SHIPMENT_CARRIER_REQUIRED`: a number or a link without the carrier. `SHIPMENT_CARRIER_INVALID`, `SHIPMENT_NUMBER_INVALID`: a text of only spaces. ' +
-        '`KEEP_SHIPPING_COST_REQUIRED`: the step back of a manual order that was shipped needs the choice. `KEEP_SHIPPING_COST_NOT_ALLOWED`: the choice with any other step, or for a pickup.',
+        '`KEEP_SHIPPING_COST_REQUIRED`: the step back of a manual order that was shipped needs the choice. `KEEP_SHIPPING_COST_NOT_ALLOWED`: the choice with any other step, or for a pickup. ' +
+        '`DELIVERED_AT_NOT_ALLOWED`: the moment of the delivery with any other step. `ORDER_DELIVERED_AT_INVALID`: a moment before the order was sent (a pickup: paid) or of the future.',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -614,7 +611,7 @@ const patchOrderStatusSchema = {
     409: {
       description:
         '`ORDER_STATUS_TRANSITION_INVALID`: the order is there, its status does not allow the step, `details: { status, requested }` ' +
-        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
+        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `ORDER_HAS_OPEN_REFUSAL`: the buyer refused the parcel and the statement of it is open, the order does not become delivered while the parcel is on its way back. `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -867,59 +864,178 @@ const postCancelPaymentSchema = {
   },
 } satisfies FastifySchema;
 
-// Schema for an admin cancelling a paid order
-const postCancelOrderSchema = {
-  operationId: 'cancelOrder',
-  summary: 'Cancel a paid order',
+// a paid order the buyer withdrew from before it was sent: cancelled, the goods and the money back
+const withdrawnOrderExample = {
+  ...shippedOrderExample,
+  status: 'cancelled',
+  cancelledAt: '2026-01-02T09:00:00.000Z',
+  returnStatus: 'full',
+  withdrawalOpen: false,
+  withdrawals: [
+    {
+      id: 12,
+      code: 'W42-1',
+      statedAt: '2026-01-02T09:00:00.000Z',
+      source: 'account',
+      basis: 'withdrawal',
+      reason: null,
+      step: 'closed',
+      closedAt: '2026-01-02T09:00:05.000Z',
+      proof: null,
+      shippingReimbursement: null,
+      items: [
+        {
+          orderItemId: 1,
+          quantity: 2,
+          amount: 99.98,
+          deliveryAmount: 4.99,
+          shippingDeduction: 0,
+          money: 'refunded',
+          refundedAt: '2026-01-02T09:00:05.000Z',
+          refusal: null,
+        },
+      ],
+    },
+  ],
+  withdrawable: [],
+};
+
+const withdrawalBodyExample = {
+  items: [{ orderItemId: 1, quantity: 2 }],
+  description: 'It does not fit.',
+};
+
+const returnProofParamsExample = { orderId: '1', returnId: '12' };
+
+const returnProofBodyExample = {
+  carrier: 'DHL',
+  trackingNumber: 'JD0146000123',
+  trackingUrl: 'https://track.example.com/JD0146000123',
+};
+
+// Schema for the buyer withdrawing from the contract
+const postWithdrawalSchema = {
+  operationId: 'withdrawFromOrder',
+  summary: 'Withdraw from the contract',
   description:
-    'An admin or root cancels a paid or shipped order, for example one that cannot be delivered. The payment is refunded in full by the payment provider that took it, ' +
-    'the stock of its items comes back (a line `stock.cancel_return` of the stock log for each variant, with the order, in the name of the admin; the admin log keeps one line with the same `orderId`) and the buyer gets a mail, unless the account is deleted. The order is cancelled only together with its refund: ' +
-    'when the provider refuses the refund nothing changes. A delivered order is not cancelled. ' +
-    'A manual order that was shipped has a send on its way: `shippingPaid` says whether the carrier was paid already, true keeps the cost of the send as owed (an expense of the shop), false makes it 0 (nothing is owed; the cost it had stays in the admin log). It is needed then, and not allowed otherwise. ' +
-    'The answer gives how to reach the buyer: the order holds the delivery (the address or the pickup, the recipient and the phone), `user` tells whether the account is deleted and its email while it is not.',
+    'The buyer withdraws from the contract of an own paid, shipped or delivered order, from the ' +
+    'whole of it or the units named (`items`; without it whatever is left of the order that has the ' +
+    'right of withdrawal). A delivered order can be withdrawn from until `withdrawalEndsAt`; a ' +
+    'paid or shipped one at any time. An item whose product has no right of withdrawal ' +
+    '(perishable, personalised, periodical) is not taken. The shop answers with a mail that the ' +
+    'statement was registered, with the date and time of it. For a paid order that was not sent the ' +
+    'goods stay with the shop, the order is cancelled when it is all of it, and the money goes ' +
+    'back at once (a second mail when it is back). For a sent order the shop waits for the ' +
+    'parcel: the buyer writes its carrier and number with ' +
+    '`POST /api/orders/{orderId}/returns/{returnId}/proof`. The statement and its path are ' +
+    '`withdrawals` of the answer, what can still be stated `withdrawable`. At most ' +
+    '`LIMIT_WITHDRAWAL_PER_USER` statements an hour.',
 
   params: {
     $ref: 'ordersGetByIdParamsSchema#',
     examples: [orderIdParamsExample],
   },
-
-  body: {
-    $ref: 'ordersCancelBodySchema#',
-    examples: [{ shippingPaid: true }],
-  },
+  body: { $ref: 'ordersWithdrawBodySchema#', examples: [withdrawalBodyExample] },
 
   response: {
-    200: {
-      description: 'The order is cancelled and its payment refunded.',
-      $ref: 'ordersCancelledResponseSchema#',
-      examples: [cancelledOrderExample],
+    201: {
+      description: 'The statement was made: the order with it.',
+      $ref: 'ordersOrderResponseSchema#',
+      examples: [withdrawnOrderExample],
     },
     400: {
       description:
-        'Invalid order id or body (VALIDATION_ERROR). `SHIPPING_PAID_REQUIRED`: the order was shipped by hand and has a send on its way, say whether the carrier was paid. `SHIPPING_PAID_NOT_ALLOWED`: the order has no send on its way.',
+        'Invalid order id or body (VALIDATION_ERROR); nothing left to withdraw from ' +
+        '(RETURN_ITEMS_REQUIRED), an item named twice (RETURN_ITEMS_REPEATED), units that are not ' +
+        'whole units above 0 (RETURN_QUANTITY_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
-      description: 'Authentication is required to cancel an order.',
+      description: 'Authentication is required to withdraw.',
       $ref: 'errorResponseSchema#',
     },
     403: {
-      description: 'Only an admin or root cancels orders (INSUFFICIENT_ROLE).',
+      description: 'Only a user withdraws from own orders (INSUFFICIENT_ROLE).',
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Order was not found (ORDER_NOT_FOUND).',
+      description:
+        'No own order with this id (ORDER_NOT_FOUND), or an item is not one of the order ' +
+        '(RETURN_ITEM_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     409: {
       description:
-        '`ORDER_ALREADY_DELIVERED`, `ORDER_ALREADY_CANCELLED`, `ORDER_NOT_PAID`: the order cannot be cancelled. ' +
-        '`ORDER_STATUS_CHANGED`: its status changed meanwhile, reload it. `ORDER_PAYMENT_ID_MISSING`: the order holds no payment to refund. `RESOURCE_BUSY`: try again.',
+        'The order is not paid, shipped or delivered (RETURN_ORDER_NOT_RETURNABLE); more units ' +
+        'than are left (RETURN_QUANTITY_EXCEEDED); an item without the right of withdrawal ' +
+        '(RETURN_ITEM_NOT_RETURNABLE); the period of a delivered order is over (RETURN_PERIOD_OVER). ' +
+        '`RESOURCE_BUSY`: try again.',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description:
+        'Too many requests in an hour (RATE_LIMITED): every request counts, those that were ' +
+        'refused too.',
       $ref: 'errorResponseSchema#',
     },
     500: {
+      description: 'Unexpected server error while withdrawing.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the buyer telling how they sent the goods back
+const postReturnProofSchema = {
+  operationId: 'provideReturnProof',
+  summary: 'Tell how the goods were sent back',
+  description:
+    'The buyer writes the carrier and the number of the parcel they sent the goods back with (and ' +
+    'a link to follow it) for a statement of their own that still waits for its goods. The ' +
+    'statement is then in the step `proof_provided` and the shop checks it; the buyer may correct ' +
+    'what they wrote until the shop confirms it (`proof_confirmed`). A statement for a paid order ' +
+    'that was not sent has no goods to send. The answer is the order with its `withdrawals`.',
+
+  params: { $ref: 'ordersReturnProofParamsSchema#', examples: [returnProofParamsExample] },
+  body: { $ref: 'ordersReturnProofBodySchema#', examples: [returnProofBodyExample] },
+
+  response: {
+    200: {
+      description: 'The proof was written: the order.',
+      $ref: 'ordersOrderResponseSchema#',
+      examples: [shippedOrderExample],
+    },
+    400: {
       description:
-        'INTERNAL_ERROR: the refund at the payment provider failed or another server error; nothing was changed (the reason is in the server log only).',
+        'Invalid ids or body (VALIDATION_ERROR); a carrier or a number that is empty, or a link ' +
+        'that is not https (RETURN_PROOF_INVALID).',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to write the proof.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only a user writes the proof of own statements (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: 'No statement of an own order with this id (RETURN_NOT_FOUND).',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description: 'Too many requests in an hour (RATE_LIMITED).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'The statement is closed (RETURN_ALREADY_CLOSED); no row of it waits for goods ' +
+        '(RETURN_NOTHING_WAITING); the shop confirmed the proof already ' +
+        '(RETURN_PROOF_ALREADY_CONFIRMED). `RESOURCE_BUSY`: try again.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while writing the proof.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -1060,7 +1176,8 @@ const taggedOrdersSchema = withOpenApiTag(
     patchOrderItemsSchema,
     deleteOrderItemsSchema,
     postCancelPaymentSchema,
-    postCancelOrderSchema,
+    postWithdrawalSchema,
+    postReturnProofSchema,
   },
   'orders',
 );

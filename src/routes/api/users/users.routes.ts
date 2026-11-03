@@ -65,6 +65,15 @@ export default async function usersRouter(app: FastifyInstance) {
     },
     usersController.getUserById,
   );
+  // root gives the data of another person, a deleted account too; the line goes to the journal
+  app.get(
+    '/:userId/export',
+    {
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('userId')],
+      schema: usersSchema.getUserExportSchema,
+    },
+    usersController.getUserExport,
+  );
   // a moderator takes the avatar of another account away; the database decides who may
   app.delete(
     '/:userId/avatar',

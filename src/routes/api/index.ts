@@ -9,6 +9,8 @@ import { usersRouter } from '@routes/api/users/index.js';
 import { productRouter } from '@routes/api/products/index.js';
 import { categoriesRouter } from '@routes/api/categories/index.js';
 import { partiesRouter } from '@routes/api/parties/index.js';
+import { returnsRouter } from '@routes/api/returns/index.js';
+import { withdrawalsRouter } from '@routes/api/withdrawals/index.js';
 import { documentsRouter } from '@routes/api/documents/index.js';
 import { attributesRouter, categoryAttributesRouter } from '@routes/api/attributes/index.js';
 import { ordersRouter } from '@routes/api/orders/index.js';
@@ -30,6 +32,8 @@ export async function registerRoutes(app: FastifyInstance) {
   app.register(productRouter, { prefix: 'api/products' });
   app.register(categoriesRouter, { prefix: 'api/categories' });
   app.register(ordersRouter, { prefix: 'api/orders' });
+  app.register(returnsRouter, { prefix: 'api/returns' });
+  app.register(withdrawalsRouter, { prefix: 'api/withdrawals' });
   app.register(paymentsRouter, { prefix: 'api/payments' });
   app.register(favoritesRouter, { prefix: 'api/favorites' });
   app.register(reviewsRouter, { prefix: 'api/reviews' });

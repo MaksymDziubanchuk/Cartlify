@@ -52,10 +52,27 @@ export interface CurrentChatWsDto {
 
 export interface CurrentChatResponseDto {
     thread: ChatThreadItemDto;
+    // the chat with the bot may be given to the admins by the button: the bot could not answer
+    // lately and the customer is a user with a confirmed email
+    adminCallAvailable: boolean;
     // the newest messages, oldest first; the cursor leads to the ones before, null at the start
     messages: ChatMessageItemDto[];
     nextCursor: string | null;
     ws: CurrentChatWsDto;
+}
+
+// POST /threads/:threadId/call-admin
+
+export interface CallAdminChatDto {
+    actorId: UserId;
+    actorRole: Role;
+    threadId: string;
+}
+
+export interface CallAdminChatResponseDto {
+    thread: ChatThreadItemDto;
+    // what the bot wrote when it gave the chat to the admins
+    message: ChatMessageItemDto;
 }
 
 // GET /threads/:threadId/messages
@@ -136,6 +153,8 @@ export type ChatWsServerEventType =
     | 'thread:joined'
     | 'message:new'
     | 'admin:requested'
+    // the button "call an admin" appeared or went away: { threadId, available }
+    | 'thread:admin-call'
     | 'thread:closed'
     | 'thread:read'
     | 'typing:start'

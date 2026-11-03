@@ -77,11 +77,13 @@ const adminUserResponseExample = {
   avatarRemovalsLimit: 5,
   reviewRemovals: 1,
   reviewRemovalsLimit: 5,
+  returns: { total: 2, open: 1, list: { path: '/api/returns', query: { userId: '7' } } },
   period: { from: '2025-12-02T10:00:00.000Z', to: '2026-01-01T10:00:00.000Z' },
   orders: [
     {
       id: 12,
       status: 'paid',
+      returnStatus: 'none',
       total: 25.5,
       createdAt: '2025-12-20T10:00:00.000Z',
       updatedAt: '2025-12-20T10:05:00.000Z',
@@ -258,9 +260,10 @@ const getMeExportSchema = {
   description:
     'Everything the shop keeps of the signed-in person, read with the rights of the person, as one JSON file ' +
     '(content-disposition attachment): the profile, the orders (each item names its product and its variant, ' +
-    'with the name and the prices the order was confirmed with), the favorites (variants, each with its ' +
+    'with the name and the prices the order was confirmed with, the sends, and the statements of withdrawal ' +
+    'or return made on the order with their rows), the favorites (variants, each with its ' +
     'product), the reviews and votes, the chats, the logins, the open sessions and the consents to the ' +
-    'terms and the contract. At most ' +
+    'terms and the contract. What the cleanups of the retention terms have emptied is not given. At most ' +
     env.LIMIT_EXPORT_PER_USER +
     ' a user an hour.',
 
@@ -275,6 +278,48 @@ const getMeExportSchema = {
     },
     429: {
       description: 'Too many exports in the last hour (RATE_LIMITED, `details.limit` export).',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for the export of the data of another person, for root
+const getUserExportSchema = {
+  operationId: 'exportUserById',
+  summary: 'Export the data of a user',
+  description:
+    'The same data as `GET /api/users/me/export` (one JSON file, content-disposition attachment), of ' +
+    'the user with this id, for root. It also works for an account that was deleted: what is still ' +
+    'kept of the person (the orders, the statements of withdrawal or return) is given, what the ' +
+    'cleanups of the retention terms have emptied is not. The person is checked outside the app ' +
+    '(the email of the statement, the phone of the recipient, the number of an order). The request ' +
+    'leaves a line in the journal of the admins (OTHER, `user.export`).',
+
+  params: {
+    $ref: 'usersGetByIdParamsSchema#',
+    examples: [userIdParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The data of the person.',
+      $ref: 'usersExportResponseSchema#',
+    },
+    400: {
+      description: 'The id must be a whole number from 1 to 2147483647.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description:
+        'The access cookie is invalid or expired and cannot be renewed (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only root can export the data of another person (INSUFFICIENT_ROLE).',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: '`USER_NOT_FOUND`: there is no user with this id.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -360,7 +405,9 @@ const getUserByIdSchema = {
     'An admin or root gets the whole profile but the password, the provider id and the id of the ' +
     'avatar file, the open chat of the user with an admin (`openChatThreadId`), how many times a ' +
     'moderator removed the avatar and the reviews of the account against the limits of the rules ' +
-    '(`avatarRemovals`, `reviewRemovals` and their limits), the period of the ' +
+    '(`avatarRemovals`, `reviewRemovals` and their limits), how many statements of withdrawal ' +
+    'and of return the orders of the user have, all and open, with the request to the list that ' +
+    'shows them (`returns`), the period of the ' +
     'lists and the lists `include` names, of that period, newest first; `consents` are the ' +
     'versions of the terms and of the contract the user accepted and the ones each order was ' +
     'confirmed with, the text of each by GET /api/legal/documents/:documentId. ' +
@@ -422,8 +469,10 @@ const ACCOUNT_DELETION =
   'avatar (also the file), locale and phone are removed, the role stays. The account can no ' +
   'longer change its own row, and other users get USER_NOT_FOUND for its profile. ' +
   'An order waiting for payment is cancelled, its stock goes back and its payment page is closed; ' +
-  'a payment that still comes for it is refunded in full. The cart goes. Paid and shipped orders, ' +
-  'favorites, reviews, login logs and chat messages stay; open chats are closed. Every refresh ' +
+  'a payment that still comes for it is refunded in full. The cart goes. Paid, shipped and ' +
+  'delivered orders and their statements of withdrawal and return (the buyer reaches them through ' +
+  'the mails and the public form of withdrawal), favorites, reviews, login logs and chat ' +
+  'messages stay; open chats are closed. Every refresh ' +
   'token is removed: an access token cannot be taken back, it works until it expires and the ' +
   'session cannot be renewed after that. The person gets a mail at the old address with the ' +
   'orders still on their way and what happened to the cancelled ones; a mail that fails is only ' +
@@ -551,9 +600,11 @@ const deleteMeSchema = {
     'A local account sends its password. An account of Google, GitHub or LinkedIn has none: ' +
     'its last login must be at most 10 minutes old, otherwise RECENT_LOGIN_REQUIRED (403) asks ' +
     'the page to log out, send the person through the provider again and repeat the request. ' +
-    'With an order waiting for payment, paid or shipped the first request answers ' +
-    'ACCOUNT_HAS_OPEN_ORDERS (409) with details.orders [{ orderId, status, total }] and changes ' +
-    'nothing; the page shows them and repeats with confirmOpenOrders: true. Send the body {} or ' +
+    'With an order waiting for payment, paid or shipped, a delivered one the person may still ' +
+    'withdraw from, or one with a statement of withdrawal or return open, the first request ' +
+    'answers ACCOUNT_HAS_OPEN_ORDERS (409) with details.orders [{ orderId, status, total, ' +
+    'reasons }] (reasons: PAYMENT_WAITING, IN_PROGRESS, WITHDRAWAL_OPEN, RETURN_OPEN) and ' +
+    'changes nothing; the page shows them and repeats with confirmOpenOrders: true. Send the body {} or ' +
     'no body at all without a Content-Type header: a Content-Type: application/json with an empty ' +
     'body is refused with 400 BAD_REQUEST before the route runs. On success the ' +
     `answer clears the auth cookies of this browser. ${ACCOUNT_DELETION}`,
@@ -595,9 +646,10 @@ const deleteMeSchema = {
     },
     409: {
       description:
-        'The account has orders waiting for payment, paid or shipped (ACCOUNT_HAS_OPEN_ORDERS, ' +
-        'details.orders lists them; repeat with confirmOpenOrders: true), or a waiting order ' +
-        'changed at that moment (ACCOUNT_ORDERS_CHANGED, repeat the request).',
+        'The account has orders waiting for payment, paid or shipped, a delivered one it may ' +
+        'still withdraw from, or one with a statement open (ACCOUNT_HAS_OPEN_ORDERS, ' +
+        'details.orders lists them with the reasons; repeat with confirmOpenOrders: true), or a ' +
+        'waiting order changed at that moment (ACCOUNT_ORDERS_CHANGED, repeat the request).',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -615,6 +667,7 @@ const taggedUsersSchema = withOpenApiTag(
     getUsersSchema,
     getMeSchema,
     getMeExportSchema,
+    getUserExportSchema,
     patchMeSchema,
     getUserByIdSchema,
     deleteUserByIdSchema,

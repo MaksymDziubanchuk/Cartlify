@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="x-apple-disable-message-reformatting">
-    <title>{{appName}} — Order #{{orderId}} is cancelled</title>
+    <title>{{appName}} — Money returned for order #{{orderId}}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f3ff;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;">
-      Order #{{orderId}} is cancelled, the payment is refunded in full.
+      Money for order #{{orderId}} is on its way back to you.
     </div>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f5f3ff;">
@@ -18,38 +18,40 @@
             <tr>
               <td style="padding:0 0 12px 0;text-align:left;font-family:Arial,Helvetica,sans-serif;">
                 {{#logoCid}}<img src="cid:{{logoCid}}" alt="{{appName}}" width="160" style="display:block;max-width:160px;height:auto;border:0;outline:none;text-decoration:none;">{{/logoCid}}{{^logoCid}}<div style="font-size:18px;font-weight:800;letter-spacing:0.2px;color:#4c1d95;">{{appName}}</div>{{/logoCid}}
+                {{#code}}<div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 10px 0;">Statement {{code}}</div>{{/code}}
               </td>
             </tr>
 
             <tr>
               <td style="background:#ffffff;border:1px solid #ddd6fe;border-radius:14px;padding:28px;font-family:Arial,Helvetica,sans-serif;">
-                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Order cancelled</div>
-
+                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Money returned</div>
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 14px 0;">
                   Hi{{#userName}} {{userName}}{{/userName}},<br>
-                  Your order <b>#{{orderId}}</b> is cancelled. The payment of <b>{{total}}</b> is refunded in full; your bank shows it within a few days.
+                  We returned <b>{{amount}}</b> for your order <b>#{{orderId}}</b>.<br>
+                  {{wayLine}}
                 </div>
-
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;color:#111827;">
                   <tr>
                     <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Item</td>
-                    <td align="center" style="padding:0 8px 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Qty</td>
-                    <td align="right" style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Total</td>
+                    <td align="center" style="padding:0 0 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Qty</td>
                   </tr>
                   {{#items}}<tr>
                     <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">{{name}}</td>
-                    <td align="center" style="padding:10px 8px;border-bottom:1px solid #ede9fe;">{{quantity}}</td>
-                    <td align="right" style="padding:10px 0;border-bottom:1px solid #ede9fe;white-space:nowrap;">{{lineTotal}}</td>
+                    <td align="center" style="padding:10px 0 10px 8px;border-bottom:1px solid #ede9fe;">{{quantity}}</td>
                   </tr>{{/items}}
-                  {{#deliveryLine}}<tr>
-                    <td colspan="2" align="right" style="padding:10px 8px 0 0;">Delivery</td>
-                    <td align="right" style="padding:10px 0 0 0;white-space:nowrap;">{{deliveryLine}}</td>
-                  </tr>{{/deliveryLine}}
-                  <tr>
-                    <td colspan="2" align="right" style="padding:12px 8px 0 0;font-weight:800;">Refunded</td>
-                    <td align="right" style="padding:12px 0 0 0;font-weight:800;white-space:nowrap;">{{total}}</td>
-                  </tr>
                 </table>
+                {{#deliveryLine}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
+                  {{deliveryLine}}
+                </div>
+                {{/deliveryLine}}
+                {{#deductionLine}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
+                  {{deductionLine}}
+                </div>
+                {{/deductionLine}}
+                {{#withheldLine}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
+                  {{withheldLine}}
+                </div>
+                {{/withheldLine}}
 
                 <div style="padding:18px 0 18px 0;">
                   <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
@@ -75,15 +77,14 @@
                 <hr style="border:none;border-top:1px solid #ddd6fe;margin:18px 0;">
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  This mailbox is not monitored.<br>
-                  Questions about your order? Ask us in the chat on our site.
+                  Questions? Write to us in the chat on our site{{#supportEmail}} or to <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
                 </div>
               </td>
             </tr>
 
             <tr>
               <td style="padding:14px 6px 0 6px;font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;line-height:1.4;">
-                © {{year}} {{appName}}
+                &copy; {{year}} {{appName}}
               </td>
             </tr>
 

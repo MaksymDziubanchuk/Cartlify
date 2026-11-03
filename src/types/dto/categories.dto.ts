@@ -1,3 +1,4 @@
+import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import type { CategoryId, IdParam, UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 import type { ProductImagesUrls } from './products.dto.js';
@@ -26,6 +27,11 @@ export interface CategoryResponseDto {
   parentId?: CategoryId;
   // the picture of the category in three sizes, null without one
   imageUrls: ProductImagesUrls | null;
+  // the rule of withdrawal its products follow while they have none of their own; null follows the
+  // category above it
+  withdrawal: WithdrawalRuleName | null;
+  // only in the answer of a change of the rule: how many live products took another rule by it
+  affectedProducts?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -56,6 +62,8 @@ export interface CreateCategoryBodyDto {
   slug: string;
   description?: string;
   parentId?: CategoryId;
+  // one of the rules of withdrawal, or none (the category follows the one above); checked by the service
+  withdrawal?: string | null;
 }
 
 export interface CreateCategoryDto extends CreateCategoryBodyDto {
@@ -74,6 +82,8 @@ export interface UpdateCategoryBodyDto {
   slug?: string;
   description?: string;
   parentId?: CategoryId;
+  // one of the rules, or null (empty) to follow the category above; checked by the service
+  withdrawal?: string | null;
 }
 
 export interface UpdateCategoryDto extends UpdateCategoryBodyDto {

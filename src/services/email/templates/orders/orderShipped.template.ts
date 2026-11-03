@@ -1,15 +1,24 @@
+import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
+import {
+  withdrawalNoticeOf,
+  withdrawalOfferOf,
+  type WithdrawalOfferArgs,
+} from './withdrawalNotice.js';
 
 export type OrderShippedItem = {
   name: string;
   quantity: number;
   // prices come as numbers or as prisma decimals turned into strings
   totalPrice: number | string;
+  // the rule of withdrawal of the item as the order kept it; the mail names the items that are not
+  // taken back
+  withdrawal?: WithdrawalRuleName;
 };
 
-export type OrderShippedTemplateArgs = {
+export type OrderShippedTemplateArgs = WithdrawalOfferArgs & {
   orderId: number;
   // the order page of the frontend
   orderUrl: string;
@@ -49,6 +58,8 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
   });
   const price = (value: number | string) => money.format(Number(value));
 
+  const noRight = withdrawalNoticeOf(args.items, 'none');
+
   const values = {
     appName,
     orderId: String(args.orderId),
@@ -60,6 +71,9 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
     })),
     deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
+    ...withdrawalOfferOf('shipped', args.items, args),
+    noRightLine: noRight.length ? 'No right of withdrawal applies to these goods:' : '',
+    noRightItems: noRight,
     shippingAddress: args.shippingAddress?.trim() || '',
     carrier: args.carrier?.trim() || '',
     trackingNumber: args.trackingNumber?.trim() || '',

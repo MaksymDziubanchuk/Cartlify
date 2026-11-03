@@ -1,6 +1,8 @@
 import env from '@config/env.js';
 import type { AiMessageDto } from '@services/ai/ai.types.js';
 import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
+import type { ReturnStatus } from '@prisma/client';
+import type { BuyerReturnDto, BuyerReturnStep } from 'types/dto/returns.dto.js';
 
 export type ChatBotActorRole = 'GUEST' | 'USER';
 
@@ -40,6 +42,32 @@ export interface ChatBotProductContextItemDto {
 export type ChatBotOrderStatus =
     'unconfirmed' | 'waiting' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
 
+// a statement of withdrawal or return on an order the way its buyer sees it: where it stands and
+// where the money of its units is. What the shop does with the goods is no part of it
+export interface ChatBotReturnContextItemDto {
+    id: number;
+    statedAt: string;
+    step: BuyerReturnStep;
+    items: Pick<
+        BuyerReturnDto['items'][number],
+        'quantity' | 'amount' | 'deliveryAmount' | 'money' | 'refundedAt' | 'refusal'
+    >[];
+}
+
+// whether the customer may still withdraw from the contract of an order and for which units
+export interface ChatBotWithdrawalContextDto {
+    open: boolean;
+    // the end of the period of the contract, an iso time in utc; none before the delivery starts it
+    endsAt: string | null;
+    // the end of the contract is past and the period is open only by the grace of the shop
+    late?: boolean;
+    // the units still free to state, by item
+    free: { name: string; quantity: number }[];
+    // the items the law gives no right of withdrawal for (a perishable or personalised good): there
+    // is nothing to state for them, which is not the same as all of them being stated already
+    noRight: string[];
+}
+
 // an order of the customer, the cart is none; times are iso in utc
 export interface ChatBotOrderContextItemDto {
     id: number;
@@ -48,9 +76,14 @@ export interface ChatBotOrderContextItemDto {
     createdAt: string;
     paidAt: string | null;
     items: { name: string; quantity: number }[];
-    // the order had an event the bot does not talk about, a cancellation or a send taken back: it
-    // is for an admin
+    // the order had an event the bot does not talk about, a send taken back or a transfer of money
+    // that failed: it is for an admin
     unusual: boolean;
+    // where the order stands as to its statements of withdrawal and return, one value for it all
+    returnStatus: ReturnStatus;
+    // none for an order that cannot be withdrawn from (not paid, not sent, or cancelled)
+    withdrawal: ChatBotWithdrawalContextDto | null;
+    returns: ChatBotReturnContextItemDto[];
     // how it goes to the customer, without the address and the phone; none before the confirmation
     delivery: { method: 'manual' | 'pickup'; price: number; country: string | null } | null;
     // the send on its way, what the admin wrote of it
@@ -106,7 +139,31 @@ const ORDER_STATUS_MEANINGS: Record<ChatBotOrderStatus, string> = {
     paid: 'paid, being prepared for shipping',
     shipped: 'sent, on its way to the customer',
     delivered: 'delivered to the customer',
-    cancelled: 'cancelled by the shop, the payment is refunded',
+    cancelled: 'cancelled, the money goes back to the card',
+};
+
+// where an order stands as to its statements of withdrawal and return
+const RETURN_STATUS_MEANINGS: Record<ReturnStatus, string | null> = {
+    none: null,
+    open: 'a statement of withdrawal or return is open, no money went back yet',
+    open_partial: 'a statement is open and part of the money went back',
+    partial: 'all statements are closed and part of the money went back',
+    full: 'all statements are closed and all the money went back',
+    declined: 'all statements are closed and no money went back',
+};
+
+// where a statement stands for its buyer
+const RETURN_STEP_MEANINGS: Record<BuyerReturnStep, string> = {
+    received: 'registered',
+    proof_provided: 'the customer told of the parcel, the shop has not confirmed it yet',
+    proof_confirmed: 'the shop confirmed the parcel',
+    closed: 'closed',
+};
+
+// what the money of a unit was in the words of the customer: refused by a reason of the shop or
+// because the goods never came
+const REFUSAL_MEANINGS: Record<string, string> = {
+    not_arrived: 'the goods never arrived',
 };
 
 // who the customer is to the admin chat: a guest, a customer without a confirmed email, or one
@@ -399,6 +456,7 @@ const formatOrderContextItem = (
         ...(order.delivery ? [describeOrderDelivery(order.delivery, currency)] : []),
         ...(order.shipment ? [describeShipment(order.shipment)] : []),
         `items: ${items}`,
+        ...describeOrderReturns(order, currency),
     ].join('; ');
 };
 
@@ -428,6 +486,90 @@ const describeShipment = (
     return `send: ${parts.length ? parts.join(', ') : 'no carrier or tracking number was given'}`;
 };
 
+// the money of the units of a statement, one part per state: refunded (with the day), on its way,
+// not refunded yet, refused (with the reason)
+const describeReturnMoney = (
+    items: ChatBotReturnContextItemDto['items'],
+    currency: string,
+): string => {
+    const parts: string[] = [];
+
+    for (const money of ['refunded', 'pending', 'not_refunded', 'refused'] as const) {
+        const rows = items.filter((item) => item.money === money);
+        if (rows.length === 0) continue;
+
+        const units = rows.reduce((sum, item) => sum + item.quantity, 0);
+        const amount =
+            Math.round(rows.reduce((sum, item) => sum + item.amount + item.deliveryAmount, 0) * 100) /
+            100;
+        const days = rows.flatMap((item) => (item.refundedAt ? [item.refundedAt] : [])).sort();
+        const reasons = [
+            ...new Set(rows.flatMap((item) => (item.refusal ? [item.refusal] : []))),
+        ].map((reason) => REFUSAL_MEANINGS[reason] ?? reason.replace(/_/g, ' '));
+
+        parts.push(
+            money === 'refunded'
+                ? `refunded ${amount} ${currency} for ${units} unit(s)${days.length ? ` on ${days.at(-1)} (UTC)` : ''}`
+                : money === 'pending'
+                  ? `${amount} ${currency} for ${units} unit(s) is on its way to the card`
+                  : money === 'not_refunded'
+                    ? `${amount} ${currency} for ${units} unit(s) is not refunded yet`
+                    : `${amount} ${currency} for ${units} unit(s) is refused${reasons.length ? ` (${reasons.join(', ')})` : ''}`,
+        );
+    }
+
+    return parts.join('; ');
+};
+
+// what the customer may still do about the contract of an order, and what they have done
+const describeOrderReturns = (
+    order: ChatBotOrderContextItemDto,
+    currency: string,
+): string[] => {
+    const lines: string[] = [];
+    const withdrawal = order.withdrawal;
+
+    if (withdrawal?.open) {
+        const noRight = withdrawal.noRight.length
+            ? `; no right of withdrawal for ${withdrawal.noRight.join(', ')}`
+            : '';
+
+        lines.push(
+            withdrawal.free.length > 0
+                ? `withdrawal: the customer may still withdraw from the contract for ${withdrawal.free
+                      .map((one) => `${one.name} x ${one.quantity}`)
+                      .join(', ')}, ${
+                      withdrawal.endsAt && withdrawal.late
+                          ? `the period of the contract ended ${withdrawal.endsAt} (UTC), the shop still takes a statement for now`
+                          : withdrawal.endsAt
+                            ? `until ${withdrawal.endsAt} (UTC)`
+                            : 'the period starts with the delivery'
+                  }${noRight}`
+                : // nothing free: the goods have no right, or every unit that has one is stated
+                  withdrawal.noRight.length === order.items.length
+                  ? `withdrawal: the goods of this order have no right of withdrawal (${withdrawal.noRight.join(', ')})`
+                  : withdrawal.noRight.length === 0
+                    ? 'withdrawal: every unit is already in a statement, nothing is left to state'
+                    : `withdrawal: every unit that can be withdrawn from is already in a statement, nothing is left to state${noRight}`,
+        );
+    } else if (withdrawal) {
+        lines.push(
+            `withdrawal: the period is over${withdrawal.endsAt ? ` (it ended ${withdrawal.endsAt} UTC)` : ''}`,
+        );
+    }
+
+    const status = RETURN_STATUS_MEANINGS[order.returnStatus];
+    if (status) lines.push(`returns: ${status}`);
+
+    for (const statement of order.returns) {
+        lines.push(
+            `statement ${statement.id} (stated ${statement.statedAt} UTC): ${RETURN_STEP_MEANINGS[statement.step]}; money: ${describeReturnMoney(statement.items, currency)}`,
+        );
+    }
+
+    return lines;
+};
+
 // builds the orders of the customer for the model, none without orders
 const buildOrdersMessage = (
     orders: ChatBotOrderContextItemDto[],
@@ -443,6 +585,7 @@ const buildOrdersMessage = (
                 (order) => `- ${formatOrderContextItem(order, currency)}`,
             ),
             'Use only these orders when the customer asks about an order; never invent an order, a status or a date.',
+            'You cannot file a withdrawal or a return and you never promise that one will be accepted or refunded. A customer who wants to withdraw from the contract uses the button "Withdraw from the contract here" in the order, a function of the website; point to it. Say only what the order data above tells: whether the customer may still withdraw, until when, for how many units, and where the money is. You do not know what the shop does with the goods after the customer sends them, or why an order was cancelled; say so.',
             ...(orders.some((order) => order.unusual)
                 ? [
                       'An order marked HUMAN ONLY is for an admin: say nothing of its status, items, delivery or payment, tell the customer that an admin will look into it, and set escalate to true with the reason HUMAN_REQUIRED.',

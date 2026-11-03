@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import env from '@config/env.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
 
 // the mail templates live as plain files next to their builders, read the way the logo is read
@@ -78,5 +79,11 @@ export function renderTemplate(file: string, values: TemplateValues): string {
     cache.set(file, source);
   }
 
-  return renderSource(source, values, { html: file.endsWith('.html'), name: file });
+  // every mail ends with where to write: the chat of the site, or the address the shop answers
+  // from (the reply-to of the mails); a template may give its own
+  return renderSource(
+    source,
+    { supportEmail: env.EMAIL_REPLY_TO, ...values },
+    { html: file.endsWith('.html'), name: file },
+  );
 }

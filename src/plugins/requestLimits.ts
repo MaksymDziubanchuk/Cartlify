@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import env from '@config/env.js';
+import { isWithdrawalCode } from '@helpers/withdrawalCode.js';
 import { TooManyRequestsError } from '@utils/errors.js';
 
 // The limits of the routes a script would abuse, on top of the limit of every route
@@ -69,6 +70,52 @@ export const REQUEST_LIMITS = {
     },
     windowMs: 60 * MINUTE,
   },
+  // a statement of withdrawal from the account: a script would fill the queue of the admins
+  withdrawalPerUser: {
+    get max() {
+      return env.LIMIT_WITHDRAWAL_PER_USER;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  // the public form of withdrawal, its units, its routing and the proof by the code: nobody is signed
+  // in, so the attempts count by address, by order and by the facts of a recipient from every
+  // address (a script guessing the name of the recipient of an order from many addresses, trying the
+  // orders of one person, or filling the queue of the admins). A request with the code of the order
+  // counts nothing for the order and the facts: it is the buyer's, so nobody can use up their
+  // requests
+  withdrawalFormPerAddress: {
+    get max() {
+      return env.LIMIT_WITHDRAWAL_FORM_PER_ADDRESS;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  withdrawalFormPerOrder: {
+    get max() {
+      return env.LIMIT_WITHDRAWAL_FORM_PER_ORDER;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  withdrawalFormPerData: {
+    get max() {
+      return env.LIMIT_WITHDRAWAL_FORM_PER_DATA;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  // the proof of a parcel is written again until the shop confirms it, each time a line of the log
+  proofPerUser: {
+    get max() {
+      return env.LIMIT_WITHDRAWAL_PER_USER * 3;
+    },
+    windowMs: 60 * MINUTE,
+  },
+  // the button "call an admin" of a chat the bot could not answer; a script would fill the queue of
+  // the admins
+  chatCallAdminPerUser: {
+    get max() {
+      return env.LIMIT_CHAT_CALL_ADMIN_PER_USER;
+    },
+    windowMs: 60 * MINUTE,
+  },
   // a comment of a review asks the model of openai; a refused one writes nothing and comes again
   reviewPerUser: {
     get max() {
@@ -128,7 +175,8 @@ class WindowCounter {
   }
 }
 
-type KeyOf = (req: FastifyRequest) => string;
+// the key a request counts under; none: the request does not count for this limit
+type KeyOf = (req: FastifyRequest) => string | null;
 
 // a preHandler that refuses the request over the limit with 429 RATE_LIMITED, naming the limit
 // and the seconds to wait (the retry-after header too)
@@ -136,7 +184,10 @@ function limitBy(name: string, limit: Limit, keyOf: KeyOf) {
   const counter = new WindowCounter(limit);
 
   return async function requestLimit(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-    const wait = counter.take(keyOf(req));
+    const key = keyOf(req);
+    if (key === null) return;
+
+    const wait = counter.take(key);
     if (wait === null) return;
 
     reply.header('retry-after', String(wait));
@@ -148,6 +199,39 @@ const byAddress: KeyOf = (req) => `ip:${req.ip}`;
 const byEmail: KeyOf = (req) =>
   `email:${emailKey((req.body as { email?: unknown } | undefined)?.email)}`;
 const byUser: KeyOf = (req) => `user:${String(req.user?.id ?? req.ip)}`;
+// one order from every address, for the requests without its code: the code comes with the mails
+// of the buyer and cannot be guessed (the limit of the address stops a try), so a request with it
+// is the buyer's and counts nothing, and nobody can use up the requests of the real buyer
+const byOrderWithoutCode: KeyOf = (req) => {
+  const body = req.body as { orderId?: unknown; code?: unknown } | undefined;
+  const orderId = Number(body?.orderId);
+  if (Number.isSafeInteger(orderId) && orderId > 0 && isWithdrawalCode(orderId, body?.code)) {
+    return null;
+  }
+  return `order:${String(body?.orderId ?? '')}`;
+};
+
+// the facts of a recipient from every address, for the requests without the code of the order: the
+// phone by its digits, or the name when no phone is given; only a hash is kept in memory. A request
+// that gives neither (the routing of a link, the proof) does not count here
+const byDataWithoutCode: KeyOf = (req) => {
+  const body = req.body as
+    { orderId?: unknown; code?: unknown; phone?: unknown; recipientName?: unknown } | undefined;
+  const orderId = Number(body?.orderId);
+  if (Number.isSafeInteger(orderId) && orderId > 0 && isWithdrawalCode(orderId, body?.code)) {
+    return null;
+  }
+  const phone = String(body?.phone ?? '').replace(/\D/g, '');
+  const name = String(body?.recipientName ?? '')
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+  if (!phone && !name) return null;
+  return `data:${createHash('sha256')
+    .update(phone ? `phone:${phone}` : `name:${name}`)
+    .digest('hex')}`;
+};
 
 // the wrong passwords of each account
 const loginFailures = new Map<string, { count: number; pausedUntil: number; lastAt: number }>();
@@ -211,4 +295,12 @@ export const requestLimits = {
   passwordChange: [limitBy('passwordChange', REQUEST_LIMITS.passwordChangePerUser, byUser)],
   export: [limitBy('export', REQUEST_LIMITS.exportPerUser, byUser)],
   review: [limitBy('review', REQUEST_LIMITS.reviewPerUser, byUser)],
+  chatCallAdmin: [limitBy('chatCallAdmin', REQUEST_LIMITS.chatCallAdminPerUser, byUser)],
+  withdrawal: [limitBy('withdrawal', REQUEST_LIMITS.withdrawalPerUser, byUser)],
+  proof: [limitBy('proof', REQUEST_LIMITS.proofPerUser, byUser)],
+  withdrawalForm: [
+    limitBy('withdrawalForm', REQUEST_LIMITS.withdrawalFormPerAddress, byAddress),
+    limitBy('withdrawalForm', REQUEST_LIMITS.withdrawalFormPerOrder, byOrderWithoutCode),
+    limitBy('withdrawalForm', REQUEST_LIMITS.withdrawalFormPerData, byDataWithoutCode),
+  ],
 };

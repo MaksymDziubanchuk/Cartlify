@@ -54,6 +54,11 @@ declare global {
       LIMIT_PASSWORD_CHANGE_PER_USER?: string;
       LIMIT_EXPORT_PER_USER?: string;
       LIMIT_REVIEW_PER_USER?: string;
+      LIMIT_CHAT_CALL_ADMIN_PER_USER?: string;
+      LIMIT_WITHDRAWAL_PER_USER?: string;
+      LIMIT_WITHDRAWAL_FORM_PER_ADDRESS?: string;
+      LIMIT_WITHDRAWAL_FORM_PER_ORDER?: string;
+      LIMIT_WITHDRAWAL_FORM_PER_DATA?: string;
       LOGIN_FAILURES_BEFORE_PAUSE?: string;
 
       UPLOAD_MAX_BYTES?: string;
@@ -67,6 +72,7 @@ declare global {
       VERIFY_TTL_MS?: string;
       ORDER_RESERVATION_MINUTES?: string;
       STRIPE_PAGE_AFTER_RESERVATION_MINUTES?: string;
+      WITHDRAWAL_GRACE_DAYS?: string;
       REVIEW_CHECK_ENABLED?: string;
       DELIVERY_METHODS?: string;
       DELIVERY_FLAT_PRICE?: string;
@@ -86,6 +92,7 @@ declare global {
       WEB_PAGE_CHECKOUT_SUCCESS?: string;
       WEB_PAGE_CHECKOUT_CANCEL?: string;
       WEB_PAGE_ORDER?: string;
+      WEB_PAGE_WITHDRAWAL?: string;
       WEB_PAGE_PRODUCT_REVIEWS?: string;
 
       CLOUDINARY_CLOUD_NAME: string;
@@ -128,6 +135,7 @@ declare global {
 
       STRIPE_SECRET_KEY: string;
       STRIPE_WEBHOOK_SECRET: string;
+      WITHDRAWAL_CODE_SECRET: string;
       STRIPE_CURRENCY: string;
     }
   }
@@ -141,6 +149,24 @@ dotenv.config({ quiet: true });
 function required(name: string): string {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env variable: ${name}`);
+  return value;
+}
+
+// the code of a link of withdrawal is an HMAC of the number of the order, which every buyer reads in
+// their mail: a short secret could be found by trying them offline, and with it the code of every
+// order, so a secret is at least this long (production requires one, elsewhere none means no code)
+const WITHDRAWAL_CODE_SECRET_MIN = 32;
+function withdrawalCodeSecret(nodeEnv: string): string {
+  const value =
+    nodeEnv === 'production'
+      ? required('WITHDRAWAL_CODE_SECRET').trim()
+      : process.env.WITHDRAWAL_CODE_SECRET?.trim() || '';
+
+  if (value && value.length < WITHDRAWAL_CODE_SECRET_MIN) {
+    throw new Error(
+      `Invalid env variable: WITHDRAWAL_CODE_SECRET must be at least ${WITHDRAWAL_CODE_SECRET_MIN} characters`,
+    );
+  }
   return value;
 }
 
@@ -158,6 +184,19 @@ function positiveInt(name: string, fallback: number, max?: number): number {
   }
   if (max !== undefined && value > max) {
     throw new Error(`Invalid env variable: ${name} must be at most ${max}`);
+  }
+
+  return value;
+}
+
+// a whole number from min to max, fallback when unset; the message names the bounds, not the value
+function boundedInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+
+  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`Invalid env variable: ${name} must be a whole number from ${min} to ${max}`);
   }
 
   return value;
@@ -490,6 +529,8 @@ export default {
   WEB_PAGE_CHECKOUT_CANCEL: webPage('WEB_PAGE_CHECKOUT_CANCEL', '/checkout/cancel', false),
   // the mails of an order link to it
   WEB_PAGE_ORDER: webPage('WEB_PAGE_ORDER', '/orders/{id}', true),
+  // the page of the form of withdrawal the mails link to; the code of the order follows the # of the link
+  WEB_PAGE_WITHDRAWAL: webPage('WEB_PAGE_WITHDRAWAL', '/orders/{id}/withdrawal', true),
   // the mail of a delivered order asks to rate each product there
   WEB_PAGE_PRODUCT_REVIEWS: webPage('WEB_PAGE_PRODUCT_REVIEWS', '/products/{id}#reviews', true),
 
@@ -546,6 +587,11 @@ export default {
   LIMIT_PASSWORD_CHANGE_PER_USER: positiveInt('LIMIT_PASSWORD_CHANGE_PER_USER', 10),
   LIMIT_EXPORT_PER_USER: positiveInt('LIMIT_EXPORT_PER_USER', 1),
   LIMIT_REVIEW_PER_USER: positiveInt('LIMIT_REVIEW_PER_USER', 30),
+  LIMIT_CHAT_CALL_ADMIN_PER_USER: positiveInt('LIMIT_CHAT_CALL_ADMIN_PER_USER', 10),
+  LIMIT_WITHDRAWAL_PER_USER: positiveInt('LIMIT_WITHDRAWAL_PER_USER', 10),
+  LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: positiveInt('LIMIT_WITHDRAWAL_FORM_PER_ADDRESS', 20),
+  LIMIT_WITHDRAWAL_FORM_PER_ORDER: positiveInt('LIMIT_WITHDRAWAL_FORM_PER_ORDER', 5),
+  LIMIT_WITHDRAWAL_FORM_PER_DATA: positiveInt('LIMIT_WITHDRAWAL_FORM_PER_DATA', 5),
   // the wrong passwords of an account before its login pauses for a minute, doubling after
   LOGIN_FAILURES_BEFORE_PAUSE: positiveInt('LOGIN_FAILURES_BEFORE_PAUSE', 5),
 
@@ -578,6 +624,11 @@ export default {
   // the minutes a confirmed order holds its units for the payment, and the minutes stripe keeps
   // its payment page open after them
   ...reservationMinutes(),
+
+  // the days after the end of the period of withdrawal in which the shop still takes a withdrawal:
+  // the end of a period that falls on a holiday moves on, the grace covers it. 4 unless given
+  // (Easter), from 0 to 30
+  WITHDRAWAL_GRACE_DAYS: boundedInt('WITHDRAWAL_GRACE_DAYS', 4, 0, 30),
 
   // the comments of reviews are checked by the model and the moderation of openai before they are
   // written (src/routes/api/products/services/helpers/reviewCheck.helper.ts); false publishes
@@ -672,4 +723,9 @@ export default {
       ? required('STRIPE_WEBHOOK_SECRET')
       : process.env.STRIPE_WEBHOOK_SECRET || '',
   STRIPE_CURRENCY: currencyWithCents('STRIPE_CURRENCY', 'eur'),
+
+  // signs the number of an order into the code of the links of withdrawal in the mails: production
+  // does not start without it, elsewhere the start warns (startupWarnings) and the links go without
+  // a code, so every form of withdrawal is checked by hand
+  WITHDRAWAL_CODE_SECRET: withdrawalCodeSecret(NODE_ENV),
 };

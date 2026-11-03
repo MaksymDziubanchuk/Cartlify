@@ -56,12 +56,12 @@ const postCategory: ControllerRouter<
   {},
   CreateCategoryResponseDto
 > = async (req, reply) => {
-  const { name, slug, description, parentId } = req.body;
+  const { name, slug, description, parentId, withdrawal } = req.body;
   const { id: actorId, role: actorRole } = req.user as User;
 
   const args = pickDefined<CreateCategoryDto>(
     { name, slug, actorId, actorRole },
-    { description, parentId },
+    { description, parentId, withdrawal },
   );
 
   const result = await categoriesServices.createCategory(args);
@@ -75,12 +75,12 @@ const patchCategory: ControllerRouter<
   UpdateCategoryResponseDto
 > = async (req, reply) => {
   const categoryId = Number(req.params.categoryId);
-  const { name, slug, description, parentId } = req.body;
+  const { name, slug, description, parentId, withdrawal } = req.body;
   const { id: actorId, role: actorRole } = req.user as User;
 
   const args = pickDefined<UpdateCategoryDto>(
     { categoryId, actorId, actorRole },
-    { name, slug, description, parentId },
+    { name, slug, description, parentId, withdrawal },
   );
 
   const result = await categoriesServices.updateCategory(args);

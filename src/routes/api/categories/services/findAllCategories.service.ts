@@ -76,6 +76,7 @@ export async function findAllCategories(
         description: true,
         parentId: true,
         imageUrl: true,
+        withdrawal: true,
         createdAt: true,
         updatedAt: true,
       },

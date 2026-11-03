@@ -2,6 +2,7 @@ import type { Prisma } from '@prisma/client';
 
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { readProductWithdrawals } from '@db/productWithdrawal.helper.js';
 import { InternalError, NotFoundError } from '@utils/errors.js';
 
 import { readCategoryPath } from './productCategory.helper.js';
@@ -110,12 +111,15 @@ export async function buildProductCard(
   }
 
   const extras = (await readProductExtras([product]))(product);
+  const withdrawal = (await readProductWithdrawals(db, [productId])).get(productId);
+  if (!withdrawal) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
   return {
     product: mapProductCard({
       product,
       categoryPath: await readCategoryPath(product.category.id, db),
       extras,
+      withdrawal,
       ...(gallery ? { gallery } : {}),
       view,
     }),

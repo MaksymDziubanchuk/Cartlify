@@ -15,6 +15,8 @@ import {
   USERS_LIST_SORT_ORDERS,
 } from '@routes/api/users/services/helpers/usersList.helper.js';
 
+import { returnStatusField } from './returns.dtoSchemas.js';
+
 const usersGetByIdParamsSchema = {
   $id: 'usersGetByIdParamsSchema',
   type: 'object',
@@ -72,11 +74,12 @@ const usersAdminProfileListsSchema = {
           type: 'string',
           enum: ['pending', 'unconfirmed', 'waiting', 'paid', 'shipped', 'delivered', 'cancelled'],
         },
+        returnStatus: returnStatusField,
         total: { type: 'number' },
         createdAt: dateTime,
         updatedAt: dateTime,
       },
-      required: ['id', 'status', 'total', 'createdAt', 'updatedAt'],
+      required: ['id', 'status', 'returnStatus', 'total', 'createdAt', 'updatedAt'],
     },
   },
   reviews: {
@@ -319,6 +322,32 @@ const usersGetByIdResponseSchema = {
     avatarRemovalsLimit: {
       type: 'number',
       description: 'Admin or root only: the removals the rules allow (AVATAR_REMOVALS_LIMIT).',
+    },
+    returns: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'Admin or root only: the statements of withdrawal and of return of the orders of the ' +
+        'user, all and the open ones, and the request to the list that shows them.',
+      properties: {
+        total: { type: 'integer' },
+        open: { type: 'integer' },
+        list: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            path: { type: 'string', enum: ['/api/returns'] },
+            query: {
+              type: 'object',
+              additionalProperties: false,
+              properties: { userId: { type: 'string' } },
+              required: ['userId'],
+            },
+          },
+          required: ['path', 'query'],
+        },
+      },
+      required: ['total', 'open', 'list'],
     },
     reviewRemovals: {
       type: 'number',
@@ -569,7 +598,8 @@ const usersDeleteMeBodySchema = {
       type: 'boolean',
       description:
         'true deletes the account although it has orders waiting for payment, paid or shipped, ' +
-        'after the user saw them in the ACCOUNT_HAS_OPEN_ORDERS answer.',
+        'a delivered one it may still withdraw from, or one with a statement open, after the ' +
+        'user saw them in the ACCOUNT_HAS_OPEN_ORDERS answer.',
     },
   },
 } as const;
@@ -604,7 +634,7 @@ const usersExportResponseSchema = {
         'id, email, name, locale, phone, avatarUrl, role, authProvider, isVerified, createdAt, updatedAt.',
     },
     orders: exportRows(
-      'The orders with their status, total, dates, items (productId, variantId, name, quantity, prices: the name and the prices the order was confirmed with), the delivery (method, recipient, address, note, price) and the sends (carrier, tracking number and link, dates).',
+      'The orders with their status, total, dates, items (productId, variantId, name, quantity, prices: the name and the prices the order was confirmed with), the delivery (method, recipient, address, note, price), the sends (carrier, tracking number and link, dates) and the returns: the statements of withdrawal or return made on the order (id, extendsId, statedAt, source, basis, reason, description, contact name and email, ip and userAgent of a statement the person made while not emptied (none for one an admin made; for a form without a code only when the shop took it for the buyer: money went back for it or its email is the one of the account, never when root closed it as not of the buyer; the description of a statement an admin made is a note of the shop and is not given), proof: the parcel the person told of, closedAt, shippingReimbursement: what the shop paid back for sending the goods back outside the app (amount, at, method), items: productId, variantId, name, quantity, money, amount, deliveryShare, shippingDeduction (the cost of the way back taken off), refundedAt, refusal: why the money was refused (the reason the goods were not accepted, the code root closed the row with, or not_arrived), outside: the way and the note of money sent outside the app). What became of the goods, what the shop paid to carry them back, the ids of the provider, the admins who acted and the notes of root on a lowered amount are not given.',
     ),
     favorites: exportRows(
       'The favorite variants: productId, variantId, name (of the variant), createdAt.',

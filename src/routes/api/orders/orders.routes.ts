@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
+import { requestLimits } from '../../../plugins/requestLimits.js';
 import { ordersSchema } from './orders.schemas.js';
 import { ordersController } from './orders.controllers.js';
 
@@ -140,6 +141,40 @@ export default async function ordersRouter(app: FastifyInstance) {
     ordersController.deleteOrderItems,
   );
 
+  // the buyer withdraws from the contract, and tells how they sent the goods back
+  app.post(
+    '/:orderId/withdrawal',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['USER']),
+        validateId('orderId'),
+        ...requestLimits.withdrawal,
+      ],
+      // a withdrawal from the whole order may come without a body
+      preValidation: async (req) => {
+        if (req.body === undefined || req.body === null) (req as any).body = {};
+      },
+      schema: ordersSchema.postWithdrawalSchema,
+    },
+    ordersController.postWithdrawal,
+  );
+
+  app.post(
+    '/:orderId/returns/:returnId/proof',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['USER']),
+        validateId('orderId'),
+        validateId('returnId'),
+        ...requestLimits.proof,
+      ],
+      schema: ordersSchema.postReturnProofSchema,
+    },
+    ordersController.postReturnProof,
+  );
+
   app.post(
     '/:orderId/cancel-payment',
     {
@@ -147,18 +182,5 @@ export default async function ordersRouter(app: FastifyInstance) {
       schema: ordersSchema.postCancelPaymentSchema,
     },
     ordersController.postCancelPayment,
-  );
-
-  app.post(
-    '/:orderId/cancel',
-    {
-      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('orderId')],
-      // a cancel may come without a body: only a manual order that was shipped needs an answer
-      preValidation: async (req) => {
-        if (req.body === undefined || req.body === null) (req as any).body = {};
-      },
-      schema: ordersSchema.postCancelOrderSchema,
-    },
-    ordersController.postCancelOrder,
   );
 }

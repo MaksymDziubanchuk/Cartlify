@@ -1,4 +1,6 @@
+import type { ProductWithdrawalRow } from '@db/productWithdrawal.helper.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
+import { withdrawalOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { buildImageUrls } from '@utils/cloudinary.util.js';
 
 import type {
@@ -31,6 +33,8 @@ export const productResponseSelect = {
   manufacturerId: true,
   euResponsibleId: true,
   warnings: true,
+  // the rule of its own; the rule it has is read apart (readProductWithdrawals)
+  withdrawal: true,
   views: true,
   popularity: true,
   popularityOverride: true,
@@ -50,6 +54,7 @@ export type ProductResponseRow = {
   manufacturerId: number;
   euResponsibleId: number | null;
   warnings: string | null;
+  withdrawal: WithdrawalRuleName | null;
   views: number;
   popularity: number;
   popularityOverride: number | null;
@@ -145,11 +150,13 @@ export function mapProductCard(args: {
   product: ProductResponseRow;
   categoryPath: ProductCategoryDto[];
   extras: ProductExtras;
+  // the rule of withdrawal the product has and where it comes from (readProductWithdrawals)
+  withdrawal: ProductWithdrawalRow;
   // read for an admin only
   gallery?: GalleryImageDto[];
   view: ProductView;
 }): ProductCardDto {
-  const { product, categoryPath, extras, gallery, view } = args;
+  const { product, categoryPath, extras, withdrawal, gallery, view } = args;
   const fields = buyerFieldsOf(product);
 
   return {
@@ -161,6 +168,16 @@ export function mapProductCard(args: {
     warnings: product.warnings,
     // the instructions and certificates, in the order an admin gave them
     documents: extras.documents,
+    // what the law lets a buyer do with the goods; an admin sees where the rule comes from too
+    withdrawal:
+      view === 'admin'
+        ? {
+            ...withdrawalOf(withdrawal.rule),
+            own: product.withdrawal,
+            source: withdrawal.source,
+            categoryId: withdrawal.categoryId,
+          }
+        : withdrawalOf(withdrawal.rule),
     ...(view === 'admin' ? { ...adminFieldsOf(product), gallery: gallery ?? [] } : {}),
   };
 }

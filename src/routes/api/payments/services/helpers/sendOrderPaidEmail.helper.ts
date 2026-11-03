@@ -3,12 +3,14 @@ import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { deliveryMailParts } from '@helpers/deliveryText.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
+import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPaid.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 import { currencyOf } from '../../providers/index.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
+import { withdrawalPeriodDaysOf } from '@routes/api/orders/services/helpers/withdrawal.helper.js';
 
 export type OrderMailLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -36,6 +38,7 @@ function loadOrder(orderId: number) {
         userId: true,
         total: true,
         paymentProvider: true,
+        withdrawalDays: true,
         delivery: {
           select: {
             method: true,
@@ -60,6 +63,7 @@ function loadOrder(orderId: number) {
             totalPrice: true,
             productName: true,
             variantId: true,
+            withdrawal: true,
             product: { select: { name: true } },
           },
         },
@@ -124,6 +128,8 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
         quantity: item.quantity,
         unitPrice: item.unitPrice.toString(),
         totalPrice: item.totalPrice.toString(),
+        // the rule the item kept at the confirmation
+        withdrawal: item.withdrawal,
       })),
       total: order.total.toString(),
       // the money of the provider that took it
@@ -134,6 +140,9 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       // what the buyer pays for the delivery, none for a pickup
       deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
       attachedDocuments: documents.map((doc) => doc.kind),
+      // the link of the page of withdrawal, with the code of the order after the #
+      withdrawalUrl: withdrawalLinkOf(order.id),
+      withdrawalDays: withdrawalPeriodDaysOf(order.withdrawalDays),
       logoCid: SHOP_LOGO_CID,
     });
 

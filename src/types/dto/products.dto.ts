@@ -1,3 +1,4 @@
+import type { WithdrawalRight, WithdrawalRuleName, WithdrawalSource } from '@helpers/withdrawal.js';
 import type { CategoryId, IdParam, ProductId, ReviewId, UserId } from '../ids.js';
 import type { Role } from 'types/user.js';
 import type { MultipartFile } from '@fastify/multipart';
@@ -240,15 +241,30 @@ export interface FindProductByIdDto {
   actorRole: Role;
 }
 
+// what the law lets a buyer do with the goods when they withdraw: the rule (a buyer's page words
+// it) and the kind it makes (full: freely, conditional: only while sealed, none: not at all). An
+// admin also gets where the rule comes from: its own value, the source (the product, a category,
+// the default) and the category it comes from
+export interface ProductWithdrawalDto {
+  rule: WithdrawalRuleName;
+  right: WithdrawalRight;
+  // admin and root only: the rule the product has of its own, null when it follows its category
+  own?: WithdrawalRuleName | null;
+  source?: WithdrawalSource;
+  categoryId?: number | null;
+}
+
 // the product of the card: the way to its category from the top of the tree, and the safety and
 // origin data (GPSR): the manufacturer, the person responsible in the EU, the warnings; the
-// instructions and certificates. An admin gets the gallery with the variants that show each picture
+// instructions and certificates; the rule of withdrawal. An admin gets the gallery with the
+// variants that show each picture
 export type ProductCardDto = Omit<ProductResponseDto, 'category'> & {
   category: ProductCategoryDto & { path: ProductCategoryDto[] };
   manufacturer: ProductPartyDto;
   euResponsible: ProductPartyDto | null;
   warnings: string | null;
   documents: ProductDocumentDto[];
+  withdrawal: ProductWithdrawalDto;
   // admin and root only
   gallery?: GalleryImageDto[];
 };
@@ -356,6 +372,9 @@ export interface CreateProductDto {
   euResponsibleId?: unknown;
   euResponsible?: unknown;
   warnings?: unknown;
+  // the rule of withdrawal of its own: one of the rules, or none (the product follows its category);
+  // checked by the service
+  withdrawal?: unknown;
   // the ids of the documents of the directory the product names, in their order: the text of a form
   // (ids with a comma between)
   documentIds?: unknown;
@@ -384,6 +403,9 @@ export interface UpdateProductBodyDto {
   manufacturerId?: number;
   euResponsibleId?: number | null;
   warnings?: string | null;
+  // the rule of withdrawal of its own; null or empty gives it up and the product follows its
+  // category. Checked by the service (WITHDRAWAL_RULE_INVALID)
+  withdrawal?: string | null;
   // the documents the product names, by their ids in their order, written whole; null or empty
   // takes every document away
   documentIds?: number[] | null;

@@ -47,6 +47,12 @@ const adminStatsResponseExample = {
       last7d: 25,
       last30d: 105,
     },
+    returned: {
+      total: 320.5,
+      inPeriod: 80,
+      last7d: 0,
+      last30d: 80,
+    },
     averageOrderValue: 239.44,
     itemsSold: 148,
   },
@@ -107,11 +113,13 @@ const getStatsSchema = {
   summary: 'Get admin stats',
   description:
     'Returns aggregated dashboard statistics for users, orders, products and reviews. The period ' +
-    'is [from, to), all time until now unless given: the money, the units sold, the average order ' +
-    'and the tops count the orders paid in it (paidAt) and not cancelled, the reviews and the ' +
-    'users the ones made in it. The users are the accounts of buyers, admins and root are left ' +
-    'out. `money` is the income, the expenses and the margins of the period, counted the way ' +
-    '`summary` of GET /api/admin/reports/accounting counts them, in the same snapshot as the rest. ' +
+    'is [from, to), all time until now unless given: the money, the units sold and the average ' +
+    'order count the orders paid in it (paidAt), cancelled later or not, `orders.returned` what ' +
+    'went back with the returns in it (by the time the money went back), the tops the net (the ' +
+    'sales less the returns), the reviews and the users the ones made in it. The users are the ' +
+    'accounts of buyers, admins and root are left out. `money` is the income, the expenses and ' +
+    'the margins of the period, counted the way `summary` of GET /api/admin/reports/accounting ' +
+    'counts them, in the same snapshot as the rest. ' +
     'The top of products (`topProductsByRevenue`) counts a product as the sum of all its ' +
     'variants; the top of variants (`topVariantsByRevenue`) lists the variants of the most money, ' +
     'each as `{ product, variant, revenue, quantitySold }`, so a product sold in two variants is ' +
@@ -150,13 +158,15 @@ const getStatsSchema = {
 } satisfies FastifySchema;
 
 const nothing = { units: 0, value: 0 };
+const nothingReturned = { units: 0, revenue: 0, cost: 0 };
 
 // the delivery of all orders in a period, as the report of the whole shop gives it
 const deliveryExample = {
   income: { orders: 9, revenue: 45 },
   refunded: { orders: 1, revenue: 5 },
   shipping: { sends: 10, cost: 36.5, withoutCost: 2 },
-  result: 8.5,
+  returnShipping: { sends: 1, cost: 4.5, withoutCost: 0, deducted: 0, reimbursed: 0 },
+  result: 3.5,
 };
 
 // Schema for the accounting report
@@ -165,20 +175,25 @@ const getAccountingReportSchema = {
   summary: 'Get the accounting report',
   description:
     'The money of a period, from `from` (taken in) to `to` (left out), in the money of the ' +
-    'shop: the sales of the orders paid in it and not cancelled, at the prices they were paid ' +
-    'with, their cost at the costs of the batches they took and the margin; told apart and in no ' +
-    'margin, the paid orders cancelled in it, whose money went back; `summary`, the income (the ' +
-    'items, the delivery, together), the expenses (what the items cost, the write-offs, the ' +
-    'sends, together) and the margins (the items, the delivery, all of it); the batches taken in ' +
-    'during it by source; the units written off in it by reason, at the costs of their batches; ' +
-    'and what the batches have left now. An order cancelled later is taken out of the period it ' +
-    'was paid in: the report of that period changes. `productIds` keeps only the variants of ' +
+    'shop: the sales of the orders paid in it (cancelled later or not), at the prices they were ' +
+    'paid with, their cost at the costs of the batches they took and the margin; the returns, ' +
+    'the rows of the statements whose money went back in it (by the time it went back), their ' +
+    'money and the cost of the units that came back, by the kind of the statement (`byKind`: ' +
+    'the right of withdrawal, or the reason an admin gave); the net, the sales less the ' +
+    'returns; `summary`, the income (the net items, the delivery less what went back, ' +
+    'together), the expenses (what the net items cost, the write-offs, the sends, together) and ' +
+    'the margins (the items, the delivery, all of it); the batches taken in during it by ' +
+    'source; the units written off in it by reason, at the costs of their batches (also the ' +
+    'goods that came back and went out at once, as `customer_return`); and the stock, read from ' +
+    'the stock log: at the start of the period, what came in, what went out, at the end, and ' +
+    'apart the units on their way back. Every event is in the period it happened in: a return ' +
+    'never changes the period its order was paid in. `productIds` keeps only the variants of ' +
     'these products, `variantIds` only these variants, `categoryId` the products of a category, ' +
     'with its whole branch unless `branch=false`. All of it comes from one snapshot. ' +
     'The `delivery` is of all orders and of no product, so it is none (null) in a report of some ' +
-    'products, variants or of a category: what the orders paid in the period and not cancelled paid for ' +
-    'it (by the time of the payment), told apart what went back with the cancels (by the time of ' +
-    'the cancel), what the sends ' +
+    'products, variants or of a category: what the orders paid in the period paid for it (by ' +
+    'the time of the payment), what went back with the returns (by the time the money went ' +
+    'back), what the sends ' +
     'cost the shop (by the time they were sent; the ones whose cost is not written are counted ' +
     'apart in `withoutCost`), and the result. ' +
     'This operation is restricted to privileged users.',
@@ -197,7 +212,23 @@ const getAccountingReportSchema = {
           period: { from: '2026-10-01T00:00:00.000Z', to: '2026-11-01T00:00:00.000Z' },
           currency: 'eur',
           sales: { orders: 12, units: 30, revenue: 1500, cost: 900, margin: 600 },
-          cancellations: { orders: 1, units: 2, revenue: 100, cost: 60 },
+          returns: {
+            orders: 1,
+            units: 2,
+            revenue: 100,
+            cost: 60,
+            byKind: {
+              withdrawal: { units: 2, revenue: 100, cost: 60 },
+              refused: nothingReturned,
+              defect: nothingReturned,
+              wrong_item: nothingReturned,
+              damaged: nothingReturned,
+              goodwill: nothingReturned,
+              shop_cancel: nothingReturned,
+              other: nothingReturned,
+            },
+          },
+          net: { units: 28, revenue: 1400, cost: 840, margin: 560, marginPercent: 40 },
           summary: {
             income: { items: 1500, delivery: 45, total: 1545 },
             expenses: { costOfGoods: 900, writeOffs: 90, shipping: 36.5, total: 1026.5 },
@@ -222,9 +253,16 @@ const getAccountingReportSchema = {
               shortage: { units: 1, value: 30 },
               returned_to_supplier: nothing,
               other: nothing,
+              customer_return: nothing,
             },
           },
-          stock: { units: 120, value: 3600 },
+          stock: {
+            opening: { units: 100, value: 3000 },
+            received: { units: 50, value: 1500 },
+            left: { units: 30, value: 900 },
+            closing: { units: 120, value: 3600 },
+            onTheWayBack: { units: 1, value: 30 },
+          },
           delivery: deliveryExample,
         },
       ],
@@ -286,11 +324,13 @@ const reportErrors = (what: string, { ids = false, cursor = true } = {}) => ({
 });
 
 const MONEY_TEXT =
-  'For each row: the sales of the orders paid in the period and not cancelled, at their prices ' +
-  'and the costs of the batches they took, with the margin and its percent of the revenue (none ' +
-  'without a revenue); told apart and in no margin, the paid orders cancelled in it; the units ' +
-  'written off, and the margin after them (`afterWriteOffs`); the units taken in, at their ' +
-  'costs. An order cancelled later is taken out of the period it was paid in. ';
+  'For each row: the sales of the orders paid in the period (cancelled later or not), at their ' +
+  'prices and the costs of the batches they took, with the margin and its percent of the ' +
+  'revenue (none without a revenue); the returns, the rows whose money went back in it (by ' +
+  'the time it went back), and the net, the sales less the returns; the units written off, and ' +
+  'the margin of the net after them (`afterWriteOffs`); the units taken in, at their costs; and ' +
+  'the stock (`stock`: opening, received, left, closing, from the stock log, and the units on ' +
+  'their way back). Every event is in the period it happened in. ';
 
 const CSV_TEXT =
   '`format=csv` gives the same as a csv file for the accountant (utf-8 with a byte order ' +
@@ -485,7 +525,7 @@ const getStockBatchesSchema = {
   description:
     'Each batch of a variant (`variant`, with its `product`) with what it came in with ' +
     '(`quantity`, `unitCost`), what is left of it ' +
-    '(`remaining`, `value` at its cost), the units of the paid orders (`sold`, a cancel puts ' +
+    '(`remaining`, `value` at its cost), the units of the paid orders (`sold`, a return puts ' +
     'them back) and the units written off; the delivery it came with (`deliveryId`, the ' +
     'supplier, the invoice, the note and the admin who took it in); `expired` when its last ' +
     'good day is behind the day of the shop (SHOP_TIME_ZONE): such units are not sold and wait ' +
@@ -511,8 +551,9 @@ const getStockMovementsSchema = {
   description:
     'Every step of the stock of a variant (`variant`, with its `product`) in one list: a ' +
     'delivery and a write-off (a line for each variant, with the admin), a sale (the units a ' +
-    'paid order took, at the payment) ' +
-    'and a cancel (the same units back in the same batches, at the cancel of the paid order). ' +
+    'paid order took, at the payment), a return (the units that came back with a statement of ' +
+    'return, also the cancel of a paid order, back in the same batches) and a return write-off ' +
+    '(the units of a return that went out at once, written off or lost). ' +
     '`quantity` and `value` are the change: in above 0, out below; `batches` are the batches ' +
     'in the order the units were taken. `productId` keeps the steps of all the variants of a ' +
     'product, `variantId` those of one variant. Newest first unless asked; a page at a time. ' +
@@ -642,7 +683,9 @@ const getStockLogSchema = {
     'Every change of the quantity of a variant, a line for each variant for each change: how ' +
     'many units came in (above 0) or went out (below 0), the stock after it (`stockAfter`), the ' +
     '`event` that made it (`stock.delivery`, `stock.write_off`, `stock.sale` at the payment of an ' +
-    'order, `stock.cancel_return` for the units a cancelled paid order gave back), the operation ' +
+    'order, `stock.return` for the units that came back with a statement of return (also the ' +
+    'cancel of a paid order), `stock.return_write_off` for the ones that went out again at ' +
+    'once), the operation ' +
     'it belongs to (`deliveryId` of a delivery, `writeOffId` of a write-off, `orderId` of an ' +
     'order: every operation that touched many variants carries one id in all its lines, the same ' +
     'id its answer or the admin log line gives), who did it (none for the sale at a payment, which ' +
@@ -655,9 +698,7 @@ const getStockLogSchema = {
     JOURNAL_TEXT,
   querystring: {
     $ref: 'adminStockLogQuerySchema#',
-    examples: [
-      { variantId: 31, events: 'stock.sale,stock.cancel_return', sortBy: 'quantityChange' },
-    ],
+    examples: [{ variantId: 31, events: 'stock.sale,stock.return', sortBy: 'quantityChange' }],
   },
   response: journalResponse('the stock log', 'adminStockLogResponseSchema'),
 } satisfies FastifySchema;
@@ -733,7 +774,14 @@ const getAlertsSchema = {
     '/api/admin/alerts/subscriptions): paid orders to ship (`paid_orders_waiting`), orders sent ' +
     'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
     'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
-    'written for some days (`shipped_without_cost`), products of the catalog with no free ' +
+    'written for some days (`shipped_without_cost`), orders shipped by hand whose send has no ' +
+    'tracking number for some days (`shipped_without_tracking`), statements of return: ' +
+    'a transfer of the money that failed (`failed_refunds`), a statement made without the code ' +
+    'that waits for a check (`returns_manual_check`), a proof of the parcel told and not ' +
+    'confirmed for some days (`returns_proof_waiting`), no goods and no word of the parcel ' +
+    'some days after the statement (`returns_goods_not_sent`), the money due and not back some ' +
+    'days after the statement (`returns_money_late`), the money back and the goods not in ' +
+    'some days later (`returns_goods_late`), products of the catalog with no free ' +
     'units (`out_of_stock`) or with a few (`low_stock`), variants that lack the weight or the ' +
     'sizes (`products_without_shipping_data`), variants that lack a characteristic their ' +
     'category requires (`variants_missing_required`), products of the catalog a buyer sees none ' +

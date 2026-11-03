@@ -15,7 +15,8 @@ import {
   summaryCsvColumns,
 } from './helpers/accountingCsv.helper.js';
 import {
-  NOT_CANCELLED,
+  LOG_BATCHES,
+  WRITE_OFF_EVENTS,
   assertCategory,
   deliveryMoneyOf,
   deliveryOfStepsSql,
@@ -38,7 +39,8 @@ import type {
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 
-// the money of a period step by step: the days, the weeks from monday or the months of the
+// the money of a period step by step (sales, returns, net, write-offs, purchases; the stock is of the
+// reports by product and by category): the days, the weeks from monday or the months of the
 // calendar of the shop (SHOP_TIME_ZONE), the first and the last step cut to the period. Without
 // a start the period is the step of its end and the eleven before it
 
@@ -110,51 +112,61 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
 
   const inStep = (column: Prisma.Sql) => Prisma.sql`${column} >= b.f and ${column} < b.t`;
 
-  // a sale is an order paid in the step and not cancelled, a cancel one cancelled in it
-  const orderLines = (column: 'paidAt' | 'cancelledAt', name: string) => {
-    const time = Prisma.raw(`o."${column}"`);
-    const sales = column === 'paidAt' ? Prisma.sql`and ${NOT_CANCELLED}` : Prisma.empty;
-    return Prisma.sql`
-      ${Prisma.raw(name)} as (
-        select b.n, sum(oi.quantity)::bigint as units, sum(oi."totalPrice") as revenue
-        from steps as b
-        join cartlify.orders as o on ${inStep(time)} ${sales}
-        join cartlify.order_items as oi on oi."orderId" = o.id
-        where oi."variantId" in (select id from scope)
-        group by b.n
-      ),
-      ${Prisma.raw(`${name}_cost`)} as (
-        select b.n, sum(a.quantity * pb."unitCost") as cost
-        from steps as b
-        join cartlify.orders as o on ${inStep(time)} ${sales}
-        join cartlify.order_batch_allocations as a on a."orderId" = o.id
-        join cartlify.product_batches as pb on pb.id = a."batchId"
-        where a."variantId" in (select id from scope)
-        group by b.n
-      )
-    `;
-  };
-
   return db.$queryRaw<StepMoney[]>`
     ${scopeCtes(scope)},
     steps as (
       select x.f at time zone 'UTC' as f, x.t at time zone 'UTC' as t, x.n
       from unnest(${froms}::timestamptz[], ${tos}::timestamptz[]) with ordinality as x(f, t, n)
     ),
-    ${orderLines('paidAt', 'sold')},
-    ${orderLines('cancelledAt', 'cancelled')},
+    sold as (
+      select b.n, sum(oi.quantity)::bigint as units, sum(oi."totalPrice") as revenue
+      from steps as b
+      join cartlify.orders as o on ${inStep(Prisma.sql`o."paidAt"`)}
+      join cartlify.order_items as oi on oi."orderId" = o.id
+      where oi."variantId" in (select id from scope)
+      group by b.n
+    ),
+    sold_cost as (
+      select b.n, sum(a.quantity * pb."unitCost") as cost
+      from steps as b
+      join cartlify.orders as o on ${inStep(Prisma.sql`o."paidAt"`)}
+      join cartlify.order_batch_allocations as a on a."orderId" = o.id
+      join cartlify.product_batches as pb on pb.id = a."batchId"
+      where a."variantId" in (select id from scope)
+      group by b.n
+    ),
+    refunded as (
+      select b.n, ri.id, ri.quantity, ri.amount, oi."variantId" as pid
+      from steps as b
+      join cartlify.return_items as ri on ri.money = 'refunded'
+        and ${inStep(Prisma.sql`ri."refundedAt"`)}
+      join cartlify.order_items as oi on oi.id = ri."orderItemId"
+      where oi."variantId" in (select id from scope)
+    ),
+    returned as (
+      select n, sum(quantity)::bigint as units, sum(amount) as revenue
+      from refunded
+      group by n
+    ),
+    returned_cost as (
+      select b.n, sum((e->>'quantity')::int * (e->>'unitCost')::numeric) as cost
+      from steps as b
+      join cartlify.return_items as ri on ri.money = 'refunded' and ri."refundedAt" < b.t
+      join cartlify.order_items as oi on oi.id = ri."orderItemId"
+      join cartlify.stock_log as l on l."returnItemId" = ri.id and l.event = 'stock.return'
+      ${LOG_BATCHES}
+      where ${inStep(Prisma.sql`greatest(ri."refundedAt", l."createdAt")`)}
+        and oi."variantId" in (select id from scope)
+      group by b.n
+    ),
     written as (
       select b.n,
              sum((e->>'quantity')::int)::bigint as units,
              sum((e->>'quantity')::int * (e->>'unitCost')::numeric) as value
       from steps as b
       join cartlify.stock_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
-      cross join lateral jsonb_array_elements(l.meta) as c
-      cross join lateral jsonb_array_elements(
-        case when c->>'field' = 'batches' and jsonb_typeof(c->'new') = 'array'
-             then c->'new' else '[]'::jsonb end
-      ) as e
-      where l.event = 'stock.write_off'
+      ${LOG_BATCHES}
+      where ${WRITE_OFF_EVENTS}
         and l."variantId" in (select id from scope)
       group by b.n
     ),
@@ -169,9 +181,9 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
            coalesce(sold.units, 0)::bigint as sold_units,
            coalesce(sold.revenue, 0) as sold_revenue,
            coalesce(sold_cost.cost, 0) as sold_cost,
-           coalesce(cancelled.units, 0)::bigint as cancelled_units,
-           coalesce(cancelled.revenue, 0) as cancelled_revenue,
-           coalesce(cancelled_cost.cost, 0) as cancelled_cost,
+           coalesce(returned.units, 0)::bigint as returned_units,
+           coalesce(returned.revenue, 0) as returned_revenue,
+           coalesce(returned_cost.cost, 0) as returned_cost,
            coalesce(written.units, 0)::bigint as written_units,
            coalesce(written.value, 0) as written_value,
            coalesce(bought.units, 0)::bigint as bought_units,
@@ -179,8 +191,8 @@ async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, st
     from steps as b
     left join sold on sold.n = b.n
     left join sold_cost on sold_cost.n = b.n
-    left join cancelled on cancelled.n = b.n
-    left join cancelled_cost on cancelled_cost.n = b.n
+    left join returned on returned.n = b.n
+    left join returned_cost on returned_cost.n = b.n
     left join written on written.n = b.n
     left join bought on bought.n = b.n
     order by b.n
@@ -229,21 +241,22 @@ export async function reportTimeline(
   // the step number keeps the order of time for the sorts that go by money
   const rows = steps.map((step, index) => {
     const columns = money[index]!;
-    const { sales, cancellations, writeOffs, afterWriteOffs, purchases } = moneyOf(columns);
+    const { sales, returns, net, writeOffs, afterWriteOffs, purchases } = moneyOf(columns);
     const stepDelivery = delivery[index] ?? null;
     return {
       id: index,
       label: step.label,
       period: { from: step.from, to: step.to },
       sales,
-      cancellations,
+      returns,
+      net,
       writeOffs,
       afterWriteOffs,
       purchases,
       delivery: stepDelivery ? deliveryMoneyOf(stepDelivery) : null,
       summary: summaryOf({
-        itemsRevenue: columns.sold_revenue,
-        itemsCost: columns.sold_cost,
+        itemsRevenue: new Prisma.Decimal(columns.sold_revenue).minus(columns.returned_revenue),
+        itemsCost: new Prisma.Decimal(columns.sold_cost).minus(columns.returned_cost),
         writeOffs: columns.written_value,
         delivery: stepDelivery,
       }),
@@ -261,7 +274,8 @@ export async function reportTimeline(
       label: row.label,
       period: row.period,
       sales: row.sales,
-      cancellations: row.cancellations,
+      returns: row.returns,
+      net: row.net,
       writeOffs: row.writeOffs,
       afterWriteOffs: row.afterWriteOffs,
       purchases: row.purchases,

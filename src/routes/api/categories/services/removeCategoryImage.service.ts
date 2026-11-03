@@ -42,6 +42,7 @@ export async function removeCategoryImage(dto: {
           description: true,
           parentId: true,
           imageUrl: true,
+          withdrawal: true,
           createdAt: true,
           updatedAt: true,
         },

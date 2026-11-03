@@ -1,15 +1,111 @@
 import { idPathParam, MAX_ID } from '@schemas/idPathParam.js';
 
-// LEGAL: the versions of the terms and of the contract of the shop and the consents to them
+// LEGAL: the versions of the terms, of the contract and of the privacy policy of the shop, and the
+// consents to the terms and to the contract
 
 export const LEGAL_DOCUMENT_MAX_TITLE = 200;
 export const LEGAL_DOCUMENT_MAX_CONTENT = 200_000;
+export const LEGAL_DOCUMENT_MAX_ADDRESS = 500;
+// the least days of withdrawal a contract may give (the law) and the most of any term in days
+export const LEGAL_WITHDRAWAL_MIN_DAYS = 14;
+export const LEGAL_MAX_DAYS = 36_500;
 
 const kindSchema = {
+  type: 'string',
+  enum: ['terms', 'contract', 'privacy'],
+  description:
+    'terms: the terms of use of the shop; contract: the contract of sale; privacy: the privacy ' +
+    'policy. A customer accepts the terms and the contract, the privacy policy only informs.',
+} as const;
+
+// the kinds a customer accepts
+const consentKindSchema = {
   type: 'string',
   enum: ['terms', 'contract'],
   description: 'terms: the terms of use of the shop; contract: the contract of sale.',
 } as const;
+
+const returnShippingPayerSchema = {
+  type: 'string',
+  enum: ['buyer', 'shop'],
+  description:
+    'Who pays the carrier for the parcel a buyer sends back when they withdraw: the buyer, or ' +
+    'the shop. The buyer is charged only when the contract said it before the purchase.',
+} as const;
+
+// what a contract says on top of its text, in a version as it is published and as it is read
+const contractTermsProperties = {
+  withdrawalDays: {
+    type: 'integer',
+    minimum: LEGAL_WITHDRAWAL_MIN_DAYS,
+    maximum: LEGAL_MAX_DAYS,
+    description:
+      `The days a buyer has to withdraw from an order after its delivery, ${LEGAL_WITHDRAWAL_MIN_DAYS} ` +
+      'at least (the law). An order keeps the days of the contract in force at its confirmation.',
+  },
+  returnAddress: {
+    type: 'string',
+    minLength: 1,
+    maxLength: LEGAL_DOCUMENT_MAX_ADDRESS,
+    description:
+      `Where a buyer sends the goods back, up to ${LEGAL_DOCUMENT_MAX_ADDRESS} characters, without ` +
+      'the spaces at its edges. The one of the contract in force is shown, whatever contract an ' +
+      'order was confirmed with.',
+  },
+  returnShippingPaidBy: returnShippingPayerSchema,
+} as const;
+
+// how long each kind of personal data is kept, in days, in a privacy policy
+const retentionProperties = {
+  loginAddressesDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description: 'The address and the browser of a login.',
+  },
+  guestDataDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description: 'The favorites and the chats of a guest, from their last activity.',
+  },
+  deletedChatsDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description: 'The chats of a deleted account, from its deletion.',
+  },
+  returnAddressesDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description: 'The address and the browser of a statement of withdrawal, from its closing.',
+  },
+  returnPersonalDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description:
+      'The name, the email, the phone and the text of a statement of withdrawal, from its closing.',
+  },
+  recipientDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description:
+      'The recipient and the address of an order, from the deletion of the account of its buyer.',
+  },
+} as const;
+
+const contractRequired = ['withdrawalDays', 'returnAddress', 'returnShippingPaidBy'] as const;
+const retentionRequired = [
+  'loginAddressesDays',
+  'guestDataDays',
+  'deletedChatsDays',
+  'returnAddressesDays',
+  'returnPersonalDays',
+  'recipientDays',
+] as const;
 
 const dateTimeSchema = { type: 'string', format: 'date-time' } as const;
 
@@ -38,8 +134,34 @@ const legalDocumentSchema = {
       description: 'The sha256 of the text in hex: what the customer accepted, to the letter.',
     },
     publishedAt: dateTimeSchema,
+    contract: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      description: 'What a contract says on top of its text; null for the other kinds.',
+      properties: contractTermsProperties,
+      required: contractRequired,
+    },
+    retention: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      description:
+        'How long a privacy policy keeps each kind of personal data, in days; null for the ' +
+        'other kinds. The page of the policy shows these numbers beside its text.',
+      properties: retentionProperties,
+      required: retentionRequired,
+    },
   },
-  required: ['id', 'kind', 'version', 'title', 'content', 'sha256', 'publishedAt'],
+  required: [
+    'id',
+    'kind',
+    'version',
+    'title',
+    'content',
+    'sha256',
+    'publishedAt',
+    'contract',
+    'retention',
+  ],
 } as const;
 
 const legalDocumentsCurrentResponseSchema = {
@@ -49,7 +171,8 @@ const legalDocumentsCurrentResponseSchema = {
   properties: {
     items: {
       type: 'array',
-      description: 'The latest version of each kind that has one, terms first.',
+      description:
+        'The latest version of each kind that has one: the terms, the contract, the privacy policy.',
       items: { $ref: 'legalDocumentSchema#' },
     },
   },
@@ -84,6 +207,24 @@ const legalDocumentPublishBodySchema = {
         `The text, plain or markdown, up to ${LEGAL_DOCUMENT_MAX_CONTENT} characters; it is kept ` +
         'as it is sent. The details of the seller (name, address) belong in the text of the ' +
         'contract: the mail of the contract carries it.',
+    },
+    contract: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'What a contract says on top of its text; required for a contract, refused for any ' +
+        'other kind.',
+      properties: contractTermsProperties,
+      required: contractRequired,
+    },
+    retention: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'How long a privacy policy keeps each kind of personal data; required for a privacy ' +
+        'policy, refused for any other kind.',
+      properties: retentionProperties,
+      required: retentionRequired,
     },
   },
   required: ['kind', 'title', 'content'],
@@ -157,13 +298,14 @@ const legalAcceptanceStatusSchema = {
   properties: {
     current: {
       type: 'array',
-      description: 'The versions in force, terms first, without their texts.',
+      description:
+        'The versions in force of the kinds a customer accepts, terms first, without their texts.',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
           id: { type: 'integer' },
-          kind: kindSchema,
+          kind: consentKindSchema,
           version: { type: 'integer' },
           title: { type: 'string' },
         },
@@ -178,7 +320,7 @@ const legalAcceptanceStatusSchema = {
         additionalProperties: false,
         properties: {
           documentId: { type: 'integer' },
-          kind: kindSchema,
+          kind: consentKindSchema,
           version: { type: 'integer' },
           acceptedAt: dateTimeSchema,
         },
@@ -190,7 +332,7 @@ const legalAcceptanceStatusSchema = {
       description:
         'The kinds whose version in force the customer has to accept before an order is ' +
         'confirmed; empty when nothing is to accept.',
-      items: kindSchema,
+      items: consentKindSchema,
     },
   },
   required: ['current', 'accepted', 'required'],

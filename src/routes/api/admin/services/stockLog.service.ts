@@ -60,6 +60,7 @@ type StockRow = {
   deliveryId: string | null;
   writeOffId: string | null;
   orderId: number | null;
+  returnItemId: number | null;
   ip: string | null;
   userAgent: string | null;
   meta: unknown;
@@ -80,6 +81,7 @@ const STOCK_SORTS = {
   deliveryId: { sql: Prisma.sql`l."deliveryId"::text`, kind: 'text' },
   writeOffId: { sql: Prisma.sql`l."writeOffId"::text`, kind: 'text' },
   orderId: { sql: l('orderId'), kind: 'number' },
+  returnItemId: { sql: l('returnItemId'), kind: 'number' },
   ip: { sql: l('ip'), kind: 'text' },
   userAgent: { sql: l('userAgent'), kind: 'text' },
 } as const;
@@ -98,7 +100,8 @@ const STOCK_DEF: JournalDef<StockRow, StockItem> = {
     l."productId", p.name AS "productName", l."variantId", v.position AS "variantPosition",
     v.sku AS "variantSku", cartlify.variant_display_name(l."variantId") AS "variantName",
     l.event, l."quantityChange", l."stockAfter", l."deliveryId"::text AS "deliveryId",
-    l."writeOffId"::text AS "writeOffId", l."orderId", l.ip, l."userAgent", l.meta`,
+    l."writeOffId"::text AS "writeOffId", l."orderId", l."returnItemId", l.ip, l."userAgent",
+    l.meta`,
   createdAt: l('createdAt'),
   event: l('event'),
   columns: [
@@ -117,6 +120,7 @@ const STOCK_DEF: JournalDef<StockRow, StockItem> = {
     'deliveryId',
     'writeOffId',
     'orderId',
+    'returnItemId',
     'ip',
     'userAgent',
     'changes',
@@ -164,6 +168,7 @@ const STOCK_DEF: JournalDef<StockRow, StockItem> = {
       deliveryId: row.deliveryId,
       writeOffId: row.writeOffId,
       orderId: row.orderId,
+      returnItemId: row.returnItemId,
       ip: hideActor ? hiddenText(row.ip) : row.ip,
       userAgent: hideActor ? hiddenText(row.userAgent) : row.userAgent,
       changes: changes as never[],
@@ -227,6 +232,13 @@ const STOCK_DEF: JournalDef<StockRow, StockItem> = {
       { header: 'writeOffId', kind: 'text', value: (row) => row.writeOffId as string | null },
     ],
     orderId: [{ header: 'orderId', kind: 'number', value: (row) => row.orderId as number | null }],
+    returnItemId: [
+      {
+        header: 'returnItemId',
+        kind: 'number',
+        value: (row) => row.returnItemId as number | null,
+      },
+    ],
     ip: [{ header: 'ip', kind: 'text', value: (row) => row.ip as string | null }],
     userAgent: [
       { header: 'userAgent', kind: 'text', value: (row) => row.userAgent as string | null },

@@ -1,8 +1,40 @@
-// LEGAL: the versions of the terms and of the contract of the shop and the consents to them
+// LEGAL: the versions of the terms, of the contract and of the privacy policy of the shop, and the
+// consents to the terms and to the contract
 
-export type LegalDocumentKind = 'terms' | 'contract';
+export type LegalDocumentKind = 'terms' | 'contract' | 'privacy';
 
-// a version with its text
+// the kinds a customer accepts; the privacy policy only informs, nobody accepts it
+export type ConsentKind = Exclude<LegalDocumentKind, 'privacy'>;
+
+// who pays the carrier for the parcel a buyer sends back when they withdraw
+export type ReturnShippingPayer = 'buyer' | 'shop';
+
+// what only a contract says: the days a buyer has to withdraw after the delivery (14 at least),
+// where they send the goods back, who pays the carrier for it
+export interface ContractTermsDto {
+  withdrawalDays: number;
+  returnAddress: string;
+  returnShippingPaidBy: ReturnShippingPayer;
+}
+
+// what only a privacy policy says: how long each kind of personal data is kept, in days
+export interface PrivacyRetentionDto {
+  // the address and the browser of the logins
+  loginAddressesDays: number;
+  // the favorites and the chats of a guest, counted from their last activity
+  guestDataDays: number;
+  // the chats of a deleted account, counted from its deletion
+  deletedChatsDays: number;
+  // the address and the browser of a statement of withdrawal, counted from its closing
+  returnAddressesDays: number;
+  // the name, the email, the phone and the text of a statement, counted from its closing
+  returnPersonalDays: number;
+  // the recipient and the address of an order, counted from the deletion of the account of its buyer
+  recipientDays: number;
+}
+
+// a version with its text; contract is the terms of a contract and retention the terms of a privacy
+// policy, null for the other kinds
 export interface LegalDocumentDto {
   id: number;
   kind: LegalDocumentKind;
@@ -11,12 +43,14 @@ export interface LegalDocumentDto {
   content: string;
   sha256: string;
   publishedAt: string;
+  contract: ContractTermsDto | null;
+  retention: PrivacyRetentionDto | null;
 }
 
-// a version without its text
+// a version of a kind a customer accepts, without its text
 export interface LegalDocumentSummaryDto {
   id: number;
-  kind: LegalDocumentKind;
+  kind: ConsentKind;
   version: number;
   title: string;
 }
@@ -36,6 +70,9 @@ export interface PublishLegalDocumentBodyDto {
   kind: LegalDocumentKind;
   title: string;
   content: string;
+  // a contract has contract, a privacy policy has retention, the terms have neither
+  contract?: ContractTermsDto;
+  retention?: PrivacyRetentionDto;
 }
 
 export interface LegalDocumentsHistoryQueryDto {
@@ -56,7 +93,7 @@ export interface LegalDocumentParamsDto {
 // what the customer accepted of each kind, the version in force or an older one
 export interface LegalAcceptedDto {
   documentId: number;
-  kind: LegalDocumentKind;
+  kind: ConsentKind;
   version: number;
   acceptedAt: string;
 }
@@ -65,7 +102,7 @@ export interface LegalAcceptedDto {
 export interface LegalAcceptanceStatusDto {
   current: LegalDocumentSummaryDto[];
   accepted: LegalAcceptedDto[];
-  required: LegalDocumentKind[];
+  required: ConsentKind[];
 }
 
 export interface AcceptLegalDocumentsBodyDto {

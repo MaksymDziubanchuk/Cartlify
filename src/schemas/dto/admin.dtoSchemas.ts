@@ -108,9 +108,10 @@ const adminStatsOrdersRevenueSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'The totals of the orders paid and not cancelled (paid, shipped, delivered), by the time of ' +
-    'the payment. In orders.revenue the delivery is part of the totals, orders.deliveryRevenue ' +
-    'is the delivery alone.',
+    'The totals of the orders paid (cancelled later or not), by the time of the payment. In ' +
+    'orders.revenue the delivery is part of the totals, orders.deliveryRevenue is the delivery ' +
+    'alone. orders.returned is what went back with the returns (the units and their part of the ' +
+    'delivery), by the time the money went back: the same fields, the periods are of that time.',
   properties: {
     total: { ...nonNegativeNumberSchema, description: 'Of all time.' },
     inPeriod: { ...nonNegativeNumberSchema, description: 'Paid in the period.' },
@@ -134,14 +135,15 @@ const adminStatsOrdersSchema = {
     byStatus: { $ref: 'adminStatsOrdersByStatusSchema#' },
     revenue: { $ref: 'adminStatsOrdersRevenueSchema#' },
     deliveryRevenue: { $ref: 'adminStatsOrdersRevenueSchema#' },
+    returned: { $ref: 'adminStatsOrdersRevenueSchema#' },
 
     averageOrderValue: {
       ...nonNegativeNumberSchema,
-      description: 'The average total of the orders paid in the period and not cancelled.',
+      description: 'The average total of the orders paid in the period, cancelled later or not.',
     },
     itemsSold: {
       ...nonNegativeIntegerSchema,
-      description: 'The units of the orders paid in the period and not cancelled.',
+      description: 'The units of the orders paid in the period, cancelled later or not.',
     },
   },
   required: [
@@ -151,6 +153,7 @@ const adminStatsOrdersSchema = {
     'byStatus',
     'revenue',
     'deliveryRevenue',
+    'returned',
     'averageOrderValue',
     'itemsSold',
   ],
@@ -261,13 +264,15 @@ const moneySummarySchema = {
   additionalProperties: false,
   description:
     'The money of the period: what came in, what went out, what each income left. The orders ' +
-    'are the ones paid in the period and not cancelled; a cancel later takes the order out of ' +
-    'the period it was paid in.',
+    'are the ones paid in the period; what goes back later (a return) is in the period its money ' +
+    'went back, and never changes the period the order was paid in.',
   properties: {
     income: {
       type: 'object',
       additionalProperties: false,
-      description: 'The items of the orders, their delivery, together.',
+      description:
+        'The items of the orders paid in the period less the returns of it, their delivery less ' +
+        'what went back, together.',
       properties: { items: { type: 'number' }, delivery: nullableMoney, total: { type: 'number' } },
       required: ['items', 'delivery', 'total'],
     },
@@ -275,8 +280,9 @@ const moneySummarySchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'What the items sold cost (the batches they took), the units written off in the period, ' +
-        'the sends the shop owes the carriers for (by the time they were sent), together.',
+        'What the items kept cost (the batches they took, less the units that came back), the ' +
+        'units written off in the period, the sends the shop owes the carriers for (by the time ' +
+        'they were sent), together.',
       properties: {
         costOfGoods: { type: 'number' },
         writeOffs: { type: 'number' },
@@ -382,8 +388,8 @@ const adminDeliveryMoneySchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'What the orders paid in the period (by paidAt) and not cancelled paid for the delivery; ' +
-        'orders counts the ones that paid for it (a delivery that cost nothing is none).',
+        'What the orders paid in the period (by paidAt), cancelled later or not, paid for the ' +
+        'delivery; orders counts the ones that paid for it (a delivery that cost nothing is none).',
       properties: { orders: nonNegativeIntegerSchema, revenue: { type: 'number' } },
       required: ['orders', 'revenue'],
     },
@@ -391,9 +397,8 @@ const adminDeliveryMoneySchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'Told apart: the delivery of the paid orders cancelled in the period (by cancelledAt). ' +
-        'It went back with the payment, and the income of the period they were paid in has it ' +
-        'no more.',
+        'The delivery that went back with the returns whose money went back in the period (by ' +
+        'the time it went back); the income of the period the order was paid in keeps it.',
       properties: { orders: nonNegativeIntegerSchema, revenue: { type: 'number' } },
       required: ['orders', 'revenue'],
     },
@@ -411,12 +416,104 @@ const adminDeliveryMoneySchema = {
       },
       required: ['sends', 'cost', 'withoutCost'],
     },
+    returnShipping: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The parcels the shop paid to carry goods back from buyers (recorded by an admin on a ' +
+        'statement of return), by the time they were sent (the time the admin gave). ' +
+        'withoutCost counts the ones whose cost is not written yet.',
+      properties: {
+        sends: nonNegativeIntegerSchema,
+        cost: { type: 'number', description: 'The costs written, to the cent.' },
+        withoutCost: nonNegativeIntegerSchema,
+        deducted: {
+          type: 'number',
+          description:
+            'The cost of the way back the buyers owed, taken off the transfers whose money went ' +
+            'back in the period: an income.',
+        },
+        reimbursed: {
+          type: 'number',
+          description:
+            'The cost of the way back root paid back to buyers outside the app in the period: ' +
+            'spent.',
+        },
+      },
+      required: ['sends', 'cost', 'withoutCost', 'deducted', 'reimbursed'],
+    },
     result: {
       type: 'number',
-      description: 'The income less what the carriers cost: what the delivery earned.',
+      description:
+        'The income less what went back and less what the carriers cost, the parcels back too: ' +
+        'what the delivery earned.',
     },
   },
-  required: ['income', 'refunded', 'shipping', 'result'],
+  required: ['income', 'refunded', 'shipping', 'returnShipping', 'result'],
+} as const;
+
+const adminReturnKindSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    units: nonNegativeIntegerSchema,
+    revenue: { type: 'number', description: 'The money of the units that went back.' },
+    cost: { type: 'number', description: 'What the units that came back cost (their batches).' },
+  },
+  required: ['units', 'revenue', 'cost'],
+} as const;
+
+const RETURN_KIND_NAMES = [
+  'withdrawal',
+  'refused',
+  'defect',
+  'wrong_item',
+  'damaged',
+  'goodwill',
+  'shop_cancel',
+  'other',
+] as const;
+
+const adminNetSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The sales less the returns: what the items of the period earned. The percent of the margin ' +
+    'is of the revenue, none without one.',
+  properties: {
+    units: { type: 'integer' },
+    revenue: { type: 'number' },
+    cost: { type: 'number' },
+    margin: { type: 'number' },
+    marginPercent: { type: ['number', 'null'] },
+  },
+  required: ['units', 'revenue', 'cost', 'margin', 'marginPercent'],
+} as const;
+
+const stockLineField = (description: string) => ({ ...adminUnitsValueSchema, description });
+
+// the stock of a report, from the stock log (db/05): where it was, what came in and went out, where
+// it is, and the goods on their way back
+const adminStockTurnoverSchema = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The stock at its costs, read from the stock log, so a past period never changes: opening ' +
+    '+ received - left = closing.',
+  properties: {
+    opening: stockLineField('The stock at the start of the period.'),
+    received: stockLineField('Came in during the period: deliveries and units that came back.'),
+    left: stockLineField(
+      'Went out during the period: sales, write-offs and units that came back and were written ' +
+        'off at once.',
+    ),
+    closing: stockLineField('The stock at the end of the period.'),
+    onTheWayBack: stockLineField(
+      'Units sold that a statement of return named and whose goods were not in at the end of ' +
+        'the period: not in the stock, shown apart (at the cost of the order).',
+    ),
+  },
+  required: ['opening', 'received', 'left', 'closing', 'onTheWayBack'],
 } as const;
 
 const adminAccountingSalesSchema = {
@@ -442,23 +539,33 @@ const adminAccountingResponseSchema = {
     sales: {
       ...adminAccountingSalesSchema,
       description:
-        'The orders paid in the period (by paidAt) and not cancelled: an order cancelled later is ' +
-        'taken out of the period it was paid in.',
+        'The orders paid in the period (by paidAt), cancelled later or not: a return never ' +
+        'takes an order out of the period it was paid in.',
     },
-    cancellations: {
+    returns: {
       type: 'object',
       additionalProperties: false,
       description:
-        'Told apart and in no margin: the paid orders cancelled in the period (by cancelledAt), ' +
-        'their money went back.',
+        'The rows of the statements of return whose money went back in the period (by the time ' +
+        'it went back): the money of the units, and what the units that came back cost. byKind ' +
+        'tells the right of withdrawal from the reasons an admin gave.',
       properties: {
         orders: nonNegativeIntegerSchema,
         units: nonNegativeIntegerSchema,
         revenue: { type: 'number' },
         cost: { type: 'number' },
+        byKind: {
+          type: 'object',
+          additionalProperties: false,
+          properties: Object.fromEntries(
+            RETURN_KIND_NAMES.map((kind) => [kind, adminReturnKindSchema]),
+          ),
+          required: [...RETURN_KIND_NAMES],
+        },
       },
-      required: ['orders', 'units', 'revenue', 'cost'],
+      required: ['orders', 'units', 'revenue', 'cost', 'byKind'],
     },
+    net: adminNetSchema,
     summary: moneySummarySchema,
     purchases: {
       type: 'object',
@@ -483,7 +590,9 @@ const adminAccountingResponseSchema = {
     writeOffs: {
       type: 'object',
       additionalProperties: false,
-      description: 'The units written off in the period, by reason.',
+      description:
+        'The units written off in the period, by reason; customer_return is the goods that came ' +
+        'back with a statement and went out of the stock at once.',
       properties: {
         units: nonNegativeIntegerSchema,
         value: { type: 'number' },
@@ -497,6 +606,7 @@ const adminAccountingResponseSchema = {
             shortage: adminUnitsValueSchema,
             returned_to_supplier: adminUnitsValueSchema,
             other: adminUnitsValueSchema,
+            customer_return: adminUnitsValueSchema,
           },
           required: [
             'damaged',
@@ -505,22 +615,21 @@ const adminAccountingResponseSchema = {
             'shortage',
             'returned_to_supplier',
             'other',
+            'customer_return',
           ],
         },
       },
       required: ['units', 'value', 'byReason'],
     },
-    stock: {
-      ...adminUnitsValueSchema,
-      description: 'What the batches have left now, whatever the period.',
-    },
+    stock: adminStockTurnoverSchema,
     delivery: adminDeliveryMoneySchema,
   },
   required: [
     'period',
     'currency',
     'sales',
-    'cancellations',
+    'returns',
+    'net',
     'summary',
     'purchases',
     'writeOffs',
@@ -566,9 +675,10 @@ const reportSortByField = {
     'name',
   ],
   description:
-    'revenue (the default), margin, marginPercent and units are of the sales (paid and not ' +
-    'cancelled); marginAfterWriteOffs is the margin less the write-offs; writeOffs and ' +
-    'purchases are their value; rows without a margin percent come last.',
+    'revenue (the default), margin, marginPercent and units are of the sales (the orders paid ' +
+    'in the period); marginAfterWriteOffs is the margin of the net (the sales less the returns) ' +
+    'less the write-offs; writeOffs and purchases are their value; stockValue and stockUnits ' +
+    'are the stock at the end of the period; rows without a margin percent come last.',
 } as const;
 
 // the query of the report by product and of the report by variant
@@ -655,8 +765,8 @@ const reportSalesSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'The items of the orders paid in the period and not cancelled, at their prices and their ' +
-    'costs; the percent of the margin is of the revenue.',
+    'The items of the orders paid in the period, cancelled later or not, at their prices and ' +
+    'their costs; the percent of the margin is of the revenue.',
   properties: {
     units: { type: 'integer' },
     revenue: moneyNumber,
@@ -667,10 +777,12 @@ const reportSalesSchema = {
   required: ['units', 'revenue', 'cost', 'margin', 'marginPercent'],
 } as const;
 
-const reportCancellationsSchema = {
+const reportReturnsSchema = {
   type: 'object',
   additionalProperties: false,
-  description: 'Told apart and in no margin: the items of the paid orders cancelled in the period.',
+  description:
+    'The items whose money went back in the period (by the time it went back): the money of the ' +
+    'units, and what the units that came back cost.',
   properties: { units: { type: 'integer' }, revenue: moneyNumber, cost: moneyNumber },
   required: ['units', 'revenue', 'cost'],
 } as const;
@@ -679,8 +791,8 @@ const reportAfterWriteOffsSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'The margin of the sales less the write-offs of the period; the percent is of the revenue ' +
-    'of the sales.',
+    'The margin of the net (the sales less the returns) less the write-offs of the period; the ' +
+    'percent is of the revenue of the net.',
   properties: {
     margin: moneyNumber,
     marginPercent: { type: ['number', 'null'], description: 'None without a revenue.' },
@@ -690,7 +802,8 @@ const reportAfterWriteOffsSchema = {
 
 const reportMoneyProperties = {
   sales: reportSalesSchema,
-  cancellations: reportCancellationsSchema,
+  returns: reportReturnsSchema,
+  net: adminNetSchema,
   writeOffs: { ...adminUnitsValueSchema, description: 'Written off in the period, at cost.' },
   afterWriteOffs: reportAfterWriteOffsSchema,
   purchases: { ...adminUnitsValueSchema, description: 'Taken in during the period, at cost.' },
@@ -698,16 +811,14 @@ const reportMoneyProperties = {
 
 const reportMoneyRequired = [
   'sales',
-  'cancellations',
+  'returns',
+  'net',
   'writeOffs',
   'afterWriteOffs',
   'purchases',
 ] as const;
 
-const reportStockField = {
-  ...adminUnitsValueSchema,
-  description: 'What the batches have left now, at their costs, whatever the period.',
-} as const;
+const reportStockField = adminStockTurnoverSchema;
 
 const stockProductSchema = {
   type: 'object',
@@ -897,7 +1008,13 @@ const writeOffReasonValues = [
   'returned_to_supplier',
   'other',
 ] as const;
-export const STOCK_MOVEMENT_KINDS = ['delivery', 'writeOff', 'sale', 'cancel'] as const;
+export const STOCK_MOVEMENT_KINDS = [
+  'delivery',
+  'writeOff',
+  'sale',
+  'return',
+  'returnWriteOff',
+] as const;
 export const STOCK_LIST_DEFAULT_LIMIT = 20;
 
 const stockIdQueryField = (what: string) =>
@@ -1006,7 +1123,8 @@ const adminStockBatchesResponseSchema = {
           remaining: nonNegativeIntegerSchema,
           sold: {
             ...nonNegativeIntegerSchema,
-            description: 'The units of the paid orders; a cancel puts its units back.',
+            description:
+              'The units of the paid orders less the units their statements of return brought back (a unit written off or lost on its way back counts as written off).',
           },
           writtenOff: nonNegativeIntegerSchema,
           value: { ...nonNegativeNumberSchema, description: 'What is left at its cost.' },
@@ -1533,6 +1651,7 @@ const STOCK_LOG_COLUMNS = [
   'deliveryId',
   'writeOffId',
   'orderId',
+  'returnItemId',
   'ip',
   'userAgent',
   'changes',
@@ -1550,6 +1669,7 @@ const STOCK_LOG_SORTS = [
   'deliveryId',
   'writeOffId',
   'orderId',
+  'returnItemId',
   'ip',
   'userAgent',
 ] as const;
@@ -1639,6 +1759,12 @@ const adminStockLogResponseSchema = journalPageSchema(
     orderId: {
       type: ['integer', 'null'],
       description: 'The order of a sale line and of a line of units back.',
+    },
+    returnItemId: {
+      type: ['integer', 'null'],
+      description:
+        'The row of the statement of return the units came back with (stock.return, ' +
+        'stock.return_write_off); the statement is in the card of the order.',
     },
     ip: logIpSchema,
     userAgent: logUserAgentSchema,
@@ -1818,6 +1944,7 @@ const ALERT_KINDS = [
   'shipped_orders_waiting',
   'pickup_not_collected',
   'shipped_without_cost',
+  'shipped_without_tracking',
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
@@ -1827,6 +1954,12 @@ const ALERT_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'failed_refunds',
+  'returns_manual_check',
+  'returns_proof_waiting',
+  'returns_goods_not_sent',
+  'returns_money_late',
+  'returns_goods_late',
   'worker_stalled',
   'admin_actions',
 ] as const;

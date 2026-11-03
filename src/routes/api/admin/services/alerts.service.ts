@@ -9,6 +9,7 @@ import {
   FREE_STOCK_SQL,
   visibleSql,
 } from '../../products/services/helpers/getAllProducts.helper.js';
+import { andOf, returnConditions } from '../../returns/services/helpers/returnFilters.helper.js';
 import { utcTime } from './helpers/accountingSql.helper.js';
 import {
   dismissalFieldOf,
@@ -61,6 +62,7 @@ const isCaseKind = (kind: AdminAlertKind): kind is CaseKind => kind !== 'worker_
 type Cases = { from: Prisma.Sql; where: Prisma.Sql };
 
 const ORDERS = Prisma.sql`from cartlify.orders as t`;
+const RETURNS = Prisma.sql`from cartlify.returns as t`;
 const BATCHES = Prisma.sql`from cartlify.product_batches as t`;
 const LOG = Prisma.sql`from cartlify.admin_audit_log as t`;
 // the variants of the products of the catalog with their free units, the number the catalog shows
@@ -91,6 +93,12 @@ const deliveryMethodIs = (method: 'manual' | 'pickup') => Prisma.sql`exists (
     where d."orderId" = t.id and d.method = ${method}::cartlify."DeliveryMethod"
   )`;
 
+// the cases of a kind about the statements of return: the statements of the filters of the list
+const returnCases = (filters: Parameters<typeof returnConditions>[0]): Cases => ({
+  from: RETURNS,
+  where: andOf(returnConditions(filters, 't', Date.now())),
+});
+
 const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   // paid, to be shipped
   paid_orders_waiting: () => ({
@@ -120,6 +128,32 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
         and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
     )`,
   }),
+  // shipped by hand, the send on its way has no tracking number and was sent so many days ago
+  // (the filters shippedWithoutNumber and shippedTo of the list of orders)
+  shipped_without_tracking: (window) => ({
+    from: ORDERS,
+    where: Prisma.sql`t.status = 'shipped'::cartlify."OrderStatus"
+      and exists (
+        select 1 from cartlify.order_shipments s
+        where s."orderId" = t.id and s."rolledBackAt" is null and s."trackingNumber" is null
+          and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
+      )`,
+  }),
+  // statements of return: the same conditions as the filters of the list of the statements
+  failed_refunds: () => returnCases({ state: 'open', money: 'failed' }),
+  returns_manual_check: () =>
+    returnCases({ state: 'open', source: 'form_manual', accepted: false }),
+  returns_proof_waiting: (window) =>
+    returnCases({
+      state: 'open',
+      goods: 'proof_provided',
+      proofOlderThanDays: window.days ?? 0,
+    }),
+  returns_goods_not_sent: (window) =>
+    returnCases({ state: 'open', goods: 'waiting_no_proof', olderThanDays: window.days ?? 0 }),
+  returns_money_late: (window) => returnCases({ state: 'open', moneyDueForDays: window.days ?? 0 }),
+  returns_goods_late: (window) =>
+    returnCases({ state: 'open', paidAheadForDays: window.days ?? 0 }),
   // variants of the catalog with no free units
   out_of_stock: () => ({
     from: VARIANTS,
@@ -170,6 +204,7 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     from: LOG,
     where: Prisma.sql`t.action = 'OTHER'::cartlify."AdminAuditAction"
       and t."entityType" = 'order'::cartlify."AdminAuditEntityType"
+      and t.event = 'order.refund_late'
       and t.meta @> '[{"field": "refund"}]'::jsonb
       and t."createdAt" >= ${utcTime(window.since ?? new Date(0))}`,
   }),

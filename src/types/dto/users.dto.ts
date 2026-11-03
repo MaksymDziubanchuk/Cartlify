@@ -8,7 +8,7 @@ import type { UploadImageResult } from '@utils/cloudinary.util.js';
 import type { AccountDeletionLogger } from '@routes/api/users/services/helpers/accountDeletedEmail.helper.js';
 import type { ProfileList } from '@routes/api/users/services/helpers/adminProfile.helper.js';
 import type { AvatarLogger } from '@routes/api/users/services/helpers/avatarRemovals.helper.js';
-import type { AuthProvider, OrderStatus } from '@prisma/client';
+import type { AuthProvider, OrderStatus, ReturnStatus } from '@prisma/client';
 
 export type AvatarUrls = {
   url32: string;
@@ -123,6 +123,8 @@ export type PublicUserProfileDto = Omit<
 export interface AdminProfileOrderDto {
   id: number;
   status: OrderStatus;
+  // where the order stands as to its statements: a delivered order may be fully returned
+  returnStatus: ReturnStatus;
   total: number;
   createdAt: Date;
   updatedAt: Date;
@@ -196,6 +198,13 @@ export type AdminUserProfileDto = PublicUserProfileDto &
     // the removals of the reviews of the account by a moderator and the limit for them
     reviewRemovals: number;
     reviewRemovalsLimit: number;
+    // the statements of withdrawal and of return of the orders of the user, and the list that shows
+    // them (GET /api/returns with the query)
+    returns: {
+      total: number;
+      open: number;
+      list: { path: '/api/returns'; query: { userId: string } };
+    };
     period: { from: Date; to: Date };
   } & Partial<Pick<AdminProfileListsDto, ProfileList>>;
 

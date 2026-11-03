@@ -6,7 +6,7 @@ import { BadRequestError, InternalError } from '@utils/errors.js';
 import type { AdminUnitsValueDto, GetAdminAccountingResponseDto } from 'types/dto/admin.dto.js';
 
 // the report of the accounting: the sales of a period at the cost of the batches they took, the
-// cancels that took sales back, what came in and what was written off, the value of the stock left
+// returns that took money back, what came in and what was written off, the value of the stock
 
 export const MAX_REPORT_PRODUCTS = 100;
 
@@ -19,9 +19,26 @@ export const WRITE_OFF_REASONS = [
   'other',
 ] as const;
 
+// the reasons of the write-offs in a report: those of the stock write-off, and the goods that came
+// back with a statement and were written off or lost at once (they have no reason of their own)
+export const REPORT_WRITE_OFF_REASONS = [...WRITE_OFF_REASONS, 'customer_return'] as const;
+
 export const STOCK_SOURCES = ['supplier', 'surplus', 'customer_return'] as const;
 
-type WriteOffReason = (typeof WRITE_OFF_REASONS)[number];
+// the kinds of a return in a report: the right of withdrawal (a statement with no reason), and the
+// reasons an admin gives to the others
+export const RETURN_KINDS = [
+  'withdrawal',
+  'refused',
+  'defect',
+  'wrong_item',
+  'damaged',
+  'goodwill',
+  'shop_cancel',
+  'other',
+] as const;
+
+type WriteOffReason = (typeof REPORT_WRITE_OFF_REASONS)[number];
 type WriteOffs = GetAdminAccountingResponseDto['writeOffs'];
 
 // the ids a report reads (products or variants), each once; the schema let through ids of digits only
@@ -67,13 +84,22 @@ const broken = (reason: string): never => {
 // the write-offs of the lines of the stock log (stock.write_off), as
 // cartlify.write_off_variant_stock writes them (db/05): the reason, and the batches with their
 // units and costs. Decimals, not floats, for the money. A line of another shape is a broken state
-// of the log, not something the report may leave out
-export function summarizeWriteOffs(lines: unknown[]): WriteOffs {
+// of the log, not something the report may leave out. The goods that came back with a statement and
+// went out at once (stock.return_write_off) have no reason and no line here: they come in apart, as
+// the units and the value read from the log in sql, and count under customer_return
+export function summarizeWriteOffs(
+  lines: unknown[],
+  returned: { units: number; value: Prisma.Decimal.Value } = { units: 0, value: 0 },
+): WriteOffs {
   const total = emptySum();
-  const byReason = Object.fromEntries(WRITE_OFF_REASONS.map((r) => [r, emptySum()])) as Record<
-    WriteOffReason,
-    Sum
-  >;
+  const byReason = Object.fromEntries(
+    REPORT_WRITE_OFF_REASONS.map((r) => [r, emptySum()]),
+  ) as Record<WriteOffReason, Sum>;
+
+  for (const sum of [total, byReason.customer_return]) {
+    sum.units += returned.units;
+    sum.value = sum.value.plus(new Prisma.Decimal(returned.value));
+  }
 
   for (const meta of lines) {
     const changes = Array.isArray(meta) ? (meta as Change[]) : broken('not a list');
@@ -107,7 +133,7 @@ export function summarizeWriteOffs(lines: unknown[]): WriteOffs {
   return {
     ...shown(total),
     byReason: Object.fromEntries(
-      WRITE_OFF_REASONS.map((r) => [r, shown(byReason[r])]),
+      REPORT_WRITE_OFF_REASONS.map((r) => [r, shown(byReason[r])]),
     ) as WriteOffs['byReason'],
   };
 }

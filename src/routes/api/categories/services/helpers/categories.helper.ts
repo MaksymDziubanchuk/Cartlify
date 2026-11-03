@@ -4,6 +4,7 @@ import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import { buildImageUrls, isCloudinaryUrl } from '@utils/cloudinary.util.js';
 
+import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import type { CategoryResponseDto } from 'types/dto/categories.dto.js';
 import type { ProductImagesUrls } from 'types/dto/products.dto.js';
 import type { Role } from 'types/user.js';
@@ -22,6 +23,7 @@ export function categoryResponseOf(row: {
   description: string | null;
   parentId: number | null;
   imageUrl: string | null;
+  withdrawal: WithdrawalRuleName | null;
   createdAt: Date;
   updatedAt: Date;
 }): CategoryResponseDto {
@@ -32,6 +34,7 @@ export function categoryResponseOf(row: {
     ...(row.description != null ? { description: row.description } : {}),
     ...(row.parentId != null ? { parentId: row.parentId as any } : {}),
     imageUrls: categoryImageUrlsOf(row.imageUrl),
+    withdrawal: row.withdrawal,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };

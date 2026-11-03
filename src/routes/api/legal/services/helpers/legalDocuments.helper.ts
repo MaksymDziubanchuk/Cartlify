@@ -6,7 +6,7 @@ import { ConflictError } from '@utils/errors.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
 import {
-  LEGAL_DOCUMENT_KINDS,
+  CONSENT_KINDS,
   checkChosenVersions,
   detailsOf,
   outdatedVersions,
@@ -16,14 +16,19 @@ import {
 
 import type { ConsentEvent, WrittenEvent } from '@config/journalEvents.js';
 import type {
+  ConsentKind,
+  ContractTermsDto,
   LegalAcceptanceStatusDto,
   LegalDocumentDto,
   LegalDocumentKind,
+  PrivacyRetentionDto,
 } from 'types/dto/legal.dto.js';
 
-// the versions of the terms and of the contract and the consents to them, read and written in
-// the transaction of the caller, under its context: everybody reads the versions, a customer keeps
-// a consent of their own (db/03). The version in force of a kind is its latest one
+// the versions of the terms, of the contract and of the privacy policy, and the consents to the
+// terms and to the contract, read and written in the transaction of the caller, under its context:
+// everybody reads the versions, a customer keeps a consent of their own (db/03). The version in
+// force of a kind is its latest one; a customer accepts the versions in force of the terms and of
+// the contract (the consent versions), the privacy policy only informs
 
 type Db = Prisma.TransactionClient;
 
@@ -35,9 +40,50 @@ export const legalDocumentSelect = {
   content: true,
   sha256: true,
   createdAt: true,
+  withdrawalDays: true,
+  returnAddress: true,
+  returnShippingPaidBy: true,
+  retentionLoginAddressesDays: true,
+  retentionGuestDataDays: true,
+  retentionDeletedChatsDays: true,
+  retentionReturnAddressesDays: true,
+  retentionReturnPersonalDays: true,
+  retentionRecipientDays: true,
 } as const;
 
 type LegalDocumentRow = Prisma.LegalDocumentGetPayload<{ select: typeof legalDocumentSelect }>;
+
+// the database keeps the fields of a kind together (db/06), so a contract has all three of its
+// fields and a privacy policy all six of its terms, or the row is not of that kind
+const contractOf = (row: LegalDocumentRow): ContractTermsDto | null =>
+  row.kind === 'contract' &&
+  row.withdrawalDays !== null &&
+  row.returnAddress !== null &&
+  row.returnShippingPaidBy !== null
+    ? {
+        withdrawalDays: row.withdrawalDays,
+        returnAddress: row.returnAddress,
+        returnShippingPaidBy: row.returnShippingPaidBy,
+      }
+    : null;
+
+const retentionOf = (row: LegalDocumentRow): PrivacyRetentionDto | null =>
+  row.kind === 'privacy' &&
+  row.retentionLoginAddressesDays !== null &&
+  row.retentionGuestDataDays !== null &&
+  row.retentionDeletedChatsDays !== null &&
+  row.retentionReturnAddressesDays !== null &&
+  row.retentionReturnPersonalDays !== null &&
+  row.retentionRecipientDays !== null
+    ? {
+        loginAddressesDays: row.retentionLoginAddressesDays,
+        guestDataDays: row.retentionGuestDataDays,
+        deletedChatsDays: row.retentionDeletedChatsDays,
+        returnAddressesDays: row.retentionReturnAddressesDays,
+        returnPersonalDays: row.retentionReturnPersonalDays,
+        recipientDays: row.retentionRecipientDays,
+      }
+    : null;
 
 export const legalDocumentOf = (row: LegalDocumentRow): LegalDocumentDto => ({
   id: row.id,
@@ -47,11 +93,16 @@ export const legalDocumentOf = (row: LegalDocumentRow): LegalDocumentDto => ({
   content: row.content,
   sha256: row.sha256,
   publishedAt: row.createdAt.toISOString(),
+  contract: contractOf(row),
+  retention: retentionOf(row),
 });
 
+// the kinds in the order a page shows them: the ones a customer accepts first
+const KINDS_IN_ORDER: readonly LegalDocumentKind[] = [...CONSENT_KINDS, 'privacy'];
+
 const byKind = (a: { kind: DbKind }, b: { kind: DbKind }) =>
-  LEGAL_DOCUMENT_KINDS.indexOf(a.kind as LegalDocumentKind) -
-  LEGAL_DOCUMENT_KINDS.indexOf(b.kind as LegalDocumentKind);
+  KINDS_IN_ORDER.indexOf(a.kind as LegalDocumentKind) -
+  KINDS_IN_ORDER.indexOf(b.kind as LegalDocumentKind);
 
 // the latest version of each kind that has one, terms first
 export async function currentDocuments(db: Db): Promise<LegalDocumentRow[]> {
@@ -63,10 +114,18 @@ export async function currentDocuments(db: Db): Promise<LegalDocumentRow[]> {
   return rows.sort(byKind);
 }
 
+// the versions in force of the kinds a customer accepts: the ones a registration, a login, an
+// order and the page of consents work with
+export async function currentConsentDocuments(db: Db): Promise<LegalDocumentRow[]> {
+  return (await currentDocuments(db)).filter((row) => isConsentKind(row.kind));
+}
+
+const isConsentKind = (kind: DbKind): boolean => CONSENT_KINDS.includes(kind as ConsentKind);
+
 export const versionsOf = (rows: LegalDocumentRow[]): CurrentVersion[] =>
   rows.map((row) => ({
     id: row.id,
-    kind: row.kind as LegalDocumentKind,
+    kind: row.kind as ConsentKind,
     version: row.version,
     title: row.title,
   }));
@@ -114,26 +173,21 @@ export async function acceptanceStatusOf(
   db: Db,
   userId: number,
 ): Promise<LegalAcceptanceStatusDto & { versions: CurrentVersion[] }> {
-  const current = await currentDocuments(db);
+  const current = await currentConsentDocuments(db);
   const accepted = await acceptedOf(db, userId);
   const versions = versionsOf(current);
 
   return {
-    current: current.map((row) => ({
-      id: row.id,
-      kind: row.kind as LegalDocumentKind,
-      version: row.version,
-      title: row.title,
-    })),
+    current: versions.map(({ id, kind, version, title }) => ({ id, kind, version, title })),
     accepted: accepted.map((row) => ({
       documentId: row.documentId,
-      kind: row.kind as LegalDocumentKind,
+      kind: row.kind as ConsentKind,
       version: row.version,
       acceptedAt: row.createdAt.toISOString(),
     })),
     required: requiredKinds(
       versions,
-      new Map(accepted.map((row) => [row.kind as LegalDocumentKind, row.documentId])),
+      new Map(accepted.map((row) => [row.kind as ConsentKind, row.documentId])),
     ),
     versions,
   };
@@ -160,14 +214,27 @@ export async function recordConsents(
   } catch (err) {
     if (String(getPgMessage(err) ?? '').includes('LEGAL_DOCUMENT_NOT_CURRENT')) {
       // the transaction stopped with the refusal: the versions in force are read outside it
-      throw outdatedVersions(versionsOf(await prisma.$transaction((tx) => currentDocuments(tx))));
+      throw outdatedVersions(
+        versionsOf(await prisma.$transaction((tx) => currentConsentDocuments(tx))),
+      );
     }
     throw err;
   }
 }
 
+// holds the versions in force of the kinds a customer accepts until the transaction ends: a
+// version root publishes meanwhile waits for it (the lock of its kind, db/05). So the versions an
+// order is confirmed with, and the contract whose days it keeps (confirm_order), are the ones in
+// force when it commits, and the list read below cannot go stale under the confirmation
+async function holdVersionsInForce(db: Db): Promise<void> {
+  for (const kind of CONSENT_KINDS) {
+    await db.$executeRaw`select pg_advisory_xact_lock_shared(hashtext(${`cartlify.legal_documents:${kind}`}))`;
+  }
+}
+
 // an order is confirmed only by a customer who accepted the versions in force; it keeps them
 export async function assertAcceptedForOrder(db: Db, userId: number): Promise<number[]> {
+  await holdVersionsInForce(db);
   const status = await acceptanceStatusOf(db, userId);
   if (status.required.length) {
     throw new ConflictError('LEGAL_ACCEPTANCE_REQUIRED', {

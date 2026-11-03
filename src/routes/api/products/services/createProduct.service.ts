@@ -5,6 +5,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 import { normalizeWarnings } from '@helpers/party.js';
+import { parseWithdrawalRule } from '@helpers/withdrawal.js';
 
 import {
   assertCategoryExists,
@@ -62,6 +63,7 @@ export async function createProduct({
   euResponsibleId,
   euResponsible,
   warnings,
+  withdrawal,
   documentIds,
   categoryId,
   variants,
@@ -89,6 +91,8 @@ export async function createProduct({
     euResponsible,
   });
   const warningsNorm = normalizeWarnings(warnings);
+  // the rule of withdrawal of its own, none when the field is empty or not sent
+  const withdrawalNorm = parseWithdrawalRule(withdrawal) ?? null;
   // the documents of the directory the product names, in their order
   const documentIdsNorm = readDocumentIds(documentIds) ?? [];
 
@@ -152,6 +156,7 @@ export async function createProduct({
             manufacturerId: parties.manufacturer.id,
             euResponsibleId: parties.euResponsible?.id ?? null,
             warnings: warningsNorm,
+            withdrawal: withdrawalNorm,
             categoryId: categoryIdRaw,
           },
           select: { id: true },
@@ -179,6 +184,7 @@ export async function createProduct({
               ? [{ field: 'euResponsibleId', old: null, new: parties.euResponsible.id }]
               : []),
             ...(warningsNorm ? [{ field: 'warnings', old: null, new: warningsNorm }] : []),
+            ...(withdrawalNorm ? [{ field: 'withdrawal', old: null, new: withdrawalNorm }] : []),
             ...(documentIdsNorm.length
               ? [{ field: 'documentIds', old: null, new: documentIdsNorm }]
               : []),

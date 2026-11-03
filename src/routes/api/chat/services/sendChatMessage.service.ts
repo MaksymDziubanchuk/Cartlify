@@ -52,6 +52,9 @@ interface SendChatMessageResultDto {
     message: ChatMessageItemDto;
     botMessage: ChatMessageItemDto | null;
     adminRequested: boolean;
+    // the button "call an admin": offered because the bot could not answer, taken away because it
+    // can again, none when nothing changed
+    adminCall: 'offered' | 'withdrawn' | null;
 }
 
 // the chats the bot answers now, in this server process: one turn of the bot at a time in a chat,
@@ -258,6 +261,7 @@ async function createChatMessage({
                 message,
                 botMessage: null,
                 adminRequested,
+                adminCall: null,
             };
         },
         {
@@ -300,6 +304,7 @@ async function attachBotTurn({
             message: result.message,
             botMessage: botResult.botMessage,
             adminRequested: result.adminRequested,
+            adminCall: botResult.adminCall,
         };
     } catch (err) {
         // keeps the customer message successful even if bot processing fails, but not silently

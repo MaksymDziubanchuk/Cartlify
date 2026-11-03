@@ -13,6 +13,7 @@ import {
     isAppError,
 } from '@utils/errors.js';
 
+import { isAdminCallOffered } from './helpers/adminCall.helper.js';
 import { readChatHistoryPage } from './helpers/chatHistory.helper.js';
 
 import type {
@@ -151,9 +152,16 @@ function readCurrentChat({
         // the newest messages, the ones before come page by page
         const { messages, nextCursor } = await readChatHistoryPage(tx, thread.id);
 
+        // the button "call an admin": only a user, only while the chat is with the bot
+        const adminCallAvailable =
+            actorRole === 'USER' && thread.type === 'bot'
+                ? await isAdminCallOffered(thread.id)
+                : false;
+
         // return widget payload
         return {
             thread,
+            adminCallAvailable,
             messages,
             nextCursor,
             ws: {

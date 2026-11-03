@@ -257,6 +257,7 @@ const postProduct: ControllerRouter<
   let manufacturerIdRaw: string | undefined;
   let euResponsibleIdRaw: string | undefined;
   let warnings: string | undefined;
+  let withdrawal: string | undefined;
   // the ids of the documents of the directory the product names, with a comma between
   let documentIdsRaw: string | undefined;
   const partyFields = new Map<string, string>();
@@ -317,6 +318,7 @@ const postProduct: ControllerRouter<
       else if (part.fieldname === 'manufacturerId' && v.trim()) manufacturerIdRaw = v;
       else if (part.fieldname === 'euResponsibleId' && v.trim()) euResponsibleIdRaw = v;
       else if (part.fieldname === 'warnings') warnings = v;
+      else if (part.fieldname === 'withdrawal') withdrawal = v;
       else if (part.fieldname === 'documentIds') documentIdsRaw = v;
       else if (PARTY_FORM_FIELD.test(part.fieldname) && v !== '') {
         partyFields.set(part.fieldname, v);
@@ -359,6 +361,7 @@ const postProduct: ControllerRouter<
         euResponsibleId: euResponsibleIdRaw,
         euResponsible: partyFromFormFields(partyFields, 'euResponsible'),
         warnings,
+        withdrawal,
         documentIds: documentIdsRaw,
         variants: variantsRaw,
         stock: stockRaw,
@@ -414,6 +417,7 @@ const updateProductById: ControllerRouter<
   let manufacturerId: unknown;
   let euResponsibleId: unknown;
   let warnings: string | null | undefined;
+  let withdrawal: string | null | undefined;
   // the documents by their ids: a form gives them as text, a json body as an array or null
   let documentIds: unknown;
 
@@ -444,6 +448,7 @@ const updateProductById: ControllerRouter<
       else if (part.fieldname === 'manufacturerId') manufacturerId = t;
       else if (part.fieldname === 'euResponsibleId') euResponsibleId = t || null;
       else if (part.fieldname === 'warnings') warnings = v;
+      else if (part.fieldname === 'withdrawal') withdrawal = v;
       else if (part.fieldname === 'documentIds') documentIds = v;
       else if (part.fieldname === 'stock') stock = v;
       else if (part.fieldname === 'categoryId') categoryId = t ? Number(t) : undefined;
@@ -463,6 +468,7 @@ const updateProductById: ControllerRouter<
     manufacturerId = b.manufacturerId;
     euResponsibleId = b.euResponsibleId;
     warnings = b.warnings;
+    withdrawal = b.withdrawal;
     documentIds = b.documentIds;
     stock = b.stock;
     categoryId = b.categoryId;
@@ -479,6 +485,7 @@ const updateProductById: ControllerRouter<
       manufacturerId: manufacturerId as UpdateProductDto['manufacturerId'],
       euResponsibleId: euResponsibleId as UpdateProductDto['euResponsibleId'],
       warnings,
+      withdrawal,
       documentIds: documentIds as UpdateProductDto['documentIds'],
       stock,
       categoryId,

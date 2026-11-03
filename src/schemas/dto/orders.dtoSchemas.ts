@@ -1,4 +1,16 @@
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
+import {
+  RETURN_BASES,
+  RETURN_DESCRIPTION_MAX,
+  RETURN_MONEY,
+  RETURN_NOT_ACCEPTED_REASONS,
+  RETURN_OUTSIDE_METHODS,
+  RETURN_REASONS,
+  RETURN_SOURCES,
+  RETURN_STATUSES,
+} from '@helpers/returns.js';
+import { WITHDRAWAL_RULES } from '@helpers/withdrawal.js';
+import { returnStatusField } from './returns.dtoSchemas.js';
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
 
 // an id or a quantity in the body: a whole number from 1 to the largest int of the database.
@@ -14,6 +26,9 @@ const wholeNumberField = (description: string) =>
 
 // the statuses of the list, for the pattern of a list of them
 const LIST_STATUSES = 'waiting|unconfirmed|paid|shipped|delivered|cancelled';
+
+// the same for the statuses of the statements of return an order has
+const RETURN_STATUS_NAMES = RETURN_STATUSES.join('|');
 
 // the longest note for the courier, in characters
 const SHIPPING_TEXT_MAX_LENGTH = 500;
@@ -211,8 +226,27 @@ const ordersOrderItemSchema = {
     quantity: { type: 'number' },
     unitPrice: { type: 'number' },
     totalPrice: { type: 'number' },
+    withdrawal: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The rule of withdrawal of the product the page words, and the kind it makes. A cart and ' +
+        'an unconfirmed order show the rule of now; the confirmation fixes the rule of that ' +
+        'moment, and the order keeps it whatever is changed after.',
+      properties: {
+        rule: { type: 'string', enum: [...WITHDRAWAL_RULES] },
+        right: {
+          type: 'string',
+          enum: ['full', 'conditional', 'none'],
+          description:
+            'full: taken back freely; conditional: only while the seal is unbroken; none: not ' +
+            'taken back at all.',
+        },
+      },
+      required: ['rule', 'right'],
+    },
   },
-  required: ['id', 'product', 'variant', 'quantity', 'unitPrice', 'totalPrice'],
+  required: ['id', 'product', 'variant', 'quantity', 'unitPrice', 'totalPrice', 'withdrawal'],
 } as const;
 
 const ordersOrderResponseSchema = {
@@ -276,7 +310,229 @@ const ordersOrderResponseSchema = {
     cancelledAt: {
       type: 'string',
       format: 'date-time',
-      description: 'When an admin cancelled the paid order, only for a cancelled order.',
+      description:
+        'When the order became cancelled (its statements of return took all of it back), only for ' +
+        'a cancelled order.',
+    },
+    deliveredAt: {
+      type: 'string',
+      format: 'date-time',
+      description: 'When the order was delivered, only while it is delivered.',
+    },
+    withdrawalEndsAt: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Until when the buyer may withdraw from the order by the contract, only once it is ' +
+        'delivered: the end of the last day (in the time zone of the shop) of the days of the ' +
+        'contract the order kept (14 when none was published at its confirmation), counted after ' +
+        'the day of the delivery. The date to show; the shop forgives a few days more (its grace), ' +
+        'so the button goes by withdrawalOpen, not by this date.',
+    },
+    withdrawalOpen: {
+      type: 'boolean',
+      description:
+        'Whether the buyer may withdraw from the order now: a paid or shipped order always (the ' +
+        'period starts with the delivery), a delivered one until withdrawalEndsAt and the days of ' +
+        'grace of the shop after it, any other order never. The button of withdrawal goes by it.',
+    },
+    returnStatus: returnStatusField,
+    returns: {
+      type: 'array',
+      description:
+        'Admin and root only: the statements of withdrawal and of return of the order, the oldest ' +
+        'first; the card of each is GET /api/returns/{returnId}.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          code: { type: 'string', description: 'The code of the statement: W42-2 or R42-1.' },
+          statedAt: { type: 'string', format: 'date-time' },
+          source: { type: 'string', enum: [...RETURN_SOURCES] },
+          basis: { type: 'string', enum: [...RETURN_BASES] },
+          reason: { type: ['string', 'null'], enum: [...RETURN_REASONS, null] },
+          extendsId: { type: ['integer', 'null'] },
+          closedAt: { type: ['string', 'null'], format: 'date-time' },
+        },
+        required: ['id', 'code', 'statedAt', 'source', 'basis', 'reason', 'extendsId', 'closedAt'],
+      },
+    },
+    returnUnits: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'Admin and root, only for an order with statements: what they did to each item they ' +
+        'touched, and the money in sum. A unit with the shop (on the shelf, written off or lost on ' +
+        'its way back) is not to be sent.',
+      properties: {
+        items: {
+          type: 'array',
+          description: 'The items the statements touched, in the order of the items.',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              orderItemId: { type: 'integer' },
+              quantity: { type: 'integer', description: 'The units the order bought.' },
+              refunded: { type: 'integer', description: 'The units whose money went back.' },
+              refused: { type: 'integer', description: 'The units whose money was refused.' },
+              waiting: {
+                type: 'integer',
+                description:
+                  'The units in statements whose money is not settled yet (or on its way).',
+              },
+              withShop: {
+                type: 'integer',
+                description:
+                  'The units the shop has back: on the shelf, written off or lost on their way back.',
+              },
+              toShip: {
+                type: 'integer',
+                description:
+                  'The units of the item still to send: quantity less withShop. For an order not ' +
+                  'sent yet it is what goes in the parcel.',
+              },
+            },
+            required: [
+              'orderItemId',
+              'quantity',
+              'refunded',
+              'refused',
+              'waiting',
+              'withShop',
+              'toShip',
+            ],
+          },
+        },
+        refundedTotal: {
+          type: 'number',
+          description: 'The money that went back to the buyer, the delivery with it.',
+        },
+        netTotal: {
+          type: 'number',
+          description: 'What the order is worth now: the total paid less the money that went back.',
+        },
+      },
+      required: ['items', 'refundedTotal', 'netTotal'],
+    },
+    withdrawals: {
+      type: 'array',
+      description:
+        'The buyer: their statements of withdrawal of the order, the oldest first, with the path of ' +
+        'each (step: received, proof_provided, proof_confirmed, closed) and the money of each row ' +
+        '(never what became of the goods).',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer' },
+          code: {
+            type: 'string',
+            description: 'The code of the statement in the mails: W42-2 (a withdrawal) or R42-1.',
+          },
+          statedAt: { type: 'string', format: 'date-time' },
+          source: { type: 'string', enum: [...RETURN_SOURCES] },
+          basis: { type: 'string', enum: [...RETURN_BASES] },
+          reason: { type: ['string', 'null'], enum: [...RETURN_REASONS, null] },
+          step: {
+            type: 'string',
+            enum: ['received', 'proof_provided', 'proof_confirmed', 'closed'],
+          },
+          closedAt: { type: ['string', 'null'], format: 'date-time' },
+          proof: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            description: 'How the buyer sent the goods back, none until they wrote it.',
+            properties: {
+              carrier: { type: 'string' },
+              trackingNumber: { type: 'string' },
+              trackingUrl: { type: ['string', 'null'] },
+              providedAt: { type: 'string', format: 'date-time' },
+              confirmed: { type: 'boolean', description: 'Whether the shop confirmed it.' },
+            },
+            required: ['carrier', 'trackingNumber', 'trackingUrl', 'providedAt', 'confirmed'],
+          },
+          shippingReimbursement: {
+            type: ['object', 'null'],
+            additionalProperties: false,
+            description:
+              'What the shop paid back for sending the goods back, outside the app, none until it did.',
+            properties: {
+              amount: { type: 'number' },
+              at: { type: 'string', format: 'date-time' },
+              method: { type: 'string', enum: [...RETURN_OUTSIDE_METHODS] },
+            },
+            required: ['amount', 'at', 'method'],
+          },
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                orderItemId: { type: 'integer' },
+                quantity: { type: 'integer' },
+                amount: { type: 'number', description: 'What the units cost.' },
+                deliveryAmount: {
+                  type: 'number',
+                  description: 'The part of the delivery that goes back with them.',
+                },
+                shippingDeduction: {
+                  type: 'number',
+                  description:
+                    'The cost of sending the goods back taken off (the contract says the buyer ' +
+                    'pays it), 0 for none.',
+                },
+                money: { type: 'string', enum: [...RETURN_MONEY] },
+                refundedAt: { type: ['string', 'null'], format: 'date-time' },
+                refusal: {
+                  type: ['string', 'null'],
+                  enum: [...RETURN_NOT_ACCEPTED_REASONS, 'not_arrived', null],
+                  description:
+                    'Why the money was refused: the shop did not accept the goods (the reason) or ' +
+                    'they never came.',
+                },
+              },
+              required: [
+                'orderItemId',
+                'quantity',
+                'amount',
+                'deliveryAmount',
+                'shippingDeduction',
+                'money',
+                'refundedAt',
+                'refusal',
+              ],
+            },
+          },
+        },
+        required: [
+          'id',
+          'code',
+          'statedAt',
+          'source',
+          'basis',
+          'reason',
+          'step',
+          'closedAt',
+          'proof',
+          'shippingReimbursement',
+          'items',
+        ],
+      },
+    },
+    withdrawable: {
+      type: 'array',
+      description:
+        'The buyer: the units of each item they can still state (the order can be withdrawn from ' +
+        'and the item has the right of withdrawal).',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { orderItemId: { type: 'integer' }, quantity: { type: 'integer' } },
+        required: ['orderItemId', 'quantity'],
+      },
     },
     confirmed: { type: 'boolean' },
   },
@@ -291,6 +547,8 @@ const ordersOrderResponseSchema = {
     'createdAt',
     'updatedAt',
     'confirmed',
+    'withdrawalOpen',
+    'returnStatus',
   ],
 } as const;
 
@@ -484,6 +742,13 @@ const ordersGetQuerySchema = {
       pattern: `^(${LIST_STATUSES})(,(${LIST_STATUSES}))*$`,
       description: 'A few statuses separated by commas, for example paid,shipped.',
     },
+    returnStatuses: {
+      type: 'string',
+      pattern: `^(${RETURN_STATUS_NAMES})(,(${RETURN_STATUS_NAMES}))*$`,
+      description:
+        'A few statuses of the statements of return separated by commas, for example ' +
+        `open,open_partial: ${RETURN_STATUSES.join(', ')}.`,
+    },
     productId: {
       type: 'integer',
       minimum: 1,
@@ -611,10 +876,13 @@ const ordersGetQuerySchema = {
         'deliveryMethod',
         'destination',
         'deliveryPrice',
+        'returnStatus',
         'shippingCostMissingSince',
       ],
       description:
         'createdAt by default, newest first. paidAt lists only the orders that are paid. ' +
+        'returnStatus sorts by the status of the statements of return, in the order of the ' +
+        `list ${RETURN_STATUSES.join(', ')}. ` +
         'destination sorts by the country and then the city and lists only the orders that go to ' +
         'an address. shippingCostMissingSince sorts by the oldest send of each order the shop ' +
         'owes the carrier for and has written no cost of, with shippingCostMissing only ' +
@@ -688,6 +956,16 @@ const shipmentInputSchema = {
   },
 } as const;
 
+const deliveredAtSchema = {
+  type: 'string',
+  format: 'date-time',
+  description:
+    'With the step to delivered: the moment the carrier delivered the order (a pickup: it was ' +
+    'collected), when the admin marks it later; not before the order was sent (a pickup: paid) and ' +
+    'never of the future (ORDER_DELIVERED_AT_INVALID). Now when none is given. The period of ' +
+    'withdrawal counts from it. Not allowed with another step (DELIVERED_AT_NOT_ALLOWED).',
+} as const;
+
 const keepShippingCostSchema = {
   type: 'boolean',
   description:
@@ -716,6 +994,7 @@ const ordersBulkStatusBodySchema = {
           orderId: { type: 'integer', minimum: 1, maximum: MAX_ID },
           shipment: shipmentInputSchema,
           keepShippingCost: keepShippingCostSchema,
+          deliveredAt: deliveredAtSchema,
         },
         required: ['orderId'],
       },
@@ -739,15 +1018,21 @@ const ordersBulkStatusResponseSchema = {
           orderId: { type: 'integer' },
           ok: { type: 'boolean' },
           status: { type: 'string', description: 'With ok: the status of the order now.' },
+          returnStatus: {
+            ...returnStatusField,
+            description:
+              'With ok: where the order stands as to its statements; any but none tells that ' +
+              'statements changed its items (GET /api/orders/{orderId} says how).',
+          },
           errorCode: {
             type: 'string',
             description:
               'Without ok: why the order did not take the step, the code PATCH ' +
               '/api/orders/{orderId}/status would answer (ORDER_NOT_FOUND, ' +
-              'ORDER_STATUS_TRANSITION_INVALID, ORDER_STATUS_CHANGED, RESOURCE_BUSY, ' +
+              'ORDER_STATUS_TRANSITION_INVALID, ORDER_HAS_OPEN_REFUSAL, ORDER_STATUS_CHANGED, RESOURCE_BUSY, ' +
               'SHIPMENT_NOT_ALLOWED, SHIPMENT_CARRIER_REQUIRED, ' +
               'SHIPMENT_CARRIER_INVALID, SHIPMENT_NUMBER_INVALID, KEEP_SHIPPING_COST_REQUIRED, ' +
-              'KEEP_SHIPPING_COST_NOT_ALLOWED).',
+              'KEEP_SHIPPING_COST_NOT_ALLOWED, DELIVERED_AT_NOT_ALLOWED, ORDER_DELIVERED_AT_INVALID).',
           },
           details: { type: 'object', additionalProperties: true },
         },
@@ -768,11 +1053,12 @@ const ordersUpdateStatusBodySchema = {
       enum: ['paid', 'shipped', 'delivered'],
       description:
         'The steps go on from paid to shipped (a pickup: ready to be collected) and to delivered ' +
-        '(collected), and one step back: delivered to shipped, shipped to paid. A cancel returns ' +
-        'the money and the stock, it is POST /api/orders/{orderId}/cancel.',
+        '(collected), and one step back: delivered to shipped, shipped to paid. A cancel is a ' +
+        'statement of return: POST /api/returns with the reason shop_cancel or refused.',
     },
     shipment: shipmentInputSchema,
     keepShippingCost: keepShippingCostSchema,
+    deliveredAt: deliveredAtSchema,
   },
   required: ['status'],
 } as const;
@@ -841,21 +1127,73 @@ const ordersDeliveryUpdateBodySchema = {
   },
 } as const;
 
-const ordersCancelBodySchema = {
-  $id: 'ordersCancelBodySchema',
+const ordersWithdrawBodySchema = {
+  $id: 'ordersWithdrawBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    shippingPaid: {
-      type: 'boolean',
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
       description:
-        'The cancel of a manual order that was shipped: true when the carrier was paid already (the ' +
-        'cost of the send stays owed, an expense of the shop), false when it was not (the cost of ' +
-        'the send becomes 0, the one it had stays in the admin log). Needed then ' +
-        '(SHIPPING_PAID_REQUIRED), not allowed otherwise ' +
-        '(SHIPPING_PAID_NOT_ALLOWED).',
+        'The units to withdraw from, each item of the order once. Without it: whatever is left of ' +
+        'the order that has the right of withdrawal.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          orderItemId: wholeNumberField('Id of the item of the order'),
+          quantity: wholeNumberField('Units of it'),
+        },
+        required: ['orderItemId', 'quantity'],
+      },
+    },
+    description: {
+      type: 'string',
+      minLength: 1,
+      maxLength: RETURN_DESCRIPTION_MAX,
+      description: "The buyer's own words, for the shop.",
     },
   },
+} as const;
+
+const ordersReturnProofParamsSchema = {
+  $id: 'ordersReturnProofParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: idPathParam('the order'),
+    returnId: idPathParam('the statement of the order'),
+  },
+  required: ['orderId', 'returnId'],
+} as const;
+
+const ordersReturnProofBodySchema = {
+  $id: 'ordersReturnProofBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    carrier: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description: 'Who carries the parcel.',
+    },
+    trackingNumber: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 100,
+      description: 'The number of the parcel.',
+    },
+    trackingUrl: {
+      type: 'string',
+      maxLength: 500,
+      pattern: '^https://[^\\s]+$',
+      description: 'A link to follow the parcel (https).',
+    },
+  },
+  required: ['carrier', 'trackingNumber'],
 } as const;
 
 const ordersUpdateStatusResponseSchema = {
@@ -874,29 +1212,10 @@ const ordersOrderItemParamsSchema = {
   required: ['orderId', 'itemId'],
 } as const;
 
-// the answer of an admin cancel: the order and how to reach its buyer; the order itself holds the
-// address, the recipient and the phone, also when the account is deleted
-const ordersCancelledResponseSchema = {
-  $id: 'ordersCancelledResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    ...ordersOrderResponseSchema.properties,
-    user: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id: { type: 'number' },
-        deleted: { type: 'boolean' },
-        email: { type: 'string', description: 'Only while the account is not deleted.' },
-      },
-      required: ['id', 'deleted'],
-    },
-  },
-  required: [...ordersOrderResponseSchema.required, 'user'],
-} as const;
-
 export const ordersDtoSchemas = [
+  ordersWithdrawBodySchema,
+  ordersReturnProofParamsSchema,
+  ordersReturnProofBodySchema,
   ordersCurrentAddItemBodySchema,
   ordersCurrentItemIdParamsSchema,
   ordersCurrentUpdateItemBodySchema,
@@ -914,9 +1233,7 @@ export const ordersDtoSchemas = [
   ordersShipmentParamsSchema,
   ordersShipmentUpdateBodySchema,
   ordersDeliveryUpdateBodySchema,
-  ordersCancelBodySchema,
   ordersUpdateStatusResponseSchema,
   ordersListResponseSchema,
   ordersOrderItemParamsSchema,
-  ordersCancelledResponseSchema,
 ];
