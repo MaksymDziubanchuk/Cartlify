@@ -46,7 +46,21 @@ async function putInForce(kind: 'terms' | 'contract'): Promise<number> {
     method: 'POST',
     url: '/api/root/legal-documents',
     headers: withCsrf(await getCsrf(app), accessCookie(root)),
-    payload: { kind, title: `The ${kind} of the demo`, content: `The ${kind}, ${uniqueTag()}.` },
+    payload: {
+      kind,
+      title: `The ${kind} of the demo`,
+      content: `The ${kind}, ${uniqueTag()}.`,
+      // the fields only a contract has
+      ...(kind === 'contract'
+        ? {
+            contract: {
+              withdrawalDays: 14,
+              returnAddress: 'Returns, 1 Main Street',
+              returnShippingPaidBy: 'buyer',
+            },
+          }
+        : {}),
+    },
   });
   expect(res.statusCode).toBe(201);
   return res.json().id;
