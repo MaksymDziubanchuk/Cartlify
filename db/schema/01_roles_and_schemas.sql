@@ -59,6 +59,13 @@ ALTER ROLE cartlify_app
 SET
   idle_in_transaction_session_timeout = '30s';
 
+-- No JIT for the app: its queries run in milliseconds, and the long ones (the reports, with many
+-- ctes) are given a high cost by estimates that cannot see through their filters, so the database
+-- compiled them on every call (about 1.7 s, against 57 ms to run one).
+ALTER ROLE cartlify_app
+SET
+  jit = off;
+
 ------------------------------------------------------------
 -- 1b. Extra rights of the owner
 ------------------------------------------------------------
@@ -176,7 +183,7 @@ SELECT
 ------------------------------------------------------------
 -- Every function starts closed: no right for public, the app or readonly. Each role then gets an
 -- explicit list of the functions it calls. Internal functions (recalc_*, the steps of stock and
--- batches, delivery_price, retention_cutoff, trigger functions) stay closed for the app: they
+-- batches, delivery_price, the retention_* helpers, trigger functions) stay closed for the app: they
 -- are called by triggers and by other functions (recalc_all_products_popularity is run by hand as
 -- the owner until a periodic job exists).
 -- The file is one transaction, so the app never sees the moment between the revoke and the grant.
@@ -248,29 +255,50 @@ BEGIN
     'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
     'cartlify.unconfirm_order(integer)',
     'cartlify.cancel_order_payment(integer)',
-    'cartlify.cancel_paid_order(integer)',
     'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
     'cartlify.expire_order_reservation(integer)',
     -- logins of a deleted account: root or the system
     'cartlify.anonymize_login_logs(integer)',
     -- cleanup of old data for the periodic tasks: the system only
     'cartlify.cleanup_user_tokens(integer)',
-    'cartlify.cleanup_login_log_addresses(integer)',
-    'cartlify.cleanup_guest_data(integer)',
-    'cartlify.cleanup_deleted_accounts_chats(integer)',
+    'cartlify.cleanup_login_log_addresses()',
+    'cartlify.cleanup_guest_data()',
+    'cartlify.cleanup_deleted_accounts_chats()',
+    'cartlify.cleanup_return_addresses()',
+    'cartlify.cleanup_return_personal()',
+    'cartlify.cleanup_deleted_accounts_recipients()',
     -- admin only: the price journal, deliveries and write-offs of stock
     'cartlify.log_variant_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
     'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
     'cartlify.write_off_variant_stock(uuid, integer, integer, integer, text, text)',
-    -- helpers: refresh_order_prices, product_current_price, variant_display_name, variant_names, shop_today and
-    -- log_admin_action run with the rights of the caller, so row level security applies;
+    -- helpers: refresh_order_prices, product_current_price, variant_display_name, variant_names,
+    -- shop_today, withdrawal_ends_at (reads no table) and log_admin_action run with the rights of
+    -- the caller, so row level security applies;
     -- variant_expired_units and units_sold_in_period run as the owner, because a buyer cannot read
-    -- the batches or the orders of others
+    -- the batches or the orders of others; product_withdrawals runs as the owner too, it reads
+    -- the rule of a product a buyer may no longer see in the catalog
     'cartlify.refresh_order_prices(integer)',
     'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
     'cartlify.variant_display_name(integer)',
     'cartlify.variant_names(integer[])',
     'cartlify.shop_today()',
+    'cartlify.withdrawal_ends_at(timestamp without time zone, integer, integer, text)',
+    'cartlify.product_withdrawals(integer[])',
+    -- the statements of withdrawal and of return: they check the actor themselves
+    'cartlify.create_return(integer, jsonb, cartlify."ReturnSource", cartlify."ReturnBasis", cartlify."ReturnReason", text, text, text, timestamp without time zone, integer, integer, text)',
+    'cartlify.receive_return_items(integer, jsonb)',
+    'cartlify.confirm_return_proof(integer)',
+    'cartlify.accept_return(integer)',
+    'cartlify.provide_return_proof(integer, text, text, text)',
+    'cartlify.record_return_shipment(integer, text, text, text, numeric, timestamp without time zone)',
+    'cartlify.set_return_shipment_cost(integer, numeric)',
+    -- the money of the statements: they check the actor themselves
+    'cartlify.begin_return_refund(integer, integer[], jsonb, numeric)',
+    'cartlify.finish_return_refund(uuid, text, text, cartlify."ReturnRefundFailure", text)',
+    'cartlify.mark_return_refunded_outside(integer, integer[], cartlify."ReturnOutsideMethod", text, timestamp without time zone)',
+    'cartlify.close_return_without_refund(integer, integer[], cartlify."ReturnCloseCode", text)',
+    'cartlify.record_return_reimbursement(integer, numeric, cartlify."ReturnOutsideMethod", text, timestamp without time zone)',
+    'cartlify.settle_return_dispute(integer, boolean, text, timestamp without time zone)',
     'cartlify.variant_expired_units(integer)',
     'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
     'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)'

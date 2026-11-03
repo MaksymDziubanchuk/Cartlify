@@ -49,12 +49,19 @@ BEGIN
       ('orders', 'id'), ('orders', 'userId'), ('orders', 'status'), ('orders', 'total'),
       ('orders', 'createdAt'), ('orders', 'updatedAt'), ('orders', 'confirmed'),
       ('orders', 'reservationExpiresAt'), ('orders', 'paymentId'), ('orders', 'paymentProvider'),
-      ('orders', 'cancelledAt'), ('orders', 'paidAt'),
+      ('orders', 'cancelledAt'), ('orders', 'paidAt'), ('orders', 'deliveredAt'),
+      ('orders', 'withdrawalDays'), ('orders', 'returnShippingPaidBy'), ('orders', 'returnStatus'),
       -- the number and the link of a parcel lead to the person it goes to, they change below
       ('order_shipments', 'id'), ('order_shipments', 'orderId'), ('order_shipments', 'carrier'),
       ('order_shipments', 'trackingNumber'), ('order_shipments', 'trackingUrl'),
       ('order_shipments', 'cost'), ('order_shipments', 'expense'), ('order_shipments', 'shippedAt'),
       ('order_shipments', 'rolledBackAt'), ('order_shipments', 'updatedAt'),
+      -- the same for a parcel the shop paid to carry goods back
+      ('return_shipments', 'id'), ('return_shipments', 'returnId'),
+      ('return_shipments', 'carrier'), ('return_shipments', 'trackingNumber'),
+      ('return_shipments', 'trackingUrl'), ('return_shipments', 'cost'),
+      ('return_shipments', 'shippedAt'), ('return_shipments', 'recordedById'),
+      ('return_shipments', 'createdAt'), ('return_shipments', 'updatedAt'),
       ('order_deliveries', 'orderId'), ('order_deliveries', 'method'),
       ('order_deliveries', 'recipientFirstName'), ('order_deliveries', 'recipientLastName'),
       ('order_deliveries', 'recipientPhone'), ('order_deliveries', 'country'),
@@ -81,7 +88,34 @@ BEGIN
       ('stock_log', 'productId'), ('stock_log', 'variantId'), ('stock_log', 'event'),
       ('stock_log', 'quantityChange'), ('stock_log', 'stockAfter'), ('stock_log', 'meta'),
       ('stock_log', 'deliveryId'), ('stock_log', 'writeOffId'), ('stock_log', 'orderId'),
-      ('stock_log', 'ip'), ('stock_log', 'userAgent'), ('stock_log', 'createdAt'),
+      ('stock_log', 'returnItemId'), ('stock_log', 'ip'), ('stock_log', 'userAgent'), ('stock_log', 'createdAt'),
+      -- a statement of return keeps the name and the email of whoever made it, the words of the
+      -- buyer, and the address and the browser of the request: they change below; the rows hold
+      -- the goods and the money, no personal data
+      ('returns', 'id'), ('returns', 'orderId'), ('returns', 'extendsId'), ('returns', 'statedAt'),
+      ('returns', 'source'), ('returns', 'createdById'), ('returns', 'basis'),
+      ('returns', 'reason'), ('returns', 'description'), ('returns', 'contactName'),
+      ('returns', 'contactEmail'), ('returns', 'ip'), ('returns', 'userAgent'),
+      ('returns', 'proofProvidedAt'), ('returns', 'proofCarrier'),
+      ('returns', 'proofTrackingNumber'), ('returns', 'proofTrackingUrl'),
+      ('returns', 'proofConfirmedAt'),
+      ('returns', 'proofConfirmedById'), ('returns', 'closedAt'), ('returns', 'closedById'),
+      ('returns', 'closeCode'), ('returns', 'closeNote'),
+      ('returns', 'shippingReimbursed'), ('returns', 'shippingReimbursedAt'),
+      ('returns', 'shippingReimbursedMethod'), ('returns', 'shippingReimbursedNote'),
+      ('returns', 'shippingReimbursedById'),
+      ('returns', 'createdAt'), ('returns', 'updatedAt'),
+      ('return_items', 'id'), ('return_items', 'returnId'), ('return_items', 'orderItemId'),
+      ('return_items', 'quantity'), ('return_items', 'goods'),
+      ('return_items', 'notAcceptedReason'), ('return_items', 'money'), ('return_items', 'amount'),
+      ('return_items', 'goodsSetAt'), ('return_items', 'goodsSetById'),
+      ('return_items', 'amountNote'), ('return_items', 'deliveryShare'),
+      ('return_items', 'shippingDeduction'),
+      ('return_items', 'refundKey'), ('return_items', 'refundId'), ('return_items', 'refundedAt'),
+      ('return_items', 'refundFailure'), ('return_items', 'refundFailureText'),
+      ('return_items', 'outsideMethod'), ('return_items', 'outsideNote'),
+      ('return_items', 'outsideById'), ('return_items', 'refusedCode'),
+      ('return_items', 'createdAt'), ('return_items', 'updatedAt'),
       -- a review is public: the shop shows it with its author, whose name changes above
       ('reviews', 'id'), ('reviews', 'productId'), ('reviews', 'userId'), ('reviews', 'rating'),
       ('reviews', 'comment'), ('reviews', 'createdAt'), ('reviews', 'downVotes'),
@@ -191,11 +225,41 @@ SET
   apartment = NULL,
   note = NULL;
 
+-- a statement of return: the name and the email are made up like the recipient of an order, the
+-- words of the buyer and the address and the browser of the request go; the moments, the reason, the
+-- source, the goods and the money stay
+UPDATE cartlify.returns
+SET
+  "contactName" = 'Recipient Customer',
+  "contactEmail" = 'return+' || id || '@example.com',
+  description = NULL,
+  ip = NULL,
+  "userAgent" = NULL,
+  "closeNote" = CASE WHEN "closeNote" IS NOT NULL THEN 'Closed by the shop' END,
+  "shippingReimbursedNote" = CASE
+    WHEN "shippingReimbursedNote" IS NOT NULL THEN 'Paid back outside the app'
+  END,
+  "proofTrackingNumber" = CASE WHEN "proofTrackingNumber" IS NOT NULL THEN 'RTRACK' || id END,
+  "proofTrackingUrl" = CASE WHEN "proofTrackingUrl" IS NOT NULL THEN 'https://example.com/track/r' || id END;
+
+-- the notes of root and the words of the provider on a row of a statement go; the key and the id of
+-- the transfer stay, like the payment id of an order
+UPDATE cartlify.return_items
+SET
+  "amountNote" = CASE WHEN "amountNote" IS NOT NULL THEN 'Lowered by the shop' END,
+  "outsideNote" = CASE WHEN "outsideNote" IS NOT NULL THEN 'Sent outside the app' END,
+  "refundFailureText" = NULL;
+
 -- the number and the link of a parcel are made up: they lead to the person the parcel goes to
 UPDATE cartlify.order_shipments
 SET
   "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'TRACK' || id END,
   "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/' || id END;
+
+UPDATE cartlify.return_shipments
+SET
+  "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'BACK' || id END,
+  "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/back' || id END;
 
 ------------------------------------------------------------
 -- 4. CHATS
@@ -238,7 +302,7 @@ SET
       SELECT jsonb_agg(
         CASE
           WHEN x.change ->> 'field' IN (
-            'avatar', 'comment', 'email', 'name', 'phone',
+            'avatar', 'comment', 'email', 'name', 'phone', 'contactName', 'contactEmail', 'description',
             -- an order: the person and the address of the delivery, the note, the send with its
             -- number and link
             'recipientFirstName', 'recipientLastName', 'recipientPhone', 'postalCode', 'city',
@@ -311,6 +375,33 @@ BEGIN
       WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
     )
     UNION ALL
+    SELECT 'returns'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.returns
+      WHERE description IS NOT NULL
+        OR ip IS NOT NULL
+        OR "userAgent" IS NOT NULL
+        OR ("closeNote" IS NOT NULL AND "closeNote" <> 'Closed by the shop')
+        OR (
+          "shippingReimbursedNote" IS NOT NULL
+          AND "shippingReimbursedNote" <> 'Paid back outside the app'
+        )
+        OR ("proofTrackingNumber" IS NOT NULL AND "proofTrackingNumber" <> 'RTRACK' || id)
+        OR ("proofTrackingUrl" IS NOT NULL AND "proofTrackingUrl" <> 'https://example.com/track/r' || id)
+        OR "contactName" <> 'Recipient Customer'
+        OR "contactEmail" <> 'return+' || id || '@example.com'
+    )
+    UNION ALL
+    SELECT 'return_items'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.return_items
+      WHERE ("amountNote" IS NOT NULL AND "amountNote" <> 'Lowered by the shop')
+        OR ("outsideNote" IS NOT NULL AND "outsideNote" <> 'Sent outside the app')
+        OR "refundFailureText" IS NOT NULL
+    )
+    UNION ALL
     SELECT 'order_deliveries'
     WHERE EXISTS (
       SELECT 1
@@ -327,6 +418,14 @@ BEGIN
       FROM cartlify.order_shipments
       WHERE ("trackingNumber" IS NOT NULL AND "trackingNumber" <> 'TRACK' || id)
         OR ("trackingUrl" IS NOT NULL AND "trackingUrl" <> 'https://example.com/track/' || id)
+    )
+    UNION ALL
+    SELECT 'return_shipments'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.return_shipments
+      WHERE ("trackingNumber" IS NOT NULL AND "trackingNumber" <> 'BACK' || id)
+        OR ("trackingUrl" IS NOT NULL AND "trackingUrl" <> 'https://example.com/track/back' || id)
     )
     UNION ALL
     SELECT 'chat_messages'

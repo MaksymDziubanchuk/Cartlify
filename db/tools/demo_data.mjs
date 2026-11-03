@@ -789,14 +789,15 @@ async function putOnSale(admin, variantIds, made) {
   step(`sales: ${onSale.length} variants on sale for 14 days`);
 }
 
-// the ids of the versions of the terms and of the contract in force; none while root published none
+// the ids of the versions of the terms and of the contract in force; none while root published none.
+// The privacy policy is in force too, and nobody accepts it
 async function versionsInForce(base) {
   const res = expectStatus(
     await new Session(base).send('GET', '/api/legal/documents/current'),
     [200],
     'the terms in force',
   );
-  return res.body.items.map((doc) => doc.id);
+  return res.body.items.filter((doc) => doc.kind !== 'privacy').map((doc) => doc.id);
 }
 
 // a buyer of the demo: logged in (ready), registered and waiting for the link of the mail to

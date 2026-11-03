@@ -776,9 +776,13 @@ BEGIN
 END;
 $$;
 
+-- Removes the old signature of log_stock_change, from before the row of a statement of return.
+DROP FUNCTION IF EXISTS cartlify.log_stock_change (integer, text, integer, integer, jsonb, uuid, uuid, integer);
+
 -- Writes a line of the stock log: the change of the stock of a variant and what made it
 -- (p_event, see src/config/journalEvents.ts), with the stock after it and the operation the change
--- belongs to (a delivery, a write-off or an order; at most one of the three). p_meta is an array of
+-- belongs to (a delivery, a write-off or an order; at most one of the three). The lines of a
+-- statement of return (stock.return, stock.return_write_off) also name its row (p_return_item_id). p_meta is an array of
 -- {field, old, new} objects (STOCK_LOG_CHANGES_NOT_ARRAY): the batches with their costs, the reason
 -- of a write-off, the supplier, the invoice and the note of a delivery. Raises VARIANT_NOT_FOUND.
 -- The actor is the one of the context; the system (the admin context without a user id, such as
@@ -796,7 +800,8 @@ CREATE OR REPLACE FUNCTION cartlify.log_stock_change (
   p_meta jsonb,
   p_delivery_id uuid,
   p_write_off_id uuid,
-  p_order_id integer
+  p_order_id integer,
+  p_return_item_id integer DEFAULT NULL
 ) RETURNS void LANGUAGE plpgsql
 SET
   search_path = cartlify,
@@ -831,6 +836,7 @@ BEGIN
     "deliveryId",
     "writeOffId",
     "orderId",
+    "returnItemId",
     ip,
     "userAgent",
     "createdAt"
@@ -847,6 +853,7 @@ BEGIN
     p_delivery_id,
     p_write_off_id,
     p_order_id,
+    p_return_item_id,
     nullif(current_setting('cartlify.request_ip', true), ''),
     nullif(current_setting('cartlify.request_user_agent', true), ''),
     now() AT TIME ZONE 'UTC'
@@ -854,94 +861,10 @@ BEGIN
 END;
 $$;
 
--- Puts the units of a cancelled paid order back into the batches they came from, and writes a line
--- of the stock log for each variant (stock.cancel_return, with the order, in the name of the
--- admin who cancels). Raises ORDER_ALLOCATIONS_MISSING when the allocations do not cover the
--- items. Internal step: runs with the caller rights; cancel_paid_order calls it as the owner. The
--- lines of the allocations stay: the reports take the cost back from the time of the cancel.
-CREATE OR REPLACE FUNCTION cartlify.return_order_stock (p_order_id integer) RETURNS void LANGUAGE plpgsql
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-DECLARE
-  r record;
-  v_stock   integer;
-  v_batches jsonb;
-BEGIN
-  -- every unit a paid order sold came from a batch; an order paid before the batches has none
-  IF EXISTS (
-    SELECT 1
-    FROM (
-      SELECT oi."variantId" AS variant_id, SUM(oi.quantity) AS qty
-      FROM cartlify.order_items AS oi
-      WHERE oi."orderId" = p_order_id
-      GROUP BY oi."variantId"
-    ) AS i
-    LEFT JOIN (
-      SELECT a."variantId" AS variant_id, SUM(a.quantity) AS qty
-      FROM cartlify.order_batch_allocations AS a
-      WHERE a."orderId" = p_order_id
-      GROUP BY a."variantId"
-    ) AS a ON a.variant_id = i.variant_id
-    WHERE a.qty IS DISTINCT FROM i.qty
-  ) THEN
-    RAISE EXCEPTION 'ORDER_ALLOCATIONS_MISSING';
-  END IF;
-
-  -- the variants in a deterministic lock order by id, then their batches
-  FOR r IN
-    SELECT a."variantId" AS variant_id,
-           SUM(a.quantity)::integer AS qty
-    FROM cartlify.order_batch_allocations AS a
-    WHERE a."orderId" = p_order_id
-    GROUP BY a."variantId"
-    ORDER BY a."variantId"
-  LOOP
-    UPDATE cartlify.product_variants AS v
-    SET "stock" = v."stock" + r.qty
-    WHERE v.id = r.variant_id
-    RETURNING v."stock" INTO v_stock;
-
-    IF NOT FOUND THEN
-      RAISE EXCEPTION 'VARIANT_NOT_FOUND';
-    END IF;
-
-    -- the batches the units go back to, in the order the sale took them
-    SELECT jsonb_agg(
-             jsonb_build_object(
-               'batchId', a."batchId",
-               'quantity', a.quantity,
-               'unitCost', trim_scale(b."unitCost")::text
-             )
-             ORDER BY a.id
-           )
-    INTO v_batches
-    FROM cartlify.order_batch_allocations AS a
-    JOIN cartlify.product_batches AS b ON b.id = a."batchId"
-    WHERE a."orderId" = p_order_id
-      AND a."variantId" = r.variant_id;
-
-    PERFORM cartlify.log_stock_change(
-      r.variant_id,
-      'stock.cancel_return',
-      r.qty,
-      v_stock,
-      jsonb_build_array(
-        jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_batches)
-      ),
-      NULL,
-      NULL,
-      p_order_id
-    );
-  END LOOP;
-
-  UPDATE cartlify.product_batches AS b
-  SET remaining = b.remaining + a.quantity
-  FROM cartlify.order_batch_allocations AS a
-  WHERE a."orderId" = p_order_id
-    AND b.id = a."batchId";
-END;
-$$;
+-- The cancel of a paid order is a statement of return now (create_return with the reason shop_cancel):
+-- its units go back through return_units_to_batches. The old function is dropped here until dev and
+-- prod no longer have it.
+DROP FUNCTION IF EXISTS cartlify.return_order_stock (integer);
 
 -- Takes in a batch of a variant and returns its id: the stock grows by it, and the stock log
 -- keeps a line (stock.delivery) with the delivery it came with, the batch with its cost, the
@@ -1998,7 +1921,13 @@ DROP FUNCTION IF EXISTS cartlify.confirm_order (integer, interval);
 -- arguments (the flat price and the free-from sum come from the settings of the server). When
 -- the buyer sent the price he saw (p_expected_delivery_price) and the rule gives another one,
 -- the confirmation is refused (ORDER_DELIVERY_PRICE_CHANGED); an item price that is not the
--- price its variant sells at now refuses it too (ORDER_PRICES_CHANGED).
+-- price its variant sells at now refuses it too (ORDER_PRICES_CHANGED). The order keeps the days
+-- to withdraw and who pays the way back of the contract in force, its latest version. The function
+-- holds the shared lock of the contract kind until the commit, as a consent does, so a contract
+-- published meanwhile waits and the consent written after it is to the version the order kept (a
+-- consent to an older one is refused, LEGAL_DOCUMENT_NOT_CURRENT). The server takes that lock
+-- before it reads the versions the buyer accepted, so the order never keeps a contract its buyer
+-- did not accept. Both stay empty while no contract is published.
 CREATE OR REPLACE FUNCTION cartlify.confirm_order (
   p_order_id integer,
   p_reserve_for interval,
@@ -2019,6 +1948,9 @@ DECLARE
   v_method         cartlify."DeliveryMethod";
   v_items_total    numeric;
   v_delivery_price numeric;
+
+  v_withdrawal_days integer;
+  v_return_payer    cartlify."ReturnShippingPayer";
 
   r record;
 BEGIN
@@ -2098,6 +2030,17 @@ BEGIN
   WHERE oi."orderId" = p_order_id
     AND oi."productName" IS DISTINCT FROM cartlify.variant_display_name(oi."variantId");
 
+  -- the rule of withdrawal each item keeps is the one of this moment, whatever the cart kept from
+  -- before; the update goes through order_items_before_ins_upd, which sets the same value
+  UPDATE cartlify.order_items AS oi
+  SET "withdrawal" = w.rule
+  FROM cartlify.product_withdrawals(
+    (SELECT array_agg(DISTINCT i."productId") FROM cartlify.order_items AS i WHERE i."orderId" = p_order_id)
+  ) AS w
+  WHERE oi."orderId" = p_order_id
+    AND oi."productId" = w."productId"
+    AND oi."withdrawal" IS DISTINCT FROM w.rule;
+
   -- where the order goes is written before the confirmation; its price is fixed now, from what
   -- the items cost, and the total that the update below sets holds it
   SELECT d.method
@@ -2129,12 +2072,25 @@ BEGIN
   WHERE d."orderId" = p_order_id
     AND d."price" IS DISTINCT FROM v_delivery_price;
 
+  -- the contract in force: its days to withdraw and its payer of the way back stay with the order;
+  -- none published leaves both empty
+  PERFORM pg_advisory_xact_lock_shared(hashtext('cartlify.legal_documents:contract'));
+
+  SELECT d."withdrawalDays", d."returnShippingPaidBy"
+  INTO v_withdrawal_days, v_return_payer
+  FROM cartlify.legal_documents AS d
+  WHERE d.kind = 'contract'
+  ORDER BY d.version DESC
+  LIMIT 1;
+
   -- confirm order and set reservation deadline
   UPDATE cartlify.orders AS o
   SET
     confirmed = true,
     status = 'waiting',
-    "reservationExpiresAt" = clock_timestamp() + p_reserve_for
+    "reservationExpiresAt" = clock_timestamp() + p_reserve_for,
+    "withdrawalDays" = v_withdrawal_days,
+    "returnShippingPaidBy" = v_return_payer
   WHERE o.id = p_order_id;
 END;
 $$;
@@ -2307,68 +2263,11 @@ BEGIN
 END;
 $$;
 
--- An admin cancels a paid or shipped order and puts its stock back into the batches. System
--- function: runs as the owner, the stock of a paid order is closed for plain updates (db/03)
--- and its status moves by the steps of an admin and by this function. Callable only in the admin context (ORDER_CANCEL_FORBIDDEN). The server
--- refunds the payment in the same transaction before the commit, so an order is cancelled only
--- together with its refund. A delivered order is not cancelled (ORDER_ALREADY_DELIVERED).
-CREATE OR REPLACE FUNCTION cartlify.cancel_paid_order (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
-SET
-  search_path = cartlify,
-  pg_temp AS $$
-DECLARE
-  v_status text;
-BEGIN
-  IF NOT cartlify.is_admin() THEN
-    RAISE EXCEPTION 'ORDER_CANCEL_FORBIDDEN';
-  END IF;
-
-  -- read state without a lock, to answer with the reason
-  SELECT o.status
-  INTO v_status
-  FROM cartlify.orders AS o
-  WHERE o.id = p_order_id;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'ORDER_NOT_FOUND';
-  END IF;
-
-  IF v_status = 'delivered' THEN
-    RAISE EXCEPTION 'ORDER_ALREADY_DELIVERED';
-  END IF;
-
-  IF v_status = 'cancelled' THEN
-    RAISE EXCEPTION 'ORDER_ALREADY_CANCELLED';
-  END IF;
-
-  IF v_status NOT IN ('paid', 'shipped') THEN
-    RAISE EXCEPTION 'ORDER_NOT_PAID';
-  END IF;
-
-  -- lock order row
-  PERFORM 1
-  FROM cartlify.orders AS o
-  WHERE o.id = p_order_id
-    AND o.status IN ('paid', 'shipped')
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    -- the status changed while waiting for the lock
-    RAISE EXCEPTION 'ORDER_STATUS_CHANGED';
-  END IF;
-
-  -- items of a confirmed order cannot change (order items trigger); the stock goes back into the
-  -- batches the payment took it from
-  PERFORM cartlify.return_order_stock(p_order_id);
-
-  -- the reports of a period take the payment back from the time of the cancel
-  UPDATE cartlify.orders AS o
-  SET
-    status = 'cancelled',
-    "cancelledAt" = now() AT TIME ZONE 'UTC'
-  WHERE o.id = p_order_id;
-END;
-$$;
+-- The cancel of an order by the shop is a statement of return (create_return with the reason
+-- shop_cancel for a paid order, refused for a parcel the buyer refused), and the order becomes
+-- cancelled by its statements (refresh_return_state). The old function is dropped here until dev and
+-- prod no longer have it.
+DROP FUNCTION IF EXISTS cartlify.cancel_paid_order (integer);
 
 -- Records a payment that a provider confirmed (the payment webhook) and turns the order into a
 -- paid one. It returns a text, not an error, so the server decides what to do with the money:
@@ -2401,6 +2300,8 @@ DECLARE
   v_recorded_payment  text;
   v_items_total       numeric;
   v_delivery_price    numeric;
+  v_withdrawal_days   integer;
+  v_return_payer      cartlify."ReturnShippingPayer";
 
   r record;
 BEGIN
@@ -2554,6 +2455,17 @@ BEGIN
 
         RAISE;
     END;
+
+    -- the order is confirmed by its payment: it keeps the term and the payer of the way back of
+    -- the contract in force now, as confirm_order does (the unconfirm took the old ones away)
+    PERFORM pg_advisory_xact_lock_shared(hashtext('cartlify.legal_documents:contract'));
+
+    SELECT d."withdrawalDays", d."returnShippingPaidBy"
+    INTO v_withdrawal_days, v_return_payer
+    FROM cartlify.legal_documents AS d
+    WHERE d.kind = 'contract'
+    ORDER BY d.version DESC
+    LIMIT 1;
   ELSE
     RETURN 'ORDER_NOT_PAYABLE';
   END IF;
@@ -2567,7 +2479,9 @@ BEGIN
     "reservationExpiresAt" = NULL,
     "paymentProvider" = p_payment_provider,
     "paymentId" = p_payment_id,
-    "paidAt" = now() AT TIME ZONE 'UTC'
+    "paidAt" = now() AT TIME ZONE 'UTC',
+    "withdrawalDays" = CASE WHEN v_confirmed THEN o."withdrawalDays" ELSE v_withdrawal_days END,
+    "returnShippingPaidBy" = CASE WHEN v_confirmed THEN o."returnShippingPaidBy" ELSE v_return_payer END
   WHERE o.id = p_order_id;
 
   RETURN 'PAID';
@@ -2676,12 +2590,59 @@ BEGIN
 END;
 $$;
 
+-- The rule of withdrawal of each product asked, and where it comes from. A product has the rule of
+-- its own; without one it takes the rule of the nearest category above it that has one (its own
+-- category first, then each parent up the tree); without any it is allowed. source is product,
+-- category (categoryId names it) or default. The one rule for every reader: the card of an admin,
+-- the cart, the confirmation of an order, the mails. It runs as the owner and reads nothing but
+-- the rule, so a buyer gets it for a product they cannot see in the catalog any more (one that was
+-- taken out while it lay in their cart); a product that is not there gives no row. It checks no
+-- actor on purpose: the rule is shown to everybody in the card of a product, and the function
+-- returns nothing else.
+CREATE OR REPLACE FUNCTION cartlify.product_withdrawals (p_product_ids integer[])
+RETURNS TABLE ("productId" integer, rule cartlify."WithdrawalRule", source text, "categoryId" integer)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  WITH RECURSIVE up AS (
+    SELECT p.id AS product_id, c.id AS category_id, c.withdrawal, c."parentId", 0 AS depth
+    FROM cartlify.products AS p
+    JOIN cartlify.categories AS c ON c.id = p."categoryId"
+    WHERE p.id = ANY (p_product_ids)
+    UNION ALL
+    SELECT up.product_id, c.id, c.withdrawal, c."parentId", up.depth + 1
+    FROM up
+    JOIN cartlify.categories AS c ON c.id = up."parentId"
+    WHERE up.depth < 100
+  ),
+  nearest AS (
+    SELECT DISTINCT ON (u.product_id) u.product_id, u.category_id, u.withdrawal
+    FROM up AS u
+    WHERE u.withdrawal IS NOT NULL
+    ORDER BY u.product_id, u.depth
+  )
+  SELECT
+    p.id,
+    COALESCE(p.withdrawal, n.withdrawal, 'allowed'::cartlify."WithdrawalRule"),
+    CASE
+      WHEN p.withdrawal IS NOT NULL THEN 'product'
+      WHEN n.withdrawal IS NOT NULL THEN 'category'
+      ELSE 'default'
+    END,
+    CASE WHEN p.withdrawal IS NULL THEN n.category_id END
+  FROM cartlify.products AS p
+  LEFT JOIN nearest AS n ON n.product_id = p.id
+  WHERE p.id = ANY (p_product_ids);
+$$;
+
 -- Takes the unit price and the name from the variant and calculates the total price of an item
 -- (before an insert or update). The price is the one the variant sells at now, never one from
 -- the caller. The order must be one the actor can change: RLS hides foreign and confirmed orders
 -- (ORDER_NOT_EDITABLE), a confirmed order seen by an admin refuses too (ORDER_ALREADY_CONFIRMED).
--- The confirmation fixes the price and the name, because items of a confirmed order cannot
--- change.
+-- The rule of withdrawal of the product comes from the database too (product_withdrawals), never
+-- from the caller. The confirmation fixes the price, the name and the rule, because items of a
+-- confirmed order cannot change.
 CREATE OR REPLACE FUNCTION cartlify.order_items_before_ins_upd () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_confirmed boolean;
@@ -2731,6 +2692,12 @@ BEGIN
   NEW."totalPrice" := NEW."unitPrice" * NEW."quantity";
   NEW."productName" := v_name;
 
+  -- the rule of the product as it is now; a product that is not there leaves the default
+  NEW."withdrawal" := COALESCE(
+    (SELECT w.rule FROM cartlify.product_withdrawals(ARRAY[NEW."productId"]) AS w),
+    'allowed'
+  );
+
   RETURN NEW;
   
 END;
@@ -2775,10 +2742,13 @@ CREATE TRIGGER trg_order_items_after_mod
 AFTER INSERT OR UPDATE OR DELETE ON cartlify.order_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_items_after_mod ();
 
--- Guards the updates of an order. It always stamps updatedAt. Going back to unconfirmed (the
--- payment was cancelled or the reservation ended) makes the total the items again; the
--- delivery is priced again at the next confirmation. A confirmed order keeps its owner and its
--- total (ORDER_CONFIRMED_CHANGE_FORBIDDEN). At the confirmation the delivery must be written
+-- Guards the updates of an order. It stamps updatedAt, except for a change of the return status
+-- alone. It owns deliveredAt (the step to delivered may give the day the carrier delivered): the step to
+-- delivered stamps it, every other state has none, and what a statement writes there is
+-- overwritten. Going back to unconfirmed (the payment was cancelled or the reservation ended)
+-- makes the total the items again and forgets the term of the contract the confirmation kept;
+-- the delivery is priced again at the next confirmation. A confirmed order keeps its owner and
+-- its total (ORDER_CONFIRMED_CHANGE_FORBIDDEN). At the confirmation the delivery must be written
 -- (ORDER_DELIVERY_REQUIRED) and the total becomes the items plus the delivery price.
 CREATE OR REPLACE FUNCTION cartlify.orders_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
@@ -2786,17 +2756,50 @@ DECLARE
   v_delivery_price numeric;
 BEGIN
   -- prisma stamps updatedAt only in its own queries, the db functions (pay, confirm, cancel,
-  -- expire) change orders too; the column holds utc time without a zone, as prisma writes it
-  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+  -- expire) change orders too; the column holds utc time without a zone, as prisma writes it.
+  -- Where the order stands as to its statements (refresh_return_state) is a summary, no change of
+  -- the order: it keeps its time (a shipped order keeps the time it was sent, the alerts count
+  -- from it)
+  IF to_jsonb(NEW) - 'returnStatus' - 'updatedAt' = to_jsonb(OLD) - 'returnStatus' - 'updatedAt' THEN
+    NEW."updatedAt" := OLD."updatedAt";
+  ELSE
+    NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+  END IF;
+
+  -- the time of the delivery: the step to delivered stamps it, or keeps the day the admin gives
+  -- (the carrier delivered it before the admin marked it): not before the order was sent (paid,
+  -- for a pickup), never of the future (ORDER_DELIVERED_AT_INVALID). No other step writes it
+  IF NEW.status = 'delivered' AND OLD.status IS DISTINCT FROM 'delivered' THEN
+    IF NEW."deliveredAt" IS NULL THEN
+      NEW."deliveredAt" := now() AT TIME ZONE 'UTC';
+    ELSIF NEW."deliveredAt" > now() AT TIME ZONE 'UTC'
+       OR NEW."deliveredAt" < COALESCE(
+         (
+           SELECT MAX(sh."shippedAt")
+           FROM cartlify.order_shipments AS sh
+           WHERE sh."orderId" = NEW.id AND sh."rolledBackAt" IS NULL
+         ),
+         NEW."paidAt"
+       ) THEN
+      RAISE EXCEPTION 'ORDER_DELIVERED_AT_INVALID' USING ERRCODE = 'check_violation';
+    END IF;
+  ELSIF NEW.status = 'delivered' THEN
+    NEW."deliveredAt" := OLD."deliveredAt";
+  ELSE
+    NEW."deliveredAt" := NULL;
+  END IF;
 
   IF OLD."confirmed" AND NOT NEW."confirmed" THEN
     -- back to unconfirmed (the payment was cancelled or the reservation ended): the order is a
     -- cart again and costs what its items cost, the delivery is priced again at the next
-    -- confirmation
+    -- confirmation, which keeps the term of the contract in force then
     IF NEW."userId" IS DISTINCT FROM OLD."userId" THEN
       RAISE EXCEPTION 'ORDER_CONFIRMED_CHANGE_FORBIDDEN'
         USING ERRCODE = 'check_violation';
     END IF;
+
+    NEW."withdrawalDays" := NULL;
+    NEW."returnShippingPaidBy" := NULL;
 
     SELECT COALESCE(SUM(oi."totalPrice"), 0)
     INTO v_total
@@ -2848,6 +2851,32 @@ DROP TRIGGER IF EXISTS trg_orders_before_update ON cartlify.orders;
 CREATE TRIGGER trg_orders_before_update
 BEFORE UPDATE ON cartlify.orders FOR EACH ROW
 EXECUTE FUNCTION cartlify.orders_before_update ();
+
+-- The end of the period in which a buyer may withdraw from an order: the end of the last day, in
+-- the time zone of the shop, of the days of the contract and the days of grace counted after the
+-- day of the delivery (that day is not counted). The one rule of the end: the answers of the app
+-- and the check of a statement both take it from here. The time is utc without a zone, as the
+-- columns hold it; none for an order that is not delivered. A time zone the database does not
+-- know is an error.
+CREATE OR REPLACE FUNCTION cartlify.withdrawal_ends_at (
+  p_delivered_at timestamp without time zone,
+  p_days integer,
+  p_grace_days integer,
+  p_time_zone text
+) RETURNS timestamp without time zone LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT CASE
+    WHEN p_delivered_at IS NULL THEN NULL
+    ELSE (
+      (
+        ((p_delivered_at AT TIME ZONE 'UTC') AT TIME ZONE p_time_zone)::date
+        + (p_days + p_grace_days + 1)
+      )::timestamp AT TIME ZONE p_time_zone
+    ) AT TIME ZONE 'UTC' - interval '1 millisecond'
+  END;
+$$;
 
 ------------------------------------------------------------
 -- REVIEWS AND VOTES
@@ -3268,17 +3297,32 @@ END;
 $$;
 
 -- Retention: how long the shop keeps what it needs no longer. The functions below empty the
--- address and the browser of old logins, remove the favorites and the chats of guests who
--- stopped coming, and the chats of accounts deleted long ago. Each is the work of the system
--- (the admin context without a user id), meant for a periodic task that passes the days to keep,
--- e.g. SELECT * FROM cartlify.cleanup_guest_data(180). The ones that run as the owner reach the
--- rows through narrow policies (db/03) and the guard of the login log
--- (trg_login_logs_update_columns).
+-- address and the browser of old logins and of closed statements of return, make the personal
+-- data of closed statements and of the recipients of the orders of deleted accounts anonymous,
+-- remove the favorites and the chats of guests who stopped coming, and the chats of accounts
+-- deleted long ago. The time each kind of data is kept is in the privacy policy of the shop
+-- (legal_documents, kind privacy, one column of days for each): a row is kept for the SHORTER of
+-- the term of the version in force when the data was collected and the term of the version in force
+-- now, and cleaned a day before the term ends, so a task that runs once a day never cleans late
+-- (a term of one day cleans at once). Without a published policy nothing is cleaned. Each function
+-- is the work of the system (the admin context without a user id), meant for a periodic task, e.g.
+-- SELECT * FROM cartlify.cleanup_guest_data(). The ones that run as the owner reach the rows
+-- through narrow policies (db/03) and the guards of the tables (db/05).
 
--- Gives the moment before which rows are old, for p_keep_days days to keep; the cleanup
--- functions share it. Only the system may call it (RETENTION_CLEANUP_FORBIDDEN), with at least
--- 1 day (RETENTION_CLEANUP_KEEP_DAYS_INVALID). Internal: runs with the rights of the caller.
-CREATE OR REPLACE FUNCTION cartlify.retention_cutoff (p_keep_days integer) RETURNS timestamp LANGUAGE plpgsql
+-- The functions that took the days to keep as an argument are replaced by the ones that read them
+-- from the policy; the old ones go (a temporary removal, to be taken out of this script when dev
+-- and prod have been compared).
+DROP FUNCTION IF EXISTS cartlify.cleanup_login_log_addresses (integer);
+
+DROP FUNCTION IF EXISTS cartlify.cleanup_guest_data (integer);
+
+DROP FUNCTION IF EXISTS cartlify.cleanup_deleted_accounts_chats (integer);
+
+DROP FUNCTION IF EXISTS cartlify.retention_cutoff (integer);
+
+-- The moment the cleanups count from, utc as the columns keep it. Only the system may ask
+-- (RETENTION_CLEANUP_FORBIDDEN). Internal.
+CREATE OR REPLACE FUNCTION cartlify.retention_now () RETURNS timestamp LANGUAGE plpgsql
 SET
   search_path = cartlify,
   pg_temp AS $$
@@ -3287,42 +3331,150 @@ BEGIN
     RAISE EXCEPTION 'RETENTION_CLEANUP_FORBIDDEN' USING ERRCODE = '42501';
   END IF;
 
-  IF p_keep_days IS NULL OR p_keep_days < 1 THEN
-    RAISE EXCEPTION 'RETENTION_CLEANUP_KEEP_DAYS_INVALID' USING ERRCODE = '22023';
-  END IF;
-
-  -- prisma keeps dates as utc in columns without a time zone
-  RETURN (now() AT TIME ZONE 'UTC') - make_interval(days => p_keep_days);
+  RETURN now() AT TIME ZONE 'UTC';
 END;
 $$;
 
--- Empties the address and the browser of the logins older than p_keep_days; the line stays as
--- history (who logged in, when, with which role). Returns how many lines it emptied.
-CREATE OR REPLACE FUNCTION cartlify.cleanup_login_log_addresses (p_keep_days integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+-- The days of a kind of data in a version of the privacy policy, by the name of its column
+-- (RETENTION_FIELD_INVALID for any other). Internal.
+CREATE OR REPLACE FUNCTION cartlify.retention_days_of (
+  p_field text,
+  p_policy cartlify.legal_documents
+) RETURNS integer LANGUAGE plpgsql IMMUTABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  RETURN CASE p_field
+    WHEN 'retentionLoginAddressesDays' THEN p_policy."retentionLoginAddressesDays"
+    WHEN 'retentionGuestDataDays' THEN p_policy."retentionGuestDataDays"
+    WHEN 'retentionDeletedChatsDays' THEN p_policy."retentionDeletedChatsDays"
+    WHEN 'retentionReturnAddressesDays' THEN p_policy."retentionReturnAddressesDays"
+    WHEN 'retentionReturnPersonalDays' THEN p_policy."retentionReturnPersonalDays"
+    WHEN 'retentionRecipientDays' THEN p_policy."retentionRecipientDays"
+    ELSE NULL
+  END;
+END;
+$$;
+
+-- The days to keep data collected at a time: the shorter of the term of the version in force then
+-- (the newest version published by then) and the term of the version in force now. None when no
+-- policy is published, and for a data collected before the first version only the version in force
+-- now counts. Internal.
+CREATE OR REPLACE FUNCTION cartlify.retention_days (p_field text, p_collected timestamp) RETURNS integer LANGUAGE plpgsql STABLE
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_before timestamp := cartlify.retention_cutoff(p_keep_days);
-  v_count  integer;
+  v_now  cartlify.legal_documents;
+  v_then cartlify.legal_documents;
+  v_a    integer;
+  v_b    integer;
 BEGIN
+  IF p_field NOT IN (
+    'retentionLoginAddressesDays', 'retentionGuestDataDays', 'retentionDeletedChatsDays',
+    'retentionReturnAddressesDays', 'retentionReturnPersonalDays', 'retentionRecipientDays'
+  ) THEN
+    RAISE EXCEPTION 'RETENTION_FIELD_INVALID' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT d.* INTO v_now
+  FROM cartlify.legal_documents AS d
+  WHERE d.kind = 'privacy'
+  ORDER BY d.version DESC
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  v_a := cartlify.retention_days_of (p_field, v_now);
+
+  SELECT d.* INTO v_then
+  FROM cartlify.legal_documents AS d
+  WHERE d.kind = 'privacy' AND d."createdAt" <= p_collected
+  ORDER BY d.version DESC
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN v_a;
+  END IF;
+
+  v_b := cartlify.retention_days_of (p_field, v_then);
+
+  RETURN LEAST(v_a, v_b);
+END;
+$$;
+
+-- The shortest term a kind of data has in any version: no row younger than it (less the day in
+-- hand) is ever due, so the cleanups skip them without asking the policy for each. None without a
+-- policy. Internal.
+CREATE OR REPLACE FUNCTION cartlify.retention_floor (p_field text) RETURNS integer LANGUAGE plpgsql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_floor integer;
+BEGIN
+  SELECT min(cartlify.retention_days_of (p_field, d)) INTO v_floor
+  FROM cartlify.legal_documents AS d
+  WHERE d.kind = 'privacy';
+
+  RETURN v_floor;
+END;
+$$;
+
+-- Whether data collected at p_collected is due for the cleanup: its term, a day in hand, has passed
+-- since p_since (the time the term counts from). False without a policy. Internal.
+CREATE OR REPLACE FUNCTION cartlify.retention_due (
+  p_field text,
+  p_collected timestamp,
+  p_since timestamp,
+  p_now timestamp
+) RETURNS boolean LANGUAGE plpgsql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_days integer := cartlify.retention_days (p_field, p_collected);
+BEGIN
+  RETURN v_days IS NOT NULL AND p_since + make_interval(days => v_days - 1) <= p_now;
+END;
+$$;
+
+-- Empties the address and the browser of the logins whose term has passed; the line stays as
+-- history (who logged in, when, with which role). Returns how many lines it emptied.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_login_log_addresses () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionLoginAddressesDays');
+  v_count integer;
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
   UPDATE cartlify.login_logs AS l
   SET
     "ipAddress" = NULL,
     "userAgent" = NULL
-  WHERE l."createdAt" < v_before
-    AND (l."ipAddress" IS NOT NULL OR l."userAgent" IS NOT NULL);
+  WHERE l."createdAt" <= v_now - make_interval(days => v_floor - 1)
+    AND (l."ipAddress" IS NOT NULL OR l."userAgent" IS NOT NULL)
+    AND cartlify.retention_due ('retentionLoginAddressesDays', l."createdAt", l."createdAt", v_now);
 
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
 END;
 $$;
 
--- Removes the favorites and the chats of guests who have not come for longer than p_keep_days:
--- a guest is gone when the newest of their favorites and chat messages is older. A guest who
--- came lately keeps all of it, an old favorite too; the messages go with their chats. Returns
--- how many favorites and chats went.
-CREATE OR REPLACE FUNCTION cartlify.cleanup_guest_data (p_keep_days integer) RETURNS TABLE (
+-- Removes the favorites and the chats of guests who have not come for as long as the term: a guest
+-- is gone when the newest of their favorites and chat messages is older. A guest who came lately
+-- keeps all of it, an old favorite too; the messages go with their chats. Returns how many
+-- favorites and chats went.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_guest_data () RETURNS TABLE (
   removed_favorites integer,
   removed_chats integer
 ) LANGUAGE plpgsql SECURITY DEFINER
@@ -3330,9 +3482,18 @@ SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_before timestamp := cartlify.retention_cutoff(p_keep_days);
+  v_now    timestamp := cartlify.retention_now();
+  v_floor  integer := cartlify.retention_floor ('retentionGuestDataDays');
   v_guests uuid[];
 BEGIN
+  removed_favorites := 0;
+  removed_chats := 0;
+
+  IF v_floor IS NULL THEN
+    RETURN NEXT;
+    RETURN;
+  END IF;
+
   SELECT coalesce(array_agg(idle.g), '{}')
   INTO v_guests
   FROM (
@@ -3347,37 +3508,230 @@ BEGIN
       WHERE t."userId" IS NULL AND t."guestId" IS NOT NULL
     ) AS a
     GROUP BY a.g
-    HAVING max(a.at) < v_before
+    HAVING max(a.at) <= v_now - make_interval(days => v_floor - 1)
+       AND cartlify.retention_due ('retentionGuestDataDays', max(a.at), max(a.at), v_now)
   ) AS idle;
 
+  -- a guest who came back since the list was made keeps what they made: everything the list saw is
+  -- older than the line the term draws, what they made now is not
   DELETE FROM cartlify.favorites AS f
-  WHERE f."userId" IS NULL AND f."guestId" = ANY (v_guests);
+  WHERE f."userId" IS NULL AND f."guestId" = ANY (v_guests)
+    AND f."createdAt" <= v_now - make_interval(days => v_floor - 1);
   GET DIAGNOSTICS removed_favorites = ROW_COUNT;
 
   DELETE FROM cartlify.chat_threads AS t
-  WHERE t."userId" IS NULL AND t."guestId" = ANY (v_guests);
+  WHERE t."userId" IS NULL AND t."guestId" = ANY (v_guests)
+    AND t."lastMessageAt" <= v_now - make_interval(days => v_floor - 1);
   GET DIAGNOSTICS removed_chats = ROW_COUNT;
 
   RETURN NEXT;
 END;
 $$;
 
--- Removes the chats, with their messages, of the accounts deleted more than p_keep_days ago; a
--- deletion keeps them for a while (an admin may still need the conversation). Returns how many
--- chats went.
-CREATE OR REPLACE FUNCTION cartlify.cleanup_deleted_accounts_chats (p_keep_days integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+-- Removes the chats, with their messages, of the accounts deleted as long ago as the term; a
+-- deletion keeps them for a while (an admin may still need the conversation). The term counts from
+-- the deletion. Returns how many chats went.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_deleted_accounts_chats () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
 DECLARE
-  v_before timestamp := cartlify.retention_cutoff(p_keep_days);
-  v_count  integer;
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionDeletedChatsDays');
+  v_count integer;
 BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
   DELETE FROM cartlify.chat_threads AS t
   USING cartlify.users AS u
   WHERE u.id = t."userId"
     AND u."deletedAt" IS NOT NULL
-    AND u."deletedAt" < v_before;
+    AND u."deletedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND cartlify.retention_due ('retentionDeletedChatsDays', t."createdAt", u."deletedAt", v_now);
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+-- Empties the address and the browser of the closed statements of return whose term has passed;
+-- the statement stays whole. The journals go with it: the lines of the journal of the admins and
+-- of the stock log that the buyer or the form caused for the statement (the request was theirs)
+-- lose the address and the browser too, the lines of the admins keep theirs. The term counts from
+-- the closing of the statement. Returns how many statements it emptied.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_return_addresses () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionReturnAddressesDays');
+  v_count integer;
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  UPDATE cartlify.returns AS r
+  SET
+    ip = NULL,
+    "userAgent" = NULL
+  WHERE r."closedAt" IS NOT NULL
+    AND r."closedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND (r.ip IS NOT NULL OR r."userAgent" IS NOT NULL)
+    AND cartlify.retention_due ('retentionReturnAddressesDays', r."createdAt", r."closedAt", v_now);
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+
+  -- the lines a journal still keeps of the request of the buyer or of the form for such a statement
+  -- (a line in the name of the buyer, or of the system for the form), also of a statement emptied
+  -- before
+  UPDATE cartlify.admin_audit_log AS a
+  SET
+    ip = NULL,
+    "userAgent" = NULL
+  FROM cartlify.returns AS r
+  WHERE r."closedAt" IS NOT NULL
+    AND r."closedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND a."entityType" = 'order'
+    AND a."entityId" = r."orderId"
+    AND a.meta @> jsonb_build_array(jsonb_build_object('field', 'returnId', 'new', r.id))
+    AND a."actorRole" IS DISTINCT FROM 'ADMIN'
+    AND a."actorRole" IS DISTINCT FROM 'ROOT'
+    AND (a.ip IS NOT NULL OR a."userAgent" IS NOT NULL)
+    AND cartlify.retention_due ('retentionReturnAddressesDays', r."createdAt", r."closedAt", v_now);
+
+  UPDATE cartlify.stock_log AS l
+  SET
+    ip = NULL,
+    "userAgent" = NULL
+  FROM cartlify.return_items AS i
+  JOIN cartlify.returns AS r ON r.id = i."returnId"
+  WHERE l."returnItemId" = i.id
+    AND r."closedAt" IS NOT NULL
+    AND r."closedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND l."actorRole" IS DISTINCT FROM 'ADMIN'
+    AND l."actorRole" IS DISTINCT FROM 'ROOT'
+    AND (l.ip IS NOT NULL OR l."userAgent" IS NOT NULL)
+    AND cartlify.retention_due ('retentionReturnAddressesDays', r."createdAt", r."closedAt", v_now);
+
+  RETURN v_count;
+END;
+$$;
+
+-- Makes the personal data of the closed statements of return anonymous once their term has passed:
+-- the name and the email of the statement become the made-up ones the copy of prod has
+-- (Recipient Customer, return+<id>@example.com), the words of the buyer, the link of the parcel and
+-- the note of the root go (also the one of the money of the way back), the number of the parcel is
+-- made up, and the notes of the rows (the
+-- reason money was lowered, the words of the provider about a transfer, the way money was sent
+-- outside the app). The money, the goods, the dates and the reasons stay: the reports stand on
+-- them. The term counts from the closing of the statement. Returns how many statements it made
+-- anonymous.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_return_personal () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionReturnPersonalDays');
+  v_ids   integer[];
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT coalesce(array_agg(r.id), ARRAY[]::integer[])
+  INTO v_ids
+  FROM cartlify.returns AS r
+  WHERE r."closedAt" IS NOT NULL
+    AND r."closedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND r."contactEmail" <> 'return+' || r.id || '@example.com'
+    AND cartlify.retention_due ('retentionReturnPersonalDays', r."createdAt", r."closedAt", v_now);
+
+  UPDATE cartlify.returns AS r
+  SET
+    "contactName" = 'Recipient Customer',
+    "contactEmail" = 'return+' || r.id || '@example.com',
+    description = NULL,
+    "proofTrackingNumber" = CASE WHEN r."proofTrackingNumber" IS NOT NULL THEN 'R' || r.id END,
+    "proofTrackingUrl" = NULL,
+    "closeNote" = CASE WHEN r."closeNote" IS NOT NULL THEN 'Cleared' END,
+    "shippingReimbursedNote" = CASE
+      WHEN r."shippingReimbursedNote" IS NOT NULL THEN 'Paid back outside the app'
+    END
+  WHERE r.id = ANY (v_ids);
+
+  UPDATE cartlify.return_items AS i
+  SET
+    "amountNote" = CASE WHEN i."amountNote" IS NOT NULL THEN 'Lowered by the shop' END,
+    "outsideNote" = CASE WHEN i."outsideNote" IS NOT NULL THEN 'Sent outside the app' END,
+    "refundFailureText" = NULL
+  WHERE i."returnId" = ANY (v_ids)
+    AND (i."amountNote" IS NOT NULL OR i."outsideNote" IS NOT NULL OR i."refundFailureText" IS NOT NULL);
+
+  RETURN cardinality(v_ids);
+END;
+$$;
+
+-- Makes the recipient of the orders of deleted accounts anonymous once the term has passed: the
+-- name, the phone, the address and the note of the delivery become made up (Recipient Customer,
+-- +10000000000, City, Street, 0). The country, the method and the price stay. An order that is
+-- paid or on its way, and one with an open statement of return, keeps its recipient: it is still
+-- being worked. So does a delivered order while its period of withdrawal may run (the days of its
+-- contract and the longest grace a shop sets, 30 days, with a day more for the zone of the shop):
+-- the public form asks for the name of the recipient, and a deleted account keeps the right. The
+-- term counts from the deletion of the account for the rest. Returns how many deliveries it made
+-- anonymous.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_deleted_accounts_recipients () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionRecipientDays');
+  v_count integer;
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  UPDATE cartlify.order_deliveries AS d
+  SET
+    "recipientFirstName" = 'Recipient',
+    "recipientLastName" = 'Customer',
+    "recipientPhone" = '+10000000000',
+    "postalCode" = NULL,
+    city = CASE WHEN d.method = 'manual' THEN 'City' END,
+    street = CASE WHEN d.method = 'manual' THEN 'Street' END,
+    house = CASE WHEN d.method = 'manual' THEN '0' END,
+    apartment = NULL,
+    note = NULL
+  FROM cartlify.orders AS o
+  JOIN cartlify.users AS u ON u.id = o."userId"
+  WHERE o.id = d."orderId"
+    AND u."deletedAt" IS NOT NULL
+    AND u."deletedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND o.status NOT IN ('paid', 'shipped')
+    AND NOT EXISTS (
+      SELECT 1 FROM cartlify.returns AS r WHERE r."orderId" = o.id AND r."closedAt" IS NULL
+    )
+    AND (
+      o."deliveredAt" IS NULL
+      OR o."deliveredAt" + make_interval(days => COALESCE(o."withdrawalDays", 14) + 32) <= v_now
+    )
+    AND NOT (
+      d."recipientFirstName" = 'Recipient'
+      AND d."recipientLastName" = 'Customer'
+      AND d."recipientPhone" = '+10000000000'
+      AND d.note IS NULL
+      AND d.apartment IS NULL
+      AND d."postalCode" IS NULL
+      AND (d.method = 'pickup' OR (d.city = 'City' AND d.street = 'Street' AND d.house = '0'))
+    )
+    AND cartlify.retention_due ('retentionRecipientDays', o."createdAt", u."deletedAt", v_now);
 
   GET DIAGNOSTICS v_count = ROW_COUNT;
   RETURN v_count;
@@ -3553,11 +3907,12 @@ $$;
 -- LEGAL DOCUMENTS AND CONSENTS
 ------------------------------------------------------------
 
--- Sets what the database owns in a new version of the terms or of the contract: the next number
--- of its kind, the sha256 of its text and the time, whatever the row says. Two versions
--- published at once wait for each other (an advisory lock of the kind), and a version waits for
--- the consents being written to its kind. It is dated when it got that lock, not when its
--- transaction began, so every consent to the version before it comes earlier.
+-- Sets what the database owns in a new version of a legal text (the terms, the contract or the
+-- privacy policy): the next number of its kind, the sha256 of its text and the time, whatever
+-- the row says. Two versions published at once wait for each other (an advisory lock of the
+-- kind), and a version waits for the consents being written to its kind and for the orders being
+-- confirmed (confirm_order). It is dated when it got that lock, not when its transaction began,
+-- so every consent to the version before it comes earlier.
 CREATE OR REPLACE FUNCTION cartlify.legal_documents_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   PERFORM pg_advisory_xact_lock(hashtext('cartlify.legal_documents:' || NEW.kind::text));
@@ -3579,17 +3934,22 @@ CREATE TRIGGER trg_legal_documents_before_insert
 BEFORE INSERT ON cartlify.legal_documents FOR EACH ROW
 EXECUTE FUNCTION cartlify.legal_documents_before_insert ();
 
--- Checks and completes a new consent. It must be to the version in force of its kind, a newer
--- version refuses it (LEGAL_DOCUMENT_NOT_CURRENT). The address and the browser are the ones of
--- the request (cartlify.request_ip, cartlify.request_user_agent, set with the context), not what
--- the row says. It holds the lock of its kind shared until it commits: a version published
--- meanwhile waits for it, and one published before it is seen here. It is dated when it is
--- written.
+-- Checks and completes a new consent. It is to the terms or to the contract, never to the privacy
+-- policy, which only informs (LEGAL_DOCUMENT_NOT_ACCEPTABLE). It must be to the version in force
+-- of its kind, a newer version refuses it (LEGAL_DOCUMENT_NOT_CURRENT). The address and the
+-- browser are the ones of the request (cartlify.request_ip, cartlify.request_user_agent, set with
+-- the context), not what the row says. It holds the lock of its kind shared until it commits: a
+-- version published meanwhile waits for it, and one published before it is seen here. It is
+-- dated when it is written.
 CREATE OR REPLACE FUNCTION cartlify.legal_acceptances_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_kind cartlify."LegalDocumentKind";
 BEGIN
   SELECT d.kind INTO v_kind FROM cartlify.legal_documents AS d WHERE d.id = NEW."documentId";
+
+  IF v_kind = 'privacy' THEN
+    RAISE EXCEPTION 'LEGAL_DOCUMENT_NOT_ACCEPTABLE' USING ERRCODE = '23514';
+  END IF;
 
   IF v_kind IS NOT NULL THEN
     PERFORM pg_advisory_xact_lock_shared(hashtext('cartlify.legal_documents:' || v_kind::text));
@@ -4015,9 +4375,11 @@ BEFORE UPDATE ON cartlify.review_votes FOR EACH ROW
 EXECUTE FUNCTION cartlify.review_votes_update_columns ();
 
 -- Guard of orders: an admin or root takes the shipping steps, one on or one back (a step over
--- is not allowed); the steps of the database change the total, the confirmation and the
--- reservation, the payment, and the cancel of an admin. The owner changes nothing of an order
--- with a plain update: where it goes is written in order_deliveries.
+-- is not allowed), and the step to delivered and back carries deliveredAt, which the database
+-- sets; the steps of the database change the total, the confirmation (with the term of the
+-- contract it keeps) and the reservation, the payment, and the state of the order as to its
+-- statements of return with the cancel they bring (refresh_return_state). The owner
+-- changes nothing of an order with a plain update: where it goes is written in order_deliveries.
 CREATE OR REPLACE FUNCTION cartlify.orders_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -4029,13 +4391,22 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- a parcel the buyer refused is on its way back: the order does not become delivered meanwhile
+  IF OLD.status = 'shipped' AND NEW.status = 'delivered' AND EXISTS (
+    SELECT 1
+    FROM cartlify.returns AS r
+    WHERE r."orderId" = OLD.id AND r.reason = 'refused' AND r."closedAt" IS NULL
+  ) THEN
+    RAISE EXCEPTION 'ORDER_HAS_OPEN_REFUSAL';
+  END IF;
+
   -- the steps of the shipping: paid to shipped to delivered, and one step back of each; a step
   -- over (paid to delivered) is not one
   IF cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
      AND (OLD.status::text, NEW.status::text) IN (
        ('paid', 'shipped'), ('shipped', 'delivered'), ('shipped', 'paid'), ('delivered', 'shipped')
      )
-     AND v_changed <@ ARRAY['status', 'updatedAt'] THEN
+     AND v_changed <@ ARRAY['status', 'deliveredAt', 'updatedAt'] THEN
     RETURN NEW;
   END IF;
 
@@ -4047,7 +4418,10 @@ BEGIN
          NEW.confirmed = false
          AND NEW.status IN ('pending', 'unconfirmed')
          AND NEW."reservationExpiresAt" IS NULL
-         AND v_changed <@ ARRAY['confirmed', 'status', 'reservationExpiresAt', 'total', 'updatedAt']
+         AND v_changed <@ ARRAY[
+           'confirmed', 'status', 'reservationExpiresAt', 'total', 'withdrawalDays',
+           'returnShippingPaidBy', 'updatedAt'
+         ]
        )
        OR (
          NEW.confirmed = true
@@ -4057,7 +4431,10 @@ BEGIN
          AND NEW."paymentProvider" IS NULL
          AND NEW."total" >= 0
          AND cartlify.is_owner(NEW."userId")
-         AND v_changed <@ ARRAY['confirmed', 'status', 'reservationExpiresAt', 'total', 'updatedAt']
+         AND v_changed <@ ARRAY[
+           'confirmed', 'status', 'reservationExpiresAt', 'total', 'withdrawalDays',
+           'returnShippingPaidBy', 'updatedAt'
+         ]
        )
        -- pay_order: the payment, who took it and when are set together, nothing else but the
        -- state changes
@@ -4071,17 +4448,24 @@ BEGIN
          AND NEW."total" >= 0
          AND v_changed <@ ARRAY[
            'confirmed', 'status', 'reservationExpiresAt', 'paymentId', 'paymentProvider', 'paidAt',
-           'total', 'updatedAt'
+           'total', 'withdrawalDays', 'returnShippingPaidBy', 'updatedAt'
          ]
+         -- the term of the contract comes only with the payment of an order the payment confirms
+         AND (
+           NOT OLD.confirmed
+           OR NOT (v_changed && ARRAY['withdrawalDays', 'returnShippingPaidBy'])
+         )
        )
-       -- cancel_paid_order: a paid or shipped order of the admin context becomes cancelled with
-       -- the time of the cancel
+       -- refresh_return_state: a paid order whose every unit is back, or a shipped one whose money
+       -- is back, becomes cancelled with the time of the cancel
        OR (
-         cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
+         OLD.status IN ('paid', 'shipped')
          AND NEW.status = 'cancelled'
          AND NEW."cancelledAt" IS NOT NULL
          AND v_changed <@ ARRAY['status', 'cancelledAt', 'updatedAt']
        )
+       -- refresh_return_state: where the order stands as to its statements, nothing else
+       OR v_changed <@ ARRAY['returnStatus', 'updatedAt']
      ) THEN
     RETURN NEW;
   END IF;
@@ -4137,9 +4521,39 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  -- cleanup_deleted_accounts_recipients makes the person and the address anonymous: the columns
+  -- only take the made-up values (the address of a pickup stays empty)
+  IF current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY[
+       'recipientFirstName', 'recipientLastName', 'recipientPhone', 'postalCode', 'city', 'street',
+       'house', 'apartment', 'note', 'updatedAt'
+     ]
+     AND (NOT ('recipientFirstName' = ANY (v_changed)) OR NEW."recipientFirstName" = 'Recipient')
+     AND (NOT ('recipientLastName' = ANY (v_changed)) OR NEW."recipientLastName" = 'Customer')
+     AND (NOT ('recipientPhone' = ANY (v_changed)) OR NEW."recipientPhone" = '+10000000000')
+     AND (NOT ('postalCode' = ANY (v_changed)) OR NEW."postalCode" IS NULL)
+     AND (NOT ('apartment' = ANY (v_changed)) OR NEW.apartment IS NULL)
+     AND (NOT ('note' = ANY (v_changed)) OR NEW.note IS NULL)
+     AND (
+       NOT ('city' = ANY (v_changed))
+       OR NEW.city IS NOT DISTINCT FROM (CASE WHEN NEW.method = 'manual' THEN 'City' END)
+     )
+     AND (
+       NOT ('street' = ANY (v_changed))
+       OR NEW.street IS NOT DISTINCT FROM (CASE WHEN NEW.method = 'manual' THEN 'Street' END)
+     )
+     AND (
+       NOT ('house' = ANY (v_changed))
+       OR NEW.house IS NOT DISTINCT FROM (CASE WHEN NEW.method = 'manual' THEN '0' END)
+     ) THEN
+    RETURN NEW;
+  END IF;
+
   -- A user may not touch the price, except that a pickup is free: the price goes to 0 together
-  -- with the method (order_deliveries_before_update).
-  IF cartlify.current_actor_role() = 'USER'
+  -- with the method (order_deliveries_before_update). The roles are of the app: a function of the
+  -- owner writes only what the branches above let it, whatever context it runs in.
+  IF current_user <> 'cartlify_owner'
+     AND cartlify.current_actor_role() = 'USER'
      AND v_changed <@ ARRAY[
        'method', 'recipientFirstName', 'recipientLastName', 'recipientPhone', 'country',
        'postalCode', 'city', 'street', 'house', 'apartment', 'note', 'price', 'updatedAt'
@@ -4148,7 +4562,8 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
+  IF current_user <> 'cartlify_owner'
+     AND cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
      AND v_changed <@ ARRAY[
        'recipientFirstName', 'recipientLastName', 'recipientPhone', 'country', 'postalCode', 'city',
        'street', 'house', 'apartment', 'note', 'updatedAt'
@@ -4563,9 +4978,11 @@ EXECUTE FUNCTION cartlify.attributes_type_locked ();
 
 -- Guard of the stock log: a line is history, written once by the functions that move the stock
 -- and never changed or removed. The policies of db/03 deny every update and delete already; this
--- guard says it a second time for a role that would skip them. A superuser (a data script by
--- hand, such as the cleanup of a development database) is not checked, as rls does not check it
--- either. The refusal is STOCK_LOG_APPEND_ONLY with the code 42501.
+-- guard says it a second time for a role that would skip them. The one change: the cleanup of the
+-- retention terms (cleanup_return_addresses, the owner) empties the address and the browser of a
+-- line, nothing else. A superuser (a data script by hand, such as the cleanup of a development
+-- database) is not checked, as rls does not check it either. The refusal is STOCK_LOG_APPEND_ONLY
+-- with the code 42501.
 CREATE OR REPLACE FUNCTION cartlify.stock_log_append_only () RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
@@ -4576,9 +4993,45 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  IF TG_OP = 'UPDATE'
+     AND current_user = 'cartlify_owner'
+     AND NEW.ip IS NULL
+     AND NEW."userAgent" IS NULL
+     AND to_jsonb(NEW) - 'ip' - 'userAgent' = to_jsonb(OLD) - 'ip' - 'userAgent' THEN
+    RETURN NEW;
+  END IF;
+
   RAISE EXCEPTION 'STOCK_LOG_APPEND_ONLY' USING ERRCODE = '42501';
 END;
 $$;
+
+-- Guard of the journal of the admins: a line is never changed. The policies of db/03 deny every
+-- update but the owner's; the one change of the owner is the cleanup of the retention terms
+-- (cleanup_return_addresses), which empties the address and the browser of a line the buyer or
+-- the form caused, nothing else. A superuser is not checked. The refusal is
+-- ADMIN_AUDIT_LOG_APPEND_ONLY with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.admin_audit_log_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND NEW.ip IS NULL
+     AND NEW."userAgent" IS NULL
+     AND to_jsonb(NEW) - 'ip' - 'userAgent' = to_jsonb(OLD) - 'ip' - 'userAgent' THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ADMIN_AUDIT_LOG_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_admin_audit_log_update_columns ON cartlify.admin_audit_log;
+
+CREATE TRIGGER trg_admin_audit_log_update_columns
+BEFORE UPDATE ON cartlify.admin_audit_log FOR EACH ROW
+EXECUTE FUNCTION cartlify.admin_audit_log_update_columns ();
 
 DROP TRIGGER IF EXISTS trg_stock_log_append_only ON cartlify.stock_log;
 
@@ -4586,7 +5039,6 @@ CREATE TRIGGER trg_stock_log_append_only
 BEFORE UPDATE OR DELETE ON cartlify.stock_log FOR EACH ROW
 EXECUTE FUNCTION cartlify.stock_log_append_only ();
 
-COMMIT;
 
 ------------------------------------------------------------
 -- TEMPORARY: the product versions of the functions that now take a variant. Remove this block
@@ -4628,3 +5080,2209 @@ DROP FUNCTION IF EXISTS cartlify.log_product_price_change (
   text,
   timestamp
 );
+
+------------------------------------------------------------
+-- RETURNS: THE STATEMENTS OF WITHDRAWAL AND OF RETURN
+------------------------------------------------------------
+
+-- Whether the goods of an order were never handed over to the buyer: a paid order that was not
+-- sent, or a pickup that is ready and not collected (shipped, the goods still on the shelf of the
+-- shop). A statement for such an order takes its goods back at once. Internal step: the returns
+-- functions call it with the status they read under the lock of the order; the app has no execute
+-- right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.order_goods_on_shelf (p_order_id integer, p_status cartlify."OrderStatus") RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT p_status = 'paid'
+    OR (
+      p_status = 'shipped'
+      AND EXISTS (
+        SELECT 1 FROM cartlify.order_deliveries AS d WHERE d."orderId" = p_order_id AND d.method = 'pickup'
+      )
+    );
+$$;
+
+-- Refreshes what the statements of an order say about it. A statement is over when none of its rows
+-- waits for its goods or for its money (every row has a result of the goods other than expected, and
+-- its money is refunded or refused): it is closed in the name of the actor of the context, who set
+-- the last result (empty for the system). The state of the order is one value for the whole order:
+-- none, open or open_partial while a statement is open (partial when part of the money went back),
+-- then full when every unit of every item went back with its money and the delivery, partial when some did,
+-- declined when none did. A paid order whose every unit is back (on the shelf, written off or lost)
+-- becomes cancelled, and so does a shipped one whose statements are all closed with all the money
+-- and the delivery back (the buyer refused the parcel): a cancelled order is not sent. Internal
+-- step: runs as the owner, the app has no execute right (db/01); the functions below call it in
+-- their own transaction.
+CREATE OR REPLACE FUNCTION cartlify.refresh_return_state (p_order_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_any    boolean;
+  v_open   boolean;
+  v_money  boolean;
+  v_full   boolean;
+  v_whole  boolean;
+  v_order_status text;
+  v_status cartlify."ReturnStatus";
+BEGIN
+  -- the delivery goes back only with an order that comes back whole: once a unit will not (its
+  -- goods not accepted or not arrived, its money refused, its transfer disputed), a row whose money
+  -- has not gone gives its share of the delivery up. Nothing changes once the delivery is on its
+  -- way or back
+  IF NOT EXISTS (
+    SELECT 1
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    WHERE r."orderId" = p_order_id AND i."deliveryShare" > 0 AND i.money IN ('pending', 'refunded')
+  ) AND EXISTS (
+    SELECT 1
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+      AND oi.quantity > COALESCE(
+        (
+          SELECT SUM(i.quantity)
+          FROM cartlify.return_items AS i
+          WHERE i."orderItemId" = oi.id
+            AND i.goods IN ('expected', 'to_stock', 'written_off', 'lost')
+            AND i.money <> 'refused'
+            AND i."refundFailure" IS DISTINCT FROM 'disputed'
+        ),
+        0
+      )
+  ) THEN
+    UPDATE cartlify.return_items AS i
+    SET "deliveryShare" = 0
+    FROM cartlify.returns AS r
+    WHERE r.id = i."returnId"
+      AND r."orderId" = p_order_id
+      AND i.money = 'not_refunded'
+      AND i."deliveryShare" <> 0;
+  END IF;
+
+  UPDATE cartlify.returns AS r
+  SET
+    "closedAt" = now() AT TIME ZONE 'UTC',
+    "closedById" = cartlify.current_actor_id()
+  WHERE r."orderId" = p_order_id
+    AND r."closedAt" IS NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM cartlify.return_items AS i
+      WHERE i."returnId" = r.id
+        AND (i.goods = 'expected' OR i.money IN ('not_refunded', 'pending'))
+    );
+
+  SELECT
+    EXISTS (SELECT 1 FROM cartlify.returns AS r WHERE r."orderId" = p_order_id),
+    EXISTS (SELECT 1 FROM cartlify.returns AS r WHERE r."orderId" = p_order_id AND r."closedAt" IS NULL),
+    EXISTS (
+      SELECT 1
+      FROM cartlify.return_items AS i
+      JOIN cartlify.returns AS r ON r.id = i."returnId"
+      WHERE r."orderId" = p_order_id AND i.money = 'refunded'
+    )
+  INTO v_any, v_open, v_money;
+
+  -- every unit of every item of the order came back with its money
+  v_full := NOT EXISTS (
+    SELECT 1
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+      AND oi.quantity > COALESCE(
+        (
+          SELECT SUM(i.quantity)
+          FROM cartlify.return_items AS i
+          WHERE i."orderItemId" = oi.id AND i.money = 'refunded'
+        ),
+        0
+      )
+  );
+
+  -- ... and the delivery went with them, when the buyer paid for one
+  IF v_full AND COALESCE(
+    (SELECT d.price FROM cartlify.order_deliveries AS d WHERE d."orderId" = p_order_id), 0
+  ) > 0 THEN
+    v_full := EXISTS (
+      SELECT 1
+      FROM cartlify.return_items AS i
+      JOIN cartlify.returns AS r ON r.id = i."returnId"
+      WHERE r."orderId" = p_order_id AND i.money = 'refunded' AND i."deliveryShare" > 0
+    );
+  END IF;
+
+  v_status := CASE
+    WHEN NOT v_any THEN 'none'
+    WHEN v_open AND v_money THEN 'open_partial'
+    WHEN v_open THEN 'open'
+    WHEN v_full THEN 'full'
+    WHEN v_money THEN 'partial'
+    ELSE 'declined'
+  END;
+
+  -- every unit of every item is back with the shop, whatever became of the money
+  v_whole := NOT EXISTS (
+    SELECT 1
+    FROM cartlify.order_items AS oi
+    WHERE oi."orderId" = p_order_id
+      AND oi.quantity > COALESCE(
+        (
+          SELECT SUM(i.quantity)
+          FROM cartlify.return_items AS i
+          WHERE i."orderItemId" = oi.id AND i.goods IN ('to_stock', 'written_off', 'lost')
+        ),
+        0
+      )
+  );
+
+  SELECT o.status::text INTO v_order_status FROM cartlify.orders AS o WHERE o.id = p_order_id;
+
+  IF (cartlify.order_goods_on_shelf (p_order_id, v_order_status::cartlify."OrderStatus") AND v_whole)
+     OR (v_order_status = 'shipped' AND v_status = 'full') THEN
+    UPDATE cartlify.orders AS o
+    SET status = 'cancelled', "cancelledAt" = now() AT TIME ZONE 'UTC'
+    WHERE o.id = p_order_id;
+  END IF;
+
+  UPDATE cartlify.orders AS o
+  SET "returnStatus" = v_status
+  WHERE o.id = p_order_id
+    AND o."returnStatus" IS DISTINCT FROM v_status;
+END;
+$$;
+
+-- Locks what every function that changes a statement of an order locks, in one order for all of them:
+-- the order, then every statement of the order in the order of their ids; the rows follow, in the
+-- function. Two of them that meet on an order wait for one another's order, never for a statement
+-- each holds (the closing of the statements of the order, refresh_return_state, touches them all).
+-- Returns the id of the order (RETURN_NOT_FOUND for a statement that is not there). Internal step:
+-- runs as the owner, the app has no execute right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.lock_return_order (p_return_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_order_id integer;
+BEGIN
+  SELECT r."orderId" INTO v_order_id FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RETURN_NOT_FOUND';
+  END IF;
+
+  PERFORM 1 FROM cartlify.orders AS o WHERE o.id = v_order_id FOR UPDATE;
+
+  PERFORM 1 FROM cartlify.returns AS r WHERE r."orderId" = v_order_id ORDER BY r.id FOR UPDATE;
+
+  RETURN v_order_id;
+END;
+$$;
+
+-- Makes a statement of withdrawal or of return for the items of a paid, shipped or delivered order
+-- and returns its id. The one place a statement is made, for every source: an admin (any basis, any
+-- reason of an admin), the buyer from the account (withdrawal, an order of their own), the system
+-- for the public form (withdrawal, the code in the link vouched for the order, or a form without
+-- one that an admin checks by hand). RETURN_FORBIDDEN for any other actor; a buyer that does not own
+-- the order finds none (RETURN_ORDER_NOT_FOUND). p_items is a list of { orderItemId, quantity }: each
+-- item of the order once, units not above what the order bought less what other statements hold (a
+-- row whose money was refused gives its units back); a statement of withdrawal takes no item whose
+-- product has no right of withdrawal (RETURN_ITEM_NOT_RETURNABLE) and, for a delivered order, only
+-- until the end of the period of its contract (withdrawal_ends_at with the grace and the time zone
+-- of the shop, which the server gives; RETURN_PERIOD_OVER). The moment of the statement is now; an
+-- admin may name a moment of the past (a parcel refused at the door), never of the future and never
+-- before the order was paid (RETURN_STATED_AT_INVALID). The name
+-- and the email are what the answers go to (RETURN_CONTACT_REQUIRED); the address and the browser
+-- come from the context of the request. An extension names a statement of the same order. The reason
+-- shop_cancel (a paid order, basis other) takes the goods back to the stock at once and cancels the
+-- order when all of it is back; the reason refused (a shipped order, basis withdrawal) takes whatever is left of the
+-- order (RETURN_REASON_INVALID for the other basis, RETURN_ORDER_NOT_RETURNABLE for the other status),
+-- whatever the right of withdrawal of its items, with the moment of the admin (RETURN_STATED_AT_INVALID
+-- without it or before the send). A statement of the buyer for a paid order that was not sent brings
+-- the goods back at once too, and cancels the order when it is all of it. A pickup that is ready and
+-- not collected (shipped, its goods still on the shelf of the shop) is a paid order that was not
+-- sent for all of this: the shop cancels it, and a statement of the buyer brings its goods back.
+-- Each statement gets the next number of its order (the code the buyer and the admins see). A
+-- statement from the account or with the code takes the units an open form without the code holds
+-- (take_back_manual_units): the form gives them up as not arrived, refused, stated_again.
+CREATE OR REPLACE FUNCTION cartlify.create_return (
+  p_order_id integer,
+  p_items jsonb,
+  p_source cartlify."ReturnSource",
+  p_basis cartlify."ReturnBasis",
+  p_reason cartlify."ReturnReason",
+  p_description text,
+  p_contact_name text,
+  p_contact_email text,
+  p_stated_at timestamp without time zone,
+  p_extends_id integer,
+  p_grace_days integer,
+  p_time_zone text
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor     integer := cartlify.current_actor_id();
+  -- to the millisecond the columns keep, so that the moment of a statement made in the same
+  -- millisecond as the payment is not before it
+  v_now       timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_stated    timestamp;
+  v_paid_at   timestamp;
+  v_name      text := btrim(p_contact_name);
+  v_email     text := btrim(p_contact_email);
+  v_status    cartlify."OrderStatus";
+  v_confirmed boolean;
+  v_owner     integer;
+  v_delivered timestamp;
+  v_days      integer;
+  v_return_id integer;
+  v_row       jsonb;
+  v_item      record;
+  v_taken     integer;
+  v_on_shelf  boolean;
+  v_number    integer;
+BEGIN
+  IF p_source = 'admin' THEN
+    IF NOT cartlify.is_admin () OR v_actor IS NULL THEN
+      RAISE EXCEPTION 'RETURN_FORBIDDEN';
+    END IF;
+  ELSIF p_source = 'account' THEN
+    IF cartlify.current_actor_role () IS DISTINCT FROM 'USER' OR v_actor IS NULL OR p_basis <> 'withdrawal' THEN
+      RAISE EXCEPTION 'RETURN_FORBIDDEN';
+    END IF;
+  ELSIF NOT cartlify.is_system () OR p_basis <> 'withdrawal' THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  IF p_stated_at IS NOT NULL AND p_source <> 'admin' THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  -- a buyer finds the order of another no more than a stranger finds none: the lock is taken only
+  -- on an order they own
+  IF p_source = 'account' AND NOT EXISTS (
+    SELECT 1 FROM cartlify.orders AS o WHERE o.id = p_order_id AND o."userId" = v_actor
+  ) THEN
+    RAISE EXCEPTION 'RETURN_ORDER_NOT_FOUND';
+  END IF;
+
+  SELECT o.status, o.confirmed, o."userId", o."deliveredAt", o."withdrawalDays", o."paidAt"
+  INTO v_status, v_confirmed, v_owner, v_delivered, v_days, v_paid_at
+  FROM cartlify.orders AS o
+  WHERE o.id = p_order_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RETURN_ORDER_NOT_FOUND';
+  END IF;
+
+  IF NOT v_confirmed OR v_status NOT IN ('paid', 'shipped', 'delivered') THEN
+    RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
+  END IF;
+
+  -- the goods were never handed over: a paid order not sent, or a pickup ready and not collected
+  v_on_shelf := cartlify.order_goods_on_shelf (p_order_id, v_status);
+
+  -- anybody who knows the order and its recipient can send the form without the code: one such
+  -- statement waits for the check of an admin at a time per order (under the lock of the order);
+  -- once an admin accepted it, another may come for the units left
+  IF p_source = 'form_manual' AND EXISTS (
+    SELECT 1
+    FROM cartlify.returns AS r
+    WHERE r."orderId" = p_order_id
+      AND r.source = 'form_manual'
+      AND r."closedAt" IS NULL
+      AND r."acceptedAt" IS NULL
+  ) THEN
+    RAISE EXCEPTION 'RETURN_MANUAL_UNDER_REVIEW';
+  END IF;
+
+  IF v_name IS NULL OR v_name = '' OR v_email IS NULL OR v_email = '' THEN
+    RAISE EXCEPTION 'RETURN_CONTACT_REQUIRED';
+  END IF;
+
+  v_stated := COALESCE(p_stated_at, v_now);
+
+  -- never of the future, and never before the order was paid: a withdrawal cannot come before the
+  -- purchase, and a moment long gone would bring a period that is over back
+  IF v_stated > v_now OR v_stated < v_paid_at THEN
+    RAISE EXCEPTION 'RETURN_STATED_AT_INVALID';
+  END IF;
+
+  -- a parcel refused is told with the moment the carrier gives, which is the admin's to give (the
+  -- period and the reports count from it) and never before the parcel was sent
+  IF p_reason = 'refused' THEN
+    IF p_stated_at IS NULL OR v_stated < COALESCE(
+      (
+        SELECT MAX(sh."shippedAt")
+        FROM cartlify.order_shipments AS sh
+        WHERE sh."orderId" = p_order_id AND sh."rolledBackAt" IS NULL
+      ),
+      v_paid_at
+    ) THEN
+      RAISE EXCEPTION 'RETURN_STATED_AT_INVALID';
+    END IF;
+  END IF;
+
+  -- the reasons that cancel an order. shop_cancel: the shop cancels a paid order that was not sent
+  -- (outside the withdrawal); its goods are on the shelf, so they come back to the stock at once
+  -- and, when it is the whole order, the order is cancelled. refused: the buyer refused a parcel
+  -- that was sent (a withdrawal); it takes whatever is left of the order, a part named is widened
+  IF p_reason = 'shop_cancel' THEN
+    IF p_basis <> 'other' THEN
+      RAISE EXCEPTION 'RETURN_REASON_INVALID';
+    END IF;
+    IF NOT v_on_shelf THEN
+      RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
+    END IF;
+  ELSIF p_reason = 'refused' THEN
+    IF p_basis <> 'withdrawal' THEN
+      RAISE EXCEPTION 'RETURN_REASON_INVALID';
+    END IF;
+    IF v_status <> 'shipped' OR v_on_shelf THEN
+      RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
+    END IF;
+
+    SELECT COALESCE(
+      jsonb_agg(jsonb_build_object('orderItemId', oi.id, 'quantity', oi.quantity - t.taken) ORDER BY oi.id),
+      '[]'::jsonb
+    )
+    INTO p_items
+    FROM cartlify.order_items AS oi
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(SUM(i.quantity), 0) AS taken
+      FROM cartlify.return_items AS i
+      WHERE i."orderItemId" = oi.id AND i.money <> 'refused'
+    ) AS t
+    WHERE oi."orderId" = p_order_id AND oi.quantity > t.taken;
+  END IF;
+
+  -- the list: each item of the order once, with whole units above 0
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'RETURN_ITEMS_REQUIRED';
+  END IF;
+
+  FOR v_row IN SELECT e.value FROM jsonb_array_elements(p_items) AS e LOOP
+    IF jsonb_typeof(v_row) <> 'object'
+       OR jsonb_typeof(v_row -> 'orderItemId') IS DISTINCT FROM 'number'
+       OR (v_row ->> 'orderItemId') !~ '^[1-9][0-9]{0,9}$'
+       OR (v_row ->> 'orderItemId')::bigint > 2147483647 THEN
+      RAISE EXCEPTION 'RETURN_ITEMS_INVALID';
+    END IF;
+
+    IF jsonb_typeof(v_row -> 'quantity') IS DISTINCT FROM 'number'
+       OR (v_row ->> 'quantity') !~ '^[1-9][0-9]{0,8}$' THEN
+      RAISE EXCEPTION 'RETURN_QUANTITY_INVALID';
+    END IF;
+  END LOOP;
+
+  IF (SELECT COUNT(DISTINCT (e.value ->> 'orderItemId')) FROM jsonb_array_elements(p_items) AS e)
+     <> jsonb_array_length(p_items) THEN
+    RAISE EXCEPTION 'RETURN_ITEMS_REPEATED';
+  END IF;
+
+  -- each item is one of the order, and its units are there to take
+  FOR v_item IN
+    SELECT (e.value ->> 'orderItemId')::integer AS id, (e.value ->> 'quantity')::integer AS quantity
+    FROM jsonb_array_elements(p_items) AS e
+    ORDER BY 1
+  LOOP
+    DECLARE
+      v_oi record;
+    BEGIN
+      SELECT oi.quantity, oi.withdrawal
+      INTO v_oi
+      FROM cartlify.order_items AS oi
+      WHERE oi.id = v_item.id AND oi."orderId" = p_order_id;
+
+      IF NOT FOUND THEN
+        RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
+      END IF;
+
+      SELECT COALESCE(SUM(i.quantity), 0)
+      INTO v_taken
+      FROM cartlify.return_items AS i
+      WHERE i."orderItemId" = v_item.id AND i.money <> 'refused';
+
+      -- a form without the code holds units until an admin checks it: the buyer who states them
+      -- from the account or with the code takes them, the form gives them up (stated_again)
+      IF v_item.quantity > v_oi.quantity - v_taken AND p_source IN ('account', 'form_code') THEN
+        PERFORM cartlify.take_back_manual_units (
+          p_order_id, v_item.id, v_item.quantity - (v_oi.quantity - v_taken), COALESCE(v_actor, v_owner)
+        );
+
+        SELECT COALESCE(SUM(i.quantity), 0)
+        INTO v_taken
+        FROM cartlify.return_items AS i
+        WHERE i."orderItemId" = v_item.id AND i.money <> 'refused';
+      END IF;
+
+      IF v_item.quantity > v_oi.quantity - v_taken THEN
+        RAISE EXCEPTION 'RETURN_QUANTITY_EXCEEDED';
+      END IF;
+
+      -- a parcel refused is recorded whatever is in it: the money is a decision of the admin
+      IF p_basis = 'withdrawal' AND p_reason IS DISTINCT FROM 'refused'
+         AND v_oi.withdrawal IN ('perishable', 'personalised', 'periodical') THEN
+        RAISE EXCEPTION 'RETURN_ITEM_NOT_RETURNABLE';
+      END IF;
+    END;
+  END LOOP;
+
+  -- the period of a delivered order, as of the moment of the statement; it starts with the
+  -- delivery, so a paid or shipped order has none; 14 days is the least the law gives
+  -- a grace or a zone the server did not give leaves no end to compare with: the period is over
+  IF p_basis = 'withdrawal' AND v_status = 'delivered' AND v_delivered IS NOT NULL
+     AND NOT COALESCE(
+       v_stated <= cartlify.withdrawal_ends_at (v_delivered, COALESCE(v_days, 14), p_grace_days, p_time_zone),
+       false
+     ) THEN
+    RAISE EXCEPTION 'RETURN_PERIOD_OVER';
+  END IF;
+
+  IF p_extends_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM cartlify.returns AS r WHERE r.id = p_extends_id AND r."orderId" = p_order_id
+  ) THEN
+    RAISE EXCEPTION 'RETURN_EXTENDS_INVALID';
+  END IF;
+
+  -- the number of the statement in its order, under the lock of the order: 1, 2, 3...
+  SELECT COALESCE(MAX(r.number), 0) + 1 INTO v_number FROM cartlify.returns AS r WHERE r."orderId" = p_order_id;
+
+  INSERT INTO cartlify.returns (
+    "orderId", number, "extendsId", "statedAt", source, "createdById", basis, reason, description,
+    "contactName", "contactEmail", ip, "userAgent", "createdAt", "updatedAt"
+  )
+  VALUES (
+    p_order_id,
+    v_number,
+    p_extends_id,
+    v_stated,
+    p_source,
+    CASE WHEN p_source IN ('admin', 'account') THEN v_actor END,
+    p_basis,
+    p_reason,
+    NULLIF(btrim(p_description), ''),
+    v_name,
+    v_email,
+    NULLIF(current_setting('cartlify.request_ip', true), ''),
+    NULLIF(current_setting('cartlify.request_user_agent', true), ''),
+    v_now,
+    v_now
+  )
+  RETURNING id INTO v_return_id;
+
+  INSERT INTO cartlify.return_items ("returnId", "orderItemId", quantity, amount, "createdAt", "updatedAt")
+  SELECT v_return_id, oi.id, (e.value ->> 'quantity')::integer,
+         oi."unitPrice" * (e.value ->> 'quantity')::integer, v_now, v_now
+  FROM jsonb_array_elements(p_items) AS e
+  JOIN cartlify.order_items AS oi ON oi.id = (e.value ->> 'orderItemId')::integer
+  ORDER BY oi.id;
+
+  -- a cancel by the shop, or a withdrawal of the buyer (from the account, or from the form with the
+  -- code of the order) from a paid order that was not sent or a pickup not collected: the goods are
+  -- on the shelf, they come back at once. A form has no actor, so the buyer of the order stands for
+  -- the author of the results
+  IF p_reason = 'shop_cancel' OR (p_source IN ('account', 'form_code') AND v_on_shelf) THEN
+    PERFORM cartlify.apply_return_results (
+      v_return_id,
+      (
+        SELECT jsonb_agg(
+          jsonb_build_object('itemId', i.id, 'quantity', i.quantity, 'goods', 'to_stock') ORDER BY i.id
+        )
+        FROM cartlify.return_items AS i
+        WHERE i."returnId" = v_return_id
+      ),
+      COALESCE(v_actor, v_owner)
+    );
+  END IF;
+
+  PERFORM cartlify.refresh_return_state (p_order_id);
+
+  RETURN v_return_id;
+END;
+$$;
+
+-- Takes units of an item from the open statements of the form without the code of an order, for a
+-- statement of the buyer from the account or with the code: the oldest rows first, each unit as not
+-- arrived with its money refused and the code stated_again (a row that gives up a part of its units
+-- is split, apply_return_results). A form whose every row has its result is closed. Internal step:
+-- create_return calls it under the lock of the order; the app has no execute right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.take_back_manual_units (
+  p_order_id integer,
+  p_order_item_id integer,
+  p_units integer,
+  p_actor integer
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_row  record;
+  v_left integer := p_units;
+  v_take integer;
+BEGIN
+  FOR v_row IN
+    SELECT i.id, i."returnId", i.quantity
+    FROM cartlify.return_items AS i
+    JOIN cartlify.returns AS r ON r.id = i."returnId"
+    WHERE r."orderId" = p_order_id
+      AND r.source = 'form_manual'
+      AND r."closedAt" IS NULL
+      AND r."acceptedAt" IS NULL
+      AND i."orderItemId" = p_order_item_id
+      AND i.goods = 'expected'
+      AND i.money = 'not_refunded'
+    ORDER BY i.id
+  LOOP
+    EXIT WHEN v_left <= 0;
+
+    v_take := LEAST(v_left, v_row.quantity);
+
+    PERFORM cartlify.apply_return_results (
+      v_row."returnId",
+      jsonb_build_array(
+        jsonb_build_object('itemId', v_row.id, 'quantity', v_take, 'goods', 'not_arrived')
+      ),
+      p_actor
+    );
+
+    -- the units just given up carry the reason
+    UPDATE cartlify.return_items AS i
+    SET "refusedCode" = 'stated_again'
+    WHERE i."returnId" = v_row."returnId"
+      AND i."orderItemId" = p_order_item_id
+      AND i.goods = 'not_arrived'
+      AND i.money = 'refused'
+      AND i."refusedCode" IS NULL
+      AND i."goodsSetAt" = (now() AT TIME ZONE 'UTC')::timestamp(3);
+
+    v_left := v_left - v_take;
+  END LOOP;
+END;
+$$;
+
+-- Brings units of a returned item back through the batches they were sold from, in the order of the
+-- sale (the allocations of the order for the variant, by id), and writes the lines of the stock log
+-- with the row of the statement. to_stock: the units go back into their batches and into the stock
+-- (stock.return). written_off and lost: they come back and go out at once, the same batches and the
+-- stock as they were, a line for each (stock.return, stock.return_write_off, with the goods as the
+-- reason): the cost of the loss is the cost of the batches. RETURN_ALLOCATIONS_MISSING when the
+-- order has not taken so many units from batches (an order paid before the batches). Internal step:
+-- runs as the owner, the app has no execute right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.return_units_to_batches (
+  p_order_id integer,
+  p_variant_id integer,
+  p_quantity integer,
+  p_return_item_id integer,
+  p_goods cartlify."ReturnGoods"
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  a         record;
+  v_left    integer := p_quantity;
+  v_take    integer;
+  v_cost    numeric;
+  v_batches jsonb := '[]'::jsonb;
+  v_stock   integer;
+BEGIN
+  SELECT v.stock
+  INTO v_stock
+  FROM cartlify.product_variants AS v
+  WHERE v.id = p_variant_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'VARIANT_NOT_FOUND';
+  END IF;
+
+  FOR a IN
+    SELECT al.id, al."batchId", al.quantity, al.returned
+    FROM cartlify.order_batch_allocations AS al
+    WHERE al."orderId" = p_order_id AND al."variantId" = p_variant_id
+    ORDER BY al.id
+    FOR UPDATE
+  LOOP
+    EXIT WHEN v_left = 0;
+    v_take := LEAST(a.quantity - a.returned, v_left);
+    CONTINUE WHEN v_take <= 0;
+
+    UPDATE cartlify.order_batch_allocations AS al
+    SET returned = al.returned + v_take
+    WHERE al.id = a.id;
+
+    -- a unit that goes out at once leaves the batch as it was
+    IF p_goods = 'to_stock' THEN
+      UPDATE cartlify.product_batches AS b
+      SET remaining = b.remaining + v_take
+      WHERE b.id = a."batchId";
+    END IF;
+
+    SELECT b."unitCost" INTO v_cost FROM cartlify.product_batches AS b WHERE b.id = a."batchId";
+
+    v_batches := v_batches || jsonb_build_object(
+      'batchId', a."batchId",
+      'quantity', v_take,
+      'unitCost', trim_scale(v_cost)::text
+    );
+    v_left := v_left - v_take;
+  END LOOP;
+
+  IF v_left > 0 THEN
+    RAISE EXCEPTION 'RETURN_ALLOCATIONS_MISSING';
+  END IF;
+
+  IF p_goods = 'to_stock' THEN
+    UPDATE cartlify.product_variants AS v
+    SET "stock" = v."stock" + p_quantity
+    WHERE v.id = p_variant_id
+    RETURNING v."stock" INTO v_stock;
+
+    PERFORM cartlify.log_stock_change (
+      p_variant_id, 'stock.return', p_quantity, v_stock,
+      jsonb_build_array(jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_batches)),
+      NULL, NULL, p_order_id, p_return_item_id
+    );
+  ELSE
+    PERFORM cartlify.log_stock_change (
+      p_variant_id, 'stock.return', p_quantity, v_stock + p_quantity,
+      jsonb_build_array(jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_batches)),
+      NULL, NULL, p_order_id, p_return_item_id
+    );
+    PERFORM cartlify.log_stock_change (
+      p_variant_id, 'stock.return_write_off', -p_quantity, v_stock,
+      jsonb_build_array(
+        jsonb_build_object('field', 'batches', 'old', NULL, 'new', v_batches),
+        jsonb_build_object('field', 'reason', 'old', NULL, 'new', p_goods::text)
+      ),
+      NULL, NULL, p_order_id, p_return_item_id
+    );
+  END IF;
+END;
+$$;
+
+-- Sets what became of the goods of the rows of a statement, in the name of the actor given; the
+-- callers check who may (receive_return_items for an admin, create_return for the cancels that bring
+-- the goods back at once). Internal step: runs as the owner, the app has no execute right (db/01).
+-- All the results or none, on an order that is not cancelled (RETURN_ORDER_NOT_RETURNABLE: a cancel
+-- puts the units back itself). p_results is a list of { itemId, quantity, goods, notAcceptedReason }:
+-- the units of a row that waits for its goods (RETURN_ITEM_NOT_EXPECTED) get one of to_stock,
+-- written_off, lost (the proof of the buyer confirmed first, RETURN_PROOF_REQUIRED), not_accepted
+-- (with the reason, RETURN_NOT_ACCEPTED_REASON_REQUIRED) or not_arrived. A result for fewer units
+-- than the row holds splits it: the units with the result are a row of their own, the rest waits
+-- on, so one unit may come late or be refused alone; the money of each row is the price of its
+-- units, and units whose money was settled ahead of the goods keep that state in both rows. The
+-- units that come back move the stock (return_units_to_batches); the units that are not accepted
+-- or never came have their money refused with the goods, which only a row with no money settled
+-- takes (RETURN_ITEM_MONEY_SETTLED); goods paid ahead that never came are not arrived with their
+-- money back. The results are shaped first, then worked in the order of the
+-- variants of the rows, so two admins that take in the same variants in another order do not
+-- lock them crosswise. The statement is closed when every row has its result (refresh_return_state).
+CREATE OR REPLACE FUNCTION cartlify.apply_return_results (p_return_id integer, p_results jsonb, p_actor integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor    integer := p_actor;
+  v_now      timestamp := now() AT TIME ZONE 'UTC';
+  v_order_id integer;
+  v_status   cartlify."OrderStatus";
+  v_proof    timestamp;
+  v_result   jsonb;
+  v_row      record;
+  v_goods    cartlify."ReturnGoods";
+  v_reason   cartlify."ReturnNotAcceptedReason";
+  v_quantity integer;
+  v_target   integer;
+  v_part     numeric;
+  v_refused  boolean;
+BEGIN
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  SELECT r."proofConfirmedAt" INTO v_proof FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+  SELECT o.status INTO v_status FROM cartlify.orders AS o WHERE o.id = v_order_id;
+
+  IF v_status = 'cancelled' THEN
+    RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
+  END IF;
+
+  IF p_results IS NULL OR jsonb_typeof(p_results) <> 'array' OR jsonb_array_length(p_results) = 0 THEN
+    RAISE EXCEPTION 'RETURN_ITEMS_REQUIRED';
+  END IF;
+
+  -- the shape of every result, before anything is read of a row
+  FOR v_result IN SELECT e.value FROM jsonb_array_elements(p_results) AS e LOOP
+    IF jsonb_typeof(v_result) <> 'object'
+       OR jsonb_typeof(v_result -> 'itemId') IS DISTINCT FROM 'number'
+       OR (v_result ->> 'itemId') !~ '^[1-9][0-9]{0,9}$'
+       OR (v_result ->> 'itemId')::bigint > 2147483647 THEN
+      RAISE EXCEPTION 'RETURN_ITEMS_INVALID';
+    END IF;
+
+    IF jsonb_typeof(v_result -> 'quantity') IS DISTINCT FROM 'number'
+       OR (v_result ->> 'quantity') !~ '^[1-9][0-9]{0,8}$' THEN
+      RAISE EXCEPTION 'RETURN_QUANTITY_INVALID';
+    END IF;
+
+    IF (v_result ->> 'goods') IS NULL
+       OR (v_result ->> 'goods') NOT IN ('to_stock', 'written_off', 'not_accepted', 'lost', 'not_arrived') THEN
+      RAISE EXCEPTION 'RETURN_GOODS_INVALID';
+    END IF;
+
+    IF (v_result ->> 'goods') = 'not_accepted' THEN
+      IF (v_result ->> 'notAcceptedReason') IS NULL
+         OR (v_result ->> 'notAcceptedReason') NOT IN ('unsealed', 'mixed', 'used', 'damaged', 'other') THEN
+        RAISE EXCEPTION 'RETURN_NOT_ACCEPTED_REASON_REQUIRED';
+      END IF;
+    ELSIF (v_result ->> 'notAcceptedReason') IS NOT NULL THEN
+      RAISE EXCEPTION 'RETURN_GOODS_INVALID';
+    END IF;
+  END LOOP;
+
+  -- the results in the order of the variants of their rows (a row that is not there last: it is
+  -- refused when its turn comes), the results of one row in the order they were given
+  FOR v_result IN
+    SELECT e.value
+    FROM jsonb_array_elements(p_results) WITH ORDINALITY AS e (value, n)
+    LEFT JOIN cartlify.return_items AS i
+      ON i.id = (e.value ->> 'itemId')::integer AND i."returnId" = p_return_id
+    LEFT JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+    ORDER BY oi."variantId" NULLS LAST, i.id NULLS LAST, e.n
+  LOOP
+    v_goods := (v_result ->> 'goods')::cartlify."ReturnGoods";
+    v_reason := (v_result ->> 'notAcceptedReason')::cartlify."ReturnNotAcceptedReason";
+    v_quantity := (v_result ->> 'quantity')::integer;
+
+    SELECT i.*, oi."unitPrice" AS "unitPrice", oi."variantId" AS "variantId"
+    INTO v_row
+    FROM cartlify.return_items AS i
+    JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+    WHERE i.id = (v_result ->> 'itemId')::integer AND i."returnId" = p_return_id
+    FOR UPDATE OF i;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
+    END IF;
+
+    IF v_row.goods <> 'expected' THEN
+      RAISE EXCEPTION 'RETURN_ITEM_NOT_EXPECTED';
+    END IF;
+
+    IF v_quantity > v_row.quantity THEN
+      RAISE EXCEPTION 'RETURN_QUANTITY_EXCEEDED';
+    END IF;
+
+    -- the goods that were lost on the way need the proof the buyer sent them
+    IF v_goods = 'lost' AND v_proof IS NULL THEN
+      RAISE EXCEPTION 'RETURN_PROOF_REQUIRED';
+    END IF;
+
+    -- money already on its way or back is not refused with the goods; goods paid ahead that never
+    -- came are not arrived with their money back (the shop gets it back outside the app)
+    IF v_goods IN ('not_accepted', 'not_arrived') AND v_row.money <> 'not_refunded'
+       AND NOT (v_goods = 'not_arrived' AND v_row.money = 'refunded') THEN
+      RAISE EXCEPTION 'RETURN_ITEM_MONEY_SETTLED';
+    END IF;
+
+    v_refused := v_goods IN ('not_accepted', 'not_arrived') AND v_row.money = 'not_refunded';
+
+    IF v_quantity < v_row.quantity THEN
+      -- the units with the result are a row of their own, the rest of the row waits on; the money of
+      -- the row goes by the units and a transfer that covers the row covers both (the delivery stays
+      -- with the row that waits). Units refused with their goods carry none of the money
+      v_part := round(v_row.amount * v_quantity / v_row.quantity, 2);
+
+      UPDATE cartlify.return_items AS i
+      SET quantity = i.quantity - v_quantity,
+          amount = i.amount - v_part
+      WHERE i.id = v_row.id;
+
+      INSERT INTO cartlify.return_items (
+        "returnId", "orderItemId", quantity, goods, "notAcceptedReason", money, amount, "amountNote",
+        "refundKey", "refundId", "refundedAt", "refundFailure", "refundFailureText",
+        "outsideMethod", "outsideNote", "outsideById",
+        "goodsSetAt", "goodsSetById", "createdAt", "updatedAt"
+      )
+      VALUES (
+        p_return_id, v_row."orderItemId", v_quantity, v_goods, v_reason,
+        CASE WHEN v_refused THEN 'refused'::cartlify."ReturnMoney" ELSE v_row.money END,
+        v_part, v_row."amountNote",
+        CASE WHEN v_refused THEN NULL ELSE v_row."refundKey" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."refundId" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."refundedAt" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."refundFailure" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."refundFailureText" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."outsideMethod" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."outsideNote" END,
+        CASE WHEN v_refused THEN NULL ELSE v_row."outsideById" END,
+        v_now, v_actor, v_row."createdAt", v_now
+      )
+      RETURNING id INTO v_target;
+    ELSE
+      UPDATE cartlify.return_items AS i
+      SET goods = v_goods,
+          "notAcceptedReason" = v_reason,
+          money = CASE WHEN v_refused THEN 'refused' ELSE i.money END,
+          "deliveryShare" = CASE WHEN v_refused THEN 0 ELSE i."deliveryShare" END,
+          "shippingDeduction" = CASE WHEN v_refused THEN 0 ELSE i."shippingDeduction" END,
+          "refundFailure" = CASE WHEN v_refused THEN NULL ELSE i."refundFailure" END,
+          "refundFailureText" = CASE WHEN v_refused THEN NULL ELSE i."refundFailureText" END,
+          "goodsSetAt" = v_now,
+          "goodsSetById" = v_actor
+      WHERE i.id = v_row.id;
+
+      v_target := v_row.id;
+    END IF;
+
+    IF v_goods IN ('to_stock', 'written_off', 'lost') THEN
+      PERFORM cartlify.return_units_to_batches (v_order_id, v_row."variantId", v_quantity, v_target, v_goods);
+    END IF;
+  END LOOP;
+
+  PERFORM cartlify.refresh_return_state (v_order_id);
+END;
+$$;
+
+-- Refuses a statement of the form without the code that no admin accepted yet
+-- (RETURN_NOT_ACCEPTED): its goods and its money wait for the check. Internal step: runs as the
+-- owner, the app has no execute right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.assert_return_accepted (p_return_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM cartlify.returns AS r
+    WHERE r.id = p_return_id AND r.source = 'form_manual' AND r."acceptedAt" IS NULL
+  ) THEN
+    RAISE EXCEPTION 'RETURN_NOT_ACCEPTED';
+  END IF;
+END;
+$$;
+
+-- An admin or root accepts a statement of the form without the code as the buyer's, once
+-- (RETURN_ALREADY_ACCEPTED), while it is open (RETURN_ALREADY_CLOSED): only then its goods and its
+-- money are handled, it leaves the check of the admins, a statement of the buyer no longer takes
+-- its units over, and the form may take another statement without the code for the units left.
+-- RETURN_NOT_MANUAL for a statement of another source, RETURN_FORBIDDEN for anyone else,
+-- RETURN_NOT_FOUND for a statement that is not there.
+CREATE OR REPLACE FUNCTION cartlify.accept_return (p_return_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor integer := cartlify.current_actor_id();
+  v_row   record;
+BEGIN
+  IF NOT cartlify.is_admin () OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  -- the same order of locks as the other functions of the statements
+  PERFORM cartlify.lock_return_order (p_return_id);
+
+  SELECT r.source, r."acceptedAt", r."closedAt"
+  INTO v_row
+  FROM cartlify.returns AS r
+  WHERE r.id = p_return_id;
+
+  IF v_row.source <> 'form_manual' THEN
+    RAISE EXCEPTION 'RETURN_NOT_MANUAL';
+  END IF;
+
+  IF v_row."closedAt" IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_ALREADY_CLOSED';
+  END IF;
+
+  IF v_row."acceptedAt" IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_ALREADY_ACCEPTED';
+  END IF;
+
+  UPDATE cartlify.returns AS r
+  SET "acceptedAt" = (now() AT TIME ZONE 'UTC')::timestamp(3),
+      "acceptedById" = v_actor
+  WHERE r.id = p_return_id;
+END;
+$$;
+
+-- Sets what became of the goods of the rows of a statement; admin or root only (RETURN_FORBIDDEN),
+-- a statement of the form without the code once accepted (RETURN_NOT_ACCEPTED); the work is
+-- apply_return_results.
+CREATE OR REPLACE FUNCTION cartlify.receive_return_items (p_return_id integer, p_results jsonb) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF NOT cartlify.is_admin () OR cartlify.current_actor_id() IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  PERFORM cartlify.assert_return_accepted (p_return_id);
+
+  PERFORM cartlify.apply_return_results (p_return_id, p_results, cartlify.current_actor_id());
+END;
+$$;
+
+-- An admin or root confirms the proof the buyer sent the goods back (a carrier and a number, or a
+-- letter with the photos: the admin may confirm it without a number), once (RETURN_PROOF_ALREADY_CONFIRMED).
+-- The goods lost on the way and the money paid ahead of the goods need it. RETURN_FORBIDDEN for any
+-- other actor, RETURN_NOT_FOUND for a statement that is not there.
+CREATE OR REPLACE FUNCTION cartlify.confirm_return_proof (p_return_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor integer := cartlify.current_actor_id();
+  v_proof timestamp;
+BEGIN
+  IF NOT cartlify.is_admin () OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  SELECT r."proofConfirmedAt"
+  INTO v_proof
+  FROM cartlify.returns AS r
+  WHERE r.id = p_return_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RETURN_NOT_FOUND';
+  END IF;
+
+  IF v_proof IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_PROOF_ALREADY_CONFIRMED';
+  END IF;
+
+  PERFORM cartlify.assert_return_accepted (p_return_id);
+
+  UPDATE cartlify.returns AS r
+  SET "proofConfirmedAt" = now() AT TIME ZONE 'UTC',
+      "proofConfirmedById" = v_actor
+  WHERE r.id = p_return_id;
+END;
+$$;
+
+-- The buyer of a statement of their own account tells how they sent the goods back: the carrier and
+-- the number of the parcel, and a link to follow it when there is one. The statement is then in the
+-- state "proof given" for the admin, who checks it and confirms it (confirm_return_proof); the buyer
+-- may correct what they wrote until then. Only the buyer who made the statement (a statement of
+-- another is not found: RETURN_NOT_FOUND; the system writes it for a statement of an account or of a
+-- form with the code, once the server checked the code of the order), only while some row waits for its goods
+-- (RETURN_NOTHING_WAITING: nothing to send back for a statement whose goods are in already) and the
+-- statement is open (RETURN_ALREADY_CLOSED), and not after the admin confirmed it
+-- (RETURN_PROOF_ALREADY_CONFIRMED). The carrier and the number are required, the link is https
+-- (RETURN_PROOF_INVALID).
+CREATE OR REPLACE FUNCTION cartlify.provide_return_proof (
+  p_return_id integer,
+  p_carrier text,
+  p_number text,
+  p_url text
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor     integer := cartlify.current_actor_id();
+  v_carrier   text := btrim(p_carrier);
+  v_number    text := btrim(p_number);
+  v_url       text := NULLIF(btrim(p_url), '');
+  v_creator   integer;
+  v_source    cartlify."ReturnSource";
+  v_confirmed timestamp;
+  v_closed    timestamp;
+  v_order_id  integer;
+BEGIN
+  IF cartlify.is_system () THEN
+    -- the server checked the code of the order: a statement of an account or of a form with a code
+    SELECT r.source INTO v_source FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+    IF NOT FOUND OR v_source NOT IN ('account', 'form_code') THEN
+      RAISE EXCEPTION 'RETURN_NOT_FOUND';
+    END IF;
+  ELSIF cartlify.current_actor_role () IS DISTINCT FROM 'USER' OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  ELSE
+    -- a statement that is not the buyer's own is not found, and no lock is taken on its order
+    SELECT r."createdById", r.source INTO v_creator, v_source FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+    IF NOT FOUND OR v_source <> 'account' OR v_creator IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'RETURN_NOT_FOUND';
+    END IF;
+  END IF;
+
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  SELECT r."proofConfirmedAt", r."closedAt" INTO v_confirmed, v_closed FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+  IF v_closed IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_ALREADY_CLOSED';
+  END IF;
+
+  IF v_confirmed IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_PROOF_ALREADY_CONFIRMED';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM cartlify.return_items AS i WHERE i."returnId" = p_return_id AND i.goods = 'expected'
+  ) THEN
+    RAISE EXCEPTION 'RETURN_NOTHING_WAITING';
+  END IF;
+
+  IF v_carrier IS NULL OR v_carrier = '' OR char_length(v_carrier) > 100
+     OR v_number IS NULL OR v_number = '' OR char_length(v_number) > 100
+     OR (v_url IS NOT NULL AND (char_length(v_url) > 500 OR v_url !~ '^https://[^[:space:]]+$')) THEN
+    RAISE EXCEPTION 'RETURN_PROOF_INVALID';
+  END IF;
+
+  UPDATE cartlify.returns AS r
+  SET "proofProvidedAt" = now() AT TIME ZONE 'UTC',
+      "proofCarrier" = v_carrier,
+      "proofTrackingNumber" = v_number,
+      "proofTrackingUrl" = v_url
+  WHERE r.id = p_return_id;
+END;
+$$;
+
+-- Stamps updatedAt of a statement and of a row on every update (utc without a zone, as prisma writes
+-- it).
+CREATE OR REPLACE FUNCTION cartlify.returns_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_returns_before_update ON cartlify.returns;
+
+CREATE TRIGGER trg_returns_before_update
+BEFORE UPDATE ON cartlify.returns FOR EACH ROW
+EXECUTE FUNCTION cartlify.returns_before_update ();
+
+DROP TRIGGER IF EXISTS trg_return_items_before_update ON cartlify.return_items;
+
+CREATE TRIGGER trg_return_items_before_update
+BEFORE UPDATE ON cartlify.return_items FOR EACH ROW
+EXECUTE FUNCTION cartlify.returns_before_update ();
+
+-- Guard of the statements: only the system functions that run as the owner change the proof, the
+-- closing, the acceptance of a statement of the form (once), the money of the way back root gave
+-- back (once) and, as the retention cleanups do, the
+-- personal columns, which then only take the made-up values (the name, the email, an empty
+-- description, address, browser and note of the money of the way back); nothing else of a
+-- statement changes (the statement is what the buyer said, when and from where).
+CREATE OR REPLACE FUNCTION cartlify.returns_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY[
+       'proofProvidedAt', 'proofCarrier', 'proofTrackingNumber', 'proofTrackingUrl',
+       'proofConfirmedAt', 'proofConfirmedById', 'closedAt', 'closedById', 'closeCode', 'closeNote',
+       'contactName', 'contactEmail', 'description', 'ip', 'userAgent', 'shippingReimbursed',
+       'shippingReimbursedAt', 'shippingReimbursedMethod', 'shippingReimbursedNote',
+       'shippingReimbursedById', 'acceptedAt', 'acceptedById', 'updatedAt'
+     ]
+     -- an admin accepts a statement of the form without the code once
+     AND (NOT (v_changed && ARRAY['acceptedAt', 'acceptedById']) OR OLD."acceptedAt" IS NULL)
+     -- the money of the way back is given back once; its note is then only made up (the retention
+     -- terms)
+     AND (
+       NOT (v_changed && ARRAY[
+         'shippingReimbursed', 'shippingReimbursedAt', 'shippingReimbursedMethod',
+         'shippingReimbursedById'
+       ])
+       OR OLD."shippingReimbursed" IS NULL
+     )
+     AND (
+       NOT ('shippingReimbursedNote' = ANY (v_changed))
+       OR OLD."shippingReimbursed" IS NULL
+       OR NEW."shippingReimbursedNote" = 'Paid back outside the app'
+     )
+     AND (NOT ('contactName' = ANY (v_changed)) OR NEW."contactName" = 'Recipient Customer')
+     AND (
+       NOT ('contactEmail' = ANY (v_changed))
+       OR NEW."contactEmail" = 'return+' || NEW.id || '@example.com'
+     )
+     AND (NOT ('description' = ANY (v_changed)) OR NEW.description IS NULL)
+     AND (NOT ('ip' = ANY (v_changed)) OR NEW.ip IS NULL)
+     AND (NOT ('userAgent' = ANY (v_changed)) OR NEW."userAgent" IS NULL) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'RETURN_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_returns_update_columns ON cartlify.returns;
+
+CREATE TRIGGER trg_returns_update_columns
+BEFORE UPDATE ON cartlify.returns FOR EACH ROW
+EXECUTE FUNCTION cartlify.returns_update_columns ();
+
+-- Guard of the rows: the system functions that run as the owner set the result of the goods, the
+-- money and the quantity a split leaves; the item the row names never changes.
+CREATE OR REPLACE FUNCTION cartlify.return_items_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY[
+       'quantity', 'goods', 'notAcceptedReason', 'money', 'amount', 'amountNote', 'deliveryShare',
+       'shippingDeduction', 'refundKey', 'refundId', 'refundedAt', 'refundFailure', 'refundFailureText', 'outsideMethod',
+       'outsideNote', 'outsideById', 'refusedCode', 'goodsSetAt', 'goodsSetById', 'updatedAt'
+     ] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'RETURN_ITEM_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_return_items_update_columns ON cartlify.return_items;
+
+CREATE TRIGGER trg_return_items_update_columns
+BEFORE UPDATE ON cartlify.return_items FOR EACH ROW
+EXECUTE FUNCTION cartlify.return_items_update_columns ();
+
+-- Guard of the allocations of an order: only the units that came back change, and only the system
+-- functions that run as the owner change them.
+CREATE OR REPLACE FUNCTION cartlify.order_batch_allocations_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner' AND v_changed <@ ARRAY['returned'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'ORDER_BATCH_ALLOCATION_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_order_batch_allocations_update_columns ON cartlify.order_batch_allocations;
+
+CREATE TRIGGER trg_order_batch_allocations_update_columns
+BEFORE UPDATE ON cartlify.order_batch_allocations FOR EACH ROW
+EXECUTE FUNCTION cartlify.order_batch_allocations_update_columns ();
+
+
+------------------------------------------------------------
+-- RETURNS: THE MONEY OF THE STATEMENTS
+------------------------------------------------------------
+
+-- Starts a transfer of money back for rows of a statement (the first of the three steps: this
+-- function in one transaction, the provider asked outside any transaction, finish_return_refund in
+-- a second transaction). Admin or root (RETURN_FORBIDDEN). p_item_ids names the rows (all that can
+-- be refunded when null): a row waits for its money (RETURN_ITEM_NOT_REFUNDABLE otherwise: its
+-- goods were not accepted or did not arrive, or its money is on its way or back); a row whose goods
+-- are still expected is paid ahead only when the proof of the buyer is confirmed
+-- (RETURN_PROOF_REQUIRED); a row whose last transfer the buyer disputed at the bank is never sent
+-- again (RETURN_REFUND_DISPUTED: the bank gives the money back, the shop would pay twice) and is
+-- not taken by default. Only root lowers what a row refunds (p_reductions, a list of
+-- { itemId, amount, note }: the amount is above 0 and not above the price of the units, the note
+-- says why, RETURN_AMOUNT_INVALID). The delivery goes back, all of it, with the row of the highest id of the
+-- call that makes the order whole (every unit of every item is in a row whose goods are expected,
+-- on the shelf, written off or lost, in this call, on its way, back, or owed after a failed
+-- transfer that was not disputed); a unit not accepted or not arrived keeps it, and
+-- refresh_return_state takes it off a row that has not sent its money once the order cannot come
+-- back whole. The transfer is
+-- the sum of its rows and never more than the order was paid, counting what is on its way or back
+-- (RETURN_REFUND_EXCEEDS_PAID). The rows become pending under one new key; the answer says what to
+-- ask the provider for: { key, returnId, orderId, provider, paymentId, amount, itemIds }, lowered:
+-- the rows root lowered in this call, { itemId, from, to, note }, for the journal of the admins, and
+-- deduction. p_shipping_deduction takes the cost of the way back off the transfer, an admin or root:
+-- only a withdrawal whose contract says the buyer pays (RETURN_DEDUCTION_NOT_ALLOWED), above 0 and
+-- leaving the transfer above 0 (RETURN_DEDUCTION_INVALID), at most what the parcels of the
+-- statement cost the shop less what other transfers took (RETURN_DEDUCTION_EXCEEDS_COST).
+-- The function took no deduction of the way back before; the old signature is dropped here until
+-- dev and prod no longer have it.
+DROP FUNCTION IF EXISTS cartlify.begin_return_refund (integer, integer[], jsonb);
+
+CREATE OR REPLACE FUNCTION cartlify.begin_return_refund (
+  p_return_id integer,
+  p_item_ids integer[],
+  p_reductions jsonb,
+  p_shipping_deduction numeric DEFAULT NULL
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_order_id   integer;
+  v_proof      timestamp;
+  v_provider   cartlify."PaymentProvider";
+  v_payment_id text;
+  v_total      numeric;
+  v_paid_at    timestamp;
+  v_delivery   numeric;
+  v_key        uuid := gen_random_uuid();
+  v_ids        integer[];
+  v_row        record;
+  v_red        jsonb;
+  v_seen       integer[] := ARRAY[]::integer[];
+  v_count      integer := 0;
+  v_price      numeric;
+  v_amount     numeric;
+  v_sum        numeric;
+  v_taken      numeric;
+  v_old        numeric;
+  v_lowered    jsonb := '[]'::jsonb;
+  v_basis      cartlify."ReturnBasis";
+  v_payer      cartlify."ReturnShippingPayer";
+  v_left       numeric;
+BEGIN
+  IF NOT cartlify.is_admin () THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  PERFORM cartlify.assert_return_accepted (p_return_id);
+
+  SELECT r."proofConfirmedAt" INTO v_proof FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+  SELECT o."paymentProvider", o."paymentId", o.total, o."paidAt", COALESCE(d.price, 0)
+  INTO v_provider, v_payment_id, v_total, v_paid_at, v_delivery
+  FROM cartlify.orders AS o
+  LEFT JOIN cartlify.order_deliveries AS d ON d."orderId" = o.id
+  WHERE o.id = v_order_id;
+
+  IF v_payment_id IS NULL OR v_paid_at IS NULL THEN
+    RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
+  END IF;
+
+  IF p_item_ids IS NULL THEN
+    SELECT COALESCE(array_agg(i.id ORDER BY i.id), ARRAY[]::integer[])
+    INTO v_ids
+    FROM cartlify.return_items AS i
+    WHERE i."returnId" = p_return_id
+      AND i.money = 'not_refunded'
+      AND i."refundFailure" IS DISTINCT FROM 'disputed'
+      AND i.goods IN ('expected', 'to_stock', 'written_off', 'lost')
+      AND (i.goods <> 'expected' OR v_proof IS NOT NULL);
+  ELSE
+    SELECT COALESCE(array_agg(DISTINCT x ORDER BY x), ARRAY[]::integer[])
+    INTO v_ids
+    FROM unnest(p_item_ids) AS x;
+  END IF;
+
+  IF cardinality(v_ids) = 0 THEN
+    RAISE EXCEPTION 'RETURN_ITEMS_REQUIRED';
+  END IF;
+
+  FOR v_row IN
+    SELECT i.id, i.goods, i.money, i."refundFailure"
+    FROM cartlify.return_items AS i
+    WHERE i.id = ANY (v_ids) AND i."returnId" = p_return_id
+    ORDER BY i.id
+    FOR UPDATE OF i
+  LOOP
+    v_count := v_count + 1;
+
+    IF v_row.money <> 'not_refunded' OR v_row.goods NOT IN ('expected', 'to_stock', 'written_off', 'lost') THEN
+      RAISE EXCEPTION 'RETURN_ITEM_NOT_REFUNDABLE';
+    END IF;
+
+    IF v_row."refundFailure" = 'disputed' THEN
+      RAISE EXCEPTION 'RETURN_REFUND_DISPUTED';
+    END IF;
+
+    IF v_row.goods = 'expected' AND v_proof IS NULL THEN
+      RAISE EXCEPTION 'RETURN_PROOF_REQUIRED';
+    END IF;
+  END LOOP;
+
+  IF v_count <> cardinality(v_ids) THEN
+    RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
+  END IF;
+
+  -- what root lowers: each row once, an amount not above the price of its units, with the reason
+  IF p_reductions IS NOT NULL THEN
+    IF jsonb_typeof(p_reductions) <> 'array' THEN
+      RAISE EXCEPTION 'RETURN_AMOUNT_INVALID';
+    END IF;
+
+    IF jsonb_array_length(p_reductions) > 0 AND NOT cartlify.is_root () THEN
+      RAISE EXCEPTION 'RETURN_FORBIDDEN';
+    END IF;
+
+    FOR v_red IN SELECT e.value FROM jsonb_array_elements(p_reductions) AS e LOOP
+      IF jsonb_typeof(v_red) <> 'object'
+         OR jsonb_typeof(v_red -> 'itemId') IS DISTINCT FROM 'number'
+         OR (v_red ->> 'itemId') !~ '^[1-9][0-9]{0,9}$'
+         OR (v_red ->> 'itemId')::bigint > 2147483647 THEN
+        RAISE EXCEPTION 'RETURN_ITEMS_INVALID';
+      END IF;
+
+      IF NOT ((v_red ->> 'itemId')::integer = ANY (v_ids)) THEN
+        RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
+      END IF;
+
+      IF (v_red ->> 'itemId')::integer = ANY (v_seen) THEN
+        RAISE EXCEPTION 'RETURN_ITEMS_REPEATED';
+      END IF;
+
+      v_seen := v_seen || (v_red ->> 'itemId')::integer;
+
+      IF jsonb_typeof(v_red -> 'amount') IS DISTINCT FROM 'number'
+         OR (v_red ->> 'amount') !~ '^[0-9]{1,8}(\.[0-9]{1,2})?$' THEN
+        RAISE EXCEPTION 'RETURN_AMOUNT_INVALID';
+      END IF;
+
+      v_amount := (v_red ->> 'amount')::numeric;
+
+      SELECT oi."unitPrice" * i.quantity, i.amount
+      INTO v_price, v_old
+      FROM cartlify.return_items AS i
+      JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+      WHERE i.id = (v_red ->> 'itemId')::integer;
+
+      -- a row lowered to nothing could never be settled: it has no money to send and its goods
+      -- are back, so it would keep the statement open
+      IF v_amount <= 0 OR v_amount > v_price THEN
+        RAISE EXCEPTION 'RETURN_AMOUNT_INVALID';
+      END IF;
+
+      IF v_amount < v_price AND (jsonb_typeof(v_red -> 'note') IS DISTINCT FROM 'string'
+         OR btrim(v_red ->> 'note') = '' OR char_length(btrim(v_red ->> 'note')) > 500) THEN
+        RAISE EXCEPTION 'RETURN_AMOUNT_NOTE_REQUIRED';
+      END IF;
+
+      UPDATE cartlify.return_items AS i
+      SET amount = v_amount,
+          "amountNote" = CASE WHEN v_amount < v_price THEN btrim(v_red ->> 'note') ELSE NULL END
+      WHERE i.id = (v_red ->> 'itemId')::integer;
+
+      IF v_amount <> v_old THEN
+        v_lowered := v_lowered || jsonb_build_array(
+          jsonb_build_object(
+            'itemId', (v_red ->> 'itemId')::integer,
+            'from', to_char(v_old, 'FM99999999990.00'),
+            'to', to_char(v_amount, 'FM99999999990.00'),
+            'note', CASE WHEN v_amount < v_price THEN btrim(v_red ->> 'note') END
+          )
+        );
+      END IF;
+    END LOOP;
+  END IF;
+
+  -- the delivery: with the last row of the call, when this call makes the order whole and no row of
+  -- the order carries it already (a row that failed keeps it until it is refunded or settled)
+  UPDATE cartlify.return_items AS i
+  SET "deliveryShare" = 0
+  WHERE i.id = ANY (v_ids) AND i."deliveryShare" <> 0;
+
+  IF v_delivery > 0
+     AND NOT EXISTS (
+       SELECT 1
+       FROM cartlify.return_items AS i
+       JOIN cartlify.returns AS r ON r.id = i."returnId"
+       WHERE r."orderId" = v_order_id AND i."deliveryShare" > 0 AND NOT (i.id = ANY (v_ids))
+     )
+     AND NOT EXISTS (
+       SELECT 1
+       FROM cartlify.order_items AS oi
+       WHERE oi."orderId" = v_order_id
+         AND oi.quantity > COALESCE(
+           (
+             SELECT SUM(i.quantity)
+             FROM cartlify.return_items AS i
+             WHERE i."orderItemId" = oi.id
+               AND i.goods IN ('expected', 'to_stock', 'written_off', 'lost')
+               AND (
+                 i.id = ANY (v_ids)
+                 OR i.money IN ('pending', 'refunded')
+                 -- a transfer that failed is still owed (tried again or sent outside the app); a
+                 -- disputed one is never sent
+                 OR (
+                   i.money = 'not_refunded'
+                   AND i."refundFailure" IS NOT NULL
+                   AND i."refundFailure" <> 'disputed'
+                 )
+               )
+           ),
+           0
+         )
+     ) THEN
+    UPDATE cartlify.return_items AS i
+    SET "deliveryShare" = v_delivery
+    WHERE i.id = v_ids[cardinality(v_ids)];
+  END IF;
+
+  -- the way back the buyer owes: a withdrawal whose contract says the buyer pays (an order without
+  -- a contract told the buyer nothing, so the shop pays, art. 14(1)), with the last row of the
+  -- call, at most what the parcels of the statement cost the shop less what other transfers took
+  -- for them; the transfer stays above 0
+  UPDATE cartlify.return_items AS i
+  SET "shippingDeduction" = 0
+  WHERE i.id = ANY (v_ids) AND i."shippingDeduction" <> 0;
+
+  IF p_shipping_deduction IS NOT NULL THEN
+    IF p_shipping_deduction <= 0 OR p_shipping_deduction > 99999999.99
+       OR p_shipping_deduction <> round(p_shipping_deduction, 2) THEN
+      RAISE EXCEPTION 'RETURN_DEDUCTION_INVALID';
+    END IF;
+
+    SELECT r.basis INTO v_basis FROM cartlify.returns AS r WHERE r.id = p_return_id;
+    SELECT o."returnShippingPaidBy" INTO v_payer FROM cartlify.orders AS o WHERE o.id = v_order_id;
+
+    IF v_basis <> 'withdrawal' OR v_payer IS DISTINCT FROM 'buyer' THEN
+      RAISE EXCEPTION 'RETURN_DEDUCTION_NOT_ALLOWED';
+    END IF;
+
+    SELECT
+      COALESCE((SELECT SUM(s.cost) FROM cartlify.return_shipments AS s WHERE s."returnId" = p_return_id), 0)
+      - COALESCE(
+        (
+          SELECT SUM(i."shippingDeduction")
+          FROM cartlify.return_items AS i
+          WHERE i."returnId" = p_return_id AND NOT (i.id = ANY (v_ids))
+        ),
+        0
+      )
+    INTO v_left;
+
+    IF p_shipping_deduction > v_left THEN
+      RAISE EXCEPTION 'RETURN_DEDUCTION_EXCEEDS_COST';
+    END IF;
+
+    UPDATE cartlify.return_items AS i
+    SET "shippingDeduction" = p_shipping_deduction
+    WHERE i.id = v_ids[cardinality(v_ids)];
+  END IF;
+
+  SELECT COALESCE(SUM(i.amount + i."deliveryShare" - i."shippingDeduction"), 0)
+  INTO v_sum
+  FROM cartlify.return_items AS i
+  WHERE i.id = ANY (v_ids);
+
+  SELECT COALESCE(SUM(i.amount + i."deliveryShare" - i."shippingDeduction"), 0)
+  INTO v_taken
+  FROM cartlify.return_items AS i
+  JOIN cartlify.returns AS r ON r.id = i."returnId"
+  WHERE r."orderId" = v_order_id AND i.money IN ('pending', 'refunded');
+
+  IF v_sum <= 0 THEN
+    IF p_shipping_deduction IS NOT NULL THEN
+      RAISE EXCEPTION 'RETURN_DEDUCTION_INVALID';
+    END IF;
+    RAISE EXCEPTION 'RETURN_REFUND_AMOUNT_INVALID';
+  END IF;
+
+  IF v_taken + v_sum > v_total THEN
+    RAISE EXCEPTION 'RETURN_REFUND_EXCEEDS_PAID';
+  END IF;
+
+  UPDATE cartlify.return_items AS i
+  SET money = 'pending',
+      "refundKey" = v_key,
+      "refundFailure" = NULL,
+      "refundFailureText" = NULL
+  WHERE i.id = ANY (v_ids);
+
+  PERFORM cartlify.refresh_return_state (v_order_id);
+
+  RETURN jsonb_build_object(
+    'key', v_key,
+    'returnId', p_return_id,
+    'orderId', v_order_id,
+    'provider', v_provider::text,
+    'paymentId', v_payment_id,
+    'amount', to_char(v_sum, 'FM99999999990.00'),
+    'itemIds', to_jsonb(v_ids),
+    'lowered', v_lowered,
+    'deduction', to_char(COALESCE(p_shipping_deduction, 0), 'FM99999999990.00')
+  );
+END;
+$$;
+
+-- Settles a transfer by the key it was started with (the last of the three steps; also what the
+-- payment webhook and the worker call when the provider tells a pending transfer's end). Admin,
+-- root or the system (RETURN_FORBIDDEN). p_status is succeeded (the rows become refunded, with the
+-- id the provider gave and the time), pending (the id is kept, the rows wait on) or failed (the
+-- rows go back to not refunded with the reason in our code and the words of the provider, the key
+-- is taken off so the next try has a new one). Repeating it changes nothing: only rows still
+-- pending under the key are settled, so a webhook and a request that meet are both right. The answer
+-- is { changed, status, returnId, orderId, itemIds, amount, deduction }; changed is false when nothing waited
+-- for the key. RETURN_REFUND_STATUS_INVALID for a status that is none of the three or a failure
+-- without its reason.
+CREATE OR REPLACE FUNCTION cartlify.finish_return_refund (
+  p_key uuid,
+  p_status text,
+  p_refund_id text,
+  p_failure cartlify."ReturnRefundFailure",
+  p_failure_text text
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_return_id integer;
+  v_order_id  integer;
+  v_ids       integer[];
+  v_amount    numeric;
+  v_deduction numeric;
+  v_now       timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+BEGIN
+  IF NOT cartlify.is_admin () THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  IF p_key IS NULL OR p_status IS NULL OR p_status NOT IN ('succeeded', 'pending', 'failed')
+     OR (p_status = 'failed' AND p_failure IS NULL) THEN
+    RAISE EXCEPTION 'RETURN_REFUND_STATUS_INVALID';
+  END IF;
+
+  SELECT i."returnId" INTO v_return_id FROM cartlify.return_items AS i WHERE i."refundKey" = p_key LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('changed', false, 'status', p_status);
+  END IF;
+
+  -- the same order of locks as begin_return_refund: the order, its statements, the rows
+  v_order_id := cartlify.lock_return_order (v_return_id);
+
+  PERFORM 1
+  FROM cartlify.return_items AS i
+  WHERE i."refundKey" = p_key AND i.money = 'pending'
+  ORDER BY i.id
+  FOR UPDATE;
+
+  SELECT array_agg(i.id ORDER BY i.id), SUM(i.amount + i."deliveryShare" - i."shippingDeduction"),
+         SUM(i."shippingDeduction")
+  INTO v_ids, v_amount, v_deduction
+  FROM cartlify.return_items AS i
+  WHERE i."refundKey" = p_key AND i.money = 'pending';
+
+  IF v_ids IS NULL THEN
+    RETURN jsonb_build_object(
+      'changed', false, 'status', p_status, 'returnId', v_return_id, 'orderId', v_order_id
+    );
+  END IF;
+
+  IF p_status = 'succeeded' THEN
+    UPDATE cartlify.return_items AS i
+    SET money = 'refunded',
+        "refundedAt" = v_now,
+        "refundId" = COALESCE(p_refund_id, i."refundId")
+    WHERE i.id = ANY (v_ids);
+  ELSIF p_status = 'pending' THEN
+    UPDATE cartlify.return_items AS i
+    SET "refundId" = COALESCE(p_refund_id, i."refundId")
+    WHERE i.id = ANY (v_ids);
+  ELSE
+    UPDATE cartlify.return_items AS i
+    SET money = 'not_refunded',
+        "refundKey" = NULL,
+        "refundId" = NULL,
+        "refundFailure" = p_failure,
+        "refundFailureText" = left(p_failure_text, 500)
+    WHERE i.id = ANY (v_ids);
+  END IF;
+
+  PERFORM cartlify.refresh_return_state (v_order_id);
+
+  RETURN jsonb_build_object(
+    'changed', p_status <> 'pending',
+    'status', p_status,
+    'returnId', v_return_id,
+    'orderId', v_order_id,
+    'itemIds', to_jsonb(v_ids),
+    'amount', to_char(v_amount, 'FM99999999990.00'),
+    'deduction', to_char(v_deduction, 'FM99999999990.00')
+  );
+END;
+$$;
+
+-- Root records that the money of rows whose transfer failed went back outside the app (a bank
+-- transfer, cash, another way). Root only (RETURN_FORBIDDEN). Only rows whose last transfer failed
+-- (RETURN_ITEM_NOT_FAILED: not one without a try), and never one the buyer disputed at the bank
+-- (RETURN_REFUND_DISPUTED: the bank settles it, the money would go twice). p_item_ids names the
+-- rows (all the failed ones of the statement when null). The method, a note (RETURN_OUTSIDE_NOTE_REQUIRED)
+-- and the day it really happened are required (RETURN_OUTSIDE_AT_INVALID: not before the order was
+-- paid, never of the future): the day is the day of the money in the reports. The sum is the sum
+-- of the rows. The answer is { returnId, orderId, itemIds, amount }.
+CREATE OR REPLACE FUNCTION cartlify.mark_return_refunded_outside (
+  p_return_id integer,
+  p_item_ids integer[],
+  p_method cartlify."ReturnOutsideMethod",
+  p_note text,
+  p_at timestamp without time zone
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor    integer := cartlify.current_actor_id();
+  v_now      timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_order_id integer;
+  v_paid_at  timestamp;
+  v_note     text := btrim(p_note);
+  v_ids      integer[];
+  v_row      record;
+  v_count    integer := 0;
+  v_amount   numeric;
+BEGIN
+  IF NOT cartlify.is_root () OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  SELECT o."paidAt" INTO v_paid_at FROM cartlify.orders AS o WHERE o.id = v_order_id;
+
+  IF p_method IS NULL OR v_note IS NULL OR v_note = '' OR char_length(v_note) > 500 THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_NOTE_REQUIRED';
+  END IF;
+
+  -- the bank gives the money of a dispute back, root records it with settle_return_dispute
+  IF p_method = 'chargeback' THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_METHOD_INVALID';
+  END IF;
+
+  IF p_at IS NULL OR p_at > v_now OR p_at < v_paid_at THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_AT_INVALID';
+  END IF;
+
+  IF p_item_ids IS NULL THEN
+    SELECT COALESCE(array_agg(i.id ORDER BY i.id), ARRAY[]::integer[])
+    INTO v_ids
+    FROM cartlify.return_items AS i
+    WHERE i."returnId" = p_return_id
+      AND i.money = 'not_refunded'
+      AND i."refundFailure" IS NOT NULL
+      AND i."refundFailure" <> 'disputed';
+  ELSE
+    SELECT COALESCE(array_agg(DISTINCT x ORDER BY x), ARRAY[]::integer[])
+    INTO v_ids
+    FROM unnest(p_item_ids) AS x;
+  END IF;
+
+  IF cardinality(v_ids) = 0 THEN
+    RAISE EXCEPTION 'RETURN_ITEMS_REQUIRED';
+  END IF;
+
+  FOR v_row IN
+    SELECT i.id, i.money, i."refundFailure"
+    FROM cartlify.return_items AS i
+    WHERE i.id = ANY (v_ids) AND i."returnId" = p_return_id
+    ORDER BY i.id
+    FOR UPDATE OF i
+  LOOP
+    v_count := v_count + 1;
+
+    IF v_row.money <> 'not_refunded' OR v_row."refundFailure" IS NULL THEN
+      RAISE EXCEPTION 'RETURN_ITEM_NOT_FAILED';
+    END IF;
+
+    IF v_row."refundFailure" = 'disputed' THEN
+      RAISE EXCEPTION 'RETURN_REFUND_DISPUTED';
+    END IF;
+  END LOOP;
+
+  IF v_count <> cardinality(v_ids) THEN
+    RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
+  END IF;
+
+  SELECT SUM(i.amount + i."deliveryShare" - i."shippingDeduction")
+  INTO v_amount
+  FROM cartlify.return_items AS i
+  WHERE i.id = ANY (v_ids);
+
+  UPDATE cartlify.return_items AS i
+  SET money = 'refunded',
+      "refundedAt" = p_at,
+      "refundFailure" = NULL,
+      "refundFailureText" = NULL,
+      "outsideMethod" = p_method,
+      "outsideNote" = v_note,
+      "outsideById" = v_actor
+  WHERE i.id = ANY (v_ids);
+
+  PERFORM cartlify.refresh_return_state (v_order_id);
+
+  RETURN jsonb_build_object(
+    'returnId', p_return_id,
+    'orderId', v_order_id,
+    'itemIds', to_jsonb(v_ids),
+    'amount', to_char(v_amount, 'FM99999999990.00')
+  );
+END;
+$$;
+
+-- Root records that the shop gave the buyer back what they paid the carrier for the way back,
+-- outside the app (a payment of the card cannot be more than the order was paid): the shop pays
+-- the way back (a statement outside the withdrawal, or a contract that says the shop pays; an order
+-- without a contract told the buyer nothing, so the shop pays) and the buyer paid the carrier.
+-- Root only (RETURN_FORBIDDEN); once a statement (RETURN_REIMBURSEMENT_EXISTS); never when the
+-- buyer pays the way back of a withdrawal (RETURN_REIMBURSEMENT_NOT_ALLOWED). The sum is above 0
+-- (RETURN_REIMBURSEMENT_INVALID); the way and a note are required (RETURN_OUTSIDE_NOTE_REQUIRED);
+-- the day it went is required, not before the statement and never of the future
+-- (RETURN_OUTSIDE_AT_INVALID): the reports count the expense in its period. The answer is
+-- { returnId, orderId, amount }.
+CREATE OR REPLACE FUNCTION cartlify.record_return_reimbursement (
+  p_return_id integer,
+  p_amount numeric,
+  p_method cartlify."ReturnOutsideMethod",
+  p_note text,
+  p_at timestamp without time zone
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor    integer := cartlify.current_actor_id();
+  v_now      timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_order_id integer;
+  v_note     text := btrim(p_note);
+  v_row      record;
+  v_payer    cartlify."ReturnShippingPayer";
+BEGIN
+  IF NOT cartlify.is_root () OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  PERFORM cartlify.assert_return_accepted (p_return_id);
+
+  SELECT r.basis, r."statedAt", r."shippingReimbursed"
+  INTO v_row
+  FROM cartlify.returns AS r
+  WHERE r.id = p_return_id;
+
+  SELECT o."returnShippingPaidBy" INTO v_payer FROM cartlify.orders AS o WHERE o.id = v_order_id;
+
+  IF v_row."shippingReimbursed" IS NOT NULL THEN
+    RAISE EXCEPTION 'RETURN_REIMBURSEMENT_EXISTS';
+  END IF;
+
+  IF v_row.basis = 'withdrawal' AND v_payer = 'buyer' THEN
+    RAISE EXCEPTION 'RETURN_REIMBURSEMENT_NOT_ALLOWED';
+  END IF;
+
+  IF p_amount IS NULL OR p_amount <= 0 OR p_amount > 99999999.99 OR p_amount <> round(p_amount, 2) THEN
+    RAISE EXCEPTION 'RETURN_REIMBURSEMENT_INVALID';
+  END IF;
+
+  IF p_method IS NULL OR v_note IS NULL OR v_note = '' OR char_length(v_note) > 500 THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_NOTE_REQUIRED';
+  END IF;
+
+  IF p_method = 'chargeback' THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_METHOD_INVALID';
+  END IF;
+
+  IF p_at IS NULL OR p_at > v_now OR p_at < v_row."statedAt" THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_AT_INVALID';
+  END IF;
+
+  UPDATE cartlify.returns AS r
+  SET "shippingReimbursed" = p_amount,
+      "shippingReimbursedAt" = p_at,
+      "shippingReimbursedMethod" = p_method,
+      "shippingReimbursedNote" = v_note,
+      "shippingReimbursedById" = v_actor
+  WHERE r.id = p_return_id;
+
+  RETURN jsonb_build_object(
+    'returnId', p_return_id,
+    'orderId', v_order_id,
+    'amount', to_char(p_amount, 'FM99999999990.00')
+  );
+END;
+$$;
+
+-- The end of a dispute of the payment of an order at the bank, for the rows whose transfer failed
+-- as disputed: lost (the bank gave the buyer the money: the rows are refunded with the way
+-- chargeback, on the day the dispute closed, with a note) or won (the bank gave the money back to
+-- the shop: the rows lose the mark and their money is sent again the usual way). Root, or the
+-- system (the webhook of the provider, which tells the end of a dispute of a payment): RETURN_FORBIDDEN
+-- for anyone else. RETURN_NOT_DISPUTED when no row of the order waits on a dispute. The note is
+-- required (RETURN_OUTSIDE_NOTE_REQUIRED); a lost dispute needs the day, not before the payment and
+-- never of the future (RETURN_OUTSIDE_AT_INVALID): the reports count the money in its period. The
+-- answer is { orderId, itemIds, returnIds, won, amount }.
+CREATE OR REPLACE FUNCTION cartlify.settle_return_dispute (
+  p_order_id integer,
+  p_won boolean,
+  p_note text,
+  p_at timestamp without time zone
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor     integer := cartlify.current_actor_id();
+  v_now       timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_note      text := btrim(p_note);
+  v_return_id integer;
+  v_paid_at   timestamp;
+  v_ids       integer[];
+  v_returns   integer[];
+  v_amount    numeric;
+BEGIN
+  IF NOT ((cartlify.is_root () AND v_actor IS NOT NULL) OR cartlify.is_system ()) THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  SELECT MIN(i."returnId")
+  INTO v_return_id
+  FROM cartlify.return_items AS i
+  JOIN cartlify.returns AS r ON r.id = i."returnId"
+  WHERE r."orderId" = p_order_id AND i.money = 'not_refunded' AND i."refundFailure" = 'disputed';
+
+  IF v_return_id IS NULL THEN
+    RAISE EXCEPTION 'RETURN_NOT_DISPUTED';
+  END IF;
+
+  -- the same order of locks as the other functions of the statements
+  PERFORM cartlify.lock_return_order (v_return_id);
+
+  SELECT
+    array_agg(i.id ORDER BY i.id),
+    array_agg(DISTINCT i."returnId"),
+    SUM(i.amount + i."deliveryShare" - i."shippingDeduction")
+  INTO v_ids, v_returns, v_amount
+  FROM cartlify.return_items AS i
+  JOIN cartlify.returns AS r ON r.id = i."returnId"
+  WHERE r."orderId" = p_order_id AND i.money = 'not_refunded' AND i."refundFailure" = 'disputed';
+
+  IF v_ids IS NULL THEN
+    RAISE EXCEPTION 'RETURN_NOT_DISPUTED';
+  END IF;
+
+  IF v_note IS NULL OR v_note = '' OR char_length(v_note) > 500 THEN
+    RAISE EXCEPTION 'RETURN_OUTSIDE_NOTE_REQUIRED';
+  END IF;
+
+  IF p_won THEN
+    UPDATE cartlify.return_items AS i
+    SET "refundFailure" = NULL,
+        "refundFailureText" = NULL
+    WHERE i.id = ANY (v_ids);
+  ELSE
+    SELECT o."paidAt" INTO v_paid_at FROM cartlify.orders AS o WHERE o.id = p_order_id;
+
+    IF p_at IS NULL OR p_at > v_now OR p_at < v_paid_at THEN
+      RAISE EXCEPTION 'RETURN_OUTSIDE_AT_INVALID';
+    END IF;
+
+    UPDATE cartlify.return_items AS i
+    SET money = 'refunded',
+        "refundedAt" = p_at,
+        "refundFailure" = NULL,
+        "refundFailureText" = NULL,
+        "outsideMethod" = 'chargeback',
+        "outsideNote" = v_note,
+        "outsideById" = v_actor
+    WHERE i.id = ANY (v_ids);
+  END IF;
+
+  PERFORM cartlify.refresh_return_state (p_order_id);
+
+  RETURN jsonb_build_object(
+    'orderId', p_order_id,
+    'itemIds', to_jsonb(v_ids),
+    'returnIds', to_jsonb(v_returns),
+    'won', p_won,
+    'amount', to_char(v_amount, 'FM99999999990.00')
+  );
+END;
+$$;
+
+-- Root closes rows of a statement without a refund: the goods never came back and the buyer does not
+-- get the money (the buyer changed their mind, was not the buyer, did not send the goods). Root
+-- only (RETURN_FORBIDDEN). Rows that wait for their goods and have no money on its way or back
+-- (RETURN_ITEM_NOT_CLOSABLE otherwise); p_item_ids names them (all of the statement when null). The
+-- rows become not arrived with the money refused and the code; the statement keeps the code and
+-- the note of the last time (the code and a note are required, RETURN_CLOSE_NOTE_REQUIRED) and is closed
+-- when no row waits. The stock does not move. The answer is { returnId, orderId, itemIds, closed }.
+CREATE OR REPLACE FUNCTION cartlify.close_return_without_refund (
+  p_return_id integer,
+  p_item_ids integer[],
+  p_code cartlify."ReturnCloseCode",
+  p_note text
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor    integer := cartlify.current_actor_id();
+  v_now      timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_order_id integer;
+  v_note     text := btrim(p_note);
+  v_ids      integer[];
+  v_row      record;
+  v_count    integer := 0;
+  v_closed   timestamp;
+BEGIN
+  IF NOT cartlify.is_root () OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  IF p_code IS NULL OR v_note IS NULL OR v_note = '' OR char_length(v_note) > 500 THEN
+    RAISE EXCEPTION 'RETURN_CLOSE_NOTE_REQUIRED';
+  END IF;
+
+  IF p_item_ids IS NULL THEN
+    SELECT COALESCE(array_agg(i.id ORDER BY i.id), ARRAY[]::integer[])
+    INTO v_ids
+    FROM cartlify.return_items AS i
+    WHERE i."returnId" = p_return_id AND i.goods = 'expected' AND i.money = 'not_refunded';
+  ELSE
+    SELECT COALESCE(array_agg(DISTINCT x ORDER BY x), ARRAY[]::integer[])
+    INTO v_ids
+    FROM unnest(p_item_ids) AS x;
+  END IF;
+
+  IF cardinality(v_ids) = 0 THEN
+    RAISE EXCEPTION 'RETURN_ITEMS_REQUIRED';
+  END IF;
+
+  FOR v_row IN
+    SELECT i.id, i.goods, i.money
+    FROM cartlify.return_items AS i
+    WHERE i.id = ANY (v_ids) AND i."returnId" = p_return_id
+    ORDER BY i.id
+    FOR UPDATE OF i
+  LOOP
+    v_count := v_count + 1;
+
+    IF v_row.goods <> 'expected' OR v_row.money <> 'not_refunded' THEN
+      RAISE EXCEPTION 'RETURN_ITEM_NOT_CLOSABLE';
+    END IF;
+  END LOOP;
+
+  IF v_count <> cardinality(v_ids) THEN
+    RAISE EXCEPTION 'RETURN_ITEM_NOT_FOUND';
+  END IF;
+
+  UPDATE cartlify.return_items AS i
+  SET goods = 'not_arrived',
+      money = 'refused',
+      "refusedCode" = p_code,
+      "deliveryShare" = 0,
+      "shippingDeduction" = 0,
+      "refundFailure" = NULL,
+      "refundFailureText" = NULL,
+      "goodsSetAt" = v_now,
+      "goodsSetById" = v_actor
+  WHERE i.id = ANY (v_ids);
+
+  UPDATE cartlify.returns AS r
+  SET "closeCode" = p_code, "closeNote" = v_note
+  WHERE r.id = p_return_id;
+
+  PERFORM cartlify.refresh_return_state (v_order_id);
+
+  SELECT r."closedAt" INTO v_closed FROM cartlify.returns AS r WHERE r.id = p_return_id;
+
+  RETURN jsonb_build_object(
+    'returnId', p_return_id,
+    'orderId', v_order_id,
+    'itemIds', to_jsonb(v_ids),
+    'closed', v_closed IS NOT NULL
+  );
+END;
+$$;
+
+----------------------------------------
+-- RETURNS: THE PARCELS BACK
+----------------------------------------
+-- Guard of the parcels back: the owner functions set the cost, nothing else changes (the carrier,
+-- the number and the time are as the admin gave them when the parcel was recorded).
+CREATE OR REPLACE FUNCTION cartlify.return_shipments_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner' AND v_changed <@ ARRAY['cost', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'RETURN_SHIPMENT_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_return_shipments_update_columns ON cartlify.return_shipments;
+
+CREATE TRIGGER trg_return_shipments_update_columns
+BEFORE UPDATE ON cartlify.return_shipments FOR EACH ROW
+EXECUTE FUNCTION cartlify.return_shipments_update_columns ();
+
+-- Stamps updatedAt of a parcel back on every update (utc without a zone, as prisma writes it).
+CREATE OR REPLACE FUNCTION cartlify.return_shipments_before_update () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."updatedAt" := now() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_return_shipments_before_update ON cartlify.return_shipments;
+
+CREATE TRIGGER trg_return_shipments_before_update
+BEFORE UPDATE ON cartlify.return_shipments FOR EACH ROW
+EXECUTE FUNCTION cartlify.return_shipments_before_update ();
+
+-- Records a parcel the shop paid to carry the goods of a statement back from the buyer, and returns
+-- its id. An admin or root (the system records none: RETURN_FORBIDDEN). The time it was sent is the
+-- admin's to give: a parcel the buyer sent, or the moment a parcel was refused; never of the
+-- future, never before the order was paid (RETURN_SHIPMENT_TIME_INVALID). The cost may be written
+-- later (set_return_shipment_cost); the reports count the parcel in the period of that time.
+CREATE OR REPLACE FUNCTION cartlify.record_return_shipment (
+  p_return_id integer,
+  p_carrier text,
+  p_tracking_number text,
+  p_tracking_url text,
+  p_cost numeric,
+  p_shipped_at timestamp
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor    integer;
+  v_order_id integer;
+  v_paid_at  timestamp;
+  v_now      timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
+  v_id       integer;
+BEGIN
+  v_actor := cartlify.current_actor_id ();
+
+  IF NOT cartlify.is_admin () OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  v_order_id := cartlify.lock_return_order (p_return_id);
+
+  PERFORM cartlify.assert_return_accepted (p_return_id);
+
+  SELECT o."paidAt" INTO v_paid_at FROM cartlify.orders AS o WHERE o.id = v_order_id;
+
+  IF p_shipped_at IS NULL OR p_shipped_at > v_now OR v_paid_at IS NULL OR p_shipped_at < v_paid_at THEN
+    RAISE EXCEPTION 'RETURN_SHIPMENT_TIME_INVALID';
+  END IF;
+
+  -- one parcel is one cost: its number once per statement, whatever the spaces and the case (a
+  -- double click would count the cost twice and let a transfer take it off twice)
+  IF NULLIF(btrim(p_tracking_number), '') IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM cartlify.return_shipments AS s
+    WHERE s."returnId" = p_return_id
+      AND upper(regexp_replace(s."trackingNumber", '\s', '', 'g'))
+        = upper(regexp_replace(p_tracking_number, '\s', '', 'g'))
+  ) THEN
+    RAISE EXCEPTION 'RETURN_SHIPMENT_EXISTS';
+  END IF;
+
+  INSERT INTO cartlify.return_shipments (
+    "returnId", carrier, "trackingNumber", "trackingUrl", cost, "shippedAt", "recordedById"
+  )
+  VALUES (
+    p_return_id,
+    NULLIF(btrim(p_carrier), ''),
+    NULLIF(btrim(p_tracking_number), ''),
+    NULLIF(btrim(p_tracking_url), ''),
+    p_cost,
+    p_shipped_at,
+    v_actor
+  )
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$$;
+
+-- Writes what the shop paid for a parcel back (a cost not written yet, or one corrected), and
+-- returns the id of the parcel with the cost it had, read under the lock of the order, for the
+-- log. An admin or root; RETURN_SHIPMENT_NOT_FOUND for a parcel there is not. The time of the
+-- parcel stays, so the cost goes to the period the parcel was sent in.
+CREATE OR REPLACE FUNCTION cartlify.set_return_shipment_cost (
+  p_shipment_id integer,
+  p_cost numeric
+) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_return_id integer;
+  v_old       numeric;
+BEGIN
+  IF NOT cartlify.is_admin () OR cartlify.current_actor_id () IS NULL THEN
+    RAISE EXCEPTION 'RETURN_FORBIDDEN';
+  END IF;
+
+  SELECT s."returnId" INTO v_return_id FROM cartlify.return_shipments AS s WHERE s.id = p_shipment_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'RETURN_SHIPMENT_NOT_FOUND';
+  END IF;
+
+  PERFORM cartlify.lock_return_order (v_return_id);
+
+  SELECT s.cost INTO v_old FROM cartlify.return_shipments AS s WHERE s.id = p_shipment_id;
+
+  UPDATE cartlify.return_shipments AS s SET cost = p_cost WHERE s.id = p_shipment_id;
+
+  RETURN jsonb_build_object('shipmentId', p_shipment_id, 'oldCost', v_old);
+END;
+$$;
+
+-- A change of a row of a statement (the result of the goods, the money, a split) is a change of the
+-- statement: its updatedAt follows, so the list of the statements sorted by the last change shows
+-- the work on the rows too. Internal: a trigger, it runs as the owner whoever changed the row.
+CREATE OR REPLACE FUNCTION cartlify.return_items_touch_return () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  UPDATE cartlify.returns AS r
+  SET "updatedAt" = now() AT TIME ZONE 'UTC'
+  WHERE r.id = NEW."returnId";
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_return_items_touch_return ON cartlify.return_items;
+
+CREATE TRIGGER trg_return_items_touch_return
+AFTER INSERT OR UPDATE ON cartlify.return_items FOR EACH ROW
+EXECUTE FUNCTION cartlify.return_items_touch_return ();
+
+COMMIT;

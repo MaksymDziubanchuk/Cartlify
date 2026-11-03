@@ -531,8 +531,8 @@ END $$;
 -- ORDERS: the time of the payment and of the cancel
 ----------------------------------------
 -- paidAt is set together with the payment (pay_order) and only then. cancelledAt is set with
--- the cancel and only then: only a paid or shipped order is cancelled (cancel_paid_order), and never
--- before its payment time.
+-- the cancel and only then: only a paid or shipped order is cancelled (refresh_return_state, by its
+-- statements of return), and never before its payment time.
 -- An order paid or cancelled before these columns existed has no such time and breaks the
 -- checks: clear those rows before the script runs.
 DO $$
@@ -560,6 +560,46 @@ BEGIN
     CHECK (
       ("cancelledAt" IS NULL) = (status <> 'cancelled')
       AND ("cancelledAt" IS NULL OR ("paidAt" IS NOT NULL AND "cancelledAt" >= "paidAt"))
+    );
+END $$;
+
+----------------------------------------
+-- ORDERS: the time of the delivery and the term of the contract
+----------------------------------------
+-- deliveredAt is set by the database with the step to delivered and only then (orders_before_update,
+-- db/05): an order has it exactly while it is delivered.
+-- withdrawalDays and returnShippingPaidBy are what the contract in force said at the confirmation
+-- (confirm_order): both or none, 14 days at least, and never on an order that is a cart.
+-- An order delivered before deliveredAt existed has no such time and breaks the first check:
+-- clear those rows before the script runs.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_delivered_at_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_delivered_at_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_delivered_at_chk
+    CHECK (("deliveredAt" IS NOT NULL) = (status = 'delivered'));
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'orders_withdrawal_terms_chk'
+  ) THEN
+    ALTER TABLE cartlify.orders
+      DROP CONSTRAINT orders_withdrawal_terms_chk;
+  END IF;
+
+  ALTER TABLE cartlify.orders
+    ADD CONSTRAINT orders_withdrawal_terms_chk
+    CHECK (
+      ("withdrawalDays" IS NULL) = ("returnShippingPaidBy" IS NULL)
+      AND (
+        "withdrawalDays" IS NULL
+        OR (confirmed AND "withdrawalDays" >= 14 AND "withdrawalDays" <= 36500)
+      )
     );
 END $$;
 
@@ -766,6 +806,69 @@ BEGIN
     ADD CONSTRAINT order_shipments_rolled_back_chk
     CHECK (
       "rolledBackAt" IS NULL OR "rolledBackAt" >= "shippedAt"
+    );
+END $$;
+
+----------------------------------------
+-- RETURN_SHIPMENTS: the parcels the shop paid to carry goods back
+----------------------------------------
+-- carrier_chk, tracking_chk, cost_non_negative: the same rules as the sends to a buyer
+-- (order_shipments): a carrier is not blank, a number needs a carrier and a link needs one, the
+-- link is https, what the shop paid is 0 or more or still empty.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'return_shipments_carrier_chk'
+  ) THEN
+    ALTER TABLE cartlify.return_shipments
+      DROP CONSTRAINT return_shipments_carrier_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_shipments
+    ADD CONSTRAINT return_shipments_carrier_chk
+    CHECK (
+      "carrier" IS NULL
+      OR (char_length("carrier") >= 1 AND "carrier" = btrim("carrier"))
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'return_shipments_tracking_chk'
+  ) THEN
+    ALTER TABLE cartlify.return_shipments
+      DROP CONSTRAINT return_shipments_tracking_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_shipments
+    ADD CONSTRAINT return_shipments_tracking_chk
+    CHECK (
+      (
+        "trackingNumber" IS NULL
+        OR (
+          carrier IS NOT NULL
+          AND char_length("trackingNumber") >= 1
+          AND "trackingNumber" = btrim("trackingNumber")
+        )
+      )
+      AND (
+        "trackingUrl" IS NULL
+        OR (
+          carrier IS NOT NULL
+          AND "trackingUrl" ~ '^https://[^[:space:]]+$'
+        )
+      )
+    );
+
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'return_shipments_cost_non_negative'
+  ) THEN
+    ALTER TABLE cartlify.return_shipments
+      DROP CONSTRAINT return_shipments_cost_non_negative;
+  END IF;
+
+  ALTER TABLE cartlify.return_shipments
+    ADD CONSTRAINT return_shipments_cost_non_negative
+    CHECK (
+      cost IS NULL OR cost >= 0
     );
 END $$;
 
@@ -1152,6 +1255,323 @@ BEGIN
     ADD CONSTRAINT legal_documents_version_chk
     CHECK (version >= 1 AND sha256 ~ '^[0-9a-f]{64}$');
 END $$;
+
+----------------------------------------
+-- LEGAL_DOCUMENTS: the fields of each kind
+----------------------------------------
+-- The contract has the days a buyer has to withdraw after the delivery (14 to 36500), the address
+-- the goods go back to (trimmed, 1-500 characters) and who pays the carrier for it. The privacy
+-- policy has the six terms of keeping personal data, each 1 to 36500 days. The terms have none of
+-- them, and no kind has the fields of another. Each test starts with IS NOT NULL: a check that
+-- reads NULL passes.
+-- A version published before these columns existed has none of them and breaks the check: clear
+-- those rows (and the consents to them) before the script runs.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'legal_documents_kind_fields_chk'
+  ) THEN
+    ALTER TABLE cartlify.legal_documents
+      DROP CONSTRAINT legal_documents_kind_fields_chk;
+  END IF;
+
+  ALTER TABLE cartlify.legal_documents
+    ADD CONSTRAINT legal_documents_kind_fields_chk
+    CHECK (
+      CASE kind
+        WHEN 'contract' THEN
+          "withdrawalDays" IS NOT NULL
+          AND "withdrawalDays" >= 14 AND "withdrawalDays" <= 36500
+          AND "returnAddress" IS NOT NULL
+          AND "returnAddress" = btrim("returnAddress")
+          AND char_length("returnAddress") >= 1 AND char_length("returnAddress") <= 500
+          AND "returnShippingPaidBy" IS NOT NULL
+          AND "retentionLoginAddressesDays" IS NULL
+          AND "retentionGuestDataDays" IS NULL
+          AND "retentionDeletedChatsDays" IS NULL
+          AND "retentionReturnAddressesDays" IS NULL
+          AND "retentionReturnPersonalDays" IS NULL
+          AND "retentionRecipientDays" IS NULL
+        WHEN 'privacy' THEN
+          "retentionLoginAddressesDays" IS NOT NULL
+          AND "retentionLoginAddressesDays" >= 1 AND "retentionLoginAddressesDays" <= 36500
+          AND "retentionGuestDataDays" IS NOT NULL
+          AND "retentionGuestDataDays" >= 1 AND "retentionGuestDataDays" <= 36500
+          AND "retentionDeletedChatsDays" IS NOT NULL
+          AND "retentionDeletedChatsDays" >= 1 AND "retentionDeletedChatsDays" <= 36500
+          AND "retentionReturnAddressesDays" IS NOT NULL
+          AND "retentionReturnAddressesDays" >= 1 AND "retentionReturnAddressesDays" <= 36500
+          AND "retentionReturnPersonalDays" IS NOT NULL
+          AND "retentionReturnPersonalDays" >= 1 AND "retentionReturnPersonalDays" <= 36500
+          AND "retentionRecipientDays" IS NOT NULL
+          AND "retentionRecipientDays" >= 1 AND "retentionRecipientDays" <= 36500
+          AND "withdrawalDays" IS NULL
+          AND "returnAddress" IS NULL
+          AND "returnShippingPaidBy" IS NULL
+        ELSE
+          "withdrawalDays" IS NULL
+          AND "returnAddress" IS NULL
+          AND "returnShippingPaidBy" IS NULL
+          AND "retentionLoginAddressesDays" IS NULL
+          AND "retentionGuestDataDays" IS NULL
+          AND "retentionDeletedChatsDays" IS NULL
+          AND "retentionReturnAddressesDays" IS NULL
+          AND "retentionReturnPersonalDays" IS NULL
+          AND "retentionRecipientDays" IS NULL
+      END
+    );
+END $$;
+
+----------------------------------------
+-- RETURNS AND RETURN_ITEMS: the statement and the pairs of the goods with the money
+----------------------------------------
+-- returns_text_chk: the name and the email of the statement are trimmed, the name has 1-200
+--   characters, the email 3-320 and an at sign.
+-- returns_stated_at_chk: a statement is not made before the moment it states (never of the future).
+-- returns_source_chk: an admin statement has its admin and its reason, any other has a reason of
+--   none; only an admin makes one outside the withdrawal; a statement of an account names the
+--   account, one of a form names none.
+-- returns_extends_chk: a statement does not extend itself.
+-- returns_proof_chk: the proof is confirmed together with who confirmed it.
+-- return_items_quantity_chk, return_items_amount_chk: whole units above 0, money not below 0.
+-- return_items_goods_chk: the day and the author of a result come with it (not with expected), the
+--   reason of a refusal to accept comes with not_accepted and with nothing else.
+-- return_items_pair_chk: the pairs of the goods with the money. The goods that came back (to_stock,
+--   written_off, lost) never have their money refused; the goods that were not accepted or did not
+--   arrive have none of it refunded or on its way; refunded or pending money is for goods that wait,
+--   came back or were lost; refused money is for goods not accepted or not arrived.
+-- return_items_money_chk: the money of a row and the fields of its transfer agree. A pending row has
+--   the key of its transfer; a refunded row has the time and either the key (sent through the
+--   provider) or the method, the note and the root who recorded it (sent outside the app), not both;
+--   a row not refunded or refused has no transfer at all; a failure and its words stay on a row not
+--   refunded; the code of a closing stays on a refused row whose goods did not arrive; a refused row
+--   carries no delivery and no deduction of the way back; no number is below 0.
+-- returns_shipping_reimbursed_chk: the money of the way back root gave back outside the app comes
+--   whole (the sum above 0, the day, the way, the note, who) or not at all.
+-- returns_accepted_chk: only a statement of the form without the code is accepted, together with
+--   who accepted it.
+-- returns_manual_under_review_uidx: one statement of the form without the code waits for the check
+--   of an admin per order (create_return refuses another first, RETURN_MANUAL_UNDER_REVIEW).
+-- return_shipments_tracking_uidx: a number of a parcel once per statement, whatever the spaces and
+--   the case (record_return_shipment refuses it first, RETURN_SHIPMENT_EXISTS).
+-- returns_proof_given_chk: the buyer gives the proof of the parcel as a whole: the time with the
+--   carrier and the number, both trimmed and not empty, and a link only with them, https and with
+--   no spaces.
+-- returns_close_chk: root closes with a code and a note together.
+-- order_batch_allocations_returned_chk: never more units back than the order took from the batch.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_text_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_text_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_text_chk
+    CHECK (
+      "contactName" = btrim("contactName")
+      AND char_length("contactName") >= 1 AND char_length("contactName") <= 200
+      AND "contactEmail" = btrim("contactEmail")
+      AND char_length("contactEmail") >= 3 AND char_length("contactEmail") <= 320
+      AND position('@' IN "contactEmail") > 1
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_stated_at_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_stated_at_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_stated_at_chk
+    CHECK ("statedAt" <= "createdAt");
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_source_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_source_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_source_chk
+    CHECK (
+      (source = 'admin') = (reason IS NOT NULL)
+      AND (source = 'admin' OR basis = 'withdrawal')
+      AND (source IN ('admin', 'account')) = ("createdById" IS NOT NULL)
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_extends_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_extends_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_extends_chk
+    CHECK ("extendsId" IS NULL OR "extendsId" <> id);
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_proof_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_proof_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_proof_chk
+    CHECK (("proofConfirmedAt" IS NULL) = ("proofConfirmedById" IS NULL));
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_quantity_chk') THEN
+    ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_quantity_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_items
+    ADD CONSTRAINT return_items_quantity_chk
+    CHECK (quantity > 0 AND amount >= 0);
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_goods_chk') THEN
+    ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_goods_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_items
+    ADD CONSTRAINT return_items_goods_chk
+    CHECK (
+      (goods = 'expected') = ("goodsSetAt" IS NULL)
+      AND ("goodsSetAt" IS NULL) = ("goodsSetById" IS NULL)
+      AND (goods = 'not_accepted') = ("notAcceptedReason" IS NOT NULL)
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_pair_chk') THEN
+    ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_pair_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_items
+    ADD CONSTRAINT return_items_pair_chk
+    CHECK (
+      CASE goods
+        WHEN 'expected' THEN money IN ('not_refunded', 'pending', 'refunded')
+        WHEN 'to_stock' THEN money IN ('not_refunded', 'pending', 'refunded')
+        WHEN 'written_off' THEN money IN ('not_refunded', 'pending', 'refunded')
+        WHEN 'lost' THEN money IN ('not_refunded', 'pending', 'refunded')
+        -- goods paid ahead that never came keep their money back
+        WHEN 'not_arrived' THEN money IN ('not_refunded', 'refused', 'refunded')
+        ELSE money IN ('not_refunded', 'refused')
+      END
+      AND (money <> 'refused' OR goods IN ('not_accepted', 'not_arrived'))
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_money_chk') THEN
+    ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_money_chk;
+  END IF;
+
+  ALTER TABLE cartlify.return_items
+    ADD CONSTRAINT return_items_money_chk
+    CHECK (
+      "deliveryShare" >= 0
+      AND "shippingDeduction" >= 0
+      AND (money <> 'pending' OR "refundKey" IS NOT NULL)
+      AND (
+        money <> 'refunded'
+        OR ("refundedAt" IS NOT NULL AND ("refundKey" IS NULL) = ("outsideMethod" IS NOT NULL))
+      )
+      AND (
+        money NOT IN ('not_refunded', 'refused')
+        OR ("refundKey" IS NULL AND "refundedAt" IS NULL AND "refundId" IS NULL AND "outsideMethod" IS NULL)
+      )
+      AND ("outsideMethod" IS NULL) = ("outsideNote" IS NULL)
+      -- money sent outside the app names root; a chargeback the webhook records names nobody
+      AND ("outsideById" IS NULL OR "outsideMethod" IS NOT NULL)
+      AND ("outsideById" IS NOT NULL OR "outsideMethod" IS NULL OR "outsideMethod" = 'chargeback')
+      AND ("refundFailure" IS NULL OR money = 'not_refunded')
+      AND ("refundFailureText" IS NULL OR "refundFailure" IS NOT NULL)
+      AND ("refusedCode" IS NULL OR (money = 'refused' AND goods = 'not_arrived'))
+      AND (money <> 'refused' OR "deliveryShare" = 0)
+      AND (money <> 'refused' OR "shippingDeduction" = 0)
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_proof_given_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_proof_given_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_proof_given_chk
+    CHECK (
+      ("proofProvidedAt" IS NULL) = ("proofCarrier" IS NULL)
+      AND ("proofProvidedAt" IS NULL) = ("proofTrackingNumber" IS NULL)
+      AND (
+        "proofCarrier" IS NULL
+        OR (char_length("proofCarrier") >= 1 AND "proofCarrier" = btrim("proofCarrier"))
+      )
+      AND (
+        "proofTrackingNumber" IS NULL
+        OR (char_length("proofTrackingNumber") >= 1 AND "proofTrackingNumber" = btrim("proofTrackingNumber"))
+      )
+      AND (
+        "proofTrackingUrl" IS NULL
+        OR ("proofProvidedAt" IS NOT NULL AND "proofTrackingUrl" ~ '^https://[^[:space:]]+$')
+      )
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_close_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_close_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_close_chk
+    CHECK (("closeCode" IS NULL) = ("closeNote" IS NULL));
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_shipping_reimbursed_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_shipping_reimbursed_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_shipping_reimbursed_chk
+    CHECK (
+      ("shippingReimbursed" IS NULL) = ("shippingReimbursedAt" IS NULL)
+      AND ("shippingReimbursed" IS NULL) = ("shippingReimbursedMethod" IS NULL)
+      AND ("shippingReimbursed" IS NULL) = ("shippingReimbursedNote" IS NULL)
+      AND ("shippingReimbursed" IS NULL) = ("shippingReimbursedById" IS NULL)
+      AND ("shippingReimbursed" IS NULL OR "shippingReimbursed" > 0)
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_accepted_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_accepted_chk;
+  END IF;
+
+  ALTER TABLE cartlify.returns
+    ADD CONSTRAINT returns_accepted_chk
+    CHECK (
+      ("acceptedAt" IS NULL) = ("acceptedById" IS NULL)
+      AND ("acceptedAt" IS NULL OR source = 'form_manual')
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'order_batch_allocations_returned_chk') THEN
+    ALTER TABLE cartlify.order_batch_allocations DROP CONSTRAINT order_batch_allocations_returned_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_batch_allocations
+    ADD CONSTRAINT order_batch_allocations_returned_chk
+    CHECK (returned >= 0 AND returned <= quantity);
+
+  -- the lines of a statement of return name the row and the order; no other line does
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'stock_log_return_item_chk') THEN
+    ALTER TABLE cartlify.stock_log DROP CONSTRAINT stock_log_return_item_chk;
+  END IF;
+
+  ALTER TABLE cartlify.stock_log
+    ADD CONSTRAINT stock_log_return_item_chk
+    CHECK (
+      (event IN ('stock.return', 'stock.return_write_off')) = ("returnItemId" IS NOT NULL)
+      AND ("returnItemId" IS NULL OR "orderId" IS NOT NULL)
+    );
+END $$;
+
+CREATE INDEX IF NOT EXISTS stock_log_return_item_idx
+  ON cartlify.stock_log ("returnItemId", id)
+  WHERE "returnItemId" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS returns_manual_under_review_uidx
+  ON cartlify.returns ("orderId")
+  WHERE source = 'form_manual' AND "closedAt" IS NULL AND "acceptedAt" IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS return_shipments_tracking_uidx
+  ON cartlify.return_shipments ("returnId", upper(regexp_replace("trackingNumber", '\s', '', 'g')))
+  WHERE "trackingNumber" IS NOT NULL;
+
+-- the transfers that wait for the provider: the worker asks about them
+CREATE INDEX IF NOT EXISTS return_items_pending_idx
+  ON cartlify.return_items ("updatedAt")
+  WHERE money = 'pending';
 
 ----------------------------------------
 -- JOURNALS: the event of a line is written domain.name

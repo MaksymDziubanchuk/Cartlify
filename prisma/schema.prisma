@@ -10,6 +10,10 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// -----------------------------------------------------------------------------
+// Users and sessions
+// -----------------------------------------------------------------------------
+
 // GUEST is a visitor without an account (a guest id in a cookie). USER is a buyer, ADMIN works in
 // the shop, ROOT is the owner and the only one who makes or removes admins.
 enum Role {
@@ -33,134 +37,6 @@ enum AuthProvider {
   GOOGLE
   GITHUB
   LINKEDIN
-}
-
-// A vote under the review of another buyer: for it or against it.
-enum ReviewVoteAction {
-  UP
-  DOWN
-}
-
-// pending: a cart. unconfirmed: a confirmed order that went back to a cart (its payment was
-// cancelled or its reservation ended). waiting: confirmed, the stock is held until
-// reservationExpiresAt, the payment is awaited. paid, shipped, delivered: the steps after the
-// payment, one at a time. cancelled: a paid order that an admin cancelled (the money is refunded).
-enum OrderStatus {
-  pending
-  unconfirmed
-  waiting
-  paid
-  shipped
-  delivered
-  cancelled
-}
-
-// Who took the money of an order. Only stripe has a module in the app, liqpay is not built yet.
-enum PaymentProvider {
-  stripe
-  liqpay
-}
-
-// How a change of a price was given: as a percent of the price or as an amount of money.
-enum PriceChangeMode {
-  percent
-  fixed
-}
-
-// Where a batch of stock came from: a delivery of a supplier, a surplus an inventory found, or
-// goods a buyer brought back.
-enum StockSource {
-  supplier
-  surplus
-  customer_return
-}
-
-// The kind of row a line of the admin journal is about.
-enum AdminAuditEntityType {
-  user
-  product
-  // a variant of a product: its price, its sale, its stock and its own edits
-  variant
-  category
-  order
-  review
-  // a manufacturer or a person responsible in the EU of the directory of parties
-  party
-  // a file of the directory of documents (instructions, certificates)
-  document
-  // a group, a characteristic or a value of a characteristic of the directory of characteristics
-  attribute
-  other
-}
-
-// what a characteristic holds: a text, a number, yes or no, one of a list of values, or several
-// of them
-enum AttributeType {
-  text
-  number
-  boolean
-  option
-  options
-}
-
-// what a document of a product is
-enum DocumentKind {
-  instruction
-  certificate
-  declaration
-  other
-}
-
-// What an admin did. A line also has an event (see AdminAuditLog) that names the route or the
-// condition when one action has several.
-enum AdminAuditAction {
-  USER_ROLE_CHANGE
-  PRODUCT_CREATE
-  PRODUCT_UPDATE
-  PRODUCT_DELETE
-  PRODUCT_PRICE_BULK_UPDATE
-  // a sale set, changed or taken off by an admin, or ended by a price put down to it (db/05)
-  PRODUCT_SALE
-  // goods taken in and units written off: one line for the whole delivery or write-off, written
-  // by the server; the line of each variant is in the stock log (db/05)
-  STOCK_DELIVERY
-  STOCK_WRITE_OFF
-  // a step of the shipping, a step back, or a cancel
-  ORDER_STATUS_CHANGE
-  // the carrier, number, link or cost of a send corrected, and the recipient or address of a paid
-  // order corrected before it is sent
-  ORDER_SHIPMENT_CHANGE
-  ORDER_DELIVERY_CHANGE
-  CATEGORY_UPDATE
-  REVIEW_DELETE
-  // everything else: an avatar removed, an account deleted, a late payment refunded, a category
-  // created or deleted
-  OTHER
-}
-
-enum ChatStatus {
-  open
-  closed
-}
-
-// bot: the bot answers. admin: the person asked for an admin and the admins answer.
-enum ChatType {
-  bot
-  admin
-}
-
-// Who wrote a message: a user or an admin (an account), a guest (no account) or the bot.
-enum ChatMessageSenderType {
-  user
-  admin
-  bot
-  guest
-}
-
-// The legal texts of the shop that a buyer accepts.
-enum LegalDocumentKind {
-  terms
-  contract
 }
 
 // An account of a buyer, an admin or the owner. The row is never removed: a deleted account keeps
@@ -206,6 +82,15 @@ model User {
   // the versions of the terms and of the contract this account published (only root does)
   legalDocumentsPublished LegalDocument[]         @relation("LegalDocumentPublisher")
   legalAcceptances        LegalAcceptance[]
+  // the statements of withdrawal this account made or confirmed the proof of
+  returnsCreated          OrderReturn[]           @relation("ReturnCreator")
+  returnsProofConfirmed   OrderReturn[]           @relation("ReturnProofConfirmer")
+  returnsAccepted         OrderReturn[]           @relation("ReturnAcceptor")
+  returnsClosed           OrderReturn[]           @relation("ReturnCloser")
+  returnsReimbursed       OrderReturn[]           @relation("ReturnShippingReimburser")
+  returnItemsSet          OrderReturnItem[]       @relation("ReturnItemGoodsSetter")
+  returnItemsOutside      OrderReturnItem[]       @relation("ReturnItemOutsideSetter")
+  returnShipmentsRecorded ReturnShipment[]        @relation("ReturnShipmentRecorder")
   chatThreads             ChatThread[]
   chatMessages            ChatMessage[]
 
@@ -271,6 +156,42 @@ model LoginLog {
   @@map("login_logs")
 }
 
+// -----------------------------------------------------------------------------
+// Catalog: categories, products, variants, characteristics
+// -----------------------------------------------------------------------------
+
+// what a characteristic holds: a text, a number, yes or no, one of a list of values, or several
+// of them
+enum AttributeType {
+  text
+  number
+  boolean
+  option
+  options
+}
+
+// what a document of a product is
+enum DocumentKind {
+  instruction
+  certificate
+  declaration
+  other
+}
+
+// What the law lets a buyer do when they withdraw from a purchase of the goods (Directive
+// 2011/83, art. 16): allowed takes them back freely; sealed_hygiene, sealed_media and mixed only
+// while the seal is unbroken (16 e, 16 i, 16 f); perishable, personalised and periodical not at
+// all (16 d, 16 c, 16 j). The database derives the three kinds from the value, nothing stores them.
+enum WithdrawalRule {
+  allowed
+  sealed_hygiene
+  sealed_media
+  mixed
+  perishable
+  personalised
+  periodical
+}
+
 // A category of products. The tree goes only top down: a category never goes inside its own branch
 // (CATEGORY_PARENT_CYCLE, db/05). A category with products cannot be deleted; the server moves the
 // children of a deleted category to its parent.
@@ -284,6 +205,10 @@ model Category {
   // none, db/06)
   imageUrl      String?
   imagePublicId String?
+
+  // the rule of withdrawal its products follow while they have none of their own; empty follows
+  // the category above it (product_withdrawals, db/05)
+  withdrawal WithdrawalRule?
 
   // the parent category; empty for a top category
   parentId Int?
@@ -362,7 +287,6 @@ model Attribute {
   categories CategoryAttribute[]
   values     VariantAttributeValue[]
 
-  @@index([groupId])
   @@map("attributes")
 }
 
@@ -381,7 +305,6 @@ model AttributeOption {
 
   values VariantAttributeValue[]
 
-  @@index([attributeId])
   @@map("attribute_options")
 }
 
@@ -459,6 +382,10 @@ model Product {
   euResponsible   Party?  @relation("ProductEuResponsible", fields: [euResponsibleId], references: [id], onDelete: Restrict)
   // the warnings of the product, plain text, optional (db/06 holds the length)
   warnings        String?
+
+  // the rule of withdrawal of its own; empty follows its category, and the nearest category above
+  // it that has one, and by default allowed (product_withdrawals, db/05)
+  withdrawal WithdrawalRule?
 
   // how many times buyers opened the card (an admin's opens are not counted)
   views Int @default(0)
@@ -652,6 +579,16 @@ model VariantAttributeValue {
   @@map("variant_attribute_values")
 }
 
+// -----------------------------------------------------------------------------
+// Reviews and favorites
+// -----------------------------------------------------------------------------
+
+// A vote under the review of another buyer: for it or against it.
+enum ReviewVoteAction {
+  UP
+  DOWN
+}
+
 // A review of a product by a buyer: a rating, a comment or both (db/06). A buyer has one review
 // for each product.
 model Review {
@@ -732,6 +669,151 @@ model Favorite {
   @@map("favorites")
 }
 
+// -----------------------------------------------------------------------------
+// Stock
+// -----------------------------------------------------------------------------
+
+// Where a batch of stock came from: a delivery of a supplier, a surplus an inventory found, or
+// goods a buyer brought back.
+enum StockSource {
+  supplier
+  surplus
+  customer_return
+}
+
+// A batch of a product: units that came in at once, at one cost of a unit in the currency of the
+// shop. The stock of the product is what its batches have left, and only database functions take
+// a batch in or take units out of it (db/05). Who took the batch in, the supplier, the invoice and
+// the note are in the admin journal (STOCK_DELIVERY).
+model ProductBatch {
+  id Int @id @default(autoincrement())
+
+  // deleting a product row for good (the app only sets deletedAt) deletes its batches; a batch
+  // that a paid order took units from cannot be deleted
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  // a batch holds the units of one variant; the product is kept beside it (the two always belong
+  // together)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
+
+  // the delivery the batch came with: one delivery takes in batches of several variants
+  deliveryId String @db.Uuid
+
+  source              StockSource
+  // the number the supplier gave the batch, when there is one
+  supplierBatchNumber String?
+
+  unitCost  Decimal   @db.Decimal(10, 2)
+  // the units that came in, and the units left after sales and write-offs
+  quantity  Int
+  remaining Int
+  // the last day the goods are good for. A sale takes the batch that ends first, then the batches
+  // without an end, oldest first; a batch that is over is not sold, it can only be written off
+  expiresAt DateTime? @db.Date
+
+  createdAt DateTime @default(now())
+
+  allocations OrderBatchAllocation[]
+
+  @@index([variantId, expiresAt, createdAt, id])
+  @@index([productId])
+  @@index([createdAt, id])
+  @@index([deliveryId])
+  @@map("product_batches")
+}
+
+// The journal of the stock: a line for every change of the quantity of a variant (product_variants
+// stock), with the event that made it. Only added, nobody edits or deletes a line, and only admin and
+// root read. The lines are written by the functions of the database that move the stock (db/05, by
+// log_stock_change) in the same transaction: a delivery, a write-off, a sale at the payment of an
+// order and the units back at the cancel of a paid order. A reserve and its release do not change
+// the stock and have no line. For a variant whose stock only moved through those functions the
+// sum of the quantityChange is its stock and the last stockAfter is its stock.
+model StockLog {
+  id Int @id @default(autoincrement())
+
+  // who did it; empty for the work of the system (the sale at the payment of an order, which the
+  // payment webhook does). The role is empty together with the account (db/06)
+  actorId   Int?
+  actor     User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  actorRole Role?
+
+  // the variant, and its product beside it (the two always belong together). A variant that has a
+  // line cannot be deleted for good
+  productId Int
+  product   Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
+
+  // what made the line: stock.delivery, stock.write_off, stock.sale, stock.return,
+  // stock.return_write_off (the list is src/config/journalEvents.ts)
+  event          String @db.VarChar(60)
+  // the change of the stock, units in above 0 and out below 0, and the stock after it
+  quantityChange Int
+  stockAfter     Int
+  // what the change was made of, a list of { field, old, new }: the batches with their costs, the
+  // reason of a write-off, the supplier, the invoice and the note of a delivery
+  meta           Json?
+
+  // the operation that touched many variants carries one id in all its lines
+  deliveryId   String?          @db.Uuid
+  writeOffId   String?          @db.Uuid
+  orderId      Int?
+  order        Order?           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  // the row of a statement the units came back with or went out with (stock.return,
+  // stock.return_write_off)
+  returnItemId Int?
+  returnItem   OrderReturnItem? @relation(fields: [returnItemId], references: [id], onDelete: Restrict)
+
+  // the address and the browser of the request; empty for work done without a request
+  ip        String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([variantId, createdAt])
+  @@index([productId, createdAt])
+  @@index([event, createdAt])
+  @@index([createdAt, id])
+  @@index([actorId, createdAt])
+  @@map("stock_log")
+}
+
+// -----------------------------------------------------------------------------
+// Orders and payments
+// -----------------------------------------------------------------------------
+
+// pending: a cart. unconfirmed: a confirmed order that went back to a cart (its payment was
+// cancelled or its reservation ended). waiting: confirmed, the stock is held until
+// reservationExpiresAt, the payment is awaited. paid, shipped, delivered: the steps after the
+// payment, one at a time. cancelled: a paid order cancelled by a statement of return, or a shipped
+// one whose parcel came back with all the money (db/05, refresh_return_state).
+enum OrderStatus {
+  pending
+  unconfirmed
+  waiting
+  paid
+  shipped
+  delivered
+  cancelled
+}
+
+// Who took the money of an order. Only stripe has a module in the app, liqpay is not built yet.
+enum PaymentProvider {
+  stripe
+  liqpay
+}
+
+// How an order gets to its buyer. manual: the shop sends it to an address itself, with a carrier it
+// picks and works with outside the app. pickup: the buyer collects it at the shop. A carrier
+// connected to the app would be another value.
+enum DeliveryMethod {
+  manual
+  pickup
+}
+
 // A cart or an order of a buyer: one row goes through the whole life (see OrderStatus). The status,
 // confirmed, reservationExpiresAt and paymentId match each other for a cart, a waiting and a paid
 // order (db/06). Confirming,
@@ -758,10 +840,22 @@ model Order {
   paymentProvider PaymentProvider?
   paymentId       String?          @unique
 
-  // when the payment was recorded (pay_order does it with the payment) and when an admin cancelled
-  // the paid order (cancel_paid_order), in utc; only those functions set them (db/03, db/06)
-  paidAt      DateTime?
-  cancelledAt DateTime?
+  // when the payment was recorded (pay_order does it with the payment) and when the order became
+  // cancelled (refresh_return_state, after a statement of return), in utc; only those functions
+  // set them (db/03, db/06)
+  paidAt               DateTime?
+  cancelledAt          DateTime?
+  // when the order became delivered: only the database sets it, with the step to delivered, and
+  // takes it away with the step back (db/05). The days of the withdrawal count from it
+  deliveredAt          DateTime?
+  // what the contract in force said at the confirmation (confirm_order, db/05): the days to
+  // withdraw and who pays the way back; empty while it is a cart, and for an order confirmed
+  // while no contract was published
+  withdrawalDays       Int?
+  returnShippingPaidBy ReturnShippingPayer?
+  // where the order stands as to its statements of withdrawal and return; only the database sets
+  // it (refresh_return_state, db/05)
+  returnStatus         ReturnStatus         @default(none)
 
   createdAt DateTime @default(now())
   // a trigger sets it on every change, also a change made by a database function (db/05)
@@ -778,6 +872,8 @@ model Order {
   stockLogs        StockLog[]
   // the versions of the terms and of the contract the order was confirmed with
   legalAcceptances LegalAcceptance[]
+  // the statements of withdrawal and of return of the order
+  returns          OrderReturn[]
 
   @@index([userId, createdAt])
   @@index([userId, updatedAt])
@@ -788,14 +884,6 @@ model Order {
   @@index([paidAt, id])
   @@index([cancelledAt])
   @@map("orders")
-}
-
-// How an order gets to its buyer. manual: the shop sends it to an address itself, with a carrier it
-// picks and works with outside the app. pickup: the buyer collects it at the shop. A carrier
-// connected to the app would be another value.
-enum DeliveryMethod {
-  manual
-  pickup
 }
 
 // Where and to whom an order goes: one row for an order. It is written with the confirmation and
@@ -872,47 +960,42 @@ model OrderShipment {
   @@map("order_shipments")
 }
 
-// A batch of a product: units that came in at once, at one cost of a unit in the currency of the
-// shop. The stock of the product is what its batches have left, and only database functions take
-// a batch in or take units out of it (db/05). Who took the batch in, the supplier, the invoice and
-// the note are in the admin journal (STOCK_DELIVERY).
-model ProductBatch {
+// A line of an order: a variant of a product and a quantity. The database sets unitPrice and
+// totalPrice from the price the variant sells at now, the caller cannot set them; the items of a
+// confirmed order do not change (db/05).
+model OrderItem {
   id Int @id @default(autoincrement())
 
-  // deleting a product row for good (the app only sets deletedAt) deletes its batches; a batch
-  // that a paid order took units from cannot be deleted
+  orderId Int
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
   productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id])
 
-  // a batch holds the units of one variant; the product is kept beside it (the two always belong
-  // together)
   variantId Int
-  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Cascade)
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId])
 
-  // the delivery the batch came with: one delivery takes in batches of several variants
-  deliveryId String @db.Uuid
-
-  source              StockSource
-  // the number the supplier gave the batch, when there is one
-  supplierBatchNumber String?
-
-  unitCost  Decimal   @db.Decimal(10, 2)
-  // the units that came in, and the units left after sales and write-offs
-  quantity  Int
-  remaining Int
-  // the last day the goods are good for. A sale takes the batch that ends first, then the batches
-  // without an end, oldest first; a batch that is over is not sold, it can only be written off
-  expiresAt DateTime? @db.Date
+  quantity    Int
+  unitPrice   Decimal        @db.Decimal(10, 2)
+  totalPrice  Decimal        @db.Decimal(10, 2)
+  // the name of the variant (the name of the product and the values that tell the variants
+  // apart): it follows the variant while the order is a cart, and the confirmation keeps the name
+  // of that moment (db/05); empty on old items
+  productName String?
+  // the rule of withdrawal of the product: set by the database on every write of the item, the
+  // confirmation keeps the rule of that moment (db/05); allowed on old items
+  withdrawal  WithdrawalRule @default(allowed)
 
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
 
-  allocations OrderBatchAllocation[]
+  // the rows of statements that name the item
+  returnItems OrderReturnItem[]
 
-  @@index([variantId, expiresAt, createdAt, id])
+  @@index([orderId])
   @@index([productId])
-  @@index([createdAt, id])
-  @@index([deliveryId])
-  @@map("product_batches")
+  @@index([variantId])
+  @@map("order_items")
 }
 
 // The units that a paid order took from each batch, so the cost of the goods it sold is known. A
@@ -934,6 +1017,9 @@ model OrderBatchAllocation {
   batch   ProductBatch @relation(fields: [batchId], references: [id], onDelete: Restrict)
 
   quantity Int
+  // how many of these units came back with a statement, into the same batch (never more than
+  // were taken); the cost of what was returned is the cost of the batch
+  returned Int @default(0)
 
   createdAt DateTime @default(now())
 
@@ -944,36 +1030,492 @@ model OrderBatchAllocation {
   @@map("order_batch_allocations")
 }
 
-// A line of an order: a variant of a product and a quantity. The database sets unitPrice and
-// totalPrice from the price the variant sells at now, the caller cannot set them; the items of a
-// confirmed order do not change (db/05).
-model OrderItem {
+// -----------------------------------------------------------------------------
+// Withdrawal and returns
+// -----------------------------------------------------------------------------
+
+// Where a statement of withdrawal or return came from: the account of the buyer, the public form
+// with the code of the link (the code vouches for the order), the form without a code (an admin
+// checks it by hand), or an admin who made it.
+enum ReturnSource {
+  account
+  form_code
+  form_manual
+  admin
+}
+
+// What the statement stands on: withdrawal is the right the law gives within the period (checked
+// against the period and the rule of each product), other is a return outside it (a defect, a wrong
+// item, damage, goodwill, a cancel by the shop), which only an admin makes.
+enum ReturnBasis {
+  withdrawal
+  other
+}
+
+// Why an admin made a statement; empty on a statement of a buyer, whose own words are the
+// description. shop_cancel is the cancel of a paid order by the shop, refused the refusal of a
+// parcel at the door.
+enum ReturnReason {
+  defect
+  wrong_item
+  damaged
+  goodwill
+  shop_cancel
+  refused
+  other
+}
+
+// What became of the goods of a row of a statement. expected: not decided yet; to_stock: back on the
+// shelf, in the batches they were sold from; written_off: came back and went out of the stock at
+// once; not_accepted: arrived and the shop does not take them (the reason says why); lost: gone on
+// the way, with the proof of the buyer; not_arrived: never came.
+enum ReturnGoods {
+  expected
+  to_stock
+  written_off
+  not_accepted
+  lost
+  not_arrived
+}
+
+// What became of the money of a row: not_refunded yet, pending at the provider, refunded, or refused
+// (the goods were not accepted or never came).
+enum ReturnMoney {
+  not_refunded
+  pending
+  refunded
+  refused
+}
+
+// Why the shop did not accept the goods of a row.
+enum ReturnNotAcceptedReason {
+  unsealed
+  mixed
+  used
+  damaged
+  other
+}
+
+// Why a transfer of money back failed, in our words: card_unavailable (the card is closed, expired
+// or lost: a retry is useless), shop_balance (the balance of the shop at the provider is short:
+// top it up and retry), disputed (the buyer opened a dispute at the bank: the bank settles it, the
+// money is not sent again), unknown (retry once, then outside the app).
+enum ReturnRefundFailure {
+  card_unavailable
+  shop_balance
+  disputed
+  unknown
+}
+
+// Why root closed rows of a statement without a refund. Informational: a code does not decide
+// whether a buyer may state the same units again.
+enum ReturnCloseCode {
+  buyer_changed_mind
+  not_buyer
+  goods_not_returned
+  other
+  // the buyer stated the same units from the account or with the code: a form without the code
+  // gives them up
+  stated_again
+}
+
+// How money was sent back outside the app, after a transfer failed; chargeback: the bank gave it
+// back to the buyer, who disputed the payment and won.
+enum ReturnOutsideMethod {
+  bank_transfer
+  cash
+  other
+  chargeback
+}
+
+// The state of an order as to its statements, one value for the whole order. none: no statement;
+// open: a statement is open and no money went back yet; open_partial: one is open and part of the
+// money went back; partial: all are closed and part went back; full: all are closed and all went
+// back, the delivery too; declined: all are closed and nothing went back.
+enum ReturnStatus {
+  none
+  open
+  open_partial
+  partial
+  full
+  declined
+}
+
+// Who pays the carrier for the parcel a buyer sends back when they withdraw from a purchase: the
+// contract says it, an order keeps what the contract in force said at its confirmation.
+enum ReturnShippingPayer {
+  buyer
+  shop
+}
+
+// A statement of a buyer that withdraws from the purchase of some goods of an order, or of an admin
+// that returns them outside the withdrawal (a defect, a cancel by the shop). The statement keeps
+// what the law asks of it: when it was made, by whom and from where (the address and the browser of
+// the request), and the name and the email the answers go to, which outlive the account. One action
+// is one statement, an extension is another one that points at the first. Never removed: only the
+// database functions write it (create_return, receive_return_items, confirm_return_proof, db/05).
+model OrderReturn {
   id Int @id @default(autoincrement())
 
   orderId Int
-  order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order   Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  // the number of the statement in its order (1, 2, 3...), set once by create_return (db/05): with
+  // the basis and the order it is the code the buyer and the admins see, W42-2 or R42-2
+  number  Int
 
-  productId Int
-  product   Product @relation(fields: [productId], references: [id])
+  // the statement this one extends: another statement of the same order
+  extendsId  Int?
+  extends    OrderReturn?  @relation("ReturnExtension", fields: [extendsId], references: [id], onDelete: Restrict)
+  extensions OrderReturn[] @relation("ReturnExtension")
 
-  variantId Int
-  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId])
+  // the moment the law counts the period of the grant from: the database sets it, an admin may
+  // name a moment of the past (a parcel refused at the door at a time the carrier gives)
+  statedAt DateTime
 
-  quantity    Int
-  unitPrice   Decimal @db.Decimal(10, 2)
-  totalPrice  Decimal @db.Decimal(10, 2)
-  // the name of the variant (the name of the product and the values that tell the variants
-  // apart): it follows the variant while the order is a cart, and the confirmation keeps the name
-  // of that moment (db/05); empty on old items
-  productName String?
+  source      ReturnSource
+  // the account that made it (the buyer, or the admin); empty for a form
+  createdById Int?
+  createdBy   User?         @relation("ReturnCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  basis       ReturnBasis
+  reason      ReturnReason?
+  // the words of the buyer, or of the admin; up to 2000 characters
+  description String?       @db.VarChar(2000)
+
+  // where the answers go: the name and the email of the statement, from the account or the form
+  contactName  String @db.VarChar(200)
+  contactEmail String @db.VarChar(320)
+
+  // the address and the browser of the request
+  ip        String?
+  userAgent String?
+
+  // the proof the buyer sent the goods back: given by the buyer, confirmed by an admin (who may
+  // confirm it without a number, from a letter)
+  proofProvidedAt     DateTime?
+  // what the buyer wrote with it: the carrier and the number of the parcel, and a link to follow it
+  proofCarrier        String?   @db.VarChar(100)
+  proofTrackingNumber String?   @db.VarChar(100)
+  proofTrackingUrl    String?   @db.VarChar(500)
+  proofConfirmedAt    DateTime?
+  proofConfirmedById  Int?
+  proofConfirmedBy    User?     @relation("ReturnProofConfirmer", fields: [proofConfirmedById], references: [id], onDelete: Restrict)
+
+  // a statement of the form without the code: when an admin accepted it as the buyer's and who
+  // (db/05, accept_return); until then its goods and its money wait
+  acceptedAt   DateTime?
+  acceptedById Int?
+  acceptedBy   User?     @relation("ReturnAcceptor", fields: [acceptedById], references: [id], onDelete: Restrict)
+
+  // when every row has its result and who set the last one
+  closedAt   DateTime?
+  closedById Int?
+  closedBy   User?     @relation("ReturnCloser", fields: [closedById], references: [id], onDelete: Restrict)
+
+  // root closed rows without a refund: the code and the note of the last time (db/05)
+  closeCode ReturnCloseCode?
+  closeNote String?          @db.VarChar(500)
+
+  // the shop pays the way back and the buyer paid the carrier: root gave it back outside the app,
+  // once, with the day it went, the way and a note (db/05, record_return_reimbursement); the note
+  // goes with the personal data of the statement
+  shippingReimbursed       Decimal?             @db.Decimal(10, 2)
+  shippingReimbursedAt     DateTime?
+  shippingReimbursedMethod ReturnOutsideMethod?
+  shippingReimbursedNote   String?              @db.VarChar(500)
+  shippingReimbursedById   Int?
+  shippingReimbursedBy     User?                @relation("ReturnShippingReimburser", fields: [shippingReimbursedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  // a trigger sets it on every change (db/05)
+  updatedAt DateTime @default(now()) @updatedAt
+
+  items     OrderReturnItem[]
+  // the parcels the shop paid to carry the goods back (db/05, record_return_shipment)
+  shipments ReturnShipment[]
+
+  @@unique([orderId, number])
+  @@index([extendsId])
+  @@index([createdAt, id])
+  @@index([closedAt])
+  @@map("returns")
+}
+
+// A part of an item of an order named in a statement, with its own quantity, the state of its goods
+// and of its money. A row starts as the whole of what the statement names and splits when only some
+// of its units get a result, so one unit may come back late or be refused alone. The money of a
+// row is the price of its units; the rules of the pairs (goods with money) are held by db/06.
+model OrderReturnItem {
+  id Int @id @default(autoincrement())
+
+  returnId Int
+  return   OrderReturn @relation(fields: [returnId], references: [id], onDelete: Restrict)
+
+  orderItemId Int
+  orderItem   OrderItem @relation(fields: [orderItemId], references: [id], onDelete: Restrict)
+
+  quantity Int
+
+  goods             ReturnGoods              @default(expected)
+  // the reason the goods were not accepted; only with not_accepted
+  notAcceptedReason ReturnNotAcceptedReason?
+  money             ReturnMoney              @default(not_refunded)
+  // what the units cost the buyer: the unit price of the item times the quantity, or less when
+  // root lowered it (the note says why)
+  amount            Decimal                  @db.Decimal(10, 2)
+  amountNote        String?                  @db.VarChar(500)
+
+  // the part of the delivery that goes back with this row: the last row that makes the order
+  // whole carries all of it, the others 0
+  deliveryShare     Decimal @default(0) @db.Decimal(10, 2)
+  // the cost of the way back the buyer owes (the contract says the buyer pays, the shop paid the
+  // carrier), taken off the transfer of this row: at most the parcels of the statement cost
+  shippingDeduction Decimal @default(0) @db.Decimal(10, 2)
+
+  // the transfer: the key of our side (one for all the rows one transfer covers, set before the
+  // provider is asked and taken off when it fails), the id the provider gave it and the time the
+  // money went back; the time is the day it happened, also for money sent outside the app
+  refundKey  String?   @db.Uuid
+  refundId   String?
+  refundedAt DateTime?
+
+  // the last transfer that failed: what the provider said in our code and in its words; it stays
+  // until the transfer is tried again or the row is settled
+  refundFailure     ReturnRefundFailure?
+  refundFailureText String?              @db.VarChar(500)
+
+  // money sent back outside the app by root: how, the note and who
+  outsideMethod ReturnOutsideMethod?
+  outsideNote   String?              @db.VarChar(500)
+  outsideById   Int?
+  outsideBy     User?                @relation("ReturnItemOutsideSetter", fields: [outsideById], references: [id], onDelete: Restrict)
+
+  // why root closed the row without a refund
+  refusedCode ReturnCloseCode?
+
+  // who set the result of the goods and when
+  goodsSetAt   DateTime?
+  goodsSetById Int?
+  goodsSetBy   User?     @relation("ReturnItemGoodsSetter", fields: [goodsSetById], references: [id], onDelete: Restrict)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  @@index([orderId])
-  @@index([productId])
-  @@index([variantId])
-  @@map("order_items")
+  // the lines of the stock log of the units that came back with the row
+  stockLogs StockLog[]
+
+  @@index([refundKey])
+  @@index([returnId])
+  @@index([orderItemId])
+  @@map("return_items")
+}
+
+// A parcel the shop paid to carry goods back from a buyer for a statement: a label the shop bought,
+// or the carrier of the buyer that the shop paid back outside the app. It is an expense of the
+// period it was sent in (shippedAt, written by the admin, never of the future), the cost may be
+// written later. Only the database functions write it (record_return_shipment,
+// set_return_shipment_cost, db/05); an admin reads it, a buyer does not.
+model ReturnShipment {
+  id Int @id @default(autoincrement())
+
+  returnId Int
+  return   OrderReturn @relation(fields: [returnId], references: [id], onDelete: Restrict)
+
+  // written by the admin; a number needs a carrier and a link needs a number, the link is https
+  // (db/06)
+  carrier        String? @db.VarChar(100)
+  trackingNumber String? @db.VarChar(100)
+  trackingUrl    String? @db.VarChar(500)
+
+  // what the shop paid, empty until the admin writes it
+  cost      Decimal? @db.Decimal(10, 2)
+  // when the parcel was sent back, or the parcel refused: the moment of the refusal
+  shippedAt DateTime
+
+  recordedById Int
+  recordedBy   User @relation("ReturnShipmentRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([returnId])
+  @@index([shippedAt])
+  @@map("return_shipments")
+}
+
+// -----------------------------------------------------------------------------
+// Journals and alerts
+// -----------------------------------------------------------------------------
+
+// How a change of a price was given: as a percent of the price or as an amount of money.
+enum PriceChangeMode {
+  percent
+  fixed
+}
+
+// The kind of row a line of the admin journal is about.
+enum AdminAuditEntityType {
+  user
+  product
+  // a variant of a product: its price, its sale, its stock and its own edits
+  variant
+  category
+  order
+  review
+  // a manufacturer or a person responsible in the EU of the directory of parties
+  party
+  // a file of the directory of documents (instructions, certificates)
+  document
+  // a group, a characteristic or a value of a characteristic of the directory of characteristics
+  attribute
+  other
+}
+
+// What an admin did. A line also has an event (see AdminAuditLog) that names the route or the
+// condition when one action has several.
+enum AdminAuditAction {
+  USER_ROLE_CHANGE
+  PRODUCT_CREATE
+  PRODUCT_UPDATE
+  PRODUCT_DELETE
+  PRODUCT_PRICE_BULK_UPDATE
+  // a sale set, changed or taken off by an admin, or ended by a price put down to it (db/05)
+  PRODUCT_SALE
+  // goods taken in and units written off: one line for the whole delivery or write-off, written
+  // by the server; the line of each variant is in the stock log (db/05)
+  STOCK_DELIVERY
+  STOCK_WRITE_OFF
+  // a step of the shipping, a step back, or a cancel
+  ORDER_STATUS_CHANGE
+  // the carrier, number, link or cost of a send corrected, and the recipient or address of a paid
+  // order corrected before it is sent
+  ORDER_SHIPMENT_CHANGE
+  ORDER_DELIVERY_CHANGE
+  CATEGORY_UPDATE
+  REVIEW_DELETE
+  // everything else: an avatar removed, an account deleted, a late payment refunded, a category
+  // created or deleted
+  OTHER
+}
+
+// The journal of price changes of products. Only added: nobody edits or deletes a line, and the app
+// writes a line only through log_product_price_change, in the name of the admin of the request
+// (db/05).
+model ProductPriceChangeLog {
+  id Int @id @default(autoincrement())
+
+  productId Int
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  // the variant whose price changed; the product is kept beside it (the two always belong together)
+  variantId Int
+  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
+
+  actorId Int
+  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  // the price before and after the change. A sale goes from the price down to the sale price,
+  // taking it off goes from the sale price back to the price
+  oldPrice Decimal @db.Decimal(10, 2)
+  newPrice Decimal @db.Decimal(10, 2)
+
+  // how the change was given, and its size in that mode (the percent or the amount of money),
+  // negative for a change down
+  mode  PriceChangeMode
+  value Decimal         @db.Decimal(10, 2)
+
+  // the end of the sale: a line with it is the start of a sale, from the price down to the sale
+  // price (db/06); empty for any other line
+  endsAt DateTime?
+
+  // what made the line, finer than mode: price.set, price.set_batch, price.bulk,
+  // price.sale_start, price.sale_end (the list is src/config/journalEvents.ts)
+  event String @db.VarChar(60)
+
+  createdAt DateTime @default(now())
+
+  @@index([productId, createdAt])
+  @@index([variantId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([event, createdAt])
+  @@map("product_price_change_logs")
+}
+
+// The journal of what admins and root did. Only added: nobody edits or deletes a line. A line is
+// written by log_admin_action (db/05).
+model AdminAuditLog {
+  id Int @id @default(autoincrement())
+
+  actorId Int
+  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  // the role of the actor at that time
+  actorRole Role
+
+  // the kind and the id of the row the line is about
+  entityType AdminAuditEntityType
+  entityId   Int?
+
+  action AdminAuditAction
+  // what made the line, finer than the action: the route or the condition (product.update_batch,
+  // order.ship_bulk, ...); the list is src/config/journalEvents.ts
+  event  String           @db.VarChar(60)
+  // the changes, a list of { field, old, new }
+  meta   Json?
+
+  // the address and the browser of the request; empty for work done without a request
+  ip        String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  // the reports read the lines of one action in a period, for example the write-offs of a month
+  @@index([action, createdAt])
+  @@index([event, createdAt])
+  @@map("admin_audit_log")
+}
+
+// The setting of one kind of alerts for one admin or root, each their own: whether they follow the
+// kind and its threshold. A kind without a row is followed with the default threshold of the
+// server.
+model AdminAlertSetting {
+  userId     Int
+  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // the kind of the alert (the list is src/routes/api/admin/services/helpers/alertKinds.helper.ts)
+  kind       String  @db.VarChar(64)
+  subscribed Boolean @default(true)
+  // the limit the kind counts against, its unit depends on the kind; empty means the default of
+  // the server, a number is at least 1 (db/06)
+  threshold  Int?
+
+  createdAt DateTime @default(now())
+
+  @@id([userId, kind])
+  @@map("admin_alert_settings")
+}
+
+// -----------------------------------------------------------------------------
+// Chat
+// -----------------------------------------------------------------------------
+
+enum ChatStatus {
+  open
+  closed
+}
+
+// bot: the bot answers. admin: the person asked for an admin and the admins answer.
+enum ChatType {
+  bot
+  admin
+}
+
+// Who wrote a message: a user or an admin (an account), a guest (no account) or the bot.
+enum ChatMessageSenderType {
+  user
+  admin
+  bot
+  guest
 }
 
 // A chat of a user or of a guest: exactly one of userId and guestId is set, and a person has at
@@ -1039,155 +1581,16 @@ model ChatMessage {
   @@map("chat_messages")
 }
 
-// The journal of price changes of products. Only added: nobody edits or deletes a line, and the app
-// writes a line only through log_product_price_change, in the name of the admin of the request
-// (db/05).
-model ProductPriceChangeLog {
-  id Int @id @default(autoincrement())
+// -----------------------------------------------------------------------------
+// Terms, contract and privacy policy
+// -----------------------------------------------------------------------------
 
-  productId Int
-  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
-
-  // the variant whose price changed; the product is kept beside it (the two always belong together)
-  variantId Int
-  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
-
-  actorId Int
-  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
-
-  // the price before and after the change. A sale goes from the price down to the sale price,
-  // taking it off goes from the sale price back to the price
-  oldPrice Decimal @db.Decimal(10, 2)
-  newPrice Decimal @db.Decimal(10, 2)
-
-  // how the change was given, and its size in that mode (the percent or the amount of money),
-  // negative for a change down
-  mode  PriceChangeMode
-  value Decimal         @db.Decimal(10, 2)
-
-  // the end of the sale: a line with it is the start of a sale, from the price down to the sale
-  // price (db/06); empty for any other line
-  endsAt DateTime?
-
-  // what made the line, finer than mode: price.set, price.set_batch, price.bulk,
-  // price.sale_start, price.sale_end (the list is src/config/journalEvents.ts)
-  event String @db.VarChar(60)
-
-  createdAt DateTime @default(now())
-
-  @@index([productId, createdAt])
-  @@index([variantId, createdAt])
-  @@index([actorId, createdAt])
-  @@index([event, createdAt])
-  @@map("product_price_change_logs")
-}
-
-// The setting of one kind of alerts for one admin or root, each their own: whether they follow the
-// kind and its threshold. A kind without a row is followed with the default threshold of the
-// server.
-model AdminAlertSetting {
-  userId     Int
-  user       User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  // the kind of the alert (the list is src/routes/api/admin/services/helpers/alertKinds.helper.ts)
-  kind       String  @db.VarChar(64)
-  subscribed Boolean @default(true)
-  // the limit the kind counts against, its unit depends on the kind; empty means the default of
-  // the server, a number is at least 1 (db/06)
-  threshold  Int?
-
-  createdAt DateTime @default(now())
-
-  @@id([userId, kind])
-  @@map("admin_alert_settings")
-}
-
-// The journal of what admins and root did. Only added: nobody edits or deletes a line. A line is
-// written by log_admin_action (db/05).
-model AdminAuditLog {
-  id Int @id @default(autoincrement())
-
-  actorId Int
-  actor   User @relation(fields: [actorId], references: [id], onDelete: Restrict)
-
-  // the role of the actor at that time
-  actorRole Role
-
-  // the kind and the id of the row the line is about
-  entityType AdminAuditEntityType
-  entityId   Int?
-
-  action AdminAuditAction
-  // what made the line, finer than the action: the route or the condition (product.update_batch,
-  // order.ship_bulk, ...); the list is src/config/journalEvents.ts
-  event  String           @db.VarChar(60)
-  // the changes, a list of { field, old, new }
-  meta   Json?
-
-  // the address and the browser of the request; empty for work done without a request
-  ip        String?
-  userAgent String?
-
-  createdAt DateTime @default(now())
-
-  @@index([actorId, createdAt])
-  @@index([entityType, entityId])
-  // the reports read the lines of one action in a period, for example the write-offs of a month
-  @@index([action, createdAt])
-  @@index([event, createdAt])
-  @@map("admin_audit_log")
-}
-
-// The journal of the stock: a line for every change of the quantity of a variant (product_variants
-// stock), with the event that made it. Only added, nobody edits or deletes a line, and only admin and
-// root read. The lines are written by the functions of the database that move the stock (db/05, by
-// log_stock_change) in the same transaction: a delivery, a write-off, a sale at the payment of an
-// order and the units back at the cancel of a paid order. A reserve and its release do not change
-// the stock and have no line. For a variant whose stock only moved through those functions the
-// sum of the quantityChange is its stock and the last stockAfter is its stock.
-model StockLog {
-  id Int @id @default(autoincrement())
-
-  // who did it; empty for the work of the system (the sale at the payment of an order, which the
-  // payment webhook does). The role is empty together with the account (db/06)
-  actorId   Int?
-  actor     User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
-  actorRole Role?
-
-  // the variant, and its product beside it (the two always belong together). A variant that has a
-  // line cannot be deleted for good
-  productId Int
-  product   Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
-  variantId Int
-  variant   ProductVariant @relation(fields: [variantId, productId], references: [id, productId], onDelete: Restrict)
-
-  // what made the line: stock.delivery, stock.write_off, stock.sale, stock.cancel_return (the list
-  // is src/config/journalEvents.ts)
-  event          String @db.VarChar(60)
-  // the change of the stock, units in above 0 and out below 0, and the stock after it
-  quantityChange Int
-  stockAfter     Int
-  // what the change was made of, a list of { field, old, new }: the batches with their costs, the
-  // reason of a write-off, the supplier, the invoice and the note of a delivery
-  meta           Json?
-
-  // the operation that touched many variants carries one id in all its lines
-  deliveryId String? @db.Uuid
-  writeOffId String? @db.Uuid
-  orderId    Int?
-  order      Order?  @relation(fields: [orderId], references: [id], onDelete: Restrict)
-
-  // the address and the browser of the request; empty for work done without a request
-  ip        String?
-  userAgent String?
-
-  createdAt DateTime @default(now())
-
-  @@index([variantId, createdAt])
-  @@index([productId, createdAt])
-  @@index([event, createdAt])
-  @@index([createdAt, id])
-  @@index([actorId, createdAt])
-  @@map("stock_log")
+// The legal texts of the shop. A buyer accepts the terms and the contract; the privacy policy only
+// informs, nobody accepts it.
+enum LegalDocumentKind {
+  terms
+  contract
+  privacy
 }
 
 // A version of the terms or of the contract of the shop. Root publishes it and nobody changes or
@@ -1204,6 +1607,21 @@ model LegalDocument {
   sha256        String            @db.VarChar(64)
   publishedById Int
   publishedBy   User              @relation("LegalDocumentPublisher", fields: [publishedById], references: [id])
+
+  // the contract only, and all three of it (db/06): the days a buyer has to withdraw after the
+  // delivery (14 at least), where they send the goods back, who pays the carrier for it
+  withdrawalDays       Int?
+  returnAddress        String?              @db.VarChar(500)
+  returnShippingPaidBy ReturnShippingPayer?
+
+  // the privacy policy only, and all six of it (db/06): how long each kind of personal data is
+  // kept, in days, counted the way the cleanups of db/05 say
+  retentionLoginAddressesDays  Int?
+  retentionGuestDataDays       Int?
+  retentionDeletedChatsDays    Int?
+  retentionReturnAddressesDays Int?
+  retentionReturnPersonalDays  Int?
+  retentionRecipientDays       Int?
 
   createdAt DateTime @default(now())
 
