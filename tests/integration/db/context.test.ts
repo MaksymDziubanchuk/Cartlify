@@ -7,6 +7,7 @@ import { parseDatabaseUrl, prisma } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import { asAdmin, inRolledBackTx, type DbSession, testTx } from '../../helpers/db.js';
+import { paidOrderOf } from '../../helpers/dbOrders.js';
 import {
   closeSessions,
   createAttribute,
@@ -383,6 +384,31 @@ describe('without a context', () => {
           owner.id,
           terms!.id,
         );
+
+        // a paid order with a statement of return, the same way: the rows of the statement are
+        // read by the owner of the order and by an admin only
+        const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
+        await db.as({ role: 'ADMIN', userId: admin.id });
+        const [item] = await db.rows<{ id: number }>(
+          'select id from cartlify.order_items where "orderId" = $1',
+          orderId,
+        );
+        const [made] = await db.rows<{ id: number }>(
+          `select cartlify.create_return(
+             $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+             'defect'::cartlify."ReturnReason", null, 'Anna', 'anna@example.com', null, null, 4,
+             'Europe/Madrid'
+           ) as id`,
+          orderId,
+          JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
+        );
+        // and a parcel the shop paid to carry the goods back: an admin reads it, nobody else
+        await db.rows(
+          `select cartlify.record_return_shipment(
+             $1::int, 'DHL', null, null, 4.5, (now() at time zone 'UTC')::timestamp(3)
+           ) as id`,
+          made!.id,
+        );
         await db.as(null);
 
         const tables = await tablesOf(db);
@@ -410,7 +436,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(33);
+    expect(Object.keys(hidden)).toHaveLength(36);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );
@@ -482,11 +508,6 @@ describe('without a context', () => {
       'cancel_order_payment',
       () => `select cartlify.cancel_order_payment(${orderId})`,
       'ORDER_CANCEL_PAYMENT_FORBIDDEN',
-    ],
-    [
-      'cancel_paid_order',
-      () => `select cartlify.cancel_paid_order(${orderId})`,
-      'ORDER_CANCEL_FORBIDDEN',
     ],
     [
       'pay_order',

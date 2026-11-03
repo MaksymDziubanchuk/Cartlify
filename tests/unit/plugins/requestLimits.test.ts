@@ -49,6 +49,11 @@ describe('the limits of the routes', () => {
       LIMIT_PASSWORD_CHANGE_PER_USER: ['passwordChangePerUser', 15],
       LIMIT_EXPORT_PER_USER: ['exportPerUser', 3],
       LIMIT_REVIEW_PER_USER: ['reviewPerUser', 40],
+      LIMIT_CHAT_CALL_ADMIN_PER_USER: ['chatCallAdminPerUser', 6],
+      LIMIT_WITHDRAWAL_PER_USER: ['withdrawalPerUser', 9],
+      LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: ['withdrawalFormPerAddress', 8],
+      LIMIT_WITHDRAWAL_FORM_PER_ORDER: ['withdrawalFormPerOrder', 4],
+      LIMIT_WITHDRAWAL_FORM_PER_DATA: ['withdrawalFormPerData', 7],
     } as const;
     const before = Object.fromEntries(
       Object.keys(settings).map((key) => [key, env[key as keyof typeof settings]]),
@@ -65,6 +70,65 @@ describe('the limits of the routes', () => {
       expect(REQUEST_LIMITS.mailPerEmail.windowMs).toBe(180_000);
     } finally {
       Object.assign(env, before);
+    }
+  });
+});
+
+// the button "call an admin" of a chat the bot could not answer: a script would fill the queue of
+// the admins, so a user may press it a few times an hour
+describe('the limit of the button "call an admin"', () => {
+  const [limit, ...rest] = requestLimits.chatCallAdmin;
+  const callBy = (id: number) =>
+    limit!(Object.assign(fakeRequest(), { user: { id } }), fakeReply().reply);
+
+  it('is one count of a user in a window of an hour', () => {
+    expect(rest).toEqual([]);
+    expect(REQUEST_LIMITS.chatCallAdminPerUser.windowMs).toBe(3_600_000);
+    expect(REQUEST_LIMITS.chatCallAdminPerUser.max).toBe(env.LIMIT_CHAT_CALL_ADMIN_PER_USER);
+  });
+
+  it('refuses a user past the setting with RATE_LIMITED naming chatCallAdmin and the seconds to wait', async () => {
+    const before = { max: env.LIMIT_CHAT_CALL_ADMIN_PER_USER, scale: env.REQUEST_LIMITS_SCALE };
+    env.LIMIT_CHAT_CALL_ADMIN_PER_USER = 2;
+    env.REQUEST_LIMITS_SCALE = 1;
+    const { reply, headers } = fakeReply();
+
+    try {
+      const user = 910_000_001;
+      await expect(callBy(user)).resolves.toBeUndefined();
+      await expect(callBy(user)).resolves.toBeUndefined();
+
+      await expect(
+        limit!(Object.assign(fakeRequest(), { user: { id: user } }), reply),
+      ).rejects.toMatchObject({
+        statusCode: 429,
+        errorCode: 'RATE_LIMITED',
+        details: { limit: 'chatCallAdmin', retryAfterSeconds: expect.any(Number) },
+      });
+      expect(Number(headers['retry-after'])).toBeGreaterThan(0);
+      expect(Number(headers['retry-after'])).toBeLessThanOrEqual(3600);
+
+      // another user has a count of their own
+      await expect(callBy(910_000_002)).resolves.toBeUndefined();
+    } finally {
+      env.LIMIT_CHAT_CALL_ADMIN_PER_USER = before.max;
+      env.REQUEST_LIMITS_SCALE = before.scale;
+    }
+  });
+
+  it('multiplies the setting by the scale of the limits', async () => {
+    const before = { max: env.LIMIT_CHAT_CALL_ADMIN_PER_USER, scale: env.REQUEST_LIMITS_SCALE };
+    env.LIMIT_CHAT_CALL_ADMIN_PER_USER = 1;
+    env.REQUEST_LIMITS_SCALE = 3;
+
+    try {
+      const user = 910_000_003;
+      for (let i = 0; i < 3; i += 1) await expect(callBy(user)).resolves.toBeUndefined();
+
+      await expect(callBy(user)).rejects.toMatchObject({ errorCode: 'RATE_LIMITED' });
+    } finally {
+      env.LIMIT_CHAT_CALL_ADMIN_PER_USER = before.max;
+      env.REQUEST_LIMITS_SCALE = before.scale;
     }
   });
 });

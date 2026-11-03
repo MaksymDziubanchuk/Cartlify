@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
@@ -109,7 +110,7 @@ describe('GET /api/products/:productId/reviews and the purchase of the author', 
     const product = await createProduct({ price: 10, stock: 3 });
     const author = await newUser();
     const orderId = await placeOrder(app, csrf, author, product, 'paid');
-    await asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
+    await cancelPaidOrder(admin.id, orderId);
     const review = await createReview(author.id, product.id);
 
     expect(await verifiedOf(product.id, review.id)).toBe(false);

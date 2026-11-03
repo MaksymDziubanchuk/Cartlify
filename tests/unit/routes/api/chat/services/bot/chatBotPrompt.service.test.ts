@@ -7,6 +7,7 @@ import {
   type ChatBotHistoryMessageDto,
   type ChatBotOrderContextItemDto,
   type ChatBotProductContextItemDto,
+  type ChatBotReturnContextItemDto,
   type ChatBotVariantContextItemDto,
 } from '@routes/api/chat/services/bot/chatBotPrompt.service.js';
 import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
@@ -51,8 +52,34 @@ const order = (patch: Partial<ChatBotOrderContextItemDto> = {}): ChatBotOrderCon
   paidAt: '2026-10-20T10:05:00.000Z',
   items: [{ name: 'Mug', quantity: 2 }],
   unusual: false,
+  returnStatus: 'none',
+  withdrawal: null,
+  returns: [],
   delivery: null,
   shipment: null,
+  ...patch,
+});
+
+// a statement the way the buyer sees it: the units of one row, the step, the money
+const statement = (
+  patch: Partial<ChatBotReturnContextItemDto> = {},
+): ChatBotReturnContextItemDto => ({
+  id: 31,
+  statedAt: '2026-10-25T08:00:00.000Z',
+  step: 'received',
+  items: [row()],
+  ...patch,
+});
+
+const row = (
+  patch: Partial<ChatBotReturnContextItemDto['items'][number]> = {},
+): ChatBotReturnContextItemDto['items'][number] => ({
+  quantity: 1,
+  amount: 12.75,
+  deliveryAmount: 0,
+  money: 'not_refunded',
+  refundedAt: null,
+  refusal: null,
   ...patch,
 });
 
@@ -493,15 +520,17 @@ describe('buildChatBotPrompt', () => {
         orders: [order(), order({ id: 9, status: 'delivered', items: [] })],
       });
 
-      expect(messages[1]).toEqual({
-        role: 'developer',
-        content: [
-          'Orders of the customer, newest first:',
-          '- order 12: shipped (sent, on its way to the customer); total 25.5 EUR; placed 2026-10-20T10:00:00.000Z (UTC); paid 2026-10-20T10:05:00.000Z (UTC); items: Mug x 2',
-          '- order 9: delivered (delivered to the customer); total 25.5 EUR; placed 2026-10-20T10:00:00.000Z (UTC); paid 2026-10-20T10:05:00.000Z (UTC); items: none',
-          'Use only these orders when the customer asks about an order; never invent an order, a status or a date.',
-        ].join('\n'),
-      });
+      expect(messages[1]!.role).toBe('developer');
+      const lines = messages[1]!.content.split('\n');
+      expect(lines.slice(0, 4)).toEqual([
+        'Orders of the customer, newest first:',
+        '- order 12: shipped (sent, on its way to the customer); total 25.5 EUR; placed 2026-10-20T10:00:00.000Z (UTC); paid 2026-10-20T10:05:00.000Z (UTC); items: Mug x 2',
+        '- order 9: delivered (delivered to the customer); total 25.5 EUR; placed 2026-10-20T10:00:00.000Z (UTC); paid 2026-10-20T10:05:00.000Z (UTC); items: none',
+        'Use only these orders when the customer asks about an order; never invent an order, a status or a date.',
+      ]);
+      // the rules of the returns close the message: one line, nothing after it
+      expect(lines).toHaveLength(5);
+      expect(lines[4]).toContain('Withdraw from the contract here');
     });
 
     it.each([
@@ -575,7 +604,8 @@ describe('buildChatBotPrompt', () => {
       expect(bare).toContain('; send: no carrier or tracking number was given;');
     });
 
-    // an order with a send taken back or a cancellation is for an admin: the bot says nothing of it
+    // an order with a send or a step taken back, or a transfer of return money that failed or was
+    // disputed, is for an admin: the bot says nothing of it
     it('leave an unusual order to an admin and say nothing of it', () => {
       const { messages } = build({
         orders: [
@@ -598,6 +628,52 @@ describe('buildChatBotPrompt', () => {
       expect(text).toContain(
         'An order marked HUMAN ONLY is for an admin: say nothing of its status, items, delivery or payment, tell the customer that an admin will look into it, and set escalate to true with the reason HUMAN_REQUIRED.',
       );
+    });
+
+    // the returns of an unusual order are the admin's too: not a word of them reaches the model
+    it('say nothing of the returns of an unusual order either', () => {
+      const text = build({
+        orders: [
+          order({
+            id: 7,
+            unusual: true,
+            returnStatus: 'open',
+            withdrawal: {
+              open: true,
+              endsAt: null,
+              free: [{ name: 'Mug', quantity: 1 }],
+              noRight: [],
+            },
+            returns: [statement({ items: [row({ money: 'refunded' })] })],
+          }),
+        ],
+      }).messages[0]!.content;
+
+      // the line of the order is all it says of it
+      expect(text.split('\n')[1]).toBe('- order 7: HUMAN ONLY, an admin handles this order');
+      expect(text).not.toMatch(/withdrawal:|returns:|statement 31|refunded \d/);
+    });
+
+    // a cancellation is no event for an admin: the money goes back to the card, and the bot says so
+    it('tell the model a cancelled order is cancelled and its money goes back to the card', () => {
+      const text = build({ orders: [order({ status: 'cancelled' })] }).messages[0]!.content;
+
+      expect(text).toContain(
+        '- order 12: cancelled (cancelled, the money goes back to the card); total 25.5 EUR;',
+      );
+      expect(text).not.toContain('by the shop');
+      expect(text).not.toContain('HUMAN ONLY');
+    });
+
+    // a cancelled pickup has no collect meaning: it is cancelled like any other order
+    it('tell the model a cancelled pickup is cancelled, not waiting to be collected', () => {
+      const text = build({
+        orders: [
+          order({ status: 'cancelled', delivery: { method: 'pickup', price: 0, country: null } }),
+        ],
+      }).messages[0]!.content;
+
+      expect(text).toContain('- order 12: cancelled (cancelled, the money goes back to the card);');
     });
 
     it('add the rule of the unusual orders only when there is one', () => {
@@ -633,6 +709,448 @@ describe('buildChatBotPrompt', () => {
 
       expect(instructions).toContain('A guest has no orders; the customer logs in to see them.');
       expect(instructions).not.toContain('The customer has no orders yet.');
+    });
+  });
+
+  // can I send it back, until when, where is my money: the bot answered from nothing and promised
+  describe('the returns of an order', () => {
+    const linesOf = (patch: Partial<ChatBotOrderContextItemDto>) =>
+      build({ orders: [order(patch)] }).messages[0]!.content.split('\n');
+
+    // the one line of the order (the first is the heading)
+    const lineOf = (patch: Partial<ChatBotOrderContextItemDto>) => linesOf(patch)[1]!;
+
+    describe('the withdrawal', () => {
+      // the period of a sent order has not started: it starts with the delivery
+      it('is open before the delivery, with no end date', () => {
+        const line = lineOf({
+          withdrawal: {
+            open: true,
+            endsAt: null,
+            free: [{ name: 'Mug', quantity: 2 }],
+            noRight: [],
+          },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: the customer may still withdraw from the contract for Mug x 2, the period starts with the delivery',
+        );
+        expect(line).not.toContain('until');
+      });
+
+      it('is open until the end date, for the free units by name', () => {
+        const line = lineOf({
+          status: 'delivered',
+          withdrawal: {
+            open: true,
+            endsAt: '2026-11-04T22:59:59.999Z',
+            free: [
+              { name: 'Mug', quantity: 1 },
+              { name: 'Lamp, white', quantity: 2 },
+            ],
+            noRight: [],
+          },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: the customer may still withdraw from the contract for Mug x 1, Lamp, white x 2, until 2026-11-04T22:59:59.999Z (UTC)',
+        );
+        expect(line).not.toContain('the period starts with the delivery');
+      });
+
+      // past the end of the contract the shop forgives a few days: the bot tells the date that
+      // passed and that a statement is still taken, not a date to come
+      it('says the contract ended and a statement is still taken in the days of grace', () => {
+        const line = lineOf({
+          status: 'delivered',
+          withdrawal: {
+            open: true,
+            endsAt: '2026-11-04T22:59:59.999Z',
+            late: true,
+            free: [{ name: 'Mug', quantity: 1 }],
+            noRight: [],
+          },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: the customer may still withdraw from the contract for Mug x 1, the period of the contract ended 2026-11-04T22:59:59.999Z (UTC), the shop still takes a statement for now',
+        );
+        expect(line).not.toContain('until 2026-11-04');
+      });
+
+      // the period is open but there is nothing to state: the units are in statements already
+      it('says every unit is in a statement when none is left to state', () => {
+        const line = lineOf({
+          status: 'delivered',
+          withdrawal: { open: true, endsAt: '2026-11-04T22:59:59.999Z', free: [], noRight: [] },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: every unit is already in a statement, nothing is left to state',
+        );
+        expect(line).not.toContain('may still withdraw');
+      });
+
+      // goods the law gives no right of withdrawal for are not "already stated": nothing can be
+      it('says the goods have no right of withdrawal when every item lacks it', () => {
+        const line = lineOf({
+          status: 'paid',
+          items: [{ name: 'Fresh bread', quantity: 2 }],
+          withdrawal: { open: true, endsAt: null, free: [], noRight: ['Fresh bread'] },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: the goods of this order have no right of withdrawal (Fresh bread)',
+        );
+        expect(line).not.toContain('already in a statement');
+        expect(line).not.toContain('may still withdraw');
+      });
+
+      it('names the items without the right next to the units that can be stated', () => {
+        const line = lineOf({
+          status: 'paid',
+          items: [
+            { name: 'Mug', quantity: 1 },
+            { name: 'Fresh bread', quantity: 2 },
+          ],
+          withdrawal: {
+            open: true,
+            endsAt: null,
+            free: [{ name: 'Mug', quantity: 1 }],
+            noRight: ['Fresh bread'],
+          },
+        });
+
+        expect(line).toContain('may still withdraw from the contract for Mug x 1');
+        expect(line).toContain('; no right of withdrawal for Fresh bread');
+      });
+
+      it('says every unit that can be withdrawn from is stated, and names the items without the right', () => {
+        const line = lineOf({
+          status: 'delivered',
+          items: [
+            { name: 'Mug', quantity: 1 },
+            { name: 'Fresh bread', quantity: 2 },
+          ],
+          withdrawal: {
+            open: true,
+            endsAt: '2026-11-04T22:59:59.999Z',
+            free: [],
+            noRight: ['Fresh bread'],
+          },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: every unit that can be withdrawn from is already in a statement, nothing is left to state; no right of withdrawal for Fresh bread',
+        );
+      });
+
+      it('says the period is over, with the day it ended', () => {
+        const line = lineOf({
+          status: 'delivered',
+          withdrawal: { open: false, endsAt: '2026-10-20T22:59:59.999Z', free: [], noRight: [] },
+        });
+
+        expect(line).toContain(
+          '; withdrawal: the period is over (it ended 2026-10-20T22:59:59.999Z UTC)',
+        );
+        expect(line).not.toContain('may still withdraw');
+        expect(line).not.toContain('nothing is left to state');
+      });
+
+      it('says the period is over without a day when it has none', () => {
+        const line = lineOf({ withdrawal: { open: false, endsAt: null, free: [], noRight: [] } });
+
+        expect(line).toContain('; withdrawal: the period is over');
+        expect(line).not.toContain('it ended');
+      });
+
+      // an order not paid, not sent or cancelled has nothing to withdraw from: not a word of it
+      it('is not mentioned for an order that cannot be withdrawn from', () => {
+        const text = build({
+          orders: [
+            order({ id: 1, status: 'waiting', paidAt: null }),
+            order({ id: 2, status: 'cancelled' }),
+          ],
+        }).messages[0]!.content;
+
+        expect(text).not.toContain('withdrawal:');
+      });
+    });
+
+    describe('the state of the order', () => {
+      it.each([
+        ['open', 'a statement of withdrawal or return is open, no money went back yet'],
+        ['open_partial', 'a statement is open and part of the money went back'],
+        ['partial', 'all statements are closed and part of the money went back'],
+        ['full', 'all statements are closed and all the money went back'],
+        ['declined', 'all statements are closed and no money went back'],
+      ] as const)('says what the return status %s means', (returnStatus, meaning) => {
+        expect(lineOf({ returnStatus })).toContain(`; returns: ${meaning}`);
+      });
+
+      it('says nothing of the returns of an order that has none', () => {
+        const line = lineOf({ returnStatus: 'none' });
+
+        expect(line).not.toContain('returns:');
+        expect(line).not.toContain('statement');
+      });
+    });
+
+    describe('a statement', () => {
+      it.each([
+        ['received', 'registered'],
+        ['proof_provided', 'the customer told of the parcel, the shop has not confirmed it yet'],
+        ['proof_confirmed', 'the shop confirmed the parcel'],
+        ['closed', 'closed'],
+      ] as const)(
+        'says what the step %s means, with its number and the day it was stated',
+        (step, meaning) => {
+          expect(lineOf({ returnStatus: 'open', returns: [statement({ step })] })).toContain(
+            `; statement 31 (stated 2026-10-25T08:00:00.000Z UTC): ${meaning}; money: `,
+          );
+        },
+      );
+
+      it('names every statement of the order, oldest first as given', () => {
+        const lines = linesOf({
+          returnStatus: 'open',
+          returns: [
+            statement({ id: 31, step: 'closed' }),
+            statement({ id: 35, statedAt: '2026-10-27T09:00:00.000Z', step: 'received' }),
+          ],
+        });
+
+        const text = lines[1]!;
+        expect(text.indexOf('statement 31')).toBeGreaterThan(-1);
+        expect(text.indexOf('statement 35 (stated 2026-10-27T09:00:00.000Z UTC)')).toBeGreaterThan(
+          text.indexOf('statement 31'),
+        );
+      });
+
+      it('goes after the state of the order and the withdrawal', () => {
+        const line = lineOf({
+          returnStatus: 'open',
+          withdrawal: {
+            open: true,
+            endsAt: null,
+            free: [{ name: 'Mug', quantity: 1 }],
+            noRight: [],
+          },
+          returns: [statement()],
+        });
+
+        expect(line.indexOf('; withdrawal:')).toBeGreaterThan(line.indexOf('items: Mug x 2'));
+        expect(line.indexOf('; returns:')).toBeGreaterThan(line.indexOf('; withdrawal:'));
+        expect(line.indexOf('; statement 31')).toBeGreaterThan(line.indexOf('; returns:'));
+      });
+    });
+
+    describe('the money of a statement', () => {
+      const moneyOf = (items: ChatBotReturnContextItemDto['items']) =>
+        lineOf({ returnStatus: 'open', returns: [statement({ items })] });
+
+      it('says the money went back, with the sum, the units and the day', () => {
+        expect(
+          moneyOf([
+            row({
+              quantity: 2,
+              amount: 25.5,
+              money: 'refunded',
+              refundedAt: '2026-10-29T12:30:00.000Z',
+            }),
+          ]),
+        ).toContain('money: refunded 25.5 EUR for 2 unit(s) on 2026-10-29T12:30:00.000Z (UTC)');
+      });
+
+      it('adds the share of the delivery to the sum of a row', () => {
+        expect(
+          moneyOf([
+            row({
+              amount: 20,
+              deliveryAmount: 5,
+              money: 'refunded',
+              refundedAt: '2026-10-29T12:30:00.000Z',
+            }),
+          ]),
+        ).toContain('refunded 25 EUR for 1 unit(s)');
+      });
+
+      it('sums the rows to the cent and names the last day when they went back on different days', () => {
+        const text = moneyOf([
+          row({ amount: 0.1, money: 'refunded', refundedAt: '2026-10-30T09:00:00.000Z' }),
+          row({ amount: 0.2, money: 'refunded', refundedAt: '2026-10-29T09:00:00.000Z' }),
+        ]);
+
+        expect(text).toContain('refunded 0.3 EUR for 2 unit(s) on 2026-10-30T09:00:00.000Z (UTC)');
+      });
+
+      it('says the money is on its way to the card when the provider has not answered', () => {
+        const text = moneyOf([row({ amount: 12.75, money: 'pending' })]);
+
+        expect(text).toContain('money: 12.75 EUR for 1 unit(s) is on its way to the card');
+        expect(text).not.toContain('refunded');
+      });
+
+      it('says the money is not refunded yet', () => {
+        expect(moneyOf([row({ quantity: 3, amount: 38.25, money: 'not_refunded' })])).toContain(
+          'money: 38.25 EUR for 3 unit(s) is not refunded yet',
+        );
+      });
+
+      it('says the money was refused, with the reason in words of the customer for goods that never came', () => {
+        expect(
+          moneyOf([row({ amount: 12.75, money: 'refused', refusal: 'not_arrived' })]),
+        ).toContain('money: 12.75 EUR for 1 unit(s) is refused (the goods never arrived)');
+      });
+
+      it('says the money was refused, with the reason the shop gave', () => {
+        expect(moneyOf([row({ amount: 12.75, money: 'refused', refusal: 'damaged' })])).toContain(
+          'money: 12.75 EUR for 1 unit(s) is refused (damaged)',
+        );
+      });
+
+      it('names every reason once when several rows were refused for the same or other reasons', () => {
+        const text = moneyOf([
+          row({ money: 'refused', refusal: 'used' }),
+          row({ money: 'refused', refusal: 'used' }),
+          row({ money: 'refused', refusal: 'not_arrived' }),
+        ]);
+
+        expect(text).toContain(
+          'money: 38.25 EUR for 3 unit(s) is refused (used, the goods never arrived)',
+        );
+      });
+
+      // the bot does not know why the shop refused, so it does not make one up
+      it('names no reason when the row has none', () => {
+        const text = moneyOf([row({ money: 'refused', refusal: null })]);
+
+        expect(text).toMatch(/unit\(s\) is refused$/m);
+        expect(text).not.toContain('by the shop');
+      });
+
+      // a statement of two rows with two fates: each fate is a part of the line, in a fixed order
+      it('gives a part for each state of the rows of one statement', () => {
+        const text = moneyOf([
+          row({ money: 'refused', refusal: 'not_arrived' }),
+          row({ money: 'not_refunded' }),
+          row({ money: 'pending' }),
+          row({ money: 'refunded', refundedAt: '2026-10-29T12:30:00.000Z' }),
+        ]);
+
+        expect(text).toContain(
+          'money: refunded 12.75 EUR for 1 unit(s) on 2026-10-29T12:30:00.000Z (UTC); ' +
+            '12.75 EUR for 1 unit(s) is on its way to the card; ' +
+            '12.75 EUR for 1 unit(s) is not refunded yet; ' +
+            '12.75 EUR for 1 unit(s) is refused (the goods never arrived)',
+        );
+      });
+
+      it('names the money in the currency of the shop, in upper case', () => {
+        const text = build({
+          currency: ' usd ',
+          orders: [
+            order({
+              returnStatus: 'open',
+              returns: [statement({ items: [row({ money: 'not_refunded' })] })],
+            }),
+          ],
+        }).messages[0]!.content;
+
+        expect(text).toContain('12.75 USD for 1 unit(s) is not refunded yet');
+      });
+    });
+
+    // the bot knows where the money is, not what the shop does with the goods
+    describe('the goods', () => {
+      it('are not in the context: nothing of what became of them reaches the model', () => {
+        // a row that carried the outcome of the goods anyway must not leak it into the prompt
+        const leaky = {
+          ...row({ money: 'refunded', refundedAt: '2026-10-29T12:30:00.000Z' }),
+          goods: 'to_stock',
+          notAcceptedReason: 'unsealed',
+        } as ChatBotReturnContextItemDto['items'][number];
+        const { instructions, messages } = build({
+          orders: [
+            order({
+              returnStatus: 'full',
+              returns: [
+                statement({ step: 'closed', items: [leaky] }),
+                statement({
+                  id: 32,
+                  items: [row({ money: 'refused', refusal: 'not_arrived' })],
+                }),
+              ],
+            }),
+          ],
+        });
+
+        const everything = [instructions, ...messages.map((message) => message.content)].join('\n');
+        expect(everything).not.toMatch(
+          /to_stock|written_off|not_accepted|unsealed|shelf|restock|put back/i,
+        );
+      });
+    });
+
+    // spec 10.2 and 10.3: the bot files nothing and promises nothing, it points to the button
+    describe('the rules for the model', () => {
+      const RULES_MARK = 'You cannot file a withdrawal or a return';
+
+      it('end the message of the orders with the button of the website', () => {
+        const lines = build({ orders: [order()] }).messages[0]!.content.split('\n');
+        const rule = lines.at(-1)!;
+
+        expect(rule).toContain(RULES_MARK);
+        expect(rule).toContain('you never promise that one will be accepted or refunded');
+        expect(rule).toContain('uses the button "Withdraw from the contract here" in the order');
+        expect(rule).toContain('a function of the website; point to it');
+      });
+
+      it('tell the model to say only what the data of the order tells', () => {
+        const rule = build({ orders: [order()] }).messages[0]!.content;
+
+        expect(rule).toContain(
+          'whether the customer may still withdraw, until when, for how many units, and where the money is',
+        );
+      });
+
+      // the bot does not know what the shop does with the goods, and why a cancellation was made
+      it('tell the model it does not know what the shop does with the goods or why an order was cancelled', () => {
+        const rule = build({ orders: [order()] }).messages[0]!.content;
+
+        expect(rule).toContain(
+          'You do not know what the shop does with the goods after the customer sends them, or why an order was cancelled; say so.',
+        );
+      });
+
+      it('come with the rule of the unusual orders when there is one, and without it when there is none', () => {
+        const plain = build({ orders: [order()] }).messages[0]!.content;
+        const unusual = build({ orders: [order(), order({ id: 7, unusual: true })] }).messages[0]!
+          .content;
+
+        expect(plain).toContain(RULES_MARK);
+        expect(plain).not.toContain('HUMAN ONLY');
+        expect(unusual).toContain(RULES_MARK);
+        expect(unusual).toContain('An order marked HUMAN ONLY is for an admin');
+      });
+
+      it('are not sent when the customer has no orders', () => {
+        const { instructions, messages } = build({ orders: [] });
+
+        expect(
+          messages.some((message) => message.content.includes('Withdraw from the contract here')),
+        ).toBe(false);
+        expect(instructions).not.toContain('Withdraw from the contract here');
+      });
+
+      // the line of the order is data, the rules are said once for all the orders
+      it('are said once, whatever the number of orders', () => {
+        const text = build({ orders: [order({ id: 1 }), order({ id: 2 }), order({ id: 3 })] })
+          .messages[0]!.content;
+
+        expect(text.split(RULES_MARK)).toHaveLength(2);
+      });
     });
   });
 });

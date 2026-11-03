@@ -157,6 +157,12 @@ describe('orders: a new order', () => {
     ],
     ['with a time of payment', '"userId", total, "paidAt"', () => [owner.id], '$1, 0, now()'],
     ['with a time of cancel', '"userId", total, "cancelledAt"', () => [owner.id], '$1, 0, now()'],
+    [
+      'that says it was returned',
+      '"userId", total, "returnStatus"',
+      () => [owner.id],
+      `$1, 0, 'full'`,
+    ],
   ])('refuses a user an order %s', async (_case, columns, values, placeholders) => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as({ role: 'USER', userId: owner.id });

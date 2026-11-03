@@ -53,7 +53,21 @@ async function published(kind: 'terms' | 'contract'): Promise<Document> {
     method: 'POST',
     url: '/api/root/legal-documents',
     headers: withCsrf(csrf, accessCookie(root)),
-    payload: { kind, title: `The ${kind}`, content: `The ${kind} of the shop, ${Date.now()}.` },
+    payload: {
+      kind,
+      title: `The ${kind}`,
+      content: `The ${kind} of the shop, ${Date.now()}.`,
+      // the fields only a contract has
+      ...(kind === 'contract'
+        ? {
+            contract: {
+              withdrawalDays: 14,
+              returnAddress: 'Returns, 1 Main Street',
+              returnShippingPaidBy: 'buyer',
+            },
+          }
+        : {}),
+    },
   });
   expect(res.statusCode).toBe(201);
   return res.json() as Document;

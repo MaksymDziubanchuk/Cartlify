@@ -3,8 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createCategory,
@@ -18,7 +18,8 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
-import { placeOrder } from '../../../helpers/orders.js';
+import { orderRowOf, placeOrder } from '../../../helpers/orders.js';
+import { cancelAndRefund } from '../../../helpers/returns.js';
 import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/admin/reports/accounting/products, /categories and /timeline: the money of a period by
@@ -26,9 +27,10 @@ import { markVariantDeleted } from '../../../helpers/variants.js';
 // /variants, reportVariants.test.ts), by category (with its whole branch, or only its own
 // products) and by day, week or month of the shop (SHOP_TIME_ZONE, Europe/Madrid unless given),
 // each sorted the way the admin asks and as a csv file for the accountant. A category and a step
-// add up the variants. The margin is of the sales; the write-offs are a column of their
-// own. Other test files make orders and batches at the same time, so each test reads only its own
-// categories
+// add up the variants. The sales are the orders paid in the period, cancelled later or not; the
+// returns are the rows whose money went back in the period; the net is the two together, and the
+// write-offs and the stock (opening, received, left, closing) are columns of their own. Other test
+// files make orders and batches at the same time, so each test reads only its own categories
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -49,11 +51,9 @@ const get = (path: string, query: Record<string, string>, actor: TestUser = admi
     headers: { cookie: accessCookie(actor) },
   });
 
-const cancelPaid = (orderId: number) =>
-  asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
-
 // a tree of its own: top (alpha, empty) and its child (beta, zeta)
-//  - alpha: 10 in at 2; 3 sold at 10, 1 sold and cancelled, 1 written off; 6 left
+//  - alpha: 10 in at 2; 3 sold at 10, then 2 more sold at 10 and cancelled by the shop with the
+//    money given back (the units are back in their batch), 1 written off; 6 left
 //  - beta: 5 in at 5; 2 sold at 20; 3 left
 //  - zeta: 2 in at 1.50, nothing sold, 2 left
 //  - empty: nothing at all, never listed
@@ -71,43 +71,74 @@ const period = () => ({
 });
 
 const NO_SALES = { units: 0, revenue: 0, cost: 0, margin: 0 };
-const NO_CANCELS = { units: 0, revenue: 0, cost: 0 };
+const NO_RETURNS = { units: 0, revenue: 0, cost: 0 };
+const NO_NET = { units: 0, revenue: 0, cost: 0, margin: 0, marginPercent: null };
 const NOTHING = { units: 0, value: 0 };
 
-// the order of alpha cancelled later is no sale: it is told apart, in no margin
+// the order of alpha that was cancelled is a sale of the period it was paid in, whole; its return is
+// in the period the money went back in, and the net is the sales less the returns. The units that
+// came back are in the stock again: they came in (received) and went out with the sale (left)
 const ALPHA = {
-  sales: { units: 3, revenue: 30, cost: 6, margin: 24, marginPercent: 80 },
-  cancellations: { units: 1, revenue: 10, cost: 2 },
+  sales: { units: 5, revenue: 50, cost: 10, margin: 40, marginPercent: 80 },
+  returns: { units: 2, revenue: 20, cost: 4 },
+  net: { units: 3, revenue: 30, cost: 6, margin: 24, marginPercent: 80 },
   writeOffs: { units: 1, value: 2 },
   afterWriteOffs: { margin: 22, marginPercent: 73.33 },
   purchases: { units: 10, value: 20 },
-  stock: { units: 6, value: 12 },
+  stock: {
+    opening: NOTHING,
+    received: { units: 12, value: 24 },
+    left: { units: 6, value: 12 },
+    closing: { units: 6, value: 12 },
+    onTheWayBack: NOTHING,
+  },
 };
 const BETA = {
   sales: { units: 2, revenue: 40, cost: 10, margin: 30, marginPercent: 75 },
-  cancellations: NO_CANCELS,
+  returns: NO_RETURNS,
+  net: { units: 2, revenue: 40, cost: 10, margin: 30, marginPercent: 75 },
   writeOffs: NOTHING,
   afterWriteOffs: { margin: 30, marginPercent: 75 },
   purchases: { units: 5, value: 25 },
-  stock: { units: 3, value: 15 },
+  stock: {
+    opening: NOTHING,
+    received: { units: 5, value: 25 },
+    left: { units: 2, value: 10 },
+    closing: { units: 3, value: 15 },
+    onTheWayBack: NOTHING,
+  },
 };
 const ZETA = {
   sales: { ...NO_SALES, marginPercent: null },
-  cancellations: NO_CANCELS,
+  returns: NO_RETURNS,
+  net: NO_NET,
   writeOffs: NOTHING,
   afterWriteOffs: { margin: 0, marginPercent: null },
   purchases: { units: 2, value: 3 },
-  stock: { units: 2, value: 3 },
+  stock: {
+    opening: NOTHING,
+    received: { units: 2, value: 3 },
+    left: NOTHING,
+    closing: { units: 2, value: 3 },
+    onTheWayBack: NOTHING,
+  },
 };
 
 // the branch of top: alpha, beta, zeta
 const TREE = {
-  sales: { units: 5, revenue: 70, cost: 16, margin: 54, marginPercent: 77.14 },
-  cancellations: { units: 1, revenue: 10, cost: 2 },
+  sales: { units: 7, revenue: 90, cost: 20, margin: 70, marginPercent: 77.78 },
+  returns: { units: 2, revenue: 20, cost: 4 },
+  net: { units: 5, revenue: 70, cost: 16, margin: 54, marginPercent: 77.14 },
   writeOffs: { units: 1, value: 2 },
   afterWriteOffs: { margin: 52, marginPercent: 74.29 },
   purchases: { units: 17, value: 48 },
-  stock: { units: 11, value: 30 },
+  stock: {
+    opening: NOTHING,
+    received: { units: 19, value: 52 },
+    left: { units: 8, value: 22 },
+    closing: { units: 11, value: 30 },
+    onTheWayBack: NOTHING,
+  },
 };
 
 beforeAll(async () => {
@@ -135,7 +166,7 @@ beforeAll(async () => {
 
   const buyer = await newUser();
   await placeOrder(app, csrf, buyer, alpha, 'paid', 3);
-  await cancelPaid(await placeOrder(app, csrf, buyer, alpha, 'paid', 1));
+  await cancelAndRefund(admin.id, await placeOrder(app, csrf, buyer, alpha, 'paid', 2));
   await placeOrder(app, csrf, buyer, beta, 'paid', 2);
   await writeOffStock(alpha.id, 1, { reason: 'damaged' });
 });
@@ -174,14 +205,15 @@ describe('GET /api/admin/reports/accounting/products', () => {
     ...money,
   });
 
-  it('gives each product of the branch with its money, the most revenue first', async () => {
+  // the most revenue is of the sales: alpha 50 (30 of it left in the net) before beta 40
+  it('gives each product of the branch with its money, the most revenue of the sales first', async () => {
     const res = await get('products', { ...period(), categoryId: String(top.id) });
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ currency: 'eur', limit: 20, nextCursor: null });
     expect(res.json().items).toEqual([
-      rowOf(beta, `Beta ${tag}`, child, BETA),
       rowOf(alpha, `Alpha ${tag}`, top, ALPHA),
+      rowOf(beta, `Beta ${tag}`, child, BETA),
       rowOf(zeta, `Zeta, the "quoted" ${tag}`, child, ZETA),
     ]);
   });
@@ -201,11 +233,14 @@ describe('GET /api/admin/reports/accounting/products', () => {
   });
 
   it.each([
-    ['margin', 'asc', () => [zeta.id, alpha.id, beta.id]],
+    // the margin of the sales: 40, 30 and nothing (of the net it would be 24 and 30)
+    ['margin', 'asc', () => [zeta.id, beta.id, alpha.id]],
     // nothing sold has no percent: it comes last either way
     ['marginPercent', 'desc', () => [alpha.id, beta.id, zeta.id]],
     ['marginPercent', 'asc', () => [beta.id, alpha.id, zeta.id]],
+    // the units of the sales: 5 and 2
     ['units', 'desc', () => [alpha.id, beta.id, zeta.id]],
+    // the margin of the net less the write-offs: 22 for alpha (of the sales it would be 38), 30
     ['marginAfterWriteOffs', 'desc', () => [beta.id, alpha.id, zeta.id]],
     ['writeOffs', 'desc', () => [alpha.id, zeta.id, beta.id]],
     ['purchases', 'desc', () => [beta.id, alpha.id, zeta.id]],
@@ -292,6 +327,36 @@ describe('GET /api/admin/reports/accounting/products', () => {
     ]);
   });
 
+  // the cancel of a paid order whose money has not gone back is no return: the sale stands whole,
+  // the units are on the shelf again (they came in, as the sale took them out)
+  it('keeps the sale whole and counts no return for a cancel whose money did not go back', async () => {
+    const category = await createCategory();
+    const product = await createProduct({ stock: 0, price: 10, categoryId: category.id });
+    await receiveBatch(product.id, { quantity: 4, unitCost: 2 });
+    const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
+    await cancelPaidOrder(admin.id, orderId);
+
+    const res = await get('products', { ...period(), categoryId: String(category.id) });
+
+    expect(res.json().items).toHaveLength(1);
+    expect(res.json().items[0]).toMatchObject({
+      sales: { units: 2, revenue: 20, cost: 4, margin: 16, marginPercent: 80 },
+      returns: NO_RETURNS,
+      net: { units: 2, revenue: 20, cost: 4, margin: 16, marginPercent: 80 },
+      stock: {
+        opening: NOTHING,
+        received: { units: 6, value: 12 },
+        left: { units: 2, value: 4 },
+        closing: { units: 4, value: 8 },
+        onTheWayBack: NOTHING,
+      },
+    });
+    expect(res.json().totals).toMatchObject({
+      returns: NO_RETURNS,
+      net: { units: 2, revenue: 20, cost: 4, margin: 16 },
+    });
+  });
+
   it('gives the accountant a csv file of every product, the totals last', async () => {
     const res = await get('products', {
       ...period(),
@@ -311,21 +376,28 @@ describe('GET /api/admin/reports/accounting/products', () => {
       .split('\r\n');
     expect(lines[0]).toBe(
       'product_id,product_name,category,deleted,' +
-        'sold_units,sold_revenue,sold_cost,sold_margin,' +
-        'sold_margin_percent,cancelled_units,cancelled_revenue,cancelled_cost,' +
+        'sold_units,sold_revenue,sold_cost,sold_margin,sold_margin_percent,' +
+        'returned_units,returned_revenue,returned_cost,' +
+        'net_units,net_revenue,net_cost,net_margin,net_margin_percent,' +
         'written_off_units,written_off_value,margin_after_write_offs,' +
-        'margin_after_write_offs_percent,purchased_units,purchased_value,stock_units,stock_value',
+        'margin_after_write_offs_percent,purchased_units,purchased_value,' +
+        'stock_opening_units,stock_opening_value,stock_received_units,stock_received_value,' +
+        'stock_left_units,stock_left_value,stock_closing_units,stock_closing_value,' +
+        'stock_on_the_way_back_units,stock_on_the_way_back_value',
     );
-    // every product, not a page
+    // every product, not a page; the most revenue of the sales first
     expect(lines).toHaveLength(5);
     expect(lines[1]).toBe(
-      `${beta.id},Beta ${tag},${child.name},no,2,40.00,10.00,30.00,75.00,0,0.00,0.00,0,0.00,30.00,75.00,5,25.00,3,15.00`,
+      `${alpha.id},Alpha ${tag},${top.name},no,5,50.00,10.00,40.00,80.00,2,20.00,4.00,3,30.00,6.00,24.00,80.00,1,2.00,22.00,73.33,10,20.00,0,0.00,12,24.00,6,12.00,6,12.00,0,0.00`,
+    );
+    expect(lines[2]).toBe(
+      `${beta.id},Beta ${tag},${child.name},no,2,40.00,10.00,30.00,75.00,0,0.00,0.00,2,40.00,10.00,30.00,75.00,0,0.00,30.00,75.00,5,25.00,0,0.00,5,25.00,2,10.00,3,15.00,0,0.00`,
     );
     expect(lines[3]).toBe(
-      `${zeta.id},"Zeta, the ""quoted"" ${tag}",${child.name},no,0,0.00,0.00,0.00,,0,0.00,0.00,0,0.00,0.00,,2,3.00,2,3.00`,
+      `${zeta.id},"Zeta, the ""quoted"" ${tag}",${child.name},no,0,0.00,0.00,0.00,,0,0.00,0.00,0,0.00,0.00,0.00,,0,0.00,0.00,,2,3.00,0,0.00,2,3.00,0,0.00,2,3.00,0,0.00`,
     );
     expect(lines[4]).toBe(
-      ',Total,,,5,70.00,16.00,54.00,77.14,1,10.00,2.00,1,2.00,52.00,74.29,17,48.00,11,30.00',
+      ',Total,,,7,90.00,20.00,70.00,77.78,2,20.00,4.00,5,70.00,16.00,54.00,77.14,1,2.00,52.00,74.29,17,48.00,0,0.00,19,52.00,8,22.00,11,30.00,0,0.00',
     );
   });
 
@@ -368,11 +440,19 @@ describe('GET /api/admin/reports/accounting/products', () => {
 
     const SUM = {
       sales: { units: 3, revenue: 50, cost: 9, margin: 41, marginPercent: 82 },
-      cancellations: { units: 0, revenue: 0, cost: 0 },
+      returns: NO_RETURNS,
+      net: { units: 3, revenue: 50, cost: 9, margin: 41, marginPercent: 82 },
       writeOffs: { units: 1, value: 5 },
       afterWriteOffs: { margin: 36, marginPercent: 72 },
       purchases: { units: 11, value: 35 },
-      stock: { units: 7, value: 21 },
+      // 11 came in (6 at 2, 4 at 5, 1 at 3); 4 went out (2 at 2 and 1 at 5 sold, 1 at 5 written off)
+      stock: {
+        opening: NOTHING,
+        received: { units: 11, value: 35 },
+        left: { units: 4, value: 14 },
+        closing: { units: 7, value: 21 },
+        onTheWayBack: NOTHING,
+      },
     };
 
     it('gives one row for the product, the money of its variants added up', async () => {
@@ -399,11 +479,14 @@ describe('GET /api/admin/reports/accounting/products', () => {
       const products = await get('products', query);
       const variants = await get('variants', query);
 
+      type UnitsValue = { units: number; value: number };
       const rows = variants.json().items as Array<{
         sales: { units: number; revenue: number; cost: number };
-        writeOffs: { units: number; value: number };
-        purchases: { units: number; value: number };
-        stock: { units: number; value: number };
+        returns: { units: number; revenue: number; cost: number };
+        net: { units: number; revenue: number; cost: number };
+        writeOffs: UnitsValue;
+        purchases: UnitsValue;
+        stock: Record<'opening' | 'received' | 'left' | 'closing' | 'onTheWayBack', UnitsValue>;
       }>;
       expect(rows).toHaveLength(3);
       const total = (pick: (row: (typeof rows)[number]) => number) =>
@@ -414,6 +497,16 @@ describe('GET /api/admin/reports/accounting/products', () => {
         revenue: total((row) => row.sales.revenue),
         cost: total((row) => row.sales.cost),
       });
+      expect(only.returns).toMatchObject({
+        units: total((row) => row.returns.units),
+        revenue: total((row) => row.returns.revenue),
+        cost: total((row) => row.returns.cost),
+      });
+      expect(only.net).toMatchObject({
+        units: total((row) => row.net.units),
+        revenue: total((row) => row.net.revenue),
+        cost: total((row) => row.net.cost),
+      });
       expect(only.writeOffs).toMatchObject({
         units: total((row) => row.writeOffs.units),
         value: total((row) => row.writeOffs.value),
@@ -422,10 +515,12 @@ describe('GET /api/admin/reports/accounting/products', () => {
         units: total((row) => row.purchases.units),
         value: total((row) => row.purchases.value),
       });
-      expect(only.stock).toMatchObject({
-        units: total((row) => row.stock.units),
-        value: total((row) => row.stock.value),
-      });
+      for (const part of ['opening', 'received', 'left', 'closing', 'onTheWayBack'] as const) {
+        expect(only.stock[part]).toMatchObject({
+          units: total((row) => row.stock[part].units),
+          value: total((row) => row.stock[part].value),
+        });
+      }
       expect(products.json().totals).toEqual(variants.json().totals);
     });
 
@@ -449,6 +544,8 @@ describe('GET /api/admin/reports/accounting/products', () => {
 
       expect(products.json().totals).toMatchObject({
         sales: SUM.sales,
+        returns: SUM.returns,
+        net: SUM.net,
         writeOffs: SUM.writeOffs,
         afterWriteOffs: SUM.afterWriteOffs,
         purchases: SUM.purchases,
@@ -543,7 +640,7 @@ describe('GET /api/admin/reports/accounting/products', () => {
         .split('\r\n');
       expect(lines).toHaveLength(3);
       expect(lines[1]).toBe(
-        `${product.id},${name},${category.name},no,3,50.00,9.00,41.00,82.00,0,0.00,0.00,1,5.00,36.00,72.00,11,35.00,7,21.00`,
+        `${product.id},${name},${category.name},no,3,50.00,9.00,41.00,82.00,0,0.00,0.00,3,50.00,9.00,41.00,82.00,1,5.00,36.00,72.00,11,35.00,0,0.00,11,35.00,4,14.00,7,21.00,0,0.00`,
       );
       expect(lines[2]!.startsWith(',Total,,,3,50.00,')).toBe(true);
     });
@@ -561,11 +658,19 @@ describe('GET /api/admin/reports/accounting/products', () => {
         sales: { units: 1, revenue: 30 },
         writeOffs: { units: 1, value: 5 },
         purchases: { units: 4, value: 20 },
-        stock: { units: 2, value: 10 },
+        // 4 at 5 came in; the one sold and the one written off went out
+        stock: {
+          received: { units: 4, value: 20 },
+          left: { units: 2, value: 10 },
+          closing: { units: 2, value: 10 },
+        },
       });
       expect(aAndB.json().items[0]).toMatchObject({ sales: { units: 3, revenue: 50 } });
       expect(none.json().items).toEqual([]);
-      expect(none.json().totals).toMatchObject({ sales: { units: 0 }, stock: { units: 0 } });
+      expect(none.json().totals).toMatchObject({
+        sales: { units: 0 },
+        stock: { received: NOTHING, left: NOTHING, closing: NOTHING },
+      });
     });
 
     it('takes the products it is asked for, and the variants of those among the variants asked for', async () => {
@@ -662,6 +767,8 @@ describe('GET /api/admin/reports/accounting/categories', () => {
 
     expect(rowOf(res, top.id)).toMatchObject({
       sales: ALPHA.sales,
+      returns: ALPHA.returns,
+      net: ALPHA.net,
       afterWriteOffs: ALPHA.afterWriteOffs,
       stock: ALPHA.stock,
     });
@@ -676,9 +783,12 @@ describe('GET /api/admin/reports/accounting/categories', () => {
     });
 
     expect(idsOf(whole)).toEqual([top.id]);
-    expect(whole.json().items[0].sales.revenue).toBe(70);
+    // the revenue of the sales (70 is the net, with the return of 20 out of it)
+    expect(whole.json().items[0].sales.revenue).toBe(90);
+    expect(whole.json().items[0].net.revenue).toBe(70);
     expect(idsOf(own)).toEqual([top.id]);
-    expect(own.json().items[0].sales.revenue).toBe(30);
+    expect(own.json().items[0].sales.revenue).toBe(50);
+    expect(own.json().items[0].net.revenue).toBe(30);
   });
 
   it('sorts the categories the way it is asked', async () => {
@@ -695,17 +805,19 @@ describe('GET /api/admin/reports/accounting/categories', () => {
 
   // their own products: top has alpha, child has beta and zeta
   it.each([
-    // margin 24 and 30
-    ['margin', 'child'],
+    // margin of the sales 40 and 30 (of the net it would be 24 and 30)
+    ['margin', 'top'],
     // 80 and 75 percent
     ['marginPercent', 'top'],
-    // 3 and 2 units sold
+    // 5 and 2 units sold
     ['units', 'top'],
+    // margin of the net less the write-offs: 22 and 30 (of the sales it would be 38 and 30)
+    ['marginAfterWriteOffs', 'child'],
     // 2 and nothing written off
     ['writeOffs', 'top'],
     // 20 and 28 taken in
     ['purchases', 'child'],
-    // 12 and 18 left at cost
+    // 12 and 18 left at cost (the closing stock)
     ['stockValue', 'child'],
     // 6 and 5 units left
     ['stockUnits', 'top'],
@@ -735,8 +847,21 @@ describe('GET /api/admin/reports/accounting/categories', () => {
       .replace(/^\uFEFF/, '')
       .trimEnd()
       .split('\r\n');
-    expect(lines[0]!.startsWith('id,name,parent_id,sold_units,')).toBe(true);
-    expect(lines[1]!.startsWith(`${child.id},${child.name},${top.id},2,40.00,`)).toBe(true);
+    expect(lines[0]).toBe(
+      'id,name,parent_id,' +
+        'sold_units,sold_revenue,sold_cost,sold_margin,sold_margin_percent,' +
+        'returned_units,returned_revenue,returned_cost,' +
+        'net_units,net_revenue,net_cost,net_margin,net_margin_percent,' +
+        'written_off_units,written_off_value,margin_after_write_offs,' +
+        'margin_after_write_offs_percent,purchased_units,purchased_value,' +
+        'stock_opening_units,stock_opening_value,stock_received_units,stock_received_value,' +
+        'stock_left_units,stock_left_value,stock_closing_units,stock_closing_value,' +
+        'stock_on_the_way_back_units,stock_on_the_way_back_value',
+    );
+    // beta and zeta: 7 came in (28), 2 sold at 20 (cost 10), 5 left (18)
+    expect(lines[1]).toBe(
+      `${child.id},${child.name},${top.id},2,40.00,10.00,30.00,75.00,0,0.00,0.00,2,40.00,10.00,30.00,75.00,0,0.00,30.00,75.00,7,28.00,0,0.00,7,28.00,2,10.00,5,18.00,0,0.00`,
+    );
     expect(lines).toHaveLength(2);
   });
 
@@ -769,7 +894,8 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     ]);
     expect(res.json().items[0]).toMatchObject({
       sales: NO_SALES,
-      cancellations: NO_CANCELS,
+      returns: NO_RETURNS,
+      net: NO_NET,
       writeOffs: NOTHING,
       purchases: NOTHING,
       // the delivery is of no category: a report of one has none
@@ -792,6 +918,7 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
       income: { orders: 0, revenue: 0 },
       refunded: { orders: 0, revenue: 0 },
       shipping: { sends: 0, cost: 0, withoutCost: 0 },
+      returnShipping: { sends: 0, cost: 0, withoutCost: 0, deducted: 0, reimbursed: 0 },
       result: 0,
     };
     expect(whole.json().items.map((item: { delivery: unknown }) => item.delivery)).toEqual([
@@ -838,17 +965,76 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
 
     const sum = (pick: (item: Record<string, Record<string, number>>) => number) =>
       res.json().items.reduce((total: number, item: never) => total + pick(item), 0);
-    expect(sum((item) => item.sales!.revenue!)).toBe(70);
-    expect(sum((item) => item.cancellations!.revenue!)).toBe(10);
-    expect(sum((item) => item.sales!.margin!)).toBe(54);
+    // the sales whole, the return of 20 apart, the net the two together
+    expect(sum((item) => item.sales!.revenue!)).toBe(90);
+    expect(sum((item) => item.returns!.revenue!)).toBe(20);
+    expect(sum((item) => item.returns!.cost!)).toBe(4);
+    expect(sum((item) => item.net!.revenue!)).toBe(70);
+    expect(sum((item) => item.net!.units!)).toBe(5);
+    expect(sum((item) => item.sales!.margin!)).toBe(70);
+    expect(sum((item) => item.net!.margin!)).toBe(54);
     expect(sum((item) => item.writeOffs!.value!)).toBe(2);
     expect(sum((item) => item.afterWriteOffs!.margin!)).toBe(52);
     expect(sum((item) => item.purchases!.value!)).toBe(48);
     const summary = (pick: (s: Record<string, Record<string, number>>) => number) =>
       res.json().items.reduce((total: number, item: never) => total + pick(item['summary']), 0);
+    // the income is the net revenue, the cost of goods the net cost
     expect(summary((s) => s.income!.items!)).toBe(70);
+    expect(summary((s) => s.expenses!.costOfGoods!)).toBe(16);
     expect(summary((s) => s.expenses!.total!)).toBe(18);
     expect(summary((s) => s.margin!.total!)).toBe(52);
+  });
+
+  // a sale is in the step it was paid in and the return of it in the step its money went back in:
+  // a step with a return and no sale has a negative net, and the steps add up to nothing
+  it('puts a sale and the return of it into the steps they happened in', async () => {
+    const category = await createCategory();
+    const product = await createProduct({ stock: 0, price: 10, categoryId: category.id });
+    await receiveBatch(product.id, { quantity: 5, unitCost: 4 });
+    const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
+    const { paidAt } = await orderRowOf(orderId);
+    const { refundedAt } = await cancelAndRefund(admin.id, orderId);
+    // the time of the database after the payment and the refund: the moment each is counted at
+    expect(paidAt!.getTime()).toBeLessThan(refundedAt.getTime());
+    const stepAt = async (at: Date) => {
+      const res = await get('timeline', {
+        from: at.toISOString(),
+        to: new Date(at.getTime() + 1).toISOString(),
+        step: 'day',
+        categoryId: String(category.id),
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().items).toHaveLength(1);
+      return res.json().items[0];
+    };
+
+    const ofPayment = await stepAt(paidAt!);
+    const ofRefund = await stepAt(refundedAt);
+
+    expect(ofPayment).toMatchObject({
+      sales: { units: 2, revenue: 20, cost: 8, margin: 12, marginPercent: 60 },
+      returns: NO_RETURNS,
+      net: { units: 2, revenue: 20, cost: 8, margin: 12, marginPercent: 60 },
+      summary: {
+        income: { items: 20, total: 20 },
+        expenses: { costOfGoods: 8, total: 8 },
+        margin: { items: 12, total: 12 },
+      },
+    });
+    expect(ofRefund).toMatchObject({
+      sales: { ...NO_SALES, marginPercent: null },
+      returns: { units: 2, revenue: 20, cost: 8 },
+      net: { units: -2, revenue: -20, cost: -8, margin: -12 },
+      afterWriteOffs: { margin: -12 },
+      summary: {
+        income: { items: -20, total: -20 },
+        expenses: { costOfGoods: -8, total: -8 },
+        margin: { items: -12, total: -12 },
+      },
+    });
+    // a step has no stock
+    expect(ofPayment).not.toHaveProperty('stock');
+    expect(ofRefund).not.toHaveProperty('stock');
   });
 
   // the end a minute after the money: the last step is the month of the setup, also when the test
@@ -866,7 +1052,8 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     expect(res.json().items).toHaveLength(12);
     const last = res.json().items.at(-1);
     expect(Date.parse(last.period.from)).toBeLessThanOrEqual(Date.now());
-    expect(last.sales.revenue).toBe(70);
+    expect(last.sales.revenue).toBe(90);
+    expect(last.net.revenue).toBe(70);
   });
 
   // an end at the start of a month is the end of the month before it: that month is the last step
@@ -918,14 +1105,15 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
       sortOrder: 'desc',
     });
 
-    expect(res.json().items[0].sales.revenue).toBe(70);
+    expect(res.json().items[0].sales.revenue).toBe(90);
     expect(res.json().items).toHaveLength(12);
   });
 
-  // all the money of the tree is in the month of now, the other eleven have none
+  // all the money of the tree is in the month of now, the other eleven have none; the margin and the
+  // units are of the sales, the margin after the write-offs and the total are of the net
   it.each([
-    ['margin', (row: Step) => row.sales.margin, 54],
-    ['units', (row: Step) => row.sales.units, 5],
+    ['margin', (row: Step) => row.sales.margin, 70],
+    ['units', (row: Step) => row.sales.units, 7],
     ['marginAfterWriteOffs', (row: Step) => row.afterWriteOffs.margin, 52],
     ['marginTotal', (row: Step) => row.summary.margin.total, 52],
     ['writeOffs', (row: Step) => row.writeOffs.value, 2],
@@ -978,13 +1166,15 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     expect(
       lines[0]!.endsWith(
         ',purchased_value,delivery_income,delivery_refunded,shipping_sends,shipping_cost,' +
-          'shipping_sends_without_cost,delivery_result,income_items,income_delivery,income_total,' +
+          'shipping_sends_without_cost,return_shipping_sends,return_shipping_cost,' +
+          'return_shipping_sends_without_cost,return_shipping_deducted,return_shipping_reimbursed,' +
+          'delivery_result,income_items,income_delivery,income_total,' +
           'expense_cost_of_goods,expense_write_offs,expense_shipping,expense_total,margin_items,' +
           'margin_delivery,margin_total',
       ),
     ).toBe(true);
-    // the six of the delivery empty, the summary without its delivery and its sends
-    expect(lines[1]!.endsWith(',0.00,,,,,,,0.00,,0.00,0.00,0.00,,0.00,0.00,,0.00')).toBe(true);
+    // the eleven of the delivery empty, the summary without its delivery and its sends
+    expect(lines[1]!.endsWith(',0.00,,,,,,,,,,,,0.00,,0.00,0.00,0.00,,0.00,0.00,,0.00')).toBe(true);
   });
 
   it('gives the delivery in the csv of the whole shop', async () => {
@@ -1001,7 +1191,7 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
       .split('\r\n');
     expect(
       lines[1]!.endsWith(
-        ',0.00,0.00,0,0.00,0,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00',
+        ',0.00,0.00,0,0.00,0,0,0.00,0,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00',
       ),
     ).toBe(true);
   });
@@ -1019,13 +1209,33 @@ describe('GET /api/admin/reports/accounting', () => {
     const whole = await get('', { ...period(), categoryId: String(top.id) });
     const own = await get('', { ...period(), categoryId: String(top.id), branch: 'false' });
 
-    expect(whole.json().sales).toMatchObject({ revenue: 70, cost: 16, margin: 54 });
+    // three orders were paid, the cancelled one among them
+    expect(whole.json().sales).toEqual({ orders: 3, units: 7, revenue: 90, cost: 20, margin: 70 });
+    expect(whole.json().returns).toEqual({
+      orders: 1,
+      units: 2,
+      revenue: 20,
+      cost: 4,
+      byKind: {
+        withdrawal: NO_RETURNS,
+        refused: NO_RETURNS,
+        defect: NO_RETURNS,
+        wrong_item: NO_RETURNS,
+        damaged: NO_RETURNS,
+        goodwill: NO_RETURNS,
+        shop_cancel: { units: 2, revenue: 20, cost: 4 },
+        other: NO_RETURNS,
+      },
+    });
+    expect(whole.json().net).toEqual(TREE.net);
     expect(whole.json().summary).toEqual({
       income: { items: 70, delivery: null, total: 70 },
       expenses: { costOfGoods: 16, writeOffs: 2, shipping: null, total: 18 },
       margin: { items: 54, delivery: null, total: 52 },
     });
-    expect(own.json().sales).toMatchObject({ revenue: 30, cost: 6, margin: 24 });
+    expect(whole.json().stock).toEqual(TREE.stock);
+    expect(own.json().sales).toEqual({ orders: 2, units: 5, revenue: 50, cost: 10, margin: 40 });
+    expect(own.json().net).toEqual(ALPHA.net);
     expect(own.json().stock).toEqual(ALPHA.stock);
   });
 });

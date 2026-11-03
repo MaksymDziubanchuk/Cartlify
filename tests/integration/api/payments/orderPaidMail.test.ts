@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
+import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { sendOrderPaidEmail } from '@routes/api/payments/services/helpers/sendOrderPaidEmail.helper.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -65,6 +66,22 @@ describe('sendOrderPaidEmail', () => {
     expect(mails[0]!.text).toContain('Total: €51.00');
     expect(mails[0]!.text).toContain(`https://shop.example.com/orders/${orderId}`);
     expect(mails[0]!.html).toContain('Hi Anna,');
+  });
+
+  // the buyer may withdraw before the goods are sent and after: the link carries the code of the order
+  it('offers the withdrawal with the link of the page and the code after the #', async () => {
+    const mails = watchMail();
+
+    await sendOrderPaidEmail(orderId, log());
+
+    expect(mails[0]!.text).toContain(
+      'before the goods are sent, and for 14 days after you receive them',
+    );
+    expect(mails[0]!.text).toContain(`Withdraw here:\n${withdrawalLinkOf(orderId)}`);
+    expect(mails[0]!.text).toMatch(
+      /\/orders\/\d+\/withdrawal#[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}-[2-9A-HJ-NP-Z]{4}\n/,
+    );
+    expect(mails[0]!.html).toContain(`href="${withdrawalLinkOf(orderId)}"`);
   });
 
   // the time of the payment the order holds, not of its last change; in utc, as the mail says

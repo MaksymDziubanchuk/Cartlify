@@ -4,9 +4,11 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { prisma } from '@db/client.js';
 import { shopToday } from '@helpers/shopDay.js';
 
+import { cancelPaidOrderIn } from '../../helpers/cancel.js';
 import { inCommittedTx, inRolledBackTx, type DbSession } from '../../helpers/db.js';
 import { pay, waitingOrderOf, type DeliveryRule } from '../../helpers/dbOrders.js';
 import { batchIdOf, dayAfter, setShopDay } from '../../helpers/dbStock.js';
+import { refundReturnIn } from '../../helpers/returns.js';
 import {
   closeSessions,
   createProduct,
@@ -46,6 +48,7 @@ type Stats = {
     byStatus: Record<string, number>;
     revenue: { total: number; inPeriod: number; last7d: number; last30d: number };
     deliveryRevenue: { total: number; inPeriod: number; last7d: number; last30d: number };
+    returned: { total: number; inPeriod: number; last7d: number; last30d: number };
     averageOrderValue: number;
     itemsSold: number;
   };
@@ -191,22 +194,31 @@ describe('cartlify.admin_stats_view', () => {
     expect(after.orders.revenue.total - before.orders.revenue.total).toBeCloseTo(80, 2);
   });
 
-  it('takes the delivery out of the revenue with the rest once the order is cancelled', async () => {
+  // the order keeps the time it was paid: its delivery stays in the revenue of that time whatever
+  // happens to it; what goes back with a return is told apart, when the money goes back
+  it('keeps the delivery in the revenue once the order is cancelled, and counts what went back apart', async () => {
     const { orderId } = await waitingOrder(2, { flat: 6 });
 
-    const { paid, cancelled } = await inRolledBackTx(async (db) => {
+    const { paid, cancelled, refunded } = await inRolledBackTx(async (db) => {
       await pay(db, admin.id, orderId);
       const paid = await statsOf(db, FAR_PAST, FAR_FUTURE);
-      await db.as({ role: 'ADMIN' });
-      await db.rows(`select 1 as done from cartlify.cancel_paid_order($1::int)`, orderId);
-      return { paid, cancelled: await statsOf(db, FAR_PAST, FAR_FUTURE) };
+      const returnId = await cancelPaidOrderIn(db, admin.id, orderId);
+      const cancelled = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await refundReturnIn(db, admin.id, returnId);
+      return { paid, cancelled, refunded: await statsOf(db, FAR_PAST, FAR_FUTURE) };
     }, REPEATABLE_READ);
 
-    expect(paid.orders.deliveryRevenue.total - cancelled.orders.deliveryRevenue.total).toBeCloseTo(
-      6,
+    expect(cancelled.orders.deliveryRevenue.total).toBeCloseTo(
+      paid.orders.deliveryRevenue.total,
       2,
     );
-    expect(paid.orders.revenue.total - cancelled.orders.revenue.total).toBeCloseTo(86, 2);
+    expect(cancelled.orders.revenue.total).toBeCloseTo(paid.orders.revenue.total, 2);
+    // the goods are back, the money is not: nothing went back yet
+    expect(cancelled.orders.returned.total).toBeCloseTo(paid.orders.returned.total, 2);
+    expect(refunded.orders.revenue.total).toBeCloseTo(paid.orders.revenue.total, 2);
+    // 80 for the units and 6 for the delivery went back
+    expect(refunded.orders.returned.total - paid.orders.returned.total).toBeCloseTo(86, 2);
+    expect(refunded.orders.returned.inPeriod - paid.orders.returned.inPeriod).toBeCloseTo(86, 2);
   });
 
   it('names the product and the category of an order paid in the period in its tops', async () => {
@@ -305,19 +317,25 @@ describe('cartlify.admin_stats_view', () => {
       expect(linesOf(before, product.id)).toEqual([]);
     });
 
-    it('takes a cancelled order out of both tops', async () => {
+    // the tops are the net: the sales less the returns, each in the period it happened in
+    it('takes a cancelled order out of both tops once its money went back, not before', async () => {
       const { product, orderId } = await twoVariantOrder();
 
-      const cancelled = await inRolledBackTx(async (db) => {
+      const { cancelled, refunded } = await inRolledBackTx(async (db) => {
         const from = await afterCartOf(db, orderId);
         await pay(db, admin.id, orderId);
-        await db.as({ role: 'ADMIN' });
-        await db.rows(`select 1 as done from cartlify.cancel_paid_order($1::int)`, orderId);
-        return statsOf(db, from, FAR_FUTURE);
+        const returnId = await cancelPaidOrderIn(db, admin.id, orderId);
+        const cancelled = await statsOf(db, from, FAR_FUTURE);
+        await refundReturnIn(db, admin.id, returnId);
+        return { cancelled, refunded: await statsOf(db, from, FAR_FUTURE) };
       }, REPEATABLE_READ);
 
-      expect(linesOf(cancelled, product.id)).toEqual([]);
-      expect(topOf(cancelled.products.topProductsByRevenue, product.id)).toBeUndefined();
+      // the goods are back, the money is not: the sale stands
+      expect(linesOf(cancelled, product.id)).not.toEqual([]);
+      expect(topOf(cancelled.products.topProductsByRevenue, product.id)).toBeDefined();
+      // the money went back in the same period: nothing is left of the sale
+      expect(linesOf(refunded, product.id)).toEqual([]);
+      expect(topOf(refunded.products.topProductsByRevenue, product.id)).toBeUndefined();
     });
 
     it('keeps a variant that was taken out of sale, and says so', async () => {
@@ -382,20 +400,26 @@ describe('cartlify.admin_stats_view', () => {
     expect(after.orders.revenue.last30d - before.orders.revenue.last30d).toBeCloseTo(80, 2);
   });
 
-  // the money of a cancelled order went back to the buyer
-  it('takes a paid order out of the revenue once it is cancelled', async () => {
+  // a cancelled order was paid: it stays in the revenue of the time it was paid, and the money that
+  // went back is told apart, in the time it went back
+  it('keeps a cancelled order in the revenue and counts the money that went back apart', async () => {
     const { orderId } = await waitingOrder();
 
-    const { paid, cancelled } = await inRolledBackTx(async (db) => {
+    const { paid, cancelled, refunded } = await inRolledBackTx(async (db) => {
       await pay(db, admin.id, orderId);
       const paid = await statsOf(db, FAR_PAST, FAR_FUTURE);
-      await db.as({ role: 'ADMIN' });
-      await db.rows(`select 1 as done from cartlify.cancel_paid_order($1::int)`, orderId);
-      return { paid, cancelled: await statsOf(db, FAR_PAST, FAR_FUTURE) };
+      const returnId = await cancelPaidOrderIn(db, admin.id, orderId);
+      const cancelled = await statsOf(db, FAR_PAST, FAR_FUTURE);
+      await refundReturnIn(db, admin.id, returnId);
+      return { paid, cancelled, refunded: await statsOf(db, FAR_PAST, FAR_FUTURE) };
     }, REPEATABLE_READ);
 
-    expect(paid.orders.revenue.total - cancelled.orders.revenue.total).toBeCloseTo(80, 2);
-    expect(paid.orders.revenue.inPeriod - cancelled.orders.revenue.inPeriod).toBeCloseTo(80, 2);
+    expect(cancelled.orders.revenue.total).toBeCloseTo(paid.orders.revenue.total, 2);
+    expect(cancelled.orders.revenue.inPeriod).toBeCloseTo(paid.orders.revenue.inPeriod, 2);
+    expect(refunded.orders.revenue.total).toBeCloseTo(paid.orders.revenue.total, 2);
+    expect(cancelled.orders.returned.total).toBeCloseTo(paid.orders.returned.total, 2);
+    expect(refunded.orders.returned.total - paid.orders.returned.total).toBeCloseTo(80, 2);
+    expect(refunded.orders.returned.inPeriod - paid.orders.returned.inPeriod).toBeCloseTo(80, 2);
     expect(cancelled.orders.byStatus.cancelled! - paid.orders.byStatus.cancelled!).toBe(1);
     expect(paid.orders.byStatus.paid! - cancelled.orders.byStatus.paid!).toBe(1);
   });

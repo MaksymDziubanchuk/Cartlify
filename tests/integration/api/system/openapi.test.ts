@@ -234,6 +234,7 @@ describe('the product routes', () => {
       'stock',
       'variants',
       'warnings',
+      'withdrawal',
     ]);
     expect(form.images).toMatchObject({
       type: 'array',
@@ -495,6 +496,7 @@ describe('the product routes', () => {
       'name',
       'reviewsCount',
       'warnings',
+      'withdrawal',
     ]);
     expect(propertiesOf(card)).not.toHaveProperty('categoryId');
     for (const field of ['price', 'stock', 'sku', 'images']) {

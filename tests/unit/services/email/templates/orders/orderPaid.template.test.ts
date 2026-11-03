@@ -80,6 +80,84 @@ describe('buildOrderPaidTemplate', () => {
     }
   });
 
+  describe('the right of withdrawal of the goods', () => {
+    const withRules = (
+      ...rules: Array<'allowed' | 'sealed_media' | 'perishable' | 'personalised'>
+    ) =>
+      order({
+        items: rules.map((withdrawal, index) => ({
+          name: `Item ${index + 1}`,
+          quantity: 1,
+          unitPrice: 10,
+          totalPrice: 10,
+          withdrawal,
+        })),
+        total: 10 * rules.length,
+      });
+
+    it('says nothing of it while every item may be taken back freely', () => {
+      for (const mail of [
+        buildOrderPaidTemplate(withRules('allowed', 'allowed')),
+        buildOrderPaidTemplate(order()),
+      ]) {
+        expect(mail.text).not.toMatch(/withdraw/i);
+        expect(mail.html).not.toMatch(/withdraw/i);
+      }
+    });
+
+    it('names the items that are not taken back, each with its reason', () => {
+      const { text, html } = buildOrderPaidTemplate(
+        withRules('allowed', 'perishable', 'personalised'),
+      );
+
+      expect(text).toContain('No right of withdrawal applies to these goods:');
+      expect(text).toContain('- Item 2: goods that spoil or expire quickly');
+      expect(text).toContain('- Item 3: goods made to your specification or personalised');
+      expect(text).not.toContain('Item 1:');
+      for (const part of ['No right of withdrawal applies to these goods:', 'Item 2', 'Item 3']) {
+        expect(html).toContain(part);
+      }
+    });
+
+    it('names the items that are taken back only while sealed, with the condition', () => {
+      const { text, html } = buildOrderPaidTemplate(withRules('sealed_media', 'allowed'));
+
+      expect(text).toContain('You may withdraw from these goods only while the condition holds:');
+      expect(text).toContain(
+        '- Item 1: sealed audio or video recordings and software, until the seal is broken',
+      );
+      expect(text).not.toContain('No right of withdrawal applies');
+      expect(html).toContain('Item 1');
+      expect(html).toContain('until the seal is broken');
+    });
+
+    it('gives both lists when the order has both kinds of item', () => {
+      const { text } = buildOrderPaidTemplate(withRules('perishable', 'sealed_media'));
+
+      expect(text.indexOf('No right of withdrawal applies')).toBeGreaterThan(-1);
+      expect(text.indexOf('You may withdraw from these goods only')).toBeGreaterThan(-1);
+    });
+
+    it('escapes the name of an item in the html', () => {
+      const { html } = buildOrderPaidTemplate(
+        order({
+          items: [
+            {
+              name: '<b>Fresh</b> flowers',
+              quantity: 1,
+              unitPrice: 5,
+              totalPrice: 5,
+              withdrawal: 'perishable',
+            },
+          ],
+        }),
+      );
+
+      expect(html).not.toContain('<b>Fresh</b>');
+      expect(html).toContain('&lt;b&gt;Fresh&lt;/b&gt; flowers');
+    });
+  });
+
   it('keeps the plain text version free of html', () => {
     expect(buildOrderPaidTemplate(order()).text).not.toMatch(/<[a-z!/]/i);
   });

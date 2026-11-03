@@ -5,6 +5,7 @@ import { startupWarnings } from '@config/startupWarnings.js';
 const SET = {
   NODE_ENV: 'development',
   STRIPE_WEBHOOK_SECRET: 'whsec_local',
+  WITHDRAWAL_CODE_SECRET: 'code-secret',
   OPENAI_API_KEY: 'sk-x',
   REVIEW_CHECK_ENABLED: true,
 };
@@ -16,6 +17,16 @@ describe('startupWarnings', () => {
     (mode) => {
       expect(startupWarnings({ ...SET, NODE_ENV: mode, STRIPE_WEBHOOK_SECRET: '' })).toEqual([
         'STRIPE_WEBHOOK_SECRET is not set: every stripe event is refused, no order becomes paid',
+      ]);
+    },
+  );
+
+  it.each(['development', 'test'])(
+    'warns in %s that the links of withdrawal carry no code without the secret of it',
+    (mode) => {
+      expect(startupWarnings({ ...SET, NODE_ENV: mode, WITHDRAWAL_CODE_SECRET: '' })).toEqual([
+        'WITHDRAWAL_CODE_SECRET is not set: the links of withdrawal in the mails carry no code, ' +
+          'every form of withdrawal is checked by an admin by hand',
       ]);
     },
   );

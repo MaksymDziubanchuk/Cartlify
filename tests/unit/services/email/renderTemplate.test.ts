@@ -130,6 +130,14 @@ describe('renderTemplate', () => {
     recipient: 'Anna Koval, +380501234567',
     // the files of the terms and of the contract a paid order carries
     attachedLine: 'The terms and the contract you accepted are attached to this mail.',
+    // the goods of a paid order that are not taken back, or only while sealed
+    noRightLine: 'No right of withdrawal applies to these goods:',
+    noRightItems: [{ name: 'Flowers', reason: 'goods that spoil or expire quickly' }],
+    conditionalLine: 'You may withdraw from these goods only while the condition holds:',
+    conditionalItems: [{ name: 'Disc', reason: 'sealed recordings, until the seal is broken' }],
+    // the offer to withdraw in the mails of an order, with the link that carries the code
+    withdrawalLine: 'You may withdraw from the contract without giving a reason. Withdraw here:',
+    withdrawalUrl: 'https://shop.example.com/orders/42/withdrawal#K7QM-4XTP-9RHD',
     // the products a delivered order asks to rate
     hasRatings: 'yes',
     ratings: [{ name: 'Lamp', reviewUrl: 'https://shop.example.com/products/7#reviews' }],
@@ -146,8 +154,6 @@ describe('renderTemplate', () => {
     'orders/orderShipped.txt',
     'orders/orderDelivered.html',
     'orders/orderDelivered.txt',
-    'orders/orderCancelled.html',
-    'orders/orderCancelled.txt',
   ])('renders %s without leaving a mark behind', (file) => {
     const out = renderTemplate(file, values);
 
@@ -157,5 +163,22 @@ describe('renderTemplate', () => {
 
   it('keeps windows line endings of the checkout out of the mail', () => {
     expect(renderTemplate('auth/verifyEmail.txt', values)).not.toContain('\r');
+  });
+
+  // every mail says where to write: the chat, or the address the shop answers from
+  it('ends every mail with the chat and the address of the shop, given or of the settings', () => {
+    const own = renderTemplate('auth/verifyEmail.txt', {
+      ...values,
+      supportEmail: 'help@shop.example.com',
+    });
+    const set = renderTemplate('orders/orderShipped.html', values);
+    const none = renderTemplate('auth/resetPassword.txt', { ...values, supportEmail: '' });
+
+    expect(own).toContain(
+      'Questions? Write to us in the chat on our site or to help@shop.example.com.',
+    );
+    expect(set).toContain('Questions? Write to us in the chat on our site');
+    expect(none).toContain('Questions? Write to us in the chat on our site.');
+    for (const out of [own, set, none]) expect(out).not.toContain('not monitored');
   });
 });

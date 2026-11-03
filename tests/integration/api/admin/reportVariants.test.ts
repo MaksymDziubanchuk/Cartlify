@@ -17,13 +17,16 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { placeOrder } from '../../../helpers/orders.js';
+import { cancelAndRefund } from '../../../helpers/returns.js';
 import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/admin/reports/accounting/variants: the money of a period by variant, a row for each
 // variant of the filter with its product (the report by product, /products, adds the variants of a
 // product up: reportBreakdowns.test.ts). The columns, the filters, the sorts, the pages and the csv
-// file are those of the report by product, with the variant named in every row. Other test files
-// make orders and batches at the same time, so each test reads only its own categories
+// file are those of the report by product, with the variant named in every row: the sales, the
+// returns whose money went back, the net, the write-offs, the purchases and the stock (opening,
+// received, left, closing). Other test files make orders and batches at the same time, so each
+// test reads only its own categories
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -65,12 +68,14 @@ afterAll(async () => {
   }
 });
 
+type UnitsValue = { units: number; value: number };
 type Money = {
   sales: { units: number; revenue: number; cost: number; margin: number };
-  cancellations: { units: number; revenue: number; cost: number };
-  writeOffs: { units: number; value: number };
-  purchases: { units: number; value: number };
-  stock: { units: number; value: number };
+  returns: { units: number; revenue: number; cost: number };
+  net: { units: number; revenue: number; cost: number; margin: number };
+  writeOffs: UnitsValue;
+  purchases: UnitsValue;
+  stock: Record<'opening' | 'received' | 'left' | 'closing' | 'onTheWayBack', UnitsValue>;
 };
 type VariantRow = {
   product: { id: number; name: string; deleted: boolean };
@@ -130,22 +135,38 @@ describe('GET /api/admin/reports/accounting/variants', () => {
     expect(items[0]!.category).toEqual({ id: category.id, name: category.name });
     expect(items[0]).toMatchObject({
       sales: { units: 1, revenue: 30, cost: 5, margin: 25, marginPercent: 83.33 },
-      cancellations: { units: 0, revenue: 0, cost: 0 },
+      returns: { units: 0, revenue: 0, cost: 0 },
+      net: { units: 1, revenue: 30, cost: 5, margin: 25, marginPercent: 83.33 },
       writeOffs: { units: 1, value: 5 },
       afterWriteOffs: { margin: 20, marginPercent: 66.67 },
       purchases: { units: 4, value: 20 },
-      stock: { units: 2, value: 10 },
+      // 4 at 5 came in; the one sold and the one written off went out
+      stock: {
+        opening: { units: 0, value: 0 },
+        received: { units: 4, value: 20 },
+        left: { units: 2, value: 10 },
+        closing: { units: 2, value: 10 },
+        onTheWayBack: { units: 0, value: 0 },
+      },
     });
     expect(items[1]).toMatchObject({
       sales: { units: 2, revenue: 20, cost: 4, margin: 16, marginPercent: 80 },
       purchases: { units: 6, value: 12 },
-      stock: { units: 4, value: 8 },
+      stock: {
+        received: { units: 6, value: 12 },
+        left: { units: 2, value: 4 },
+        closing: { units: 4, value: 8 },
+      },
     });
     // the units of a variant taken out of sale stay in its stock until they are written off
     expect(items[2]).toMatchObject({
       sales: { units: 0, revenue: 0 },
       purchases: { units: 1, value: 3 },
-      stock: { units: 1, value: 3 },
+      stock: {
+        received: { units: 1, value: 3 },
+        left: { units: 0, value: 0 },
+        closing: { units: 1, value: 3 },
+      },
     });
   });
 
@@ -162,10 +183,19 @@ describe('GET /api/admin/reports/accounting/variants', () => {
     expect(res.json().nextCursor).not.toBeNull();
     expect(res.json().totals).toMatchObject({
       sales: { units: 3, revenue: 50, cost: 9, margin: 41, marginPercent: 82 },
+      returns: { units: 0, revenue: 0, cost: 0 },
+      net: { units: 3, revenue: 50, cost: 9, margin: 41, marginPercent: 82 },
       writeOffs: { units: 1, value: 5 },
       afterWriteOffs: { margin: 36, marginPercent: 72 },
       purchases: { units: 11, value: 35 },
-      stock: { units: 7, value: 21 },
+      // 11 came in (6 at 2, 4 at 5, 1 at 3); 4 went out (2 at 2 and 1 at 5 sold, 1 at 5 written off)
+      stock: {
+        opening: { units: 0, value: 0 },
+        received: { units: 11, value: 35 },
+        left: { units: 4, value: 14 },
+        closing: { units: 7, value: 21 },
+        onTheWayBack: { units: 0, value: 0 },
+      },
     });
   });
 
@@ -205,15 +235,84 @@ describe('GET /api/admin/reports/accounting/variants', () => {
         sumOf(id, (row) => row.purchases.value),
         2,
       );
-      expect(item.stock.units).toBe(sumOf(id, (row) => row.stock.units));
-      expect(item.stock.value).toBeCloseTo(
-        sumOf(id, (row) => row.stock.value),
+      expect(item.returns.units).toBe(sumOf(id, (row) => row.returns.units));
+      expect(item.net.units).toBe(sumOf(id, (row) => row.net.units));
+      expect(item.net.revenue).toBeCloseTo(
+        sumOf(id, (row) => row.net.revenue),
         2,
       );
+      for (const part of ['opening', 'received', 'left', 'closing', 'onTheWayBack'] as const) {
+        expect(item.stock[part].units).toBe(sumOf(id, (row) => row.stock[part].units));
+        expect(item.stock[part].value).toBeCloseTo(
+          sumOf(id, (row) => row.stock[part].value),
+          2,
+        );
+      }
     }
     expect(products.json().items).toHaveLength(2);
     expect(rows.length).toBeGreaterThan(products.json().items.length);
     expect(variants.json().totals).toEqual(products.json().totals);
+  });
+
+  // the return of a sale is in the row of the variant it was sold from: the sales stay whole, the
+  // net is the sales less the return, and the units that came back are in the stock again. A: 4 in
+  // at 2, 2 sold at 10 and taken back with the money; B: 2 in at 3, 1 sold at 10 and kept. The sort
+  // by the margin is by the sales (A 16, B 7), the one after the write-offs is by the net (A 0, B 7)
+  it('counts a refunded return in the row of its variant, and sorts by the sales or by the net as asked', async () => {
+    const category = await createCategory();
+    const product = await createProduct({ stock: 0, price: 10, categoryId: category.id });
+    const second = await createVariant(product.id, { price: 10, stock: 0 });
+    await receiveBatch({ variantId: product.variantId }, { quantity: 4, unitCost: 2 });
+    await receiveBatch({ variantId: second.id }, { quantity: 2, unitCost: 3 });
+    const buyer = await newUser();
+    const returned = await placeOrder(app, csrf, buyer, product, 'paid', 2);
+    await placeOrder(app, csrf, buyer, { ...product, variantId: second.id }, 'paid', 1);
+    await cancelAndRefund(admin.id, returned);
+    const query = { ...period(), categoryId: String(category.id) };
+
+    const byRevenue = await get('variants', query);
+    const byMargin = await get('variants', { ...query, sortBy: 'margin', sortOrder: 'desc' });
+    const byNet = await get('variants', {
+      ...query,
+      sortBy: 'marginAfterWriteOffs',
+      sortOrder: 'desc',
+    });
+
+    expect(variantIdsOf(byRevenue)).toEqual([product.variantId, second.id]);
+    expect(variantIdsOf(byMargin)).toEqual([product.variantId, second.id]);
+    expect(variantIdsOf(byNet)).toEqual([second.id, product.variantId]);
+    const [first, other] = byRevenue.json().items as VariantRow[];
+    expect(first).toMatchObject({
+      sales: { units: 2, revenue: 20, cost: 4, margin: 16, marginPercent: 80 },
+      returns: { units: 2, revenue: 20, cost: 4 },
+      net: { units: 0, revenue: 0, cost: 0, margin: 0, marginPercent: null },
+      afterWriteOffs: { margin: 0, marginPercent: null },
+      purchases: { units: 4, value: 8 },
+      // the 2 that came back are received again, the 2 sold are left: all 4 are on the shelf
+      stock: {
+        opening: { units: 0, value: 0 },
+        received: { units: 6, value: 12 },
+        left: { units: 2, value: 4 },
+        closing: { units: 4, value: 8 },
+        onTheWayBack: { units: 0, value: 0 },
+      },
+    });
+    expect(other).toMatchObject({
+      sales: { units: 1, revenue: 10, cost: 3, margin: 7, marginPercent: 70 },
+      returns: { units: 0, revenue: 0, cost: 0 },
+      net: { units: 1, revenue: 10, cost: 3, margin: 7, marginPercent: 70 },
+      stock: {
+        received: { units: 2, value: 6 },
+        left: { units: 1, value: 3 },
+        closing: { units: 1, value: 3 },
+      },
+    });
+    expect(byRevenue.json().totals).toMatchObject({
+      sales: { units: 3, revenue: 30, cost: 7, margin: 23, marginPercent: 76.67 },
+      returns: { units: 2, revenue: 20, cost: 4 },
+      net: { units: 1, revenue: 10, cost: 3, margin: 7, marginPercent: 70 },
+      stock: { closing: { units: 5, value: 11 } },
+    });
   });
 
   it('keeps to the own products of the category without its branch', async () => {
@@ -272,7 +371,7 @@ describe('GET /api/admin/reports/accounting/variants', () => {
     ['marginAfterWriteOffs', 'desc', ['b', 'a', 'd']],
     // nothing written off: the ties come by the id of the variant, the later first going down
     ['writeOffs', 'desc', ['b', 'd', 'a']],
-    // 20, 12 and 3 taken in at cost; 10, 8 and 3 left at cost
+    // 20, 12 and 3 taken in at cost; 10, 8 and 3 left at cost (the closing stock)
     ['purchases', 'desc', ['b', 'a', 'd']],
     ['stockValue', 'desc', ['b', 'a', 'd']],
     ['stockUnits', 'asc', ['d', 'b', 'a']],
@@ -413,10 +512,14 @@ describe('GET /api/admin/reports/accounting/variants', () => {
     const lines = csvLines(res.body);
     expect(lines[0]).toBe(
       'product_id,product_name,variant_id,variant_name,sku,category,deleted,variant_deleted,' +
-        'sold_units,sold_revenue,sold_cost,sold_margin,' +
-        'sold_margin_percent,cancelled_units,cancelled_revenue,cancelled_cost,' +
+        'sold_units,sold_revenue,sold_cost,sold_margin,sold_margin_percent,' +
+        'returned_units,returned_revenue,returned_cost,' +
+        'net_units,net_revenue,net_cost,net_margin,net_margin_percent,' +
         'written_off_units,written_off_value,margin_after_write_offs,' +
-        'margin_after_write_offs_percent,purchased_units,purchased_value,stock_units,stock_value',
+        'margin_after_write_offs_percent,purchased_units,purchased_value,' +
+        'stock_opening_units,stock_opening_value,stock_received_units,stock_received_value,' +
+        'stock_left_units,stock_left_value,stock_closing_units,stock_closing_value,' +
+        'stock_on_the_way_back_units,stock_on_the_way_back_value',
     );
     // every variant, not a page
     expect(lines).toHaveLength(5);
@@ -431,7 +534,7 @@ describe('GET /api/admin/reports/accounting/variants', () => {
     expect(cells(lines[3]!)[6]).toBe('no');
     expect(cells(lines[3]!)[7]).toBe('yes');
     expect(lines[4]).toBe(
-      ',Total,,,,,,,3,50.00,9.00,41.00,82.00,0,0.00,0.00,1,5.00,36.00,72.00,11,35.00,7,21.00',
+      ',Total,,,,,,,3,50.00,9.00,41.00,82.00,0,0.00,0.00,3,50.00,9.00,41.00,82.00,1,5.00,36.00,72.00,11,35.00,0,0.00,11,35.00,4,14.00,7,21.00,0,0.00',
     );
   });
 

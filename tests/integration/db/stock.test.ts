@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { prisma } from '@db/client.js';
 
+import { cancelPaidOrderIn } from '../../helpers/cancel.js';
 import { inRolledBackTx, type Actor } from '../../helpers/db.js';
 import {
   cartOf,
@@ -39,10 +40,10 @@ import {
 // the stock of a variant is what its batches have left. A batch comes in through
 // cartlify.receive_variant_batch, units go out through cartlify.write_off_variant_stock and
 // through the payment of an order, which keeps what it took from each batch
-// (order_batch_allocations); a cancel of the paid order puts the units back into the same
-// batches. Each of these functions acts as the owner for a signed-in admin and writes the line of
-// the stock log in their name (tests/integration/db/stockLog.test.ts). A plain statement changes none
-// of it
+// (order_batch_allocations); a cancel of the paid order (a statement of return for all of it) puts
+// the units back into the same batches. Each of these functions acts as the owner for a signed-in
+// admin and writes the line of the stock log in their name (tests/integration/db/stockLog.test.ts).
+// A plain statement changes none of it
 
 let owner: TestUser;
 let admin: TestUser;
@@ -582,8 +583,7 @@ describe('a sale takes from the batches', () => {
       await pay(db, admin.id, orderId);
       // a later delivery does not take the units back
       await batchIdOf(db, asAdmin(), product.variantId, { quantity: 4 });
-      await db.as(asAdmin());
-      await db.rows('select 1 as done from cartlify.cancel_paid_order($1::int)', orderId);
+      await cancelPaidOrderIn(db, admin.id, orderId);
       return {
         late,
         soon,
@@ -1025,8 +1025,7 @@ describe('the variants of one product', () => {
           await stockOf(db, admin.id, product.variantId),
           await stockOf(db, admin.id, sibling.id),
         ];
-        await db.as(asAdmin());
-        await db.rows('select 1 as done from cartlify.cancel_paid_order($1::int)', orderId);
+        await cancelPaidOrderIn(db, admin.id, orderId);
         return {
           mine,
           theirs,

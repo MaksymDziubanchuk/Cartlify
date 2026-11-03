@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
@@ -32,6 +33,8 @@ import { markVariantDeleted, stripVariantImages } from '../../../helpers/variant
 
 let app: FastifyInstance;
 let csrf: Csrf;
+// the admin who cancels the paid orders of the tests
+let admin: TestUser;
 const userIds: number[] = [];
 // an order keeps its product, so these products stay; the test database goes after the run
 const products: TestProduct[] = [];
@@ -84,6 +87,7 @@ async function unconfirmedOrderOf(user: TestUser, items: [number, number][]): Pr
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
+  admin = await newUser({ role: 'ADMIN' });
 });
 
 afterAll(async () => {
@@ -148,7 +152,7 @@ describe('GET /api/orders/:orderId', () => {
     const orderId = await placeOrder(app, csrf, user, await newProduct(), 'paid');
     const { paidAt } = (await getOrder(user, orderId)).json();
 
-    await asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
+    await cancelPaidOrder(admin.id, orderId);
     const res = await getOrder(user, orderId);
 
     expect(res.json()).toMatchObject({ status: 'cancelled', paidAt });
@@ -457,7 +461,7 @@ describe('GET /api/orders/:orderId', () => {
       `,
     );
     const paidAt = await updatedAtOf(user, orderId);
-    await asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
+    await cancelPaidOrder(admin.id, orderId);
     const res = await getOrder(user, orderId);
 
     expect(paid[0]?.result).toBe('PAID');

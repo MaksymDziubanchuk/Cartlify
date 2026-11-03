@@ -161,12 +161,13 @@ describe('buildOrderDeliveredTemplate', () => {
     expect(without.html).not.toMatch(/recipient/i);
   });
 
-  // an admin may mark an order delivered that never arrived, the buyer needs to know where to say so
-  it('tells the buyer where to say the order did not arrive', () => {
+  // an admin may mark an order delivered that never arrived, the buyer needs to know where to say
+  // so: the line every mail of the shop ends with
+  it('tells the buyer where to write, the chat or the address of the shop', () => {
     const { text, html } = buildOrderDeliveredTemplate(order());
 
-    expect(text).toContain('The order did not reach you');
-    expect(html).toContain('The order did not reach you');
+    expect(text).toContain('Questions? Write to us in the chat on our site');
+    expect(html).toContain('Questions? Write to us in the chat on our site');
   });
 
   it('greets the user by name, or without one', () => {

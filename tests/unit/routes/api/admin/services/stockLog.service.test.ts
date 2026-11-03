@@ -63,9 +63,9 @@ describe('stockLogArgsOf', () => {
   });
 
   it('takes the events of the stock log and none of an old line', () => {
-    expect(stockLogArgsOf({ events: 'stock.sale,stock.cancel_return' }, actor).events).toEqual([
+    expect(stockLogArgsOf({ events: 'stock.sale,stock.return' }, actor).events).toEqual([
       'stock.sale',
-      'stock.cancel_return',
+      'stock.return',
     ]);
 
     const err = thrownBy(() => stockLogArgsOf({ events: 'legacy.unknown,order.ship' }, actor));

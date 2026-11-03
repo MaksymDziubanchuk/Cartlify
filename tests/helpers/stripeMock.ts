@@ -138,8 +138,9 @@ const KNOWN_PARAMS: Record<string, unknown> = {
     automatic_payment_methods: { enabled: true, allow_redirects: true },
   },
   'GET /v1/payment_intents/:id': {},
-  'POST /v1/refunds': { payment_intent: true, metadata: true },
-  'GET /v1/refunds': { payment_intent: true },
+  'POST /v1/refunds': { payment_intent: true, amount: true, metadata: true },
+  'GET /v1/refunds': { payment_intent: true, limit: true },
+  'GET /v1/refunds/:id': {},
   'GET /v1/events': { type: true, created: { gte: true }, limit: true },
 };
 
@@ -156,11 +157,19 @@ type PaymentIntent = Record<string, unknown> & { id: string; amount: number; sta
 type Refund = Record<string, unknown> & { id: string; payment_intent: string };
 type StripeEvent = { id: string; type: string; created: number; [key: string]: unknown };
 
+// how the next refund ends, for a test of a refund that does not simply succeed: the sandbox gives
+// a card refund that succeeds, so only the mock can make one that is still pending or fails
+export type RefundOutcome = { status: 'pending' } | { status: 'failed'; reason: string };
+
 export type StripeMock = {
   listen: () => Promise<number>;
   close: () => Promise<void>;
   // the requests it was not taught since the last call
   takeUnanswered: () => string[];
+  // the next refund made ends this way (queued: one outcome for each refund made)
+  queueRefundOutcome: (outcome: RefundOutcome) => void;
+  // a refund that was pending ends: the event Stripe records is the one the webhook gets
+  settleRefund: (refundId: string, end: { status: 'succeeded' } | RefundOutcome) => void;
 };
 
 export function startStripeMock(key: string): StripeMock {
@@ -176,6 +185,7 @@ export function startStripeMock(key: string): StripeMock {
     { id: string; type: string; email: string | null; name: string | null }
   >();
   const refunds: Refund[] = [];
+  const refundOutcomes: RefundOutcome[] = [];
   const events: StripeEvent[] = [];
   const idempotent = new Map<string, { request: string; answer: Answer }>();
   let unanswered: string[] = [];
@@ -519,30 +529,71 @@ export function startStripeMock(key: string): StripeMock {
       unanswered.push(`a refund of a payment that is ${payment.status}`);
       return error(400, { message: 'stripe mock: a refund of a payment that succeeded only' });
     }
-    if (refunds.some((refund) => refund.payment_intent === paymentId)) {
+    // what is left to give back: a refund that failed or was cancelled took nothing
+    const left =
+      payment.amount -
+      refunds
+        .filter(
+          (refund) =>
+            refund.payment_intent === paymentId &&
+            refund.status !== 'failed' &&
+            refund.status !== 'canceled',
+        )
+        .reduce((sum, refund) => sum + Number(refund.amount), 0);
+    if (left <= 0) {
       return error(400, {
         message: `Charge ${String(payment.latest_charge)} has already been refunded.`,
         code: 'charge_already_refunded',
       });
     }
 
+    const amount = params.amount === undefined ? left : Number(params.amount);
+    if (!Number.isInteger(amount) || amount <= 0) {
+      return error(400, { message: 'Invalid positive integer', param: 'amount' });
+    }
+    if (amount > left) {
+      const money = (cents: number) => `€${(cents / 100).toFixed(2)}`;
+      return error(400, {
+        message: `Refund amount (${money(amount)}) is greater than unrefunded amount on charge (${money(left)}).`,
+      });
+    }
+
+    const outcome = refundOutcomes.shift();
     const refund: Refund = {
       id: idOf('re_', 27),
       object: 'refund',
-      amount: payment.amount,
+      amount,
       balance_transaction: idOf('txn_', 28),
       charge: payment.latest_charge,
       created: now(),
       currency: payment.currency,
+      ...(outcome?.status === 'failed'
+        ? { failure_balance_transaction: idOf('txn_', 28), failure_reason: outcome.reason }
+        : {}),
       metadata: (params.metadata as Params | undefined) ?? {},
       payment_intent: paymentId,
       payment_method: payment.payment_method,
       reason: null,
       receipt_number: null,
-      status: 'succeeded',
+      status: outcome?.status ?? 'succeeded',
     };
     refunds.push(refund);
+    record('refund.created', refund);
+    if (outcome?.status === 'failed') record('refund.failed', refund);
     return { status: 200, body: copy(refund) };
+  }
+
+  function settleRefund(refundId: string, end: { status: 'succeeded' } | RefundOutcome): void {
+    const refund = refunds.find((one) => one.id === refundId);
+    if (!refund) throw new Error(`the stripe mock has no refund ${refundId}`);
+
+    refund.status = end.status;
+    if (end.status === 'failed') {
+      refund.failure_reason = end.reason;
+      refund.failure_balance_transaction = idOf('txn_', 28);
+    }
+    record('refund.updated', refund);
+    if (end.status === 'failed') record('refund.failed', refund);
   }
 
   function listEvents(params: Params): Answer {
@@ -596,6 +647,17 @@ export function startStripeMock(key: string): StripeMock {
       }
       case 'POST /v1/refunds':
         return createRefund(params);
+      case 'GET /v1/refunds/:id': {
+        const refund = refunds.find((one) => one.id === id);
+        if (!refund) {
+          return error(404, {
+            message: `No such refund: '${id}'`,
+            code: 'resource_missing',
+            param: 'refund',
+          });
+        }
+        return { status: 200, body: copy(refund) };
+      }
       case 'GET /v1/refunds': {
         const paymentId = String(params.payment_intent);
         if (!paymentIntents.has(paymentId)) return noSuchPayment(paymentId, 'payment_intent');
@@ -718,5 +780,9 @@ export function startStripeMock(key: string): StripeMock {
       unanswered = [];
       return taken;
     },
+    queueRefundOutcome: (outcome) => {
+      refundOutcomes.push(outcome);
+    },
+    settleRefund,
   };
 }

@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import {
   mapOrderRowToResponse,
@@ -43,6 +43,7 @@ const item = (patch: Record<string, unknown> = {}) => ({
   unitPrice: new Prisma.Decimal('9.99'),
   totalPrice: new Prisma.Decimal('19.98'),
   productName: null,
+  withdrawal: 'allowed',
   product: { id: 4, name: 'Mug', categoryId: 1, deletedAt: null },
   variant: variantRow(),
   ...patch,
@@ -59,6 +60,9 @@ const row = (patch: Record<string, unknown> = {}) => ({
   shipments: [],
   paidAt: null,
   cancelledAt: null,
+  deliveredAt: null,
+  withdrawalDays: null,
+  returnStatus: 'none',
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
   items: [item()],
@@ -98,13 +102,84 @@ const send = (patch: Record<string, unknown> = {}) => ({
 type Row = Parameters<typeof mapOrderRowToResponse>[0];
 // the name the variant has now comes with the context (cartlify.variant_names)
 const names = new Map([[21, { name: 'Mug', values: [] }]]);
+// the end of the period of withdrawal the database counted, by the id of the order
+const noEnds = new Map<number, Date>();
+// the rule of now of the products of the items of an order that is not confirmed, by product id
+const noRules = new Map<number, 'allowed'>();
 const map = (
   patch: Record<string, unknown> = {},
   expired = new Map<number, number>(),
   currentNames = names,
-) => mapOrderRowToResponse(row(patch) as unknown as Row, { expired, names: currentNames });
+  withdrawalEnds = noEnds,
+  rules: Map<number, never> = noRules as Map<number, never>,
+) =>
+  mapOrderRowToResponse(row(patch) as unknown as Row, {
+    expired,
+    names: currentNames,
+    rules,
+    withdrawalEnds,
+    withdrawalDeadlines: withdrawalEnds,
+    returns: new Map(),
+    returnUnits: new Map(),
+    withdrawals: new Map(),
+    withdrawable: new Map(),
+  });
+// the statements of the order 10 an admin is told of
+const returns = new Map([
+  [
+    10,
+    [
+      {
+        id: 4,
+        code: 'R10-1',
+        statedAt: '2026-01-05T10:00:00.000Z',
+        source: 'admin' as const,
+        basis: 'other' as const,
+        reason: 'defect' as const,
+        extendsId: null,
+        closedAt: null,
+      },
+    ],
+  ],
+]);
+// what the buyer of the order 10 sees of their statements, and the units they can still state
+const withdrawals = new Map([
+  [
+    10,
+    [
+      {
+        id: 4,
+        code: 'W10-1',
+        statedAt: '2026-01-02T09:00:00.000Z',
+        source: 'account' as const,
+        basis: 'withdrawal' as const,
+        reason: null,
+        step: 'received' as const,
+        closedAt: null,
+        proof: null,
+        shippingReimbursement: null,
+        items: [],
+      },
+    ],
+  ],
+]);
+const withdrawable = new Map([[10, [{ orderItemId: 1, quantity: 2 }]]]);
 const mapFor = (view: 'buyer' | 'admin', patch: Record<string, unknown> = {}) =>
-  mapOrderRowToResponse(row(patch) as unknown as Row, { expired: new Map(), names }, view);
+  mapOrderRowToResponse(
+    row(patch) as unknown as Row,
+    {
+      expired: new Map(),
+      names,
+      rules: noRules,
+      withdrawalEnds: noEnds,
+      withdrawalDeadlines: noEnds,
+      returns,
+      returnUnits: new Map(),
+      withdrawals,
+      withdrawable,
+    },
+    view,
+  );
 
 describe('mapOrderRowToResponse', () => {
   it('turns money decimals into numbers', () => {
@@ -477,6 +552,132 @@ describe('mapOrderRowToResponse', () => {
 
     expect(out).not.toHaveProperty('paidAt');
     expect(out).not.toHaveProperty('cancelledAt');
+  });
+
+  describe('the statements of return', () => {
+    it('gives the state of the order as to its statements to everybody', () => {
+      expect(orderResponseSelect).toMatchObject({ returnStatus: true });
+      expect(map({ returnStatus: 'open' }).returnStatus).toBe('open');
+      expect(mapFor('admin', { returnStatus: 'declined' }).returnStatus).toBe('declined');
+    });
+
+    it('lists the statements of the order for an admin only', () => {
+      expect(mapFor('admin', { returnStatus: 'open' }).returns).toEqual(returns.get(10));
+      expect(mapFor('buyer', { returnStatus: 'open' })).not.toHaveProperty('returns');
+    });
+
+    it('gives the buyer their statements and the units they can still state, never to an admin', () => {
+      const buyer = mapFor('buyer', { returnStatus: 'open' });
+
+      expect(buyer.withdrawals).toEqual(withdrawals.get(10));
+      expect(buyer.withdrawable).toEqual(withdrawable.get(10));
+      expect(mapFor('admin', { returnStatus: 'open' })).not.toHaveProperty('withdrawals');
+      expect(mapFor('admin', { returnStatus: 'open' })).not.toHaveProperty('withdrawable');
+    });
+
+    it('gives the buyer empty lists for an order with no statements and nothing to state', () => {
+      const out = mapFor('buyer', { id: 99 });
+
+      expect(out.withdrawals).toEqual([]);
+      expect(out.withdrawable).toEqual([]);
+    });
+
+    it('gives an admin an empty list for an order with no statements', () => {
+      expect(mapFor('admin', { id: 99 }).returns).toEqual([]);
+    });
+  });
+
+  describe('the rule of withdrawal of an item', () => {
+    const rules = new Map([[4, 'sealed_hygiene' as never]]);
+
+    it('reads the rule the item kept (db/05) and gives it with its kind', () => {
+      expect(orderResponseSelect.items.select).toMatchObject({ withdrawal: true });
+      expect(map({ confirmed: true, status: 'waiting' }).items[0]!.withdrawal).toEqual({
+        rule: 'allowed',
+        right: 'full',
+      });
+    });
+
+    it('shows the rule of now in a cart, not the one the item has kept', () => {
+      const out = map({}, undefined, undefined, undefined, rules);
+
+      expect(out.items[0]!.withdrawal).toEqual({ rule: 'sealed_hygiene', right: 'conditional' });
+    });
+
+    it('keeps the rule of the confirmation once the order is confirmed, whatever is read of now', () => {
+      const out = map(
+        { confirmed: true, status: 'paid', items: [item({ withdrawal: 'perishable' })] },
+        undefined,
+        undefined,
+        undefined,
+        rules,
+      );
+
+      expect(out.items[0]!.withdrawal).toEqual({ rule: 'perishable', right: 'none' });
+    });
+
+    it('falls back to the rule the item kept when the cart has none of now', () => {
+      const out = map({ items: [item({ withdrawal: 'periodical' })] });
+
+      expect(out.items[0]!.withdrawal).toEqual({ rule: 'periodical', right: 'none' });
+    });
+  });
+
+  describe('the withdrawal', () => {
+    const deliveredAt = new Date('2026-03-03T15:00:00Z');
+    const endsAt = new Date('2026-03-21T22:59:59.999Z');
+    const ends = new Map([[10, endsAt]]);
+    const delivered = { status: 'delivered', confirmed: true, deliveredAt };
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('reads the time of the delivery and the days the order kept, and never their payer', () => {
+      expect(orderResponseSelect).toMatchObject({ deliveredAt: true, withdrawalDays: true });
+    });
+
+    it('gives the time of the delivery and the end of the period of a delivered order', () => {
+      jest.spyOn(Date, 'now').mockReturnValue(deliveredAt.getTime());
+
+      expect(map(delivered, undefined, undefined, ends)).toMatchObject({
+        deliveredAt,
+        withdrawalEndsAt: endsAt,
+        withdrawalOpen: true,
+      });
+    });
+
+    it('leaves out both times until the order is delivered', () => {
+      const out = map({ status: 'shipped', confirmed: true }, undefined, undefined, ends);
+
+      expect(out).not.toHaveProperty('deliveredAt');
+      expect(out).not.toHaveProperty('withdrawalEndsAt');
+    });
+
+    it('is open until the end of the period, the last millisecond included', () => {
+      const now = jest.spyOn(Date, 'now');
+
+      now.mockReturnValue(endsAt.getTime());
+      expect(map(delivered, undefined, undefined, ends).withdrawalOpen).toBe(true);
+
+      now.mockReturnValue(endsAt.getTime() + 1);
+      expect(map(delivered, undefined, undefined, ends).withdrawalOpen).toBe(false);
+    });
+
+    it.each([
+      ['paid', true],
+      ['shipped', true],
+      ['pending', false],
+      ['unconfirmed', false],
+      ['waiting', false],
+      ['cancelled', false],
+    ])('is %s open: %s (the period starts with the delivery)', (status, open) => {
+      expect(map({ status, confirmed: status !== 'pending' }).withdrawalOpen).toBe(open);
+    });
+
+    it('is closed for a delivered order the database gave no end for', () => {
+      expect(map(delivered).withdrawalOpen).toBe(false);
+    });
   });
 
   it('never reads or gives the payment id', () => {

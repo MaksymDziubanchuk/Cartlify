@@ -80,6 +80,7 @@ describe('GET /api/chat/thread/current', () => {
     expect(first.statusCode).toBe(200);
     expect(first.json()).toMatchObject({
       thread: { type: 'bot', status: 'open', userId: null },
+      adminCallAvailable: false,
       messages: [{ senderType: 'bot', isRead: true }],
       nextCursor: null,
       ws: { url: '/api/chat/ws', threadId: first.json().thread.id },

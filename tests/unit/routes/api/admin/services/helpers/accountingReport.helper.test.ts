@@ -116,7 +116,23 @@ describe('summarizeWriteOffs', () => {
         shortage: NOTHING,
         returned_to_supplier: NOTHING,
         other: NOTHING,
+        customer_return: NOTHING,
       },
+    });
+  });
+
+  // the goods that came back with a statement and went out at once have no line with a reason: they
+  // come in as the units and the value the log gives, and count under customer_return
+  it('adds the goods that came back and went out at once under customer_return', () => {
+    const out = summarizeWriteOffs([line('damaged', [{ quantity: 1, unitCost: '2' }])], {
+      units: 3,
+      value: '7.5',
+    });
+
+    expect(out).toMatchObject({
+      units: 4,
+      value: 9.5,
+      byReason: { damaged: { units: 1, value: 2 }, customer_return: { units: 3, value: 7.5 } },
     });
   });
 

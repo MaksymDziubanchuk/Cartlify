@@ -8,7 +8,8 @@ import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js'
 import { cartOf, changedRows } from '../../helpers/dbOrders.js';
 import { closeSessions, createUser, type TestUser } from '../../helpers/factories.js';
 
-// the terms and the contract of the shop (legal_documents) and the consents to them
+// the terms and the contract of the shop (legal_documents) and the consents to them (what each kind
+// has to say is in withdrawal.test.ts)
 // (legal_acceptances). Root publishes a version; the database numbers the versions of each kind
 // and keeps the sha256 of the text; nobody changes or takes away a version, everybody reads them.
 // A customer keeps a consent of their own to a version in force, with an order of their own or
@@ -47,13 +48,18 @@ const publish = (
   opts: { title?: string; content?: string; publishedById?: number } = {},
 ) =>
   db.attempt<Published>(
-    `insert into cartlify.legal_documents (kind, title, content, "publishedById")
-     values ($1::cartlify."LegalDocumentKind", $2, $3, $4)
+    `insert into cartlify.legal_documents
+       (kind, title, content, "publishedById", "withdrawalDays", "returnAddress", "returnShippingPaidBy")
+     values ($1::cartlify."LegalDocumentKind", $2, $3, $4, $5::int, $6, $7::cartlify."ReturnShippingPayer")
      returning id, version, sha256`,
     kind,
     opts.title ?? `Terms ${kind}`,
     opts.content ?? `The text of the ${kind}.`,
     opts.publishedById ?? root.id,
+    // the fields only a contract has (db/06)
+    kind === 'contract' ? 14 : null,
+    kind === 'contract' ? 'Returns, 1 Main Street' : null,
+    kind === 'contract' ? 'buyer' : null,
   );
 
 async function published(db: DbSession, kind: 'terms' | 'contract', content?: string) {

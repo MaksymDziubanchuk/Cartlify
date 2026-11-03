@@ -3,7 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
+import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
   closeSessions,
   createProduct,
@@ -14,7 +15,6 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { placeOrder } from '../../../helpers/orders.js';
-import { placePaidOrder } from '../../../helpers/payments.js';
 
 // two sorts of the catalog for everybody: by the discount (the variants on sale first, the biggest
 // discount first going desc, then the rest by popularity; the rows are variants) and by the units
@@ -180,14 +180,7 @@ describe('GET /api/products?sort=sales', () => {
     const buyer = await newUser();
     await placeOrder(app, csrf, buyer, best, 'paid', 3);
     await placeOrder(app, csrf, buyer, some, 'paid', 1);
-    // a real payment: the cancel gives it back at the provider
-    const { orderId } = await placePaidOrder(app, csrf, buyer, cancelled, { quantity: 2 });
-    const cancel = await app.inject({
-      method: 'POST',
-      url: `/api/orders/${orderId}/cancel`,
-      headers: withCsrf(csrf, accessCookie(admin)),
-    });
-    expect(cancel.statusCode).toBe(200);
+    await cancelPaidOrder(admin.id, await placeOrder(app, csrf, buyer, cancelled, 'paid', 2));
 
     categoryIds = categoriesOf(best, some, cancelled, none);
     const now = Date.now();

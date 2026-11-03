@@ -310,7 +310,7 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     const failed = await withStripeOutOfReach(() => deliver(app, event));
 
     expect(failed.statusCode).toBe(500);
-    expect(takeLogs({ msg: 'request failed', reason: 'STRIPE_REFUND_FAILED' })).toHaveLength(1);
+    expect(takeLogs({ msg: 'request failed', reason: 'PAYMENT_REFUND_FAILED' })).toHaveLength(1);
     expect(await refundsOf(paymentId)).toEqual([]);
     expect(await refundAuditOf(orderId)).toEqual([]);
 

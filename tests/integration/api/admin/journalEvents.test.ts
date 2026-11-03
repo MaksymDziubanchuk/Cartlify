@@ -435,40 +435,33 @@ describe('the events of the lines of an order', () => {
     expect(await linesOf('order', second)).toEqual(['ORDER_DELIVERY_CHANGE order.delivery_change']);
   });
 
-  it('names the cancel of a paid order', async () => {
+  // the cancel of a paid order is a statement of return with the reason shop_cancel: the statement
+  // has its event, and the money that goes back at once has its own
+  it('names the cancel of a paid order as a statement of return, and the money that went back', async () => {
     const { orderId } = await placePaidOrder(
       app,
       csrf,
       await newUser(),
       await createProduct({ price: 10, stock: 5 }),
     );
+    const items = await asAdmin((tx) =>
+      tx.orderItem.findMany({
+        where: { orderId },
+        orderBy: { id: 'asc' },
+        select: { id: true, quantity: true },
+      }),
+    );
 
-    const res = await send('POST', `/api/orders/${orderId}/cancel`);
+    const res = await send('POST', '/api/returns', {
+      orderId,
+      items: items.map((item) => ({ orderItemId: item.id, quantity: item.quantity })),
+      basis: 'other',
+      reason: 'shop_cancel',
+    });
 
-    expect(res.statusCode).toBe(200);
-    expect(await linesOf('order', orderId)).toEqual(['ORDER_STATUS_CHANGE order.cancel']);
+    expect(res.statusCode).toBe(201);
+    expect(await linesOf('order', orderId)).toEqual(['OTHER return.create', 'OTHER return.refund']);
   });
-
-  it.each([
-    [true, 'order.cancel_shipped_paid'],
-    [false, 'order.cancel_shipped_unpaid'],
-  ])(
-    'names the cancel of an order on its way by whether the carrier was paid (%s)',
-    async (shippingPaid, event) => {
-      const { orderId } = await placePaidOrder(
-        app,
-        csrf,
-        await newUser(),
-        await createProduct({ price: 10, stock: 5 }),
-      );
-      await step(orderId, 'shipped', { shipment: { carrier: 'DHL', cost: 5 } });
-
-      const res = await send('POST', `/api/orders/${orderId}/cancel`, { shippingPaid });
-
-      expect(res.statusCode).toBe(200);
-      expect((await linesOf('order', orderId)).at(-1)).toBe(`ORDER_STATUS_CHANGE ${event}`);
-    },
-  );
 });
 
 describe('the events of the lines of an account', () => {
