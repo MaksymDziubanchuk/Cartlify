@@ -10,7 +10,8 @@ import {
   createUser,
   uniqueEmail,
 } from '../../../helpers/factories.js';
-import { linkToken, watchMail } from '../../../helpers/mail.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { linkToken, refuseMail, watchMail } from '../../../helpers/mail.js';
 
 // the mail goes to the SendGrid mock (tests/helpers/mail.ts); the reset tests take a link made
 // the way /password/forgot stores one (createResetToken)
@@ -73,6 +74,21 @@ describe('POST /api/auth/password/forgot', () => {
     expect(mails[0]).toMatchObject({ to: [user.email], accepted: true });
     expect(mails[0]!.subject).toContain('Reset your password');
     expect(linkToken(mails[0]!, '/web/auth/reset')).toEqual(expect.any(String));
+  });
+
+  // another answer would tell that an account has this email
+  it('answers the same when SendGrid refuses the mail, and logs it with the account and no email', async () => {
+    const user = await newUser();
+    refuseMail();
+
+    const res = await forgot(user.email);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ message: GENERIC_FORGOT });
+    const logged = takeLogs({ msg: 'password reset mail was not sent' });
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ level: 50, userId: user.id });
+    expect(JSON.stringify(logged[0])).not.toContain(user.email);
   });
 
   // the same answer, so the form does not tell which emails have accounts
@@ -222,6 +238,13 @@ describe('POST /api/auth/password/reset', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'PASSWORD_TOO_SHORT' });
+  });
+
+  it('refuses a new password of only spaces as no password', async () => {
+    const res = await reset('made-up-token-0123456789', '        ');
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'NEW_PASSWORD_REQUIRED' });
   });
 
   it.each([

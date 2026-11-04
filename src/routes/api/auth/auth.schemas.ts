@@ -526,10 +526,6 @@ const setVerifyResendSchema = {
       description: 'Unexpected server error while resending verification email.',
       $ref: 'errorResponseSchema#',
     },
-    502: {
-      description: '`VERIFY_EMAIL_SEND_FAILED`: the mail with the new link did not go, try again.',
-      $ref: 'errorResponseSchema#',
-    },
   },
 } satisfies FastifySchema;
 
@@ -599,11 +595,6 @@ const setPasswordForgotSchema = {
     },
     500: {
       description: 'Unexpected server error while requesting password reset.',
-      $ref: 'errorResponseSchema#',
-    },
-    502: {
-      description:
-        '`PASSWORD_FORGOT_EMAIL_SEND_FAILED`: the mail with the link did not go, try again.',
       $ref: 'errorResponseSchema#',
     },
   },
