@@ -254,6 +254,11 @@ describe('PUT /api/categories/:categoryId/image', () => {
       (): FormPart[] => [imageField('picture', pngImage(10, 10))],
       'CATEGORY_IMAGE_REQUIRED',
     ],
+    [
+      'an empty file',
+      (): FormPart[] => [imageField('image', Buffer.alloc(0))],
+      'CATEGORY_IMAGE_STREAM_ERROR',
+    ],
   ])('refuses %s', async (_case, parts, errorCode) => {
     const category = await newCategory();
 

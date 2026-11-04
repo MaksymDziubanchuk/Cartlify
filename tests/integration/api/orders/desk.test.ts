@@ -325,6 +325,27 @@ describe('GET /api/orders for an admin', () => {
     }
   });
 
+  it('names the buyer of a deleted account without the email', async () => {
+    const root = await newUser({ role: 'ROOT' });
+    const buyer = await newUser({ name: 'Olena' });
+    const orderId = await placeOrder(app, csrf, buyer, await createProduct(), 'paid');
+    const deleted = await app.inject({
+      method: 'DELETE',
+      url: `/api/users/${buyer.id}`,
+      headers: withCsrf(csrf, accessCookie(root)),
+    });
+    expect(deleted.statusCode).toBe(200);
+
+    const res = await listAs(admin, `userId=${buyer.id}`);
+
+    expect(res.json().items).toEqual([
+      expect.objectContaining({
+        id: orderId,
+        buyer: { id: buyer.id, name: expect.any(String), email: null, deleted: true },
+      }),
+    ]);
+  });
+
   // a buyer sees only their own orders: the filters of the desk are the admin's
   it.each(['userId=1', 'q=1', 'format=csv'])('refuses %s to a buyer', async (query) => {
     const res = await listAs(await newUser(), query);

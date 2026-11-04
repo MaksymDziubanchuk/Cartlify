@@ -21,10 +21,15 @@ import { placePaidOrder } from '../../../helpers/payments.js';
 import {
   craftEvent,
   deliver,
+  DISPUTED_CARD,
+  REFUND_FAIL_CARD,
+  PENDING_REFUND_CARD,
   queueRefundOutcome,
+  refundBecomes,
+  closeDispute,
+  stripeWait,
   realStripe,
   refundsOf,
-  settleRefund,
   stripeEvent,
   withStripeOutOfReach,
 } from '../../../helpers/stripe.js';
@@ -76,12 +81,16 @@ const post = (url: string, payload: Record<string, unknown> = {}, actor: TestUse
     payload,
   });
 
+const get = (url: string, actor: TestUser = admin) =>
+  app.inject({ method: 'GET', url, headers: { cookie: accessCookie(actor) } });
+
 // an order paid by a card Stripe really took (the mock holds the payment), and its first item
-async function paidByCard(units: number) {
+async function paidByCard(units: number, card?: string) {
   const product = await createProduct({ price: 10, stock: 30 });
   products.push(product);
   const { orderId, paymentId } = await placePaidOrder(app, csrf, buyer, product, {
     quantity: units,
+    ...(card ? { card } : {}),
   });
   const items = await asAdmin((tx) =>
     tx.orderItem.findMany({ where: { orderId }, orderBy: { id: 'asc' }, select: { id: true } }),
@@ -490,25 +499,82 @@ function buyerActor(): TestUser {
 }
 
 describe('a refund that does not go through at once', () => {
-  mockOnly(
-    'keeps the rows pending while Stripe has not decided, and settles them by its event',
+  it('keeps the rows pending while Stripe has not decided, and mails nothing', async () => {
+    const { orderId, itemId } = await paidByCard(1, PENDING_REFUND_CARD);
+    const card = await comeBack(orderId, itemId, 1);
+    const mails = watchMail();
+
+    const res = await refund(card.id);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0]).toMatchObject({
+      money: 'pending',
+      refundId: expect.stringMatching(/^re_/),
+    });
+    expect(mailTo(mails, 'is closed')).toHaveLength(0);
+    expect(mailTo(mails, 'Money returned')).toHaveLength(0);
+  });
+
+  // the bank of a card that is gone sends the money back after the refund went (the sandbox: the
+  // card of a refund that fails, about 130 s later): the rows wait for their money again, the buyer
+  // is told, the admin finds the statement among the failed transfers
+  it(
+    'takes the money back to not refunded when the bank of a card that is gone sends it back',
     async () => {
-      const { orderId, paymentId, itemId } = await paidByCard(1);
+      const { orderId, paymentId, itemId } = await paidByCard(1, REFUND_FAIL_CARD);
       const card = await comeBack(orderId, itemId, 1);
-      queueRefundOutcome({ status: 'pending' });
       const mails = watchMail();
+      const went = await refund(card.id);
+      expect(went.json().items[0]).toMatchObject({ money: 'refunded' });
+      expect(went.json().closedAt).not.toBeNull();
+      const refundId = went.json().items[0].refundId as string;
 
-      const res = await refund(card.id);
+      await refundBecomes(refundId, { status: 'failed', reason: 'expired_or_canceled_card' });
+      const event = await stripeEvent('refund.failed', refundId);
+      expect((await deliver(app, event)).statusCode).toBe(200);
+      expect((await deliver(app, event)).statusCode).toBe(200);
 
-      expect(res.statusCode).toBe(200);
-      const row = res.json().items[0];
-      expect(row).toMatchObject({ money: 'pending', refundId: expect.stringMatching(/^re_/) });
-      // nothing is mailed while the money is on its way
-      expect(mailTo(mails, 'is closed')).toHaveLength(0);
-      expect(mailTo(mails, 'Money returned')).toHaveLength(0);
+      const after = (await get(`/api/returns/${card.id}`)).json();
+      expect(after.closedAt).toBeNull();
+      expect(after.items).toEqual([
+        expect.objectContaining({
+          money: 'not_refunded',
+          refundedAt: null,
+          refundFailure: expect.objectContaining({ code: 'card_unavailable' }),
+        }),
+      ]);
+      const failedList = (await get(`/api/returns?money=failed&q=${after.code}`)).json().items;
+      expect(failedList).toHaveLength(1);
+      const told = mailTo(mails, 'We could not return the money');
+      expect(told).toHaveLength(1);
+      expect(told[0]!.text).toContain('sent back to us by the bank of the card');
+      expect(await logOf(orderId, 'return.refund_failed')).toEqual([
+        expect.objectContaining({
+          meta: expect.arrayContaining([
+            expect.objectContaining({
+              field: 'refund',
+              new: expect.objectContaining({ refundId, sentBack: true }),
+            }),
+          ]),
+        }),
+      ]);
+      expect((await refundsOf(paymentId)).map((one) => one.status)).toEqual(['failed']);
+    },
+    stripeWait,
+  );
+
+  // the sandbox ends a refund of the pending card about two minutes later with one refund.updated
+  // (seen 04.11.2026): the test waits for it; the mock ends it at once
+  it(
+    'settles the pending rows by the event of Stripe, once',
+    async () => {
+      const { orderId, paymentId, itemId } = await paidByCard(1, PENDING_REFUND_CARD);
+      const card = await comeBack(orderId, itemId, 1);
+      const mails = watchMail();
+      const row = (await refund(card.id)).json().items[0];
 
       // Stripe decides: the event it records is the one the webhook gets
-      settleRefund(row.refundId, { status: 'succeeded' });
+      await refundBecomes(row.refundId, { status: 'succeeded' });
       const event = await stripeEvent('refund.updated', row.refundId);
       const first = await deliver(app, event);
       const second = await deliver(app, event);
@@ -524,6 +590,7 @@ describe('a refund that does not go through at once', () => {
       expect(await logOf(orderId, 'return.refund')).toHaveLength(1);
       expect(await refundsOf(paymentId)).toHaveLength(1);
     },
+    stripeWait,
   );
 
   mockOnly(
@@ -658,10 +725,9 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
     },
   );
 
-  mockOnly('never records a transfer the buyer disputed at the bank (409)', async () => {
-    const { orderId, itemId } = await paidByCard(1);
+  it('never records a transfer the buyer disputed at the bank (409)', async () => {
+    const { orderId, itemId } = await paidByCard(1, DISPUTED_CARD);
     const card = await comeBack(orderId, itemId, 1);
-    queueRefundOutcome({ status: 'failed', reason: 'charge_for_pending_refund_disputed' });
     const failed = await refund(card.id);
     const { paidAt } = await asAdmin((tx) =>
       tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paidAt: true } }),
@@ -679,10 +745,9 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
     expect(res.json()).toMatchObject({ errorCode: 'RETURN_REFUND_DISPUTED' });
   });
 
-  mockOnly('never sends again a transfer the buyer disputed at the bank (409)', async () => {
-    const { orderId, itemId, paymentId } = await paidByCard(1);
+  it('never sends again a transfer the buyer disputed at the bank (409)', async () => {
+    const { orderId, itemId, paymentId } = await paidByCard(1, DISPUTED_CARD);
     const card = await comeBack(orderId, itemId, 1);
-    queueRefundOutcome({ status: 'failed', reason: 'charge_for_pending_refund_disputed' });
     const failed = await refund(card.id);
     const before = (await refundsOf(paymentId)).length;
 
@@ -863,17 +928,31 @@ describe('POST /api/returns/:returnId/dispute', () => {
     expect(mails.filter((mail) => mail.to.includes(buyer.email))).toEqual([]);
   });
 
-  mockOnly('takes the mark off a won dispute, and the money goes again', async () => {
-    const { card } = await disputedCard();
+  // a dispute the buyer opened at the bank, which the shop wins there (the sandbox: a payment of
+  // the card of a dispute and the test evidence of a win, about 20 s); the money goes again then
+  it(
+    'takes the mark off a won dispute, and the money goes again',
+    async () => {
+      const { orderId, itemId, paymentId } = await paidByCard(1, DISPUTED_CARD);
+      const card = await comeBack(orderId, itemId, 1);
+      const failed = await refund(card.id);
+      expect(failed.json().items[0]).toMatchObject({ refundFailure: { code: 'disputed' } });
+      await closeDispute(paymentId, 'won');
 
-    const res = await dispute(card.id, { outcome: 'won', note: 'The bank kept it with the shop.' });
-    const again = await refund(card.id);
+      const res = await dispute(card.id, {
+        outcome: 'won',
+        note: 'The bank kept it with the shop.',
+      });
+      const again = await refund(card.id);
 
-    expect(res.statusCode).toBe(200);
-    expect(res.json().items[0]).toMatchObject({ money: 'not_refunded', refundFailure: null });
-    expect(again.statusCode).toBe(200);
-    expect(again.json().items[0]).toMatchObject({ money: 'refunded' });
-  });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().items[0]).toMatchObject({ money: 'not_refunded', refundFailure: null });
+      expect(again.statusCode).toBe(200);
+      expect(again.json().items[0]).toMatchObject({ money: 'refunded' });
+      expect((await refundsOf(paymentId)).map((one) => one.status)).toEqual(['succeeded']);
+    },
+    stripeWait,
+  );
 
   it('is root only (403), for a statement with a dispute (409), with the day of a lost one (400); chargeback is not a way by hand (400)', async () => {
     const { card } = await disputedCard();

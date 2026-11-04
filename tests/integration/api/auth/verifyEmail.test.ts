@@ -14,7 +14,8 @@ import {
   removeProducts,
   uniqueEmail,
 } from '../../../helpers/factories.js';
-import { mailedToken, watchMail, type SentMail } from '../../../helpers/mail.js';
+import { takeLogs } from '../../../helpers/logs.js';
+import { mailedToken, refuseMail, watchMail, type SentMail } from '../../../helpers/mail.js';
 
 // the resent link comes from the mail the SendGrid mock took (tests/helpers/mail.ts); the
 // verification tests take a link stored the way the registration stores one
@@ -221,6 +222,25 @@ describe('POST /api/auth/verify/resend', () => {
     expect(mails[1]).toMatchObject({ to: [email], accepted: true });
 
     expect((await verify(mailedToken(mails, '/web/login'))).statusCode).toBe(200);
+  });
+
+  // another answer would tell that an unconfirmed account has this email
+  it('answers the same when SendGrid refuses the new mail, and logs it with the account and no email', async () => {
+    const mails = watchMail();
+    const { email } = await registered(mails);
+    const { id } = await asAdmin((tx) =>
+      tx.user.findUniqueOrThrow({ where: { email }, select: { id: true } }),
+    );
+    refuseMail();
+
+    const res = await resend(email);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ message: GENERIC_RESEND });
+    const logged = takeLogs({ msg: 'verification mail was not sent' });
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toMatchObject({ level: 50, userId: id });
+    expect(JSON.stringify(logged[0])).not.toContain(email);
   });
 
   // the same answer, so the form does not tell which emails have accounts

@@ -217,6 +217,7 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: the details of the s
       'SHIPMENT_CARRIER_REQUIRED',
     ],
     ['writes a carrier of only spaces', { carrier: '   ' }, 'SHIPMENT_CARRIER_INVALID'],
+    ['writes a number of only spaces', { trackingNumber: '   ' }, 'SHIPMENT_NUMBER_INVALID'],
   ])('refuses a change that %s', async (_case, payload, errorCode) => {
     const { orderId, shipmentId } = await shipped({
       carrier: 'DHL',

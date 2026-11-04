@@ -6628,10 +6628,14 @@ $$;
 -- id the provider gave and the time), pending (the id is kept, the rows wait on) or failed (the
 -- rows go back to not refunded with the reason in our code and the words of the provider, the key
 -- is taken off so the next try has a new one). Repeating it changes nothing: only rows still
--- pending under the key are settled, so a webhook and a request that meet are both right. The answer
--- is { changed, status, returnId, orderId, itemIds, amount, deduction }; changed is false when nothing waited
--- for the key. RETURN_REFUND_STATUS_INVALID for a status that is none of the three or a failure
--- without its reason.
+-- pending under the key are settled, so a webhook and a request that meet are both right. A refund
+-- the provider took back after it succeeded (the bank of a card that is gone sends the money back,
+-- refund.failed of the same refund id) puts the rows refunded by it back to not refunded the same
+-- way, with no time of the money any more, and opens their statement again, so an admin sees them
+-- and root sends the money another way (reversed in the answer). The answer is { changed, status,
+-- returnId, orderId, itemIds, amount, deduction, reversed }; changed is false when nothing waited for
+-- the key. RETURN_REFUND_STATUS_INVALID for a status that is none of the three or a failure without
+-- its reason.
 CREATE OR REPLACE FUNCTION cartlify.finish_return_refund (
   p_key uuid,
   p_status text,
@@ -6648,6 +6652,7 @@ DECLARE
   v_ids       integer[];
   v_amount    numeric;
   v_deduction numeric;
+  v_reversed  boolean := false;
   v_now       timestamp := (now() AT TIME ZONE 'UTC')::timestamp(3);
 BEGIN
   IF NOT cartlify.is_admin () THEN
@@ -6680,6 +6685,23 @@ BEGIN
   FROM cartlify.return_items AS i
   WHERE i."refundKey" = p_key AND i.money = 'pending';
 
+  -- nothing waits, but the provider failed a refund it had made: the rows it refunded
+  IF v_ids IS NULL AND p_status = 'failed' AND p_refund_id IS NOT NULL THEN
+    PERFORM 1
+    FROM cartlify.return_items AS i
+    WHERE i."refundKey" = p_key AND i.money = 'refunded' AND i."refundId" = p_refund_id
+    ORDER BY i.id
+    FOR UPDATE;
+
+    SELECT array_agg(i.id ORDER BY i.id), SUM(i.amount + i."deliveryShare" - i."shippingDeduction"),
+           SUM(i."shippingDeduction")
+    INTO v_ids, v_amount, v_deduction
+    FROM cartlify.return_items AS i
+    WHERE i."refundKey" = p_key AND i.money = 'refunded' AND i."refundId" = p_refund_id;
+
+    v_reversed := v_ids IS NOT NULL;
+  END IF;
+
   IF v_ids IS NULL THEN
     RETURN jsonb_build_object(
       'changed', false, 'status', p_status, 'returnId', v_return_id, 'orderId', v_order_id
@@ -6701,9 +6723,18 @@ BEGIN
     SET money = 'not_refunded',
         "refundKey" = NULL,
         "refundId" = NULL,
+        "refundedAt" = NULL,
         "refundFailure" = p_failure,
         "refundFailureText" = left(p_failure_text, 500)
     WHERE i.id = ANY (v_ids);
+  END IF;
+
+  -- a statement closed with the money of these rows waits for it again
+  IF v_reversed THEN
+    UPDATE cartlify.returns AS r
+    SET "closedAt" = NULL, "closedById" = NULL
+    WHERE r.id IN (SELECT i."returnId" FROM cartlify.return_items AS i WHERE i.id = ANY (v_ids))
+      AND r."closedAt" IS NOT NULL;
   END IF;
 
   PERFORM cartlify.refresh_return_state (v_order_id);
@@ -6715,7 +6746,8 @@ BEGIN
     'orderId', v_order_id,
     'itemIds', to_jsonb(v_ids),
     'amount', to_char(v_amount, 'FM99999999990.00'),
-    'deduction', to_char(v_deduction, 'FM99999999990.00')
+    'deduction', to_char(v_deduction, 'FM99999999990.00'),
+    'reversed', v_reversed
   );
 END;
 $$;

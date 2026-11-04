@@ -269,6 +269,19 @@ describe('POST /api/auth/password/change', () => {
     expect(res.json()).toMatchObject({ errorCode: 'PASSWORD_TOO_SHORT' });
   });
 
+  it('refuses a new password of only spaces as no password', async () => {
+    const user = await newUser();
+    const session = await signInFrom(user, PHONE);
+
+    const res = await changePassword(session, {
+      currentPassword: user.password,
+      newPassword: '        ',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'NEW_PASSWORD_REQUIRED' });
+  });
+
   // an account of google, github or linkedin has no password of ours to change
   it('refuses an account that signs in through a provider', async () => {
     const user = await newUser({ authProvider: 'GOOGLE', providerSub: `google-${Date.now()}` });

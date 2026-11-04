@@ -72,6 +72,13 @@ describe('POST /api/categories', () => {
 });
 
 describe('PATCH /api/categories/:categoryId', () => {
+  it('answers 404 CATEGORY_NOT_FOUND for a category that is not there', async () => {
+    const res = await send('PATCH', '/api/categories/2147483646', { name: 'Nowhere' });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'CATEGORY_NOT_FOUND' });
+  });
+
   it('changes the name, the slug and the description, each change in the admin log', async () => {
     const category = await createCategory();
     const before = await asAdmin((tx) =>

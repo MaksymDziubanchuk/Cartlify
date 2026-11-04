@@ -391,6 +391,18 @@ describe('buildReturnRefundFailedTemplate', () => {
     expect(html).toContain('€25.00');
   });
 
+  it('tells a buyer told the money was returned that the bank of the card sent it back', () => {
+    const sentBack = 'The money we returned earlier was sent back to us by the bank of the card';
+
+    const back = buildReturnRefundFailedTemplate({ ...base, sentBack: true });
+    const plain = buildReturnRefundFailedTemplate(base);
+
+    expect(back.text).toContain(sentBack);
+    expect(back.html).toContain(sentBack);
+    expect(plain.text).not.toContain(sentBack);
+    expect(plain.html).not.toContain(sentBack);
+  });
+
   it('keeps the words of the provider out of the mail', () => {
     const { text } = buildReturnRefundFailedTemplate(base);
 

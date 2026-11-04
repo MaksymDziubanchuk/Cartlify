@@ -106,6 +106,16 @@ describe('env', () => {
     },
   );
 
+  // a value of spaces only is no secret: the start stops as if it were missing
+  it.each(['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'STRIPE_WEBHOOK_SECRET'])(
+    'stops the start when %s is only spaces',
+    async (key) => {
+      const err = await rejectedBy(() => loadEnv({ NODE_ENV: 'production', [key]: '   ' }));
+
+      expect((err as Error).message).toBe(`Missing required env variable: ${key}`);
+    },
+  );
+
   it('uses the defaults for every setting that is not set', async () => {
     expect(await loadEnv(UNSET)).toMatchObject({
       NODE_ENV: 'development',
@@ -255,22 +265,25 @@ describe('env', () => {
     },
   );
 
-  // without the secret every stripe event is refused and no order ever becomes paid
-  it('stops the start in production when STRIPE_WEBHOOK_SECRET is missing', async () => {
-    const err = await rejectedBy(() =>
-      loadEnv({ NODE_ENV: 'production', STRIPE_WEBHOOK_SECRET: '' }),
-    );
+  // without the secret every stripe event is refused and no order ever becomes paid; the dev
+  // server is a copy of production, so it stops the same way
+  it.each(['development', 'production'])(
+    'stops the start in %s when STRIPE_WEBHOOK_SECRET is missing',
+    async (mode) => {
+      const err = await rejectedBy(() => loadEnv({ NODE_ENV: mode, STRIPE_WEBHOOK_SECRET: '' }));
 
-    expect((err as Error).message).toBe('Missing required env variable: STRIPE_WEBHOOK_SECRET');
-  });
+      expect((err as Error).message).toBe('Missing required env variable: STRIPE_WEBHOOK_SECRET');
+    },
+  );
 
-  it('stops the start in production when WITHDRAWAL_CODE_SECRET is missing', async () => {
-    const err = await rejectedBy(() =>
-      loadEnv({ NODE_ENV: 'production', WITHDRAWAL_CODE_SECRET: '' }),
-    );
+  it.each(['development', 'production'])(
+    'stops the start in %s when WITHDRAWAL_CODE_SECRET is missing',
+    async (mode) => {
+      const err = await rejectedBy(() => loadEnv({ NODE_ENV: mode, WITHDRAWAL_CODE_SECRET: ' ' }));
 
-    expect((err as Error).message).toBe('Missing required env variable: WITHDRAWAL_CODE_SECRET');
-  });
+      expect((err as Error).message).toBe('Missing required env variable: WITHDRAWAL_CODE_SECRET');
+    },
+  );
 
   it.each(['development', 'production'])(
     'refuses a WITHDRAWAL_CODE_SECRET shorter than 32 characters in %s: a short one could be found by trying the code of a mail offline',
@@ -294,14 +307,14 @@ describe('env', () => {
     expect(loaded.WITHDRAWAL_CODE_SECRET).toBe('a'.repeat(32));
   });
 
-  it('starts without WITHDRAWAL_CODE_SECRET outside production, with no secret', async () => {
-    const loaded = await loadEnv({ NODE_ENV: 'development', WITHDRAWAL_CODE_SECRET: ' ' });
+  it('lets the tests start without WITHDRAWAL_CODE_SECRET, with no secret', async () => {
+    const loaded = await loadEnv({ NODE_ENV: 'test', WITHDRAWAL_CODE_SECRET: ' ' });
 
     expect(loaded.WITHDRAWAL_CODE_SECRET).toBe('');
   });
 
-  it('starts without STRIPE_WEBHOOK_SECRET outside production', async () => {
-    const loaded = await loadEnv({ NODE_ENV: 'development', STRIPE_WEBHOOK_SECRET: '' });
+  it('lets the tests start without STRIPE_WEBHOOK_SECRET', async () => {
+    const loaded = await loadEnv({ NODE_ENV: 'test', STRIPE_WEBHOOK_SECRET: '' });
 
     expect(loaded.STRIPE_WEBHOOK_SECRET).toBe('');
   });

@@ -365,6 +365,11 @@ describe('PATCH /api/orders/:orderId/status: the send of the shipped step', () =
       'SHIPMENT_CARRIER_REQUIRED',
     ],
     ['a carrier of only spaces', { carrier: '   ' }, 'SHIPMENT_CARRIER_INVALID'],
+    [
+      'a number of only spaces',
+      { carrier: 'DHL', trackingNumber: '   ' },
+      'SHIPMENT_NUMBER_INVALID',
+    ],
   ])('refuses %s and ships nothing', async (_case, shipment, errorCode) => {
     const orderId = await paidOrder();
 

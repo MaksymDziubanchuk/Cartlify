@@ -57,7 +57,7 @@ let activeMock: StripeMock | null = null;
 function mockOfRefunds(): StripeMock {
   if (!activeMock) {
     throw new Error(
-      'a refund that is pending or fails can be made by the mock only, not by Stripe',
+      'this end of a refund or of a dispute can be made by the mock only, not by Stripe',
     );
   }
   return activeMock;
@@ -70,6 +70,79 @@ export const queueRefundOutcome = (outcome: RefundOutcome) =>
 // a refund that was pending ends the way given; the event of it is recorded for the webhook (mock only)
 export const settleRefund = (refundId: string, end: { status: 'succeeded' } | RefundOutcome) =>
   mockOfRefunds().settleRefund(refundId, end);
+
+// the test card whose refunds are pending first and succeed a moment later, with a refund.updated
+// event (docs.stripe.com/testing, refunds; the sandbox took about two minutes, 04.11.2026); the mock
+// keeps it pending until a test ends it (settleRefund)
+export const PENDING_REFUND_CARD = 'pm_card_pendingRefund';
+
+// the test card whose payment the buyer disputes at the bank at once (docs.stripe.com/testing,
+// disputes): Stripe refuses a refund of it with charge_disputed, the mock does the same
+export const DISPUTED_CARD = 'pm_card_createDispute';
+
+// the test card of a card that is gone: a refund succeeds, then the bank sends the money back and
+// Stripe fails it with expired_or_canceled_card and refund.failed (about 130 s later in the
+// sandbox, 04.11.2026); the mock fails it when the test says so (refundBecomes)
+export const REFUND_FAIL_CARD = 'pm_card_refundFail';
+
+// the time a test that waits for Stripe may take with the sandbox: Stripe ends a pending refund or
+// fails one of a card that is gone about two minutes later (04.11.2026); the mock answers at once,
+// those tests keep the usual limit there
+export const stripeWait: number | undefined = realStripe ? 300_000 : undefined;
+
+// asks Stripe until the answer is there (not null), for at most four minutes
+export async function untilStripe<T>(
+  what: string,
+  ask: () => Promise<T | null | undefined>,
+): Promise<T> {
+  const until = Date.now() + 240_000;
+  for (;;) {
+    const answer = await call(what, ask);
+    if (answer !== null && answer !== undefined) return answer;
+    if (Date.now() > until) throw new Error(`Stripe did not give ${what} in four minutes`);
+    await sleep(3000);
+  }
+}
+
+// a refund ends the way Stripe ends it on its own: the sandbox does it a moment later (the card of
+// the payment decides how), the test waits; the mock ends it now
+export async function refundBecomes(
+  refundId: string,
+  end: { status: 'succeeded' } | RefundOutcome,
+): Promise<void> {
+  if (!realStripe) {
+    settleRefund(refundId, end);
+    return;
+  }
+  await untilStripe(`the end ${end.status} of the refund`, async () => {
+    const refund = await testStripe.refunds.retrieve(refundId);
+    return refund.status === end.status ? refund : null;
+  });
+}
+
+// the bank decides the dispute of a payment of DISPUTED_CARD: the sandbox closes it by the test
+// evidence (winning_evidence or losing_evidence, docs.stripe.com/testing; won in about 20 s,
+// 04.11.2026), the test waits; the mock closes it now
+export async function closeDispute(paymentId: string, outcome: 'won' | 'lost'): Promise<void> {
+  if (!realStripe) {
+    mockOfRefunds().closeDispute(paymentId, outcome);
+    return;
+  }
+  const dispute = await untilStripe('the dispute of the payment', async () => {
+    const found = await testStripe.disputes.list({ payment_intent: paymentId, limit: 1 });
+    return found.data[0] ?? null;
+  });
+  await call('answer the dispute', () =>
+    testStripe.disputes.update(dispute.id, {
+      evidence: { uncategorized_text: outcome === 'won' ? 'winning_evidence' : 'losing_evidence' },
+      submit: true,
+    }),
+  );
+  await untilStripe(`the dispute ${outcome}`, async () => {
+    const now = await testStripe.disputes.retrieve(dispute.id);
+    return now.status === outcome ? now : null;
+  });
+}
 
 export function installStripe(): void {
   if (realStripe) return;
@@ -194,6 +267,29 @@ export async function openForeignSession(
 // the api of the payment page itself. It is not documented, a change at Stripe breaks only this
 // step. Returns the payment of the page
 export async function payCheckoutSession(sessionId: string): Promise<string> {
+  const refusal = await tryCardOnPage(sessionId, 'tok_visa');
+  if (refusal) throw new Error(`the test card was refused on the page: ${refusal.code}`);
+
+  const after = await readSession(sessionId);
+  const payment = after.payment_intent;
+  const paymentId = typeof payment === 'string' ? payment : payment?.id;
+  if (!paymentId) throw new Error('the paid page has no payment');
+  return paymentId;
+}
+
+// the buyer tries a test card on the page (docs.stripe.com/testing: tok_visa pays,
+// tok_chargeDeclined, tok_chargeDeclinedInsufficientFunds and tok_chargeDeclinedExpiredCard are
+// refused by the bank of the card); null when the page is paid, the refusal otherwise
+export async function tryCardOnPage(
+  sessionId: string,
+  token: string,
+): Promise<{
+  statusCode: number;
+  type: string;
+  code: string;
+  declineCode: string;
+  message: string;
+} | null> {
   const session = await readSession(sessionId);
 
   await call('open the payment page', () =>
@@ -202,26 +298,31 @@ export async function payCheckoutSession(sessionId: string): Promise<string> {
   const card = await call('make a test card', () =>
     testStripe.paymentMethods.create({
       type: 'card',
-      card: { token: 'tok_visa' },
+      card: { token },
       // the page knows the email of the buyer: the card has the same one
       billing_details: { email: session.customer_email ?? 'buyer@example.com', name: 'Test Buyer' },
     }),
   );
-  const paid = await call('pay the page', () =>
-    testStripe.rawRequest('POST', `/v1/payment_pages/${sessionId}/confirm`, {
+  try {
+    const paid = await testStripe.rawRequest('POST', `/v1/payment_pages/${sessionId}/confirm`, {
       payment_method: card.id,
       expected_amount: session.amount_total,
-    }),
-  );
-  if (paid.payment_status !== 'paid') {
-    throw new Error(`the test card left the page ${paid.payment_status}`);
+    });
+    if (paid.payment_status !== 'paid') {
+      throw new Error(`the test card left the page ${paid.payment_status}`);
+    }
+    return null;
+  } catch (err) {
+    const e = err as Stripe.errors.StripeError & { raw?: { decline_code?: string } };
+    if (e.type !== 'StripeCardError') throw stripeFailure(err, 'pay the page');
+    return {
+      statusCode: e.statusCode ?? 0,
+      type: e.type,
+      code: e.code ?? '',
+      declineCode: e.raw?.decline_code ?? '',
+      message: e.message,
+    };
   }
-
-  const after = await readSession(sessionId);
-  const payment = after.payment_intent;
-  const paymentId = typeof payment === 'string' ? payment : payment?.id;
-  if (!paymentId) throw new Error('the paid page has no payment');
-  return paymentId;
 }
 
 // the event Stripe recorded for the payment page; it comes a moment after the change
@@ -292,14 +393,14 @@ export const refundsOf = async (paymentId: string) =>
 export const refundAtStripe = (paymentId: string) =>
   call('refund the payment', () => testStripe.refunds.create({ payment_intent: paymentId }));
 
-// a payment of the amount (in cents) with a test card, without a payment page: an order an admin
-// cancels needs a payment Stripe really took. Returns the payment
-export async function payByCard(amount: number): Promise<string> {
+// a payment of the amount (in cents) with a test card (pm_card_visa unless given), without a payment
+// page: an order an admin cancels needs a payment Stripe really took. Returns the payment
+export async function payByCard(amount: number, card = 'pm_card_visa'): Promise<string> {
   const payment = await call('take a test card payment', () =>
     testStripe.paymentIntents.create({
       amount,
       currency: 'eur',
-      payment_method: 'pm_card_visa',
+      payment_method: card,
       confirm: true,
       automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
     }),

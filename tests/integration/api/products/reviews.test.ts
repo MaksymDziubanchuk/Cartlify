@@ -89,6 +89,33 @@ describe('POST /api/products/:productId/reviews', () => {
     expect(res.json()).toMatchObject({ id: review.id, upVotes: 1, downVotes: 0 });
   });
 
+  it.each([
+    ['another rating', { rating: 5 }, 'REVIEW_RATING_UPDATE_FORBIDDEN'],
+    ['another comment', { comment: 'Lost its handle' }, 'REVIEW_COMMENT_UPDATE_FORBIDDEN'],
+  ])(
+    'keeps the part the review has: %s is refused and nothing changes',
+    async (_case, payload, errorCode) => {
+      const product = await createProduct();
+      const author = await newUser();
+      const review = await createReview(author.id, product.id, {
+        rating: 4,
+        comment: 'Holds the heat well',
+      });
+
+      const res = await writeReview(author, product.id, payload);
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ errorCode });
+      const row = await asAdmin((tx) =>
+        tx.review.findUniqueOrThrow({
+          where: { id: review.id },
+          select: { rating: true, comment: true },
+        }),
+      );
+      expect(row).toEqual({ rating: 4, comment: 'Holds the heat well' });
+    },
+  );
+
   it('takes a comment of 2000 signs and refuses a longer one', async () => {
     const product = await createProduct();
 

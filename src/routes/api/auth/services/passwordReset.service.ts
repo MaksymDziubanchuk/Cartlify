@@ -13,6 +13,8 @@ import { sendResetPasswordEmail } from '@routes/api/auth/services/helpers/sendRe
 import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
+import type { FastifyBaseLogger } from 'fastify';
+
 import type { PasswordForgotDto, PasswordResetDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 import type { Role } from 'types/user.js';
@@ -20,7 +22,13 @@ import type { Role } from 'types/user.js';
 // password reset request flow
 // create reset token row
 // return generic response
-export async function passwordForgot({ email }: PasswordForgotDto): Promise<MessageResponseDto> {
+// the mail of a link of reset, and the account it is for (the log names the account, not the email)
+type ResetMailJob = { to: string; resetToken: string; expiresAt: Date; userId: number };
+
+export async function passwordForgot(
+  { email }: PasswordForgotDto,
+  log: Pick<FastifyBaseLogger, 'error'>,
+): Promise<MessageResponseDto> {
   const cleanEmail = email?.trim().toLowerCase();
   if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
 
@@ -28,7 +36,7 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
 
   const genericOk = { message: 'If account exists, reset email will be sent' };
 
-  let sendJob: { to: string; resetToken: string; expiresAt: Date } | null = null;
+  let sendJob: ResetMailJob | null = null;
 
   try {
     const res = await prisma.$transaction(async (tx) => {
@@ -80,7 +88,7 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
       // the password is really reset (passwordReset below)
 
       // schedule email send
-      sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt };
+      sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt, userId: u.id };
 
       // return generic ok
       return genericOk;
@@ -89,18 +97,15 @@ export async function passwordForgot({ email }: PasswordForgotDto): Promise<Mess
     // avoid user enumeration
     if (!sendJob) return res;
 
+    // set inside the transaction, which the narrowing of typescript does not follow
+    const { userId, ...mail } = sendJob as ResetMailJob;
     try {
-      await sendResetPasswordEmail(sendJob);
+      await sendResetPasswordEmail(mail);
     } catch (err) {
-      // only a failure of the mail provider is a bad gateway, our own error stays a server error
+      // a mail the provider did not take is only logged: another answer than the generic one would
+      // tell that an account has this email. Our own error stays a server error
       if (!(err instanceof AppError && err.statusCode === 502)) throw err;
-
-      throw new AppError({
-        statusCode: 502,
-        errorCode: 'PASSWORD_FORGOT_EMAIL_SEND_FAILED',
-        message: 'Bad Gateway',
-        cause: err,
-      });
+      log.error({ err, userId }, 'password reset mail was not sent');
     }
 
     return res;

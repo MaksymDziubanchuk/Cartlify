@@ -6,6 +6,8 @@ import { hashToken } from '@helpers/tokenHash.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
+import type { FastifyBaseLogger } from 'fastify';
+
 import type { ResendVerifyDto, VerifyEmailDto } from 'types/dto/auth.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
 
@@ -15,15 +17,22 @@ import { migrateGuestDataToUser } from './helpers/guestMigration.helper.js';
 
 import type { Role } from 'types/user.js';
 
+// the mail of a new link of confirmation, and the account it is for (the log names the account,
+// not the email)
+type VerifyMailJob = { to: string; token: string; expiresAt: Date; userId: number };
+
 // resend verify email flow
 // create new verify token
-export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageResponseDto> {
+export async function resendVerify(
+  { email }: ResendVerifyDto,
+  log: Pick<FastifyBaseLogger, 'error'>,
+): Promise<MessageResponseDto> {
   assertEmail(email);
 
   const cleanEmail = email.trim().toLowerCase();
   const { token, expiresAt } = makeVerifyToken();
 
-  let sendPayload: { to: string; token: string; expiresAt: Date } | null = null;
+  let sendPayload: VerifyMailJob | null = null;
 
   await prisma.$transaction(async (tx) => {
     await setGuestNullContext(tx);
@@ -39,17 +48,26 @@ export async function resendVerify({ email }: ResendVerifyDto): Promise<MessageR
         to: cleanEmail,
         token,
         expiresAt: rows[0].expires_at,
+        userId: rows[0].user_id,
       };
     }
   });
 
-  // avoid user enumeration
+  // avoid user enumeration: a mail the provider did not take is only logged, another answer than
+  // the generic one would tell that an unconfirmed account has this email
   if (sendPayload) {
+    // set inside the transaction, which the narrowing of typescript does not follow
+    const { userId, ...mail } = sendPayload as VerifyMailJob;
     try {
-      await sendVerifyEmail(sendPayload);
+      await sendVerifyEmail(mail);
     } catch (err) {
-      if (err instanceof AppError) throw err;
-      throw new InternalError({ reason: 'VERIFY_EMAIL_RESEND_SEND_FAILED' }, err);
+      if (err instanceof AppError && err.statusCode === 502) {
+        log.error({ err, userId }, 'verification mail was not sent');
+      } else if (err instanceof AppError) {
+        throw err;
+      } else {
+        throw new InternalError({ reason: 'VERIFY_EMAIL_RESEND_SEND_FAILED' }, err);
+      }
     }
   }
 

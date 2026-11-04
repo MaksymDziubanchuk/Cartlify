@@ -284,6 +284,13 @@ describe('POST /api/categories', () => {
 });
 
 describe('DELETE /api/categories/:categoryId', () => {
+  it('answers 404 CATEGORY_NOT_FOUND for a category that is not there', async () => {
+    const res = await send('DELETE', '/api/categories/2147483646');
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'CATEGORY_NOT_FOUND' });
+  });
+
   it('gives the direct children of the category to its parent, with their branches', async () => {
     const t = await tree();
 

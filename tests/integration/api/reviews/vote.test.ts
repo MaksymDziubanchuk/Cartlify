@@ -61,6 +61,13 @@ afterAll(async () => {
 });
 
 describe('POST /api/reviews/:reviewId/vote', () => {
+  it('answers 404 REVIEW_NOT_FOUND for a review that is not there', async () => {
+    const res = await vote(await newUser(), 2147483646, 'up');
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ errorCode: 'REVIEW_NOT_FOUND' });
+  });
+
   it('answers with the counts of every vote, not only of the voter', async () => {
     const reviewId = await reviewWithVotes({ up: 2, down: 1 });
 

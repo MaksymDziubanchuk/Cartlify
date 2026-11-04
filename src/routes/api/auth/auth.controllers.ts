@@ -150,7 +150,7 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageRespons
     {},
   );
   // resend verify email
-  const result = await authServices.resendVerify(args);
+  const result = await authServices.resendVerify(args, req.log);
   return reply.code(200).send(result);
 };
 
@@ -389,7 +389,7 @@ const postPasswordForgot: ControllerRouter<
   const email = req.body?.email;
   const args = pickDefined<PasswordForgotDto>({ email }, {});
   // request password reset
-  const result = await authServices.passwordForgot(args);
+  const result = await authServices.passwordForgot(args, req.log);
 
   // revoke auth cookies
   clearAuthCookies(reply);

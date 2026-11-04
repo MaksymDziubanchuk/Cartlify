@@ -314,6 +314,20 @@ describe('product images (Cloudinary)', () => {
       expect(movesSince(mark)).toEqual([]);
     });
 
+    it('refuses an empty image and uploads nothing', async () => {
+      const mark = uploadMark();
+
+      const res = await createForm([
+        ...formFields(1),
+        ...manufacturerFormFields(),
+        image(Buffer.alloc(0)),
+      ]);
+
+      expect(res.statusCode).toBe(400);
+      expect(bodyOf(res)).toMatchObject({ errorCode: 'PRODUCT_IMAGE_STREAM_ERROR' });
+      expect(uploadsSince(mark)).toEqual([]);
+    });
+
     // the type a form names is the client's word; the file itself has to be a jpeg, png or webp
     it.each([
       ['text that says it is a png', Buffer.from('this is not an image')],

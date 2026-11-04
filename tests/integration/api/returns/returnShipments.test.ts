@@ -219,6 +219,22 @@ describe('POST /api/returns/:returnId/shipments', () => {
     }
     expect(await asAdmin((tx) => tx.returnShipment.count({ where: { returnId } }))).toBe(0);
   });
+
+  it('records a parcel once by its number: the same one in other case and spaces is refused (409 RETURN_SHIPMENT_EXISTS)', async () => {
+    const { returnId, paidAt } = await statement();
+    const shippedAt = afterPay(paidAt, 1);
+    expect((await record(returnId, { ...PARCEL, shippedAt })).statusCode).toBe(201);
+
+    const again = await record(returnId, {
+      ...PARCEL,
+      shippedAt,
+      trackingNumber: 'jd 0146 000123',
+    });
+
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ errorCode: 'RETURN_SHIPMENT_EXISTS' });
+    expect(await asAdmin((tx) => tx.returnShipment.count({ where: { returnId } }))).toBe(1);
+  });
 });
 
 describe('PATCH /api/returns/:returnId/shipments/:shipmentId', () => {

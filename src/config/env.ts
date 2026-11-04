@@ -145,22 +145,24 @@ declare global {
 // outside the fastify logger
 dotenv.config({ quiet: true });
 
-// fail fast on missing required vars
+// fail fast on missing required vars; a value of spaces only is missing too
 function required(name: string): string {
   const value = process.env[name];
-  if (!value) throw new Error(`Missing required env variable: ${name}`);
+  if (!value?.trim()) throw new Error(`Missing required env variable: ${name}`);
   return value;
 }
 
 // the code of a link of withdrawal is an HMAC of the number of the order, which every buyer reads in
 // their mail: a short secret could be found by trying them offline, and with it the code of every
-// order, so a secret is at least this long (production requires one, elsewhere none means no code)
+// order, so a secret is at least this long. The start stops without one in development as in
+// production (the dev server is a copy of production); only the tests may go without, then the
+// links carry no code
 const WITHDRAWAL_CODE_SECRET_MIN = 32;
 function withdrawalCodeSecret(nodeEnv: string): string {
   const value =
-    nodeEnv === 'production'
-      ? required('WITHDRAWAL_CODE_SECRET').trim()
-      : process.env.WITHDRAWAL_CODE_SECRET?.trim() || '';
+    nodeEnv === 'test'
+      ? process.env.WITHDRAWAL_CODE_SECRET?.trim() || ''
+      : required('WITHDRAWAL_CODE_SECRET').trim();
 
   if (value && value.length < WITHDRAWAL_CODE_SECRET_MIN) {
     throw new Error(
@@ -716,16 +718,15 @@ export default {
 
   // stripe
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY || '',
-  // without it every stripe event is refused and no order becomes paid: production does not
-  // start, elsewhere the start only warns (startupWarnings)
+  // without it every stripe event is refused and no order becomes paid: the start stops without it
+  // in development as in production, only the tests may go without
   STRIPE_WEBHOOK_SECRET:
-    NODE_ENV === 'production'
-      ? required('STRIPE_WEBHOOK_SECRET')
-      : process.env.STRIPE_WEBHOOK_SECRET || '',
+    NODE_ENV === 'test'
+      ? process.env.STRIPE_WEBHOOK_SECRET || ''
+      : required('STRIPE_WEBHOOK_SECRET'),
   STRIPE_CURRENCY: currencyWithCents('STRIPE_CURRENCY', 'eur'),
 
-  // signs the number of an order into the code of the links of withdrawal in the mails: production
-  // does not start without it, elsewhere the start warns (startupWarnings) and the links go without
-  // a code, so every form of withdrawal is checked by hand
+  // signs the number of an order into the code of the links of withdrawal in the mails; the start
+  // stops without it in development as in production (withdrawalCodeSecret)
   WITHDRAWAL_CODE_SECRET: withdrawalCodeSecret(NODE_ENV),
 };

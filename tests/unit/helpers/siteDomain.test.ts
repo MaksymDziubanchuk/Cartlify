@@ -37,15 +37,19 @@ describe('siteDomain', () => {
     );
   });
 
-  it('is null in production when SITE_DOMAIN is not set', async () => {
-    const { siteDomain } = await load({ NODE_ENV: 'production', SITE_DOMAIN: ' ' });
+  // the dev server is a copy of production
+  it.each(['development', 'production'])(
+    'is null in %s when SITE_DOMAIN is not set',
+    async (mode) => {
+      const { siteDomain } = await load({ NODE_ENV: mode, SITE_DOMAIN: ' ' });
 
-    expect(siteDomain).toBeNull();
-  });
+      expect(siteDomain).toBeNull();
+    },
+  );
 
   // example.com is reserved: a made-up address on it never reaches anybody
-  it('falls back to example.com outside production', async () => {
-    const { siteDomain } = await load({ NODE_ENV: 'development', SITE_DOMAIN: '' });
+  it('falls back to example.com in the tests', async () => {
+    const { siteDomain } = await load({ NODE_ENV: 'test', SITE_DOMAIN: '' });
 
     expect(siteDomain).toBe('example.com');
   });

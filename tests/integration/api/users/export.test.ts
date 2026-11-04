@@ -312,6 +312,16 @@ describe('GET /api/users/me/export', () => {
     }
   });
 
+  // the staff are people with data of their own too: the same file, with their role
+  it.each(['ADMIN', 'ROOT'] as const)('gives an account of %s its own data', async (role) => {
+    const person = await newUser({ role, name: 'Staff Person' });
+
+    const res = await exportOf(accessCookie(person));
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().profile).toMatchObject({ email: person.email, name: 'Staff Person', role });
+  });
+
   it('refuses a guest', async () => {
     const res = await exportOf('');
 

@@ -161,6 +161,8 @@ Who pays the carrier for the parcel back is what the contract the order kept say
 
 A transfer that got no answer stays `pending`: the worker asks the provider again with the same key, and the webhook of the provider settles it.
 
+A transfer can fail after it went: Stripe answers `succeeded`, the buyer is mailed that the money went back and the statement may close, but the bank of a card that is closed or expired sends the money back a while later (`refund.failed`, `expired_or_canceled_card`). The webhook then puts the rows refunded by that refund back to `not_refunded` with `card_unavailable`, opens the statement again and mails the buyer that the money did not reach them; the alert `failed_refunds` lists it, the admin log has `return.refund_failed` with `sentBack`. Root sends the money another way and records it, as above. In the reports the money of these rows counts on the day root records it, not on the day of the first transfer.
+
 ## 14. A dispute at the bank
 
 The buyer disputed the payment at the bank, so the provider refused the transfer as `disputed`. The app neither sends it again nor records it as returned outside until the bank decides.

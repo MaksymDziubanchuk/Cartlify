@@ -18,14 +18,20 @@ import {
   expireSession,
   lineItemsOf,
   openBankPaymentPage,
+  DISPUTED_CARD,
   payByCard,
   payCheckoutSession,
+  PENDING_REFUND_CARD,
   readSession,
   refundsOf,
+  refundBecomes,
+  REFUND_FAIL_CARD,
   rememberSession,
   stripeEvent,
   stripeOfTests,
+  stripeWait,
   stripeWithKey,
+  tryCardOnPage,
 } from '../../../helpers/stripe.js';
 
 // the answers of Stripe the app and the tests rely on: the states of a page and of a payment, the
@@ -325,6 +331,52 @@ describe('closing a page', () => {
 });
 
 describe('paying a page with a test card', () => {
+  it('is refused by the bank of a declined card, and the page stays open for another card', async () => {
+    const session = await openAppPage();
+
+    const refusals = [];
+    for (const token of [
+      'tok_chargeDeclined',
+      'tok_chargeDeclinedInsufficientFunds',
+      'tok_chargeDeclinedExpiredCard',
+    ]) {
+      refusals.push(await tryCardOnPage(session.id, token));
+    }
+    const open = await stripe.checkout.sessions.retrieve(session.id);
+    const paid = await tryCardOnPage(session.id, 'tok_visa');
+
+    expect(refusals).toEqual([
+      {
+        statusCode: 402,
+        type: 'StripeCardError',
+        code: 'card_declined',
+        declineCode: 'generic_decline',
+        message: 'Your card was declined.',
+      },
+      {
+        statusCode: 402,
+        type: 'StripeCardError',
+        code: 'card_declined',
+        declineCode: 'insufficient_funds',
+        message:
+          'Your card has insufficient funds. Use a different payment method to complete this purchase.',
+      },
+      {
+        statusCode: 402,
+        type: 'StripeCardError',
+        code: 'expired_card',
+        declineCode: 'expired_card',
+        message: 'Your card has expired.',
+      },
+    ]);
+    expect(open).toMatchObject({ status: 'open', payment_status: 'unpaid' });
+    expect(paid).toBeNull();
+    expect(await stripe.checkout.sessions.retrieve(session.id)).toMatchObject({
+      status: 'complete',
+      payment_status: 'paid',
+    });
+  });
+
   it('is refused for an amount the page does not show', async () => {
     const session = await openAppPage();
     const card = await testCard();
@@ -516,6 +568,60 @@ describe('a refund of the app', () => {
       payment_intent: paymentId,
     });
   });
+
+  // the sandbox ends it about two minutes later with one refund.updated of status succeeded (seen
+  // 04.11.2026), longer than a test waits; the mock ends it when a test says so
+  it('of a payment by the card of a pending refund is pending, and is read so', async () => {
+    const paymentId = await payByCard(1200, PENDING_REFUND_CARD);
+    const made = await refundOf(paymentId, '12.00', `refund:${paymentId}`);
+
+    expect(made).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'pending' });
+    expect(await getStripeRefund(made.refundId!)).toEqual(made);
+  });
+
+  it('is refused for a payment the buyer disputed at the bank, as charge_disputed', async () => {
+    const paymentId = await payByCard(1000, DISPUTED_CARD);
+    const { latest_charge: charge } = await stripe.paymentIntents.retrieve(paymentId);
+
+    expect(
+      await refusalOf(stripe.refunds.create({ payment_intent: paymentId, amount: 500 })),
+    ).toEqual(
+      refused({
+        statusCode: 400,
+        code: 'charge_disputed',
+        message: `Charge ${String(charge)} has been charged back; cannot issue a refund.`,
+      }),
+    );
+    expect(await refundOf(paymentId, '5.00', `refund:${paymentId}`)).toMatchObject({
+      status: 'failed',
+      failure: 'disputed',
+    });
+  });
+
+  // the sandbox fails it about 130 s later: the test waits
+  it(
+    'of a payment by the card of a card that is gone succeeds, then fails with refund.failed',
+    async () => {
+      const paymentId = await payByCard(1100, REFUND_FAIL_CARD);
+      const made = await refundOf(paymentId, '11.00', `refund:${paymentId}`);
+      expect(made).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'succeeded' });
+
+      await refundBecomes(made.refundId!, { status: 'failed', reason: 'expired_or_canceled_card' });
+
+      expect(await getStripeRefund(made.refundId!)).toMatchObject({
+        refundId: made.refundId,
+        status: 'failed',
+        failure: 'card_unavailable',
+      });
+      const event = await stripeEvent('refund.failed', made.refundId!);
+      expect(event.data.object).toMatchObject({
+        id: made.refundId,
+        status: 'failed',
+        failure_reason: 'expired_or_canceled_card',
+      });
+    },
+    stripeWait,
+  );
 
   it('is not found by an id Stripe does not know', async () => {
     const id = `re_${randomText(24)}`;
