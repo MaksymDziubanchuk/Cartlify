@@ -18,6 +18,9 @@ import {
 import { watchMail } from '../../helpers/mail.js';
 import { placePaidOrder, placePaidOrderOf } from '../../helpers/payments.js';
 import {
+  PENDING_REFUND_CARD,
+  refundBecomes,
+  stripeWait,
   queueRefundOutcome,
   realStripe,
   refundsOf,
@@ -74,10 +77,13 @@ const post = (url: string, payload: Record<string, unknown> = {}) =>
   });
 
 // a statement whose one unit is back on the shelf, for an order paid by a card
-async function readyStatement() {
+async function readyStatement(paymentCard?: string) {
   const product = await createProduct({ price: 10, stock: 10 });
   products.push(product);
-  const { orderId, paymentId } = await placePaidOrder(app, csrf, buyer, product, { quantity: 1 });
+  const { orderId, paymentId } = await placePaidOrder(app, csrf, buyer, product, {
+    quantity: 1,
+    ...(paymentCard ? { card: paymentCard } : {}),
+  });
   const [item] = await asAdmin((tx) =>
     tx.orderItem.findMany({ where: { orderId }, select: { id: true } }),
   );
@@ -125,20 +131,31 @@ describe('the return refund worker', () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
-  mockOnly(
-    'asks where a refund stands, leaves it while Stripe holds it, and settles it when it ends',
+  it('asks where a refund stands and leaves it while Stripe holds it', async () => {
+    const { returnId } = await readyStatement(PENDING_REFUND_CARD);
+    const res = await post(`/api/returns/${returnId}/refund`);
+    const refundId: string = res.json().items[0].refundId;
+
+    const held = await settlePendingReturnRefunds(workerLog(), { olderThanMs: 0, returnId });
+
+    expect(held).toBe(0);
+    expect(await rowsOf(returnId)).toEqual([
+      expect.objectContaining({ money: 'pending', refundId }),
+    ]);
+  });
+
+  // the sandbox ends a refund of the pending card about two minutes later: the test waits for it;
+  // the mock ends it at once
+  it(
+    'settles a pending refund when Stripe ends it, for the system',
     async () => {
-      const { orderId, returnId } = await readyStatement();
-      queueRefundOutcome({ status: 'pending' });
+      const { orderId, returnId } = await readyStatement(PENDING_REFUND_CARD);
       const res = await post(`/api/returns/${returnId}/refund`);
       const refundId: string = res.json().items[0].refundId;
-      const log = workerLog();
+      await refundBecomes(refundId, { status: 'succeeded' });
 
-      const held = await settlePendingReturnRefunds(log, { olderThanMs: 0, returnId });
-      settleRefund(refundId, { status: 'succeeded' });
-      const settled = await settlePendingReturnRefunds(log, { olderThanMs: 0, returnId });
+      const settled = await settlePendingReturnRefunds(workerLog(), { olderThanMs: 0, returnId });
 
-      expect(held).toBe(0);
       expect(settled).toBe(1);
       expect(await rowsOf(returnId)).toEqual([
         expect.objectContaining({ money: 'refunded', refundId }),
@@ -160,6 +177,7 @@ describe('the return refund worker', () => {
         }),
       ]);
     },
+    stripeWait,
   );
 
   mockOnly('settles a refund that failed after it was pending, with the reason', async () => {
@@ -181,9 +199,8 @@ describe('the return refund worker', () => {
     ]);
   });
 
-  mockOnly('leaves a transfer it cannot ask about now, and logs it', async () => {
-    const { returnId } = await readyStatement();
-    queueRefundOutcome({ status: 'pending' });
+  it('leaves a transfer it cannot ask about now, and logs it', async () => {
+    const { returnId } = await readyStatement(PENDING_REFUND_CARD);
     await post(`/api/returns/${returnId}/refund`);
     const log = workerLog();
 

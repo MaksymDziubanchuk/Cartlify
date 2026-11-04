@@ -33,7 +33,13 @@ const CARD_MINIMUM_TOTAL = 50;
 
 const error = (
   status: number,
-  fields: { message: string; type?: string; code?: string; param?: string },
+  fields: {
+    message: string;
+    type?: string;
+    code?: string;
+    param?: string;
+    decline_code?: string;
+  },
 ): Answer => ({
   status,
   body: {
@@ -44,12 +50,33 @@ const error = (
             doc_url: `https://stripe.com/docs/error-codes/${fields.code.replaceAll('_', '-')}`,
           }
         : {}),
+      ...(fields.decline_code ? { decline_code: fields.decline_code } : {}),
       message: fields.message,
       ...(fields.param ? { param: fields.param } : {}),
       type: fields.type ?? 'invalid_request_error',
     },
   },
 });
+
+// the test cards whose bank says no on the page, with the answer of the sandbox (seen 04.11.2026)
+const DECLINED_CARDS: Record<string, { code: string; decline_code: string; message: string }> = {
+  tok_chargeDeclined: {
+    code: 'card_declined',
+    decline_code: 'generic_decline',
+    message: 'Your card was declined.',
+  },
+  tok_chargeDeclinedInsufficientFunds: {
+    code: 'card_declined',
+    decline_code: 'insufficient_funds',
+    message:
+      'Your card has insufficient funds. Use a different payment method to complete this purchase.',
+  },
+  tok_chargeDeclinedExpiredCard: {
+    code: 'expired_card',
+    decline_code: 'expired_card',
+    message: 'Your card has expired.',
+  },
+};
 
 const list = (url: string, data: unknown[]): Answer => ({
   status: 200,
@@ -170,6 +197,9 @@ export type StripeMock = {
   queueRefundOutcome: (outcome: RefundOutcome) => void;
   // a refund that was pending ends: the event Stripe records is the one the webhook gets
   settleRefund: (refundId: string, end: { status: 'succeeded' } | RefundOutcome) => void;
+  // the bank decides the dispute of a payment of pm_card_createDispute: won, its charge may be
+  // refunded again; lost, it stays charged back
+  closeDispute: (paymentId: string, outcome: 'won' | 'lost') => void;
 };
 
 export function startStripeMock(key: string): StripeMock {
@@ -182,10 +212,14 @@ export function startStripeMock(key: string): StripeMock {
   const paymentIntents = new Map<string, PaymentIntent>();
   const paymentMethods = new Map<
     string,
-    { id: string; type: string; email: string | null; name: string | null }
+    { id: string; type: string; token: string; email: string | null; name: string | null }
   >();
   const refunds: Refund[] = [];
   const refundOutcomes: RefundOutcome[] = [];
+  // the payments made by the test card whose refunds are pending first (pm_card_pendingRefund), and
+  // by the card the buyer disputes at the bank at once (pm_card_createDispute)
+  const pendingRefundPayments = new Set<string>();
+  const disputedPayments = new Set<string>();
   const events: StripeEvent[] = [];
   const idempotent = new Map<string, { request: string; answer: Answer }>();
   let unanswered: string[] = [];
@@ -405,6 +439,9 @@ export function startStripeMock(key: string): StripeMock {
       unanswered.push(`a payment of the page by ${method?.type ?? 'an unknown payment method'}`);
       return error(400, { message: 'stripe mock: the page is paid by card or sepa_debit only' });
     }
+    // the bank of the card says no: the page stays open, another card may pay it
+    const declined = DECLINED_CARDS[method.token];
+    if (declined) return error(402, { type: 'card_error', ...declined });
 
     // a card takes the money at once, a bank debit completes the page and the bank decides later
     const byBank = method.type === 'sepa_debit';
@@ -482,17 +519,21 @@ export function startStripeMock(key: string): StripeMock {
   function createPaymentMethod(params: Params): Answer {
     const type = String(params.type);
     const billing = (params.billing_details as Params | undefined) ?? {};
-    const card = (params.card as Params | undefined)?.token === 'tok_visa';
+    const token = String((params.card as Params | undefined)?.token ?? '');
+    const card = token === 'tok_visa' || token in DECLINED_CARDS;
     const bank = Boolean((params.sepa_debit as Params | undefined)?.iban);
 
     if (!(type === 'card' && card) && !(type === 'sepa_debit' && bank)) {
       unanswered.push(`a payment method of type ${type}`);
-      return error(400, { message: 'stripe mock: a test card tok_visa or a test iban only' });
+      return error(400, {
+        message: 'stripe mock: a test card tok_visa, a declined test card or a test iban only',
+      });
     }
 
     const method = {
       id: idOf('pm_', 27),
       type,
+      token,
       email: (billing.email as string | undefined) ?? null,
       name: (billing.name as string | undefined) ?? null,
     };
@@ -502,13 +543,20 @@ export function startStripeMock(key: string): StripeMock {
 
   function createPaymentIntent(params: Params): Answer {
     const automatic = params.automatic_payment_methods as Params | undefined;
+    const card = params.payment_method;
     if (
-      params.payment_method !== 'pm_card_visa' ||
+      (card !== 'pm_card_visa' &&
+        card !== 'pm_card_pendingRefund' &&
+        card !== 'pm_card_refundFail' &&
+        card !== 'pm_card_createDispute') ||
       params.confirm !== 'true' ||
       automatic?.allow_redirects !== 'never'
     ) {
-      unanswered.push('a payment other than one confirmed at once by pm_card_visa');
-      return error(400, { message: 'stripe mock: pm_card_visa confirmed at once only' });
+      unanswered.push('a payment other than one confirmed at once by a test card of the mock');
+      return error(400, {
+        message:
+          'stripe mock: pm_card_visa, pm_card_pendingRefund or pm_card_createDispute confirmed at once only',
+      });
     }
 
     const payment = makePayment({
@@ -518,6 +566,8 @@ export function startStripeMock(key: string): StripeMock {
       description: null,
       status: 'succeeded',
     });
+    if (card === 'pm_card_pendingRefund') pendingRefundPayments.add(payment.id);
+    if (card === 'pm_card_createDispute') disputedPayments.add(payment.id);
     return { status: 200, body: copy(payment) };
   }
 
@@ -528,6 +578,13 @@ export function startStripeMock(key: string): StripeMock {
     if (payment.status !== 'succeeded') {
       unanswered.push(`a refund of a payment that is ${payment.status}`);
       return error(400, { message: 'stripe mock: a refund of a payment that succeeded only' });
+    }
+    // the sandbox refuses a refund of a charge the buyer disputed (seen 04.11.2026)
+    if (disputedPayments.has(paymentId)) {
+      return error(400, {
+        message: `Charge ${String(payment.latest_charge)} has been charged back; cannot issue a refund.`,
+        code: 'charge_disputed',
+      });
     }
     // what is left to give back: a refund that failed or was cancelled took nothing
     const left =
@@ -558,7 +615,10 @@ export function startStripeMock(key: string): StripeMock {
       });
     }
 
-    const outcome = refundOutcomes.shift();
+    // a refund of the payment of the pending card is pending, as at Stripe, until the test ends it
+    const outcome: RefundOutcome | undefined =
+      refundOutcomes.shift() ??
+      (pendingRefundPayments.has(paymentId) ? { status: 'pending' } : undefined);
     const refund: Refund = {
       id: idOf('re_', 27),
       object: 'refund',
@@ -784,5 +844,10 @@ export function startStripeMock(key: string): StripeMock {
       refundOutcomes.push(outcome);
     },
     settleRefund,
+    closeDispute: (paymentId, outcome) => {
+      if (!disputedPayments.has(paymentId))
+        throw new Error(`the stripe mock has no dispute of ${paymentId}`);
+      if (outcome === 'won') disputedPayments.delete(paymentId);
+    },
   };
 }

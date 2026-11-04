@@ -21,7 +21,16 @@ import {
   statementCodeIn,
   withdrawalLinkIn,
 } from '../../helpers/returnJourney.js';
-import { queueRefundOutcome, realStripe, refundsOf } from '../../helpers/stripe.js';
+import {
+  closeDispute,
+  deliver,
+  DISPUTED_CARD,
+  refundBecomes,
+  REFUND_FAIL_CARD,
+  refundsOf,
+  stripeEvent,
+  stripeWait,
+} from '../../helpers/stripe.js';
 
 // What becomes of the goods and of the money of a withdrawal from a sent order
 // (docs/return-scenarios.md, 9 to 14): goods that come back damaged or worth less, goods that never
@@ -39,7 +48,6 @@ const j = journeyOf(
   () => app,
   () => csrf,
 );
-const mockOnly = realStripe ? it.skip : it;
 
 beforeAll(async () => {
   app = await startApp();
@@ -60,14 +68,18 @@ afterAll(async () => {
 
 // a sent order the buyer withdraws from in full; what each side has of it: the buyer the mails,
 // the admin the statement found by the code of the mail
-async function withdrawn(units: number, name = 'Desk lamp') {
+async function withdrawn(units: number, name = 'Desk lamp', card?: string) {
   const buyer = await createUser({ name: 'Anna Koval' });
   userIds.push(buyer.id);
   const product = await createProduct({ price: 10, stock: 20, name: `${name} ${buyer.id}` });
   products.push(product);
-  const { orderId, paymentId } = await placePaidOrderOf(app, csrf, buyer, [
-    { item: product, quantity: units },
-  ]);
+  const { orderId, paymentId } = await placePaidOrderOf(
+    app,
+    csrf,
+    buyer,
+    [{ item: product, quantity: units }],
+    card ? { card } : {},
+  );
   expect(
     (await j.patch(admin, `/api/orders/${orderId}/status`, { status: 'shipped' })).statusCode,
   ).toBe(200);
@@ -184,20 +196,26 @@ describe('the goods that never come', () => {
 });
 
 describe('the money that does not go back the usual way', () => {
-  mockOnly(
-    'tells the buyer the card refused it, and root records the money sent another way',
+  // the card was closed: the refund goes, the bank of the card sends it back (the sandbox: the card
+  // of a refund that fails, about 130 s later), Stripe tells it by refund.failed
+  it(
+    'tells the buyer the bank of the card sent the money back, and root records the money sent another way',
     async () => {
-      const { buyer, mails, returnId } = await withdrawn(1);
+      const { buyer, mails, returnId } = await withdrawn(1, 'Desk lamp', REFUND_FAIL_CARD);
       const [row] = (await cardOf(returnId)).items;
       expect(
         (await receive(returnId, [{ itemId: row.id, quantity: 1, goods: 'to_stock' }])).statusCode,
       ).toBe(200);
 
-      queueRefundOutcome({ status: 'failed', reason: 'expired_or_canceled_card' });
-      const failed = await j.post(admin, `/api/returns/${returnId}/refund`);
-      expect(failed.json().items[0]).toMatchObject({ refundFailure: { code: 'card_unavailable' } });
+      const went = await j.post(admin, `/api/returns/${returnId}/refund`);
+      expect(went.json().items[0]).toMatchObject({ money: 'refunded' });
+      const refundId = went.json().items[0].refundId as string;
+      await refundBecomes(refundId, { status: 'failed', reason: 'expired_or_canceled_card' });
+      expect((await deliver(app, await stripeEvent('refund.failed', refundId))).statusCode).toBe(
+        200,
+      );
       expect(mailTo(mails, buyer.email, 'We could not return the money').text).toContain(
-        'the card can no longer take money',
+        'sent back to us by the bank of the card',
       );
 
       // the list of the failed transfers names it; root sends the money by a bank transfer
@@ -218,23 +236,25 @@ describe('the money that does not go back the usual way', () => {
         outside: { method: 'bank_transfer' },
       });
     },
+    stripeWait,
   );
 
-  mockOnly(
+  it(
     'records the end of a dispute at the bank: lost, the rows are refunded by chargeback without a mail',
     async () => {
-      const { buyer, mails, returnId } = await withdrawn(1);
+      const { buyer, mails, returnId, paymentId } = await withdrawn(1, 'Desk lamp', DISPUTED_CARD);
       const [row] = (await cardOf(returnId)).items;
       expect(
         (await receive(returnId, [{ itemId: row.id, quantity: 1, goods: 'to_stock' }])).statusCode,
       ).toBe(200);
-      queueRefundOutcome({ status: 'failed', reason: 'charge_for_pending_refund_disputed' });
       expect(
         (await j.post(admin, `/api/returns/${returnId}/refund`)).json().items[0],
       ).toMatchObject({
         refundFailure: { code: 'disputed' },
       });
       const before = mails.length;
+      // the bank decides for the buyer; root learns it from Stripe and records it
+      await closeDispute(paymentId, 'lost');
 
       const card = await cardOf(returnId);
       const settled = await j.post(root, `/api/returns/${returnId}/dispute`, {
@@ -250,6 +270,7 @@ describe('the money that does not go back the usual way', () => {
       });
       expect(mailsTo(mails.slice(before), buyer.email, '')).toEqual([]);
     },
+    stripeWait,
   );
 
   it('pays the buyer back the way back the shop owes, when no parcel of the shop is on the statement', async () => {

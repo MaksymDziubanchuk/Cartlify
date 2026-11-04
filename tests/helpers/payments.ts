@@ -61,6 +61,8 @@ export async function placePaidOrder(
     stage?: 'paid' | 'shipped';
     // where the order goes, when a test needs it other than the usual one
     delivery?: Record<string, unknown>;
+    // the test card of the payment, when its refunds have to behave another way
+    card?: string;
   } = {},
 ): Promise<{ orderId: number; paymentId: string }> {
   return placePaidOrderOf(app, csrf, user, [{ item: product, quantity: opts.quantity ?? 1 }], opts);
@@ -75,6 +77,7 @@ export async function placePaidOrderOf(
   opts: {
     stage?: 'paid' | 'shipped';
     delivery?: Record<string, unknown>;
+    card?: string;
   } = {},
 ): Promise<{ orderId: number; paymentId: string }> {
   const orderId = await placeOrderOf(app, csrf, user, lines, 'waiting', opts.delivery);
@@ -82,7 +85,7 @@ export async function placePaidOrderOf(
   const { total } = await asAdmin((tx) =>
     tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { total: true } }),
   );
-  const paymentId = await payByCard(Math.round(Number(total) * 100));
+  const paymentId = await payByCard(Math.round(Number(total) * 100), opts.card);
 
   const paid = await asAdmin(
     (tx) => tx.$queryRaw<{ result: string }[]>`

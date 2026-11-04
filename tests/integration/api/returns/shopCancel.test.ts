@@ -326,34 +326,25 @@ describe('shop_cancel: the shop cancels a paid order', () => {
     expect(await refundsOf(done.paymentId)).toHaveLength(1);
   });
 
-  mockOnly(
-    'cancels the order of a payment Stripe does not know and shows the money as not refunded, with the failure',
-    async () => {
-      const product = await createProduct({ price: 10, stock: 5 });
-      products.push(product);
-      // a made-up payment id: Stripe has no such payment
-      const orderId = await placeOrderOf(
-        app,
-        csrf,
-        buyer,
-        [{ item: product, quantity: 1 }],
-        'paid',
-      );
-      const [item] = await asAdmin((tx) =>
-        tx.orderItem.findMany({ where: { orderId }, select: { id: true } }),
-      );
+  it('cancels the order of a payment Stripe does not know and shows the money as not refunded, with the failure', async () => {
+    const product = await createProduct({ price: 10, stock: 5 });
+    products.push(product);
+    // a made-up payment id: Stripe has no such payment
+    const orderId = await placeOrderOf(app, csrf, buyer, [{ item: product, quantity: 1 }], 'paid');
+    const [item] = await asAdmin((tx) =>
+      tx.orderItem.findMany({ where: { orderId }, select: { id: true } }),
+    );
 
-      const res = await post('/api/returns', cancelBody(orderId, item!.id, 1));
+    const res = await post('/api/returns', cancelBody(orderId, item!.id, 1));
 
-      expect(res.statusCode).toBe(201);
-      expect(res.json().order.status).toBe('cancelled');
-      expect(res.json().items[0]).toMatchObject({
-        goods: 'to_stock',
-        money: 'not_refunded',
-        refundFailure: { code: 'unknown', text: expect.stringContaining('No such payment_intent') },
-      });
-    },
-  );
+    expect(res.statusCode).toBe(201);
+    expect(res.json().order.status).toBe('cancelled');
+    expect(res.json().items[0]).toMatchObject({
+      goods: 'to_stock',
+      money: 'not_refunded',
+      refundFailure: { code: 'unknown', text: expect.stringContaining('No such payment_intent') },
+    });
+  });
 
   it.each([
     [
