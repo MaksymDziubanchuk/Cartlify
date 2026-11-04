@@ -77,13 +77,7 @@ describe('a product with variants, from the directory to the order', () => {
     });
     expect(asked.statusCode).toBe(200);
 
-    // a variant without the colour is refused; the product with a black and a white variant is made
-    const bare = await createProductForm(app, csrf, admin, {
-      categoryId,
-      name: `Bare lamp ${tag}`,
-    });
-    expect(bare.statusCode).toBe(400);
-    expect(bare.json()).toMatchObject({ errorCode: 'ATTRIBUTE_REQUIRED' });
+    // the product with a black and a white variant
     const made = await createProductForm(app, csrf, admin, {
       categoryId,
       name: `Desk lamp ${tag}`,

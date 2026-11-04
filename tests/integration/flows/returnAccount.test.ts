@@ -168,4 +168,25 @@ describe('the buyer withdraws from their account', () => {
     expect((await stockOf(product)).stock).toBe(before.stock + 2);
     expect((await refundsOf(paymentId)).map((refund) => refund.amount)).toEqual([2000]);
   });
+
+  it('writes the parcel on the page of the order in the account, and the admin sees it on the card', async () => {
+    const { buyer, orderId } = await buyerWithOrder(1);
+    expect(
+      (await j.patch(admin, `/api/orders/${orderId}/status`, { status: 'shipped' })).statusCode,
+    ).toBe(200);
+    const mails = watchMail();
+    const made = await j.post(buyer, `/api/orders/${orderId}/withdrawal`);
+    const returnId = made.json().withdrawals[0].id as number;
+
+    const proof = await j.post(buyer, `/api/orders/${orderId}/returns/${returnId}/proof`, {
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000777',
+    });
+    expect(proof.statusCode).toBe(200);
+
+    const code = statementCodeIn(mailTo(mails, buyer.email, `Withdrawal from order #${orderId}`));
+    const [found] = (await j.get(admin, `/api/returns?q=${code}`)).json().items;
+    const card = (await j.get(admin, `/api/returns/${found.id}`)).json();
+    expect(card.proof).toMatchObject({ carrier: 'DHL', trackingNumber: 'JD0146000777' });
+  });
 });

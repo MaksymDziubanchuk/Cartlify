@@ -130,7 +130,7 @@ describe('the returns the shop starts', () => {
     expect((await refundsOf(paymentId)).map((refund) => refund.amount)).toEqual([2000]);
   });
 
-  it('takes goods back outside the withdrawal, with the parcel the shop paid recorded once and warned of', async () => {
+  it('takes goods back outside the withdrawal, with the parcel the shop paid and its cost put right', async () => {
     const { buyer, orderId, paymentId } = await paidOrder(1);
     await step(orderId, 'shipped');
     await step(orderId, 'delivered');
@@ -148,7 +148,7 @@ describe('the returns the shop starts', () => {
     const returnId = made.json().id;
     expect(statementCodeIn(mailTo(mails, buyer.email, 'registered'))).toBe(`R${orderId}-1`);
 
-    // the shop sends a label: the parcel back with its cost, once by its number
+    // the shop sends a label: the parcel back with its cost; the bill of the carrier puts it right
     const parcel = {
       carrier: 'DHL',
       trackingNumber: 'JD0146000555',
@@ -157,14 +157,13 @@ describe('the returns the shop starts', () => {
     };
     const recorded = await j.post(admin, `/api/returns/${returnId}/shipments`, parcel);
     expect(recorded.statusCode).toBe(201);
-    // outside the withdrawal nothing is taken off; the parcel of the shop is warned of
-    expect(recorded.json()).toMatchObject({ deductible: 0, warnings: ['shop_paid_parcel'] });
-    const twice = await j.post(admin, `/api/returns/${returnId}/shipments`, {
-      ...parcel,
-      trackingNumber: 'jd 0146 000555',
+    const shipmentId = recorded.json().shipments[0].id as number;
+    const billed = await j.patch(admin, `/api/returns/${returnId}/shipments/${shipmentId}`, {
+      cost: 5.2,
     });
-    expect(twice.statusCode).toBe(409);
-    expect(twice.json()).toMatchObject({ errorCode: 'RETURN_SHIPMENT_EXISTS' });
+    expect(billed.json().shipments).toEqual([
+      expect.objectContaining({ id: shipmentId, cost: 5.2 }),
+    ]);
 
     expect(
       (

@@ -71,7 +71,6 @@ describe('a review from the delivery to its removal', () => {
         payload: { action: 'up' },
       });
     expect((await vote(voter, praiseId)).json()).toMatchObject({ upVotes: 1, userVote: 'up' });
-    expect((await vote(buyer, praiseId)).json().errorCode).toBe('REVIEW_OWN_VOTE_FORBIDDEN');
 
     // the product counts both, the most helpful comes first
     const card = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });

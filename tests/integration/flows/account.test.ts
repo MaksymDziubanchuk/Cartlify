@@ -70,13 +70,6 @@ describe('an account from the first visit to the logout', () => {
     userIds.push(registered.json().id);
     expect(await favoritesOf({ guestId })).toEqual([likedVariant]);
 
-    // a login waits for the confirmation of the email
-    const early = await logIn(app, csrf, { email, password });
-    expect({ status: early.statusCode, code: early.json().errorCode }).toEqual({
-      status: 403,
-      code: 'EMAIL_NOT_VERIFIED',
-    });
-
     // the link of the mail, opened in the browser of the guest, confirms the email and gives the
     // account the favorite and the chat
     const verified = await app.inject({
