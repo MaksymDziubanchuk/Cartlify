@@ -1123,10 +1123,6 @@ const patchProductsBulkPriceRouterSchema = {
       description: 'Unexpected server error while updating variant prices.',
       $ref: 'errorResponseSchema#',
     },
-    501: {
-      description: 'Bulk price update mode is not implemented.',
-      $ref: 'errorResponseSchema#',
-    },
   },
 } satisfies FastifySchema;
 

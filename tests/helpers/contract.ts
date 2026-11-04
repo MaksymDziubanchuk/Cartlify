@@ -2,6 +2,8 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import ajvModule, { type ValidateFunction } from 'ajv';
 import ajvFormatsModule from 'ajv-formats';
 
+import { recordAnswer, recordDocument } from './routeMap.js';
+
 // Every answer the app gives in the integration tests is held against the swagger document the
 // frontend reads (GET /documentation/json) and the response schemas of its route:
 // - the status is one the route lists;
@@ -78,7 +80,9 @@ function shapeLosses(raw: unknown, sent: unknown, path = ''): string[] {
 
     if (!(key in sent)) return [`field ${at} is dropped by the schema`];
     if (value === null && sent[key] !== null) {
-      return [`field ${at} is null but the schema has no null, it is sent as ${JSON.stringify(sent[key])}`];
+      return [
+        `field ${at} is null but the schema has no null, it is sent as ${JSON.stringify(sent[key])}`,
+      ];
     }
 
     return shapeLosses(value, sent[key], at);
@@ -137,7 +141,10 @@ export function installContractCheck(app: FastifyInstance): void {
     if (method === 'options' || method === 'head') return payload;
     if (req.routeOptions.schema?.hide) return payload;
 
-    doc ??= app.swagger() as SwaggerDocument;
+    if (!doc) {
+      doc = app.swagger() as SwaggerDocument;
+      recordDocument(doc);
+    }
     const status = reply.statusCode;
     // a route of a prefix ('/' under /api/products) answers with and without the slash, the
     // document names it with one
@@ -157,12 +164,28 @@ export function installContractCheck(app: FastifyInstance): void {
       return payload;
     }
 
-    const contentType = String(reply.getHeader('content-type') ?? '').split(';')[0]!.trim();
+    const contentType = String(reply.getHeader('content-type') ?? '')
+      .split(';')[0]!
+      .trim();
     const body = jsonOf(payload);
+
+    // who asked and what they got, for the route x role x case map (tests/helpers/routeMap.ts)
+    const answerCode = body.ok && isRecord(body.value) ? body.value.errorCode : undefined;
+    recordAnswer({
+      method: req.method,
+      url,
+      role: req.user?.role ?? 'none',
+      status,
+      code: typeof answerCode === 'string' ? answerCode : null,
+    });
 
     // a body of a type the document does not give for this status
     if (contentType && documented.content && !(contentType in documented.content)) {
-      report(req, status, `the answer is ${contentType}, the document gives ${Object.keys(documented.content).join(', ')}`);
+      report(
+        req,
+        status,
+        `the answer is ${contentType}, the document gives ${Object.keys(documented.content).join(', ')}`,
+      );
     }
     if (!documented.content && typeof payload === 'string' && payload !== '') {
       report(req, status, 'the answer has a body, the document gives none');
@@ -179,7 +202,11 @@ export function installContractCheck(app: FastifyInstance): void {
       const validate = validatorOf(req, status, contentType);
       if (validate && !validate(body.value)) {
         for (const error of validate.errors ?? []) {
-          report(req, status, `the body does not pass the schema: ${error.instancePath || '/'} ${error.message}`);
+          report(
+            req,
+            status,
+            `the body does not pass the schema: ${error.instancePath || '/'} ${error.message}`,
+          );
         }
       }
 

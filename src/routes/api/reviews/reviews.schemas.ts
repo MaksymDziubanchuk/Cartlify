@@ -61,7 +61,7 @@ const postVoteReviewSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Review was not found.',
+      description: '`REVIEW_NOT_FOUND`: there is no review with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {

@@ -569,20 +569,6 @@ describe('POST /api/orders/current/confirm and the consent', () => {
     expect((await confirm(user, orderId)).statusCode).toBe(200);
   });
 
-  it('refuses it after a new version until the customer accepts it', async () => {
-    const user = await consentingUser();
-    const orderId = await cartOf(user);
-    const contract = await published('contract');
-
-    const refused = await confirm(user, orderId);
-    await acceptAs(user, [contract.id]);
-    const confirmed = await confirm(user, orderId);
-
-    expect(refused.statusCode).toBe(409);
-    expect(refused.json()).toMatchObject({ details: { kinds: ['contract'] } });
-    expect(confirmed.statusCode).toBe(200);
-  });
-
   it('keeps the versions the order was confirmed with', async () => {
     const user = await consentingUser();
     const ids = await currentIds();

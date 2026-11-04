@@ -694,6 +694,35 @@ describe('POST /api/withdrawals when the database is busy', () => {
   });
 });
 
+// the units a form without the code may name, after every fact of the recipient matches; a fact
+// that does not match answers as an order there is not (the flow of the form walks the units)
+describe('POST /api/withdrawals/items', () => {
+  it('gives the units for the facts of the recipient, and one answer for any fact that does not match', async () => {
+    const { orderId } = await order(1, 'shipped');
+
+    const right = await post('/api/withdrawals/items', { orderId, ...FACTS });
+    expect(right.statusCode).toBe(200);
+
+    const answers = [];
+    for (const wrong of [
+      { ...FACTS, recipientName: 'Olena Koval' },
+      { ...FACTS, phone: '+380509999999' },
+      { ...FACTS, country: 'pl' },
+      { ...FACTS, postalCode: '01002' },
+      { recipientName: FACTS.recipientName },
+    ]) {
+      answers.push(await post('/api/withdrawals/items', { orderId, ...wrong }));
+    }
+    answers.push(await post('/api/withdrawals/items', { orderId: 2_000_000_100, ...FACTS }));
+
+    for (const res of answers) {
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'WITHDRAWAL_REJECTED' });
+    }
+    expect(new Set(answers.map((res) => res.json().message)).size).toBe(1);
+  });
+});
+
 describe('POST /api/withdrawals refusals', () => {
   it('gives one answer for an order there is not, a recipient who does not match, a period that is over, an order not paid and units that are not the order', async () => {
     const paid = await order(1);

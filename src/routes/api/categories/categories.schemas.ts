@@ -253,7 +253,7 @@ const patchCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Category was not found.',
+      description: '`CATEGORY_NOT_FOUND`: there is no category with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -307,7 +307,7 @@ const deleteCategorySchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'Category was not found.',
+      description: '`CATEGORY_NOT_FOUND`: there is no category with this id.',
       $ref: 'errorResponseSchema#',
     },
     409: {
@@ -344,7 +344,7 @@ const putCategoryImageSchema = {
     400: {
       description:
         '`MULTIPART_REQUIRED`: the body is not a form. `CATEGORY_IMAGE_REQUIRED`: the form has no ' +
-        '`image` file. `CATEGORY_IMAGE_MULTIPLE`: the form has more than one. `CATEGORY_IMAGE_EMPTY`, ' +
+        '`image` file. `CATEGORY_IMAGE_MULTIPLE`: the form has more than one. ' +
         '`CATEGORY_IMAGE_STREAM_ERROR`: an empty file. `IMAGE_TYPE_NOT_ALLOWED`: not a jpeg, png or ' +
         'webp file. `IMAGE_INVALID`: Cloudinary cannot read the file.',
       $ref: 'errorResponseSchema#',

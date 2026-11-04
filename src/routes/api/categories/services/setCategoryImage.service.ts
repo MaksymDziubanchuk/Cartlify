@@ -14,7 +14,7 @@ import {
   requireImageStream,
   uploadImage,
 } from '@utils/cloudinary.util.js';
-import { BadRequestError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
+import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { categoryResponseOf } from './helpers/categories.helper.js';
 
@@ -33,12 +33,6 @@ export async function beginCategoryImageUpload(args: {
   image: CategoryImagePart;
 }): Promise<UploadedCategoryImage> {
   const { categoryId, image } = args;
-
-  // fast fail when the stream is already dead
-  const stream: any = image.file;
-  if (!stream || stream.destroyed || stream.readableEnded) {
-    throw new BadRequestError('CATEGORY_IMAGE_EMPTY');
-  }
 
   // an empty file and one that is not a jpeg, png or webp by its bytes never reach cloudinary
   const safeStream = await requireImageStream(image.file, {

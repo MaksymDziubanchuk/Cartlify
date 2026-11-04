@@ -110,6 +110,16 @@ describe('POST /api/payments/stripe/webhook', () => {
       expect(res.json()).toMatchObject({ errorCode: 'STRIPE_SIGNATURE_INVALID' });
     });
 
+    it('answers STRIPE_SIGNATURE_REQUIRED for a header of the signature of only spaces', async () => {
+      const res = await post(JSON.stringify(ignoredEvent()), {
+        'content-type': 'application/json',
+        'stripe-signature': '   ',
+      });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'STRIPE_SIGNATURE_REQUIRED' });
+    });
+
     // a server without the secret takes no event: Stripe gets an error and delivers it again
     it('answers 500 and logs STRIPE_WEBHOOK_SECRET_MISSING without the webhook secret', async () => {
       const secret = env.STRIPE_WEBHOOK_SECRET;

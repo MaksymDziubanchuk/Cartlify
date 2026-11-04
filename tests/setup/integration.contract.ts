@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach } from '@jest/globals';
 
 import { takeContractViolations } from '../helpers/contract.js';
+import { flushRouteMap } from '../helpers/routeMap.js';
 
 // answers from the start of the file (beforeAll) belong to no test; their gaps show up in the
 // first test of the file
@@ -27,6 +28,7 @@ afterEach(() => {
 
 // answers of the cleanup after the last test
 afterAll(() => {
+  flushRouteMap();
   const late = takeContractViolations();
   if (late.length) {
     throw new Error(
