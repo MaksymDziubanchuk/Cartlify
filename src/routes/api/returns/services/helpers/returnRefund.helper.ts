@@ -37,6 +37,9 @@ export type FinishedRefund = {
   amount?: string;
   // the cost of the way back the buyer owes, taken off the transfer
   deduction?: string;
+  // the provider took back a refund it had made (the bank of the card sent the money back): the
+  // rows are not refunded again
+  reversed?: boolean;
 };
 
 // who settles a transfer: the admin whose request it is, or the system (the payment webhook, the
@@ -107,6 +110,8 @@ export async function settleReturnRefund({
               ...(answer.status === 'failed'
                 ? { failure: answer.failure, failureText: answer.failureText }
                 : {}),
+              // the money had gone and the bank of the card sent it back
+              ...(result.reversed ? { sentBack: true } : {}),
             },
           },
         ],
@@ -120,7 +125,12 @@ export async function settleReturnRefund({
     if (answer.status === 'succeeded') {
       await sendReturnMoneyEmail(finished.returnId, finished.itemIds, log);
     } else if (answer.status === 'failed' && answer.failure === 'card_unavailable') {
-      await sendReturnRefundFailedEmail(finished.returnId, finished.itemIds, log);
+      await sendReturnRefundFailedEmail(
+        finished.returnId,
+        finished.itemIds,
+        log,
+        finished.reversed === true,
+      );
     }
   }
 

@@ -758,6 +758,32 @@ describe('the cost of the way back', () => {
       message: expect.stringContaining('RETURN_OUTSIDE_AT_INVALID'),
     });
   });
+
+  it('refuses a sum of nothing, below nothing or of more than two decimals', async () => {
+    const outcomes = await inRolledBackTx(async (db) => {
+      const { returnId } = await withdrawal(db, 'shop');
+      await asRoot(db);
+      const sums: Record<string, unknown> = {};
+      for (const amount of ['0', '-1', '6.555']) {
+        sums[amount] = await db.attempt(
+          `select cartlify.record_return_reimbursement(
+             $1::int, $2::numeric, 'bank_transfer'::cartlify."ReturnOutsideMethod", 'The receipt.',
+             (now() at time zone 'UTC')::timestamp(3)
+           ) as done`,
+          returnId,
+          amount,
+        );
+      }
+      return sums;
+    });
+
+    for (const outcome of Object.values(outcomes)) {
+      expect(outcome).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('RETURN_REIMBURSEMENT_INVALID'),
+      });
+    }
+  });
 });
 
 describe('finish_return_refund', () => {
@@ -794,6 +820,65 @@ describe('finish_return_refund', () => {
       closedAt: expect.any(String),
       closedById: admin.id,
     });
+  });
+
+  // the bank of a card that is gone sends the money of a refund back: the provider fails the refund
+  // it had made, the rows wait for their money again and the statement is open
+  it('takes back the rows of a refund the provider failed after it succeeded, once', async () => {
+    const result = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await soldOrder(db, 2, DELIVERY_FIVE);
+      const returnId = await comeBack(db, orderId, itemId, 2);
+      const started = await begin(db, returnId);
+      if (!started.ok) throw new Error(started.message ?? 'refused');
+      await asAdmin(db);
+      const key = started.rows[0]!.done.key;
+      await finish(db, key, 'succeeded', { refundId: 're_1' });
+      const closed = await stateOf(db, orderId, returnId);
+      const other = await finish(db, key, 'failed', {
+        refundId: 're_other',
+        failure: 'card_unavailable',
+        text: 'expired_or_canceled_card',
+      });
+      const back = await finish(db, key, 'failed', {
+        refundId: 're_1',
+        failure: 'card_unavailable',
+        text: 'expired_or_canceled_card',
+      });
+      const again = await finish(db, key, 'failed', {
+        refundId: 're_1',
+        failure: 'card_unavailable',
+        text: 'expired_or_canceled_card',
+      });
+      return {
+        closed,
+        other,
+        back,
+        again,
+        rows: await rowsOf(db, returnId),
+        state: await stateOf(db, orderId, returnId),
+      };
+    });
+
+    expect(result.closed).toMatchObject({ status: 'full', closedAt: expect.any(String) });
+    expect(result.other.ok && result.other.rows[0]!.done).toMatchObject({ changed: false });
+    expect(result.back.ok && result.back.rows[0]!.done).toMatchObject({
+      changed: true,
+      status: 'failed',
+      amount: '25.00',
+      reversed: true,
+    });
+    expect(result.again.ok && result.again.rows[0]!.done).toMatchObject({ changed: false });
+    expect(result.rows).toEqual([
+      expect.objectContaining({
+        money: 'not_refunded',
+        refundKey: null,
+        refundId: null,
+        refundedAt: null,
+        refundFailure: 'card_unavailable',
+        refundFailureText: 'expired_or_canceled_card',
+      }),
+    ]);
+    expect(result.state).toMatchObject({ status: 'open', closedAt: null, closedById: null });
   });
 
   it('says partial when only some of the units went back, and the system may settle it too', async () => {
@@ -1475,5 +1560,41 @@ describe('settle_return_dispute', () => {
       ok: false,
       message: expect.stringContaining('RETURN_OUTSIDE_METHOD_INVALID'),
     });
+  });
+});
+
+// the shape of the rows a function is given: the routes check it first,
+// the functions hold the same for any other caller
+describe('the guards of the functions of the money', () => {
+  it('refuses a row named by no id in each function that takes rows (RETURN_ITEMS_INVALID)', async () => {
+    const outcomes = await inRolledBackTx(async (db) => {
+      const { orderId, itemId } = await soldOrder(db, 2);
+      await asAdmin(db);
+      const created = await db.attempt(
+        `select cartlify.create_return(
+           $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+           'defect'::cartlify."ReturnReason", null, 'Anna Koval', 'anna@example.com', null, null, 4,
+           'Europe/Madrid'
+         ) as id`,
+        orderId,
+        JSON.stringify([{ orderItemId: 'one', quantity: 1 }]),
+      );
+      const returnId = await statementOf(db, orderId, itemId, 2);
+      const received = await receive(db, returnId, [
+        { itemId: 'one' as unknown as number, quantity: 1, goods: 'to_stock' },
+      ]);
+      const [row] = await rowsOf(db, returnId);
+      await receive(db, returnId, [{ itemId: row!.id, quantity: 2, goods: 'to_stock' }]);
+      await asRoot(db);
+      const reduced = await begin(db, returnId, [row!.id], [{ itemId: 'one', amount: 1 }]);
+      return { created, received, reduced };
+    });
+
+    for (const outcome of Object.values(outcomes)) {
+      expect(outcome).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('RETURN_ITEMS_INVALID'),
+      });
+    }
   });
 });

@@ -28,6 +28,7 @@
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 14px 0;">
                   Hi{{#userName}} {{userName}}{{/userName}},<br>
                   We could not return <b>{{amount}}</b> for your order <b>#{{orderId}}</b> to the card it was paid with: the card can no longer take money (it may be closed or expired).<br>
+                  {{#sentBack}}The money we returned earlier was sent back to us by the bank of the card, so it did not reach you.<br>{{/sentBack}}
                   We will contact you about another way to return it. You can also write to us at the address below.
                 </div>
 

@@ -12,6 +12,8 @@ export type ReturnRefundFailedTemplateArgs = {
   supportEmail: string;
   // the code of the statement the mail is about (W42-2), told in the subject and the text
   code?: string;
+  // the money went to the card and its bank sent it back: the buyer was told it was returned
+  sentBack?: boolean;
   userName?: string;
   appName?: string;
   logoCid?: string;
@@ -38,6 +40,7 @@ export function buildReturnRefundFailedTemplate(args: ReturnRefundFailedTemplate
     appName,
     orderId: String(args.orderId),
     code: args.code?.trim() || '',
+    sentBack: args.sentBack ? 'yes' : '',
     orderUrl,
     amount: money.format(Number(args.amount)),
     supportEmail: args.supportEmail.trim(),

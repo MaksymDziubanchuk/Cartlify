@@ -272,6 +272,8 @@ export async function sendReturnRefundFailedEmail(
   returnId: number,
   itemIds: number[],
   log: ReturnMailLogger,
+  // the money had gone to the card and its bank sent it back
+  sentBack = false,
 ): Promise<void> {
   try {
     const statement = await loadStatement(returnId);
@@ -287,7 +289,11 @@ export async function sendReturnRefundFailedEmail(
 
     await send(
       statement,
-      buildReturnRefundFailedTemplate({ ...common(statement), amount: moneyOf(rows).total / 100 }),
+      buildReturnRefundFailedTemplate({
+        ...common(statement),
+        amount: moneyOf(rows).total / 100,
+        sentBack,
+      }),
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return refund failed mail was not sent');
