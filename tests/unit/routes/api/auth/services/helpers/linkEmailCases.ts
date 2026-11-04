@@ -219,10 +219,10 @@ export function describeLinkEmail(name: string, c: LinkEmailCase): void {
       expect(sentText(calls[0]!.body)).toContain(`${CONFIG.WEB_ORIGIN}${c.linkPath}?token=tok-123`);
     });
 
-    // a developer without the setting still gets a link to the local frontend
-    it('falls back to localhost outside production', async () => {
+    // a test without the setting still gets a link to the local frontend
+    it('falls back to localhost in the tests', async () => {
       const local = c.pick(
-        await importWithEnv(c.specifier, { ...CONFIG, NODE_ENV: 'development', WEB_ORIGIN: '' }),
+        await importWithEnv(c.specifier, { ...CONFIG, NODE_ENV: 'test', WEB_ORIGIN: '' }),
       );
       const calls = stubFetch(() => textResponse('', 202));
 

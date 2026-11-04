@@ -2,58 +2,28 @@ import { describe, expect, it } from '@jest/globals';
 
 import { startupWarnings } from '@config/startupWarnings.js';
 
-const SET = {
-  NODE_ENV: 'development',
-  STRIPE_WEBHOOK_SECRET: 'whsec_local',
-  WITHDRAWAL_CODE_SECRET: 'code-secret',
-  OPENAI_API_KEY: 'sk-x',
-  REVIEW_CHECK_ENABLED: true,
-};
+const SET = { OPENAI_API_KEY: 'sk-x', REVIEW_CHECK_ENABLED: true };
 
+// the secrets of the webhook and of the codes of withdrawal stop the start instead, in every mode
+// but the tests (tests/unit/config/env.test.ts)
 describe('startupWarnings', () => {
-  // in production env.ts stops the start instead, see tests/unit/config/env.test.ts
-  it.each(['development', 'test'])(
-    'warns in %s that stripe events are refused without the webhook secret',
-    (mode) => {
-      expect(startupWarnings({ ...SET, NODE_ENV: mode, STRIPE_WEBHOOK_SECRET: '' })).toEqual([
-        'STRIPE_WEBHOOK_SECRET is not set: every stripe event is refused, no order becomes paid',
-      ]);
-    },
-  );
-
-  it.each(['development', 'test'])(
-    'warns in %s that the links of withdrawal carry no code without the secret of it',
-    (mode) => {
-      expect(startupWarnings({ ...SET, NODE_ENV: mode, WITHDRAWAL_CODE_SECRET: '' })).toEqual([
-        'WITHDRAWAL_CODE_SECRET is not set: the links of withdrawal in the mails carry no code, ' +
-          'every form of withdrawal is checked by an admin by hand',
-      ]);
-    },
-  );
-
   // the shop runs without openai, production too: the bot and the check of comments are off
-  it.each(['development', 'test', 'production'])(
-    'warns in %s that the bot and the check of the comments of reviews are off without the key of openai',
-    (mode) => {
-      expect(startupWarnings({ ...SET, NODE_ENV: mode, OPENAI_API_KEY: ' ' })).toEqual([
-        'OPENAI_API_KEY is not set: the chat bot answers with a fixed text and the comments of ' +
-          'reviews are published unchecked',
-      ]);
-    },
-  );
+  it('warns that the bot and the check of the comments of reviews are off without the key of openai', () => {
+    expect(startupWarnings({ ...SET, OPENAI_API_KEY: ' ' })).toEqual([
+      'OPENAI_API_KEY is not set: the chat bot answers with a fixed text and the comments of ' +
+        'reviews are published unchecked',
+    ]);
+  });
 
   // a shop may keep the bot and leave the comments unchecked, production too
-  it.each(['development', 'production'])(
-    'warns in %s that the comments of reviews go unchecked when the check is off',
-    (mode) => {
-      expect(startupWarnings({ ...SET, NODE_ENV: mode, REVIEW_CHECK_ENABLED: false })).toEqual([
-        'REVIEW_CHECK_ENABLED is false: the comments of reviews are published unchecked',
-      ]);
-    },
-  );
+  it('warns that the comments of reviews go unchecked when the check is off', () => {
+    expect(startupWarnings({ ...SET, REVIEW_CHECK_ENABLED: false })).toEqual([
+      'REVIEW_CHECK_ENABLED is false: the comments of reviews are published unchecked',
+    ]);
+  });
 
   it('names each thing that is off once', () => {
-    expect(startupWarnings({ ...SET, OPENAI_API_KEY: '', REVIEW_CHECK_ENABLED: false })).toEqual([
+    expect(startupWarnings({ OPENAI_API_KEY: '', REVIEW_CHECK_ENABLED: false })).toEqual([
       'OPENAI_API_KEY is not set: the chat bot answers with a fixed text',
       'REVIEW_CHECK_ENABLED is false: the comments of reviews are published unchecked',
     ]);
@@ -64,9 +34,8 @@ describe('startupWarnings', () => {
   });
 
   it('never quotes a value of the settings', () => {
-    const warnings = startupWarnings({ ...SET, STRIPE_WEBHOOK_SECRET: '', OPENAI_API_KEY: '' });
+    const warnings = startupWarnings({ OPENAI_API_KEY: 'sk-x', REVIEW_CHECK_ENABLED: false });
 
-    expect(warnings).toHaveLength(2);
-    expect(warnings.join(' ')).not.toContain('whsec_');
+    expect(warnings.join(' ')).not.toContain('sk-x');
   });
 });

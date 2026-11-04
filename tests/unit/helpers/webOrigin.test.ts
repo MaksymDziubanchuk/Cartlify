@@ -49,28 +49,29 @@ describe('allowedWebOrigins', () => {
     expect(allowedWebOrigins).toEqual(['https://shop.example.com']);
   });
 
-  it('lets nobody in in production when WEB_ORIGIN is not set', async () => {
-    const { allowedWebOrigins, isAllowedWebOrigin } = await load({
-      NODE_ENV: 'production',
-      WEB_ORIGIN: ' ',
-    });
+  // the dev server is a copy of production
+  it.each(['development', 'production'])(
+    'lets nobody in in %s when WEB_ORIGIN is not set',
+    async (mode) => {
+      const { allowedWebOrigins, isAllowedWebOrigin } = await load({
+        NODE_ENV: mode,
+        WEB_ORIGIN: ' ',
+      });
 
-    expect(allowedWebOrigins).toEqual([]);
-    expect(isAllowedWebOrigin('http://localhost:3000')).toBe(false);
-  });
-
-  it.each(['development', 'test'])(
-    'falls back to localhost in %s when WEB_ORIGIN is not set',
-    async (nodeEnv) => {
-      const { allowedWebOrigins } = await load({ NODE_ENV: nodeEnv, WEB_ORIGIN: '' });
-
-      expect(allowedWebOrigins).toEqual(['http://localhost:3000']);
+      expect(allowedWebOrigins).toEqual([]);
+      expect(isAllowedWebOrigin('http://localhost:3000')).toBe(false);
     },
   );
 
-  it('prefers WEB_ORIGIN over the localhost fallback outside production', async () => {
+  it('falls back to localhost in the tests when WEB_ORIGIN is not set', async () => {
+    const { allowedWebOrigins } = await load({ NODE_ENV: 'test', WEB_ORIGIN: '' });
+
+    expect(allowedWebOrigins).toEqual(['http://localhost:3000']);
+  });
+
+  it('prefers WEB_ORIGIN over the localhost fallback in the tests', async () => {
     const { allowedWebOrigins } = await load({
-      NODE_ENV: 'development',
+      NODE_ENV: 'test',
       WEB_ORIGIN: 'http://localhost:5173',
     });
 
@@ -155,8 +156,8 @@ describe('webUrl', () => {
     expect(new URL(webUrl('auth/callback')).origin).toBe('https://shop.example.com');
   });
 
-  it('builds localhost addresses outside production when WEB_ORIGIN is not set', async () => {
-    const { webUrl, webOrigin } = await load({ NODE_ENV: 'development', WEB_ORIGIN: '' });
+  it('builds localhost addresses in the tests when WEB_ORIGIN is not set', async () => {
+    const { webUrl, webOrigin } = await load({ NODE_ENV: 'test', WEB_ORIGIN: '' });
 
     expect(webOrigin).toBe('http://localhost:3000');
     expect(webUrl('/auth/callback')).toBe('http://localhost:3000/auth/callback');

@@ -1,7 +1,7 @@
 import env from '@config/env.js';
 import { InternalError } from '@utils/errors.js';
 
-// frontend address outside production when WEB_ORIGIN is not set
+// frontend address of the tests when WEB_ORIGIN is not set
 const DEV_WEB_ORIGIN = 'http://localhost:3000';
 
 // scheme, host and port of an address, the form a browser puts in the Origin header
@@ -20,8 +20,9 @@ export function toOrigin(value: string): string | null {
 function resolveWebOrigin(): string | null {
   const raw = env.WEB_ORIGIN.trim();
 
-  // production without WEB_ORIGIN has no frontend, development falls back to localhost
-  if (!raw) return env.NODE_ENV === 'production' ? null : DEV_WEB_ORIGIN;
+  // without WEB_ORIGIN there is no frontend, in development as in production (the dev server is a
+  // copy of production); only the tests fall back to localhost
+  if (!raw) return env.NODE_ENV === 'test' ? DEV_WEB_ORIGIN : null;
 
   const origin = toOrigin(raw);
   if (!origin) {
@@ -31,7 +32,7 @@ function resolveWebOrigin(): string | null {
   return origin;
 }
 
-// the frontend, null in production when WEB_ORIGIN is not set
+// the frontend, null when WEB_ORIGIN is not set (outside the tests)
 export const webOrigin: string | null = resolveWebOrigin();
 
 // sites whose pages may call the api with the visitor's cookies

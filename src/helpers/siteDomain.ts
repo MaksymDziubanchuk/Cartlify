@@ -1,8 +1,8 @@
 import env from '@config/env.js';
 import { InternalError } from '@utils/errors.js';
 
-// domain outside production when SITE_DOMAIN is not set: reserved for examples, mail to it
-// is never delivered to anyone
+// domain of the tests when SITE_DOMAIN is not set: reserved for examples, mail to it is never
+// delivered to anyone
 const DEV_SITE_DOMAIN = 'example.com';
 
 // a bare domain name: dot-separated labels of letters, digits and dashes, at least two of them
@@ -12,8 +12,9 @@ const DOMAIN_NAME =
 function resolveSiteDomain(): string | null {
   const raw = env.SITE_DOMAIN.trim().toLowerCase();
 
-  // production without SITE_DOMAIN has no domain of its own, development falls back to example.com
-  if (!raw) return env.NODE_ENV === 'production' ? null : DEV_SITE_DOMAIN;
+  // without SITE_DOMAIN the site has no domain of its own, in development as in production (the dev
+  // server is a copy of production); only the tests fall back to example.com
+  if (!raw) return env.NODE_ENV === 'test' ? DEV_SITE_DOMAIN : null;
 
   if (!DOMAIN_NAME.test(raw)) {
     throw new Error(
@@ -25,7 +26,7 @@ function resolveSiteDomain(): string | null {
   return raw;
 }
 
-// the domain the site lives on, null in production when SITE_DOMAIN is not set
+// the domain the site lives on, null when SITE_DOMAIN is not set (outside the tests)
 export const siteDomain: string | null = resolveSiteDomain();
 
 // the domain for addresses the app makes up itself (a deleted account): ours, so a mail that

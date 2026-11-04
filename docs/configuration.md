@@ -12,9 +12,10 @@ NODE_ENV=development
 PORT=3000
 HOST=0.0.0.0
 # frontend address: mail links, oauth redirects and the only site CORS and the chat websocket let in
-# (in production for example https://shop.example.com; locally the frontend dev server)
+# (for example https://shop.example.com; locally the frontend dev server). Without it there is no
+# frontend, in development as in production; only the tests fall back to http://localhost:3000
 WEB_ORIGIN=https://shop.example.com
-# domain the site lives on, without https:// (required in production): a deleted account gets an address on it
+# domain the site lives on, without https:// (required in development and production, only the tests fall back to example.com): a deleted account gets an address on it
 SITE_DOMAIN=shop.example.com
 # the pages of the frontend on WEB_ORIGIN the server links to and sends the browser back to, a path from /;
 # the page of an order or of a product names it by {id}
@@ -202,13 +203,13 @@ LINKEDIN_STATE_SECRET=
 
 # Stripe (STRIPE_SECRET_KEY must be set and start with sk_, otherwise the app does not start)
 STRIPE_SECRET_KEY=sk_test_replace_this_key
-# the signing secret of the webhook endpoint: required in production, elsewhere the start warns
-# that every stripe event is refused without it
+# the signing secret of the webhook endpoint: required, the start stops without it in development
+# and production (only the tests go without; every stripe event would be refused)
 STRIPE_WEBHOOK_SECRET=
 # signs the number of an order into the code of the links of withdrawal in the mails (32 characters
-# at least): required in production, elsewhere the start warns and the links go without a code
-# (every form is checked by hand). Use another value on dev than on prod, so the codes of prod do
-# not work there. Changing it stops all the links sent before
+# at least): required, the start stops without it in development and production. Use another
+# value on dev than on prod, so the codes of prod do not work there. Changing it stops all the
+# links sent before
 WITHDRAWAL_CODE_SECRET=
 # a three letter code of a currency with cents (eur unless given); jpy, kwd and the like stop the start
 STRIPE_CURRENCY=eur

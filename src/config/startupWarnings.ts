@@ -1,28 +1,13 @@
-// settings that let the server start but switch a feature off; production stops on some of them in
-// env.ts instead (the webhook secret), elsewhere the start logs a warning. Never quotes a value
+// settings that let the server start but switch a feature off, the same in every mode; a setting
+// the shop cannot work without stops the start in env.ts instead (the secrets of the webhook and
+// of the codes of withdrawal). Never quotes a value
 type StartupSettings = {
-  NODE_ENV: string;
-  STRIPE_WEBHOOK_SECRET: string;
-  WITHDRAWAL_CODE_SECRET: string;
   OPENAI_API_KEY: string;
   REVIEW_CHECK_ENABLED: boolean;
 };
 
 export function startupWarnings(settings: StartupSettings): string[] {
   const warnings: string[] = [];
-
-  if (!settings.STRIPE_WEBHOOK_SECRET) {
-    warnings.push(
-      'STRIPE_WEBHOOK_SECRET is not set: every stripe event is refused, no order becomes paid',
-    );
-  }
-
-  if (!settings.WITHDRAWAL_CODE_SECRET) {
-    warnings.push(
-      'WITHDRAWAL_CODE_SECRET is not set: the links of withdrawal in the mails carry no code, every ' +
-        'form of withdrawal is checked by an admin by hand',
-    );
-  }
 
   // the shop works without openai, production too: nobody would see it otherwise
   if (!settings.OPENAI_API_KEY.trim()) {
