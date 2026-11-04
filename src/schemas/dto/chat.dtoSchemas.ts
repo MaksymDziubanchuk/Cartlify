@@ -120,6 +120,11 @@ const currentChatResponseSchema = {
   additionalProperties: false,
   properties: {
     thread: { $ref: 'chatThreadItemSchema#' },
+    adminCallAvailable: {
+      type: 'boolean',
+      description:
+        'true: show the button "call an admin" (POST /api/chat/threads/{threadId}/call-admin). The bot could not answer lately (the model gave no answer, the limit of the shop or of the customer is used up) and the customer is a user with a confirmed email; the chat is still with the bot. The WebSocket event thread:admin-call { threadId, available } says when it changes.',
+    },
     messages: {
       type: 'array',
       items: { $ref: 'chatMessageItemSchema#' },
@@ -131,7 +136,7 @@ const currentChatResponseSchema = {
     },
     ws: { $ref: 'chatWsInfoSchema#' },
   },
-  required: ['thread', 'messages', 'nextCursor', 'ws'],
+  required: ['thread', 'adminCallAvailable', 'messages', 'nextCursor', 'ws'],
 } as const;
 
 const chatThreadMessagesQuerySchema = {
@@ -205,6 +210,20 @@ const adminChatThreadResponseSchema = {
   required: ['thread', 'messages', 'nextCursor', 'previousThreads'],
 } as const;
 
+const callAdminChatResponseSchema = {
+  $id: 'callAdminChatResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    thread: { $ref: 'chatThreadItemSchema#' },
+    message: {
+      $ref: 'chatMessageItemSchema#',
+      description: 'What the bot wrote when it gave the chat to the admins.',
+    },
+  },
+  required: ['thread', 'message'],
+} as const;
+
 const closeChatThreadResponseSchema = {
   $id: 'closeChatThreadResponseSchema',
   type: 'object',
@@ -228,4 +247,5 @@ export const chatsDtoSchemas = [
   adminChatThreadsResponseSchema,
   adminChatThreadResponseSchema,
   closeChatThreadResponseSchema,
+  callAdminChatResponseSchema,
 ];

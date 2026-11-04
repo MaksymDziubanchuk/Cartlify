@@ -21,13 +21,14 @@ export function moneyCsvColumns<T>(
       kind: 'money',
       value: (row) => moneyOf(row).sales.marginPercent,
     },
-    { header: 'cancelled_units', kind: 'number', value: (row) => moneyOf(row).cancellations.units },
-    {
-      header: 'cancelled_revenue',
-      kind: 'money',
-      value: (row) => moneyOf(row).cancellations.revenue,
-    },
-    { header: 'cancelled_cost', kind: 'money', value: (row) => moneyOf(row).cancellations.cost },
+    { header: 'returned_units', kind: 'number', value: (row) => moneyOf(row).returns.units },
+    { header: 'returned_revenue', kind: 'money', value: (row) => moneyOf(row).returns.revenue },
+    { header: 'returned_cost', kind: 'money', value: (row) => moneyOf(row).returns.cost },
+    { header: 'net_units', kind: 'number', value: (row) => moneyOf(row).net.units },
+    { header: 'net_revenue', kind: 'money', value: (row) => moneyOf(row).net.revenue },
+    { header: 'net_cost', kind: 'money', value: (row) => moneyOf(row).net.cost },
+    { header: 'net_margin', kind: 'money', value: (row) => moneyOf(row).net.margin },
+    { header: 'net_margin_percent', kind: 'money', value: (row) => moneyOf(row).net.marginPercent },
     { header: 'written_off_units', kind: 'number', value: (row) => moneyOf(row).writeOffs.units },
     { header: 'written_off_value', kind: 'money', value: (row) => moneyOf(row).writeOffs.value },
     {
@@ -45,9 +46,30 @@ export function moneyCsvColumns<T>(
   ];
 
   if (opts.stock) {
+    const stock = (row: T) => moneyOf(row).stock;
     columns.push(
-      { header: 'stock_units', kind: 'number', value: (row) => moneyOf(row).stock?.units },
-      { header: 'stock_value', kind: 'money', value: (row) => moneyOf(row).stock?.value },
+      { header: 'stock_opening_units', kind: 'number', value: (row) => stock(row)?.opening.units },
+      { header: 'stock_opening_value', kind: 'money', value: (row) => stock(row)?.opening.value },
+      {
+        header: 'stock_received_units',
+        kind: 'number',
+        value: (row) => stock(row)?.received.units,
+      },
+      { header: 'stock_received_value', kind: 'money', value: (row) => stock(row)?.received.value },
+      { header: 'stock_left_units', kind: 'number', value: (row) => stock(row)?.left.units },
+      { header: 'stock_left_value', kind: 'money', value: (row) => stock(row)?.left.value },
+      { header: 'stock_closing_units', kind: 'number', value: (row) => stock(row)?.closing.units },
+      { header: 'stock_closing_value', kind: 'money', value: (row) => stock(row)?.closing.value },
+      {
+        header: 'stock_on_the_way_back_units',
+        kind: 'number',
+        value: (row) => stock(row)?.onTheWayBack.units,
+      },
+      {
+        header: 'stock_on_the_way_back_value',
+        kind: 'money',
+        value: (row) => stock(row)?.onTheWayBack.value,
+      },
     );
   }
 
@@ -71,6 +93,31 @@ export function deliveryCsvColumns<T>(
       header: 'shipping_sends_without_cost',
       kind: 'number',
       value: (row) => deliveryOf(row)?.shipping.withoutCost,
+    },
+    {
+      header: 'return_shipping_sends',
+      kind: 'number',
+      value: (row) => deliveryOf(row)?.returnShipping.sends,
+    },
+    {
+      header: 'return_shipping_cost',
+      kind: 'money',
+      value: (row) => deliveryOf(row)?.returnShipping.cost,
+    },
+    {
+      header: 'return_shipping_sends_without_cost',
+      kind: 'number',
+      value: (row) => deliveryOf(row)?.returnShipping.withoutCost,
+    },
+    {
+      header: 'return_shipping_deducted',
+      kind: 'money',
+      value: (row) => deliveryOf(row)?.returnShipping.deducted,
+    },
+    {
+      header: 'return_shipping_reimbursed',
+      kind: 'money',
+      value: (row) => deliveryOf(row)?.returnShipping.reimbursed,
     },
     { header: 'delivery_result', kind: 'money', value: (row) => deliveryOf(row)?.result },
   ];

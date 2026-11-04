@@ -3,6 +3,7 @@
 type StartupSettings = {
   NODE_ENV: string;
   STRIPE_WEBHOOK_SECRET: string;
+  WITHDRAWAL_CODE_SECRET: string;
   OPENAI_API_KEY: string;
   REVIEW_CHECK_ENABLED: boolean;
 };
@@ -13,6 +14,13 @@ export function startupWarnings(settings: StartupSettings): string[] {
   if (!settings.STRIPE_WEBHOOK_SECRET) {
     warnings.push(
       'STRIPE_WEBHOOK_SECRET is not set: every stripe event is refused, no order becomes paid',
+    );
+  }
+
+  if (!settings.WITHDRAWAL_CODE_SECRET) {
+    warnings.push(
+      'WITHDRAWAL_CODE_SECRET is not set: the links of withdrawal in the mails carry no code, every ' +
+        'form of withdrawal is checked by an admin by hand',
     );
   }
 

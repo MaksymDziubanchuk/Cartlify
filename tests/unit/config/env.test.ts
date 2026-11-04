@@ -1,4 +1,4 @@
-import { copyFileSync, rmSync } from 'node:fs';
+import { copyFileSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
@@ -39,6 +39,11 @@ const SHOP_DEFAULTS = {
   LIMIT_PASSWORD_CHANGE_PER_USER: 10,
   LIMIT_EXPORT_PER_USER: 1,
   LIMIT_REVIEW_PER_USER: 30,
+  LIMIT_CHAT_CALL_ADMIN_PER_USER: 10,
+  LIMIT_WITHDRAWAL_PER_USER: 10,
+  LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: 20,
+  LIMIT_WITHDRAWAL_FORM_PER_ORDER: 5,
+  LIMIT_WITHDRAWAL_FORM_PER_DATA: 5,
   LOGIN_FAILURES_BEFORE_PAUSE: 5,
   UPLOAD_MAX_BYTES: 5_000_000,
   PRODUCT_IMAGES_MAX: 50,
@@ -50,6 +55,7 @@ const SHOP_DEFAULTS = {
   VERIFY_TTL_MS: 86_400_000,
   ORDER_RESERVATION_MINUTES: 15,
   STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 30,
+  WITHDRAWAL_GRACE_DAYS: 4,
   REVIEW_CHECK_ENABLED: true,
   SHOP_LOGO_PATH: 'src/static/images/logo-mail.png',
   WEB_PAGE_OAUTH_CALLBACK: '/auth/callback',
@@ -59,6 +65,7 @@ const SHOP_DEFAULTS = {
   WEB_PAGE_CHECKOUT_SUCCESS: '/checkout/success',
   WEB_PAGE_CHECKOUT_CANCEL: '/checkout/cancel',
   WEB_PAGE_ORDER: '/orders/{id}',
+  WEB_PAGE_WITHDRAWAL: '/orders/{id}/withdrawal',
   WEB_PAGE_PRODUCT_REVIEWS: '/products/{id}#reviews',
 };
 
@@ -257,6 +264,42 @@ describe('env', () => {
     expect((err as Error).message).toBe('Missing required env variable: STRIPE_WEBHOOK_SECRET');
   });
 
+  it('stops the start in production when WITHDRAWAL_CODE_SECRET is missing', async () => {
+    const err = await rejectedBy(() =>
+      loadEnv({ NODE_ENV: 'production', WITHDRAWAL_CODE_SECRET: '' }),
+    );
+
+    expect((err as Error).message).toBe('Missing required env variable: WITHDRAWAL_CODE_SECRET');
+  });
+
+  it.each(['development', 'production'])(
+    'refuses a WITHDRAWAL_CODE_SECRET shorter than 32 characters in %s: a short one could be found by trying the code of a mail offline',
+    async (mode) => {
+      const err = await rejectedBy(() =>
+        loadEnv({ NODE_ENV: mode, WITHDRAWAL_CODE_SECRET: 'a'.repeat(31) }),
+      );
+
+      expect((err as Error).message).toBe(
+        'Invalid env variable: WITHDRAWAL_CODE_SECRET must be at least 32 characters',
+      );
+    },
+  );
+
+  it('takes a WITHDRAWAL_CODE_SECRET of 32 characters, trimmed', async () => {
+    const loaded = await loadEnv({
+      NODE_ENV: 'production',
+      WITHDRAWAL_CODE_SECRET: ` ${'a'.repeat(32)} `,
+    });
+
+    expect(loaded.WITHDRAWAL_CODE_SECRET).toBe('a'.repeat(32));
+  });
+
+  it('starts without WITHDRAWAL_CODE_SECRET outside production, with no secret', async () => {
+    const loaded = await loadEnv({ NODE_ENV: 'development', WITHDRAWAL_CODE_SECRET: ' ' });
+
+    expect(loaded.WITHDRAWAL_CODE_SECRET).toBe('');
+  });
+
   it('starts without STRIPE_WEBHOOK_SECRET outside production', async () => {
     const loaded = await loadEnv({ NODE_ENV: 'development', STRIPE_WEBHOOK_SECRET: '' });
 
@@ -278,6 +321,11 @@ describe('the settings of the shop', () => {
         LIMIT_PASSWORD_CHANGE_PER_USER: '4',
         LIMIT_EXPORT_PER_USER: '6',
         LIMIT_REVIEW_PER_USER: '50',
+        LIMIT_CHAT_CALL_ADMIN_PER_USER: '4',
+        LIMIT_WITHDRAWAL_PER_USER: '7',
+        LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: '9',
+        LIMIT_WITHDRAWAL_FORM_PER_ORDER: '3',
+        LIMIT_WITHDRAWAL_FORM_PER_DATA: '2',
         LOGIN_FAILURES_BEFORE_PAUSE: '8',
         UPLOAD_MAX_BYTES: '10000000',
         PRODUCT_IMAGES_MAX: '20',
@@ -298,6 +346,7 @@ describe('the settings of the shop', () => {
         WEB_PAGE_CHECKOUT_SUCCESS: '/pay/ok',
         WEB_PAGE_CHECKOUT_CANCEL: '/pay/back',
         WEB_PAGE_ORDER: '/account/orders/{id}',
+        WEB_PAGE_WITHDRAWAL: '/account/orders/{id}/leave',
         WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}?tab=reviews#rate',
       }),
     ).toMatchObject({
@@ -310,6 +359,11 @@ describe('the settings of the shop', () => {
       LIMIT_PASSWORD_CHANGE_PER_USER: 4,
       LIMIT_EXPORT_PER_USER: 6,
       LIMIT_REVIEW_PER_USER: 50,
+      LIMIT_CHAT_CALL_ADMIN_PER_USER: 4,
+      LIMIT_WITHDRAWAL_PER_USER: 7,
+      LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: 9,
+      LIMIT_WITHDRAWAL_FORM_PER_ORDER: 3,
+      LIMIT_WITHDRAWAL_FORM_PER_DATA: 2,
       LOGIN_FAILURES_BEFORE_PAUSE: 8,
       UPLOAD_MAX_BYTES: 10_000_000,
       PRODUCT_IMAGES_MAX: 20,
@@ -330,6 +384,7 @@ describe('the settings of the shop', () => {
       WEB_PAGE_CHECKOUT_SUCCESS: '/pay/ok',
       WEB_PAGE_CHECKOUT_CANCEL: '/pay/back',
       WEB_PAGE_ORDER: '/account/orders/{id}',
+      WEB_PAGE_WITHDRAWAL: '/account/orders/{id}/leave',
       WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}?tab=reviews#rate',
     });
   });
@@ -355,6 +410,11 @@ describe('the settings of the shop', () => {
       'LIMIT_PASSWORD_CHANGE_PER_USER',
       'LIMIT_EXPORT_PER_USER',
       'LIMIT_REVIEW_PER_USER',
+      'LIMIT_CHAT_CALL_ADMIN_PER_USER',
+      'LIMIT_WITHDRAWAL_PER_USER',
+      'LIMIT_WITHDRAWAL_FORM_PER_ADDRESS',
+      'LIMIT_WITHDRAWAL_FORM_PER_ORDER',
+      'LIMIT_WITHDRAWAL_FORM_PER_DATA',
       'LOGIN_FAILURES_BEFORE_PAUSE',
       'UPLOAD_MAX_BYTES',
       'PRODUCT_IMAGES_MAX',
@@ -488,6 +548,7 @@ describe('the settings of the shop', () => {
     ['WEB_PAGE_ORDER', '/orders'],
     ['WEB_PAGE_ORDER', '/orders/{id}/{id}'],
     ['WEB_PAGE_ORDER', '//evil.example/{id}'],
+    ['WEB_PAGE_WITHDRAWAL', '/withdrawal'],
     ['WEB_PAGE_PRODUCT_REVIEWS', '/products#reviews'],
   ])('stops the start when %s is %p, not a path of the site with {id}', async (key, value) => {
     const err = await rejectedBy(() => loadEnv({ [key]: value }));
@@ -495,5 +556,60 @@ describe('the settings of the shop', () => {
     expect((err as Error).message).toBe(
       `Invalid env variable: ${key} must be a path of the site starting with /, with {id} once`,
     );
+  });
+});
+
+// the days of grace after the period of withdrawal in the contract: the end of a period that falls
+// on a holiday moves on, the grace covers it. Zero is allowed (and is the owner's risk, the docs
+// say so); the start stops outside 0-30 and on what is not a whole number
+describe('env: WITHDRAWAL_GRACE_DAYS', () => {
+  it.each([
+    ['0', 0],
+    ['1', 1],
+    ['30', 30],
+    [' 7 ', 7],
+  ])('takes %p as %p days', async (value, days) => {
+    expect((await loadEnv({ WITHDRAWAL_GRACE_DAYS: value })).WITHDRAWAL_GRACE_DAYS).toBe(days);
+  });
+
+  it('is 4 days when it is not set', async () => {
+    expect((await loadEnv({ WITHDRAWAL_GRACE_DAYS: '' })).WITHDRAWAL_GRACE_DAYS).toBe(4);
+  });
+
+  it.each(['-1', '31', '4.5', 'many', '1e1'])('stops the start when it is %p', async (value) => {
+    const err = await rejectedBy(() => loadEnv({ WITHDRAWAL_GRACE_DAYS: value }));
+
+    expect((err as Error).message).toBe(
+      'Invalid env variable: WITHDRAWAL_GRACE_DAYS must be a whole number from 0 to 30',
+    );
+    // the start error lands in the hosting logs, the value stays out of it
+    expect((err as Error).message).not.toContain(value);
+  });
+});
+
+// the limits of the routes a shop can set: the example of the env file and the configuration page
+// of the docs list each one with the default the code has (the same keys in both, as the rules of
+// the project say)
+describe('env: the limits of the routes in the example and the docs', () => {
+  const limits = Object.entries(SHOP_DEFAULTS).filter(([key]) => key.startsWith('LIMIT_'));
+
+  it('include the limit of the button "call an admin"', () => {
+    expect(SHOP_DEFAULTS.LIMIT_CHAT_CALL_ADMIN_PER_USER).toBe(10);
+    expect(limits.map(([key]) => key)).toContain('LIMIT_CHAT_CALL_ADMIN_PER_USER');
+  });
+
+  it.each(limits)('lists %s with its default %p in .env.example, left empty', (key, fallback) => {
+    const lines = readFileSync('.env.example', 'utf8').split(/\r?\n/);
+    const at = lines.indexOf(`${key}=`);
+
+    expect(at).toBeGreaterThan(0);
+    // the line before it says what the setting is and its default
+    expect(lines[at - 1]).toContain(`(${fallback} unless given)`);
+  });
+
+  it.each(limits)('lists %s with its default %p in docs/configuration.md', (key, fallback) => {
+    const lines = readFileSync('docs/configuration.md', 'utf8').split(/\r?\n/);
+
+    expect(lines).toContain(`${key}=${fallback}`);
   });
 });

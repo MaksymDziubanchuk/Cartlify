@@ -5,13 +5,21 @@ Paid on {{paidAt}}.
 {{/items}}
 {{#deliveryLine}}Delivery: {{deliveryLine}}
 {{/deliveryLine}}Total: {{total}}
-{{#shippingAddress}}Shipping to: {{shippingAddress}}
+{{#noRightLine}}
+{{noRightLine}}
+{{/noRightLine}}{{#noRightItems}}- {{name}}: {{reason}}
+{{/noRightItems}}{{#conditionalLine}}
+{{conditionalLine}}
+{{/conditionalLine}}{{#conditionalItems}}- {{name}}: {{reason}}
+{{/conditionalItems}}{{#shippingAddress}}Shipping to: {{shippingAddress}}
 {{/shippingAddress}}{{#pickup}}Pick up at: {{pickup}}
 {{/pickup}}{{#recipient}}Recipient: {{recipient}}
 {{/recipient}}
 See your order:
-{{orderUrl}}
+{{orderUrl}}{{#withdrawalLine}}
+
+{{withdrawalLine}}
+{{withdrawalUrl}}{{/withdrawalLine}}
 
 {{#attachedLine}}{{attachedLine}}
-{{/attachedLine}}This mailbox is not monitored.
-Questions about your order? Ask us in the chat on our site.
+{{/attachedLine}}Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.

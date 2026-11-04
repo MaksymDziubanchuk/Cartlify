@@ -25,6 +25,7 @@ const product: ProductResponseRow = {
   manufacturerId: 7,
   euResponsibleId: null,
   warnings: null,
+  withdrawal: null,
   deletedAt: null,
   createdAt: new Date('2026-01-01T10:00:00.000Z'),
   updatedAt: new Date('2026-01-05T10:00:00.000Z'),
@@ -44,11 +45,19 @@ const documents = [
   { id: 3, title: 'Manual', kind: 'instruction' as const, url: 'https://x/m.pdf' },
 ];
 
-const map = (patch: Partial<ProductResponseRow> = {}, view: 'buyer' | 'admin' = 'buyer') =>
+// the rule of withdrawal the product has, as the database counts it (readProductWithdrawals)
+const ruled = { rule: 'allowed' as const, source: 'default' as const, categoryId: null };
+
+const map = (
+  patch: Partial<ProductResponseRow> = {},
+  view: 'buyer' | 'admin' = 'buyer',
+  withdrawal: Parameters<typeof mapProductCard>[0]['withdrawal'] = ruled,
+) =>
   mapProductCard({
     product: { ...product, ...patch },
     categoryPath: [{ id: 1 as never, name: 'Home', slug: 'home' }],
     extras: { manufacturer, euResponsible, documents },
+    withdrawal,
     view,
   });
 
@@ -159,6 +168,39 @@ describe('mapProductCard', () => {
     }
   });
 
+  describe('the rule of withdrawal', () => {
+    it('gives a buyer the rule and its kind, and nothing of where it comes from', () => {
+      const out = map({}, 'buyer', { rule: 'sealed_hygiene', source: 'category', categoryId: 2 });
+
+      expect(out.withdrawal).toEqual({ rule: 'sealed_hygiene', right: 'conditional' });
+    });
+
+    it('gives an admin the rule of its own and the source besides', () => {
+      expect(
+        map({ withdrawal: 'perishable' }, 'admin', {
+          rule: 'perishable',
+          source: 'product',
+          categoryId: null,
+        }).withdrawal,
+      ).toEqual({
+        rule: 'perishable',
+        right: 'none',
+        own: 'perishable',
+        source: 'product',
+        categoryId: null,
+      });
+      expect(
+        map({}, 'admin', { rule: 'mixed', source: 'category', categoryId: 9 }).withdrawal,
+      ).toEqual({
+        rule: 'mixed',
+        right: 'conditional',
+        own: null,
+        source: 'category',
+        categoryId: 9,
+      });
+    });
+  });
+
   it('shows an admin the counters, the override, the delete date and the gallery', () => {
     const gallery = mapGallery(
       [
@@ -177,6 +219,7 @@ describe('mapProductCard', () => {
       },
       categoryPath: [],
       extras: { manufacturer, euResponsible: null, documents: [] },
+      withdrawal: ruled,
       gallery,
       view: 'admin',
     });

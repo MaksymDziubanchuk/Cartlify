@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 import { closeRedis, connectRedis, getRedis } from '@redis/client.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
@@ -14,6 +15,7 @@ import {
   stockLogOf,
   stockOf,
   type TestProduct,
+  type TestUser,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail } from '../../../helpers/mail.js';
@@ -41,6 +43,8 @@ import {
 
 let app: FastifyInstance;
 let csrf: Csrf;
+// the admin who cancels the paid orders of the tests
+let admin: TestUser;
 const userIds: number[] = [];
 // an order keeps its product, so these products stay; the test database goes after the run
 const products: TestProduct[] = [];
@@ -57,23 +61,28 @@ async function orderWithPage(opts: { stock?: number } = {}) {
 }
 
 // an admin moves the paid order on, past the routes: shipped and delivered by its status, a cancel
-// the way POST /cancel takes it, without the refund (only the webhook is checked here)
-const moveOrderTo = (orderId: number, stage: 'shipped' | 'delivered' | 'cancelled') =>
-  asAdmin(async (tx) => {
-    if (stage === 'cancelled') {
-      await tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`;
-    } else {
-      // the steps go one by one: delivered comes after shipped
-      if (stage === 'delivered') {
-        await tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } });
-      }
-      await tx.order.update({ where: { id: orderId }, data: { status: stage } });
+// the way a statement of return with the reason shop_cancel takes it, without the refund (only the
+// webhook is checked here)
+const moveOrderTo = async (orderId: number, stage: 'shipped' | 'delivered' | 'cancelled') => {
+  if (stage === 'cancelled') {
+    await cancelPaidOrder(admin.id, orderId);
+    return;
+  }
+
+  await asAdmin(async (tx) => {
+    // the steps go one by one: delivered comes after shipped
+    if (stage === 'delivered') {
+      await tx.order.update({ where: { id: orderId }, data: { status: 'shipped' } });
     }
+    await tx.order.update({ where: { id: orderId }, data: { status: stage } });
   });
+};
 
 beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
+  admin = await createUser({ role: 'ADMIN' });
+  userIds.push(admin.id);
 });
 
 afterAll(async () => {

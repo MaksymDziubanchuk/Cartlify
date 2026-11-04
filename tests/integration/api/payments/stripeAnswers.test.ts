@@ -7,7 +7,11 @@ import {
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
 } from '@routes/api/payments/providers/stripe/stripeCheckout.helper.js';
-import { refundStripePayment } from '@routes/api/payments/providers/stripe/stripeRefund.helper.js';
+import {
+  findStripeRefund,
+  getStripeRefund,
+  refundStripePayment,
+} from '@routes/api/payments/providers/stripe/stripeRefund.helper.js';
 
 import {
   closeOpenSessions,
@@ -422,12 +426,16 @@ describe('a page paid by a bank debit', () => {
 });
 
 describe('a refund of the app', () => {
+  const refundOf = (paymentId: string, amount: string, key: string) =>
+    refundStripePayment({ orderId: 2_000_000_001, paymentIntentId: paymentId, amount, key });
+
   it('gives the whole payment back once for its key, and Stripe refuses a second refund', async () => {
     const paymentId = await payByCard(2000);
 
-    const first = await refundStripePayment({ orderId: 2_000_000_001, paymentIntentId: paymentId });
-    const again = await refundStripePayment({ orderId: 2_000_000_001, paymentIntentId: paymentId });
+    const first = await refundOf(paymentId, '20.00', `refund:${paymentId}`);
+    const again = await refundOf(paymentId, '20.00', `refund:${paymentId}`);
 
+    expect(first).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'succeeded' });
     expect(again.refundId).toBe(first.refundId);
     expect(await refundsOf(paymentId)).toEqual([
       expect.objectContaining({
@@ -438,7 +446,11 @@ describe('a refund of the app', () => {
         status: 'succeeded',
         payment_intent: paymentId,
         charge: expect.stringMatching(/^ch_/),
-        metadata: { entityType: 'order', entityId: '2000000001' },
+        metadata: {
+          entityType: 'order',
+          entityId: '2000000001',
+          transfer: `refund:${paymentId}`,
+        },
       }),
     ]);
     const charge = (await stripe.paymentIntents.retrieve(paymentId)).latest_charge;
@@ -449,6 +461,71 @@ describe('a refund of the app', () => {
         message: `Charge ${String(charge)} has already been refunded.`,
       }),
     );
+  });
+
+  it('gives back a part for each key, the same refund for the same key, and no more than is left', async () => {
+    const paymentId = await payByCard(2000);
+    const key = `refund:${randomText(20)}`;
+
+    const part = await refundOf(paymentId, '5.00', key);
+    const sameKey = await refundOf(paymentId, '5.00', key);
+    const next = await refundOf(paymentId, '7.00', `refund:${randomText(20)}`);
+    const tooMuch = await refundOf(paymentId, '9.00', `refund:${randomText(20)}`);
+
+    expect(part).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'succeeded' });
+    expect(sameKey.refundId).toBe(part.refundId);
+    expect(next.refundId).not.toBe(part.refundId);
+    // 8.00 are left: Stripe refuses 9.00 with its words, nothing is refunded
+    expect(tooMuch).toEqual({
+      refundId: null,
+      status: 'failed',
+      failure: 'unknown',
+      failureText: expect.stringMatching(/is greater than unrefunded amount on charge/),
+    });
+    expect((await refundsOf(paymentId)).map((refund) => refund.amount).sort()).toEqual([500, 700]);
+  });
+
+  it('is found by the key of its transfer among the refunds of the payment, and not found by another', async () => {
+    const paymentId = await payByCard(2000);
+    const key = `refund:${randomText(20)}`;
+    const made = await refundOf(paymentId, '5.00', key);
+    await refundOf(paymentId, '7.00', `refund:${randomText(20)}`);
+
+    const found = await findStripeRefund({ paymentIntentId: paymentId, key });
+    const none = await findStripeRefund({
+      paymentIntentId: paymentId,
+      key: `refund:${randomText(20)}`,
+    });
+
+    expect(found).toEqual(made);
+    expect(none).toBeNull();
+  });
+
+  it('is read by its id, the way it was made', async () => {
+    const paymentId = await payByCard(1500);
+    const made = await refundOf(paymentId, '15.00', `refund:${paymentId}`);
+
+    const read = await getStripeRefund(made.refundId!);
+
+    expect(read).toEqual(made);
+    expect(await stripe.refunds.retrieve(made.refundId!)).toMatchObject({
+      id: made.refundId,
+      object: 'refund',
+      amount: 1500,
+      status: 'succeeded',
+      payment_intent: paymentId,
+    });
+  });
+
+  it('is not found by an id Stripe does not know', async () => {
+    const id = `re_${randomText(24)}`;
+
+    expect(await refusalOf(stripe.refunds.retrieve(id))).toMatchObject({
+      type: 'StripeInvalidRequestError',
+      statusCode: 404,
+      code: 'resource_missing',
+      message: `No such refund: '${id}'`,
+    });
   });
 
   it('is not found for a payment Stripe does not know', async () => {

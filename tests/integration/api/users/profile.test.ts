@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
@@ -51,6 +51,16 @@ const profileOf = (id: number | string, cookie: string, query: Record<string, st
 const rowOf = (id: number) => asAdmin((tx) => tx.user.findUniqueOrThrow({ where: { id } }));
 
 const daysAgo = (days: number) => new Date(Date.now() - days * DAY);
+
+// the statements of withdrawal and of return of the orders of a user, as the admin profile counts
+// them, and the request to the list that shows them
+const returnsOf = (userId: number, total: number, open: number) => ({
+  total,
+  open,
+  list: { path: '/api/returns', query: { userId: String(userId) } },
+});
+
+const noReturnsOf = (userId: number) => returnsOf(userId, 0, 0);
 
 // a user with a login 10, 40 and 100 days ago, to see which ones a period takes
 async function userWithLogins(): Promise<{ user: TestUser; logins: Record<number, Date> }> {
@@ -257,6 +267,7 @@ describe('GET /api/users/:userId for an admin', () => {
         avatarRemovalsLimit: 2,
         reviewRemovals: 0,
         reviewRemovalsLimit: 2,
+        returns: noReturnsOf(target.id),
         period: { from: expect.any(String), to: expect.any(String) },
       });
     },
@@ -286,8 +297,83 @@ describe('GET /api/users/:userId for an admin', () => {
       avatarRemovalsLimit: 2,
       reviewRemovals: 0,
       reviewRemovalsLimit: 2,
+      returns: noReturnsOf(target.id),
       period: expect.any(Object),
     });
+  });
+
+  // the statements are made by an admin through the route; one is settled (the shop does not accept
+  // the goods, which closes it), the other waits for its parcel
+  it('counts the statements of the orders of the user, all and the open ones, and names the list that shows them', async () => {
+    const admin = await newUser({ role: 'ADMIN' });
+    const target = await newUser();
+    const other = await newUser();
+    const product = await createProduct({ price: 10, stock: 10 });
+
+    const state = async (buyer: TestUser) => {
+      const orderId = await placeOrder(app, csrf, buyer, product, 'shipped');
+      const item = await asAdmin((tx) =>
+        tx.orderItem.findFirstOrThrow({ where: { orderId }, select: { id: true } }),
+      );
+      const made = await app.inject({
+        method: 'POST',
+        url: '/api/returns',
+        headers: withCsrf(csrf, accessCookie(admin)),
+        payload: {
+          orderId,
+          items: [{ orderItemId: item.id, quantity: 1 }],
+          basis: 'other',
+          reason: 'defect',
+        },
+      });
+      expect(made.statusCode).toBe(201);
+      return made.json() as { id: number; items: Array<{ id: number }> };
+    };
+    const settled = await state(target);
+    const waiting = await state(target);
+    await state(other);
+    const closed = await app.inject({
+      method: 'POST',
+      url: `/api/returns/${settled.id}/receive`,
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: {
+        results: [
+          {
+            itemId: settled.items[0]!.id,
+            quantity: 1,
+            goods: 'not_accepted',
+            notAcceptedReason: 'unsealed',
+          },
+        ],
+      },
+    });
+    expect(closed.statusCode).toBe(200);
+    expect(closed.json().closedAt).not.toBeNull();
+
+    const profile = await profileOf(target.id, accessCookie(admin));
+    const profileOfOther = await profileOf(other.id, accessCookie(admin));
+    const profileOfNone = await profileOf((await newUser()).id, accessCookie(admin));
+
+    // two statements, one open; the open statement of the other buyer is not theirs
+    expect(profile.json().returns).toEqual(returnsOf(target.id, 2, 1));
+    expect(profileOfOther.json().returns).toEqual(returnsOf(other.id, 1, 1));
+    expect(profileOfNone.json().returns).toMatchObject({ total: 0, open: 0 });
+
+    // the list the profile names shows exactly those statements
+    const { path, query } = profile.json().returns.list;
+    const list = await app.inject({
+      method: 'GET',
+      url: `${path}?${new URLSearchParams(query)}`,
+      headers: { cookie: accessCookie(admin) },
+    });
+    expect(list.statusCode).toBe(200);
+    expect(list.json().total).toBe(2);
+    expect(
+      list
+        .json()
+        .items.map((row: { id: number }) => row.id)
+        .sort((a: number, b: number) => a - b),
+    ).toEqual([settled.id, waiting.id].sort((a, b) => a - b));
   });
 
   // the admin goes from the profile into the chat the user opened and writes there
@@ -338,6 +424,7 @@ describe('GET /api/users/:userId for an admin', () => {
       {
         id: orderId,
         status: 'pending',
+        returnStatus: 'none',
         total: 10,
         createdAt: expect.any(String),
         updatedAt: expect.any(String),

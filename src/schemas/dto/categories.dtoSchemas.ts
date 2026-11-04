@@ -1,4 +1,14 @@
+import { WITHDRAWAL_RULES } from '@helpers/withdrawal.js';
 import { idPathParam, MAX_ID } from '@schemas/idPathParam.js';
+
+// a plain text, not an enum: a rule there is not is WITHDRAWAL_RULE_INVALID
+const withdrawalBodyField = {
+  type: ['string', 'null'],
+  description:
+    `The rule of withdrawal its products follow: ${WITHDRAWAL_RULES.join(', ')} ` +
+    '(WITHDRAWAL_RULE_INVALID for any other). Empty or null gives it up: the category follows the ' +
+    'one above it, and the products are allowed by default.',
+} as const;
 
 // the id of a parent category, a whole number in the range of the ids of postgres
 const parentIdField = {
@@ -75,10 +85,24 @@ const categoriesCategoryResponseSchema = {
     description: { type: 'string' },
     parentId: { type: 'number' },
     imageUrls: { anyOf: [{ $ref: 'categoryImageUrlsSchema#' }, { type: 'null' }] },
+    withdrawal: {
+      type: ['string', 'null'],
+      enum: [...WITHDRAWAL_RULES, null],
+      description:
+        'The rule of withdrawal the products of the category follow while they have none of ' +
+        'their own and no nearer category has one; null follows the category above it.',
+    },
+    affectedProducts: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'Only in the answer of a change of the rule: how many live products took another rule by ' +
+        'it (the ones that follow the category, below it too).',
+    },
     createdAt: { type: 'string', format: 'date-time' },
     updatedAt: { type: 'string', format: 'date-time' },
   },
-  required: ['id', 'name', 'imageUrls', 'createdAt', 'updatedAt'],
+  required: ['id', 'name', 'imageUrls', 'withdrawal', 'createdAt', 'updatedAt'],
 } as const;
 
 export const categoriesListResponseSchema = {
@@ -151,6 +175,7 @@ const categoriesCreateBodySchema = {
     },
     description: { type: 'string' },
     parentId: parentIdField,
+    withdrawal: withdrawalBodyField,
   },
   required: ['name', 'slug'],
 } as const;
@@ -187,6 +212,7 @@ const categoriesUpdateBodySchema = {
         'top. The category moves with its whole branch, never inside its own branch ' +
         '(CATEGORY_PARENT_CYCLE).',
     },
+    withdrawal: withdrawalBodyField,
   },
 } as const;
 

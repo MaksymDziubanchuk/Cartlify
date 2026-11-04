@@ -25,6 +25,7 @@ import {
   refundLatePayment,
 } from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
 import { sendOrderPaidEmail } from '@routes/api/payments/services/helpers/sendOrderPaidEmail.helper.js';
+import { settleStripeRefundEvent } from '../stripeRefundEvent.helper.js';
 
 import {
   getOrderIdFromCheckoutSession,
@@ -209,6 +210,20 @@ export async function handleStripeWebhook(
           await deleteOrderPaymentPageLink(orderId);
         }
 
+        break;
+      }
+
+      // a refund of the app ended or changed: the transfer of a statement of return is settled by it
+      case 'refund.updated':
+      case 'refund.failed': {
+        const refund = event.data.object;
+
+        if (refund.object !== 'refund') {
+          throw new BadRequestError('STRIPE_EVENT_OBJECT_INVALID');
+        }
+
+        // a failure to settle is an error answer: stripe delivers the event again
+        await settleStripeRefundEvent(refund, log);
         break;
       }
 

@@ -8,7 +8,9 @@ import { botLimits } from '@routes/api/chat/services/bot/chatBotLimits.service.j
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { closeChatSockets, openChatSocket, type ChatSocket } from '../../../helpers/chatSocket.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
+import { chatBotDriver } from '../../../helpers/chatBot.js';
+import { closeChatSockets } from '../../../helpers/chatSocket.js';
 import { getCsrf, withCsrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
@@ -30,6 +32,7 @@ import {
 } from '../../../helpers/openai.js';
 import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
 import { placePaidOrder } from '../../../helpers/payments.js';
+import { cancelAndRefund } from '../../../helpers/returns.js';
 
 // the bot asks the model of the app; here the model is the test's (tests/helpers/openai.ts): the
 // decision whether a person is needed is the model's, so the test decides it
@@ -56,79 +59,16 @@ afterAll(async () => {
   }
 });
 
-type Chat = { userId: number | null; cookie: string; threadId: string; socket: ChatSocket };
-
-// a customer with the chat open the way the widget opens it: the current chat through the api,
-// then its socket joined to the thread
-async function openChat(kind: 'user' | 'unverified' | 'guest', address?: string): Promise<Chat> {
-  let cookie = `guestId=${randomUUID()}`;
-  let userId: number | null = null;
-
-  if (kind !== 'guest') {
-    const user = await createUser({ isVerified: kind === 'user' });
-    userIds.push(user.id);
-    userId = user.id;
-    cookie = accessCookie(user);
-  }
-
-  const res = await app.inject({
-    method: 'GET',
-    url: '/api/chat/thread/current',
-    headers: { cookie },
-  });
-  expect(res.statusCode).toBe(200);
-  const threadId = res.json().thread.id as string;
-
-  const socket = await openChatSocket(app, { cookie }, address);
-  await socket.join(threadId);
-
-  return { userId, cookie, threadId, socket };
-}
-
-const say = (chat: Chat, content: string) =>
-  chat.socket.send({ type: 'message:send', payload: { threadId: chat.threadId, content } });
-
-// the next message of the sender that reaches the socket of the chat
-const nextMessage = async (chat: Chat, senderType: 'user' | 'guest' | 'bot') =>
-  (await chat.socket.take('message:new', (e) => e.payload.senderType === senderType)).payload as {
-    id: number;
-    content: string;
-    createdAt: string;
-  };
-
-// the customer says it and waits for the bot to answer
-async function ask(chat: Chat, content: string) {
-  say(chat, content);
-  return nextMessage(chat, 'bot');
-}
-
-const threadRowOf = (threadId: string) =>
-  asAdmin((tx) => tx.chatThread.findUniqueOrThrow({ where: { id: threadId } }));
-
-const messageRowsOf = (threadId: string) =>
-  asAdmin((tx) => tx.chatMessage.findMany({ where: { threadId }, orderBy: { id: 'asc' } }));
-
-async function openAdminSocket() {
-  const admin = await createUser({ role: 'ADMIN' });
-  userIds.push(admin.id);
-
-  return {
-    cookie: accessCookie(admin),
-    socket: await openChatSocket(app, { cookie: accessCookie(admin) }),
-  };
-}
-
-// whether the thread is in the queue of chats waiting for an admin
-async function isWaitingForAdmin(adminCookie: string, threadId: string) {
-  const res = await app.inject({
-    method: 'GET',
-    url: '/api/chat/admin/threads?queue=waiting&limit=100',
-    headers: { cookie: adminCookie },
-  });
-  expect(res.statusCode).toBe(200);
-
-  return (res.json().items as Array<{ id: string }>).some((thread) => thread.id === threadId);
-}
+const {
+  openChat,
+  say,
+  nextMessage,
+  ask,
+  threadRowOf,
+  messageRowsOf,
+  openAdminSocket,
+  isWaitingForAdmin,
+} = chatBotDriver({ app: () => app, userIds });
 
 const purposes = (calls: ModelCall[]) => calls.map((call) => call.purpose);
 
@@ -521,7 +461,7 @@ describe('what the bot knows of the customer', () => {
     expect(ordersMessageOf(calls[0]!)).toContain('delivery: pickup at the shop');
   });
 
-  // an order with a send taken back or a cancellation: the bot says nothing and hands it to an admin
+  // an order with a send or a step taken back: the bot says nothing and hands it to an admin
   it.each([
     [
       'a send taken back',
@@ -556,26 +496,53 @@ describe('what the bot knows of the customer', () => {
     },
   );
 
-  it('leaves a cancelled order to an admin and tells the model nothing of it', async () => {
+  // a cancellation is no event for an admin: the bot tells that the order is cancelled and that the
+  // money goes back to the card, never that the shop did it
+  it('tells the model a cancelled order is cancelled and its money goes back to the card', async () => {
     const csrf = await getCsrf(app);
     const chat = await openChat('user');
     const user = { id: chat.userId!, role: 'USER' as const, email: '', password: '' };
     const { orderId } = await placePaidOrder(app, csrf, user, await createProduct({ stock: 5 }));
     const admin = await createUser({ role: 'ADMIN' });
     userIds.push(admin.id);
-    const cancelled = await app.inject({
-      method: 'POST',
-      url: `/api/orders/${orderId}/cancel`,
-      headers: withCsrf(csrf, accessCookie(admin)),
-    });
-    expect(cancelled.statusCode).toBe(200);
+    await cancelPaidOrder(admin.id, orderId);
     const calls = answerAsModel();
 
     await ask(chat, 'Why was my order cancelled?');
 
     const orders = ordersMessageOf(calls[0]!)!;
-    expect(orders).toContain(`- order ${orderId}: HUMAN ONLY, an admin handles this order`);
-    expect(orders).not.toContain('cancelled');
+    const line = orders.split('\n').find((one) => one.startsWith(`- order ${orderId}:`))!;
+    expect(line).toContain(
+      `- order ${orderId}: cancelled (cancelled, the money goes back to the card); total`,
+    );
+    expect(line).toContain('; paid ');
+    expect(orders).not.toContain('HUMAN ONLY');
+    expect(orders).not.toContain('by the shop');
+    // there is nothing to withdraw from in a cancelled order
+    expect(line).not.toContain('withdrawal:');
+  });
+
+  it('tells the model the money of a cancelled order went back once it did', async () => {
+    const csrf = await getCsrf(app);
+    const chat = await openChat('user');
+    const user = { id: chat.userId!, role: 'USER' as const, email: '', password: '' };
+    const { orderId } = await placePaidOrder(app, csrf, user, await createProduct({ stock: 5 }));
+    const admin = await createUser({ role: 'ADMIN' });
+    userIds.push(admin.id);
+    const { refundedAt } = await cancelAndRefund(admin.id, orderId);
+    const calls = answerAsModel();
+
+    await ask(chat, 'Where is my money?');
+
+    const orders = ordersMessageOf(calls[0]!)!;
+    const line = orders.split('\n').find((one) => one.startsWith(`- order ${orderId}:`))!;
+    expect(line).toContain(`- order ${orderId}: cancelled (cancelled, the money goes back to the card)`);
+    expect(line).toContain(
+      '; returns: all statements are closed and all the money went back',
+    );
+    expect(line).toMatch(/: closed; money: refunded [\d.]+ EUR for 1 unit\(s\) on /);
+    expect(line).toContain(`on ${refundedAt.toISOString()} (UTC)`);
+    expect(orders).not.toContain('HUMAN ONLY');
   });
 
   it('tells the model a guest has no orders', async () => {

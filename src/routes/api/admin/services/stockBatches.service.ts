@@ -283,9 +283,10 @@ export async function listStockBatches(
         from cartlify.product_batches as b
         join cartlify.products as p on p.id = b."productId"
         join cartlify.product_variants as v on v.id = b."variantId"
-        -- the units of the paid orders; a cancel put its units back into the batch
+        -- the units of the paid orders, less the units their statements brought back into the
+        -- batch (a cancel of the old kind put its units back without marking them returned)
         cross join lateral (
-          select coalesce(sum(a.quantity), 0)::int as sold
+          select coalesce(sum(a.quantity - a.returned), 0)::int as sold
           from cartlify.order_batch_allocations as a
           join cartlify.orders as o on o.id = a."orderId"
           where a."batchId" = b.id and o.status <> 'cancelled'::cartlify."OrderStatus"

@@ -22,6 +22,8 @@ import { ordersDtoSchemas } from '@schemas/dto/orders.dtoSchemas.js';
 import { favoritesDtoSchemas } from '@schemas/dto/favorites.dtoSchemas.js';
 import { categoriesDtoSchemas } from '@schemas/dto/categories.dtoSchemas.js';
 import { partiesDtoSchemas } from '@schemas/dto/parties.dtoSchemas.js';
+import { returnsDtoSchemas } from '@schemas/dto/returns.dtoSchemas.js';
+import { withdrawalsDtoSchemas } from '@schemas/dto/withdrawals.dtoSchemas.js';
 import { documentsDtoSchemas } from '@schemas/dto/documents.dtoSchemas.js';
 import { attributesDtoSchemas } from '@schemas/dto/attributes.dtoSchemas.js';
 import { reviewsDtoSchemas } from '@schemas/dto/reviews.dtoSchemas.js';
@@ -172,6 +174,8 @@ for (const schema of [
   ...favoritesDtoSchemas,
   ...categoriesDtoSchemas,
   ...partiesDtoSchemas,
+  ...returnsDtoSchemas,
+  ...withdrawalsDtoSchemas,
   ...documentsDtoSchemas,
   ...attributesDtoSchemas,
   ...reviewsDtoSchemas,

@@ -62,6 +62,9 @@ export interface AdminStatsOrdersDto {
   revenue: AdminStatsOrdersRevenueDto;
   // the delivery alone, part of the revenue
   deliveryRevenue: AdminStatsOrdersRevenueDto;
+  // what went back with the returns (the units and their part of the delivery), by the time the
+  // money went back
+  returned: AdminStatsOrdersRevenueDto;
   averageOrderValue: number;
   itemsSold: number;
 }
@@ -156,70 +159,132 @@ export interface AdminSalesDto {
 }
 
 // the delivery of the orders in a period, apart from the products: what buyers paid for it, what
-// went back with a cancel, what the shop paid the carriers; it is of no product, so a report of
+// went back with the returns, what the shop paid the carriers; it is of no product, so a report of
 // some products has none
 export interface AdminDeliveryMoneyDto {
-  // the delivery of the orders paid in the period and not cancelled (orders that paid for it)
+  // the delivery of the orders paid in the period, cancelled later or not (orders that paid for it)
   income: { orders: number; revenue: number };
-  // told apart: the delivery of the paid orders cancelled in the period, by cancelledAt; it went
-  // back, and the income of the period they were paid in has it no more
+  // the delivery that went back with the returns whose money went back in the period (by the time
+  // the money went back); the income of the period the order was paid in keeps it
   refunded: { orders: number; revenue: number };
   // the sends the shop owes the carriers for, by the time they were sent (shippedAt); the ones
   // without a cost written count apart
   shipping: { sends: number; cost: number; withoutCost: number };
-  // the income less what the carriers cost
+  // the parcels the shop paid to carry goods back from buyers, by the time they were sent (the time
+  // the admin gave); the ones without a cost written count apart. deducted: the cost of the way
+  // back the buyers owed, taken off the transfers in the period (an income); reimbursed: the cost
+  // of the way back root paid back to buyers outside the app in the period (spent)
+  returnShipping: {
+    sends: number;
+    cost: number;
+    withoutCost: number;
+    deducted: number;
+    reimbursed: number;
+  };
+  // the income less what went back and less what the carriers cost, the parcels back too
   result: number;
 }
 
 // the money of a period in three parts; the delivery and the sends are of the whole shop, none for
 // a report of some products or of a category, and the totals are of the items then
 export interface AdminMoneySummaryDto {
-  // the orders paid in the period and not cancelled: their items, their delivery, together
+  // the items of the orders paid in the period less the returns, the delivery less what went back,
+  // together
   income: { items: number; delivery: number | null; total: number };
-  // what the items sold cost (their batches), the units written off, the sends the shop owes the
-  // carriers for, together
+  // what the items kept cost (their batches, less the units that came back), the units written
+  // off, the sends the shop owes the carriers for, together
   expenses: { costOfGoods: number; writeOffs: number; shipping: number | null; total: number };
   // the items less their cost, the delivery less the sends, all the income less all the expenses
   margin: { items: number; delivery: number | null; total: number };
 }
 
+// the sales less the returns: what the items of the period earned
+export interface AdminNetDto {
+  units: number;
+  revenue: number;
+  cost: number;
+  margin: number;
+  marginPercent: number | null;
+}
+
+// the stock of the variants of a report, read from the stock log: at the start of the period, what
+// came in (deliveries, returns), what went out (sales, write-offs, goods written off at once with a
+// return), at the end; apart, the units sold whose goods are on their way back (the statement is
+// there, the goods are not in), at their cost
+export interface AdminStockTurnoverDto {
+  opening: AdminUnitsValueDto;
+  received: AdminUnitsValueDto;
+  left: AdminUnitsValueDto;
+  closing: AdminUnitsValueDto;
+  onTheWayBack: AdminUnitsValueDto;
+}
+
+export type AdminReturnKind =
+  | 'withdrawal'
+  | 'refused'
+  | 'defect'
+  | 'wrong_item'
+  | 'damaged'
+  | 'goodwill'
+  | 'shop_cancel'
+  | 'other';
+
+// the units, the money and the cost of the units that came back
+export interface AdminReturnsDto {
+  units: number;
+  revenue: number;
+  cost: number;
+}
+
 export interface GetAdminAccountingResponseDto {
   period: AdminStatsPeriodDto;
   currency: string;
-  // the orders paid in the period and not cancelled
+  // the orders paid in the period, cancelled later or not
   sales: AdminSalesDto;
-  // told apart and in no margin: the orders cancelled in the period, their payments went back
-  cancellations: Omit<AdminSalesDto, 'margin'>;
+  // the rows of the statements whose money went back in the period; orders counts the orders they
+  // belong to; byKind tells the right of withdrawal from the reasons an admin gave
+  returns: AdminReturnsDto & { orders: number; byKind: Record<AdminReturnKind, AdminReturnsDto> };
+  // the sales less the returns
+  net: AdminNetDto;
   // the income, the expenses and the margins of the period
   summary: AdminMoneySummaryDto;
   // the batches taken in during the period, at their costs
   purchases: AdminUnitsValueDto & {
     bySource: Record<'supplier' | 'surplus' | 'customer_return', AdminUnitsValueDto>;
   };
-  // the units written off in the period, at the costs of their batches
+  // the units written off in the period, at the costs of their batches; customer_return is the
+  // goods that came back with a statement and went out at once
   writeOffs: AdminUnitsValueDto & {
     byReason: Record<
-      'damaged' | 'defective' | 'expired' | 'shortage' | 'returned_to_supplier' | 'other',
+      | 'damaged'
+      | 'defective'
+      | 'expired'
+      | 'shortage'
+      | 'returned_to_supplier'
+      | 'other'
+      | 'customer_return',
       AdminUnitsValueDto
     >;
   };
-  // what the batches have left now, at their costs
-  stock: AdminUnitsValueDto;
+  // the stock at its costs: at the start of the period, what came in and went out, at the end
+  stock: AdminStockTurnoverDto;
   // the delivery of all orders; none when the report is of some products or of a category
   delivery: AdminDeliveryMoneyDto | null;
 }
 
 // the money of a product, a category or a step of time in a period
 export interface AdminMoneyBreakdownDto {
-  // the orders paid in the period and not cancelled; the percent is of the revenue, none without
+  // the orders paid in the period; the percent is of the revenue, none without
   sales: Omit<AdminSalesDto, 'orders'> & { marginPercent: number | null };
-  // told apart and in no margin: the orders cancelled in the period
-  cancellations: Omit<AdminSalesDto, 'orders' | 'margin'>;
+  // the rows of the statements whose money went back in the period
+  returns: AdminReturnsDto;
+  // the sales less the returns
+  net: AdminNetDto;
   writeOffs: AdminUnitsValueDto;
-  // the margin of the sales less the write-offs, the percent of the revenue of the sales
+  // the margin of the net less the write-offs, the percent of the revenue of the net
   afterWriteOffs: { margin: number; marginPercent: number | null };
   purchases: AdminUnitsValueDto;
-  stock: AdminUnitsValueDto;
+  stock: AdminStockTurnoverDto;
 }
 
 export type AdminReportFormat = 'json' | 'csv';
@@ -416,7 +481,7 @@ export interface GetAdminStockBatchesResponseDto {
 }
 
 // the journal of the stock: GET /api/admin/stock/movements
-export type AdminStockMovementKind = 'delivery' | 'writeOff' | 'sale' | 'cancel';
+export type AdminStockMovementKind = 'delivery' | 'writeOff' | 'sale' | 'return' | 'returnWriteOff';
 
 export interface AdminStockMovementsQueryDto {
   // the steps of all the variants of the product
@@ -597,6 +662,8 @@ export interface AdminStockLogItemDto {
   deliveryId: string | null;
   writeOffId: string | null;
   orderId: number | null;
+  // the row of the statement of return the units came back with (stock.return, stock.return_write_off)
+  returnItemId: number | null;
   ip: string | null;
   userAgent: string | null;
   // what the change was made of: the batches with their costs, the reason, the supplier
@@ -666,6 +733,7 @@ export type AdminAlertKind =
   | 'shipped_orders_waiting'
   | 'pickup_not_collected'
   | 'shipped_without_cost'
+  | 'shipped_without_tracking'
   | 'out_of_stock'
   | 'low_stock'
   | 'products_without_shipping_data'
@@ -675,6 +743,12 @@ export type AdminAlertKind =
   | 'expired_batches'
   | 'chats_waiting'
   | 'refunded_payments'
+  | 'failed_refunds'
+  | 'returns_manual_check'
+  | 'returns_proof_waiting'
+  | 'returns_goods_not_sent'
+  | 'returns_money_late'
+  | 'returns_goods_late'
   | 'worker_stalled'
   | 'admin_actions';
 

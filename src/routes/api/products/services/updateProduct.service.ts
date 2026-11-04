@@ -17,8 +17,8 @@ import {
 import type { UpdateProductDto, UpdateProductResponseDto } from 'types/dto/products.dto.js';
 
 // PATCH /api/products/:productId: the fields of the product itself (the name, the description, the
-// category, the manufacturer and the person responsible in the EU, the warnings, the documents,
-// the override of the popularity). The price, the sale, the article number, the weight and the
+// category, the manufacturer and the person responsible in the EU, the warnings, the rule of
+// withdrawal, the documents, the override of the popularity). The price, the sale, the article number, the weight and the
 // sizes are changed on the variant (PATCH .../variants/:variantId), the pictures in the gallery
 // (POST and DELETE .../images). The answer is the card of an admin
 export async function updateProduct({
@@ -30,6 +30,7 @@ export async function updateProduct({
   manufacturerId,
   euResponsibleId,
   warnings,
+  withdrawal,
   documentIds,
   stock,
   categoryId,
@@ -49,6 +50,7 @@ export async function updateProduct({
     manufacturerId,
     euResponsibleId,
     warnings,
+    withdrawal,
     documentIds,
     stock,
     categoryId,

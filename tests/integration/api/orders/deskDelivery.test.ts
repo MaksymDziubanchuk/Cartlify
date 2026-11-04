@@ -471,6 +471,7 @@ describe('GET /api/orders?format=csv: the delivery for the courier', () => {
   const HEADER = [
     'Order',
     'Status',
+    'Return status',
     'Paid at',
     'Buyer email',
     'Recipient',

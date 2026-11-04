@@ -22,7 +22,6 @@ import {
   readOrderResponse,
 } from './helpers/index.js';
 
-import type { OrderCancelLogger } from './helpers/sendOrderCancelledEmail.helper.js';
 import type { CancelOrderDto, OrderResponseDto } from 'types/dto/orders.dto.js';
 
 const txOptions = {
@@ -59,6 +58,11 @@ async function closePaymentPage(orderId: number): Promise<void> {
 // the owner cancels the payment of an order that waits for it: the payment page is closed, the
 // reservation goes, the order becomes unconfirmed with its items and shipping data, the owner can
 // change them and confirm it again
+type OrderCancelLogger = {
+  warn: (obj: unknown, msg?: string) => void;
+  error: (obj: unknown, msg?: string) => void;
+};
+
 export async function cancelOrderPayment(
   { actorId, actorRole, orderId }: CancelOrderDto,
   log: OrderCancelLogger,

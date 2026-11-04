@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import cloudinary from '@config/cloudinary.js';
+import env from '@config/env.js';
 
 import {
   accessCookie,
@@ -24,6 +25,7 @@ import {
   type TestProduct,
 } from '../../../helpers/factories.js';
 import { placeOrder } from '../../../helpers/orders.js';
+import { placePaidOrderOf } from '../../../helpers/payments.js';
 
 // DELETE /api/users/me: a user deletes their own account. A local account confirms with the
 // password, an oauth one with a login of the last 10 minutes; open orders are shown first and
@@ -281,12 +283,12 @@ describe('open orders', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ errorCode: 'ACCOUNT_HAS_OPEN_ORDERS' });
     const { orders } = res.json().details as {
-      orders: { orderId: number; status: string; total: string }[];
+      orders: { orderId: number; status: string; total: string; reasons: string[] }[];
     };
-    expect(orders.map(({ orderId, status }) => ({ orderId, status }))).toEqual([
-      { orderId: paidId, status: 'paid' },
-      { orderId: shippedId, status: 'shipped' },
-      { orderId: waitingId, status: 'waiting' },
+    expect(orders.map(({ orderId, status, reasons }) => ({ orderId, status, reasons }))).toEqual([
+      { orderId: paidId, status: 'paid', reasons: ['IN_PROGRESS'] },
+      { orderId: shippedId, status: 'shipped', reasons: ['IN_PROGRESS'] },
+      { orderId: waitingId, status: 'waiting', reasons: ['PAYMENT_WAITING'] },
     ]);
     expect(orders.every((order) => Number(order.total) === 10)).toBe(true);
     expect(await isDeleted(user.id)).toBe(false);
@@ -319,5 +321,121 @@ describe('open orders', () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ errorCode: 'PASSWORD_INVALID' });
+  });
+});
+
+// the orders that live on without the account and that the person should know of before it goes: a
+// delivered one inside its period of withdrawal, and any one with a statement open. The statement
+// stays open, the order too: the buyer reaches them through the mails and the public form
+describe('DELETE /api/users/me with a delivered order or an open statement', () => {
+  const grace = env.WITHDRAWAL_GRACE_DAYS;
+  afterEach(() => {
+    env.WITHDRAWAL_GRACE_DAYS = grace;
+  });
+
+  const deliveredOrder = async (user: Awaited<ReturnType<typeof newUser>>) => {
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'shipped');
+    await asAdmin(
+      (tx) =>
+        tx.$executeRaw`update cartlify.orders set status = 'delivered' where id = ${orderId}::int`,
+    );
+    return orderId;
+  };
+
+  const withdraw = (user: Awaited<ReturnType<typeof newUser>>, orderId: number) =>
+    app.inject({
+      method: 'POST',
+      url: `/api/orders/${orderId}/withdrawal`,
+      headers: withCsrf(csrf, accessCookie(user)),
+      payload: {},
+    });
+
+  const reasonsOf = (res: Awaited<ReturnType<typeof deleteMe>>) =>
+    (res.json().details as { orders: { orderId: number; reasons: string[] }[] }).orders.map(
+      ({ orderId, reasons }) => ({ orderId, reasons }),
+    );
+
+  it('lists a delivered order the person may still withdraw from, and deletes after the second request', async () => {
+    const user = await newUser();
+    const orderId = await deliveredOrder(user);
+
+    const first = await deleteMe(accessCookie(user), { password: user.password });
+
+    expect(first.statusCode).toBe(409);
+    expect(first.json()).toMatchObject({ errorCode: 'ACCOUNT_HAS_OPEN_ORDERS' });
+    expect(reasonsOf(first)).toEqual([{ orderId, reasons: ['WITHDRAWAL_OPEN'] }]);
+    expect(await isDeleted(user.id)).toBe(false);
+
+    const second = await deleteMe(accessCookie(user), {
+      password: user.password,
+      confirmOpenOrders: true,
+    });
+
+    expect(second.statusCode).toBe(204);
+    expect(await orderOf(orderId)).toMatchObject({ status: 'delivered', userId: user.id });
+  });
+
+  it('does not list a delivered order whose period is over', async () => {
+    const user = await newUser();
+    await deliveredOrder(user);
+    env.WITHDRAWAL_GRACE_DAYS = -400;
+
+    const res = await deleteMe(accessCookie(user), { password: user.password });
+
+    expect(res.statusCode).toBe(204);
+  });
+
+  it('lists an order with an open statement together with the other reasons, and the statement lives on', async () => {
+    const user = await newUser();
+    const orderId = await placeOrder(app, csrf, user, await newProduct(), 'shipped');
+    expect((await withdraw(user, orderId)).statusCode).toBe(201);
+
+    const first = await deleteMe(accessCookie(user), { password: user.password });
+
+    expect(first.statusCode).toBe(409);
+    expect(reasonsOf(first)).toEqual([{ orderId, reasons: ['IN_PROGRESS', 'RETURN_OPEN'] }]);
+
+    const second = await deleteMe(accessCookie(user), {
+      password: user.password,
+      confirmOpenOrders: true,
+    });
+
+    expect(second.statusCode).toBe(204);
+    const statements = await asAdmin((tx) =>
+      tx.orderReturn.findMany({ where: { orderId }, select: { closedAt: true, source: true } }),
+    );
+    expect(statements).toEqual([{ closedAt: null, source: 'account' }]);
+  });
+
+  it('lists a delivered order past its period only for its open statement', async () => {
+    const user = await newUser();
+    const orderId = await deliveredOrder(user);
+    expect((await withdraw(user, orderId)).statusCode).toBe(201);
+    env.WITHDRAWAL_GRACE_DAYS = -400;
+
+    const res = await deleteMe(accessCookie(user), { password: user.password });
+
+    expect(res.statusCode).toBe(409);
+    expect(reasonsOf(res)).toEqual([{ orderId, reasons: ['RETURN_OPEN'] }]);
+  });
+
+  it('does not list a cancelled order whose statement is closed: the goods are back and the money is given back', async () => {
+    const user = await newUser();
+    const { orderId } = await placePaidOrderOf(
+      app,
+      csrf,
+      user,
+      [{ item: await newProduct(), quantity: 1 }],
+      {},
+    );
+    expect((await withdraw(user, orderId)).statusCode).toBe(201);
+    const statements = await asAdmin((tx) =>
+      tx.orderReturn.findMany({ where: { orderId }, select: { closedAt: true } }),
+    );
+    expect(statements[0]!.closedAt).not.toBeNull();
+
+    const res = await deleteMe(accessCookie(user), { password: user.password });
+
+    expect(res.statusCode).toBe(204);
   });
 });

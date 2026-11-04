@@ -32,6 +32,8 @@ WEB_PAGE_CHECKOUT_SUCCESS=/checkout/success
 WEB_PAGE_CHECKOUT_CANCEL=/checkout/cancel
 # the page the mails of an order link to
 WEB_PAGE_ORDER=/orders/{id}
+# the page of the form of withdrawal the mails link to; the code of the order follows the # of the link
+WEB_PAGE_WITHDRAWAL=/orders/{id}/withdrawal
 # the page the mail of a delivered order asks to rate each product on
 WEB_PAGE_PRODUCT_REVIEWS=/products/{id}#reviews
 
@@ -83,6 +85,16 @@ LIMIT_PASSWORD_CHANGE_PER_USER=10
 LIMIT_EXPORT_PER_USER=1
 # the reviews of a user in an hour
 LIMIT_REVIEW_PER_USER=30
+# the calls of an admin by the button of a chat the bot could not answer, from a user in an hour
+LIMIT_CHAT_CALL_ADMIN_PER_USER=10
+# the statements of withdrawal a user makes from their account in an hour
+LIMIT_WITHDRAWAL_PER_USER=10
+# the requests of the public form of withdrawal from one address in an hour
+LIMIT_WITHDRAWAL_FORM_PER_ADDRESS=20
+# the requests of the public form of withdrawal for one order without its code, from every address, in an hour
+LIMIT_WITHDRAWAL_FORM_PER_ORDER=5
+# the requests of the public form of withdrawal with the same phone (or name) of a recipient without the code, from every address, in an hour
+LIMIT_WITHDRAWAL_FORM_PER_DATA=5
 # the wrong passwords of an account before its login pauses for a minute, doubling after
 LOGIN_FAILURES_BEFORE_PAUSE=5
 # the biggest file of a form in bytes and the most pictures in the gallery of a product; the most
@@ -106,6 +118,11 @@ ATTRIBUTE_MULTI_VALUES_MAX=50
 # after them (at least 30); both together at most 1440, the 24 hours stripe takes
 ORDER_RESERVATION_MINUTES=15
 STRIPE_PAGE_AFTER_RESERVATION_MINUTES=30
+# the days after the end of the period of withdrawal in which the shop still takes a withdrawal
+# (4 unless given, 0 to 30): the end of a period that falls on a Saturday, a Sunday or a holiday
+# moves to the next working day, the grace covers it. Under 4 days a buyer can lose a day or two
+# of the period over a holiday, and 0 leaves none: that is on the owner of the shop
+WITHDRAWAL_GRACE_DAYS=4
 # the time zone of the days and months of the reports (Europe/Madrid unless given)
 SHOP_TIME_ZONE=Europe/Madrid
 # the name of the shop on a payment, in the mails, in the chat bot and in the documentation (Cartlify unless given)
@@ -188,6 +205,11 @@ STRIPE_SECRET_KEY=sk_test_replace_this_key
 # the signing secret of the webhook endpoint: required in production, elsewhere the start warns
 # that every stripe event is refused without it
 STRIPE_WEBHOOK_SECRET=
+# signs the number of an order into the code of the links of withdrawal in the mails (32 characters
+# at least): required in production, elsewhere the start warns and the links go without a code
+# (every form is checked by hand). Use another value on dev than on prod, so the codes of prod do
+# not work there. Changing it stops all the links sent before
+WITHDRAWAL_CODE_SECRET=
 # a three letter code of a currency with cents (eur unless given); jpy, kwd and the like stop the start
 STRIPE_CURRENCY=eur
 

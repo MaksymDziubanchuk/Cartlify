@@ -1,5 +1,6 @@
 import type { FastifySchema } from 'fastify';
 
+import env from '@config/env.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurityFor } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
@@ -56,6 +57,7 @@ const adminChatMessageExample = {
 
 const currentChatResponseExample = {
   thread: chatThreadExample,
+  adminCallAvailable: false,
   messages: [chatMessageExample],
   nextCursor: null,
   ws: {
@@ -91,6 +93,23 @@ const adminChatThreadResponseExample = {
 const chatThreadMessagesResponseExample = {
   messages: [chatMessageExample],
   nextCursor: 'eyJpZCI6MSwidiI6bnVsbH0',
+};
+
+const callAdminChatResponseExample = {
+  thread: {
+    ...adminChatThreadExample,
+    adminRequestedAt: '2026-01-01T10:10:00.000Z',
+  },
+  message: {
+    ...chatMessageExample,
+    id: 3,
+    senderId: null,
+    senderType: 'bot',
+    content:
+      'I have passed this chat to an admin. Please describe your issue in a message, an admin will answer when they are available.',
+    isRead: true,
+    createdAt: '2026-01-01T10:10:00.000Z',
+  },
 };
 
 const closeChatThreadResponseExample = {
@@ -246,6 +265,76 @@ const getAdminChatThreadSchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for giving a chat with the bot to the admins by the button
+const callAdminChatSchema = {
+  operationId: 'callAdminChat',
+  summary: 'Call an admin',
+  description:
+    'The button "call an admin" of a chat the bot could not answer. The bot cannot answer when the ' +
+    'model gives no answer, the limit of the shop is used up or the limit of the customer is used ' +
+    'up; then, for a user with a confirmed email, GET /api/chat/thread/current has ' +
+    '`adminCallAvailable: true` and the socket sends `thread:admin-call` ' +
+    '(`{ threadId, available }`). The button comes back every time the bot is down and goes away ' +
+    'when the bot answers again, the chat goes to the admins, or the mark runs out (30 minutes). ' +
+    'This route gives the own open chat that is still with the bot to the admins, and only while ' +
+    'the chat has the mark: the bot writes that the chat was passed on and asks to describe the ' +
+    'issue, and the chat enters the queue of the admins with the next message of the customer. At ' +
+    'most ' +
+    env.LIMIT_CHAT_CALL_ADMIN_PER_USER +
+    ' a user an hour.',
+
+  params: {
+    $ref: 'chatThreadIdParamsSchema#',
+    examples: [chatThreadIdParamsExample],
+  },
+
+  response: {
+    200: {
+      description: 'The chat was given to the admins.',
+      $ref: 'callAdminChatResponseSchema#',
+      examples: [callAdminChatResponseExample],
+    },
+    400: {
+      description: 'The thread id is not a uuid.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required (LOGIN_REQUIRED).',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        'Only a user calls an admin (INSUFFICIENT_ROLE). `CHAT_ADMIN_EMAIL_NOT_CONFIRMED`: the ' +
+        'email is not confirmed.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        "`CHAT_THREAD_NOT_FOUND`: there is no such chat, or it is another customer's (the user does " +
+        'not see it).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`CHAT_THREAD_CLOSED`: the chat is closed. `CHAT_ADMIN_CALL_UNAVAILABLE`: the chat has no ' +
+        'button (the bot answered since, the mark ran out) or is with the admins already.',
+      $ref: 'errorResponseSchema#',
+    },
+    429: {
+      description: 'Too many calls in the last hour (RATE_LIMITED, `details.limit` chatCallAdmin).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while giving the chat to the admins.',
+      $ref: 'errorResponseSchema#',
+    },
+    503: {
+      description: '`REDIS_UNAVAILABLE`: the mark of the button cannot be read.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for closing admin chat thread
 const closeAdminChatThreadSchema = {
   operationId: 'closeAdminChatThread',
@@ -301,6 +390,7 @@ const taggedChatSchemas = withOpenApiTag(
     getAdminChatThreadsSchema,
     getAdminChatThreadSchema,
     closeAdminChatThreadSchema,
+    callAdminChatSchema,
   },
   'chat',
 );
@@ -316,5 +406,10 @@ const chatSchemasWithCurrentSecurity = withOpenApiSecurityFor(
 export const chatsSchemas = withOpenApiSecurityFor(
   chatSchemasWithCurrentSecurity,
   openApiSecurity.accessTokenCookie,
-  ['getAdminChatThreadsSchema', 'getAdminChatThreadSchema', 'closeAdminChatThreadSchema'],
+  [
+    'getAdminChatThreadsSchema',
+    'getAdminChatThreadSchema',
+    'closeAdminChatThreadSchema',
+    'callAdminChatSchema',
+  ],
 );

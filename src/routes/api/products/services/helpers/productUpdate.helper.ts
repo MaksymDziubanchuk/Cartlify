@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import { buildProductUpdateAuditChanges, writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { normalizeWarnings } from '@helpers/party.js';
+import { parseWithdrawalRule } from '@helpers/withdrawal.js';
 import { BadRequestError, NotFoundError } from '@utils/errors.js';
 
 import { assertCategoryExists } from './productCategory.helper.js';
@@ -28,8 +29,8 @@ export type ProductWriteContext = {
   batch?: boolean;
 };
 
-// a change of a product: its own fields only (name, description, category, parties, warnings,
-// documents, the override of the popularity). The price, the sale, the article number, the weight
+// a change of a product: its own fields only (name, description, category, parties, warnings, the
+// rule of withdrawal, documents, the override of the popularity). The price, the sale, the article number, the weight
 // and the stock are the variant's. The fields are read and checked first, then the product as it
 // is under the lock of its row, then the steps are written in the transaction of the caller with
 // every line of the logs
@@ -50,6 +51,7 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     manufacturerId,
     euResponsibleId,
     warnings,
+    withdrawal,
     documentIds,
     stock,
     categoryId,
@@ -75,6 +77,8 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
   // the manufacturer and the person in the EU by their ids; the warnings, none when empty
   const partyChanges = planUpdateParties({ manufacturerId, euResponsibleId });
   const warningsNorm = warnings !== undefined ? normalizeWarnings(warnings) : undefined;
+  // the rule of withdrawal: one of the rules, or none (null) when the product gives it up
+  const withdrawalNorm = parseWithdrawalRule(withdrawal);
   // the documents by their ids, the list written whole; null or none is an empty list
   const documentIdsNorm = readDocumentIds(documentIds);
 
@@ -86,6 +90,7 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     manufacturerId !== undefined ||
     euResponsibleId !== undefined ||
     warnings !== undefined ||
+    withdrawal !== undefined ||
     documentIds !== undefined ||
     categoryId !== undefined ||
     popularityOverride !== undefined ||
@@ -103,6 +108,7 @@ export function planProductUpdate(fields: ProductUpdateFields, opts: { hasImages
     popularityOverrideUntilDate,
     partyChanges,
     warningsNorm,
+    withdrawalNorm,
     documentIdsNorm,
   };
 }
@@ -116,6 +122,7 @@ export const productBeforeUpdateSelect = {
   manufacturerId: true,
   euResponsibleId: true,
   warnings: true,
+  withdrawal: true,
   popularityOverride: true,
   popularityOverrideUntil: true,
   popularity: true,
@@ -182,6 +189,7 @@ export async function writeProductUpdate(
     ...(input.description !== undefined ? { description: plan.descriptionNorm || null } : {}),
     ...plan.partyChanges,
     ...(plan.warningsNorm !== undefined ? { warnings: plan.warningsNorm } : {}),
+    ...(plan.withdrawalNorm !== undefined ? { withdrawal: plan.withdrawalNorm } : {}),
     ...(input.categoryId !== undefined ? { categoryId: plan.categoryIdRaw! } : {}),
   };
 
@@ -219,6 +227,7 @@ export async function writeProductUpdate(
       manufacturerId: plan.partyChanges.manufacturerId,
       euResponsibleId: plan.partyChanges.euResponsibleId,
       warnings: plan.warningsNorm,
+      withdrawal: plan.withdrawalNorm,
       categoryId: input.categoryId,
       popularityOverride: input.popularityOverride,
       popularityOverrideUntil: input.popularityOverrideUntil,

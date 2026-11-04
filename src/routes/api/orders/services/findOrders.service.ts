@@ -43,6 +43,7 @@ const whereOf = (q: ReturnType<typeof normalizeFindOrdersInput>) =>
     actorRole: q.actorRole,
     status: q.status,
     statuses: q.statuses,
+    returnStatuses: q.returnStatuses,
     confirmed: q.confirmed,
     paidFrom: q.paidFrom,
     paidTo: q.paidTo,
@@ -125,7 +126,7 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
           )
         : new Map<number, Parameters<typeof buyerOf>[0]>();
 
-      const context = await orderContextOf(tx, pageRows);
+      const context = await orderContextOf(tx, pageRows, isAdmin ? 'admin' : 'buyer');
 
       const last = pageRows[pageRows.length - 1];
       const nextCursor =
@@ -154,6 +155,7 @@ export async function findOrders(dto: FindOrdersDto): Promise<GetOrdersResponseD
 type CsvOrder = {
   id: number;
   status: string;
+  returnStatus: string;
   paidAt: Date | null;
   total: unknown;
   delivery: {
@@ -194,6 +196,8 @@ const weightOf = (row: CsvOrder) => ({
 const CSV_COLUMNS: CsvColumn<CsvOrder>[] = [
   { header: 'Order', kind: 'number', value: (row) => row.id },
   { header: 'Status', kind: 'text', value: (row) => row.status },
+  // a delivered order may be fully returned: the status alone does not say it
+  { header: 'Return status', kind: 'text', value: (row) => row.returnStatus },
   { header: 'Paid at', kind: 'text', value: (row) => row.paidAt?.toISOString() },
   {
     header: 'Buyer email',
@@ -270,6 +274,7 @@ export async function findOrdersCsv(
           id: true,
           userId: true,
           status: true,
+          returnStatus: true,
           paidAt: true,
           total: true,
           delivery: {

@@ -118,6 +118,14 @@ async function handleMessageSend(
             payload: result.botMessage,
         });
     }
+
+    // the button "call an admin" came or went with this turn of the bot
+    if (result.adminCall) {
+        chatWsBroadcaster.broadcastToThread(threadId, {
+            type: 'thread:admin-call',
+            payload: { threadId, available: result.adminCall === 'offered' },
+        });
+    }
 }
 
 // handle thread read

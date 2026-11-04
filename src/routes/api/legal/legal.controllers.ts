@@ -58,6 +58,8 @@ const postDocument: ControllerRouter<
     kind: req.body.kind,
     title: req.body.title,
     content: req.body.content,
+    contract: req.body.contract,
+    retention: req.body.retention,
   });
   return reply.code(201).send(result);
 };

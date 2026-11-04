@@ -25,8 +25,9 @@ const idOf = (item: UpdateProductsBatchItemDto) => item.productId;
 
 // PATCH /api/products/batch: many products, each with fields of its own, all of them or none. The
 // fields are the ones a product has (name, description, category, the manufacturer and the person in
-// the EU, the warnings, the documents, the override of the popularity); the price, the sale, the
-// article number and the weight are the variants', PATCH /api/products/variants/batch. The change of
+// the EU, the warnings, the rule of withdrawal, the documents, the override of the popularity); the
+// price, the sale, the article number and the weight are the variants', PATCH
+// /api/products/variants/batch. The change of
 // each is the one of PATCH /api/products/:productId (productUpdate.helper): the fields of every
 // product are checked first, then every product as it is under the lock of its row (by id, so two
 // such requests wait for each other); only then anything is written. The answer has the cards of an

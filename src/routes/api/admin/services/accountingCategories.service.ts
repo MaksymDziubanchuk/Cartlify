@@ -89,8 +89,8 @@ const SORT_VALUE: Record<
   marginAfterWriteOffs: (row) => row.afterWriteOffs.margin,
   writeOffs: (row) => row.writeOffs.value,
   purchases: (row) => row.purchases.value,
-  stockValue: (row) => row.stock.value,
-  stockUnits: (row) => row.stock.units,
+  stockValue: (row) => row.stock.closing.value,
+  stockUnits: (row) => row.stock.closing.units,
   name: (row) => row.name,
 };
 

@@ -1,6 +1,12 @@
+import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
+import {
+  withdrawalNoticeOf,
+  withdrawalOfferOf,
+  type WithdrawalOfferArgs,
+} from './withdrawalNotice.js';
 
 export type OrderDeliveredItem = {
   name: string;
@@ -12,9 +18,12 @@ export type OrderDeliveredItem = {
   // the name the rating line goes by (the product, whose reviews the page shows); without one the
   // name of the item
   reviewName?: string;
+  // the rule of withdrawal of the item as the order kept it; the mail names the items that are not
+  // taken back
+  withdrawal?: WithdrawalRuleName;
 };
 
-export type OrderDeliveredTemplateArgs = {
+export type OrderDeliveredTemplateArgs = WithdrawalOfferArgs & {
   orderId: number;
   // the order page of the frontend
   orderUrl: string;
@@ -52,6 +61,8 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
   });
   const price = (value: number | string) => money.format(Number(value));
 
+  const noRight = withdrawalNoticeOf(args.items, 'none');
+
   const values = {
     appName,
     orderId: String(args.orderId),
@@ -63,6 +74,9 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
     })),
     deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
+    ...withdrawalOfferOf('delivered', args.items, args),
+    noRightLine: noRight.length ? 'No right of withdrawal applies to these goods:' : '',
+    noRightItems: noRight,
     // the products to rate, each with the page of its reviews
     ratings: args.items
       .filter((item) => item.reviewUrl?.trim())

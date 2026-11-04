@@ -5,6 +5,7 @@ import pg from 'pg';
 import { prisma } from '@db/client.js';
 import { STOCK_LOG_EVENTS } from '@config/journalEvents.js';
 
+import { SHOP_CANCEL_SQL } from '../../helpers/cancel.js';
 import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js';
 import {
   cartOf,
@@ -35,10 +36,10 @@ import {
 
 // the stock log is the journal of every change of the quantity of a variant (product_variants
 // stock): a line for each variant for each change, with the event that made it (a delivery, a
-// write-off, a sale at the payment of an order, the units back at the cancel of a paid order). The
-// functions of the database that move the stock write the lines in the same transaction; nobody
-// else writes, edits or deletes one; only admin and root read. A reserve and its release do not
-// change the stock and have no line
+// write-off, a sale at the payment of an order, the units back with a statement of return, which is
+// what the cancel of a paid order is). The functions of the database that move the stock write the
+// lines in the same transaction; nobody else writes, edits or deletes one; only admin and root
+// read. A reserve and its release do not change the stock and have no line
 
 let owner: TestUser;
 let admin: TestUser;
@@ -79,9 +80,33 @@ async function paidOrder(db: DbSession, items: [number, number][]) {
   return orderId;
 }
 
+// the cancel of a paid order: a statement of return for all of it with the reason shop_cancel,
+// made by the actor given (an admin, root; the others are refused)
 const cancel = async (db: DbSession, actor: Actor, orderId: number) => {
   await db.as(actor);
-  return db.attempt('select 1 as done from cartlify.cancel_paid_order($1::int)', orderId);
+  return db.attempt(SHOP_CANCEL_SQL, orderId);
+};
+
+// the lines of the log of an order with the row of the statement each one names and the order and
+// the variant of the item that row is for
+const returnRowsOf = async (db: DbSession, orderId: number) => {
+  await db.as(asAdmin());
+  return db.rows<{
+    event: string;
+    variantId: number;
+    returnItemId: number | null;
+    itemOrderId: number | null;
+    itemVariantId: number | null;
+  }>(
+    `select l.event, l."variantId", l."returnItemId",
+            oi."orderId" as "itemOrderId", oi."variantId" as "itemVariantId"
+     from cartlify.stock_log as l
+     left join cartlify.return_items as ri on ri.id = l."returnItemId"
+     left join cartlify.order_items as oi on oi.id = ri."orderItemId"
+     where l."orderId" = $1
+     order by l.id`,
+    orderId,
+  );
 };
 
 const countOf = async (db: DbSession, variantIds: number[]) => {
@@ -427,7 +452,7 @@ describe('the stock log of a sale', () => {
 
 describe('the stock log of a cancel', () => {
   it('has a line for each variant of the order with the units back, in the name of the admin', async () => {
-    const { orderId, sold, back } = await inRolledBackTx(async (db) => {
+    const { orderId, sold, back, rows } = await inRolledBackTx(async (db) => {
       await batchIdOf(db, asAdmin(), product.variantId, { quantity: 5, unitCost: '2' });
       await batchIdOf(db, asAdmin(), other.variantId, { quantity: 3, unitCost: '1.5' });
       const orderId = await paidOrder(db, [
@@ -440,7 +465,8 @@ describe('the stock log of a cancel', () => {
       return {
         orderId,
         sold: lines.filter((line) => line.event === 'stock.sale'),
-        back: lines.filter((line) => line.event === 'stock.cancel_return'),
+        back: lines.filter((line) => line.event === 'stock.return'),
+        rows: await returnRowsOf(db, orderId),
       };
     });
 
@@ -456,6 +482,22 @@ describe('the stock log of a cancel', () => {
       true,
     );
     expect(back.every((line) => line.deliveryId === null && line.writeOffId === null)).toBe(true);
+    // each line of the units back names the row of the statement it comes with (the item of this
+    // order for the same variant), a row for each variant; the sale lines name none
+    const backRows = rows.filter((row) => row.event === 'stock.return');
+    expect(backRows).toHaveLength(2);
+    expect(
+      backRows.every(
+        (row) =>
+          row.returnItemId !== null &&
+          row.itemOrderId === orderId &&
+          row.itemVariantId === row.variantId,
+      ),
+    ).toBe(true);
+    expect(new Set(backRows.map((row) => row.returnItemId)).size).toBe(2);
+    expect(
+      rows.filter((row) => row.event === 'stock.sale').every((row) => row.returnItemId === null),
+    ).toBe(true);
     // the same batches with the same costs as the sale took them from
     expect(back.map((line) => fieldOf(line, 'batches'))).toEqual(
       sold.map((line) => fieldOf(line, 'batches')),
@@ -467,7 +509,7 @@ describe('the stock log of a cancel', () => {
       await batchIdOf(db, asAdmin(), product.variantId, { quantity: 3 });
       const orderId = await paidOrder(db, [[product.variantId, 1]]);
       await cancel(db, asRoot(), orderId);
-      return stockLogOf(db, admin.id, product.variantId, 'stock.cancel_return');
+      return stockLogOf(db, admin.id, product.variantId, 'stock.return');
     });
 
     expect(lines).toHaveLength(1);
@@ -486,7 +528,7 @@ describe('the stock log of a cancel', () => {
       });
       const orderId = await paidOrder(db, [[product.variantId, 3]]);
       await cancel(db, asAdmin(), orderId);
-      const [line] = await stockLogOf(db, admin.id, product.variantId, 'stock.cancel_return');
+      const [line] = await stockLogOf(db, admin.id, product.variantId, 'stock.return');
       return { first, second, line };
     });
 
@@ -503,7 +545,7 @@ describe('the stock log of a cancel', () => {
       const before = await countOf(db, [product.variantId]);
       // a signed-in buyer cannot cancel a paid order
       const refused = await cancel(db, { role: 'USER', userId: owner.id }, orderId);
-      expect(refused.ok).toBe(false);
+      expect(refused).toMatchObject({ ok: false, message: 'RETURN_FORBIDDEN' });
       return (await countOf(db, [product.variantId])) - before;
     });
 
@@ -532,7 +574,7 @@ describe('the sum of the changes of a variant', () => {
       ['stock.sale', -2, 3],
       ['stock.write_off', -1, 2],
       ['stock.sale', -1, 1],
-      ['stock.cancel_return', 1, 2],
+      ['stock.return', 1, 2],
       ['stock.delivery', 3, 5],
     ]);
     expect(lines.reduce((sum, line) => sum + line.quantityChange, 0)).toBe(stock!.stock);
@@ -729,9 +771,11 @@ describe('the stock log is only added to', () => {
       );
       const id = rows[0]!.id;
 
+      // the owner reaches a line only to empty its address and browser (the cleanup of the
+      // retention terms): any other change is refused by the guard, a delete by the policy
       expect(
         await outcomeOf(`update cartlify.stock_log set "stockAfter" = 4 where id = $1`, id),
-      ).toBe('rows 0');
+      ).toBe('42501 STOCK_LOG_APPEND_ONLY');
       expect(await outcomeOf(`delete from cartlify.stock_log where id = $1`, id)).toBe('rows 0');
 
       const kept = await client.query<{ stockAfter: number }>(
@@ -785,6 +829,7 @@ describe('the shape of a line', () => {
       'stock_log_actorId_fkey',
       'stock_log_orderId_fkey',
       'stock_log_productId_fkey',
+      'stock_log_returnItemId_fkey',
       'stock_log_variantId_productId_fkey',
     ]);
     // r: restrict
@@ -807,6 +852,7 @@ describe('the shape of a line', () => {
       'stock_log_event_chk',
       'stock_log_meta_chk',
       'stock_log_operation_chk',
+      'stock_log_return_item_chk',
     ]);
     expect(checks.every((check) => check.validated)).toBe(true);
     // the event is written domain.name in lower case, as in the other journals
@@ -828,6 +874,10 @@ describe('the shape of a line', () => {
       return (await stockLogOf(db, admin.id, product.variantId)).map((line) => line.event);
     });
 
-    expect([...new Set(events)].sort()).toEqual([...STOCK_LOG_EVENTS].sort());
+    // the line of the goods that came back and went out at once comes with a statement whose goods
+    // are written off or lost, not with a cancel (db/returns.test.ts)
+    expect([...new Set(events)].sort()).toEqual(
+      STOCK_LOG_EVENTS.filter((event) => event !== 'stock.return_write_off').sort(),
+    );
   });
 });

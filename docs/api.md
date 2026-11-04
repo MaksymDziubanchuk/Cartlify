@@ -32,10 +32,10 @@ Examples of implemented business endpoints:
 - parties (admin): list, get, create, update, delete the manufacturers and the persons responsible in the EU that products name
 - characteristics (admin): the groups of the card, the characteristics of a variant (text, number, yes/no, one value or several of a list) and the values of a list, each created, listed, changed, deleted and put in an order of its own, a value of a list put in the place of another in every variant that has it (`POST /api/admin/attributes/:attributeId/options/:optionId/replace`, `{ withOptionId }`); `GET` and `PUT /api/categories/:categoryId/attributes` read and write the characteristics a category asks for
 - favorites: the list (`{ product, variant, addedAt }` rows), add and remove a variant (`POST|DELETE /api/favorites/:variantId`)
-- orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update, admin cancel with refund
+- orders: current cart, item mutations (also of an unconfirmed order), confirm, cancel of a payment, history, details, admin status update (the cancel of an order is a statement of return, see returns)
 - reviews: vote on review
 - admin: stats (the top of products and the top of variants), the accounting reports (by product, by variant, by category, by time), product popularity, admin chat queues, alerts
-- root: manage admins, publish the terms and the contract
+- root: manage admins, publish the terms, the contract and the privacy policy
 - legal: the versions in force, a version by id, the consents of the user
 
 ## Products and variants
@@ -158,5 +158,7 @@ Implemented chat behavior:
 - admin escalation: the bot asks to describe the issue, the description enters the admin queue
 - admin queue model using `adminRequestedAt` and `adminUnreadSince`
 - guest-to-user chat migration during authentication
+- the bot knows the orders of a signed-in customer, with their statements of withdrawal and return: whether the customer may still withdraw, until when, for which units, and where the money is; it never files or promises a return (the customer uses the button "Withdraw from the contract here" in the order) and leaves an order whose transfer of money failed or was disputed to an admin
+- the button "call an admin": when the bot cannot answer a user with a confirmed email (the model gives no answer, the limit of the shop or the limit of the customer is used up), `GET /api/chat/thread/current` has `adminCallAvailable: true` and the socket sends `thread:admin-call` (`{ threadId, available }`); `POST /api/chat/threads/{threadId}/call-admin` then gives the chat to the admins. The button comes back every time the bot is down and goes away when the bot answers again; the mark behind it lives 30 minutes in redis
 
 The chat module is implemented, but admin workflow details are still being refined through manual testing.

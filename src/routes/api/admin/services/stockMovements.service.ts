@@ -24,9 +24,10 @@ import { isDbYear } from '@helpers/dbDate.js';
 
 // the journal of the stock for an admin, every step of a variant in one list, read from the stock
 // log (one line for each variant for each change): a delivery, a write-off, a sale (the units a
-// paid order took at the payment) and a cancel (the same units the cancel of the paid order put
-// back, at the cancel). Each step names its variant with its product. Sorted by the time of the
-// step; the steps of one time go by kind, then by the line of the log
+// paid order took at the payment), a return (units that came back with a statement of return, on
+// the shelf) and a return write-off (the units of a return that went out at once, written off or
+// lost). Each step names its variant with its product. Sorted by the time of the step; the steps of
+// one time go by kind, then by the line of the log
 
 type MovementRow = {
   kind: AdminStockMovementKind;
@@ -152,8 +153,8 @@ const metaJson = (field: string) =>
   );
 
 // every step of the stock: one row for each line of the stock log. A delivery and a write-off name
-// the admin who did them; a sale is the work of the system and a cancel is told apart by its
-// order, so those two have no actor
+// the admin who did them, so does a return (the admin who took the goods in); a sale is the work of
+// the system and has no actor
 const MOVEMENTS = Prisma.sql`
   movements as (
     select
@@ -161,10 +162,16 @@ const MOVEMENTS = Prisma.sql`
         when 'stock.delivery' then 'delivery'
         when 'stock.write_off' then 'writeOff'
         when 'stock.sale' then 'sale'
-        else 'cancel'
+        when 'stock.return' then 'return'
+        when 'stock.return_write_off' then 'returnWriteOff'
       end as kind,
       l."createdAt" as at,
-      case l.event when 'stock.sale' then 1 when 'stock.cancel_return' then 2 else 0 end as rank,
+      case l.event
+        when 'stock.sale' then 1
+        when 'stock.return' then 2
+        when 'stock.return_write_off' then 3
+        else 0
+      end as rank,
       l.id as a,
       0 as b,
       l."variantId",
@@ -177,10 +184,18 @@ const MOVEMENTS = Prisma.sql`
       ${metaText('supplier')} as supplier,
       ${metaText('document')} as document,
       ${metaText('note')} as note,
-      case when l.event in ('stock.delivery', 'stock.write_off') then l."actorId" end as "actorId",
-      case when l.event in ('stock.delivery', 'stock.write_off') then l."actorRole"::text end
-        as "actorRole"
+      case
+        when l.event in ('stock.delivery', 'stock.write_off', 'stock.return', 'stock.return_write_off')
+          then l."actorId"
+      end as "actorId",
+      case
+        when l.event in ('stock.delivery', 'stock.write_off', 'stock.return', 'stock.return_write_off')
+          then l."actorRole"::text
+      end as "actorRole"
     from cartlify.stock_log as l
+    where l.event in (
+      'stock.delivery', 'stock.write_off', 'stock.sale', 'stock.return', 'stock.return_write_off'
+    )
   )
 `;
 
@@ -216,8 +231,8 @@ function afterCursor(cursor: Cursor | null, sortOrder: AdminReportSortOrder): Pr
   return Prisma.sql`(m.at, m.rank, m.a, m.b) ${op} (${utcTime(new Date(cursor.v))}, ${cursor.k}::int, ${cursor.id}::int, ${cursor.b}::int)`;
 }
 
-// a delivery and a cancel bring units in, a write-off and a sale take them out
-const SIGNED = Prisma.raw(`case when m.kind in ('delivery', 'cancel') then 1 else -1 end`);
+// a delivery and a return bring units in, a write-off, a sale and a return write-off take them out
+const SIGNED = Prisma.raw(`case when m.kind in ('delivery', 'return') then 1 else -1 end`);
 
 const toBatch = (line: MovementRow['batches'][number]): AdminStockMovementBatchDto => ({
   batchId: line.batchId,

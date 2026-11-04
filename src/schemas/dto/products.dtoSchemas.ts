@@ -1,6 +1,7 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { MAX_PRODUCT_VARIANTS, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { PARTY_LIMITS, WARNINGS_MAX } from '@helpers/party.js';
+import { WITHDRAWAL_RULES } from '@helpers/withdrawal.js';
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
 
 // money of a request: whole cents up to what numeric(10, 2) holds (the price of a variant)
@@ -589,6 +590,41 @@ const warningsResponseField = {
   description: 'The warnings of the product, null when it has none.',
 } as const;
 
+// what the law lets a buyer do with the goods when they withdraw from the purchase
+const withdrawalResponseField = {
+  type: 'object',
+  additionalProperties: false,
+  description:
+    'The rule of withdrawal of the product, the one the cart and the order keep: the rule, which ' +
+    'the page words (allowed; sealed_hygiene, sealed_media and mixed only while the seal is ' +
+    'unbroken; perishable, personalised and periodical not at all), and the kind it makes.',
+  properties: {
+    rule: { type: 'string', enum: [...WITHDRAWAL_RULES] },
+    right: {
+      type: 'string',
+      enum: ['full', 'conditional', 'none'],
+      description:
+        'full: taken back freely; conditional: only while the seal is unbroken, the page warns ' +
+        'the buyer; none: not taken back at all.',
+    },
+    own: {
+      type: ['string', 'null'],
+      enum: [...WITHDRAWAL_RULES, null],
+      description: `${ADMIN_ONLY} The rule the product has of its own, null when it follows its category.`,
+    },
+    source: {
+      type: 'string',
+      enum: ['product', 'category', 'default'],
+      description: `${ADMIN_ONLY} Where the rule comes from: the product, the nearest category above it that has one, or the default (allowed).`,
+    },
+    categoryId: {
+      type: ['integer', 'null'],
+      description: `${ADMIN_ONLY} The category the rule comes from, only when the source is a category.`,
+    },
+  },
+  required: ['rule', 'right'],
+} as const;
+
 // the body of a change: a party of the directory by its id; a type list, not anyOf, because
 // removeAdditional would strip the fields while ajv tries a shape
 const manufacturerIdBodyField = {
@@ -615,6 +651,16 @@ const warningsBodyField = {
   description: `The warnings, up to ${WARNINGS_MAX} signs; empty or null takes them away.`,
 } as const;
 
+// a plain text, not an enum: a rule there is not is WITHDRAWAL_RULE_INVALID for the form and the
+// body alike
+const withdrawalBodyField = {
+  type: ['string', 'null'],
+  description:
+    `The rule of withdrawal of the product of its own: ${WITHDRAWAL_RULES.join(', ')} ` +
+    '(WITHDRAWAL_RULE_INVALID for any other). Empty or null gives it up, and the product follows ' +
+    'its category, the nearest one above it that has a rule, and is allowed by default.',
+} as const;
+
 // the same by the text fields of a form: a party of the directory by its id
 const partyIdFormFields = {
   manufacturerId: {
@@ -630,6 +676,12 @@ const partyIdFormFields = {
   warnings: {
     type: 'string',
     description: `The warnings, up to ${WARNINGS_MAX} signs (PRODUCT_WARNINGS_TOO_LONG); empty takes them away on a change.`,
+  },
+  withdrawal: {
+    type: 'string',
+    description:
+      `The rule of withdrawal of the product of its own: ${WITHDRAWAL_RULES.join(', ')} ` +
+      '(WITHDRAWAL_RULE_INVALID for any other); empty means none, the product follows its category.',
   },
 } as const;
 
@@ -683,6 +735,7 @@ const productResponseSchema = {
     euResponsible: euResponsibleResponseField,
     warnings: warningsResponseField,
     documents: documentsResponseField,
+    withdrawal: withdrawalResponseField,
     category: {
       type: 'object',
       additionalProperties: false,
@@ -705,7 +758,14 @@ const productResponseSchema = {
       items: { $ref: 'galleryImageSchema#' },
     },
   },
-  required: [...productRequired, 'manufacturer', 'euResponsible', 'warnings', 'documents'],
+  required: [
+    ...productRequired,
+    'manufacturer',
+    'euResponsible',
+    'warnings',
+    'documents',
+    'withdrawal',
+  ],
 } as const;
 
 // the card: the product, the variant it opens and the variants to switch between
@@ -1002,6 +1062,7 @@ const updateProductBodySchema = {
     manufacturerId: manufacturerIdBodyField,
     euResponsibleId: euResponsibleIdBodyField,
     warnings: warningsBodyField,
+    withdrawal: withdrawalBodyField,
     documentIds: documentIdsBodyField,
 
     // kept in the schema so that a stock sent is refused, not dropped without a word

@@ -3,7 +3,7 @@ import type { Prisma, Role } from '@prisma/client';
 import { setUserContext } from '@db/dbContext.service.js';
 import { checkChosenVersions } from '@routes/api/legal/services/helpers/legalConsent.helper.js';
 import {
-  currentDocuments,
+  currentConsentDocuments,
   knownDocumentIds,
   recordConsents,
   takeConsentAtLogin,
@@ -41,7 +41,7 @@ export async function takeConsentAtOAuthLogin(
     return;
   }
 
-  const current = versionsOf(await currentDocuments(tx));
+  const current = versionsOf(await currentConsentDocuments(tx));
   checkChosenVersions(current, login.accepted, await knownDocumentIds(tx, login.accepted), {
     every: true,
   });

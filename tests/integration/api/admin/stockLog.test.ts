@@ -16,9 +16,9 @@ import { placePaidOrderOf } from '../../../helpers/payments.js';
 
 // GET /api/admin/stock-log: the journal of every change of the quantity of a variant, a line for
 // each variant for each change. The story below is made through the routes of the shop (two
-// deliveries, a write-off, a paid order, its cancel) and the journal is read by its filters, sorts,
-// events, columns, period, cursor and csv. Other files write lines at the same time: a test
-// narrows the journal to the product of the story
+// deliveries, a write-off, a paid order, its cancel as a statement of return) and the journal is
+// read by its filters, sorts, events, columns, period, cursor and csv. Other files write lines at
+// the same time: a test narrows the journal to the product of the story
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -140,8 +140,21 @@ beforeAll(async () => {
     { item: { variantId: a1.variantId }, quantity: 2 },
     { item: { variantId: b.variantId }, quantity: 1 },
   ]);
-  const cancelled = await post(`/api/orders/${orderId}/cancel`, admin);
-  expect(cancelled.statusCode).toBe(200);
+  // the cancel is a statement of return for every unit of the order with the reason shop_cancel
+  const orderItems = await asAdmin((tx) =>
+    tx.orderItem.findMany({
+      where: { orderId },
+      orderBy: { id: 'asc' },
+      select: { id: true, quantity: true },
+    }),
+  );
+  const cancelled = await post('/api/returns', admin, {
+    orderId,
+    items: orderItems.map((item) => ({ orderItemId: item.id, quantity: item.quantity })),
+    basis: 'other',
+    reason: 'shop_cancel',
+  });
+  expect(cancelled.statusCode).toBe(201);
 
   const second = await post('/api/products/stock/deliveries', admin, {
     source: 'surplus',
@@ -170,7 +183,7 @@ afterAll(async () => {
 });
 
 // the lines of the product with two variants: 3 deliveries of variants (two of the first delivery,
-// one of the second), 2 of the write-off, 1 sale, 1 cancel
+// one of the second), 2 of the write-off, 1 sale, 1 cancel (the units back)
 const mine = () => `productId=${story.a1.id}`;
 
 const SORTS = [
@@ -186,6 +199,7 @@ const SORTS = [
   'deliveryId',
   'writeOffId',
   'orderId',
+  'returnItemId',
   'ip',
   'userAgent',
 ];
@@ -206,6 +220,7 @@ const COLUMNS = [
   'deliveryId',
   'writeOffId',
   'orderId',
+  'returnItemId',
   'ip',
   'userAgent',
   'changes',
@@ -327,20 +342,29 @@ describe('GET /api/admin/stock-log', () => {
       deliveryId: null,
       writeOffId: null,
       orderId: story.orderId,
+      returnItemId: null,
     });
   });
 
   it('describes the units back at the cancel: the order, the units in, in the name of the admin who cancelled', async () => {
-    const page = await all(`variantId=${story.a1.variantId}&events=stock.cancel_return`);
+    const page = await all(`variantId=${story.a1.variantId}&events=stock.return`);
+    const [row] = await asAdmin((tx) =>
+      tx.orderReturnItem.findMany({
+        where: { orderItem: { orderId: story.orderId, variantId: story.a1.variantId } },
+        select: { id: true },
+      }),
+    );
 
     expect(page.items).toHaveLength(1);
     expect(page.items[0]).toMatchObject({
       actorId: admin.id,
       actorRole: 'ADMIN',
-      event: 'stock.cancel_return',
+      event: 'stock.return',
       quantityChange: 2,
       stockAfter: 4,
       orderId: story.orderId,
+      // the row of the statement the units came back with (6.6)
+      returnItemId: row!.id,
       userAgent: AGENT,
     });
     // the same batches with the same costs as the sale took them from
@@ -410,8 +434,8 @@ describe('GET /api/admin/stock-log', () => {
       expect(page.items.map((item) => [item.variantId, item.event])).toEqual([
         [story.a1.variantId, 'stock.sale'],
         [story.b.variantId, 'stock.sale'],
-        [story.a1.variantId, 'stock.cancel_return'],
-        [story.b.variantId, 'stock.cancel_return'],
+        [story.a1.variantId, 'stock.return'],
+        [story.b.variantId, 'stock.return'],
       ]);
     });
 
@@ -433,7 +457,7 @@ describe('GET /api/admin/stock-log', () => {
 
       expect(deliveryOfProduct.items.map((item) => item.variantId)).toEqual([story.b.variantId]);
       expect(orderOfVariant.items.map((item) => item.event).sort()).toEqual([
-        'stock.cancel_return',
+        'stock.return',
         'stock.sale',
       ]);
       expect(sales.total).toBe(2);
@@ -506,7 +530,13 @@ describe('GET /api/admin/stock-log', () => {
         errorCode: 'LOG_EVENTS_INVALID',
         details: {
           events: ['stock.nothing'],
-          allowed: ['stock.delivery', 'stock.write_off', 'stock.sale', 'stock.cancel_return'],
+          allowed: [
+            'stock.delivery',
+            'stock.write_off',
+            'stock.sale',
+            'stock.return',
+            'stock.return_write_off',
+          ],
         },
       });
       // the stock log began with its events: no line has the event of an old line
@@ -580,14 +610,11 @@ describe('GET /api/admin/stock-log', () => {
 
   describe('the events, the columns and the period', () => {
     it('keeps the lines of the events asked for and counts only them', async () => {
-      const some = await all(`${mine()}&events=stock.sale,stock.cancel_return`);
+      const some = await all(`${mine()}&events=stock.sale,stock.return`);
       const one = await all(`${mine()}&events=stock.write_off`);
 
       expect(some.total).toBe(2);
-      expect(some.items.map((item) => item.event).sort()).toEqual([
-        'stock.cancel_return',
-        'stock.sale',
-      ]);
+      expect(some.items.map((item) => item.event).sort()).toEqual(['stock.return', 'stock.sale']);
       expect(one.total).toBe(2);
     });
 
@@ -760,7 +787,7 @@ describe('what reads the stock log', () => {
     ]);
   });
 
-  it('lists every step of the stock of the product: deliveries, write-offs, the sale and the cancel', async () => {
+  it('lists every step of the stock of the product: deliveries, write-offs, the sale and the return of the cancel', async () => {
     const res = await get(
       `/api/admin/stock/movements?productId=${story.a1.id}&sortOrder=asc&limit=100`,
     );
@@ -773,7 +800,7 @@ describe('what reads the stock log', () => {
       ['writeOff', story.a1.variantId, -1, -2],
       ['writeOff', story.a2.variantId, -1, -3],
       ['sale', story.a1.variantId, -2, -4],
-      ['cancel', story.a1.variantId, 2, 4],
+      ['return', story.a1.variantId, 2, 4],
       ['delivery', story.a1.variantId, 3, 3],
     ]);
     expect(items[0]).toMatchObject({
@@ -789,9 +816,13 @@ describe('what reads the stock log', () => {
       note: 'Wet boxes',
       actor: { id: root.id, role: 'ROOT' },
     });
-    // the sale and the cancel are told apart by the order, not by an account
+    // the sale is the work of the system and has no account; the units back are taken in by the
+    // admin who cancelled the order
     expect(items[4]).toMatchObject({ orderId: story.orderId, actor: null });
-    expect(items[5]).toMatchObject({ orderId: story.orderId, actor: null });
+    expect(items[5]).toMatchObject({
+      orderId: story.orderId,
+      actor: { id: admin.id, role: 'ADMIN' },
+    });
     // the filters of the journal find the same lines by the ids of the operations
     const byOrder = await get(`/api/admin/stock/movements?orderId=${story.orderId}&limit=100`);
     const byDelivery = await get(

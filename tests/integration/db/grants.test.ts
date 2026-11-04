@@ -33,15 +33,17 @@ const APP_FUNCTIONS = [
   'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
   'cartlify.unconfirm_order(integer)',
   'cartlify.cancel_order_payment(integer)',
-  'cartlify.cancel_paid_order(integer)',
   'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
   'cartlify.expire_order_reservation(integer)',
   'cartlify.anonymize_login_logs(integer)',
   // maintenance the periodic tasks run as the system
   'cartlify.cleanup_user_tokens(integer)',
-  'cartlify.cleanup_login_log_addresses(integer)',
-  'cartlify.cleanup_guest_data(integer)',
-  'cartlify.cleanup_deleted_accounts_chats(integer)',
+  'cartlify.cleanup_login_log_addresses()',
+  'cartlify.cleanup_guest_data()',
+  'cartlify.cleanup_deleted_accounts_chats()',
+  'cartlify.cleanup_return_addresses()',
+  'cartlify.cleanup_return_personal()',
+  'cartlify.cleanup_deleted_accounts_recipients()',
   'cartlify.refresh_order_prices(integer)',
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',
@@ -49,6 +51,21 @@ const APP_FUNCTIONS = [
   'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
   'cartlify.write_off_variant_stock(uuid, integer, integer, integer, text, text)',
   'cartlify.shop_today()',
+  'cartlify.withdrawal_ends_at(timestamp without time zone, integer, integer, text)',
+  'cartlify.product_withdrawals(integer[])',
+  'cartlify.create_return(integer, jsonb, cartlify."ReturnSource", cartlify."ReturnBasis", cartlify."ReturnReason", text, text, text, timestamp without time zone, integer, integer, text)',
+  'cartlify.receive_return_items(integer, jsonb)',
+  'cartlify.confirm_return_proof(integer)',
+  'cartlify.provide_return_proof(integer, text, text, text)',
+  'cartlify.record_return_shipment(integer, text, text, text, numeric, timestamp without time zone)',
+  'cartlify.set_return_shipment_cost(integer, numeric)',
+  'cartlify.begin_return_refund(integer, integer[], jsonb, numeric)',
+  'cartlify.finish_return_refund(uuid, text, text, cartlify."ReturnRefundFailure", text)',
+  'cartlify.mark_return_refunded_outside(integer, integer[], cartlify."ReturnOutsideMethod", text, timestamp without time zone)',
+  'cartlify.close_return_without_refund(integer, integer[], cartlify."ReturnCloseCode", text)',
+  'cartlify.record_return_reimbursement(integer, numeric, cartlify."ReturnOutsideMethod", text, timestamp without time zone)',
+  'cartlify.settle_return_dispute(integer, boolean, text, timestamp without time zone)',
+  'cartlify.accept_return(integer)',
   'cartlify.variant_display_name(integer)',
   'cartlify.variant_names(integer[])',
   'cartlify.variant_expired_units(integer)',
@@ -228,6 +245,16 @@ describe(`role ${APP}`, () => {
     expect(settings).toEqual([{ statement: '15s', idle: '30s' }]);
   });
 
+  // the reports with many ctes got a high cost from their estimates and were compiled on every
+  // call, which took far longer than running them
+  it('runs its queries without jit', async () => {
+    const settings = await inRolledBackTx((db) =>
+      db.rows<{ jit: string }>(`select current_setting('jit') as jit`),
+    );
+
+    expect(settings).toEqual([{ jit: 'off' }]);
+  });
+
   it('runs only the functions db/schema/01 opens for it, besides the extension functions', async () => {
     const { expected, actual } = await inRolledBackTx(async (db) => ({
       expected: await listed(db, APP_FUNCTIONS),
@@ -260,7 +287,13 @@ describe(`role ${APP}`, () => {
       'log_stock_change',
       `select cartlify.log_stock_change(1, 'stock.delivery', 1, 1, null, null, null, null)`,
     ],
-    ['return_order_stock', 'select cartlify.return_order_stock(1)'],
+    ['lock_return_order', 'select cartlify.lock_return_order(1)'],
+    ['apply_return_results', `select cartlify.apply_return_results(1, '[]'::jsonb, 1)`],
+    ['refresh_return_state', 'select cartlify.refresh_return_state(1)'],
+    ['order_goods_on_shelf', `select cartlify.order_goods_on_shelf(1, 'paid')`],
+    ['take_back_manual_units', 'select cartlify.take_back_manual_units(1, 1, 1, 1)'],
+    ['assert_return_accepted', 'select cartlify.assert_return_accepted(1)'],
+    ['return_units_to_batches', `select cartlify.return_units_to_batches(1, 1, 1, 1, 'to_stock')`],
     ['consume_variant_stock', 'select cartlify.consume_variant_stock(1, 1, 1)'],
     ['reserve_variant_stock', 'select cartlify.reserve_variant_stock(1, 1)'],
     ['release_variant_stock', 'select cartlify.release_variant_stock(1, 1)'],

@@ -663,15 +663,155 @@ CREATE POLICY order_batch_allocations_insert_owner ON cartlify.order_batch_alloc
 WITH
   CHECK (quantity > 0);
 
--- UPDATE: denied to every role
-CREATE POLICY order_batch_allocations_update_deny ON cartlify.order_batch_allocations
-FOR UPDATE
-  USING (false)
+DROP POLICY IF EXISTS order_batch_allocations_update_owner ON cartlify.order_batch_allocations;
+
+-- UPDATE for the system functions only: the units that came back with a statement of return
+-- (receive_return_items); the columns an update may change: trg_order_batch_allocations_update_columns
+-- (db/05). Denied to every other role
+CREATE POLICY order_batch_allocations_update_owner ON cartlify.order_batch_allocations
+FOR UPDATE TO cartlify_owner
+  USING (true)
 WITH
-  CHECK (false);
+  CHECK (true);
 
 -- DELETE: denied to every role
 CREATE POLICY order_batch_allocations_delete_deny ON cartlify.order_batch_allocations FOR DELETE USING (false);
+
+----------------------------------------
+-- RETURNS AND RETURN_ITEMS
+----------------------------------------
+-- A statement of withdrawal or of return and its rows. Read by the buyer of the order and by admin
+-- and root, written only by the system functions that run as the owner (create_return,
+-- receive_return_items, confirm_return_proof, refresh_return_state, db/05); the columns an update
+-- may change: trg_returns_update_columns, trg_return_items_update_columns (db/05). Never deleted.
+ALTER TABLE cartlify.returns ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.returns FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS returns_select ON cartlify.returns;
+
+DROP POLICY IF EXISTS returns_select_owner ON cartlify.returns;
+
+DROP POLICY IF EXISTS returns_insert_owner ON cartlify.returns;
+
+DROP POLICY IF EXISTS returns_update_owner ON cartlify.returns;
+
+DROP POLICY IF EXISTS returns_delete_deny ON cartlify.returns;
+
+CREATE POLICY returns_select ON cartlify.returns FOR
+SELECT
+  USING (
+    cartlify.is_owner_or_admin (
+      (
+        SELECT
+          o."userId"
+        FROM
+          cartlify.orders AS o
+        WHERE
+          o.id = returns."orderId"
+      )
+    )
+  );
+
+CREATE POLICY returns_select_owner ON cartlify.returns FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+CREATE POLICY returns_insert_owner ON cartlify.returns FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+CREATE POLICY returns_update_owner ON cartlify.returns
+FOR UPDATE TO cartlify_owner
+  USING (true)
+WITH
+  CHECK (true);
+
+CREATE POLICY returns_delete_deny ON cartlify.returns FOR DELETE USING (false);
+
+ALTER TABLE cartlify.return_items ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.return_items FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS return_items_select ON cartlify.return_items;
+
+DROP POLICY IF EXISTS return_items_select_owner ON cartlify.return_items;
+
+DROP POLICY IF EXISTS return_items_insert_owner ON cartlify.return_items;
+
+DROP POLICY IF EXISTS return_items_update_owner ON cartlify.return_items;
+
+DROP POLICY IF EXISTS return_items_delete_deny ON cartlify.return_items;
+
+-- the rows of the statements the reader sees
+CREATE POLICY return_items_select ON cartlify.return_items FOR
+SELECT
+  USING (
+    EXISTS (
+      SELECT
+        1
+      FROM
+        cartlify.returns AS r
+      WHERE
+        r.id = return_items."returnId"
+    )
+  );
+
+CREATE POLICY return_items_select_owner ON cartlify.return_items FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+CREATE POLICY return_items_insert_owner ON cartlify.return_items FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+CREATE POLICY return_items_update_owner ON cartlify.return_items
+FOR UPDATE TO cartlify_owner
+  USING (true)
+WITH
+  CHECK (true);
+
+CREATE POLICY return_items_delete_deny ON cartlify.return_items FOR DELETE USING (false);
+
+----------------------------------------
+-- RETURN_SHIPMENTS
+----------------------------------------
+-- The parcels the shop paid to carry goods back: read by admin and root, written only by the
+-- system functions that run as the owner (record_return_shipment, set_return_shipment_cost, db/05);
+-- the columns an update may change: trg_return_shipments_update_columns. Never deleted.
+ALTER TABLE cartlify.return_shipments ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.return_shipments FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS return_shipments_select ON cartlify.return_shipments;
+
+DROP POLICY IF EXISTS return_shipments_select_owner ON cartlify.return_shipments;
+
+DROP POLICY IF EXISTS return_shipments_insert_owner ON cartlify.return_shipments;
+
+DROP POLICY IF EXISTS return_shipments_update_owner ON cartlify.return_shipments;
+
+DROP POLICY IF EXISTS return_shipments_delete_deny ON cartlify.return_shipments;
+
+CREATE POLICY return_shipments_select ON cartlify.return_shipments FOR
+SELECT
+  USING (cartlify.is_admin ());
+
+CREATE POLICY return_shipments_select_owner ON cartlify.return_shipments FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+CREATE POLICY return_shipments_insert_owner ON cartlify.return_shipments FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+CREATE POLICY return_shipments_update_owner ON cartlify.return_shipments
+FOR UPDATE TO cartlify_owner
+  USING (true)
+WITH
+  CHECK (true);
+
+CREATE POLICY return_shipments_delete_deny ON cartlify.return_shipments FOR DELETE USING (false);
 
 ----------------------------------------
 -- PRODUCT IMAGES
@@ -1069,6 +1209,8 @@ DROP POLICY IF EXISTS orders_update_owner ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_update_owner_cancel ON cartlify.orders;
 
+DROP POLICY IF EXISTS orders_update_owner_returns ON cartlify.orders;
+
 DROP POLICY IF EXISTS orders_delete ON cartlify.orders;
 
 CREATE POLICY orders_select ON cartlify.orders FOR
@@ -1080,7 +1222,8 @@ CREATE POLICY orders_select_owner ON cartlify.orders FOR
 SELECT
   TO cartlify_owner USING (true);
 
--- INSERT: a USER, a new cart of their own: not confirmed, no reservation, payment or dates
+-- INSERT: a USER, a new cart of their own: not confirmed, no reservation, payment, dates or
+-- statements of return
 CREATE POLICY orders_insert ON cartlify.orders FOR INSERT
 WITH
   CHECK (
@@ -1093,6 +1236,7 @@ WITH
     AND "paymentProvider" IS NULL
     AND "paidAt" IS NULL
     AND "cancelledAt" IS NULL
+    AND "returnStatus" = 'none'
   );
 
 -- UPDATE (who): the buyer, while the order is not confirmed. The guard refuses every column the
@@ -1128,7 +1272,7 @@ WITH
 
 -- UPDATE (who): admin/root, on a paid, shipped or delivered order. The guard lets only the status
 -- move, one step on or one step back (paid, shipped, delivered). A cancel is not a status change
--- here: it goes through cancel_paid_order, which returns the stock.
+-- here: the order is cancelled by its statements of return (refresh_return_state), which return the stock.
 CREATE POLICY orders_update_admin_shipping_status ON cartlify.orders
 FOR UPDATE
   USING (
@@ -1139,17 +1283,14 @@ WITH
   -- the columns an update may change: trg_orders_update_columns (db/05)
   CHECK (true);
 
--- UPDATE for cancel_paid_order: a paid or shipped order of the admin context becomes cancelled,
--- with the time of the cancel, and nothing else changes. The rows it reaches are the ones the
--- admin policy above reaches already, so it opens no other order to the system functions.
-CREATE POLICY orders_update_owner_cancel ON cartlify.orders
+-- UPDATE for the statements of return: the system functions that make and settle them lock a
+-- confirmed order and set the state of the order as to its statements (refresh_return_state). The
+-- guard lets that update change returnStatus, and the cancel it brings (status and cancelledAt),
+-- and nothing else (trg_orders_update_columns, db/05).
+CREATE POLICY orders_update_owner_returns ON cartlify.orders
 FOR UPDATE
-  TO cartlify_owner USING (
-    cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
-    AND status IN ('paid', 'shipped')
-  )
+  TO cartlify_owner USING (confirmed = true)
 WITH
-  -- the columns an update may change: trg_orders_update_columns (db/05)
   CHECK (true);
 
 -- DELETE: a USER, an own order that is not confirmed
@@ -1965,7 +2106,9 @@ CREATE POLICY legal_acceptances_delete_deny ON cartlify.legal_acceptances FOR DE
 -- ADMIN AUDIT LOG
 ----------------------------------------
 -- The log of what admins and root do (and of what the system does for a customer). Read:
--- admin/root. A line is never changed or removed.
+-- admin/root. A line is never removed or changed, but by the cleanup of the retention terms (the
+-- owner): it empties the address and the browser of a line the buyer caused
+-- (trg_admin_audit_log_update_columns says which columns, db/05).
 ALTER TABLE cartlify.admin_audit_log ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.admin_audit_log FORCE ROW LEVEL SECURITY;
@@ -1975,6 +2118,8 @@ DROP POLICY IF EXISTS aal_select ON cartlify.admin_audit_log;
 DROP POLICY IF EXISTS aal_insert ON cartlify.admin_audit_log;
 
 DROP POLICY IF EXISTS aal_update_deny ON cartlify.admin_audit_log;
+
+DROP POLICY IF EXISTS aal_update_owner ON cartlify.admin_audit_log;
 
 DROP POLICY IF EXISTS aal_delete_deny ON cartlify.admin_audit_log;
 
@@ -1996,12 +2141,18 @@ WITH
     )
   );
 
--- UPDATE: denied to every role
+-- UPDATE: denied to every role but the owner (the cleanup of the retention terms)
 CREATE POLICY aal_update_deny ON cartlify.admin_audit_log
 FOR UPDATE
   USING (false)
 WITH
   CHECK (false);
+
+CREATE POLICY aal_update_owner ON cartlify.admin_audit_log
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (true);
 
 -- DELETE: denied to every role
 CREATE POLICY aal_delete_deny ON cartlify.admin_audit_log FOR DELETE USING (false);
@@ -2012,7 +2163,7 @@ CREATE POLICY aal_delete_deny ON cartlify.admin_audit_log FOR DELETE USING (fals
 -- The journal of the stock: a line for every change of the quantity of a variant. Read: admin/root.
 -- A line is written by the system functions that move the stock (cartlify.log_stock_change, called
 -- from receive_variant_batch, write_off_variant_stock, consume_variant_stock and
--- return_order_stock, which run as the owner) and never changed or removed.
+-- return_units_to_batches, which run as the owner) and never changed or removed.
 ALTER TABLE cartlify.stock_log ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.stock_log FORCE ROW LEVEL SECURITY;
@@ -2023,6 +2174,8 @@ DROP POLICY IF EXISTS stock_log_insert_owner ON cartlify.stock_log;
 
 DROP POLICY IF EXISTS stock_log_update_deny ON cartlify.stock_log;
 
+DROP POLICY IF EXISTS stock_log_update_owner ON cartlify.stock_log;
+
 DROP POLICY IF EXISTS stock_log_delete_deny ON cartlify.stock_log;
 
 CREATE POLICY stock_log_select ON cartlify.stock_log FOR
@@ -2031,7 +2184,9 @@ SELECT
 
 -- INSERT for the system functions: a line names who did it. A signed-in admin or root is named
 -- with their own role; the system (the admin context without a user id, the payment webhook) has
--- no actor and no role. The app role has no insert policy: it writes nothing here.
+-- no actor and no role; a buyer is named on the lines of the units that came back with their own
+-- statement of withdrawal of a paid order (stock.return, create_return), which name the row of the
+-- statement. The app role has no insert policy: it writes nothing here.
 CREATE POLICY stock_log_insert_owner ON cartlify.stock_log FOR INSERT TO cartlify_owner
 WITH
   CHECK (
@@ -2045,14 +2200,33 @@ WITH
       AND "actorId" = cartlify.current_actor_id ()
       AND "actorRole" = cartlify.current_actor_role ()
     )
+    OR (
+      cartlify.current_actor_role () = 'USER'
+      AND event IN ('stock.return', 'stock.return_write_off')
+      AND "actorId" = cartlify.current_actor_id ()
+      AND "actorRole" = 'USER'
+      AND EXISTS (
+        SELECT 1
+        FROM cartlify.return_items AS ri
+        JOIN cartlify.returns AS rr ON rr.id = ri."returnId"
+        WHERE ri.id = "returnItemId" AND rr."createdById" = cartlify.current_actor_id ()
+      )
+    )
   );
 
--- UPDATE: denied to every role
+-- UPDATE: denied to every role but the owner (the cleanup of the retention terms empties the
+-- address and the browser of a line, trg_stock_log_append_only says so, db/05)
 CREATE POLICY stock_log_update_deny ON cartlify.stock_log
 FOR UPDATE
   USING (false)
 WITH
   CHECK (false);
+
+CREATE POLICY stock_log_update_owner ON cartlify.stock_log
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (true);
 
 -- DELETE: denied to every role
 CREATE POLICY stock_log_delete_deny ON cartlify.stock_log FOR DELETE USING (false);

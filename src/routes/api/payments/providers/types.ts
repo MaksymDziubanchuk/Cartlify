@@ -1,9 +1,26 @@
-import type { PaymentProvider as PaymentProviderName } from '@prisma/client';
+import type {
+  PaymentProvider as PaymentProviderName,
+  ReturnRefundFailure as RefundFailure,
+} from '@prisma/client';
 
 import type { CheckoutSessionDto } from 'types/dto/payments.dto.js';
 
 // the names the database knows (orders.paymentProvider), also of a provider this server has not
-export type { PaymentProviderName };
+export type { PaymentProviderName, RefundFailure };
+
+// where a transfer of money back stands at the provider:
+// succeeded - the money is on its way to the buyer for good
+// pending - the provider has not decided yet, or did not answer (then there is no id): the same
+//   key asks again and gets the one refund
+// failed - the money did not go back; failure is the reason in our words and failureText the
+//   words of the provider. alreadyRefunded: the money of the payment was back before this call
+export type RefundAnswer = {
+  refundId: string | null;
+  status: 'succeeded' | 'pending' | 'failed';
+  failure?: RefundFailure;
+  failureText?: string;
+  alreadyRefunded?: boolean;
+};
 
 // a confirmed order a payment page is opened for
 export type PaymentPageOrder = {
@@ -72,6 +89,23 @@ export interface PaymentProvider {
   // closes an unpaid page; throws PAYMENT_PROVIDER_UNAVAILABLE when the provider cannot be asked
   closePaymentPage(pageId: string): Promise<PaymentPageCloseResult>;
 
-  // returns the whole payment; a repeated call for the same payment gives no money twice
-  refundPayment(args: { orderId: number; paymentId: string }): Promise<{ refundId: string | null }>;
+  // gives back the sum (digits with up to two decimals) of a payment. The key is the one of our
+  // transfer: a repeated call with it is the same transfer, a new transfer has a new key. A refusal
+  // of the provider is a failed answer, no answer is a pending one without an id; the call does
+  // not throw for either
+  refundPayment(args: {
+    orderId: number;
+    paymentId: string;
+    amount: string;
+    key: string;
+  }): Promise<RefundAnswer>;
+
+  // where a refund the provider made stands now; throws PAYMENT_PROVIDER_UNAVAILABLE when the
+  // provider cannot be asked
+  getRefund(refundId: string): Promise<RefundAnswer>;
+
+  // the refund the provider made for the key of a transfer, none when it made none: the answer to a
+  // request may have been lost, and a provider forgets a key after a day, so the transfer is looked
+  // for before it is asked again. Throws PAYMENT_PROVIDER_UNAVAILABLE when the provider cannot be asked
+  findRefund(args: { paymentId: string; key: string }): Promise<RefundAnswer | null>;
 }

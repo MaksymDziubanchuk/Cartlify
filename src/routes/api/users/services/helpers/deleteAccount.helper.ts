@@ -5,6 +5,10 @@ import { getPgMessage, tx } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { requireSiteDomain } from '@helpers/siteDomain.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
+import {
+  withdrawalEndsOf,
+  withdrawalOpenOf,
+} from '@routes/api/orders/services/helpers/withdrawal.helper.js';
 import { isRedisReady } from '@redis/client.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
@@ -36,8 +40,8 @@ export type DeleteAccountArgs = {
   // the id of the root context the transaction runs in: the root who deletes, or the user
   // deleting their own account (the server then acts as the system for them)
   systemActorId: number;
-  // false refuses with ACCOUNT_HAS_OPEN_ORDERS while the account has an order waiting for payment,
-  // paid or shipped; a root deletes without asking
+  // false refuses with ACCOUNT_HAS_OPEN_ORDERS while the account has an order that lives on after
+  // it and that the person should know of (see OpenOrderReason); a root deletes without asking
   confirmOpenOrders: boolean;
   log: AccountDeletionLogger;
 };
@@ -55,6 +59,12 @@ type OpenOrder = {
     product: { name: string };
   }[];
 };
+
+// why an order is listed before the account goes: it waits for payment (it is cancelled), it is paid
+// or on its way (it lives on), the buyer may still withdraw from it (the delivered one inside its
+// period), a statement of withdrawal or return is open for it. A statement and an order live on
+// without the account: the buyer reaches them through the mails and the public form of withdrawal
+export type OpenOrderReason = 'PAYMENT_WAITING' | 'IN_PROGRESS' | 'WITHDRAWAL_OPEN' | 'RETURN_OPEN';
 
 type ErasedAccount = {
   email: string;
@@ -140,14 +150,54 @@ async function eraseAccount(
         },
       })) as OpenOrder[];
 
-      if (open.length && !confirmOpenOrders) {
-        throw new ConflictError('ACCOUNT_HAS_OPEN_ORDERS', {
-          orders: open.map((order) => ({
-            orderId: order.id,
-            status: order.status,
-            total: order.total.toString(),
-          })),
-        });
+      // the orders that are not open but still count: a delivered one the buyer may withdraw from,
+      // and any one with a statement open. One query each, in turn
+      const delivered = await db.order.findMany({
+        where: { userId, status: 'delivered' },
+        select: { id: true, deliveredAt: true, withdrawalDays: true },
+      });
+      const ends = await withdrawalEndsOf(db, delivered);
+      const withdrawable = new Set(
+        delivered
+          .filter((order) => withdrawalOpenOf('delivered', ends.get(order.id), Date.now()))
+          .map((order) => order.id),
+      );
+      const stated = new Set(
+        (
+          await db.orderReturn.findMany({
+            where: { closedAt: null, order: { userId } },
+            select: { orderId: true },
+          })
+        ).map((row) => row.orderId),
+      );
+
+      const openIds = new Set(open.map((order) => order.id));
+      const alsoIds = [...new Set([...withdrawable, ...stated])].filter((id) => !openIds.has(id));
+      const also = alsoIds.length
+        ? await db.order.findMany({
+            where: { id: { in: alsoIds } },
+            select: { id: true, status: true, total: true },
+          })
+        : [];
+
+      const reasonsOf = (id: number, status: string): OpenOrderReason[] => [
+        ...(status === 'waiting' ? (['PAYMENT_WAITING'] as const) : []),
+        ...(status === 'paid' || status === 'shipped' ? (['IN_PROGRESS'] as const) : []),
+        ...(withdrawable.has(id) ? (['WITHDRAWAL_OPEN'] as const) : []),
+        ...(stated.has(id) ? (['RETURN_OPEN'] as const) : []),
+      ];
+
+      const listed = [...open, ...also]
+        .sort((a, b) => a.id - b.id)
+        .map((order) => ({
+          orderId: order.id,
+          status: order.status,
+          total: order.total.toString(),
+          reasons: reasonsOf(order.id, order.status),
+        }));
+
+      if (listed.length && !confirmOpenOrders) {
+        throw new ConflictError('ACCOUNT_HAS_OPEN_ORDERS', { orders: listed });
       }
 
       // a waiting order gives its reserved stock back and returns to the cart; the system function

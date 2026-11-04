@@ -1,16 +1,16 @@
 import { BadRequestError, ConflictError, NotFoundError } from '@utils/errors.js';
 
-import type { LegalDocumentKind } from 'types/dto/legal.dto.js';
+import type { ConsentKind } from 'types/dto/legal.dto.js';
 
 // what a consent of a customer means against the versions in force; the database keeps the
 // versions and the consents (legalDocuments.helper.ts), this only decides
 
-// the kinds in the order a page shows them and a list names them
-export const LEGAL_DOCUMENT_KINDS: readonly LegalDocumentKind[] = ['terms', 'contract'];
+// the kinds a customer accepts, in the order a page shows them and a list names them
+export const CONSENT_KINDS: readonly ConsentKind[] = ['terms', 'contract'];
 
 export type CurrentVersion = {
   id: number;
-  kind: LegalDocumentKind;
+  kind: ConsentKind;
   version: number;
   title: string;
 };
@@ -19,9 +19,9 @@ export type CurrentVersion = {
 // kind they accepted last); none while no version is in force
 export function requiredKinds(
   current: readonly CurrentVersion[],
-  accepted: ReadonlyMap<LegalDocumentKind, number>,
-): LegalDocumentKind[] {
-  return LEGAL_DOCUMENT_KINDS.filter((kind) => {
+  accepted: ReadonlyMap<ConsentKind, number>,
+): ConsentKind[] {
+  return CONSENT_KINDS.filter((kind) => {
     const inForce = current.find((doc) => doc.kind === kind);
     return inForce !== undefined && accepted.get(kind) !== inForce.id;
   });
@@ -32,8 +32,9 @@ export function requiredKinds(
 export const detailsOf = (current: readonly CurrentVersion[]) =>
   current.map(({ id, kind, version, title }) => ({ id, kind, version, title }));
 
-// the versions a customer sends: each one has to be there (known) and in force; a registration
-// has to name every kind in force (every)
+// the versions a customer sends: each one has to be there (known) and in force, which a version of
+// the privacy policy never is: nobody accepts it; a registration has to name every kind in force
+// (every)
 export function checkChosenVersions(
   current: readonly CurrentVersion[],
   chosen: readonly number[],

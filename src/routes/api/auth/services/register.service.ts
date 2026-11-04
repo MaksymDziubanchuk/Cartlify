@@ -13,7 +13,7 @@ import { setAdminContext, setGuestContext, setUserContext } from '@db/dbContext.
 import { avatarOf } from '@utils/avatar.util.js';
 import { checkChosenVersions } from '@routes/api/legal/services/helpers/legalConsent.helper.js';
 import {
-  currentDocuments,
+  currentConsentDocuments,
   knownDocumentIds,
   recordConsents,
   versionsOf,
@@ -117,7 +117,7 @@ export async function register({
       }
 
       // the versions in force, each one accepted; none while root has published none
-      const current = versionsOf(await currentDocuments(tx));
+      const current = versionsOf(await currentConsentDocuments(tx));
       checkChosenVersions(
         current,
         acceptedDocumentIds,

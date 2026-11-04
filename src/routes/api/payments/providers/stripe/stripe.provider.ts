@@ -10,7 +10,7 @@ import {
   mapCreatedCheckoutSession,
   readCheckoutSessionStatus,
 } from './stripeCheckout.helper.js';
-import { refundStripePayment } from './stripeRefund.helper.js';
+import { findStripeRefund, getStripeRefund, refundStripePayment } from './stripeRefund.helper.js';
 
 import type Stripe from 'stripe';
 import type { PaymentPageCloseResult, PaymentProvider } from '../types.js';
@@ -104,8 +104,16 @@ export const stripeProvider: PaymentProvider = {
     }
   },
 
-  refundPayment({ orderId, paymentId }) {
+  refundPayment({ orderId, paymentId, amount, key }) {
     // the payment id of a stripe order is its PaymentIntent
-    return refundStripePayment({ orderId, paymentIntentId: paymentId });
+    return refundStripePayment({ orderId, paymentIntentId: paymentId, amount, key });
+  },
+
+  getRefund(refundId) {
+    return getStripeRefund(refundId);
+  },
+
+  findRefund({ paymentId, key }) {
+    return findStripeRefund({ paymentIntentId: paymentId, key });
   },
 };

@@ -81,6 +81,11 @@ describe('thresholdOf', () => {
     ['shipped_without_cost', 3, 'days'],
     ['expiring_batches', 7, 'days'],
     ['refunded_payments', 7, 'days'],
+    ['shipped_without_tracking', 2, 'days'],
+    ['returns_proof_waiting', 2, 'days'],
+    ['returns_goods_not_sent', 21, 'days'],
+    ['returns_money_late', 10, 'days'],
+    ['returns_goods_late', 14, 'days'],
     ['worker_stalled', 180, 'seconds'],
     ['admin_actions', 24, 'hours'],
   ] as const)('gives %s %p %s unless set', (kind, value, unit) => {
@@ -95,6 +100,8 @@ describe('thresholdOf', () => {
     'products_hidden_from_buyers',
     'expired_batches',
     'chats_waiting',
+    'failed_refunds',
+    'returns_manual_check',
   ] as const)('gives %s no threshold', (kind) => {
     expect(thresholdOf(kind, null)).toBeNull();
   });
@@ -105,6 +112,24 @@ describe('assertThreshold', () => {
     expect(() => assertThreshold('shipped_orders_waiting', 1)).not.toThrow();
     expect(() => assertThreshold('shipped_orders_waiting', 365)).not.toThrow();
     expect(() => assertThreshold('worker_stalled', 60)).not.toThrow();
+  });
+
+  it.each([
+    'shipped_without_tracking',
+    'returns_proof_waiting',
+    'returns_goods_not_sent',
+    'returns_money_late',
+    'returns_goods_late',
+  ] as const)('takes %s from 1 to 365 days and no other', (kind) => {
+    expect(() => assertThreshold(kind, 1)).not.toThrow();
+    expect(() => assertThreshold(kind, 365)).not.toThrow();
+    for (const value of [0, 366]) {
+      expect(thrownBy(() => assertThreshold(kind, value))).toMatchObject({
+        statusCode: 400,
+        errorCode: 'ALERT_THRESHOLD_INVALID',
+        details: { min: 1, max: 365 },
+      });
+    }
   });
 
   it.each([
@@ -147,6 +172,29 @@ describe('alertWindowOf', () => {
       since: new Date(NOW - 24 * 3_600_000),
     });
   });
+
+  it('starts the time of the orders sent without a number the threshold back from now', () => {
+    expect(alertWindowOf('shipped_without_tracking', 2, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 2 * DAY),
+    });
+  });
+
+  // the lists of the statements count their periods in days, so the window of these kinds is the days
+  it.each([
+    'returns_proof_waiting',
+    'returns_goods_not_sent',
+    'returns_money_late',
+    'returns_goods_late',
+  ] as const)('gives %s the days of the threshold', (kind) => {
+    expect(alertWindowOf(kind, 9, NOW, '2026-10-25')).toEqual({ days: 9 });
+  });
+
+  it.each(['failed_refunds', 'returns_manual_check'] as const)(
+    'gives %s, which has no threshold, no window',
+    (kind) => {
+      expect(alertWindowOf(kind, null, NOW, '2026-10-25')).toEqual({});
+    },
+  );
 
   it('gives the last day of the batches the days of the threshold after the day of the shop', () => {
     expect(alertWindowOf('expiring_batches', 7, NOW, '2026-10-25')).toEqual({
@@ -294,6 +342,8 @@ describe('alertListOf', () => {
       query: {
         actions: 'OTHER',
         entityType: 'order',
+        // the money of a statement of return goes back with the same field: the event tells them apart
+        events: 'order.refund_late',
         field: 'refund',
         from: new Date(NOW - 7 * DAY).toISOString(),
       },
@@ -301,6 +351,80 @@ describe('alertListOf', () => {
     expect(listOf('admin_actions', 24)).toEqual({
       path: '/api/admin/audit-log',
       query: { actorRole: 'ADMIN', from: new Date(NOW - 24 * 3_600_000).toISOString() },
+    });
+  });
+
+  it('sends to the orders whose send has no number and went before the threshold, the oldest first', () => {
+    expect(listOf('shipped_without_tracking', 2)).toEqual({
+      path: '/api/orders',
+      query: {
+        shippedWithoutNumber: 'true',
+        shippedTo: new Date(NOW - 2 * DAY).toISOString(),
+        sortBy: 'updatedAt',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  // the cases of the statements are statements: the alert names the list of the statements with
+  // its own filters, the days of the threshold as text, the oldest statement first
+  it('sends to the open statements whose transfer failed', () => {
+    expect(listOf('failed_refunds', null)).toEqual({
+      path: '/api/returns',
+      query: { state: 'open', money: 'failed', sortBy: 'statedAt', sortDir: 'asc' },
+    });
+  });
+
+  it('sends to the open statements of the form that no admin accepted yet', () => {
+    expect(listOf('returns_manual_check', null)).toEqual({
+      path: '/api/returns',
+      query: {
+        state: 'open',
+        source: 'form_manual',
+        accepted: 'false',
+        sortBy: 'statedAt',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  it('sends to the open statements whose proof of the parcel waits for the shop for the days', () => {
+    expect(listOf('returns_proof_waiting', 2)).toEqual({
+      path: '/api/returns',
+      query: {
+        state: 'open',
+        goods: 'proof_provided',
+        proofOlderThanDays: '2',
+        sortBy: 'statedAt',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  it('sends to the open statements whose parcel the buyer has not told of, stated before the days', () => {
+    expect(listOf('returns_goods_not_sent', 21)).toEqual({
+      path: '/api/returns',
+      query: {
+        state: 'open',
+        goods: 'waiting_no_proof',
+        olderThanDays: '21',
+        sortBy: 'statedAt',
+        sortDir: 'asc',
+      },
+    });
+  });
+
+  it('sends to the open statements whose money is due and not back for the days', () => {
+    expect(listOf('returns_money_late', 10)).toEqual({
+      path: '/api/returns',
+      query: { state: 'open', moneyDueForDays: '10', sortBy: 'statedAt', sortDir: 'asc' },
+    });
+  });
+
+  it('sends to the open statements paid ahead whose goods have not come for the days', () => {
+    expect(listOf('returns_goods_late', 14)).toEqual({
+      path: '/api/returns',
+      query: { state: 'open', paidAheadForDays: '14', sortBy: 'statedAt', sortDir: 'asc' },
     });
   });
 

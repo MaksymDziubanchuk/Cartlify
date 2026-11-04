@@ -13,6 +13,12 @@ import {
     type VariantRow,
 } from '@routes/api/products/services/helpers/variant.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
+import { withdrawalRightOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
+import { buyerReturnsOf } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
+import {
+    withdrawalEndsOf,
+    withdrawalOpenOf,
+} from '@routes/api/orders/services/helpers/withdrawal.helper.js';
 import {
     paymentProviders,
     shopCurrency,
@@ -42,6 +48,10 @@ import {
 } from './chatBotPrompt.service.js';
 import { evaluateChatBotEscalation } from './chatBotEscalation.service.js';
 import { botLimits } from './chatBotLimits.service.js';
+import {
+    offerAdminCall,
+    withdrawAdminCall,
+} from '../helpers/adminCall.helper.js';
 
 import type {
     ChatMessageItemDto,
@@ -67,6 +77,9 @@ interface HandleChatBotTurnResultDto {
     thread: ChatThreadItemDto | null;
     botMessage: ChatMessageItemDto | null;
     adminPending: boolean;
+    // the button "call an admin": offered because the bot could not answer, or taken away because
+    // it can again; none when nothing changed
+    adminCall: 'offered' | 'withdrawn' | null;
 }
 
 interface LoadedChatBotContextDto {
@@ -87,6 +100,9 @@ interface LoadedChatBotContextDto {
 interface ChatBotTurnPlanDto {
     text: string;
     toAdmin: boolean;
+    // true: the bot could not answer a customer who may talk to an admin, the chat gets the button;
+    // false: it answered or gave the chat away, the button goes; none: the turn says nothing of it
+    adminCall?: boolean;
 }
 
 // who the customer is to the admin chat: only a user with a confirmed email talks to an admin
@@ -560,6 +576,49 @@ const rolledBackOrderIds = async (orderIds: number[]): Promise<Set<number>> => {
     return new Set(lines.flatMap((line) => (line.entityId === null ? [] : [line.entityId])));
 };
 
+// whether the customer may still withdraw from the contract of the order and for which units; none
+// for an order that is not paid, sent or delivered
+const withdrawalOf = (
+    order: {
+        status: string;
+        items: {
+            id: number;
+            withdrawal: WithdrawalRuleName;
+            productName: string | null;
+            product: { name: string };
+            variantId: number;
+        }[];
+    },
+    endsAt: Date | undefined,
+    deadline: Date | undefined,
+    free: { orderItemId: number; quantity: number }[],
+): ChatBotOrderContextItemDto['withdrawal'] => {
+    if (order.status !== 'paid' && order.status !== 'shipped' && order.status !== 'delivered') {
+        return null;
+    }
+
+    const now = Date.now();
+    const open = withdrawalOpenOf(order.status, endsAt, now);
+
+    return {
+        open,
+        // the end of the contract, the date the buyer is told; the grace only keeps it open longer
+        endsAt: deadline?.toISOString() ?? null,
+        ...(open && deadline && deadline.getTime() < now ? { late: true } : {}),
+        noRight: open
+            ? order.items
+                  .filter((item) => withdrawalRightOf(item.withdrawal) === 'none')
+                  .map((item) => itemNameOf(item))
+            : [],
+        free: open
+            ? free.flatMap((one) => {
+                  const item = order.items.find((candidate) => candidate.id === one.orderItemId);
+                  return item ? [{ name: itemNameOf(item), quantity: one.quantity }] : [];
+              })
+            : [],
+    };
+};
+
 const findOrdersForBotContext = async (
     db: Prisma.TransactionClient,
     userId: number,
@@ -574,11 +633,16 @@ const findOrdersForBotContext = async (
             total: true,
             createdAt: true,
             paidAt: true,
+            deliveredAt: true,
+            withdrawalDays: true,
+            returnStatus: true,
             // how it goes, not where: the address and the phone are not for the model
             delivery: { select: { method: true, price: true, country: true } },
             items: {
                 orderBy: { id: 'asc' },
                 select: {
+                    id: true,
+                    withdrawal: true,
                     quantity: true,
                     productName: true,
                     variantId: true,
@@ -603,6 +667,22 @@ const findOrdersForBotContext = async (
 
     const rolledBack = await rolledBackOrderIds(orders.map((order) => order.id));
 
+    // the statements as the buyer sees them, and the units still free to state, as the order view
+    // of the buyer reads them
+    const ends = await withdrawalEndsOf(db, orders);
+    const deadlines = await withdrawalEndsOf(db, orders, 0);
+    const { withdrawals, withdrawable } = await buyerReturnsOf(db, orders, ends);
+
+    // the orders with money that failed to go back: the bank refused it or disputed it
+    const failedTransfers = await db.orderReturnItem.findMany({
+        where: {
+            refundFailure: { not: null },
+            return: { orderId: { in: orders.map((order) => order.id) } },
+        },
+        select: { return: { select: { orderId: true } } },
+    });
+    const failed = new Set(failedTransfers.map((row) => row.return.orderId));
+
     // the name of the variant of now, for the items of a cart that is not confirmed
     const liveNames = await variantNamesOf(
         db,
@@ -623,11 +703,35 @@ const findOrdersForBotContext = async (
         total: Number(order.total),
         createdAt: order.createdAt.toISOString(),
         paidAt: order.paidAt?.toISOString() ?? null,
-        // a cancellation or a send taken back is for an admin, the bot says nothing of it
+        // a send taken back, a step taken back or a transfer of money that failed is for an admin,
+        // the bot says nothing of it. A cancellation is not: the bot tells that it is cancelled and
+        // where the money is
         unusual:
-            order.status === 'cancelled' ||
             shipments.some((send) => send.rolledBackAt !== null) ||
-            rolledBack.has(order.id),
+            rolledBack.has(order.id) ||
+            failed.has(order.id),
+        returnStatus: order.returnStatus,
+        withdrawal: withdrawalOf(
+            order,
+            ends.get(order.id),
+            deadlines.get(order.id),
+            withdrawable.get(order.id) ?? [],
+        ),
+        returns: (withdrawals.get(order.id) ?? []).map((statement) => ({
+            id: statement.id,
+            statedAt: statement.statedAt,
+            step: statement.step,
+            items: statement.items.map(
+                ({ quantity, amount, deliveryAmount, money, refundedAt, refusal }) => ({
+                    quantity,
+                    amount,
+                    deliveryAmount,
+                    money,
+                    refundedAt,
+                    refusal,
+                }),
+            ),
+        })),
         delivery: order.delivery
             ? {
                   method: order.delivery.method,
@@ -764,7 +868,8 @@ const planAdminRequest = async (
         ? await generateLanguageMatchedBotText({ userMessage, log, ...texts })
         : texts.fallbackText;
 
-    return { text, toAdmin: access === 'allowed' };
+    // the chat goes to the admins, or the customer is told who talks to one: no button either way
+    return { text, toAdmin: access === 'allowed', adminCall: false };
 };
 
 // generates loop-assistance response in the customer's latest language
@@ -837,11 +942,18 @@ const planBotTurn = async (
                 ? await generateLoopAssistanceBotText(userMessage, log)
                 : LOOP_ASSISTANCE_MESSAGES[0],
             toAdmin: false,
+            // the loop text is no answer of the bot to the question: the button stays as it is when
+            // the model is asked, and is there when the bot is down
+            ...(withModel ? {} : { adminCall: access === 'allowed' }),
         };
     }
 
+    // a customer who may talk to an admin gets the button when the bot cannot answer: the limit of
+    // the shop, the limit of the customer (or of their address), a model that gave no answer
+    const adminCall = access === 'allowed';
+
     if (modelAccess === 'ceiling') {
-        return { text: BOT_FALLBACK_MESSAGE, toAdmin: false };
+        return { text: BOT_FALLBACK_MESSAGE, toAdmin: false, adminCall };
     }
 
     if (modelAccess === 'limit') {
@@ -850,6 +962,7 @@ const planBotTurn = async (
                 DAILY_LIMIT_MESSAGE +
                 (access === 'allowed' ? DAILY_LIMIT_ADMIN_HINT : ''),
             toAdmin: false,
+            adminCall,
         };
     }
 
@@ -860,6 +973,7 @@ const planBotTurn = async (
         return {
             text: await generateFallbackBotText(userMessage, log),
             toAdmin: false,
+            adminCall,
         };
     }
 
@@ -867,12 +981,13 @@ const planBotTurn = async (
     if (answer.escalate)
         return planAdminRequest(access, userMessage, log, true);
 
-    return { text: answer.reply, toAdmin: false };
+    // the model answered: the button, if there was one, goes
+    return { text: answer.reply, toAdmin: false, adminCall: false };
 };
 
 // writes the answer of the bot and, when the plan says so, gives the chat to the admins in the
 // same transaction: a bot that promised an admin always leaves the chat with one
-const writeBotTurn = async ({
+export const writeBotTurn = async ({
     actorId,
     actorRole,
     threadId,
@@ -961,6 +1076,20 @@ const writeBotTurn = async ({
     );
 };
 
+// puts the button "call an admin" on the chat when the bot could not answer, and takes it away
+// when it did (or the chat went to the admins); only a customer who has an account has one
+const settleAdminCall = async (
+    actorRole: ChatBotActorRole,
+    threadId: string,
+    offered: boolean | undefined,
+): Promise<'offered' | 'withdrawn' | null> => {
+    if (actorRole !== 'USER' || offered === undefined) return null;
+
+    if (offered) return (await offerAdminCall(threadId)) ? 'offered' : null;
+
+    return (await withdrawAdminCall(threadId)) ? 'withdrawn' : null;
+};
+
 // handles one full bot turn after customer message is already saved
 export const handleChatBotTurn = async (
     dto: HandleChatBotTurnDto,
@@ -977,6 +1106,7 @@ export const handleChatBotTurn = async (
                 thread: null,
                 botMessage: null,
                 adminPending: false,
+                adminCall: null,
             };
         }
 
@@ -1003,6 +1133,7 @@ export const handleChatBotTurn = async (
                 thread: null,
                 botMessage: null,
                 adminPending: false,
+                adminCall: null,
             };
         }
 
@@ -1010,6 +1141,11 @@ export const handleChatBotTurn = async (
             thread: writeResult.thread,
             botMessage: writeResult.botMessage,
             adminPending: plan.toAdmin,
+            adminCall: await settleAdminCall(
+                actorRole,
+                dto.threadId,
+                plan.adminCall,
+            ),
         };
     } catch (err) {
         // preserves known application errors

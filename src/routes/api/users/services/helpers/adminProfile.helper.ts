@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 
 import { BadRequestError } from '@utils/errors.js';
+import type { ConsentKind } from 'types/dto/legal.dto.js';
 import type { AdminProfileListsDto } from 'types/dto/users.dto.js';
 
 // what an admin asks for on the profile of a user (GET /api/users/:userId): the lists the
@@ -79,7 +80,14 @@ export async function loadProfileLists(
         const orders = await tx.order.findMany({
           where: { userId, createdAt },
           orderBy: newestFirst,
-          select: { id: true, status: true, total: true, createdAt: true, updatedAt: true },
+          select: {
+            id: true,
+            status: true,
+            returnStatus: true,
+            total: true,
+            createdAt: true,
+            updatedAt: true,
+          },
         });
         result.orders = orders.map((order) => ({ ...order, total: order.total.toNumber() }));
         break;
@@ -146,7 +154,8 @@ export async function loadProfileLists(
         result.consents = consents.map(({ document, ...consent }) => ({
           id: consent.id,
           documentId: consent.documentId,
-          kind: document.kind,
+          // a consent is only ever given to the terms or to the contract (db/05)
+          kind: document.kind as ConsentKind,
           version: document.version,
           title: document.title,
           orderId: consent.orderId,

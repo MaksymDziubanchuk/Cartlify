@@ -5,6 +5,7 @@ import { shopToday } from '@helpers/shopDay.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
 import {
@@ -28,8 +29,9 @@ import { markVariantDeleted } from '../../../helpers/variants.js';
 // came with (the supplier, the invoice, the note and the admin from the stock log) and whether it
 // is over by the day of the shop. The journal puts the steps of the stock of the variants in one
 // list, read from the stock log (a line for each variant for each change): the deliveries, the
-// write-offs, the units the paid orders took and the units their cancels put back. The filters name a product (all its variants) or a variant. Other
-// files make batches at the same time, so each test reads only its own products
+// write-offs, the units the paid orders took and the units their cancels put back (the returns).
+// The filters name a product (all its variants) or a variant. Other files make batches at the same
+// time, so each test reads only its own products
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -103,9 +105,6 @@ async function writeOff(payload: object): Promise<string> {
   if (res.statusCode !== 201) throw new Error(`the write-off answered ${res.statusCode}`);
   return res.json().writeOffId;
 }
-
-const cancelPaid = (orderId: number) =>
-  asAdmin((tx) => tx.$executeRaw`select cartlify.cancel_paid_order(${orderId}::int)`);
 
 const get = (path: string, query: Record<string, string | number | boolean>, actor = admin) =>
   app.inject({
@@ -264,11 +263,37 @@ describe('GET /api/admin/stock/batches', () => {
     const product = await newProduct();
     await receiveBatch(product.id, { quantity: 4, unitCost: 1 });
     const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 3);
-    await cancelPaid(orderId);
+    await cancelPaidOrder(admin.id, orderId);
 
     const [item] = (await batches({ productId: product.id })).json().items;
 
     expect(item).toMatchObject({ quantity: 4, remaining: 4, sold: 0, writtenOff: 0 });
+  });
+
+  // the units a statement brings back go into the batch they were sold from, the order living on
+  it('gives the units a statement brings back to what is left, not to what was sold', async () => {
+    const product = await newProduct();
+    await receiveBatch(product.id, { quantity: 5, unitCost: 1 });
+    const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 3);
+    const [orderItem] = await asAdmin((tx) =>
+      tx.orderItem.findMany({ where: { orderId }, select: { id: true } }),
+    );
+    const cancel = await app.inject({
+      method: 'POST',
+      url: '/api/returns',
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: {
+        orderId,
+        items: [{ orderItemId: orderItem!.id, quantity: 1 }],
+        basis: 'other',
+        reason: 'shop_cancel',
+      },
+    });
+    expect(cancel.statusCode).toBe(201);
+
+    const [item] = (await batches({ productId: product.id })).json().items;
+
+    expect(item).toMatchObject({ quantity: 5, remaining: 3, sold: 2, writtenOff: 0 });
   });
 
   it('shows the batch of a product removed from the catalog, and of its variant', async () => {
@@ -623,11 +648,11 @@ describe('GET /api/admin/stock/movements', () => {
       note: 'Inventory',
       items: [{ variantId: product.variantId, batchId: noEnd, quantity: 1 }],
     });
-    await cancelPaid(orderId);
+    await cancelPaidOrder(admin.id, orderId);
     return { product, soon: soon!, noEnd: noEnd!, orderId, writeOffId };
   }
 
-  it('puts the deliveries, the sales, the write-offs and the cancels in one list', async () => {
+  it('puts the deliveries, the sales, the write-offs and the returns of a cancel in one list', async () => {
     const { product, soon, noEnd, orderId, writeOffId } = await productWithHistory();
     const name = await nameOf(product.id);
     const variant = await variantRefOf(product.variantId);
@@ -705,11 +730,13 @@ describe('GET /api/admin/stock/movements', () => {
       },
       {
         ...empty,
-        kind: 'cancel',
+        // the units are taken in by the admin who cancelled the order
+        kind: 'return',
         at: expect.any(String),
         product: { id: product.id, name, deleted: false },
         variant,
         orderId,
+        actor: { id: admin.id, role: 'ADMIN' },
         quantity: 3,
         value: 5,
         batches: [
@@ -728,7 +755,7 @@ describe('GET /api/admin/stock/movements', () => {
     const res = await movements({ productId: product.id });
 
     expect(res.json().items.map((item: { kind: string }) => item.kind)).toEqual([
-      'cancel',
+      'return',
       'writeOff',
       'sale',
       'delivery',
@@ -882,7 +909,7 @@ describe('GET /api/admin/stock/movements', () => {
         'delivery',
         'sale',
         'writeOff',
-        'cancel',
+        'return',
       ]);
       expect(
         items.every((item: { product: { id: number } }) => item.product.id === product.id),
@@ -900,7 +927,7 @@ describe('GET /api/admin/stock/movements', () => {
 
       expect(ofOrder.json().items.map((item: { kind: string }) => item.kind)).toEqual([
         'sale',
-        'cancel',
+        'return',
       ]);
       expect(ofDelivery.json().items).toHaveLength(2);
       expect(
@@ -916,12 +943,12 @@ describe('GET /api/admin/stock/movements', () => {
       const { product } = await productWithHistory();
       const all = (await movements({ productId: product.id, sortOrder: 'asc' })).json().items;
       const sale = all.find((item: { kind: string }) => item.kind === 'sale');
-      const cancel = all.find((item: { kind: string }) => item.kind === 'cancel');
+      const returned = all.find((item: { kind: string }) => item.kind === 'return');
 
       const res = await movements({
         productId: product.id,
         from: sale.at,
-        to: cancel.at,
+        to: returned.at,
         sortOrder: 'asc',
       });
 

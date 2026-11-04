@@ -20,14 +20,14 @@ import type {
   UpdateOrderStatusDto,
   OrderResponseDto,
   OrderItemParamsDto,
-  CancelOrderBodyDto,
-  CancelOrderDto,
-  CancelledOrderResponseDto,
   UpdateShipmentParamsDto,
   UpdateShipmentBodyDto,
   UpdateOrderDeliveryBodyDto,
   UpdateOrdersStatusBodyDto,
   UpdateOrdersStatusResponseDto,
+  WithdrawBodyDto,
+  ReturnProofBodyDto,
+  ReturnProofParamsDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
@@ -121,6 +121,7 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     cursor,
     status,
     statuses,
+    returnStatuses,
     confirmed,
     paidFrom,
     paidTo,
@@ -156,6 +157,7 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
       cursor,
       status,
       statuses,
+      returnStatuses,
       confirmed,
       // the schema let through date-times only
       paidFrom: paidFrom ? new Date(paidFrom) : undefined,
@@ -229,11 +231,11 @@ const putOrderStatus: ControllerRouter<
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const orderId = Number(req.params.orderId);
-  const { status, shipment, keepShippingCost } = req.body;
+  const { status, shipment, keepShippingCost, deliveredAt } = req.body;
 
   const args = pickDefined<UpdateOrderStatusDto>(
     { actorId, actorRole, orderId, status },
-    { shipment, keepShippingCost, bulk: undefined },
+    { shipment, keepShippingCost, deliveredAt, bulk: undefined },
   );
 
   const result = await ordersServices.updateOrderStatus(args, req.log);
@@ -339,30 +341,43 @@ const postCancelPayment: ControllerRouter<GetOrderByIdParamsDto, {}, {}, OrderRe
   const { id: actorId, role: actorRole } = req.user as UserEntity;
   const orderId = Number(req.params.orderId);
 
-  const args = pickDefined<CancelOrderDto>(
-    { actorId, actorRole, orderId },
-    { shippingPaid: undefined },
-  );
-
-  const result = await ordersServices.cancelOrderPayment(args, req.log);
+  const result = await ordersServices.cancelOrderPayment({ actorId, actorRole, orderId }, req.log);
   return reply.code(200).send(result);
 };
 
-const postCancelOrder: ControllerRouter<
+const postWithdrawal: ControllerRouter<
   GetOrderByIdParamsDto,
-  CancelOrderBodyDto,
+  WithdrawBodyDto,
   {},
-  CancelledOrderResponseDto
+  OrderResponseDto
 > = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as UserEntity;
-  const orderId = Number(req.params.orderId);
 
-  const args = pickDefined<CancelOrderDto>(
-    { actorId, actorRole, orderId },
-    { shippingPaid: req.body?.shippingPaid },
-  );
+  const result = await ordersServices.withdrawFromOrder({
+    ...req.body,
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+    log: req.log,
+  });
+  return reply.code(201).send(result);
+};
 
-  const result = await ordersServices.cancelPaidOrder(args, req.log);
+const postReturnProof: ControllerRouter<
+  ReturnProofParamsDto,
+  ReturnProofBodyDto,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const result = await ordersServices.provideReturnProof({
+    ...req.body,
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+    returnId: Number(req.params.returnId),
+  });
   return reply.code(200).send(result);
 };
 
@@ -384,5 +399,6 @@ export const ordersController = {
   patchOrderItems,
   deleteOrderItems,
   postCancelPayment,
-  postCancelOrder,
+  postWithdrawal,
+  postReturnProof,
 };

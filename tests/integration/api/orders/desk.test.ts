@@ -355,10 +355,13 @@ describe('GET /api/orders for an admin', () => {
       .trim()
       .split('\r\n');
     // the columns of the delivery are checked in deskDelivery.test.ts
-    expect(lines[0]).toMatch(/^Order,Status,Paid at,Buyer email,Recipient,Phone,Method,/);
+    expect(lines[0]).toMatch(
+      /^Order,Status,Return status,Paid at,Buyer email,Recipient,Phone,Method,/,
+    );
     expect(lines[0]).toContain(',Items,');
     expect(lines).toHaveLength(2);
-    expect(lines[1]).toContain(`${paid},paid,`);
+    // a paid order with no statement
+    expect(lines[1]).toContain(`${paid},paid,none,`);
     expect(lines[1]).toContain(buyer.email);
     expect(lines[1]).toContain(`${names[0]} x 1`);
   });
@@ -388,14 +391,14 @@ describe('POST /api/orders/status', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json().results).toEqual([
-      { orderId: first, ok: true, status: 'shipped' },
+      { orderId: first, ok: true, status: 'shipped', returnStatus: 'none' },
       {
         orderId: waiting,
         ok: false,
         errorCode: 'ORDER_STATUS_TRANSITION_INVALID',
         details: { status: 'waiting', requested: 'shipped' },
       },
-      { orderId: second, ok: true, status: 'shipped' },
+      { orderId: second, ok: true, status: 'shipped', returnStatus: 'none' },
     ]);
     expect(mails).toHaveLength(2);
   });
@@ -435,7 +438,7 @@ describe('POST /api/orders/status', () => {
     const res = await bulk({ orders: [{ orderId }, { orderId }], status: 'shipped' });
 
     expect(res.json().results).toEqual([
-      { orderId, ok: true, status: 'shipped' },
+      { orderId, ok: true, status: 'shipped', returnStatus: 'none' },
       expect.objectContaining({ orderId, ok: false, errorCode: 'ORDER_STATUS_TRANSITION_INVALID' }),
     ]);
   });
@@ -492,7 +495,7 @@ describe('POST /api/orders/status', () => {
         ok: false,
         errorCode: 'SHIPMENT_CARRIER_REQUIRED',
       }),
-      { orderId: fine, ok: true, status: 'shipped' },
+      { orderId: fine, ok: true, status: 'shipped', returnStatus: 'none' },
     ]);
   });
 
@@ -512,8 +515,8 @@ describe('POST /api/orders/status', () => {
     });
 
     expect(res.json().results).toEqual([
-      { orderId: kept, ok: true, status: 'paid' },
-      { orderId: cleared, ok: true, status: 'paid' },
+      { orderId: kept, ok: true, status: 'paid', returnStatus: 'none' },
+      { orderId: cleared, ok: true, status: 'paid', returnStatus: 'none' },
     ]);
     const sends = await asAdmin((tx) =>
       tx.orderShipment.findMany({

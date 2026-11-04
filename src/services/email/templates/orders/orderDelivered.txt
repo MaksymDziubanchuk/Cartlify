@@ -4,7 +4,10 @@ Your {{appName}} order #{{orderId}} {{statement}}.
 {{/items}}
 {{#deliveryLine}}Delivery: {{deliveryLine}}
 {{/deliveryLine}}Total: {{total}}
-{{#shippingAddress}}Delivered to: {{shippingAddress}}
+{{#noRightLine}}
+{{noRightLine}}
+{{/noRightLine}}{{#noRightItems}}- {{name}}: {{reason}}
+{{/noRightItems}}{{#shippingAddress}}Delivered to: {{shippingAddress}}
 {{/shippingAddress}}{{#pickup}}Collected at: {{pickup}}
 {{/pickup}}{{#recipient}}Recipient: {{recipient}}
 {{/recipient}}
@@ -13,7 +16,9 @@ See your order:
 {{#hasRatings}}
 How is it? Rate what you bought, it helps other buyers choose:
 {{#ratings}}- {{name}}: {{reviewUrl}}
-{{/ratings}}{{/hasRatings}}
+{{/ratings}}{{/hasRatings}}{{#withdrawalLine}}
 
-This mailbox is not monitored.
-The order did not reach you, or a question about it? Ask us in the chat on our site.
+{{withdrawalLine}}
+{{withdrawalUrl}}{{/withdrawalLine}}
+
+Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.

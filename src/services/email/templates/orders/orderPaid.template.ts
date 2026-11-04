@@ -1,6 +1,12 @@
+import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
+import {
+  withdrawalNoticeOf,
+  withdrawalOfferOf,
+  type WithdrawalOfferArgs,
+} from './withdrawalNotice.js';
 
 export type OrderPaidItem = {
   name: string;
@@ -8,9 +14,12 @@ export type OrderPaidItem = {
   // prices come as numbers or as prisma decimals turned into strings
   unitPrice: number | string;
   totalPrice: number | string;
+  // the rule of withdrawal of the item as the order kept it; the mail names the items that are
+  // not taken back and the ones taken back only while sealed
+  withdrawal?: WithdrawalRuleName;
 };
 
-export type OrderPaidTemplateArgs = {
+export type OrderPaidTemplateArgs = WithdrawalOfferArgs & {
   orderId: number;
   // the order page of the frontend
   orderUrl: string;
@@ -74,6 +83,9 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
     timeZone: 'UTC',
   }).format(args.paidAt)} UTC`;
 
+  const noRight = withdrawalNoticeOf(args.items, 'none');
+  const conditional = withdrawalNoticeOf(args.items, 'conditional');
+
   const values = {
     appName,
     orderId: String(args.orderId),
@@ -87,6 +99,13 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
     })),
     deliveryLine: deliveryLineOf(args.deliveryPrice, price),
     total: price(args.total),
+    ...withdrawalOfferOf('paid', args.items, args),
+    noRightLine: noRight.length ? 'No right of withdrawal applies to these goods:' : '',
+    noRightItems: noRight,
+    conditionalLine: conditional.length
+      ? 'You may withdraw from these goods only while the condition holds:'
+      : '',
+    conditionalItems: conditional,
     shippingAddress: args.shippingAddress?.trim() || '',
     pickup: args.pickup?.trim() || '',
     // the name and the phone in one line; an order confirmed before the recipient fields existed

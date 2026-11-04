@@ -792,7 +792,8 @@ describe('GET /api/admin/log-events', () => {
         'stock.delivery',
         'stock.write_off',
         'stock.sale',
-        'stock.cancel_return',
+        'stock.return',
+        'stock.return_write_off',
       ]),
     );
     expect(body.stockLog).not.toContain('legacy.unknown');

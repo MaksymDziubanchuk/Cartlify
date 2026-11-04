@@ -1,5 +1,14 @@
+import type { FastifyBaseLogger } from 'fastify';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { DeliveryQuote } from '@helpers/deliveryPrice.js';
+import type { ReturnStatus } from '@prisma/client';
+import type { WithdrawalRight, WithdrawalRuleName } from '@helpers/withdrawal.js';
+import type {
+  BuyerReturnDto,
+  OrderReturnUnitsDto,
+  ReturnSummaryDto,
+  WithdrawableDto,
+} from './returns.dto.js';
 import type { UserId, ProductId, OrderId, CategoryId, IdParam } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 import type { VariantOfItemDto } from './variants.dto.js';
@@ -29,6 +38,9 @@ export interface OrderItemDto {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  // the rule of withdrawal of the product and the kind it makes: the rule of now while the order is
+  // a cart, the rule of the confirmation once it is confirmed
+  withdrawal: { rule: WithdrawalRuleName; right: WithdrawalRight };
 }
 
 // the address of a manual delivery
@@ -102,12 +114,32 @@ export interface OrderResponseDto {
   // when the payment was recorded and when an admin cancelled the paid order
   paidAt?: Date;
   cancelledAt?: Date;
+  // when the order was delivered, and when the buyer may no longer withdraw from it: the days the
+  // order kept from the contract (14 when none was published) and the days of grace of the shop
+  // after the delivery, to the end of the last day in the time zone of the shop; both left out
+  // until the order is delivered
+  deliveredAt?: Date;
+  withdrawalEndsAt?: Date;
+  // whether the buyer may withdraw now: a paid or shipped order always, a delivered one until
+  // withdrawalEndsAt, every other order never
+  withdrawalOpen: boolean;
+  // where the order stands as to its statements of withdrawal and return (none, open, open_partial,
+  // partial, full, declined), set by the database
+  returnStatus: ReturnStatus;
   // an order that is not confirmed: what each enabled method would cost now
   deliveryQuotes?: DeliveryQuote[];
   // a cart: the delivery of the last order of the buyer
   deliverySuggestion?: OrderDeliverySuggestionDto;
   // admin and root: every send of the order, the latest first
   shipments?: OrderShipmentAdminDto[];
+  // admin and root: the statements of withdrawal and of return of the order, the oldest first
+  returns?: ReturnSummaryDto[];
+  // admin and root, an order with statements: what they did to each item, and the money in sum
+  returnUnits?: OrderReturnUnitsDto;
+  // the buyer: their statements of the order with the path of each, the oldest first, and the units
+  // they can still state
+  withdrawals?: BuyerReturnDto[];
+  withdrawable?: WithdrawableDto[];
   // admin and root: what the order weighs (the weights of its variants times the units); not complete when a variant of it has no weight
   weight?: { grams: number; complete: boolean };
 }
@@ -164,28 +196,44 @@ export interface OrderItemParamsDto {
   itemId: IdParam;
 }
 
-// POST /:orderId/cancel-payment and POST /:orderId/cancel
-export interface CancelOrderBodyDto {
-  // a manual order that was shipped: the carrier was paid already (the cost of the send stays owed)
-  // or not (nothing is owed)
-  shippingPaid?: boolean;
-}
-
+// POST /:orderId/cancel-payment
 export interface CancelOrderDto {
   actorId: UserId;
   actorRole: Role;
   orderId: OrderId;
-  shippingPaid?: boolean;
 }
 
-// the answer of an admin cancel: the order with how to reach its buyer
-export interface CancelledOrderResponseDto extends OrderResponseDto {
-  user: {
-    id: UserId;
-    deleted: boolean;
-    // only while the account is not deleted
-    email?: string;
-  };
+// POST /:orderId/withdrawal: the buyer withdraws from the contract, all that is left or the units named
+export interface WithdrawBodyDto {
+  items?: Array<{ orderItemId: number; quantity: number }>;
+  // their own words
+  description?: string;
+}
+
+export interface WithdrawDto extends WithdrawBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  orderId: OrderId;
+  log: FastifyBaseLogger;
+}
+
+// POST /:orderId/returns/:returnId/proof: how the buyer sent the goods back
+export interface ReturnProofBodyDto {
+  carrier: string;
+  trackingNumber: string;
+  trackingUrl?: string;
+}
+
+export interface ReturnProofParamsDto {
+  orderId: IdParam;
+  returnId: IdParam;
+}
+
+export interface ProvideReturnProofDto extends ReturnProofBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  orderId: OrderId;
+  returnId: number;
 }
 
 // POST /current/confirm
@@ -233,6 +281,7 @@ export type OrdersSortBy =
   | 'deliveryMethod'
   | 'destination'
   | 'deliveryPrice'
+  | 'returnStatus'
   | 'shippingCostMissingSince';
 export type OrdersSortDir = 'asc' | 'desc';
 
@@ -243,6 +292,8 @@ export interface GetOrdersQueryDto {
   status?: OrderStatus;
   // a few statuses, separated by commas
   statuses?: string;
+  // a few statuses of the statements of return, separated by commas
+  returnStatuses?: string;
   confirmed?: ConfirmedStatus;
   // the orders paid from paidFrom and before paidTo, iso date-times
   paidFrom?: string;
@@ -284,6 +335,7 @@ export interface FindOrdersDto {
 
   status?: OrderStatus;
   statuses?: string;
+  returnStatuses?: string;
   confirmed?: ConfirmedStatus;
   paidFrom?: Date;
   paidTo?: Date;
@@ -356,6 +408,8 @@ export interface UpdateOrderStatusBodyDto {
   shipment?: ShipmentInputDto;
   // with the step back to paid, of a manual order shipped: the cost of the send stays owed or not
   keepShippingCost?: boolean;
+  // with the step to delivered: the moment the carrier delivered it, now when none is given
+  deliveredAt?: string;
 }
 
 // PATCH /:orderId/shipments/:shipmentId: what the shop pays the carrier and the details of the send
@@ -402,6 +456,7 @@ export interface UpdateOrderStatusDto {
   status: OrderStatus;
   shipment?: ShipmentInputDto;
   keepShippingCost?: boolean;
+  deliveredAt?: string;
   // the step comes from the route of many orders (the admin log tells it)
   bulk?: boolean;
 }
@@ -412,7 +467,12 @@ export type UpdateOrderStatusResponseDto = OrderResponseDto;
 export interface UpdateOrdersStatusBodyDto {
   status: 'paid' | 'shipped' | 'delivered';
   // each order with its own send, and its own choice for a step back
-  orders: { orderId: OrderId; shipment?: ShipmentInputDto; keepShippingCost?: boolean }[];
+  orders: {
+    orderId: OrderId;
+    shipment?: ShipmentInputDto;
+    keepShippingCost?: boolean;
+    deliveredAt?: string;
+  }[];
 }
 
 export interface UpdateOrdersStatusDto extends UpdateOrdersStatusBodyDto {
@@ -421,7 +481,7 @@ export interface UpdateOrdersStatusDto extends UpdateOrdersStatusBodyDto {
 }
 
 export type UpdateOrdersStatusResultDto =
-  | { orderId: OrderId; ok: true; status: OrderStatus }
+  | { orderId: OrderId; ok: true; status: OrderStatus; returnStatus: ReturnStatus }
   | { orderId: OrderId; ok: false; errorCode: string; details?: Record<string, unknown> };
 
 export interface UpdateOrdersStatusResponseDto {

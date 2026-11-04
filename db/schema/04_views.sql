@@ -89,8 +89,9 @@ WITH
             u.role NOT IN ('ADMIN'::cartlify."Role", 'ROOT'::cartlify."Role")
     ),
     -- Orders. The counts are for all time: every order (carts too), the confirmed ones and each
-    -- status. The money is of the orders that were paid (paid, shipped, delivered), counted by
-    -- the time of the payment (paidAt): for all time, in the period, in the last 7 and 30 days.
+    -- status. The money is of the orders that were paid, cancelled later or not, counted by the
+    -- time of the payment (paidAt): for all time, in the period, in the last 7 and 30 days. What
+    -- went back with the returns is apart (returns_stats), in the period its money went back.
     -- revenue_* sums orders.total, which holds the price of the delivery; delivery_revenue_* is
     -- the part of it that buyers paid for delivery. An order has one delivery row at most, so the
     -- join does not repeat an order.
@@ -138,11 +139,7 @@ WITH
                 SUM(o.total) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                 ),
                 0
             )::numeric AS revenue_total,
@@ -150,11 +147,7 @@ WITH
                 SUM(o.total) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                         AND o."paidAt" >= p.from_ts
                         AND o."paidAt" < p.to_ts
                 ),
@@ -164,11 +157,7 @@ WITH
                 SUM(o.total) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                         AND o."paidAt" >= p.last_7d_from
                 ),
                 0
@@ -177,11 +166,7 @@ WITH
                 SUM(o.total) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                         AND o."paidAt" >= p.last_30d_from
                 ),
                 0
@@ -191,11 +176,7 @@ WITH
                 SUM(d.price) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                 ),
                 0
             )::numeric AS delivery_revenue_total,
@@ -203,11 +184,7 @@ WITH
                 SUM(d.price) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                         AND o."paidAt" >= p.from_ts
                         AND o."paidAt" < p.to_ts
                 ),
@@ -217,11 +194,7 @@ WITH
                 SUM(d.price) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                         AND o."paidAt" >= p.last_7d_from
                 ),
                 0
@@ -230,11 +203,7 @@ WITH
                 SUM(d.price) FILTER (
                     WHERE
                         o.confirmed IS TRUE
-                        AND o.status IN (
-                            'paid'::cartlify."OrderStatus",
-                            'shipped'::cartlify."OrderStatus",
-                            'delivered'::cartlify."OrderStatus"
-                        )
+                        AND o."paidAt" IS NOT NULL
                         AND o."paidAt" >= p.last_30d_from
                 ),
                 0
@@ -246,22 +215,14 @@ WITH
                     SUM(o.total) FILTER (
                         WHERE
                             o.confirmed IS TRUE
-                            AND o.status IN (
-                                'paid'::cartlify."OrderStatus",
-                                'shipped'::cartlify."OrderStatus",
-                                'delivered'::cartlify."OrderStatus"
-                            )
+                            AND o."paidAt" IS NOT NULL
                             AND o."paidAt" >= p.from_ts
                             AND o."paidAt" < p.to_ts
                     ) / NULLIF(
                         COUNT(*) FILTER (
                             WHERE
                                 o.confirmed IS TRUE
-                                AND o.status IN (
-                                    'paid'::cartlify."OrderStatus",
-                                    'shipped'::cartlify."OrderStatus",
-                                    'delivered'::cartlify."OrderStatus"
-                                )
+                                AND o."paidAt" IS NOT NULL
                                 AND o."paidAt" >= p.from_ts
                                 AND o."paidAt" < p.to_ts
                         ),
@@ -276,6 +237,74 @@ WITH
             LEFT JOIN cartlify.order_deliveries d ON d."orderId" = o.id
             CROSS JOIN params p
     ),
+    -- What went back with the returns: the money of the rows of the statements (the units and
+    -- their part of the delivery, less the way back the buyer owes) by the time the money went
+    -- back: for all time, in the period, in the last 7 and 30 days.
+    returns_stats AS (
+        SELECT
+            COALESCE(SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction"), 0)::numeric AS returned_total,
+            COALESCE(
+                SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction") FILTER (
+                    WHERE
+                        ri."refundedAt" >= p.from_ts
+                        AND ri."refundedAt" < p.to_ts
+                ),
+                0
+            )::numeric AS returned_in_period,
+            COALESCE(
+                SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction") FILTER (
+                    WHERE
+                        ri."refundedAt" >= p.last_7d_from
+                ),
+                0
+            )::numeric AS returned_last_7d,
+            COALESCE(
+                SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction") FILTER (
+                    WHERE
+                        ri."refundedAt" >= p.last_30d_from
+                ),
+                0
+            )::numeric AS returned_last_30d
+        FROM
+            cartlify.return_items ri
+            CROSS JOIN params p
+        WHERE
+            ri.money = 'refunded'::cartlify."ReturnMoney"
+    ),
+    -- The lines of the sales of the period, a row each: the items of the orders paid in it, and,
+    -- with the opposite sign, the rows of the returns whose money went back in it. The tops are
+    -- made of them, so they are the net: the sales less the returns, each in the period it
+    -- happened.
+    sale_lines AS (
+        SELECT
+            oi."productId" AS product_id,
+            oi."variantId" AS variant_id,
+            oi."totalPrice" AS revenue,
+            oi.quantity AS quantity
+        FROM
+            cartlify.order_items oi
+            JOIN cartlify.orders o ON o.id = oi."orderId"
+            CROSS JOIN params prm
+        WHERE
+            o.confirmed IS TRUE
+            AND o."paidAt" IS NOT NULL
+            AND o."paidAt" >= prm.from_ts
+            AND o."paidAt" < prm.to_ts
+        UNION ALL
+        SELECT
+            oi."productId",
+            oi."variantId",
+            - ri.amount,
+            - ri.quantity
+        FROM
+            cartlify.return_items ri
+            JOIN cartlify.order_items oi ON oi.id = ri."orderItemId"
+            CROSS JOIN params prm
+        WHERE
+            ri.money = 'refunded'::cartlify."ReturnMoney"
+            AND ri."refundedAt" >= prm.from_ts
+            AND ri."refundedAt" < prm.to_ts
+    ),
     -- Units sold: the quantity of the items of the orders paid in the period.
     items_sold_stats AS (
         SELECT
@@ -286,11 +315,7 @@ WITH
             CROSS JOIN params prm
         WHERE
             o.confirmed IS TRUE
-            AND o.status IN (
-                'paid'::cartlify."OrderStatus",
-                'shipped'::cartlify."OrderStatus",
-                'delivered'::cartlify."OrderStatus"
-            )
+            AND o."paidAt" IS NOT NULL
             AND o."paidAt" >= prm.from_ts
             AND o."paidAt" < prm.to_ts
     ),
@@ -326,32 +351,24 @@ WITH
         FROM
             cartlify.products p
     ),
-    -- The 5 products with the highest revenue from their items in the period (a tie goes to
-    -- more units sold, then to the lower id); the items of all the variants of a product count
-    -- for it. Delivery is not part of it; deleted products are counted.
+    -- The 5 products with the highest net revenue from their items in the period, the sales less
+    -- the returns (a tie goes to more units sold, then to the lower id); the items of all the
+    -- variants of a product count for it. Delivery is not part of it; deleted products are
+    -- counted; a product with no unit left after the returns is not in the top.
     top_products AS (
         SELECT
             p.id,
             p.name,
-            COALESCE(SUM(oi."totalPrice"), 0)::numeric AS revenue,
-            COALESCE(SUM(oi.quantity), 0)::int AS quantity_sold
+            COALESCE(SUM(sl.revenue), 0)::numeric AS revenue,
+            COALESCE(SUM(sl.quantity), 0)::int AS quantity_sold
         FROM
-            cartlify.order_items oi
-            JOIN cartlify.orders o ON o.id = oi."orderId"
-            JOIN cartlify.products p ON p.id = oi."productId"
-            CROSS JOIN params prm
-        WHERE
-            o.confirmed IS TRUE
-            AND o.status IN (
-                'paid'::cartlify."OrderStatus",
-                'shipped'::cartlify."OrderStatus",
-                'delivered'::cartlify."OrderStatus"
-            )
-            AND o."paidAt" >= prm.from_ts
-            AND o."paidAt" < prm.to_ts
+            sale_lines sl
+            JOIN cartlify.products p ON p.id = sl.product_id
         GROUP BY
             p.id,
             p.name
+        HAVING
+            SUM(sl.quantity) > 0
         ORDER BY
             revenue DESC,
             quantity_sold DESC,
@@ -396,23 +413,12 @@ WITH
             v."position",
             v.sku,
             v."deletedAt" IS NOT NULL AS variant_deleted,
-            COALESCE(SUM(oi."totalPrice"), 0)::numeric AS revenue,
-            COALESCE(SUM(oi.quantity), 0)::int AS quantity_sold
+            COALESCE(SUM(sl.revenue), 0)::numeric AS revenue,
+            COALESCE(SUM(sl.quantity), 0)::int AS quantity_sold
         FROM
-            cartlify.order_items oi
-            JOIN cartlify.orders o ON o.id = oi."orderId"
-            JOIN cartlify.product_variants v ON v.id = oi."variantId"
+            sale_lines sl
+            JOIN cartlify.product_variants v ON v.id = sl.variant_id
             JOIN cartlify.products p ON p.id = v."productId"
-            CROSS JOIN params prm
-        WHERE
-            o.confirmed IS TRUE
-            AND o.status IN (
-                'paid'::cartlify."OrderStatus",
-                'shipped'::cartlify."OrderStatus",
-                'delivered'::cartlify."OrderStatus"
-            )
-            AND o."paidAt" >= prm.from_ts
-            AND o."paidAt" < prm.to_ts
         GROUP BY
             v.id,
             v."productId",
@@ -421,6 +427,8 @@ WITH
             v."position",
             v.sku,
             v."deletedAt"
+        HAVING
+            SUM(sl.quantity) > 0
         ORDER BY
             revenue DESC,
             quantity_sold DESC,
@@ -477,26 +485,17 @@ WITH
         SELECT
             c.id,
             c.name,
-            COALESCE(SUM(oi."totalPrice"), 0)::numeric AS revenue,
-            COALESCE(SUM(oi.quantity), 0)::int AS quantity_sold
+            COALESCE(SUM(sl.revenue), 0)::numeric AS revenue,
+            COALESCE(SUM(sl.quantity), 0)::int AS quantity_sold
         FROM
-            cartlify.order_items oi
-            JOIN cartlify.orders o ON o.id = oi."orderId"
-            JOIN cartlify.products p ON p.id = oi."productId"
+            sale_lines sl
+            JOIN cartlify.products p ON p.id = sl.product_id
             JOIN cartlify.categories c ON c.id = p."categoryId"
-            CROSS JOIN params prm
-        WHERE
-            o.confirmed IS TRUE
-            AND o.status IN (
-                'paid'::cartlify."OrderStatus",
-                'shipped'::cartlify."OrderStatus",
-                'delivered'::cartlify."OrderStatus"
-            )
-            AND o."paidAt" >= prm.from_ts
-            AND o."paidAt" < prm.to_ts
         GROUP BY
             c.id,
             c.name
+        HAVING
+            SUM(sl.quantity) > 0
         ORDER BY
             revenue DESC,
             quantity_sold DESC,
@@ -630,6 +629,17 @@ SELECT
             'last30d',
             os.delivery_revenue_last_30d
         ),
+        'returned',
+        jsonb_build_object(
+            'total',
+            ret.returned_total,
+            'inPeriod',
+            ret.returned_in_period,
+            'last7d',
+            ret.returned_last_7d,
+            'last30d',
+            ret.returned_last_30d
+        ),
         'averageOrderValue',
         os.average_order_value,
         'itemsSold',
@@ -668,6 +678,7 @@ FROM
     params prm
     CROSS JOIN users_stats us
     CROSS JOIN orders_stats os
+    CROSS JOIN returns_stats ret
     CROSS JOIN items_sold_stats iss
     CROSS JOIN products_stats ps
     CROSS JOIN top_products_json tpj

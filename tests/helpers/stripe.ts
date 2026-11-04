@@ -8,7 +8,7 @@ import { STRIPE_PLACEHOLDER_KEY } from '../setup/isolateEnv.js';
 import { uniqueTag } from './factories.js';
 import { hideSecrets } from './hideSecrets.js';
 import { isRealService } from './services.js';
-import { startStripeMock } from './stripeMock.js';
+import { startStripeMock, type RefundOutcome, type StripeMock } from './stripeMock.js';
 
 // Stripe answers from a mock (tests/helpers/stripeMock.ts) unless the run takes it for real
 // (service:stripe): then the payment tests use the key of a test sandbox (STRIPE_TEST_SECRET_KEY,
@@ -51,10 +51,31 @@ export function stripeWithKey(key: string): Stripe {
 // every integration test file: the mock starts before the file and stops after it, unless the run
 // takes Stripe for real. A request the mock does not answer fails the test that sent it: the mock
 // would only guess, so it gets the answer of the sandbox first
+// the mock of the file under test; none when the run takes Stripe for real
+let activeMock: StripeMock | null = null;
+
+function mockOfRefunds(): StripeMock {
+  if (!activeMock) {
+    throw new Error(
+      'a refund that is pending or fails can be made by the mock only, not by Stripe',
+    );
+  }
+  return activeMock;
+}
+
+// the next refund Stripe makes is still pending, or fails with the reason (mock only)
+export const queueRefundOutcome = (outcome: RefundOutcome) =>
+  mockOfRefunds().queueRefundOutcome(outcome);
+
+// a refund that was pending ends the way given; the event of it is recorded for the webhook (mock only)
+export const settleRefund = (refundId: string, end: { status: 'succeeded' } | RefundOutcome) =>
+  mockOfRefunds().settleRefund(refundId, end);
+
 export function installStripe(): void {
   if (realStripe) return;
 
   const mock = startStripeMock(process.env.STRIPE_SECRET_KEY ?? STRIPE_PLACEHOLDER_KEY);
+  activeMock = mock;
   const failUnanswered = () => {
     const unanswered = mock.takeUnanswered();
     if (unanswered.length) {

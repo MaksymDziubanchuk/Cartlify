@@ -7,6 +7,7 @@ import {
   encodeCursor,
 } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
+import { RETURN_STATUSES } from '@helpers/returns.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 import { BadRequestError, ForbiddenError } from '@utils/errors.js';
@@ -51,6 +52,12 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
   if (statuses?.some((status) => !LIST_STATUSES.includes(status))) {
     throw new BadRequestError('STATUS_INVALID');
   }
+
+  // a few statuses of the statements of return, separated by commas (the schema of the route lets
+  // only the names of the enum through)
+  const returnStatuses = dto.returnStatuses
+    ? [...new Set(dto.returnStatuses.split(',').map((status) => status.trim()))]
+    : undefined;
 
   const q = typeof dto.q === 'string' && dto.q.trim() ? dto.q.trim() : undefined;
 
@@ -101,6 +108,7 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     cursor,
     status,
     statuses,
+    returnStatuses,
     confirmed,
     paidFrom,
     paidTo,
@@ -161,6 +169,7 @@ export function buildOrdersWhere(args: {
   actorRole: Role;
   status?: string | undefined;
   statuses?: string[] | undefined;
+  returnStatuses?: string[] | undefined;
   confirmed?: boolean | undefined;
   paidFrom?: Date | undefined;
   paidTo?: Date | undefined;
@@ -188,6 +197,7 @@ export function buildOrdersWhere(args: {
   const status = args.status ? args.status : { not: 'pending' };
   where.status = args.statuses ? { in: args.statuses } : status;
   if (args.statuses && args.status) where.AND = [{ status: args.status }];
+  if (args.returnStatuses) where.returnStatus = { in: args.returnStatuses };
   // the orders that hold a variant of the product and the variant itself: both filters name the
   // same position when both are sent
   if (args.productId !== undefined || args.variantId !== undefined) {
@@ -219,10 +229,18 @@ export function buildOrdersWhere(args: {
     };
     and.push({ shipments: { some: { rolledBackAt: null, carrier: part } } });
   }
+  // the send without a number is the one on its way; with shippedTo it is that very send that was
+  // sent before the time (the clock of the alert of the shipments without a number)
   if (args.shippedWithoutNumber) {
     and.push({
       status: 'shipped',
-      shipments: { some: { rolledBackAt: null, trackingNumber: null } },
+      shipments: {
+        some: {
+          rolledBackAt: null,
+          trackingNumber: null,
+          ...(args.shippedTo ? { shippedAt: { lt: args.shippedTo } } : {}),
+        },
+      },
     });
   }
   if (args.withoutWeight) {
@@ -317,6 +335,7 @@ export function buildOrdersOrderBy(sortBy: OrdersSortBy, sortDir: OrdersSortDir)
   if (sortBy === 'createdAt') return [{ createdAt: sortDir }, { id: sortDir }];
   if (sortBy === 'updatedAt') return [{ updatedAt: sortDir }, { id: sortDir }];
   if (sortBy === 'paidAt') return [{ paidAt: sortDir }, { id: sortDir }];
+  if (sortBy === 'returnStatus') return [{ returnStatus: sortDir }, { id: sortDir }];
   if (sortBy === 'total') return [{ total: sortDir }, { id: sortDir }];
   if (sortBy === 'deliveryMethod') return [{ delivery: { method: sortDir } }, { id: sortDir }];
   if (sortBy === 'deliveryPrice') return [{ delivery: { price: sortDir } }, { id: sortDir }];
@@ -356,6 +375,23 @@ export function buildOrdersCursorWhere(args: {
       OR: [
         { delivery: { is: { method: { in: [...further] } } } },
         { AND: [{ delivery: { is: { method: val } } }, { id: { [op]: id } }] },
+      ],
+    };
+  }
+
+  // the status of the statements of return, a name of the enum: ordered as the enum declares the
+  // names (none, open, open_partial, partial, full, declined), the names after or before the one of
+  // the cursor are listed, as for the method of the delivery
+  if (args.sortBy === 'returnStatus') {
+    const val = cursorString(v);
+    const at = (RETURN_STATUSES as string[]).indexOf(val);
+    if (at < 0) throw new BadRequestError('CURSOR_INVALID');
+    const further =
+      args.sortDir === 'asc' ? RETURN_STATUSES.slice(at + 1) : RETURN_STATUSES.slice(0, at);
+    return {
+      OR: [
+        { returnStatus: { in: [...further] } },
+        { AND: [{ returnStatus: val as never }, { id: { [op]: id } }] },
       ],
     };
   }
@@ -433,6 +469,7 @@ export function makeNextOrdersCursor(
   else if (sortBy === 'updatedAt') v = new Date(last.updatedAt).toISOString();
   else if (sortBy === 'paidAt') v = new Date(last.paidAt).toISOString();
   else if (sortBy === 'deliveryMethod') v = String(last.delivery?.method ?? '');
+  else if (sortBy === 'returnStatus') v = String(last.returnStatus ?? '');
   else if (sortBy === 'deliveryPrice') v = decimalToNumber(last.delivery?.price ?? 0);
   else if (sortBy === 'destination')
     v = `${last.delivery?.country ?? ''}\u0001${last.delivery?.city ?? ''}`;

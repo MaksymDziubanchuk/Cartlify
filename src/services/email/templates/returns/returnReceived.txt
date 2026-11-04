@@ -1,0 +1,18 @@
+Hi{{#userName}} {{userName}}{{/userName}},
+
+{{#code}}Statement {{code}}.
+{{/code}}We registered your withdrawal from your {{appName}} order #{{orderId}} on {{statedAt}}.
+{{outcomeLine}}
+
+{{#items}}- {{name}} x {{quantity}}
+{{/items}}{{#addressLine}}
+{{addressLine}}{{/addressLine}}{{#sendByLine}}
+{{sendByLine}}{{/sendByLine}}{{#payerLine}}
+{{payerLine}}{{/payerLine}}{{#proofLine}}
+{{proofLine}}{{/proofLine}}{{#proofLinkUrl}}
+{{proofLinkUrl}}{{/proofLinkUrl}}
+
+{{#linkUrl}}{{linkIntro}}
+{{linkUrl}}
+
+{{/linkUrl}}Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.

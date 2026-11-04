@@ -40,11 +40,9 @@ export async function findById({
         // if rls denies access, it will look like "not found"
         if (!order) throw new NotFoundError('ORDER_NOT_FOUND', { orderId });
 
-        return mapOrderRowToResponse(
-          order,
-          await orderContextOf(db, [order]),
-          actorRole === 'ADMIN' || actorRole === 'ROOT' ? 'admin' : 'buyer',
-        );
+        const view = actorRole === 'ADMIN' || actorRole === 'ROOT' ? 'admin' : 'buyer';
+
+        return mapOrderRowToResponse(order, await orderContextOf(db, [order], view), view);
       },
       {
         // keep default isolation and retry only transient lock/conflict errors

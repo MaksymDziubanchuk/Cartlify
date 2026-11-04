@@ -25,7 +25,7 @@ import { BadRequestError } from '@utils/errors.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { clearAuthCookies } from '@routes/api/auth/services/helpers/authCookies.helper.js';
 import { usersServices } from './users.services.js';
-import type { ExportMeResponseDto } from './services/exportMe.service.js';
+import type { ExportPersonResponseDto } from './services/exportPerson.service.js';
 import { UserId } from 'types/ids.js';
 
 const getUsers: ControllerRouter<{}, {}, GetUsersQueryDto, UsersListResponseDto> = async (
@@ -53,12 +53,39 @@ const getMe: ControllerRouter<{}, {}, {}, UserResponseDto> = async (req, reply) 
 };
 
 // the data of the person as a file the browser saves
-const getMeExport: ControllerRouter<{}, {}, {}, ExportMeResponseDto> = async (req, reply) => {
+const getMeExport: ControllerRouter<{}, {}, {}, ExportPersonResponseDto> = async (req, reply) => {
   const { id, role } = req.user as UserEntity;
 
-  const result = await usersServices.exportMe({ userId: Number(id), role });
+  const result = await usersServices.exportPerson({
+    subjectId: Number(id),
+    actorId: Number(id),
+    actorRole: role,
+    audit: false,
+  });
 
   reply.header('content-disposition', `attachment; filename="cartlify-data-${Number(id)}.json"`);
+  return reply.code(200).send(result);
+};
+
+// the data of another person for root: the same set as /me/export, also for an account that was
+// deleted (a request that came by mail, the person checked outside the app)
+const getUserExport: ControllerRouter<
+  GetUserByIdParamsDto,
+  {},
+  {},
+  ExportPersonResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+  const subjectId = Number(req.params.userId);
+
+  const result = await usersServices.exportPerson({
+    subjectId,
+    actorId: Number(actorId),
+    actorRole,
+    audit: true,
+  });
+
+  reply.header('content-disposition', `attachment; filename="cartlify-data-${subjectId}.json"`);
   return reply.code(200).send(result);
 };
 
@@ -227,6 +254,7 @@ export const usersController = {
   getMeExport,
   patchMe,
   getUserById,
+  getUserExport,
   deleteUserById,
   deleteUserAvatar,
   deleteMe,

@@ -1,6 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
+import env from '@config/env.js';
+import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
+
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
@@ -624,6 +627,10 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     expect(mails[0]!.text).toContain('https://track.example.com/JD0146');
     expect(mails[0]!.text).toContain(`https://shop.example.com/orders/${orderId}`);
     expect(mails[0]!.html).toContain('Hi Anna,');
+    // the buyer may withdraw: the link of the page of withdrawal carries the code of the order
+    expect(mails[0]!.text).toContain('after you receive the goods. Withdraw here:');
+    expect(mails[0]!.text).toContain(`Withdraw here:\n${withdrawalLinkOf(orderId)}`);
+    expect(mails[0]!.html).toContain(`href="${withdrawalLinkOf(orderId)}"`);
   });
 
   // some carriers give only a link: the buyer gets the carrier and the link, and no empty number
@@ -685,6 +692,48 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     expect(mails[0]!.text).toContain('Delivered to: Test street 1, 01001 Kyiv, UA');
     expect(mails[0]!.text).toContain('Recipient: Anna Koval, +380501234567');
     expect(mails[0]!.html).toContain('Hi Anna,');
+    // the last day of the period of the contract (14 days, no grace) in the zone of the shop, and
+    // the link with the code
+    const [order] = await asAdmin((tx) =>
+      tx.order.findMany({ where: { id: orderId }, select: { deliveredAt: true } }),
+    );
+    const lastDay = new Date(
+      `${new Intl.DateTimeFormat('en-CA', { timeZone: env.SHOP_TIME_ZONE }).format(order!.deliveredAt!)}T12:00:00Z`,
+    );
+    lastDay.setUTCDate(lastDay.getUTCDate() + 14);
+    expect(mails[0]!.text).toContain(
+      `You may withdraw from the contract without giving a reason until ${new Intl.DateTimeFormat(
+        'en-GB',
+        { dateStyle: 'long', timeZone: 'UTC' },
+      ).format(lastDay)}. Withdraw here:`,
+    );
+    expect(mails[0]!.text).toContain(`Withdraw here:\n${withdrawalLinkOf(orderId)}`);
+  });
+
+  // the carrier delivered it before the admin marked it: the period counts from the moment given
+  it('keeps the moment of the delivery the admin gives, and refuses one of the future (400) or with another step (400)', async () => {
+    const orderId = await shippedOrder();
+    const sent = await asAdmin((tx) =>
+      tx.orderShipment.findFirstOrThrow({ where: { orderId }, select: { shippedAt: true } }),
+    );
+    // the moment of the send itself: the earliest the delivery can be, and surely not of the future
+    const moment = sent.shippedAt.toISOString();
+
+    const future = await setStatus(admin, orderId, 'delivered', {
+      deliveredAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    const otherStep = await setStatus(admin, orderId, 'paid', {
+      keepShippingCost: true,
+      deliveredAt: moment,
+    });
+    const res = await setStatus(admin, orderId, 'delivered', { deliveredAt: moment });
+
+    expect(future.statusCode).toBe(400);
+    expect(future.json()).toMatchObject({ errorCode: 'ORDER_DELIVERED_AT_INVALID' });
+    expect(otherStep.statusCode).toBe(400);
+    expect(otherStep.json()).toMatchObject({ errorCode: 'DELIVERED_AT_NOT_ALLOWED' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().deliveredAt).toBe(moment);
   });
 
   it('mails the buyer of a pickup that the order is collected', async () => {
@@ -707,7 +756,9 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
 
     expect(mails).toHaveLength(1);
     expect(mails[0]!.subject).toBe(`Cartlify — The details of order #${orderId} changed`);
-    expect(mails[0]!.text).toContain('Ask us in the chat on our site');
+    expect(mails[0]!.text).toContain(
+      `Questions? Write to us in the chat on our site or to ${env.EMAIL_REPLY_TO}.`,
+    );
     // the admin explains in the chat: nothing of the send is in the mail
     expect(mails[0]!.text).not.toContain('DHL');
     expect(mails[0]!.text).not.toContain('A1');

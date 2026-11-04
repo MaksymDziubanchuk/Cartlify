@@ -29,12 +29,14 @@ import {
   startLogin,
   type Provider,
 } from '../../../helpers/oauth.js';
+import env from '@config/env.js';
 import { placeOrder, shippingData } from '../../../helpers/orders.js';
 import { openPaymentPage, orderStateOf, payPage } from '../../../helpers/payments.js';
 import { closeOpenSessions, deliver } from '../../../helpers/stripe.js';
 
-// the terms and the contract of the shop. Root publishes a version of each (POST
-// /api/root/legal-documents), everybody reads the versions in force; a customer accepts them when
+// the terms, the contract and the privacy policy of the shop. Root publishes a version of each (POST
+// /api/root/legal-documents), everybody reads the versions in force; a customer accepts the terms
+// and the contract (the privacy policy only informs) when
 // registering, or later with POST /api/legal/acceptances (an account made by a provider, a new
 // version); an order is confirmed only by a customer who accepted the versions in force, and the
 // mail after the payment carries their texts. A version in force is for the whole shop and cannot
@@ -68,16 +70,54 @@ afterAll(async () => {
   }
 });
 
+// the kinds a customer accepts, and the kinds root publishes
 type Kind = 'terms' | 'contract';
+type PublishedKind = Kind | 'privacy';
+
+type ContractTerms = {
+  withdrawalDays: number;
+  returnAddress: string;
+  returnShippingPaidBy: 'buyer' | 'shop';
+};
+type Retention = {
+  loginAddressesDays: number;
+  guestDataDays: number;
+  deletedChatsDays: number;
+  returnAddressesDays: number;
+  returnPersonalDays: number;
+  recipientDays: number;
+};
+
 type LegalDocument = {
   id: number;
-  kind: Kind;
+  kind: PublishedKind;
   version: number;
   title: string;
   content: string;
   sha256: string;
   publishedAt: string;
+  contract: ContractTerms | null;
+  retention: Retention | null;
 };
+
+const CONTRACT: ContractTerms = {
+  withdrawalDays: 14,
+  returnAddress: 'Returns, 1 Main Street, Madrid',
+  returnShippingPaidBy: 'buyer',
+};
+
+const RETENTION: Retention = {
+  loginAddressesDays: 90,
+  guestDataDays: 180,
+  deletedChatsDays: 30,
+  returnAddressesDays: 1095,
+  returnPersonalDays: 3650,
+  recipientDays: 3650,
+};
+
+// the fields a kind carries beside its text
+const fieldsOf = (kind: PublishedKind): Record<string, unknown> =>
+  kind === 'contract' ? { contract: CONTRACT } : kind === 'privacy' ? { retention: RETENTION } : {};
 
 const sha256 = (text: string) => createHash('sha256').update(text, 'utf8').digest('hex');
 
@@ -89,17 +129,26 @@ const publish = (actor: TestUser, payload: Record<string, unknown>) =>
     payload,
   });
 
-async function published(kind: Kind, content = `The ${kind} of the shop, ${Date.now()}.`) {
-  const res = await publish(root, { kind, title: `The ${kind}`, content });
+async function published(
+  kind: PublishedKind,
+  content = `The ${kind} of the shop, ${Date.now()}.`,
+  fields: Record<string, unknown> = fieldsOf(kind),
+) {
+  const res = await publish(root, { kind, title: `The ${kind}`, content, ...fields });
   expect(res.statusCode).toBe(201);
   return res.json() as LegalDocument;
 }
 
-const currentDocuments = async () => {
+// every version in force, the privacy policy too
+const allCurrentDocuments = async () => {
   const res = await app.inject({ method: 'GET', url: '/api/legal/documents/current' });
   expect(res.statusCode).toBe(200);
   return res.json().items as LegalDocument[];
 };
+
+// the versions in force a customer accepts: the privacy policy is not one of them
+const currentDocuments = async () =>
+  (await allCurrentDocuments()).filter((doc) => doc.kind !== 'privacy');
 
 const currentIds = async () => (await currentDocuments()).map((doc) => doc.id);
 
@@ -184,6 +233,8 @@ describe('POST /api/root/legal-documents', () => {
       content,
       sha256: sha256(content),
       publishedAt: expect.any(String),
+      contract: null,
+      retention: null,
     });
   });
 
@@ -201,7 +252,12 @@ describe('POST /api/root/legal-documents', () => {
   it('keeps the title without the spaces at its edges and the text as it was sent', async () => {
     const content = '\n  The contract, word for word.  \n';
 
-    const res = await publish(root, { kind: 'contract', title: '  The contract  ', content });
+    const res = await publish(root, {
+      kind: 'contract',
+      title: '  The contract  ',
+      content,
+      contract: CONTRACT,
+    });
 
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({ title: 'The contract', content, sha256: sha256(content) });
@@ -293,11 +349,14 @@ describe('GET /api/root/legal-documents', () => {
 });
 
 describe('the versions in force', () => {
-  it('gives a guest the latest version of each kind with its text', async () => {
+  it('gives a guest the latest version of each kind with its text, the terms of the contract and of the policy too', async () => {
     const terms = await published('terms');
     const contract = await published('contract');
+    const policy = await published('privacy');
 
-    expect(await currentDocuments()).toEqual([terms, contract]);
+    expect(await allCurrentDocuments()).toEqual([terms, contract, policy]);
+    expect(contract.contract).toEqual(CONTRACT);
+    expect(policy.retention).toEqual(RETENTION);
   });
 
   it('gives any version by its id, an old one too', async () => {
@@ -713,6 +772,49 @@ describe('a version published while a consent is written', () => {
     expect(await consentsOf(user.id)).toEqual([]);
   });
 
+  // a contract is published while a customer confirms an order: the order must not keep the days
+  // of a contract its buyer never accepted, so the confirmation waits for the publication and then
+  // asks for the consent to the new contract
+  it('makes a confirmation wait for a contract being published and then ask for it', async () => {
+    const user = await consentingUser();
+    const orderId = await cartOf(user);
+    const written = gate();
+    const commit = gate();
+
+    const publishing = inCommittedTx(async (db) => {
+      await db.as({ role: 'ROOT', userId: root.id });
+      const [row] = await db.rows<VersionRow>(
+        `insert into cartlify.legal_documents
+           (kind, title, content, "publishedById", "withdrawalDays", "returnAddress", "returnShippingPaidBy")
+         values ('contract'::cartlify."LegalDocumentKind", 'The contract', $1, $2, 30,
+                 'Returns, 3 Back Street', 'shop'::cartlify."ReturnShippingPayer")
+         returning id, version, "createdAt"`,
+        `The contract, ${Date.now()}.`,
+        root.id,
+      );
+      written.open();
+      await commit.opened;
+      return row!;
+    });
+    await written.opened;
+
+    const confirming = confirm(user, orderId);
+    await untilWaiting('contract', confirming);
+    commit.open();
+    const contract = await publishing;
+    const res = await confirming;
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      errorCode: 'LEGAL_ACCEPTANCE_REQUIRED',
+      details: { kinds: ['contract'] },
+    });
+    expect(await orderStateOf(orderId)).toMatchObject({ status: 'pending' });
+    // accepting the new contract lets the same order through, with its days
+    expect((await acceptAs(user, [contract.id])).statusCode).toBe(200);
+    expect((await confirm(user, orderId)).statusCode).toBe(200);
+  });
+
   it('dates a new version after every consent given to the one before it', async () => {
     const user = await newUser();
     const terms = (await currentDocuments()).find((doc) => doc.kind === 'terms')!;
@@ -1084,5 +1186,319 @@ describe('the consents of a customer for an admin', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).not.toHaveProperty('consents');
+  });
+});
+
+// what a contract and a privacy policy carry besides their text (db/06) and what publishing them
+// asks: the fields of the kind, and no other
+describe('POST /api/root/legal-documents: the fields of a kind', () => {
+  it('gives the terms of a contract back, in the answer and by the id', async () => {
+    const terms = {
+      withdrawalDays: 21,
+      returnAddress: 'Returns, 2 Side Street',
+      returnShippingPaidBy: 'shop',
+    };
+
+    const res = await publish(root, {
+      kind: 'contract',
+      title: 'The contract',
+      content: 'C',
+      contract: { ...terms, returnAddress: '  Returns, 2 Side Street  ' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({ contract: terms, retention: null });
+    const again = await app.inject({ method: 'GET', url: `/api/legal/documents/${res.json().id}` });
+    expect(again.json()).toMatchObject({ contract: terms, retention: null });
+  });
+
+  it('gives the terms of keeping of a privacy policy back', async () => {
+    const res = await publish(root, {
+      kind: 'privacy',
+      title: 'The policy',
+      content: 'P',
+      retention: { ...RETENTION, recipientDays: 365 },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json()).toMatchObject({
+      kind: 'privacy',
+      contract: null,
+      retention: { ...RETENTION, recipientDays: 365 },
+    });
+  });
+
+  it.each([
+    ['a contract without its terms', { kind: 'contract' }, 'contract'],
+    ['a privacy policy without its terms of keeping', { kind: 'privacy' }, 'retention'],
+  ])('refuses %s (LEGAL_DOCUMENT_FIELDS_REQUIRED)', async (_case, payload, field) => {
+    const res = await publish(root, { title: 'T', content: 'C', ...payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      errorCode: 'LEGAL_DOCUMENT_FIELDS_REQUIRED',
+      details: { kind: payload.kind, fields: [field] },
+    });
+  });
+
+  it.each([
+    ['the terms with the terms of a contract', { kind: 'terms', contract: CONTRACT }, 'contract'],
+    ['the terms with the terms of keeping', { kind: 'terms', retention: RETENTION }, 'retention'],
+    [
+      'a contract with the terms of keeping',
+      { kind: 'contract', contract: CONTRACT, retention: RETENTION },
+      'retention',
+    ],
+    [
+      'a privacy policy with the terms of a contract',
+      { kind: 'privacy', retention: RETENTION, contract: CONTRACT },
+      'contract',
+    ],
+  ])('refuses %s (LEGAL_DOCUMENT_FIELDS_UNEXPECTED)', async (_case, payload, field) => {
+    const res = await publish(root, { title: 'T', content: 'C', ...payload });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      errorCode: 'LEGAL_DOCUMENT_FIELDS_UNEXPECTED',
+      details: { kind: payload.kind, fields: [field] },
+    });
+  });
+
+  it.each([
+    ['a term of withdrawal under 14 days', { contract: { ...CONTRACT, withdrawalDays: 13 } }],
+    ['a term of withdrawal of a century', { contract: { ...CONTRACT, withdrawalDays: 36_501 } }],
+    ['a term of withdrawal that is not whole', { contract: { ...CONTRACT, withdrawalDays: 14.5 } }],
+    ['no address of returns', { contract: { ...CONTRACT, returnAddress: undefined } }],
+    ['a payer there is not', { contract: { ...CONTRACT, returnShippingPaidBy: 'both' } }],
+    [
+      'an address past 500 characters',
+      { contract: { ...CONTRACT, returnAddress: 'a'.repeat(501) } },
+    ],
+  ])('refuses %s of a contract (VALIDATION_ERROR)', async (_case, extra) => {
+    const res = await publish(root, { kind: 'contract', title: 'T', content: 'C', ...extra });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+
+  it('refuses an address of returns of spaces only (LEGAL_DOCUMENT_EMPTY)', async () => {
+    const res = await publish(root, {
+      kind: 'contract',
+      title: 'T',
+      content: 'C',
+      contract: { ...CONTRACT, returnAddress: '   ' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'LEGAL_DOCUMENT_EMPTY' });
+  });
+
+  it.each(Object.keys(RETENTION))(
+    'refuses a privacy policy with %s of no days, of a century or missing (VALIDATION_ERROR)',
+    async (field) => {
+      const without = { ...RETENTION } as Record<string, unknown>;
+      delete without[field];
+
+      for (const retention of [
+        { ...RETENTION, [field]: 0 },
+        { ...RETENTION, [field]: 36_501 },
+        without,
+      ]) {
+        const res = await publish(root, { kind: 'privacy', title: 'T', content: 'P', retention });
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+      }
+    },
+  );
+});
+
+// nobody accepts the privacy policy: it never stops a registration, a login or an order, and the
+// page of consents does not name it
+describe('the privacy policy and the consents', () => {
+  it('is left out of what a customer has to accept, and a consent to it is refused', async () => {
+    const policy = await published('privacy');
+    const user = await consentingUser();
+
+    const status = await statusOf(user);
+    const refused = await acceptAs(user, [policy.id]);
+
+    expect(status.statusCode).toBe(200);
+    expect(status.json().required).toEqual([]);
+    expect((status.json().current as Array<{ kind: string }>).map((doc) => doc.kind)).toEqual([
+      'terms',
+      'contract',
+    ]);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({
+      errorCode: 'LEGAL_VERSION_OUTDATED',
+      details: { current: inForce(await currentDocuments()) },
+    });
+  });
+
+  it('does not stop a registration that names the terms and the contract only', async () => {
+    await published('privacy');
+    const email = uniqueEmail('policy');
+
+    const res = await register({
+      email,
+      password: 'Passw0rd!123',
+      name: 'Policy Reader',
+      acceptedDocumentIds: await currentIds(),
+    });
+
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('does not stop an order, and is not one of the versions the order is confirmed with', async () => {
+    const policy = await published('privacy');
+    const user = await consentingUser();
+
+    const orderId = await placeOrder(
+      app,
+      csrf,
+      user,
+      await createProduct({ price: 10, stock: 5 }),
+      'waiting',
+    );
+
+    const links = (await consentsOf(user.id)).filter((row) => row.orderId === orderId);
+    expect(links.map((row) => row.documentId)).not.toContain(policy.id);
+    expect(links.map((row) => row.documentId)).toEqual(await currentIds());
+  });
+
+  it('a new version of it asks nothing of a customer', async () => {
+    const user = await consentingUser();
+    await published('privacy');
+
+    expect((await statusOf(user)).json().required).toEqual([]);
+    expect((await confirm(user, await cartOf(user))).statusCode).toBe(200);
+  });
+});
+
+// what the contract in force at the confirmation said stays with the order: the days to withdraw
+// count the end of the period of the order, whatever contract comes later. The end is the end of
+// the last day in the time zone of the shop; the days of grace of the shop are not told in it
+describe('the days of withdrawal an order keeps', () => {
+  const dateIn = (at: Date) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: env.SHOP_TIME_ZONE }).format(at);
+  const timeIn = (at: Date) =>
+    new Intl.DateTimeFormat('en-GB', {
+      timeZone: env.SHOP_TIME_ZONE,
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).format(at);
+  const addDays = (date: string, days: number) => {
+    const moved = new Date(`${date}T12:00:00Z`);
+    moved.setUTCDate(moved.getUTCDate() + days);
+    return moved.toISOString().slice(0, 10);
+  };
+
+  const setStatus = (orderId: number, status: string) =>
+    app.inject({
+      method: 'PATCH',
+      url: `/api/orders/${orderId}/status`,
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: { status },
+    });
+
+  const orderAs = async (user: TestUser, orderId: number) =>
+    (
+      await app.inject({
+        method: 'GET',
+        url: `/api/orders/${orderId}`,
+        headers: { cookie: accessCookie(user) },
+      })
+    ).json();
+
+  async function deliveredOrderOf(user: TestUser) {
+    const orderId = await placeOrder(
+      app,
+      csrf,
+      user,
+      await createProduct({ price: 10, stock: 5 }),
+      'waiting',
+    );
+    const sessionId = await openPaymentPage(app, csrf, user, orderId);
+    const { event } = await payPage(sessionId);
+    expect((await deliver(app, event)).statusCode).toBe(200);
+    return orderId;
+  }
+
+  async function deliver_(orderId: number) {
+    expect((await setStatus(orderId, 'shipped')).statusCode).toBe(200);
+    expect((await setStatus(orderId, 'delivered')).statusCode).toBe(200);
+  }
+
+  const endIsAt = (order: { deliveredAt: string; withdrawalEndsAt: string }, days: number) => {
+    const delivered = new Date(order.deliveredAt);
+    const ends = new Date(order.withdrawalEndsAt);
+
+    expect(dateIn(ends)).toBe(addDays(dateIn(delivered), days));
+    expect(timeIn(ends)).toBe('23:59:59');
+    expect(ends.getMilliseconds()).toBe(999);
+  };
+
+  it('counts the end of the period from the days of the contract in force at the confirmation', async () => {
+    await published('contract', 'The contract of 21 days.', {
+      contract: { ...CONTRACT, withdrawalDays: 21 },
+    });
+    const user = await consentingUser();
+    const orderId = await deliveredOrderOf(user);
+    const before = await orderAs(user, orderId);
+
+    await deliver_(orderId);
+    const order = await orderAs(user, orderId);
+
+    expect(before).toMatchObject({ status: 'paid', withdrawalOpen: true });
+    expect(before).not.toHaveProperty('withdrawalEndsAt');
+    expect(order).toMatchObject({
+      status: 'delivered',
+      deliveredAt: expect.any(String),
+      withdrawalOpen: true,
+    });
+    endIsAt(order, 21);
+  });
+
+  it('keeps the days of the contract the order was confirmed with when a newer one comes', async () => {
+    await published('contract', 'The contract of 21 days.', {
+      contract: { ...CONTRACT, withdrawalDays: 21 },
+    });
+    const user = await consentingUser();
+    const orderId = await deliveredOrderOf(user);
+    const newer = await published('contract', 'The contract of 40 days.', {
+      contract: { ...CONTRACT, withdrawalDays: 40 },
+    });
+
+    await deliver_(orderId);
+    const kept = await orderAs(user, orderId);
+    await acceptAs(user, [newer.id]);
+    const another = await deliveredOrderOf(user);
+    await deliver_(another);
+
+    endIsAt(kept, 21);
+    endIsAt(await orderAs(user, another), 40);
+  });
+
+  it('gives the end of the period to the admin as to the buyer', async () => {
+    const user = await consentingUser();
+    const orderId = await deliveredOrderOf(user);
+    await deliver_(orderId);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/orders/${orderId}`,
+      headers: { cookie: accessCookie(admin) },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      status: 'delivered',
+      deliveredAt: expect.any(String),
+      withdrawalEndsAt: expect.any(String),
+      withdrawalOpen: true,
+    });
   });
 });

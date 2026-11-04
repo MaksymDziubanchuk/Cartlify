@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { getPgMessage, prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
+import { parseWithdrawalRule } from '@helpers/withdrawal.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 
 import {
@@ -15,7 +16,7 @@ import {
 
 import { normalizeFindCategoryByIdInput, normalizeUpdateCategoryInput } from './helpers/index.js';
 import { categoryImageUrlsOf } from './helpers/categories.helper.js';
-import { assertOutsideOwnBranch } from './helpers/categoryTree.helper.js';
+import { assertOutsideOwnBranch, withdrawalsOfBranch } from './helpers/categoryTree.helper.js';
 
 import type { UpdateCategoryDto, UpdateCategoryResponseDto } from 'types/dto/categories.dto.js';
 
@@ -29,6 +30,7 @@ export async function updateCategory({
   slug,
   description,
   parentId,
+  withdrawal,
 }: UpdateCategoryDto): Promise<UpdateCategoryResponseDto> {
   // validate actor context for rls and admin-only update
   assertAdminActor(actorId, actorRole);
@@ -44,9 +46,16 @@ export async function updateCategory({
     parentId,
   });
 
+  // the rule of withdrawal: one of the rules, null (or empty) to follow the category above
+  const withdrawalNorm = parseWithdrawalRule(withdrawal);
+
   // reject empty patch
   const hasAnyUpdates =
-    name !== undefined || slug !== undefined || description !== undefined || parentId !== undefined;
+    name !== undefined ||
+    slug !== undefined ||
+    description !== undefined ||
+    parentId !== undefined ||
+    withdrawal !== undefined;
 
   if (!hasAnyUpdates) throw new BadRequestError('NO_FIELDS_TO_UPDATE');
 
@@ -63,7 +72,14 @@ export async function updateCategory({
       // load previous state for audit
       const before = await tx.category.findUnique({
         where: { id: categoryIdRaw },
-        select: { id: true, name: true, slug: true, description: true, parentId: true },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          description: true,
+          parentId: true,
+          withdrawal: true,
+        },
       });
       if (!before) throw new NotFoundError('CATEGORY_NOT_FOUND');
 
@@ -76,7 +92,12 @@ export async function updateCategory({
         ...(slug !== undefined ? { slug: slugNorm! } : {}),
         ...(description !== undefined ? { description: descriptionNorm ?? null } : {}),
         ...(parentId !== undefined ? { parentId: parentIdNorm ?? null } : {}),
+        ...(withdrawalNorm !== undefined ? { withdrawal: withdrawalNorm } : {}),
       };
+
+      // the rules the products of the branch have before the change, to say how many it moved
+      const rulesBefore =
+        withdrawalNorm !== undefined ? await withdrawalsOfBranch(tx, categoryIdRaw) : null;
 
       const after = await tx.category.update({
         where: { id: categoryIdRaw },
@@ -88,6 +109,7 @@ export async function updateCategory({
           description: true,
           parentId: true,
           imageUrl: true,
+          withdrawal: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -112,6 +134,19 @@ export async function updateCategory({
         changes.push({ field: 'parentId', old: before.parentId, new: after.parentId });
       }
 
+      if (withdrawalNorm !== undefined && before.withdrawal !== after.withdrawal) {
+        changes.push({ field: 'withdrawal', old: before.withdrawal, new: after.withdrawal });
+      }
+
+      // the products of the branch that took another rule by the change
+      let affectedProducts: number | undefined;
+      if (rulesBefore) {
+        const rulesAfter = await withdrawalsOfBranch(tx, categoryIdRaw);
+        affectedProducts = [...rulesAfter].filter(
+          ([id, rule]) => rulesBefore.get(id) !== rule,
+        ).length;
+      }
+
       // write admin audit log when something actually changed
       if (changes.length) {
         await writeAdminAuditLog(tx, {
@@ -125,7 +160,7 @@ export async function updateCategory({
         });
       }
 
-      return after;
+      return { ...after, affectedProducts };
     });
 
     return {
@@ -135,6 +170,10 @@ export async function updateCategory({
       ...(updated.description != null ? { description: updated.description } : {}),
       ...(updated.parentId != null ? { parentId: updated.parentId } : {}),
       imageUrls: categoryImageUrlsOf(updated.imageUrl),
+      withdrawal: updated.withdrawal,
+      ...(updated.affectedProducts !== undefined
+        ? { affectedProducts: updated.affectedProducts }
+        : {}),
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     };

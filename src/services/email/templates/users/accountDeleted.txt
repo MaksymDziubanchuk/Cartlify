@@ -11,5 +11,4 @@ These orders were waiting for payment and are cancelled:
 {{#cancelled}}- Order #{{orderId}}, {{total}}: {{paymentText}}
   {{itemsText}}
 {{/cancelled}}{{/hasCancelled}}
-This mailbox is not monitored.
-Questions? Ask us in the chat on our site.
+Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.

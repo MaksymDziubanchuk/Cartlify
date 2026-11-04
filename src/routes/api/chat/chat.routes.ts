@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import authGuard, { authGuardWithoutRefresh } from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import requireWebOrigin from '@middlewares/requireWebOrigin.js';
+import { requestLimits } from '../../../plugins/requestLimits.js';
 import { chatsSchemas } from './chat.schemas.js';
 import { chatController } from './chat.controllers.js';
 import { chatWsController } from './ws/chatWs.controller.js';
@@ -23,6 +24,15 @@ export default async function chatRouter(app: FastifyInstance) {
       schema: chatsSchemas.getChatThreadMessagesSchema,
     },
     chatController.getChatThreadMessages,
+  );
+
+  app.post(
+    '/threads/:threadId/call-admin',
+    {
+      preHandler: [authGuard, requireRole(['USER']), ...requestLimits.chatCallAdmin],
+      schema: chatsSchemas.callAdminChatSchema,
+    },
+    chatController.callAdminChat,
   );
 
   app.get(

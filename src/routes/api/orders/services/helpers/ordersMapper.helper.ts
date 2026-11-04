@@ -1,11 +1,16 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma, ReturnStatus } from '@prisma/client';
 
 import env from '@config/env.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { variantNamesOf, type VariantNameInfo } from '@db/variantNames.helper.js';
 
 import { deliveryPriceOf, deliveryQuotesOf } from '@helpers/deliveryPrice.js';
+import { returnCodeOf } from '@helpers/returns.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
+import { readProductWithdrawals } from '@db/productWithdrawal.helper.js';
+import { withdrawalOf, withdrawalRightOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
+import { withdrawalEndsOf, withdrawalOpenOf } from './withdrawal.helper.js';
+import { unitsHeldOf } from './withdrawalItems.helper.js';
 import {
   isVariantVisible,
   variantRowSelect,
@@ -18,6 +23,12 @@ import type {
   OrderResponseDto,
   OrderShipmentAdminDto,
 } from 'types/dto/orders.dto.js';
+import type {
+  BuyerReturnDto,
+  ReturnItemUnitsDto,
+  ReturnSummaryDto,
+  WithdrawableDto,
+} from 'types/dto/returns.dto.js';
 
 // what every order answer reads: the cart, the confirmation, one order, the list and the status
 // change of an admin. The payment id stays internal and is not read
@@ -30,6 +41,11 @@ export const orderResponseSelect = {
   total: true,
   paidAt: true,
   cancelledAt: true,
+  deliveredAt: true,
+  // the days the order kept from the contract; their end is counted by the database
+  withdrawalDays: true,
+  // where the order stands as to its statements of withdrawal and return
+  returnStatus: true,
   createdAt: true,
   updatedAt: true,
   items: {
@@ -41,6 +57,8 @@ export const orderResponseSelect = {
       unitPrice: true,
       totalPrice: true,
       productName: true,
+      // the rule of withdrawal kept by the item (db/05); a cart shows the rule of now instead
+      withdrawal: true,
 
       // the product of the position, and its variant as the catalog reads it (the price, the sale,
       // the stock, the weight and the pictures of THIS variant); a query reads at most two
@@ -149,15 +167,47 @@ export async function readOrderResponse(
 // what the items of orders need besides their rows: the units of batches that are over of their
 // variants, by the day of the shop the transaction carries (the free units of an item leave them
 // out), and the names the variants have now, for the items that do not carry a name of the
-// confirmation
+// confirmation, the rule of withdrawal of the products of the items that are not confirmed yet (a
+// confirmed item keeps its own), and the end of the period of withdrawal of each delivered order
 export type OrderContext = {
   expired: Map<number, number>;
   names: Map<number, VariantNameInfo>;
+  rules: Map<number, WithdrawalRuleName>;
+  withdrawalEnds: Map<number, Date>;
+  // the end of the period of the contract, without the grace of the shop: the date the buyer is told
+  withdrawalDeadlines: Map<number, Date>;
+  // the statements of each order that has any, for the view of an admin
+  returns: Map<number, ReturnSummaryDto[]>;
+  // what the statements did to the items of each order that has any, for the view of an admin:
+  // the units of each item and the money that went back, in cents
+  returnUnits: Map<number, { items: Map<number, ReturnItemUnitsDto>; refundedCents: number }>;
+  // the same statements with their path and money, for the view of the buyer
+  withdrawals: Map<number, BuyerReturnDto[]>;
+  // the units of each order the buyer can still state
+  withdrawable: Map<number, WithdrawableDto[]>;
 };
 
 export async function orderContextOf(
   db: Prisma.TransactionClient,
-  rows: { confirmed: boolean; items: { variantId: number; productName: string | null }[] }[],
+  rows: {
+    id: number;
+    status: string;
+    confirmed: boolean;
+    deliveredAt: Date | null;
+    withdrawalDays: number | null;
+    returnStatus: ReturnStatus;
+    items: {
+      id: number;
+      quantity: number;
+      withdrawal: WithdrawalRuleName;
+      productId: number;
+      variantId: number;
+      productName: string | null;
+    }[];
+  }[],
+  // who reads: an admin needs the summaries of the statements, the buyer their path and what they can
+  // still state; each view reads only its own
+  view: 'buyer' | 'admin' = 'buyer',
 ): Promise<OrderContext> {
   const expired = await expiredUnitsOf(
     db,
@@ -173,7 +223,263 @@ export async function orderContextOf(
     ),
   );
 
-  return { expired, names };
+  // the rule of now for the items of an order that is not confirmed
+  const rules = new Map<number, WithdrawalRuleName>();
+  const live = await readProductWithdrawals(
+    db,
+    rows.filter((row) => !row.confirmed).flatMap((row) => row.items.map((item) => item.productId)),
+  );
+  for (const [productId, row] of live) rules.set(productId, row.rule);
+
+  const withdrawalEnds = await withdrawalEndsOf(db, rows);
+  const withdrawalDeadlines = await withdrawalEndsOf(db, rows, 0);
+
+  // the statements of the orders that have any
+  const returns = new Map<number, ReturnSummaryDto[]>();
+  const returnUnits: OrderContext['returnUnits'] = new Map();
+  const withReturns = rows.filter((row) => row.returnStatus !== 'none').map((row) => row.id);
+  if (view === 'admin' && withReturns.length) {
+    const found = await db.orderReturn.findMany({
+      where: { orderId: { in: withReturns } },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        orderId: true,
+        number: true,
+        statedAt: true,
+        source: true,
+        basis: true,
+        reason: true,
+        extendsId: true,
+        closedAt: true,
+      },
+    });
+    for (const { orderId, number, statedAt, closedAt, ...rest } of found) {
+      returns.set(orderId, [
+        ...(returns.get(orderId) ?? []),
+        {
+          ...rest,
+          code: returnCodeOf(rest.basis, orderId, number),
+          statedAt: statedAt.toISOString(),
+          closedAt: closedAt?.toISOString() ?? null,
+        },
+      ]);
+    }
+
+    // the rows of those statements, for what they did to each item (6.3)
+    const statementOf = new Map(found.map((statement) => [statement.id, statement.orderId]));
+    const lines = await db.orderReturnItem.findMany({
+      where: { returnId: { in: found.map((statement) => statement.id) } },
+      orderBy: { id: 'asc' },
+      select: {
+        returnId: true,
+        orderItemId: true,
+        quantity: true,
+        goods: true,
+        money: true,
+        amount: true,
+        deliveryShare: true,
+        shippingDeduction: true,
+      },
+    });
+    for (const line of lines) {
+      const orderId = statementOf.get(line.returnId)!;
+      const order = returnUnits.get(orderId) ?? { items: new Map(), refundedCents: 0 };
+      const item = order.items.get(line.orderItemId) ?? {
+        orderItemId: line.orderItemId,
+        quantity: rows
+          .find((row) => row.id === orderId)!
+          .items.find((orderItem) => orderItem.id === line.orderItemId)!.quantity,
+        refunded: 0,
+        refused: 0,
+        waiting: 0,
+        withShop: 0,
+        toShip: 0,
+      };
+      if (line.money === 'refunded') {
+        item.refunded += line.quantity;
+        order.refundedCents +=
+          centsOf(line.amount) + centsOf(line.deliveryShare) - centsOf(line.shippingDeduction);
+      } else if (line.money === 'refused') item.refused += line.quantity;
+      else item.waiting += line.quantity;
+      if (line.goods === 'to_stock' || line.goods === 'written_off' || line.goods === 'lost') {
+        item.withShop += line.quantity;
+      }
+      item.toShip = item.quantity - item.withShop;
+      order.items.set(line.orderItemId, item);
+      returnUnits.set(orderId, order);
+    }
+  }
+
+  const { withdrawals, withdrawable } =
+    view === 'buyer'
+      ? await buyerReturnsOf(db, rows, withdrawalEnds)
+      : { withdrawals: new Map(), withdrawable: new Map() };
+
+  return {
+    expired,
+    names,
+    rules,
+    withdrawalEnds,
+    withdrawalDeadlines,
+    returns,
+    returnUnits,
+    withdrawals,
+    withdrawable,
+  };
+}
+
+// the statements of the orders as their buyer sees them, and the units each order still lets them
+// state: what an item bought less what the statements that were not refused hold, for the items
+// that have the right of withdrawal, while the order can be withdrawn from
+export async function buyerReturnsOf(
+  db: Prisma.TransactionClient,
+  rows: {
+    id: number;
+    status: string;
+    deliveredAt: Date | null;
+    returnStatus: ReturnStatus;
+    items: { id: number; quantity: number; withdrawal: WithdrawalRuleName }[];
+  }[],
+  withdrawalEnds: Map<number, Date>,
+): Promise<{
+  withdrawals: Map<number, BuyerReturnDto[]>;
+  withdrawable: Map<number, WithdrawableDto[]>;
+}> {
+  const withdrawals = new Map<number, BuyerReturnDto[]>();
+  const withdrawable = new Map<number, WithdrawableDto[]>();
+
+  // the statements, then their rows: a query reads at most two relations side by side
+  const withStatements = rows.filter((row) => row.returnStatus !== 'none').map((row) => row.id);
+  if (withStatements.length) {
+    const statements = await db.orderReturn.findMany({
+      where: { orderId: { in: withStatements } },
+      orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        orderId: true,
+        number: true,
+        statedAt: true,
+        source: true,
+        basis: true,
+        reason: true,
+        closedAt: true,
+        proofProvidedAt: true,
+        proofConfirmedAt: true,
+        proofCarrier: true,
+        proofTrackingNumber: true,
+        proofTrackingUrl: true,
+        shippingReimbursed: true,
+        shippingReimbursedAt: true,
+        shippingReimbursedMethod: true,
+      },
+    });
+    const lines = await db.orderReturnItem.findMany({
+      where: { returnId: { in: statements.map((statement) => statement.id) } },
+      orderBy: { id: 'asc' },
+      select: {
+        returnId: true,
+        orderItemId: true,
+        quantity: true,
+        amount: true,
+        deliveryShare: true,
+        shippingDeduction: true,
+        money: true,
+        refundedAt: true,
+        goods: true,
+        notAcceptedReason: true,
+      },
+    });
+
+    for (const statement of statements) {
+      const step: BuyerReturnDto['step'] = statement.closedAt
+        ? 'closed'
+        : statement.proofConfirmedAt
+          ? 'proof_confirmed'
+          : statement.proofProvidedAt
+            ? 'proof_provided'
+            : 'received';
+
+      const dto: BuyerReturnDto = {
+        id: statement.id,
+        code: returnCodeOf(statement.basis, statement.orderId, statement.number),
+        statedAt: statement.statedAt.toISOString(),
+        source: statement.source,
+        basis: statement.basis,
+        reason: statement.reason,
+        step,
+        closedAt: statement.closedAt?.toISOString() ?? null,
+        proof:
+          statement.proofProvidedAt && statement.proofCarrier && statement.proofTrackingNumber
+            ? {
+                carrier: statement.proofCarrier,
+                trackingNumber: statement.proofTrackingNumber,
+                trackingUrl: statement.proofTrackingUrl,
+                providedAt: statement.proofProvidedAt.toISOString(),
+                confirmed: statement.proofConfirmedAt !== null,
+              }
+            : null,
+        shippingReimbursement:
+          statement.shippingReimbursed !== null &&
+          statement.shippingReimbursedAt !== null &&
+          statement.shippingReimbursedMethod !== null
+            ? {
+                amount: decimalToNumber(statement.shippingReimbursed),
+                at: statement.shippingReimbursedAt.toISOString(),
+                method: statement.shippingReimbursedMethod,
+              }
+            : null,
+        items: lines
+          .filter((line) => line.returnId === statement.id)
+          .map((line) => ({
+            orderItemId: line.orderItemId,
+            quantity: line.quantity,
+            amount: decimalToNumber(line.amount),
+            deliveryAmount: decimalToNumber(line.deliveryShare),
+            shippingDeduction: decimalToNumber(line.shippingDeduction),
+            money: line.money,
+            refundedAt: line.refundedAt?.toISOString() ?? null,
+            refusal:
+              line.money !== 'refused'
+                ? null
+                : line.goods === 'not_arrived'
+                  ? 'not_arrived'
+                  : line.notAcceptedReason,
+          })),
+      };
+      withdrawals.set(statement.orderId, [...(withdrawals.get(statement.orderId) ?? []), dto]);
+    }
+  }
+
+  // the units still free: the order can be withdrawn from (a paid or shipped one, a delivered one
+  // until the end of its period), and the item has the right; the units of an open statement of the
+  // form without the code are free to the buyer, their statement takes them over
+  const open = rows.filter((row) =>
+    withdrawalOpenOf(row.status, withdrawalEnds.get(row.id), Date.now()),
+  );
+  const items = open.flatMap((row) =>
+    row.items.filter((item) => withdrawalRightOf(item.withdrawal) !== 'none'),
+  );
+  if (items.length) {
+    const taken = await unitsHeldOf(
+      db,
+      items.map((item) => item.id),
+      true,
+    );
+
+    for (const row of open) {
+      const free = row.items
+        .filter((item) => withdrawalRightOf(item.withdrawal) !== 'none')
+        .map((item) => ({
+          orderItemId: item.id,
+          quantity: item.quantity - (taken.get(item.id) ?? 0),
+        }))
+        .filter((one) => one.quantity > 0);
+      withdrawable.set(row.id, free);
+    }
+  }
+
+  return { withdrawals, withdrawable };
 }
 
 // the orders the buyer has not paid yet: the price of their variants is still the one of now
@@ -312,6 +618,31 @@ function mapItem(
     quantity: it.quantity,
     unitPrice,
     totalPrice: decimalToNumber(it.totalPrice),
+    // a confirmed item keeps the rule of its confirmation, a cart shows the rule of now
+    withdrawal: withdrawalOf(
+      row.confirmed ? it.withdrawal : (context.rules.get(it.productId) ?? it.withdrawal),
+    ),
+  };
+}
+
+// cents of a sum without float math
+const centsOf = (value: Prisma.Decimal) => Math.round(decimalToNumber(value) * 100);
+
+// what the statements of an order did to its items, the items in the order of the order, and the
+// money that went back with what the order is worth after it; none for an order without statements
+function returnUnitsOf(row: OrderResponseRow, context: OrderContext) {
+  const units = context.returnUnits.get(row.id);
+  if (!units) return {};
+
+  const totalCents = centsOf(row.total);
+  return {
+    returnUnits: {
+      items: row.items
+        .map((item) => units.items.get(item.id))
+        .filter((item): item is ReturnItemUnitsDto => item !== undefined),
+      refundedTotal: units.refundedCents / 100,
+      netTotal: (totalCents - units.refundedCents) / 100,
+    },
   };
 }
 
@@ -327,6 +658,11 @@ export function mapOrderRowToResponse(
   const unpaid = UNPAID_STATUSES.has(row.status);
   const itemsTotal = itemsTotalOf(row);
   const delivery = mapDelivery(row, itemsTotal);
+  // the period starts with the delivery: an order that is not delivered has no end
+  // the end the server keeps, with the grace of the shop, opens the button; the buyer is told the end
+  // of the contract
+  const withdrawalEndsAt = row.deliveredAt ? context.withdrawalEnds.get(row.id) : undefined;
+  const withdrawalDeadline = row.deliveredAt ? context.withdrawalDeadlines.get(row.id) : undefined;
 
   return {
     id: row.id as any,
@@ -347,8 +683,22 @@ export function mapOrderRowToResponse(
     ...(row.reservationExpiresAt ? { reservationExpiresAt: row.reservationExpiresAt } : {}),
     ...(row.paidAt ? { paidAt: row.paidAt } : {}),
     ...(row.cancelledAt ? { cancelledAt: row.cancelledAt } : {}),
+    ...(row.deliveredAt ? { deliveredAt: row.deliveredAt } : {}),
+    ...(withdrawalDeadline ? { withdrawalEndsAt: withdrawalDeadline } : {}),
+    withdrawalOpen: withdrawalOpenOf(row.status, withdrawalEndsAt, Date.now()),
+    returnStatus: row.returnStatus,
     // an order that is not confirmed: what each method of the shop would cost now
     ...(row.confirmed ? {} : { deliveryQuotes: deliveryQuotesOf(itemsTotal) }),
-    ...(view === 'admin' ? { shipments: mapShipments(row), weight: weightOf(row) } : {}),
+    ...(view === 'admin'
+      ? {
+          shipments: mapShipments(row),
+          weight: weightOf(row),
+          returns: context.returns.get(row.id) ?? [],
+          ...returnUnitsOf(row, context),
+        }
+      : {
+          withdrawals: context.withdrawals.get(row.id) ?? [],
+          withdrawable: context.withdrawable.get(row.id) ?? [],
+        }),
   };
 }

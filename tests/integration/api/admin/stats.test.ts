@@ -87,6 +87,7 @@ describe('GET /api/admin/stats', () => {
         },
         revenue: { total: count, inPeriod: count, last7d: count, last30d: count },
         deliveryRevenue: { total: count, inPeriod: count, last7d: count, last30d: count },
+        returned: { total: count, inPeriod: count, last7d: count, last30d: count },
         averageOrderValue: count,
         itemsSold: count,
       },
@@ -188,8 +189,12 @@ describe('GET /api/admin/stats', () => {
 
     expect(fromStats.money).toEqual(fromReport.summary);
     expect(fromStats.money.income.items).toBeGreaterThanOrEqual(20);
-    // the money of the orders of the statistics is the income of the period
-    expect(fromStats.orders.revenue.inPeriod).toBe(fromStats.money.income.total);
+    // the money of the orders of the statistics less what went back with the returns is the income
+    // of the period
+    expect(fromStats.orders.revenue.inPeriod - fromStats.orders.returned.inPeriod).toBeCloseTo(
+      fromStats.money.income.total,
+      2,
+    );
     expect(fromStats.orders.deliveryRevenue.inPeriod).toBe(fromStats.money.income.delivery);
   });
 

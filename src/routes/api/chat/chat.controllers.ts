@@ -2,6 +2,8 @@ import type { ControllerRouter } from 'types/controller.js';
 import { chatWsBroadcaster } from './ws/chatWs.broadcaster.js';
 import { chatWsConnectionManager } from './ws/chatWs.connectionManager.js';
 import type {
+    CallAdminChatDto,
+    CallAdminChatResponseDto,
     AdminChatThreadResponseDto,
     AdminChatThreadsQueryDto,
     AdminChatThreadsResponseDto,
@@ -132,7 +134,35 @@ const closeAdminChatThread: ControllerRouter<
     return reply.code(200).send(result);
 };
 
+// the customer gives the chat with the bot to the admins by the button
+const callAdminChat: ControllerRouter<
+    ChatThreadIdParamsDto,
+    {},
+    {},
+    CallAdminChatResponseDto
+> = async (req, reply) => {
+    const { id: actorId, role: actorRole } = req.user as User;
+    const { threadId } = req.params;
+
+    const args = pickDefined<CallAdminChatDto>({ actorId, actorRole, threadId }, {});
+
+    const result = await chatsServices.callAdminChatService(args);
+
+    // the chat sees what the bot wrote and that the button is gone
+    chatWsBroadcaster.broadcastToThread(threadId, {
+        type: 'message:new',
+        payload: result.message,
+    });
+    chatWsBroadcaster.broadcastToThread(threadId, {
+        type: 'thread:admin-call',
+        payload: { threadId, available: false },
+    });
+
+    return reply.code(200).send(result);
+};
+
 export const chatController = {
+    callAdminChat,
     getCurrentChat,
     getChatThreadMessages,
     getAdminChatThreads,

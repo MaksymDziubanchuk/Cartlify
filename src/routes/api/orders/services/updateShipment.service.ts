@@ -177,7 +177,7 @@ export async function updateShipment(
       const row = await readOrderResponse(db, orderId);
       if (!row) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_SHIPMENT_UPDATE' });
 
-      return mapOrderRowToResponse(row, await orderContextOf(db, [row]), 'admin');
+      return mapOrderRowToResponse(row, await orderContextOf(db, [row], 'admin'), 'admin');
     });
 
     // the change is committed; the mail never undoes it, a failure is only logged

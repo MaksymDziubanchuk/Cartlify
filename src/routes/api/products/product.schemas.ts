@@ -100,6 +100,7 @@ const productResponseExample = {
     euResponsible: null,
     warnings: 'Do not listen at a high volume for a long time.',
     documents: [],
+    withdrawal: { rule: 'sealed_media', right: 'conditional' },
   },
   variant: variantFullExample,
   variants: [variantShortExample],
@@ -110,6 +111,13 @@ const productAdminResponseExample = {
   product: {
     ...productResponseExample.product,
     ...productAdminFieldsExample,
+    withdrawal: {
+      rule: 'sealed_media',
+      right: 'conditional',
+      own: null,
+      source: 'category',
+      categoryId: 3,
+    },
     gallery: [{ id: 5, position: 0, ...productImageUrlsExample, variantIds: [31] }],
   },
   variant: {
@@ -643,7 +651,9 @@ const postProductRouterSchema = {
     '`manufacturer.address`, `manufacturer.email`, `manufacturer.country`), which is added to the ' +
     'directory; a person responsible in the EU for a manufacturer outside it the same way ' +
     '(`euResponsibleId` or `euResponsible.*`); the warnings (`warnings`). The card gives them as ' +
-    '`manufacturer`, `euResponsible` and `warnings`. The shipping needs what a variant weighs and ' +
+    '`manufacturer`, `euResponsible` and `warnings`. The product may have a rule of withdrawal of ' +
+    'its own (`withdrawal`), otherwise it follows its category; the card gives the rule it has as ' +
+    '`withdrawal`. The shipping needs what a variant weighs and ' +
     'measures packed: `weightGrams` and the three sizes `lengthMm`, `widthMm`, `heightMm`, whole ' +
     'grams and millimetres; a variant has them unless `withoutShippingData: true` says they come ' +
     'later (the flag is not kept). A variant also has the values of its characteristics of the ' +
@@ -668,6 +678,7 @@ const postProductRouterSchema = {
         '(PARTY_ID_INVALID, `details.field`), the values of a new party missing ' +
         '(PARTY_FIELDS_REQUIRED, `details.fields`) or wrong (PARTY_FIELDS_INVALID, ' +
         '`details.fields`), warnings over 2000 signs (PRODUCT_WARNINGS_TOO_LONG, `details.max`), a ' +
+        'rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, `details.allowed`), a ' +
         'manufacturer outside the EU without a person responsible in the EU ' +
         '(PRODUCT_EU_RESPONSIBLE_REQUIRED), a person that is not in the EU ' +
         '(EU_RESPONSIBLE_NOT_IN_EU), ' +
@@ -811,7 +822,8 @@ const updateProductByIdRouterSchema = {
   summary: 'Update product by id',
   description:
     'Updates the fields of a product by product id: the name, the description, the category, ' +
-    'the manufacturer and the person responsible in the EU, the warnings, the documents and the ' +
+    'the manufacturer and the person responsible in the EU, the warnings, the rule of withdrawal ' +
+    '(null gives it up: the product follows its category), the documents and the ' +
     'override of the popularity. This operation is restricted to privileged users. The price, ' +
     'the sale, the article number, the weight and the sizes belong to the variants ' +
     '(PATCH /api/products/{productId}/variants/{variantId}), the pictures to the gallery ' +
@@ -854,7 +866,8 @@ const updateProductByIdRouterSchema = {
         '(VALIDATION_ERROR for a JSON body, PRODUCT_NAME_INVALID, CATEGORY_ID_INVALID, ' +
         'POPULARITY_OVERRIDE_INVALID, an id of a party that is not a whole number ' +
         '(PARTY_ID_INVALID, `details.field`), warnings over 2000 signs (PRODUCT_WARNINGS_TOO_LONG, ' +
-        '`details.max`), a manufacturer outside the EU without a person responsible in the EU ' +
+        '`details.max`), a rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, ' +
+        '`details.allowed`), a manufacturer outside the EU without a person responsible in the EU ' +
         '(PRODUCT_EU_RESPONSIBLE_REQUIRED), a person that is not in the EU ' +
         '(EU_RESPONSIBLE_NOT_IN_EU), ' +
         'a document id that is no whole number (DOCUMENT_ID_INVALID), an id twice ' +
@@ -930,7 +943,8 @@ const patchProductsBatchRouterSchema = {
         '`details.productIds`), or a product with nothing to change (NO_FIELDS_TO_UPDATE), a ' +
         'wrong field (PRODUCT_NAME_INVALID, CATEGORY_ID_INVALID, ' +
         'POPULARITY_OVERRIDE_INVALID, POPULARITY_OVERRIDE_UNTIL_INVALID, ' +
-        'PARTY_ID_INVALID, PRODUCT_WARNINGS_TOO_LONG, PRODUCT_EU_RESPONSIBLE_REQUIRED, ' +
+        'PARTY_ID_INVALID, PRODUCT_WARNINGS_TOO_LONG, WITHDRAWAL_RULE_INVALID, ' +
+        'PRODUCT_EU_RESPONSIBLE_REQUIRED, ' +
         'EU_RESPONSIBLE_NOT_IN_EU, DOCUMENT_ID_INVALID, DOCUMENT_IDS_REPEATED, ' +
         'PRODUCT_DOCUMENTS_TOO_MANY), a popularity override without its end ' +
         'or an end without an override after the change (POPULARITY_OVERRIDE_UNTIL_REQUIRED, ' +

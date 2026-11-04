@@ -27,7 +27,7 @@ import {
 // checks the actor first: confirm_order (the owner, reserves the stock), cancel_order_payment (the
 // owner, gives the reserve back), unconfirm_order and expire_order_reservation (the system as an
 // admin, give the reserve back), pay_order (the system as an admin, sells the reserved stock),
-// cancel_paid_order (an admin, puts the stock back), refresh_order_prices (the owner, takes the
+// refresh_order_prices (the owner, takes the
 // prices of the catalog for an unconfirmed order)
 
 let owner: TestUser;
@@ -74,15 +74,6 @@ async function unconfirmedOrderOf(db: DbSession, items: [number, number][]) {
   await call(db, asSystem(), 'select 1 as done from cartlify.unconfirm_order($1::int)', orderId);
   return orderId;
 }
-
-const setStatus = async (db: DbSession, orderId: number, status: string) => {
-  await db.as(asAdmin());
-  await db.rows(
-    `update cartlify.orders set status = $2::cartlify."OrderStatus" where id = $1 returning id`,
-    orderId,
-    status,
-  );
-};
 
 describe('an update of a product or a variant while a payment holds its row', () => {
   // the update waits for the row and then changes the version the payment left. A policy that
@@ -914,97 +905,6 @@ describe('cartlify.pay_order', () => {
     expect(outcome).toMatchObject({
       ok: false,
       error: expect.stringContaining('ORDER_PAY_FORBIDDEN'),
-    });
-  });
-});
-
-describe('cartlify.cancel_paid_order', () => {
-  it.each(['paid', 'shipped'] as const)(
-    'cancels a %s order and puts its stock back',
-    async (stage) => {
-      const { outcome, state, dates, stock } = await inRolledBackTx(async (db) => {
-        const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 2]]);
-        if (stage === 'shipped') await setStatus(db, orderId, 'shipped');
-        const outcome = await call(
-          db,
-          asAdmin(),
-          'select 1 as done from cartlify.cancel_paid_order($1::int)',
-          orderId,
-        );
-        return {
-          outcome,
-          state: await orderStateOf(db, admin.id, orderId),
-          dates: await orderDatesOf(db, admin.id, orderId),
-          stock: await stockOf(db, admin.id, product.variantId),
-        };
-      });
-
-      expect(outcome.ok).toBe(true);
-      expect(state).toMatchObject({ status: 'cancelled', paymentId: expect.any(String) });
-      // the time of the cancel next to the time of the payment, which stays
-      expect(dates).toEqual({ paidAt: dates.now, cancelledAt: dates.now, now: dates.now });
-      expect(stock).toEqual({ stock: 10, reserved: 0 });
-    },
-  );
-
-  it.each([
-    ['a delivered order', 'delivered', 'ORDER_ALREADY_DELIVERED'],
-    ['a cancelled order', 'cancelled', 'ORDER_ALREADY_CANCELLED'],
-    ['an order that waits for its payment', 'waiting', 'ORDER_NOT_PAID'],
-  ])('refuses %s', async (_case, stage, error) => {
-    const { outcome, stock, dates } = await inRolledBackTx(async (db) => {
-      let orderId: number;
-      if (stage === 'waiting') {
-        orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 2]]);
-      } else {
-        orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 2]]);
-        if (stage === 'delivered') {
-          await setStatus(db, orderId, 'shipped');
-          await setStatus(db, orderId, 'delivered');
-        }
-        if (stage === 'cancelled')
-          await call(
-            db,
-            asAdmin(),
-            'select 1 as done from cartlify.cancel_paid_order($1::int)',
-            orderId,
-          );
-      }
-      const before = await stockOf(db, admin.id, product.variantId);
-      const datesBefore = await orderDatesOf(db, admin.id, orderId);
-      const outcome = await call(
-        db,
-        asAdmin(),
-        'select 1 as done from cartlify.cancel_paid_order($1::int)',
-        orderId,
-      );
-      const after = await stockOf(db, admin.id, product.variantId);
-      return {
-        outcome,
-        stock: { before, after },
-        dates: { before: datesBefore, after: await orderDatesOf(db, admin.id, orderId) },
-      };
-    });
-
-    expect(outcome).toMatchObject({ ok: false, error: expect.stringContaining(error) });
-    expect(stock.after).toEqual(stock.before);
-    expect(dates.after).toEqual(dates.before);
-  });
-
-  it('refuses a user, also the owner', async () => {
-    const outcome = await inRolledBackTx(async (db) => {
-      const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
-      return call(
-        db,
-        asOwner(),
-        'select 1 as done from cartlify.cancel_paid_order($1::int)',
-        orderId,
-      );
-    });
-
-    expect(outcome).toMatchObject({
-      ok: false,
-      error: expect.stringContaining('ORDER_CANCEL_FORBIDDEN'),
     });
   });
 });

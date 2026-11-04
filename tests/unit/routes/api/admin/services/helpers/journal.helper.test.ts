@@ -108,11 +108,12 @@ describe('journalArgsOf', () => {
     });
 
     it('refuse an event the journal has not, and name it with the ones it has', () => {
-      expect(thrownBy(() => argsOf({ events: 'order.ship,order.cancel' }))).toMatchObject({
+      // order.deliver is an event of the app, but not one of this journal
+      expect(thrownBy(() => argsOf({ events: 'order.ship,order.deliver' }))).toMatchObject({
         statusCode: 400,
         errorCode: 'LOG_EVENTS_INVALID',
         details: {
-          events: ['order.cancel'],
+          events: ['order.deliver'],
           allowed: ['product.update', 'order.ship', 'legacy.unknown'],
         },
       });

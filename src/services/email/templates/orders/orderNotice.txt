@@ -6,5 +6,4 @@
 See your order:
 {{orderUrl}}
 
-This mailbox is not monitored.
-Questions about your order? Ask us in the chat on our site.
+Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.

@@ -1,3 +1,4 @@
+import { callAdminChatService } from './services/callAdminChat.service.js';
 import { closeAdminChatThreadService } from './services/closeAdminChatThread.service.js';
 import { getAdminChatThreadService } from './services/getAdminChatThread.service.js';
 import { getAdminChatThreadsService } from './services/getAdminChatThreads.service.js';
@@ -12,6 +13,7 @@ export const chatsServices = {
     getAdminChatThreadsService,
     getAdminChatThreadService,
     closeAdminChatThreadService,
+    callAdminChatService,
     markChatThreadReadService,
     sendChatMessageService,
 };

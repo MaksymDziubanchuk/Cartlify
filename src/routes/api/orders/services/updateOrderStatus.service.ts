@@ -1,5 +1,5 @@
 import { Prisma } from '@prisma/client';
-import { tx, isRetryableTxError } from '@db/client.js';
+import { tx, isRetryableTxError, getPgMessage } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import {
@@ -72,13 +72,22 @@ const STEP_EVENTS: Record<'manual' | 'pickup', StepEvents> = {
 // the commit unless the account is deleted. A second request of the same step (a double click)
 // finds the order moved on and is 409 with no second mail
 export async function updateOrderStatus(
-  { actorId, actorRole, orderId, status, shipment, keepShippingCost, bulk }: UpdateOrderStatusDto,
+  {
+    actorId,
+    actorRole,
+    orderId,
+    status,
+    shipment,
+    keepShippingCost,
+    deliveredAt,
+    bulk,
+  }: UpdateOrderStatusDto,
   log: OrderStatusMailLogger,
 ): Promise<OrderResponseDto> {
   // enforce admin/root only
   if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
 
-  // a cancel returns the money and the stock, it goes through POST /:orderId/cancel
+  // a cancel is a statement of return (POST /api/returns), no step of the status
   if (!isStepStatus(status)) throw new BadRequestError('STATUS_INVALID');
 
   // what a request may carry: a send with the step to shipped, the choice with the step back to paid
@@ -86,6 +95,10 @@ export async function updateOrderStatus(
     throw new BadRequestError('SHIPMENT_NOT_ALLOWED');
   if (keepShippingCost !== undefined && status !== 'paid') {
     throw new BadRequestError('KEEP_SHIPPING_COST_NOT_ALLOWED');
+  }
+  // the moment the carrier delivered comes with the step to delivered only; the database checks it
+  if (deliveredAt !== undefined && status !== 'delivered') {
+    throw new BadRequestError('DELIVERED_AT_NOT_ALLOWED');
   }
   const send = shipment !== undefined ? buildShipmentData(shipment) : null;
 
@@ -152,7 +165,10 @@ export async function updateOrderStatus(
         // status); rls holds the same rule
         const moved = await db.order.updateMany({
           where: { id: orderIdRaw, status: current.status },
-          data: { status },
+          data: {
+            status,
+            ...(deliveredAt !== undefined ? { deliveredAt: new Date(deliveredAt) } : {}),
+          },
         });
         if (moved.count !== 1) {
           throw new ConflictError('ORDER_STATUS_CHANGED', { orderId: orderIdRaw });
@@ -160,6 +176,10 @@ export async function updateOrderStatus(
 
         const changes: { field: string; old: unknown; new: unknown }[] = [
           { field: 'status', old: current.status, new: status },
+          // the moment the admin gave for the delivery, the one of the carrier
+          ...(deliveredAt !== undefined
+            ? [{ field: 'deliveredAt', old: null, new: new Date(deliveredAt).toISOString() }]
+            : []),
         ];
 
         // shipped by hand: the send is recorded, with nothing known of it when nothing is said
@@ -232,6 +252,16 @@ export async function updateOrderStatus(
   } catch (err) {
     if (isAppError(err)) throw err;
 
+    // a parcel the buyer refused is on its way back (the guard of orders, db/05)
+    if (getPgMessage(err) === 'ORDER_HAS_OPEN_REFUSAL') {
+      throw new ConflictError('ORDER_HAS_OPEN_REFUSAL', { orderId: orderIdRaw });
+    }
+
+    // the moment of the delivery the admin gave is before the send or of the future (db/05)
+    if (getPgMessage(err) === 'ORDER_DELIVERED_AT_INVALID') {
+      throw new BadRequestError('ORDER_DELIVERED_AT_INVALID', { orderId: orderIdRaw });
+    }
+
     if (isRetryableTxError(err)) {
       throw new ResourceBusyError();
     }
@@ -252,6 +282,6 @@ async function readOrder(
     const order = await readOrderResponse(db, orderId);
     if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_STATUS_UPDATE' });
 
-    return mapOrderRowToResponse(order, await orderContextOf(db, [order]), 'admin');
+    return mapOrderRowToResponse(order, await orderContextOf(db, [order], 'admin'), 'admin');
   });
 }

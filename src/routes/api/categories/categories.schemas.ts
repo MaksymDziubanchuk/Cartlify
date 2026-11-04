@@ -11,6 +11,7 @@ const categoryExample = {
   description: 'Smartphones and mobile devices.',
   parentId: 1,
   imageUrls: null,
+  withdrawal: null,
   createdAt: '2026-01-01T10:00:00.000Z',
   updatedAt: '2026-01-01T10:00:00.000Z',
 };
@@ -149,7 +150,8 @@ const postCategorySchema = {
   description:
     'Creates a new product category. This operation is restricted to privileged users. ' +
     'The name and the slug are required; the category takes no children, they come to it one ' +
-    'PATCH each.',
+    'PATCH each. It may carry a rule of withdrawal (`withdrawal`) its products follow while they ' +
+    'have none of their own.',
 
   body: {
     $ref: 'categoriesCreateBodySchema#',
@@ -167,7 +169,8 @@ const postCategorySchema = {
       description:
         'Invalid category creation request: no name or slug (VALIDATION_ERROR), an empty name ' +
         '(CATEGORY_NAME_INVALID), a slug of no latin letter or digit (CATEGORY_SLUG_INVALID), a ' +
-        'parentId that is not a whole number from 1 to 2147483647 (VALIDATION_ERROR).',
+        'parentId that is not a whole number from 1 to 2147483647 (VALIDATION_ERROR), a rule of ' +
+        'withdrawal there is not (WITHDRAWAL_RULE_INVALID, `details.allowed`).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -203,7 +206,9 @@ const patchCategorySchema = {
     'Updates category data by category id. This operation is restricted to privileged users. ' +
     'A new parentId moves the category with its whole branch, null moves it to the top; the tree ' +
     'goes from the top down, so a category never goes inside its own branch (409 ' +
-    'CATEGORY_PARENT_CYCLE), and the children of a new parent category come to it one PATCH each.',
+    'CATEGORY_PARENT_CYCLE), and the children of a new parent category come to it one PATCH each. ' +
+    'A new `withdrawal` (null gives it up) changes the rule of the products that follow the ' +
+    'category, and the answer says how many took another rule (`affectedProducts`).',
 
   params: {
     $ref: 'categoriesUpdateParamsSchema#',
@@ -225,6 +230,8 @@ const patchCategorySchema = {
           name: 'Mobile phones',
           slug: 'mobile-phones',
           description: 'Updated mobile phones category.',
+          withdrawal: 'sealed_media',
+          affectedProducts: 12,
           updatedAt: '2026-01-02T10:00:00.000Z',
         },
       ],
@@ -232,7 +239,9 @@ const patchCategorySchema = {
 
     400: {
       description:
-        'Invalid category update request: the category made a parent of itself (CATEGORY_PARENT_ID_INVALID).',
+        'Invalid category update request: the category made a parent of itself ' +
+        '(CATEGORY_PARENT_ID_INVALID), a rule of withdrawal there is not (WITHDRAWAL_RULE_INVALID, ' +
+        '`details.allowed`).',
       $ref: 'errorResponseSchema#',
     },
     401: {

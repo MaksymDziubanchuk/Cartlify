@@ -45,6 +45,7 @@ const viewRow = () => ({
     },
     revenue: { total: 120.5, inPeriod: 60, last7d: 10, last30d: 60 },
     deliveryRevenue: { total: 10.5, inPeriod: 5, last7d: 1, last30d: 5 },
+    returned: { total: 12, inPeriod: 6, last7d: 0, last30d: 6 },
     averageOrderValue: 30.13,
     itemsSold: 7,
   },
@@ -71,11 +72,29 @@ const viewRow = () => ({
 const stats = () => adminServices.showAllStats({ ...PERIOD, actorId: 5, actorRole: 'ADMIN' });
 
 // the view answers its own query; the money of the period is counted by the queries of the report
-// of the accounting, which find nothing here
-const isViewQuery = (first: unknown) =>
-  Array.isArray(first) && (first as string[]).join('?').includes('cartlify.admin_stats_view');
+// of the accounting: the one that adds up the variants gives its one row of sums, with nothing in
+// it here, and the delivery finds nothing
+const textOf = (first: unknown) => (Array.isArray(first) ? (first as string[]).join('?') : '');
+const isViewQuery = (first: unknown) => textOf(first).includes('cartlify.admin_stats_view');
+const isTotalsQuery = (first: unknown) => textOf(first).includes('report_rows');
+const NO_TOTALS = Object.fromEntries(
+  [
+    'sold_units',
+    'sold_revenue',
+    'sold_cost',
+    'returned_units',
+    'returned_revenue',
+    'returned_cost',
+    'written_units',
+    'written_value',
+    'bought_units',
+    'bought_value',
+  ].map((column) => [column, 0]),
+);
 const answerView = (rows: unknown[]) =>
-  queryRaw.mockImplementation(async (first: unknown) => (isViewQuery(first) ? rows : []));
+  queryRaw.mockImplementation(async (first: unknown) =>
+    isViewQuery(first) ? rows : isTotalsQuery(first) ? [NO_TOTALS] : [],
+  );
 
 // the money of a period with nothing in it, counted the way the report counts it
 const NO_MONEY = {

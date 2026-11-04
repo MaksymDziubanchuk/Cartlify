@@ -85,6 +85,7 @@ const ADMIN_KINDS = [
   'shipped_orders_waiting',
   'pickup_not_collected',
   'shipped_without_cost',
+  'shipped_without_tracking',
   'out_of_stock',
   'low_stock',
   'products_without_shipping_data',
@@ -94,6 +95,12 @@ const ADMIN_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'failed_refunds',
+  'returns_manual_check',
+  'returns_proof_waiting',
+  'returns_goods_not_sent',
+  'returns_money_late',
+  'returns_goods_late',
   'worker_stalled',
 ];
 
@@ -210,12 +217,17 @@ const shippedOrder = async () =>
   placeOrder(app, csrf, await newUser(), await createProduct({ price: 10, stock: 5 }), 'shipped');
 
 // a line of the admin log, the way the late payment refund writes one (field refund) or another
-async function logLine(actor: TestUser, orderId: number, field: string): Promise<number> {
+async function logLine(
+  actor: TestUser,
+  orderId: number,
+  field: string,
+  event = 'order.refund_late',
+): Promise<number> {
   return testTx(async (tx) => {
     await setUserContext(tx, { userId: actor.id, role: actor.role });
     await tx.$executeRaw`select cartlify.log_admin_action(
       ${actor.id}::int, ${actor.role}::cartlify."Role", 'order'::cartlify."AdminAuditEntityType",
-      ${orderId}::int, 'OTHER'::cartlify."AdminAuditAction", 'order.refund_late',
+      ${orderId}::int, 'OTHER'::cartlify."AdminAuditAction", ${event},
       ${JSON.stringify([{ field, new: { provider: 'stripe', paymentId: `pi_${orderId}` } }])}::jsonb)`;
     const [line] = await tx.$queryRaw<{ id: number }[]>`
       select id from cartlify.admin_audit_log
@@ -795,12 +807,16 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     const orderId = await paidOrder();
     const refund = await logLine(someone, orderId, 'refund');
     const other = await logLine(someone, orderId, 'note');
+    // the money of a statement of return goes back with a field of the same name: it is no late
+    // payment
+    const statement = await logLine(someone, orderId, 'refund', 'return.refund');
 
     expect(idsIn(await listOf(someone, 'refunded_payments', { entityId: orderId }))).toEqual([
       refund,
     ]);
     await expectCounted(someone, 'refunded_payments', refund);
     await expectNotCounted(someone, 'refunded_payments', other);
+    await expectNotCounted(someone, 'refunded_payments', statement);
 
     runClock(8 * DAY);
 

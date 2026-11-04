@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AuthProvider, Role } from '@prisma/client';
+import type { AuthProvider, Role, WithdrawalRule } from '@prisma/client';
 
 import { setUserContext } from '@db/dbContext.service.js';
 import { createPlaceholder } from '@helpers/placeholder.js';
@@ -500,7 +500,9 @@ export async function writeOffStock(
 }
 
 // a category of its own, under a parent when one is named
-export const createCategory = (opts: { parentId?: number; name?: string } = {}) => {
+export const createCategory = (
+  opts: { parentId?: number; name?: string; withdrawal?: WithdrawalRule } = {},
+) => {
   const tag = uniqueTag();
 
   return asAdmin((tx) =>
@@ -509,6 +511,7 @@ export const createCategory = (opts: { parentId?: number; name?: string } = {}) 
         name: opts.name ?? `Test category ${tag}`,
         slug: `test-category-${tag}`,
         ...(opts.parentId ? { parentId: opts.parentId } : {}),
+        ...(opts.withdrawal ? { withdrawal: opts.withdrawal } : {}),
       },
       select: { id: true, name: true },
     }),
@@ -543,6 +546,8 @@ export async function createProduct(
     // the manufacturer the product names; without one it names the one party of the test file
     manufacturerId?: number;
     name?: string;
+    // the rule of withdrawal of its own; without one it follows its category
+    withdrawal?: WithdrawalRule;
   } = {},
 ): Promise<TestProduct> {
   const tag = uniqueTag();
@@ -560,6 +565,7 @@ export async function createProduct(
         name: opts.name ?? `Test product ${tag}`,
         categoryId: category.id,
         manufacturerId,
+        ...(opts.withdrawal ? { withdrawal: opts.withdrawal } : {}),
         images: { create: { url: TEST_IMAGE_URL, position: 0 } },
       },
       select: { id: true, categoryId: true, images: { select: { id: true } } },

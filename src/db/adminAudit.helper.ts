@@ -54,6 +54,7 @@ export function buildProductUpdateAuditChanges(
     manufacturerId?: number;
     euResponsibleId?: number | null;
     warnings?: string | null;
+    withdrawal?: string | null;
     weightGrams?: number | null;
     lengthMm?: number | null;
     widthMm?: number | null;
@@ -72,6 +73,7 @@ export function buildProductUpdateAuditChanges(
       manufacturerId?: number;
       euResponsibleId?: number | null;
       warnings?: string | null;
+      withdrawal?: string | null;
       weightGrams?: number | null;
       lengthMm?: number | null;
       widthMm?: number | null;
@@ -86,6 +88,7 @@ export function buildProductUpdateAuditChanges(
       manufacturerId?: unknown;
       euResponsibleId?: unknown;
       warnings?: unknown;
+      withdrawal?: unknown;
       sku?: unknown;
       price?: unknown;
       categoryId?: unknown;
@@ -143,6 +146,18 @@ export function buildProductUpdateAuditChanges(
       field: 'warnings',
       old: before.warnings ?? null,
       new: args.after.warnings ?? null,
+    });
+  }
+
+  // the rule of withdrawal of its own; null gives it up, which is a change too
+  if (
+    args.input.withdrawal !== undefined &&
+    (before.withdrawal ?? null) !== (args.after.withdrawal ?? null)
+  ) {
+    changes.push({
+      field: 'withdrawal',
+      old: before.withdrawal ?? null,
+      new: args.after.withdrawal ?? null,
     });
   }
 

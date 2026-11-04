@@ -22,7 +22,9 @@ import { updateOrderDelivery } from './services/updateOrderDelivery.service.js';
 
 import { cancelOrderPayment } from './services/cancelOrderPayment.service.js';
 
-import { cancelPaidOrder } from './services/cancelPaidOrder.service.js';
+import { withdrawFromOrder } from './services/withdrawFromOrder.service.js';
+
+import { provideReturnProof } from './services/provideReturnProof.service.js';
 
 export const ordersServices = {
   getCurrent,
@@ -40,5 +42,6 @@ export const ordersServices = {
   updateOrderDelivery,
 
   cancelOrderPayment,
-  cancelPaidOrder,
+  withdrawFromOrder,
+  provideReturnProof,
 };

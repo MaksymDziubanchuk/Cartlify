@@ -43,6 +43,8 @@ export type DbSession = {
   // a statement the database may refuse: it runs in a savepoint, so a refusal leaves the
   // transaction usable for the next statement
   attempt<T = Record<string, unknown>>(query: string, ...values: unknown[]): Promise<Outcome<T>>;
+  // the transaction itself, for a helper of the app that reads with Prisma under the same context
+  tx: Prisma.TransactionClient;
 };
 
 class RolledBack extends Error {}
@@ -51,6 +53,7 @@ let savepoints = 0;
 
 function sessionOf(tx: Prisma.TransactionClient): DbSession {
   return {
+    tx,
     async as(actor) {
       await tx.$executeRawUnsafe(
         'select cartlify.set_current_context($1::cartlify."Role", $2::int, $3::uuid)',

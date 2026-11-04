@@ -166,6 +166,7 @@ function parseOrders(value: unknown): AdminStatsOrdersDto {
     byStatus: parseOrdersByStatus(orders.byStatus),
     revenue: parseOrdersRevenue(orders.revenue),
     deliveryRevenue: parseOrdersRevenue(orders.deliveryRevenue, 'orders.deliveryRevenue'),
+    returned: parseOrdersRevenue(orders.returned, 'orders.returned'),
     averageOrderValue: toNumber(orders.averageOrderValue, 'orders.averageOrderValue'),
     itemsSold: toNumber(orders.itemsSold, 'orders.itemsSold'),
   };
