@@ -12,7 +12,7 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { asAdmin } from '../../../helpers/db.js';
-import { resetDelivery, setDelivery } from '../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import { deliveryBody, quotedDeliveryPrice, shippingData } from '../../../helpers/orders.js';
 import { openPaymentPage } from '../../../helpers/payments.js';
 import {
@@ -36,7 +36,7 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
 });
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 afterAll(async () => {
   try {
@@ -136,7 +136,7 @@ describe('the delivery on the payment page of an order', () => {
   }
 
   it('has a line for the delivery that costs something, and the lines are the total', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { buyer, orderId } = await confirmedOrder();
 
     const sessionId = await openPaymentPage(app, csrf, buyer, orderId);
@@ -149,7 +149,7 @@ describe('the delivery on the payment page of an order', () => {
   });
 
   it('has no line for a delivery that is free', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 20 });
+    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 20 });
     const { buyer, orderId } = await confirmedOrder();
 
     const sessionId = await openPaymentPage(app, csrf, buyer, orderId);
@@ -159,7 +159,7 @@ describe('the delivery on the payment page of an order', () => {
   });
 
   it('is the delivery alone for an order of free items', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 1 });
+    setShopSettings({ deliveryFlatPrice: 1 });
     const buyer = await createUser();
     userIds.push(buyer.id);
     const gift = await createProduct({ price: 0, stock: 5, name: 'Gift' });

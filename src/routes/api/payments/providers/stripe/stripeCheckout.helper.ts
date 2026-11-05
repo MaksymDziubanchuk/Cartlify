@@ -1,4 +1,5 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 import stripe from '@config/stripe.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
@@ -31,16 +32,70 @@ type BuildCheckoutSessionPayloadArgs = {
   // where and to whom the order goes: the payment carries it, it helps Stripe tell a fraud
   shipping?: PaymentPageShipping | null;
   customerEmail: string | null;
+  // the language of the buyer (mailLocaleOf); the page opens in it when Stripe has it
+  locale: string;
 };
+
+// the languages Checkout itself can open in (Stripe.Checkout.SessionCreateParams.Locale, minus
+// "auto" and the open-ended OtherString Stripe leaves room for its own future additions); not
+// every language the shop answers in is one of these (Ukrainian is not, at the time of writing)
+const STRIPE_CHECKOUT_LOCALES: readonly Stripe.Checkout.SessionCreateParams.Locale[] = [
+  'bg',
+  'cs',
+  'da',
+  'de',
+  'el',
+  'en',
+  'en-GB',
+  'es',
+  'es-419',
+  'et',
+  'fi',
+  'fil',
+  'fr',
+  'fr-CA',
+  'hr',
+  'hu',
+  'id',
+  'it',
+  'ja',
+  'ko',
+  'lt',
+  'lv',
+  'ms',
+  'mt',
+  'nb',
+  'nl',
+  'pl',
+  'pt',
+  'pt-BR',
+  'ro',
+  'ru',
+  'sk',
+  'sl',
+  'sv',
+  'th',
+  'tr',
+  'vi',
+  'zh',
+  'zh-HK',
+  'zh-TW',
+];
+
+// Checkout's own locale, when it has the buyer's; "auto" (the browser's own) otherwise, the same
+// as leaving it unset
+const stripeLocaleOf = (locale: string): Stripe.Checkout.SessionCreateParams.Locale =>
+  (STRIPE_CHECKOUT_LOCALES as readonly string[]).includes(locale)
+    ? (locale as Stripe.Checkout.SessionCreateParams.Locale)
+    : 'auto';
 
 // money in cents without float math: 10.15 * 100 is 1014.9999999999999
 const centsOf = (value: number) => Math.round(Math.round(value * 1000) / 10);
 
-// how long after the reservation stripe closes the page itself
-// (STRIPE_PAGE_AFTER_RESERVATION_MINUTES, 30 unless set, the least stripe takes). The timer closes
-// it at the end of the reservation; when it cannot (stripe out of reach), this keeps a late
-// payment within these minutes instead of a day
-const pageExpiresAfterReservationMs = () => env.STRIPE_PAGE_AFTER_RESERVATION_MINUTES * 60_000;
+// how long after the reservation stripe closes the page itself (stripePageMinutes, 30 unless
+// root set one, the least stripe takes). The timer closes it at the end of the reservation; when
+// it cannot (stripe out of reach), this keeps a late payment within these minutes instead of a day
+const pageExpiresAfterReservationMs = () => shopSettings().stripePageMinutes * 60_000;
 
 type ExpireCheckoutSessionArgs = {
   sessionId: string;
@@ -69,6 +124,7 @@ function buildCheckoutSessionPayload({
   deliveryPrice = 0,
   shipping = null,
   customerEmail,
+  locale,
 }: BuildCheckoutSessionPayloadArgs): Stripe.Checkout.SessionCreateParams {
   // a line for each item and one for the delivery when it costs something; the webhook takes the
   // paid amount for the total of the order, so the lines add up to it to the cent, or the page is
@@ -130,7 +186,7 @@ function buildCheckoutSessionPayload({
     line_items: lines,
     // the payment names the shop and the order, the bank statement and the dashboard show it
     payment_intent_data: {
-      description: `${env.SHOP_NAME} order #${orderId}`,
+      description: `${shopSettings().shopName} order #${orderId}`,
       ...(shipping
         ? {
             shipping: {
@@ -150,6 +206,7 @@ function buildCheckoutSessionPayload({
         : {}),
     },
     ...(customerEmail ? { customer_email: customerEmail } : {}),
+    locale: stripeLocaleOf(locale),
     success_url: successUrlText,
     cancel_url: cancelUrlText,
     // from the reservation, not the clock: a repeated request with the same key sends the same values
@@ -170,6 +227,12 @@ const STRIPE_UNAVAILABLE_TYPES = new Set([
 function isStripeUnavailable(err: unknown): boolean {
   const type = (err as { type?: unknown } | null)?.type;
   return typeof type === 'string' && STRIPE_UNAVAILABLE_TYPES.has(type);
+}
+
+// stripe refused a key it already used with other values: the session of the key exists, made
+// from what the request carried the first time
+function isStripeIdempotencyConflict(err: unknown): boolean {
+  return (err as { type?: unknown } | null)?.type === 'StripeIdempotencyError';
 }
 
 // stripe has no such object: an id it never made, or one of another account or mode. For a
@@ -403,6 +466,7 @@ async function readCheckoutSessionStatus(
 
 export {
   isOrderCheckoutSession,
+  isStripeIdempotencyConflict,
   isStripeResourceMissing,
   isStripeUnavailable,
   readCheckoutSessionStatus,

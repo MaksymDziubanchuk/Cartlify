@@ -1,13 +1,14 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 export type ReturnRefundedItem = { name: string; quantity: number };
 
-// how money sent outside the app went, in the words of the mail
-const OUTSIDE_WORDS: Record<string, string> = {
-  bank_transfer: 'a bank transfer',
-  cash: 'cash',
-  other: 'another way',
-};
+// how money sent outside the app went (src/locales, returnWayWords.*); none for other
+const WAY_KEYS = ['bank_transfer', 'cash'];
+
+const wayWordsOf = (method: string, locale: string) =>
+  t(`returnWayWords.${WAY_KEYS.includes(method) ? method : 'other'}`, locale);
 
 export type ReturnRefundedTemplateArgs = {
   orderId: number;
@@ -38,6 +39,7 @@ export type ReturnRefundedTemplateArgs = {
   userName?: string;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
 // the mail itself is returnRefunded.html and returnRefunded.txt next to this file
@@ -48,50 +50,80 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
   if (!args.items?.length) throw new Error('ORDER_ITEMS_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
+  const dateLocale = locale === 'en' ? 'en-GB' : locale;
   const delivery = Number(args.deliveryAmount ?? 0);
   const deduction = Number(args.deductionAmount ?? 0);
+  const orderId = String(args.orderId);
+  const code = args.code?.trim() || '';
+  const amount = money.format(Number(args.amount));
 
+  const way = args.outsideMethod ? wayWordsOf(args.outsideMethod, locale) : '';
   const wayLine = args.outsideMethod
-    ? `We sent it by ${OUTSIDE_WORDS[args.outsideMethod] ?? OUTSIDE_WORDS.other}${
-        args.sentOn
-          ? ` on ${new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeZone: args.timeZone || 'UTC' }).format(args.sentOn)}`
-          : ''
-      }.`
-    : 'It goes back the way you paid. Your bank shows it within a few days.';
+    ? args.sentOn
+      ? t('returnRefunded.sentWithDate', locale, {
+          way,
+          date: new Intl.DateTimeFormat(dateLocale, {
+            dateStyle: 'long',
+            timeZone: args.timeZone || 'UTC',
+          }).format(args.sentOn),
+        })
+      : t('returnRefunded.sentNoDate', locale, { way })
+    : t('returnRefunded.wayBack', locale);
 
   const values = {
     appName,
-    orderId: String(args.orderId),
-    code: args.code?.trim() || '',
+    orderId,
+    code,
     withheldLine:
       Number(args.withheldAmount ?? 0) > 0 && args.withheldItems?.length
-        ? `We kept ${money.format(Number(args.withheldAmount))} of the price for the value the goods lost: ${args.withheldItems.map((name) => name.trim()).join(', ')}.`
+        ? t('returnClosed.withheldLine', locale, {
+            amount: money.format(Number(args.withheldAmount)),
+            names: args.withheldItems.map((name) => name.trim()).join(', '),
+          })
         : '',
     orderUrl,
-    amount: money.format(Number(args.amount)),
+    amount,
     wayLine,
-    deliveryLine: delivery > 0 ? `The delivery is included: ${money.format(delivery)}.` : '',
+    deliveryLine:
+      delivery > 0
+        ? t('returnRefunded.deliveryLine', locale, { amount: money.format(delivery) })
+        : '',
     deductionLine:
       deduction > 0
-        ? `The cost of sending the goods back, ${money.format(deduction)}, is taken off: the contract says you pay it.`
+        ? t('returnRefunded.deductionLine', locale, { amount: money.format(deduction) })
         : '',
     items: args.items.map((item) => ({ name: item.name.trim(), quantity: String(item.quantity) })),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('returnRefunded.subject', locale, { appName, orderId }),
+    preview: t('returnRefunded.preview', locale, { orderId }),
+    leadTxt: t('returnRefunded.leadTxt', locale, { appName, orderId, amount }),
+    heading: t('returnRefunded.heading', locale),
+    body: t('returnRefunded.body', locale, { orderId, amount }),
+    greeting: greetingOf(args.userName, locale),
+    statementLine: code ? t('common.statementLine', locale, { code }) : '',
+    itemHeader: t('common.itemHeader', locale),
+    qtyHeader: t('common.qtyHeader', locale),
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
   return {
-    subject: `${appName} — Money returned for order #${args.orderId}${args.code ? ` (${args.code})` : ''}`,
+    subject: `${values.title}${code ? ` (${code})` : ''}`,
     text: renderTemplate('returns/returnRefunded.txt', values),
     html: renderTemplate('returns/returnRefunded.html', values),
   };

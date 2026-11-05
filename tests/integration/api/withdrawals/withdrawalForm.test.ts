@@ -9,6 +9,7 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin, testTx } from '../../../helpers/db.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -54,12 +55,11 @@ afterAll(async () => {
 });
 
 let clock: { restore: () => void } | null = null;
-const grace = env.WITHDRAWAL_GRACE_DAYS;
 
 afterEach(() => {
   clock?.restore();
   clock = null;
-  env.WITHDRAWAL_GRACE_DAYS = grace;
+  resetShopSettings();
 });
 
 const post = (url: string, payload: Record<string, unknown>) =>
@@ -197,6 +197,30 @@ describe('POST /api/withdrawals/route', () => {
 });
 
 describe('POST /api/withdrawals with the code of the order', () => {
+  // the person of the form is no account (mailLocaleOf(null)): their mails go in the shop's own
+  // language, never in the language of the account the order belongs to. The shop's language is
+  // changed in the memory of this file only (tests/helpers/shopSettings.ts)
+  it("mails the person of the form in the shop's own language, not the account's", async () => {
+    setShopSettings({ shopLocale: 'uk' });
+    const owner = await createUser({ name: 'Ana', locale: 'es' });
+    userIds.push(owner.id);
+    const { orderId } = await order(1, 'paid', owner);
+    const mails = watchMail();
+
+    const res = await form(filled(orderId, { code: withdrawalCodeOf(orderId) }));
+
+    expect(res.statusCode).toBe(201);
+    expect(mails.filter((mail) => mail.to.includes(owner.email))).toHaveLength(0);
+    const own = mails.filter((mail) => mail.to.includes(FORM_EMAIL));
+    expect(own.map((mail) => mail.subject)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`Cartlify — Відмову за замовленням #${orderId} зареєстровано`),
+        expect.stringContaining(`Cartlify — Повернення за замовленням #${orderId} закрито`),
+      ]),
+    );
+    expect(own.every((mail) => mail.text.startsWith('Привіт, Anna Koval!'))).toBe(true);
+  });
+
   it('makes the statement of an account for a paid order that was not sent: the goods come back at once, the order is cancelled and the money goes back', async () => {
     const { product, orderId, paymentId } = await order(2);
     const before = await stockOf(product);
@@ -493,6 +517,28 @@ describe('a statement of the buyer takes over the units of one without the code'
       }),
     );
 
+  // the person of the form is no account: the change goes in the shop's own language
+  it("mails the change in the shop's own language, not the account's", async () => {
+    setShopSettings({ shopLocale: 'uk' });
+    const owner = await createUser({ name: 'Ana', locale: 'es' });
+    userIds.push(owner.id);
+    const { orderId } = await order(3, 'shipped', owner);
+    expect((await form(filled(orderId))).statusCode).toBe(201);
+    const mails = watchMail();
+
+    const res = await form(
+      filled(orderId, { code: withdrawalCodeOf(orderId), email: 'own@example.com' }),
+    );
+
+    expect(res.statusCode).toBe(201);
+    const changed = mails.filter((mail) => mail.to.includes(FORM_EMAIL));
+    expect(changed).toHaveLength(1);
+    expect(changed[0]!.subject).toContain(
+      `Cartlify — Вашу заяву за замовленням #${orderId} змінено`,
+    );
+    expect(changed[0]!.text.startsWith('Привіт, Anna Koval!')).toBe(true);
+  });
+
   it('takes all of them with the code and mails the form the change, naming no goods', async () => {
     const { orderId } = await order(3, 'shipped');
     const [item] = await asAdmin((tx) =>
@@ -730,7 +776,7 @@ describe('POST /api/withdrawals refusals', () => {
     await delivered(shipped.orderId);
     const waiting = await placeOrderOf(app, csrf, buyer, [{ item: await newProduct() }], 'waiting');
     // the period of the delivered order is over, the paid ones have none
-    env.WITHDRAWAL_GRACE_DAYS = -400;
+    setShopSettings({ withdrawalGraceDays: -400 });
 
     const other = await order(1);
     const foreignItem = await asAdmin((tx) =>

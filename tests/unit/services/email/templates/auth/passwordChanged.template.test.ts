@@ -49,4 +49,17 @@ describe('buildPasswordChangedTemplate', () => {
       'LOGIN_URL_REQUIRED',
     );
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const en = buildPasswordChangedTemplate(args);
+    const uk = buildPasswordChangedTemplate({ ...args, locale: 'uk' });
+    const es = buildPasswordChangedTemplate({ ...args, locale: 'es' });
+
+    expect(en.html).toContain('Your password was changed');
+    expect(uk.html).toContain('Ваш пароль змінено');
+    expect(es.html).toContain('Tu contraseña fue cambiada');
+    expect(uk.subject).toBe('Cartlify — Ваш пароль змінено');
+    expect(es.subject).toBe('Cartlify — Tu contraseña fue cambiada');
+  });
 });

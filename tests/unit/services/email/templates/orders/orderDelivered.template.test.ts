@@ -110,7 +110,7 @@ describe('buildOrderDeliveredTemplate', () => {
     const { text, html } = buildOrderDeliveredTemplate(order());
 
     expect(text).toContain('Your Cartlify order #42 is delivered.');
-    expect(html).toContain('Your order <b>#42</b> is delivered.');
+    expect(html).toContain('Your order #42 is delivered.');
   });
 
   it('lists every item with its quantity and line total in both versions', () => {

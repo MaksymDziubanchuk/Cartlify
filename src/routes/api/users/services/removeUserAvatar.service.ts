@@ -1,7 +1,8 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { getPgMessage, prisma } from '@db/client.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { ForbiddenError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import type { RemoveUserAvatarDto, RemoveUserAvatarResponseDto } from 'types/dto/users.dto.js';
@@ -25,7 +26,7 @@ export async function removeUserAvatar({
   log,
 }: RemoveUserAvatarDto): Promise<RemoveUserAvatarResponseDto> {
   const id = Number(userId);
-  const limit = env.AVATAR_REMOVALS_LIMIT;
+  const limit = shopSettings().avatarRemovalsLimit;
 
   let outcome: {
     removed: boolean;
@@ -33,6 +34,7 @@ export async function removeUserAvatar({
     publicId: string | null;
     mailTo: string | null;
     userName: string | null;
+    locale: string | null;
   };
 
   try {
@@ -42,7 +44,7 @@ export async function removeUserAvatar({
       // who gets the mail
       const target = await tx.user.findUnique({
         where: { id },
-        select: { email: true, name: true, deletedAt: true },
+        select: { email: true, name: true, deletedAt: true, locale: true },
       });
       if (!target) throw new NotFoundError('USER_NOT_FOUND');
 
@@ -73,6 +75,7 @@ export async function removeUserAvatar({
         // a deleted account has no avatar and no address to write to
         mailTo: target.deletedAt ? null : target.email,
         userName: target.name,
+        locale: target.locale,
       };
     });
   } catch (err) {
@@ -94,6 +97,7 @@ export async function removeUserAvatar({
           userId: id,
           to: outcome.mailTo,
           userName: outcome.userName,
+          locale: mailLocaleOf(outcome.locale),
           removals: outcome.avatarRemovals,
           limit,
         },

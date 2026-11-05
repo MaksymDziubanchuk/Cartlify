@@ -396,30 +396,30 @@ describe('PATCH /api/users/me with json', () => {
     });
   });
 
-  describe.each(['name', 'locale'] as const)('the %s length limit', (field) => {
+  describe('the name length limit', () => {
     it('takes 100 characters', async () => {
       const user = await newUser();
 
-      const res = await patch(accessCookie(user), { [field]: 'x'.repeat(100) });
+      const res = await patch(accessCookie(user), { name: 'x'.repeat(100) });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()[field]).toBe('x'.repeat(100));
+      expect(res.json().name).toBe('x'.repeat(100));
     });
 
     // an emoji is two UTF-16 units but one character, the way a person counts
     it('counts characters, not UTF-16 units', async () => {
       const user = await newUser();
 
-      const res = await patch(accessCookie(user), { [field]: '😀'.repeat(100) });
+      const res = await patch(accessCookie(user), { name: '😀'.repeat(100) });
 
       expect(res.statusCode).toBe(200);
-      expect((await rowOf(user.id))[field]).toBe('😀'.repeat(100));
+      expect((await rowOf(user.id)).name).toBe('😀'.repeat(100));
     });
 
     it('refuses 101 characters and changes nothing', async () => {
       const user = await newUser({ name: 'Anna', locale: 'uk' });
 
-      const res = await patch(accessCookie(user), { [field]: 'x'.repeat(101) });
+      const res = await patch(accessCookie(user), { name: 'x'.repeat(101) });
 
       expect(res.statusCode).toBe(400);
       expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
@@ -429,9 +429,65 @@ describe('PATCH /api/users/me with json', () => {
     it('refuses thousands of characters', async () => {
       const user = await newUser();
 
-      const res = await patch(accessCookie(user), { [field]: 'x'.repeat(5000) });
+      const res = await patch(accessCookie(user), { name: 'x'.repeat(5000) });
 
       expect(res.statusCode).toBe(400);
+    });
+  });
+
+  // a locale is two letters of a language (users_locale_chk, db/06) the shop answers in
+  // (shopSettings().enabledLocales, src/locales)
+  describe('the locale of a json body', () => {
+    it('reads uk-UA and UK alike as uk, a region or the case make no difference', async () => {
+      const user = await newUser();
+
+      const res = await patch(accessCookie(user), { locale: ' UK ' });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().locale).toBe('uk');
+      expect((await rowOf(user.id)).locale).toBe('uk');
+    });
+
+    it('refuses 101 characters, by the schema, before the service reads it', async () => {
+      const user = await newUser({ name: 'Anna', locale: 'uk' });
+
+      const res = await patch(accessCookie(user), { locale: 'x'.repeat(101) });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+      expect(await rowOf(user.id)).toMatchObject({ name: 'Anna', locale: 'uk' });
+    });
+
+    it('refuses thousands of characters', async () => {
+      const user = await newUser();
+
+      const res = await patch(accessCookie(user), { locale: 'x'.repeat(5000) });
+
+      expect(res.statusCode).toBe(400);
+    });
+
+    it.each(['english', 'u', 'u-k', '123'])(
+      'refuses %s, not two letters of a language, and changes nothing',
+      async (value) => {
+        const user = await newUser({ locale: 'uk' });
+
+        const res = await patch(accessCookie(user), { locale: value });
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ errorCode: 'LOCALE_INVALID' });
+        expect((await rowOf(user.id)).locale).toBe('uk');
+      },
+    );
+
+    // the right shape, but not a language the shop answers in
+    it('refuses a language with no dictionary, and changes nothing', async () => {
+      const user = await newUser({ locale: 'uk' });
+
+      const res = await patch(accessCookie(user), { locale: 'xx' });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'LOCALE_INVALID' });
+      expect((await rowOf(user.id)).locale).toBe('uk');
     });
   });
 

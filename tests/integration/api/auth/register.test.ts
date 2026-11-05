@@ -93,6 +93,45 @@ describe('POST /api/auth/register', () => {
     expect(linkToken(mails[0]!, '/web/login')).toEqual(expect.any(String));
   });
 
+  // a language the shop answers in (shopSettings().enabledLocales, src/locales) is saved, and the
+  // verify mail that follows goes out in it, not in English
+  it('saves a language the shop answers in, and mails the verify link in it', async () => {
+    const mails = watchMail();
+    const email = newEmail();
+
+    const res = await register({ email, password: 'password123', locale: 'UK' });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().locale).toBe('uk');
+    const row = await asAdmin((tx) =>
+      tx.user.findUniqueOrThrow({ where: { email }, select: { locale: true } }),
+    );
+    expect(row.locale).toBe('uk');
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toContain('Підтвердьте свою електронну адресу');
+    expect(mails[0]!.text).toContain('Підтвердьте свою електронну адресу');
+    // the time the link lasts in the words of the mail, not English slotted into Ukrainian
+    expect(mails[0]!.text).toMatch(/дійсне протягом \d+ (хвилини|хвилин|години|годин|дня|днів)\./);
+  });
+
+  // never refused: the account is made either way, only without a locale of its own
+  it.each([
+    ['a language the shop does not answer in', 'xx'],
+    ['the wrong shape', 'english'],
+  ])('drops %s, without refusing the registration', async (_case, locale) => {
+    const email = newEmail();
+
+    const res = await register({ email, password: 'password123', locale });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().locale).toBeUndefined();
+    const row = await asAdmin((tx) =>
+      tx.user.findUniqueOrThrow({ where: { email }, select: { locale: true } }),
+    );
+    expect(row.locale).toBeNull();
+  });
+
   it('lets the link from the mail verify the email, after which the user logs in', async () => {
     const mails = watchMail();
     const email = newEmail();

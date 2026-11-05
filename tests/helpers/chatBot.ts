@@ -26,13 +26,18 @@ export type ChatKind = 'user' | 'unverified' | 'guest';
 
 export function chatBotDriver(context: { app: () => FastifyInstance; userIds: number[] }) {
   // the chat of the customer through the api, then its socket joined to the thread. The address is
-  // the one the socket seems to come from (the bot counts the turns of a guest by it)
-  async function openChat(kind: ChatKind, address?: string): Promise<Chat> {
+  // the one the socket seems to come from (the bot counts the turns of a guest by it); locale is
+  // the account's own language, none of a guest
+  async function openChat(
+    kind: ChatKind,
+    address?: string,
+    opts: { locale?: string } = {},
+  ): Promise<Chat> {
     let cookie = `guestId=${randomUUID()}`;
     let user: TestUser | null = null;
 
     if (kind !== 'guest') {
-      user = await createUser({ isVerified: kind === 'user' });
+      user = await createUser({ isVerified: kind === 'user', ...opts });
       context.userIds.push(user.id);
       cookie = accessCookie(user);
     }

@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="x-apple-disable-message-reformatting">
-    <title>{{appName}} — The payment for order #{{orderId}} is refunded</title>
+    <title>{{title}}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f3ff;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;">
-      The payment for order #{{orderId}} is refunded in full.
+      {{preview}}
     </div>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f5f3ff;">
@@ -23,15 +23,15 @@
 
             <tr>
               <td style="background:#ffffff;border:1px solid #ddd6fe;border-radius:14px;padding:28px;font-family:Arial,Helvetica,sans-serif;">
-                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Payment refunded</div>
+                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">{{heading}}</div>
 
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 14px 0;">
-                  Hi{{#userName}} {{userName}}{{/userName}},<br>
-                  Your payment of <b>{{amount}}</b> for order <b>#{{orderId}}</b> is refunded in full: {{reason}}.
+                  {{greeting}}<br>
+                  {{body}}
                 </div>
 
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 14px 0;">
-                  {{orderLine}} Your bank shows the money back within a few days.
+                  {{bankNote}}
                 </div>
 
                 <div style="padding:4px 0 18px 0;">
@@ -40,7 +40,7 @@
                       <td bgcolor="#6d28d9" style="border-radius:10px;">
                         <a href="{{orderUrl}}"
                            style="display:inline-block;padding:12px 18px;font-size:14px;font-weight:800;color:#ffffff;text-decoration:none;font-family:Arial,Helvetica,sans-serif;">
-                          View order
+                          {{viewOrderButton}}
                         </a>
                       </td>
                     </tr>
@@ -48,7 +48,7 @@
                 </div>
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  If the button does not work, open this link:
+                  {{openLinkFallback}}
                 </div>
 
                 <div style="font-size:12px;line-height:1.5;margin:6px 0 0 0;word-break:break-all;">
@@ -58,7 +58,7 @@
                 <hr style="border:none;border-top:1px solid #ddd6fe;margin:18px 0;">
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  Questions? Write to us in the chat on our site{{#supportEmail}} or to <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
+                  {{questionsIntro}}{{#supportEmail}} {{orTo}} <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
                 </div>
               </td>
             </tr>

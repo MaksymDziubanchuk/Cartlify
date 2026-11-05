@@ -2,8 +2,6 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import cloudinary from '@config/cloudinary.js';
-import env from '@config/env.js';
-
 import {
   accessCookie,
   getMe,
@@ -15,6 +13,7 @@ import { startApp, stopApp } from '../../../helpers/app.js';
 import { setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createLoginLog,
@@ -328,10 +327,7 @@ describe('open orders', () => {
 // delivered one inside its period of withdrawal, and any one with a statement open. The statement
 // stays open, the order too: the buyer reaches them through the mails and the public form
 describe('DELETE /api/users/me with a delivered order or an open statement', () => {
-  const grace = env.WITHDRAWAL_GRACE_DAYS;
-  afterEach(() => {
-    env.WITHDRAWAL_GRACE_DAYS = grace;
-  });
+  afterEach(resetShopSettings);
 
   const deliveredOrder = async (user: Awaited<ReturnType<typeof newUser>>) => {
     const orderId = await placeOrder(app, csrf, user, await newProduct(), 'shipped');
@@ -378,7 +374,7 @@ describe('DELETE /api/users/me with a delivered order or an open statement', () 
   it('does not list a delivered order whose period is over', async () => {
     const user = await newUser();
     await deliveredOrder(user);
-    env.WITHDRAWAL_GRACE_DAYS = -400;
+    setShopSettings({ withdrawalGraceDays: -400 });
 
     const res = await deleteMe(accessCookie(user), { password: user.password });
 
@@ -411,7 +407,7 @@ describe('DELETE /api/users/me with a delivered order or an open statement', () 
     const user = await newUser();
     const orderId = await deliveredOrder(user);
     expect((await withdraw(user, orderId)).statusCode).toBe(201);
-    env.WITHDRAWAL_GRACE_DAYS = -400;
+    setShopSettings({ withdrawalGraceDays: -400 });
 
     const res = await deleteMe(accessCookie(user), { password: user.password });
 

@@ -1,4 +1,5 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { failureOf } from '@helpers/failureOf.js';
 import { isAiServiceError } from '@services/ai/ai.errors.js';
 import type { AiGenerateTextRequestDto, AiJsonSchemaDto } from '@services/ai/ai.types.js';
@@ -11,8 +12,9 @@ import { aiClientService } from '@services/ai/aiClient.service.js';
 //   the comment cannot talk it round the way it could try with the model.
 // An opinion, however negative, is never a reason. A comment either check refuses is not written,
 // the answer names the reasons. A check that fails says nothing against the comment: a review
-// never waits for an outage of openai. Without the key of openai, or with REVIEW_CHECK_ENABLED
-// false, nobody is asked (the start of the server warns about it)
+// never waits for an outage of openai. Without the key of openai, or with reviewCheckEnabled
+// false (root, PUT /api/root/shop-settings), nobody is asked (the start of the server warns
+// about the key; reviewCheckEnabled can change afterwards, root sees it directly)
 
 export const REVIEW_CHECK_REASONS = [
   'profanity',
@@ -221,7 +223,7 @@ export async function checkReviewComment(
   subject: ReviewCheckSubject,
   log: ReviewCheckLogger,
 ): Promise<ReviewCheckReason[]> {
-  if (!env.REVIEW_CHECK_ENABLED || !env.OPENAI_API_KEY.trim()) return [];
+  if (!shopSettings().reviewCheckEnabled || !env.OPENAI_API_KEY.trim()) return [];
 
   const [byModel, byModeration] = await Promise.all([
     askModel(subject, log),

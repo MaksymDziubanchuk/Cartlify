@@ -55,7 +55,7 @@ describe('buildOrderShippedTemplate', () => {
     const { text, html } = buildOrderShippedTemplate(order());
 
     expect(text).toContain('Your Cartlify order #42 is shipped and on its way to you.');
-    expect(html).toContain('Your order <b>#42</b> is shipped and on its way to you.');
+    expect(html).toContain('Your order #42 is shipped and on its way to you.');
   });
 
   // the delivered mail keeps this promise

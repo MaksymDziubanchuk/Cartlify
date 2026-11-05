@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { deliveryPriceOf } from '@helpers/deliveryPrice.js';
 import { shopCurrency } from '@routes/api/payments/providers/index.js';
 
@@ -6,15 +6,17 @@ import type { GetDeliveryMethodsResponseDto } from 'types/dto/delivery.dto.js';
 
 // the methods of the shop as they are set now: the settings are read on each call
 export async function getDeliveryMethods(): Promise<GetDeliveryMethodsResponseDto> {
+  const settings = shopSettings();
+
   return {
     currency: shopCurrency(),
-    methods: env.DELIVERY_METHODS.map((method) =>
+    methods: settings.deliveryMethods.map((method) =>
       method === 'manual'
         ? {
             method,
             price: deliveryPriceOf('manual', 0),
-            freeFrom: env.DELIVERY_FLAT_PRICE === null ? null : env.DELIVERY_FREE_FROM,
-            countries: [...env.DELIVERY_COUNTRIES],
+            freeFrom: settings.deliveryFlatPrice === null ? null : settings.deliveryFreeFrom,
+            countries: [...settings.deliveryCountries],
             address: null,
             hours: null,
           }
@@ -23,8 +25,8 @@ export async function getDeliveryMethods(): Promise<GetDeliveryMethodsResponseDt
             price: 0,
             freeFrom: null,
             countries: [],
-            address: env.PICKUP_ADDRESS,
-            hours: env.PICKUP_HOURS,
+            address: settings.pickupAddress,
+            hours: settings.pickupHours,
           },
     ),
   };

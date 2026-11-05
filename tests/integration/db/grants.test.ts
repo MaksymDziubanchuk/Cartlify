@@ -47,6 +47,9 @@ const APP_FUNCTIONS = [
   'cartlify.refresh_order_prices(integer)',
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',
+  // the shape of a list shop_settings writes (db/06, a CHECK constraint cannot hold a subquery)
+  'cartlify.array_matches(text[], text)',
+  'cartlify.array_has_no_duplicates(text[])',
   'cartlify.log_variant_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
   'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
   'cartlify.write_off_variant_stock(uuid, integer, integer, integer, text, text)',

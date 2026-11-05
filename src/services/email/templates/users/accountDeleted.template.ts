@@ -1,3 +1,5 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 export type AccountDeletedItem = { name: string; quantity: number };
@@ -33,24 +35,25 @@ export type AccountDeletedTemplateArgs = {
   userName?: string | null;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
-const STATUS_TEXT: Record<AccountDeletedDelivery['status'], string> = {
-  paid: 'paid, it will be shipped',
-  shipped: 'shipped, it is on its way',
-};
+// the key of accountDeleted.* for the status of a delivery (src/locales), by whether it is picked
+// up at the shop or sent
+const statusKeyOf = (status: AccountDeletedDelivery['status'], pickup: boolean | undefined) =>
+  pickup
+    ? status === 'paid'
+      ? 'statusPaidPickup'
+      : 'statusReadyPickup'
+    : status === 'paid'
+      ? 'statusPaid'
+      : 'statusShipped';
 
-const PICKUP_STATUS_TEXT: Record<AccountDeletedDelivery['status'], string> = {
-  paid: 'paid, it will be prepared for pickup at the shop',
-  shipped: 'ready, it waits for you at the shop',
-};
-
-// only what is known goes into the mail: an unknown payment is told as a condition, not a guess
-const PAYMENT_TEXT: Record<CancelledOrderPayment, string> = {
-  not_taken: 'cancelled, no payment was taken and none will be',
-  refunding:
-    'cancelled, your payment was received and is refunded in full; your bank shows it within a few days',
-  unknown: 'cancelled; if you paid for it, the payment is refunded in full automatically',
+// the key of accountDeleted.* for what the payment provider said of a cancelled order
+const PAYMENT_KEYS: Record<CancelledOrderPayment, string> = {
+  not_taken: 'paymentNotTaken',
+  refunding: 'paymentRefunding',
+  unknown: 'paymentUnknown',
 };
 
 // the mail itself is accountDeleted.html and accountDeleted.txt next to this file
@@ -60,8 +63,9 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
   html: string;
 } {
   const appName = args.appName?.trim() || 'Cartlify';
+  const locale = args.locale || 'en';
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
@@ -78,20 +82,34 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
     deliveries: args.deliveries.map((order) => ({
       orderId: String(order.orderId),
       total: price(order.total),
-      statusText: (order.pickup ? PICKUP_STATUS_TEXT : STATUS_TEXT)[order.status],
+      statusText: t(`accountDeleted.${statusKeyOf(order.status, order.pickup)}`, locale),
       itemsText: itemsText(order.items),
     })),
     hasCancelled: args.cancelled.length ? 'yes' : '',
     cancelled: args.cancelled.map((order) => ({
       orderId: String(order.orderId),
       total: price(order.total),
-      paymentText: PAYMENT_TEXT[order.payment],
+      paymentText: t(`accountDeleted.${PAYMENT_KEYS[order.payment]}`, locale),
       itemsText: itemsText(order.items),
     })),
+    title: t('accountDeleted.subject', locale, { appName }),
+    preview: t('accountDeleted.preview', locale, { appName }),
+    heading: t('accountDeleted.heading', locale),
+    body: t('accountDeleted.body', locale, { appName }),
+    greeting: greetingOf(args.userName, locale),
+    deliveriesHeading: t('accountDeleted.deliveriesHeading', locale),
+    deliveriesIntro: t('accountDeleted.deliveriesIntro', locale),
+    deliveriesIntroTxt: t('accountDeleted.deliveriesIntroTxt', locale),
+    deliveriesOutroTxt: t('accountDeleted.deliveriesOutroTxt', locale),
+    cancelledHeading: t('accountDeleted.cancelledHeading', locale),
+    cancelledIntro: t('accountDeleted.cancelledIntro', locale),
+    orderLabel: t('accountDeleted.orderLabel', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
   return {
-    subject: `${appName} — Your account is deleted`,
+    subject: values.title,
     text: renderTemplate('users/accountDeleted.txt', values),
     html: renderTemplate('users/accountDeleted.html', values),
   };

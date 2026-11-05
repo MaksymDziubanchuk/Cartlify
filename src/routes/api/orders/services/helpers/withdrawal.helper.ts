@@ -1,10 +1,12 @@
 import { Prisma } from '@prisma/client';
 
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 
 // the period in which a buyer may withdraw from an order: it starts with the delivery and lasts the
-// days of the contract the order kept, then the days of grace of the shop (WITHDRAWAL_GRACE_DAYS).
-// The database counts the end (cartlify.withdrawal_ends_at, db/05), the one rule for every answer
+// days of the contract the order kept, then the days of grace of the shop (withdrawalGraceDays,
+// root sets it). The database counts the end (cartlify.withdrawal_ends_at, db/05), the one rule
+// for every answer
 
 // the days of an order that kept no contract (none was published at its confirmation): the least
 // the law gives, which a contract may not go under (db/06)
@@ -19,7 +21,7 @@ type Delivered = { id: number; deliveredAt: Date | null; withdrawalDays: number 
 export async function withdrawalEndsOf(
   db: Prisma.TransactionClient,
   rows: readonly Delivered[],
-  grace: number = env.WITHDRAWAL_GRACE_DAYS,
+  grace: number = shopSettings().withdrawalGraceDays,
 ): Promise<Map<number, Date>> {
   const ids = rows.filter((row) => row.deliveredAt).map((row) => row.id);
   if (ids.length === 0) return new Map();

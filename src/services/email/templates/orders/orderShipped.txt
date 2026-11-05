@@ -1,23 +1,22 @@
-Your {{appName}} order #{{orderId}} is shipped and on its way to you.
-We will let you know when it is delivered.
+{{leadTxt}}
 
 {{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
 {{/items}}
-{{#deliveryLine}}Delivery: {{deliveryLine}}
-{{/deliveryLine}}Total: {{total}}
+{{#deliveryLine}}{{deliveryLabel}}: {{deliveryLine}}
+{{/deliveryLine}}{{totalHeader}}: {{total}}
 {{#noRightLine}}
 {{noRightLine}}
 {{/noRightLine}}{{#noRightItems}}- {{name}}: {{reason}}
-{{/noRightItems}}{{#shippingAddress}}Shipping to: {{shippingAddress}}
-{{/shippingAddress}}{{#recipient}}Recipient: {{recipient}}
-{{/recipient}}{{#carrier}}Carrier: {{carrier}}
-{{/carrier}}{{#trackingNumber}}Tracking number: {{trackingNumber}}
-{{/trackingNumber}}{{#trackingUrl}}Follow your parcel: {{trackingUrl}}
+{{/noRightItems}}{{#shippingAddress}}{{shippingToLabel}}: {{shippingAddress}}
+{{/shippingAddress}}{{#recipient}}{{recipientLabel}}: {{recipient}}
+{{/recipient}}{{#carrier}}{{carrierLabel}}: {{carrier}}
+{{/carrier}}{{#trackingNumber}}{{trackingNumberLabel}}: {{trackingNumber}}
+{{/trackingNumber}}{{#trackingUrl}}{{followParcelLabel}}: {{trackingUrl}}
 {{/trackingUrl}}
-See your order:
+{{seeOrderTxt}}
 {{orderUrl}}{{#withdrawalLine}}
 
 {{withdrawalLine}}
 {{withdrawalUrl}}{{/withdrawalLine}}
 
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.

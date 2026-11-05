@@ -1,4 +1,5 @@
 import { prisma } from '@db/client.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { assertRedisReady } from '@redis/client.js';
 import {
   getOrderPaymentPageClosedAt,
@@ -21,30 +22,61 @@ import {
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 
 import { getPaymentProvider } from '../providers/index.js';
+import { PaymentPageChangedError } from '../providers/types.js';
 
 import type { UnavailableOrderItem } from '@routes/api/orders/services/helpers/confirmOrder.helper.js';
-import type { PaymentProviderName } from '../providers/types.js';
+import type { PaymentPageOrder, PaymentProviderName } from '../providers/types.js';
 import type {
   CreateCheckoutSessionDto,
   CheckoutSessionResponseDto,
 } from 'types/dto/payments.dto.js';
 
-// the buyer picked another provider than the one whose page is open for the order: that page is
-// closed first, so the order cannot be paid twice; one that took the money keeps the order as it is
-async function closePageOfOtherProvider(orderId: number, provider: PaymentProviderName) {
+// closes the page the order has open, so the order cannot be paid twice; one that took the money
+// keeps the order as it is. The time of the close goes into the key of the next page of the order.
+// No page linked (redis lost the link after the page was opened) leaves nothing to close: the next
+// page is new all the same, and a payment of the one left open is given back as a second payment
+async function closeLinkedPage(orderId: number, except?: PaymentProviderName) {
   const page = await getOrderPaymentPageLink(orderId);
-  if (!page || page.provider === provider) return;
+  if (page && page.provider === except) return;
 
-  const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
+  if (page) {
+    const closed = await getPaymentProvider(page.provider).closePaymentPage(page.pageId);
 
-  if (closed.state === 'paid') throw new ConflictError('ORDER_ALREADY_PAID');
-  if (closed.state === 'in_progress') throw new ConflictError('ORDER_PAYMENT_IN_PROGRESS');
-  if (closed.state === 'open') {
-    throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, closed.cause);
+    if (closed.state === 'paid') throw new ConflictError('ORDER_ALREADY_PAID');
+    if (closed.state === 'in_progress') throw new ConflictError('ORDER_PAYMENT_IN_PROGRESS');
+    if (closed.state === 'open') {
+      throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, closed.cause);
+    }
+  } else if (except) {
+    return;
   }
 
-  // the time of the close goes into the key of the next page of the order
   await markOrderPaymentPageClosed(orderId);
+}
+
+// the page of the order at the provider: the same page again while its values stay the same; one
+// opened with other values (the buyer changed their language, root changed a setting the page
+// carries) is closed and a new one opened, instead of a refusal until the reservation runs out
+async function openPage(
+  order: Omit<PaymentPageOrder, 'pageClosedAt'>,
+  provider: PaymentProviderName,
+) {
+  const paymentProvider = getPaymentProvider(provider);
+
+  try {
+    return await paymentProvider.openPaymentPage({
+      ...order,
+      pageClosedAt: await getOrderPaymentPageClosedAt(order.orderId),
+    });
+  } catch (err) {
+    if (!(err instanceof PaymentPageChangedError)) throw err;
+
+    await closeLinkedPage(order.orderId);
+    return paymentProvider.openPaymentPage({
+      ...order,
+      pageClosedAt: await getOrderPaymentPageClosedAt(order.orderId),
+    });
+  }
 }
 
 // the payment page of a confirmed order at the provider the buyer picked
@@ -116,7 +148,7 @@ export async function createCheckoutSession({
       // relations side by side, so the account is read apart
       const buyer = await db.user.findUniqueOrThrow({
         where: { id: order.userId },
-        select: { email: true, deletedAt: true },
+        select: { email: true, deletedAt: true, locale: true },
       });
 
       // require confirmed order
@@ -215,17 +247,15 @@ export async function createCheckoutSession({
               }
             : null,
         customerEmail: buyer.deletedAt ? null : buyer.email,
+        locale: mailLocaleOf(buyer.locale),
       };
     });
 
-    await closePageOfOtherProvider(orderSnapshot.orderId, provider);
-    const pageClosedAt = await getOrderPaymentPageClosedAt(orderSnapshot.orderId);
+    // the buyer picked another provider than the one whose page is open for the order
+    await closeLinkedPage(orderSnapshot.orderId, provider);
 
     // the same order with the same reservation gets the same page, not a second payment
-    const { pageId, checkoutSession } = await paymentProvider.openPaymentPage({
-      ...orderSnapshot,
-      pageClosedAt,
-    });
+    const { pageId, checkoutSession } = await openPage(orderSnapshot, provider);
 
     // the link from the order to its page, for closing it at the reservation end or on a cancel;
     // the page is not closed when this fails: the retry gets the same page back and links it

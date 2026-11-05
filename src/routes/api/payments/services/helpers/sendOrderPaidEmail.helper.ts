@@ -1,7 +1,9 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { deliveryMailParts } from '@helpers/deliveryText.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPaid.template.js';
@@ -73,7 +75,7 @@ function loadOrder(orderId: number) {
 
     const user = await tx.user.findUniqueOrThrow({
       where: { id: order.userId },
-      select: { email: true, name: true },
+      select: { email: true, name: true, locale: true },
     });
 
     // the versions of the terms and of the contract the order was confirmed with, latest first:
@@ -117,11 +119,15 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       return row ? [{ kind, content: row.document.content }] : [];
     });
 
+    const logo = await shopLogoAttachment(log);
+    const locale = mailLocaleOf(order.user.locale);
+
     const { subject, text, html } = buildOrderPaidTemplate({
       // the name of the shop the mail is from
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: order.id,
       orderUrl: orderPage(order.id),
+      locale,
       items: order.items.map((item) => ({
         // the name the variant had when the order was confirmed
         name: itemNameOf(item),
@@ -136,14 +142,14 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       currency: currencyOf(order.paymentProvider),
       paidAt,
       ...(order.user.name ? { userName: order.user.name } : {}),
-      ...deliveryMailParts(order.delivery),
+      ...deliveryMailParts(order.delivery, locale),
       // what the buyer pays for the delivery, none for a pickup
       deliveryPrice: order.delivery?.method === 'manual' ? order.delivery.price.toString() : null,
       attachedDocuments: documents.map((doc) => doc.kind),
       // the link of the page of withdrawal, with the code of the order after the #
       withdrawalUrl: withdrawalLinkOf(order.id),
       withdrawalDays: withdrawalPeriodDaysOf(order.withdrawalDays),
-      logoCid: SHOP_LOGO_CID,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
     });
 
     await sendEmail({
@@ -152,7 +158,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       text,
       html,
       attachments: [
-        await shopLogoAttachment(),
+        ...(logo ? [logo] : []),
         ...documents.map((doc) => ({
           content: Buffer.from(doc.content, 'utf8').toString('base64'),
           type: 'text/plain',

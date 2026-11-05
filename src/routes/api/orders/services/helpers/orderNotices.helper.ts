@@ -1,3 +1,5 @@
+import { t } from '@config/i18n.js';
+
 // the mails of an event of an order that show no items: what each says to the buyer. A step of the
 // status taken back and a correction of the data say nothing of the reason: the admin explains it
 // to the buyer himself in the chat
@@ -31,6 +33,8 @@ export type OrderNoticeData = {
   // where and to whom the order goes now
   recipient: string;
   shippingAddress: string;
+  // the language of the mail (mailLocaleOf), "en" unless given
+  locale?: string;
 };
 
 export type OrderNotice = {
@@ -42,67 +46,62 @@ export type OrderNotice = {
 
 export function orderNoticeOf(kind: OrderNoticeKind, data: OrderNoticeData): OrderNotice {
   const { appName, orderId } = data;
+  const locale = data.locale || 'en';
+  const vars = { appName, orderId };
 
   switch (kind) {
     case 'pickup_ready':
       return {
-        subject: `${appName} — Order #${orderId} is ready for pickup`,
-        heading: 'Ready for pickup',
-        paragraphs: [`Your order #${orderId} is ready. You can collect it at the shop.`],
-        details: [{ label: 'Pick up at', value: data.pickup }],
+        subject: t('orderNotice.pickupReadySubject', locale, vars),
+        heading: t('orderNotice.pickupReadyHeading', locale),
+        paragraphs: [t('orderNotice.pickupReadyBody', locale, vars)],
+        details: [{ label: t('orderNotice.pickupAtLabel', locale), value: data.pickup }],
       };
 
     case 'shipment_changed':
       return {
-        subject: `${appName} — The shipping details of order #${orderId} changed`,
-        heading: 'Shipping details changed',
-        paragraphs: [
-          `The shipping details of your order #${orderId} were updated. Please use these from now on.`,
-        ],
+        subject: t('orderNotice.shipmentChangedSubject', locale, vars),
+        heading: t('orderNotice.shipmentChangedHeading', locale),
+        paragraphs: [t('orderNotice.shipmentChangedBody', locale, vars)],
         details: [
-          { label: 'Carrier', value: data.carrier },
-          { label: 'Tracking number', value: data.trackingNumber },
-          { label: 'Follow your parcel', value: data.trackingUrl },
+          { label: t('orderNotice.carrierLabel', locale), value: data.carrier },
+          { label: t('orderNotice.trackingNumberLabel', locale), value: data.trackingNumber },
+          { label: t('orderNotice.followParcelLabel', locale), value: data.trackingUrl },
         ],
       };
 
     case 'details_changed':
       return {
-        subject: `${appName} — The details of order #${orderId} changed`,
-        heading: 'Order details changed',
+        subject: t('orderNotice.detailsChangedSubject', locale, vars),
+        heading: t('orderNotice.detailsChangedHeading', locale),
         paragraphs: [
-          `The details of your order #${orderId} were changed.`,
-          'Ask us in the chat on our site for the details.',
+          t('orderNotice.detailsChangedBody', locale, vars),
+          t('orderNotice.askInChat', locale),
         ],
         details: [],
       };
 
     case 'delivery_corrected':
       return {
-        subject: `${appName} — Order #${orderId}: please ignore our last mail`,
-        heading: 'Please ignore our last mail',
-        paragraphs: data.pickup
-          ? [
-              `Sorry, please ignore our previous mail about your order #${orderId}.`,
-              'Your order is waiting to be collected.',
-            ]
-          : [
-              `Sorry, please ignore our previous mail about your order #${orderId}.`,
-              'The delivery goes on as planned.',
-            ],
-        details: [{ label: 'Pick up at', value: data.pickup }],
+        subject: t('orderNotice.deliveryCorrectedSubject', locale, vars),
+        heading: t('orderNotice.deliveryCorrectedHeading', locale),
+        paragraphs: [
+          t('orderNotice.deliveryCorrectedBody', locale, vars),
+          data.pickup
+            ? t('orderNotice.waitingForPickup', locale)
+            : t('orderNotice.deliveryAsPlanned', locale),
+        ],
+        details: [{ label: t('orderNotice.pickupAtLabel', locale), value: data.pickup }],
       };
 
     case 'delivery_data_changed':
       return {
-        subject: `${appName} — The delivery details of order #${orderId} changed`,
-        heading: 'Delivery details changed',
-        paragraphs: [
-          `The delivery details of your order #${orderId} were updated. Ask us in the chat on our site if something is wrong.`,
-        ],
+        subject: t('orderNotice.deliveryDataChangedSubject', locale, vars),
+        heading: t('orderNotice.deliveryDataChangedHeading', locale),
+        paragraphs: [t('orderNotice.deliveryDataChangedBody', locale, vars)],
         details: [
-          { label: 'Shipping to', value: data.shippingAddress },
-          { label: 'Recipient', value: data.recipient },
+          { label: t('orderNotice.shippingToLabel', locale), value: data.shippingAddress },
+          { label: t('common.recipientLabel', locale), value: data.recipient },
         ],
       };
   }

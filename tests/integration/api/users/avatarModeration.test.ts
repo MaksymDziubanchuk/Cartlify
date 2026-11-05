@@ -126,6 +126,20 @@ describe('DELETE /api/users/:userId/avatar', () => {
     expect(mails[0]!.text).toContain(`This is removal 1 of the ${LIMIT} the rules allow.`);
   });
 
+  // the language of the person's account (mailLocaleOf), the count of the removals too
+  it('mails the person in the language of their account', async () => {
+    const { user } = await userWithAvatar({ name: 'Ana', locale: 'es' });
+    const mails = watchMail();
+
+    const res = await removeAvatar(user.id);
+
+    expect(res.statusCode).toBe(200);
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toBe('Cartlify — Se eliminó tu foto de perfil');
+    expect(mails[0]!.text).toContain('Hola, Ana:');
+    expect(mails[0]!.text).not.toContain('the rules allow');
+  });
+
   // the person learns where the removals lead; the admin sees when the limit is passed
   it('counts every removal and tells the person when the limit is reached and passed', async () => {
     const { user } = await userWithAvatar();

@@ -277,6 +277,8 @@ describe('the new kinds in GET /api/admin/alerts', () => {
       'refunded_payments',
       ...NEW_KINDS,
       'worker_stalled',
+      'shop_settings_incomplete',
+      'shop_locale_missing',
     ]);
     expect(total).toBe(alerts.reduce((sum, alert) => sum + alert.count, 0));
   });

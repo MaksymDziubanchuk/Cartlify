@@ -238,6 +238,22 @@ describe('POST /api/auth/password/change', () => {
     expect(mails[0]!.text).not.toContain('changed-password-1');
   });
 
+  // the mail goes in the language of the account (mailLocaleOf), not in the shop's own
+  it('tells the owner in the language of their account', async () => {
+    const user = await newUser({ locale: 'es' });
+    const laptop = await signInFrom(user, LAPTOP);
+    const mails = watchMail();
+
+    const res = await changePassword(laptop, {
+      currentPassword: user.password,
+      newPassword: 'changed-password-1',
+    });
+
+    expect(res.statusCode).toBe(204);
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toContain('Tu contraseña fue cambiada');
+  });
+
   it('changes nothing when the current password is wrong', async () => {
     const user = await newUser();
     const phone = await signInFrom(user, PHONE);

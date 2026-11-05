@@ -136,8 +136,8 @@ export function installContractCheck(app: FastifyInstance): void {
     const url = req.routeOptions.url;
     const method = req.method.toLowerCase();
 
-    // no route (404 of an unknown address), the documentation itself, files, preflights
-    if (!url || url.startsWith('/documentation') || url.startsWith('/static')) return payload;
+    // no route (404 of an unknown address), the documentation itself, preflights
+    if (!url || url.startsWith('/documentation')) return payload;
     if (method === 'options' || method === 'head') return payload;
     if (req.routeOptions.schema?.hide) return payload;
 

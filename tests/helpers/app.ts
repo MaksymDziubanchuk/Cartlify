@@ -2,11 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import { SerializerSelector } from '@fastify/fast-json-stringify-compiler';
 
 import { app } from '../../src/app.js';
+import { loadShopSettings } from '@config/shopSettings.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { prisma } from '@db/client.js';
 
 import { captureLogs } from './logs.js';
 import { installContractCheck } from './contract.js';
+import { applyTestShopSettingsBaseline } from './shopSettings.js';
 
 // the server builds a serializer for every answer of every route when it starts, about 3 s of
 // every test file; a file calls a few routes, so here each one is built on its first use. It is
@@ -45,6 +47,13 @@ export async function startApp(
   installContractCheck(app);
 
   await connectRedis(app.log);
+  // the test database of every integration file starts without a row (tests/setup): this fills
+  // in the server's defaults the same way src/index.ts does, so routes that read shopSettings()
+  // have something to read
+  await loadShopSettings();
+  // the server defaults alone give no delivery and no seller; the baseline every test had before
+  // this table existed (tests/setup/integration.setup.ts still sets the env vars of it)
+  applyTestShopSettingsBaseline();
   await app.ready();
 
   return app;

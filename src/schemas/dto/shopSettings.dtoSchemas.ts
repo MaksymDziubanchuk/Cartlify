@@ -1,0 +1,306 @@
+// SHOP SETTINGS: the data of the shop (delivery, brand, reservation, moderation, withdrawal,
+// languages, the seller), a version root writes (docs/shop-settings.md)
+
+import { DELIVERY_METHOD_NAMES } from '@config/deliveryMethods.js';
+
+const dateTimeSchema = { type: 'string', format: 'date-time' } as const;
+
+// above zero to the cent, at most what the column holds (Decimal(10, 2)); the rules the env
+// variable of the price was held to before root set it here
+const moneySchema = {
+  type: ['number', 'null'],
+  exclusiveMinimum: 0,
+  maximum: 99999999.99,
+  multipleOf: 0.01,
+} as const;
+const textSchema = { type: ['string', 'null'] } as const;
+const localeSchema = {
+  type: 'string',
+  pattern: '^[a-z]{2}$',
+  description: 'A language of a dictionary the server has (src/locales): two lower-case letters.',
+} as const;
+
+// the fields every version carries, written and read the same way
+const valueProperties = {
+  deliveryMethods: {
+    type: 'array',
+    items: { type: 'string', enum: [...DELIVERY_METHOD_NAMES] },
+    uniqueItems: true,
+    description:
+      'manual: the shop sends the order itself; pickup: the buyer collects it at the shop. ' +
+      'Empty: the shop sends by hand, outside the app.',
+  },
+  deliveryFlatPrice: {
+    ...moneySchema,
+    description: 'What a buyer pays for the manual method, above zero; null for no fixed price.',
+  },
+  deliveryFreeFrom: {
+    ...moneySchema,
+    description: 'From this sum of the items the manual delivery is free; needs deliveryFlatPrice.',
+  },
+  deliveryCountries: {
+    type: 'array',
+    items: { type: 'string', minLength: 2, maxLength: 2, pattern: '^[A-Z]{2}$' },
+    uniqueItems: true,
+    description:
+      'The countries the app delivers to (ISO codes): required once deliveryMethods has ' +
+      '"manual" (GET /api/delivery/methods and POST /api/orders/confirm need it).',
+  },
+  pickupAddress: {
+    type: 'string',
+    maxLength: 300,
+    description:
+      'Where a buyer collects a pickup order; required (not blank) once deliveryMethods has ' +
+      '"pickup", may be empty otherwise.',
+  },
+  pickupHours: {
+    type: 'string',
+    maxLength: 300,
+    description:
+      'When a buyer collects a pickup order; required (not blank) once deliveryMethods has ' +
+      '"pickup", may be empty otherwise.',
+  },
+  shopName: {
+    type: 'string',
+    maxLength: 100,
+    description: 'The brand on the pages and the mails.',
+  },
+  emailFromName: { type: 'string', maxLength: 100, description: 'The sender name of a mail.' },
+  emailReplyTo: {
+    type: 'string',
+    maxLength: 254,
+    description:
+      'The address replies to a mail go to, also named in the mails as the one to write to; ' +
+      'empty until root sets it, and no mail goes out while it is (GET ' +
+      '/api/admin/shop-settings/missing names it).',
+  },
+  reservationMinutes: {
+    type: 'integer',
+    minimum: 1,
+    description: 'How long the app holds the stock of a cart before it is confirmed.',
+  },
+  stripePageMinutes: {
+    type: 'integer',
+    minimum: 30,
+    description:
+      'How long the Stripe page of an order stays open after the reservation ends; together ' +
+      'with reservationMinutes at most 1440 (a day, the most Stripe keeps a page).',
+  },
+  reviewCheckEnabled: { type: 'boolean', description: 'Whether the AI check of a review is on.' },
+  avatarRemovalsLimit: {
+    type: 'integer',
+    minimum: 1,
+    description: 'Removals of an avatar by a moderator the rules allow.',
+  },
+  reviewRemovalsLimit: {
+    type: 'integer',
+    minimum: 1,
+    description: 'Removals of the reviews of an author by a moderator the rules allow.',
+  },
+  withdrawalGraceDays: {
+    type: 'integer',
+    minimum: 0,
+    maximum: 30,
+    description: 'Days of grace the shop adds to the legal minimum of a withdrawal.',
+  },
+  shopLocale: {
+    ...localeSchema,
+    description: 'The mail of a buyer with no dictionary of their own gets this.',
+  },
+  enabledLocales: {
+    type: 'array',
+    items: localeSchema,
+    uniqueItems: true,
+    description: 'The languages the shop answers in; shopLocale is one of them.',
+  },
+  sellerLegalName: {
+    ...textSchema,
+    maxLength: 200,
+    description: 'The seller the shop names on its pages.',
+  },
+  sellerAddress: { ...textSchema, maxLength: 500 },
+  sellerTaxId: { ...textSchema, maxLength: 50 },
+  sellerEmail: { ...textSchema, maxLength: 254 },
+  sellerPhone: { ...textSchema, maxLength: 30 },
+} as const;
+
+const valueRequired = Object.keys(valueProperties);
+
+const shopSettingsValuesResponseSchema = {
+  $id: 'shopSettingsValuesResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: { ...valueProperties, logoUrl: textSchema },
+  required: [...valueRequired, 'logoUrl'],
+} as const;
+
+const publicShopSettingsResponseSchema = {
+  $id: 'publicShopSettingsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    shopName: valueProperties.shopName,
+    logoUrl: textSchema,
+    shopLocale: valueProperties.shopLocale,
+    enabledLocales: valueProperties.enabledLocales,
+    sellerLegalName: valueProperties.sellerLegalName,
+    sellerAddress: valueProperties.sellerAddress,
+    sellerTaxId: valueProperties.sellerTaxId,
+    sellerEmail: valueProperties.sellerEmail,
+    sellerPhone: valueProperties.sellerPhone,
+  },
+  required: [
+    'shopName',
+    'logoUrl',
+    'shopLocale',
+    'enabledLocales',
+    'sellerLegalName',
+    'sellerAddress',
+    'sellerTaxId',
+    'sellerEmail',
+    'sellerPhone',
+  ],
+} as const;
+
+// a version root writes is held to more than one read back: a version written before root set
+// the reply-to reads it as its empty default, a write names a real address (and the seller's
+// email, when it names one, is one too)
+const putShopSettingsBodySchema = {
+  $id: 'putShopSettingsBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    baseVersion: {
+      type: 'integer',
+      minimum: 0,
+      description:
+        'The version root edited from: `items[0].version` of GET ' +
+        '/api/root/shop-settings/history?limit=1 when root opened the form (0 before any ' +
+        'version exists); a stale one is refused (409 SHOP_SETTINGS_OUTDATED).',
+    },
+    ...valueProperties,
+    emailReplyTo: { ...valueProperties.emailReplyTo, format: 'email' },
+    sellerEmail: { ...valueProperties.sellerEmail, format: 'email' },
+  },
+  required: ['baseVersion', ...valueRequired],
+} as const;
+
+const SHOP_SETTINGS_FIELD_KEYS = [...valueRequired, 'logoUrl'];
+
+const shopSettingsFieldParamsSchema = {
+  $id: 'shopSettingsFieldParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    key: {
+      type: 'string',
+      enum: SHOP_SETTINGS_FIELD_KEYS,
+      description: 'One field of the data of the shop.',
+    },
+  },
+  required: ['key'],
+} as const;
+
+const shopSettingsFieldResponseSchema = {
+  $id: 'shopSettingsFieldResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    key: { type: 'string', enum: SHOP_SETTINGS_FIELD_KEYS },
+    value: {
+      description: 'The value of the field, its own shape (a string, a number, a list, or null).',
+    },
+  },
+  required: ['key', 'value'],
+} as const;
+
+const shopSettingsHistoryQuerySchema = {
+  $id: 'shopSettingsHistoryQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 100,
+      description: 'Rows on a page, 20 unless given.',
+    },
+    cursor: {
+      type: 'string',
+      minLength: 1,
+      pattern: '^[A-Za-z0-9_-]+$',
+      description: 'nextCursor of the page before.',
+    },
+  },
+} as const;
+
+const shopSettingsHistoryResponseSchema = {
+  $id: 'shopSettingsHistoryResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      description: 'Every version, the latest first.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          version: { type: 'integer' },
+          setBy: {
+            description:
+              'null for a version the server wrote to fill in a default root left empty.',
+            oneOf: [
+              { type: 'null' },
+              {
+                type: 'object',
+                additionalProperties: false,
+                properties: {
+                  id: { type: 'integer' },
+                  name: { type: ['string', 'null'] },
+                  email: {
+                    type: ['string', 'null'],
+                    description: 'null for an account that was deleted.',
+                  },
+                },
+                required: ['id', 'name', 'email'],
+              },
+            ],
+          },
+          createdAt: dateTimeSchema,
+          ...valueProperties,
+          logoUrl: textSchema,
+        },
+        required: ['version', 'setBy', 'createdAt', ...valueRequired, 'logoUrl'],
+      },
+    },
+    nextCursor: { type: ['string', 'null'] },
+  },
+  required: ['items', 'nextCursor'],
+} as const;
+
+// the form of the logo of the shop
+const shopLogoFormSchema = {
+  $id: 'shopLogoFormSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    image: {
+      type: 'string',
+      format: 'binary',
+      description: 'The logo of the shop: a jpeg, png or webp file by its content.',
+    },
+  },
+  required: ['image'],
+} as const;
+
+export const shopSettingsDtoSchemas = [
+  shopSettingsValuesResponseSchema,
+  publicShopSettingsResponseSchema,
+  putShopSettingsBodySchema,
+  shopSettingsFieldParamsSchema,
+  shopSettingsFieldResponseSchema,
+  shopSettingsHistoryQuerySchema,
+  shopSettingsHistoryResponseSchema,
+  shopLogoFormSchema,
+];

@@ -1,7 +1,9 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { returnCodeOf } from '@helpers/returns.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
@@ -57,7 +59,7 @@ function loadReturn(returnId: number) {
       where: { id: row.orderId },
       select: {
         returnShippingPaidBy: true,
-        user: { select: { name: true, email: true, deletedAt: true } },
+        user: { select: { name: true, email: true, deletedAt: true, locale: true } },
       },
     });
 
@@ -103,12 +105,19 @@ export async function sendReturnReceivedEmail(
 
     const manualCheck = row.source === 'form_manual';
 
-    const mailTo = async (to: string, userName: string | null | undefined) => {
+    const mailTo = async (
+      to: string,
+      userName: string | null | undefined,
+      locale: string | null,
+    ) => {
+      const logo = await shopLogoAttachment(log);
+
       const { subject, text, html } = buildReturnReceivedTemplate({
-        appName: env.SHOP_NAME,
+        appName: shopSettings().shopName,
         orderId: row.orderId,
         code: returnCodeOf(row.basis, row.orderId, row.number),
         timeZone: env.SHOP_TIME_ZONE,
+        locale: mailLocaleOf(locale),
         ...(publicForm
           ? {
               publicForm: true,
@@ -130,9 +139,9 @@ export async function sendReturnReceivedEmail(
         returnAddress: row.returnAddress,
         sendBy: new Date(row.statedAt.getTime() + SEND_BACK_DAYS * 86_400_000),
         shippingPaidBy: row.order?.returnShippingPaidBy ?? null,
-        supportEmail: env.EMAIL_REPLY_TO,
+        supportEmail: shopSettings().emailReplyTo,
         ...(userName ? { userName } : {}),
-        logoCid: SHOP_LOGO_CID,
+        ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
       });
 
       await sendEmail({
@@ -140,12 +149,17 @@ export async function sendReturnReceivedEmail(
         subject,
         text,
         html,
-        attachments: [await shopLogoAttachment()],
+        attachments: logo ? [logo] : [],
       });
     };
 
-    // a statement of the form is greeted by the name given there, the other by the account
-    await mailTo(row.contactEmail, publicForm ? row.contactName : row.order?.user?.name);
+    // a statement of the form is greeted by the name given there, the other by the account; a form
+    // has no account to read a language from: its mail goes in the shop's language
+    await mailTo(
+      row.contactEmail,
+      publicForm ? row.contactName : row.order?.user?.name,
+      publicForm ? null : (row.order?.user?.locale ?? null),
+    );
 
     // A statement made by hand needs no code, so a third person can send it with the order number
     // and the name of its recipient: the account of the order, while it lives, is told as well
@@ -156,7 +170,7 @@ export async function sendReturnReceivedEmail(
       !owner.deletedAt &&
       owner.email.toLowerCase() !== row.contactEmail.toLowerCase()
     ) {
-      await mailTo(owner.email, owner.name);
+      await mailTo(owner.email, owner.name, owner.locale);
     }
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return received mail was not sent');

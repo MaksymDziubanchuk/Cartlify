@@ -105,6 +105,21 @@ describe('DELETE /api/products/:productId/reviews/:reviewId by a moderator', () 
     expect(mails[0]!.text).toContain(`This is removal 1 of the ${LIMIT} the rules allow.`);
   });
 
+  // the language of the author's account (mailLocaleOf), the count of the removals too
+  it('mails the author in the language of their account', async () => {
+    const author = await newUser({ name: 'Ana', locale: 'es' });
+    const review = await reviewOf(author);
+    const mails = watchMail();
+
+    const res = await removeReview(review);
+
+    expect(res.statusCode).toBe(200);
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toBe('Cartlify — Se eliminó tu reseña');
+    expect(mails[0]!.text).toContain('Hola, Ana:');
+    expect(mails[0]!.text).not.toContain('the rules allow');
+  });
+
   // the removals of the reviews of one author add up, whatever the product
   it('counts every removal of the author and tells when the limit is reached and passed', async () => {
     const author = await newUser();

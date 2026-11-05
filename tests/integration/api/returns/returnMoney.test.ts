@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -85,10 +85,10 @@ const get = (url: string, actor: TestUser = admin) =>
   app.inject({ method: 'GET', url, headers: { cookie: accessCookie(actor) } });
 
 // an order paid by a card Stripe really took (the mock holds the payment), and its first item
-async function paidByCard(units: number, card?: string) {
+async function paidByCard(units: number, card?: string, owner: TestUser = buyer) {
   const product = await createProduct({ price: 10, stock: 30 });
   products.push(product);
-  const { orderId, paymentId } = await placePaidOrder(app, csrf, buyer, product, {
+  const { orderId, paymentId } = await placePaidOrder(app, csrf, owner, product, {
     quantity: units,
     ...(card ? { card } : {}),
   });
@@ -223,7 +223,25 @@ describe('POST /api/returns/:returnId/refund', () => {
     const own = mailTo(mails, `Return of order #${orderId} is closed`);
     expect(own).toHaveLength(1);
     expect(own[0]!.text).toContain('€20.00 went back to you.');
-    expect(own[0]!.text).toContain(env.EMAIL_REPLY_TO);
+    expect(own[0]!.text).toContain(shopSettings().emailReplyTo);
+  });
+
+  // the language of the buyer's account (mailLocaleOf): the words and the money
+  it("mails the money back in the language of the buyer's account", async () => {
+    const owner = await createUser({ name: 'Ana', locale: 'es' });
+    userIds.push(owner.id);
+    const { orderId, itemId } = await paidByCard(3, undefined, owner);
+    const card = await comeBack(orderId, itemId, 2);
+    const mails = watchMail();
+
+    const res = await refund(card.id);
+
+    expect(res.statusCode).toBe(200);
+    const own = mails.filter((mail) => mail.to.includes(owner.email));
+    expect(own).toHaveLength(1);
+    expect(own[0]!.subject).toContain(`Se cerró la devolución del pedido #${orderId}`);
+    expect(own[0]!.text).toContain('Hola, Ana:');
+    expect(own[0]!.text).toContain('20,00');
   });
 
   it('says the order is full when every unit went back', async () => {

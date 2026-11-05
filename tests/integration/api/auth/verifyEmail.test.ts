@@ -224,6 +224,25 @@ describe('POST /api/auth/verify/resend', () => {
     expect((await verify(mailedToken(mails, '/web/login'))).statusCode).toBe(200);
   });
 
+  // a visitor who is not signed in asks for it: the language is read from the account itself,
+  // and the time the link lasts is in the words of that language too
+  it('mails the new link in the language of the account', async () => {
+    const user = await createUser({
+      email: uniqueEmail('verify'),
+      isVerified: false,
+      locale: 'uk',
+    });
+    emails.push(user.email);
+    const mails = watchMail();
+
+    const res = await resend(user.email);
+
+    expect(res.statusCode).toBe(200);
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toContain('Підтвердьте свою електронну адресу');
+    expect(mails[0]!.text).toMatch(/дійсне протягом \d+ (хвилини|хвилин|години|годин|дня|днів)\./);
+  });
+
   // another answer would tell that an unconfirmed account has this email
   it('answers the same when SendGrid refuses the new mail, and logs it with the account and no email', async () => {
     const mails = watchMail();

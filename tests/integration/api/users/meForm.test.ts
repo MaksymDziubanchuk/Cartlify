@@ -130,23 +130,20 @@ describe('PATCH /api/users/me with a form', () => {
   });
 
   // a form skips the schema, the service holds the same limit for it
-  describe.each([
-    ['name', 'NAME_TOO_LONG'],
-    ['locale', 'LOCALE_TOO_LONG'],
-  ] as const)('the %s length limit', (field, errorCode) => {
+  describe('the name length limit', () => {
     it('takes 100 characters', async () => {
       const user = await newUser();
 
-      const res = await patchForm(accessCookie(user), fields({ [field]: 'x'.repeat(100) }));
+      const res = await patchForm(accessCookie(user), fields({ name: 'x'.repeat(100) }));
 
       expect(res.statusCode).toBe(200);
-      expect(res.json()[field]).toBe('x'.repeat(100));
+      expect(res.json().name).toBe('x'.repeat(100));
     });
 
     it('counts characters, not UTF-16 units', async () => {
       const user = await newUser();
 
-      const res = await patchForm(accessCookie(user), fields({ [field]: '😀'.repeat(100) }));
+      const res = await patchForm(accessCookie(user), fields({ name: '😀'.repeat(100) }));
 
       expect(res.statusCode).toBe(200);
     });
@@ -154,11 +151,60 @@ describe('PATCH /api/users/me with a form', () => {
     it('refuses 101 characters and changes nothing', async () => {
       const user = await newUser({ name: 'Anna', locale: 'uk' });
 
-      const res = await patchForm(accessCookie(user), fields({ [field]: 'x'.repeat(101) }));
+      const res = await patchForm(accessCookie(user), fields({ name: 'x'.repeat(101) }));
 
       expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ errorCode });
+      expect(res.json()).toMatchObject({ errorCode: 'NAME_TOO_LONG' });
       expect(await rowOf(user.id)).toMatchObject({ name: 'Anna', locale: 'uk' });
+    });
+  });
+
+  // a locale is two letters of a language (users_locale_chk, db/06) the shop answers in
+  // (shopSettings().enabledLocales, src/locales); a form skips the schema, the service checks
+  // the length first (the same limit as a name), the shape after, then whether it is enabled
+  describe('the locale of the form', () => {
+    it('reads uk-UA and UK alike as uk, a region or the case make no difference', async () => {
+      const user = await newUser();
+
+      const res = await patchForm(accessCookie(user), fields({ locale: ' UK ' }));
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().locale).toBe('uk');
+      expect(await rowOf(user.id)).toMatchObject({ locale: 'uk' });
+    });
+
+    it('refuses 101 characters and changes nothing', async () => {
+      const user = await newUser({ name: 'Anna', locale: 'uk' });
+
+      const res = await patchForm(accessCookie(user), fields({ locale: 'x'.repeat(101) }));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'LOCALE_TOO_LONG' });
+      expect(await rowOf(user.id)).toMatchObject({ name: 'Anna', locale: 'uk' });
+    });
+
+    it.each(['english', 'u', 'u-k', '123'])(
+      'refuses %s, not two letters of a language, and changes nothing',
+      async (value) => {
+        const user = await newUser({ locale: 'uk' });
+
+        const res = await patchForm(accessCookie(user), fields({ locale: value }));
+
+        expect(res.statusCode).toBe(400);
+        expect(res.json()).toMatchObject({ errorCode: 'LOCALE_INVALID' });
+        expect(await rowOf(user.id)).toMatchObject({ locale: 'uk' });
+      },
+    );
+
+    // the right shape, but not a language the shop answers in
+    it('refuses a language with no dictionary, and changes nothing', async () => {
+      const user = await newUser({ locale: 'uk' });
+
+      const res = await patchForm(accessCookie(user), fields({ locale: 'xx' }));
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'LOCALE_INVALID' });
+      expect(await rowOf(user.id)).toMatchObject({ locale: 'uk' });
     });
   });
 

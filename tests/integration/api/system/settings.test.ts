@@ -1,17 +1,18 @@
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import env from '@config/env.js';
+import { makePublicId, uploadImage } from '@utils/cloudinary.util.js';
 
 import { accessCookie, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { closeChatSockets, openChatSocket } from '../../../helpers/chatSocket.js';
+import { pngImage } from '../../../helpers/cloudinary.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -26,10 +27,11 @@ import { placeOrder } from '../../../helpers/orders.js';
 import { openPaymentPage } from '../../../helpers/payments.js';
 import { stripeOfTests } from '../../../helpers/stripe.js';
 
-// the settings a shop sets in its environment, and what each one changes: the pages of the
-// frontend the server links to and sends the browser back to, the name of the shop the bot and the
-// documentation give, the logo of the mails, the time a confirmed order holds its units and the
-// time its payment page stays open after that, the life of the link of a verification. Each test
+// the settings a shop tunes, in its environment or in the data of the shop (shopSettings, root
+// sets it), and what each one changes: the pages of the frontend the server links to and sends
+// the browser back to, the name of the shop the bot and the documentation give, the logo of the
+// mails, the time a confirmed order holds its units and the time its payment page stays open
+// after that, the life of the link of a verification. Each test
 // sets them for itself and puts them back; the app reads them on each request
 
 let app: FastifyInstance;
@@ -64,6 +66,7 @@ beforeAll(async () => {
 afterEach(() => {
   Object.assign(env, restore);
   restore = {};
+  resetShopSettings();
   stopModel();
 });
 
@@ -188,9 +191,9 @@ describe('the pages of the frontend (WEB_PAGE_*)', () => {
   });
 });
 
-describe('the name of the shop (SHOP_NAME)', () => {
+describe('the name of the shop (shopName)', () => {
   it('is the name the bot greets a new chat with', async () => {
-    set({ SHOP_NAME: 'Lamp House' });
+    setShopSettings({ shopName: 'Lamp House' });
 
     const res = await app.inject({
       method: 'GET',
@@ -205,7 +208,7 @@ describe('the name of the shop (SHOP_NAME)', () => {
   });
 
   it('is the name the bot answers as', async () => {
-    set({ SHOP_NAME: 'Lamp House' });
+    setShopSettings({ shopName: 'Lamp House' });
     const calls = answerAsModel();
     const cookie = accessCookie(await newUser({ isVerified: true }));
     const current = await app.inject({
@@ -226,10 +229,15 @@ describe('the name of the shop (SHOP_NAME)', () => {
   });
 });
 
-describe('the logo of the mails (SHOP_LOGO_PATH)', () => {
-  it('goes inline with every mail, the file of the setting', async () => {
-    const logo = 'tests/fixtures/images/jpeg-baseline.jpg';
-    set({ SHOP_LOGO_PATH: logo });
+describe('the logo of the mails (shopSettings.logoUrl)', () => {
+  it('goes inline with every mail, fetched from Cloudinary', async () => {
+    const data = pngImage(12, 8);
+    const uploaded = await uploadImage({
+      file: data,
+      mimetype: 'image/png',
+      publicId: makePublicId({ kind: 'shop', imageKey: randomUUID() }),
+    });
+    setShopSettings({ logoUrl: uploaded.urlBase, logoPublicId: uploaded.publicId });
     const user = await newUser();
     const mails = watchMail();
 
@@ -237,18 +245,32 @@ describe('the logo of the mails (SHOP_LOGO_PATH)', () => {
 
     expect(mails[0]!.attachments).toEqual([
       expect.objectContaining({
-        type: 'image/jpeg',
-        filename: 'jpeg-baseline.jpg',
+        type: 'image/png',
+        filename: 'logo.png',
         disposition: 'inline',
-        content: readFileSync(path.join(process.cwd(), logo)).toString('base64'),
+        content: data.toString('base64'),
       }),
     ]);
+    expect(mails[0]!.html).toContain('cid:cartlify-logo');
+  });
+
+  // the plan for this (notes/i18n-shop-steps.md, step 4): no logo, or Cloudinary did not answer,
+  // is not a reason to refuse the mail, only to send it without the logo
+  it('sends the mail without the logo, and without its place in the html, when the shop has none', async () => {
+    setShopSettings({ logoUrl: null, logoPublicId: null });
+    const user = await newUser();
+    const mails = watchMail();
+
+    expect((await forgot(user.email)).statusCode).toBe(200);
+
+    expect(mails[0]!.attachments).toEqual([]);
+    expect(mails[0]!.html).not.toContain('cid:cartlify-logo');
   });
 });
 
-describe('the time of a reservation (ORDER_RESERVATION_MINUTES)', () => {
+describe('the time of a reservation (reservationMinutes)', () => {
   it('holds the units of a confirmed order for the minutes of the setting', async () => {
-    set({ ORDER_RESERVATION_MINUTES: 5 });
+    setShopSettings({ reservationMinutes: 5 });
     const before = Date.now();
 
     const orderId = await placeOrder(
@@ -271,8 +293,8 @@ describe('the time of a reservation (ORDER_RESERVATION_MINUTES)', () => {
   });
 
   // stripe closes the page itself the minutes after the end of the reservation
-  it('keeps the payment page open the minutes of STRIPE_PAGE_AFTER_RESERVATION_MINUTES after it', async () => {
-    set({ STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 45 });
+  it('keeps the payment page open the minutes of stripePageMinutes after it', async () => {
+    setShopSettings({ stripePageMinutes: 45 });
     const buyer = await newUser();
     const orderId = await placeOrder(
       app,

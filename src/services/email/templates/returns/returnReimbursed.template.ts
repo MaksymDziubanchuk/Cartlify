@@ -1,11 +1,12 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
-// how the money went, in the words of the mail
-const WAY_WORDS: Record<string, string> = {
-  bank_transfer: 'a bank transfer',
-  cash: 'cash',
-  other: 'another way',
-};
+// how money sent outside the app went (src/locales, returnWayWords.*); none for other
+const WAY_KEYS = ['bank_transfer', 'cash'];
+
+const wayWordsOf = (method: string, locale: string) =>
+  t(`returnWayWords.${WAY_KEYS.includes(method) ? method : 'other'}`, locale);
 
 export type ReturnReimbursedTemplateArgs = {
   orderId: number;
@@ -27,6 +28,7 @@ export type ReturnReimbursedTemplateArgs = {
   userName?: string;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
 // the mail itself is returnReimbursed.html and returnReimbursed.txt next to this file. It goes when
@@ -38,34 +40,52 @@ export function buildReturnReimbursedTemplate(args: ReturnReimbursedTemplateArgs
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
-  const day = new Intl.DateTimeFormat('en-GB', {
+  const dateLocale = locale === 'en' ? 'en-GB' : locale;
+  const day = new Intl.DateTimeFormat(dateLocale, {
     dateStyle: 'long',
     timeZone: args.timeZone || 'UTC',
   });
 
+  const orderId = String(args.orderId);
+  const code = args.code?.trim() || '';
+  const amount = money.format(Number(args.amount));
+  const way = wayWordsOf(args.method, locale);
+  const sentOn = day.format(args.sentOn);
+
   const values = {
     appName,
-    orderId: String(args.orderId),
-    code: args.code?.trim() || '',
+    orderId,
+    code,
     orderUrl,
-    amount: money.format(Number(args.amount)),
-    way: WAY_WORDS[args.method] ?? WAY_WORDS.other!,
-    sentOn: day.format(args.sentOn),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('returnReimbursed.subject', locale, { appName, orderId }),
+    preview: t('returnReimbursed.preview', locale, { amount }),
+    leadTxt: t('returnReimbursed.leadTxt', locale, { appName, orderId, amount }),
+    heading: t('returnReimbursed.heading', locale),
+    body: t('returnReimbursed.body', locale, { orderId, amount }),
+    sentOnLine: t('returnReimbursed.sentOn', locale, { way, date: sentOn }),
+    greeting: greetingOf(args.userName, locale),
+    statementLine: code ? t('common.statementLine', locale, { code }) : '',
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
   return {
-    subject: `${appName} — We paid back the cost of sending order #${args.orderId} back${args.code ? ` (${args.code})` : ''}`,
+    subject: `${values.title}${code ? ` (${code})` : ''}`,
     text: renderTemplate('returns/returnReimbursed.txt', values),
     html: renderTemplate('returns/returnReimbursed.html', values),
   };

@@ -1,9 +1,10 @@
 import { Prisma } from '@prisma/client';
 
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { returnCodeOf } from '@helpers/returns.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
@@ -67,15 +68,19 @@ export async function sendReturnChangedEmail(
       return;
     }
 
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildReturnChangedTemplate({
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: row.orderId,
       code: returnCodeOf(row.basis, row.orderId, row.number),
       // nothing of it is left to handle: every row is refused
       allTaken: row.items.every((item) => item.money === 'refused'),
-      supportEmail: env.EMAIL_REPLY_TO,
+      supportEmail: shopSettings().emailReplyTo,
+      // the form has no account to read a language from: the mail goes in the shop's language
+      locale: mailLocaleOf(null),
       ...(row.contactName ? { userName: row.contactName } : {}),
-      logoCid: SHOP_LOGO_CID,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
     });
 
     await sendEmail({
@@ -83,7 +88,7 @@ export async function sendReturnChangedEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return changed mail was not sent');

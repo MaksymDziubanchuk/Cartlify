@@ -103,9 +103,11 @@ const setRegisterSchema = {
   description:
     'Creates a new user account and sets authentication cookies. ' +
     'The password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols. ' +
-    'The name is optional, up to 100 characters. While a version of the terms or of the ' +
-    'contract is in force (GET /api/legal/documents/current), the person accepts every one of ' +
-    'them with the registration: `acceptedDocumentIds` names them.',
+    'The name is optional, up to 100 characters. `locale` is optional too, and never refused: a ' +
+    'language the shop answers in is saved and the confirmation mail goes in it, anything else ' +
+    "is only dropped and the mail goes in the shop's own language. While a version of the terms " +
+    'or of the contract is in force (GET /api/legal/documents/current), the person accepts ' +
+    'every one of them with the registration: `acceptedDocumentIds` names them.',
 
   body: {
     $ref: 'authRegisterBodySchema#',

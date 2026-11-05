@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
@@ -638,6 +639,20 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     expect(mails[0]!.html).toContain(`href="${withdrawalLinkOf(orderId)}"`);
   });
 
+  // the language of the buyer's account (mailLocaleOf), the offer to withdraw included
+  it("mails the step in the language of the buyer's account", async () => {
+    const buyer = await newUser({ name: 'Ana', locale: 'es' });
+    const orderId = await paidOrder(buyer);
+    const mails = watchMail();
+
+    await setStatus(admin, orderId, 'shipped');
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toBe(`Cartlify — Pedido #${orderId} enviado`);
+    expect(mails[0]!.html).toContain('Hola, Ana:');
+    expect(mails[0]!.text).toContain(`Desiste aquí:\n${withdrawalLinkOf(orderId)}`);
+  });
+
   // some carriers give only a link: the buyer gets the carrier and the link, and no empty number
   it('ships with a carrier and a link but no number, and mails the link', async () => {
     const orderId = await paidOrder();
@@ -762,7 +777,7 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     expect(mails).toHaveLength(1);
     expect(mails[0]!.subject).toBe(`Cartlify — The details of order #${orderId} changed`);
     expect(mails[0]!.text).toContain(
-      `Questions? Write to us in the chat on our site or to ${env.EMAIL_REPLY_TO}.`,
+      `Questions? Write to us in the chat on our site or to ${shopSettings().emailReplyTo}.`,
     );
     // the admin explains in the chat: nothing of the send is in the mail
     expect(mails[0]!.text).not.toContain('DHL');

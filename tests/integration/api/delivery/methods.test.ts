@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
-import { resetDelivery, setDelivery } from '../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
 
 // GET /api/delivery/methods: how this shop gets an order to its buyer, for the page that confirms an
@@ -20,7 +20,7 @@ beforeAll(async () => {
   buyer = await createUser();
 });
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 afterAll(async () => {
   try {
@@ -35,13 +35,13 @@ const read = (headers: Record<string, string> = {}) =>
 
 describe('GET /api/delivery/methods', () => {
   it('gives a guest the methods of the shop with the price of each', async () => {
-    setDelivery({
-      DELIVERY_METHODS: ['manual', 'pickup'],
-      DELIVERY_FLAT_PRICE: 4.99,
-      DELIVERY_FREE_FROM: 50,
-      DELIVERY_COUNTRIES: ['UA', 'PL'],
-      PICKUP_ADDRESS: 'Main street 1, Kyiv',
-      PICKUP_HOURS: 'Mon-Fri 10:00-18:00',
+    setShopSettings({
+      deliveryMethods: ['manual', 'pickup'],
+      deliveryFlatPrice: 4.99,
+      deliveryFreeFrom: 50,
+      deliveryCountries: ['UA', 'PL'],
+      pickupAddress: 'Main street 1, Kyiv',
+      pickupHours: 'Mon-Fri 10:00-18:00',
     });
 
     const res = await read({ cookie: `guestId=${randomUUID()}` });
@@ -81,7 +81,7 @@ describe('GET /api/delivery/methods', () => {
   });
 
   it('says a delivery costs nothing when the shop names no price', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: null, DELIVERY_FREE_FROM: null });
+    setShopSettings({ deliveryFlatPrice: null, deliveryFreeFrom: null });
 
     const manual = (await read()).json().methods[0];
 
@@ -89,7 +89,7 @@ describe('GET /api/delivery/methods', () => {
   });
 
   it('leaves out a method the shop has not enabled', async () => {
-    setDelivery({ DELIVERY_METHODS: ['pickup'] });
+    setShopSettings({ deliveryMethods: ['pickup'] });
 
     const res = await read();
 
@@ -97,10 +97,10 @@ describe('GET /api/delivery/methods', () => {
   });
 
   it('lists the countries the shop has named, and none for a shop that only has a pickup', async () => {
-    setDelivery({ DELIVERY_METHODS: ['manual'], DELIVERY_COUNTRIES: ['DE', 'GB'] });
+    setShopSettings({ deliveryMethods: ['manual'], deliveryCountries: ['DE', 'GB'] });
     expect((await read()).json().methods[0].countries).toEqual(['DE', 'GB']);
 
-    setDelivery({ DELIVERY_METHODS: ['pickup'] });
+    setShopSettings({ deliveryMethods: ['pickup'] });
     expect((await read()).json().methods[0].countries).toEqual([]);
   });
 });

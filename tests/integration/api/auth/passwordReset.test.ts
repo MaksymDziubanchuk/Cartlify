@@ -76,6 +76,20 @@ describe('POST /api/auth/password/forgot', () => {
     expect(linkToken(mails[0]!, '/web/auth/reset')).toEqual(expect.any(String));
   });
 
+  // the language of the account, the time the link lasts too: the words of the period are the
+  // ones of the mail, not English slotted into another language
+  it('mails the link in the language of the account', async () => {
+    const user = await newUser({ locale: 'es' });
+    const mails = watchMail();
+
+    const res = await forgot(user.email);
+
+    expect(res.statusCode).toBe(200);
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toContain('Restablece tu contraseña');
+    expect(mails[0]!.text).toMatch(/Este enlace es válido durante \d+ (minutos?|horas?|días?)\./);
+  });
+
   // another answer would tell that an account has this email
   it('answers the same when SendGrid refuses the mail, and logs it with the account and no email', async () => {
     const user = await newUser();

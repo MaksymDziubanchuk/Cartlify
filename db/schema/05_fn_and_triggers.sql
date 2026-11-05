@@ -5039,6 +5039,80 @@ CREATE TRIGGER trg_stock_log_append_only
 BEFORE UPDATE OR DELETE ON cartlify.stock_log FOR EACH ROW
 EXECUTE FUNCTION cartlify.stock_log_append_only ();
 
+------------------------------------------------------------
+-- SHOP SETTINGS
+------------------------------------------------------------
+-- A CHECK constraint cannot hold a subquery (db/06, shop_settings_delivery_chk and the others of
+-- the table check the shape of a list the shop writes), so the shape of a list is checked here,
+-- in a plain function instead.
+
+-- True when every element of an array matches a regular expression; true for an empty or empty
+-- array.
+CREATE OR REPLACE FUNCTION cartlify.array_matches (p_values text[], p_pattern text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT NOT EXISTS (SELECT 1 FROM unnest(p_values) AS v WHERE v !~ p_pattern);
+$$;
+
+-- True when no element of an array repeats; true for an empty or empty array.
+CREATE OR REPLACE FUNCTION cartlify.array_has_no_duplicates (p_values text[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT cardinality(p_values) = cardinality(ARRAY(SELECT DISTINCT unnest(p_values)));
+$$;
+
+-- Sets what the database owns in a new version of the data of the shop: the next version number
+-- and the time, whatever the row says. Two versions written at once wait for each other (an
+-- advisory lock). The version root saw when they wrote this one is given in "basedOnVersion"; if
+-- the current version moved on since (another write got there first), the write is refused,
+-- SHOP_SETTINGS_OUTDATED. A write of the system (cartlify.is_system, no author, db/03) carries no
+-- basedOnVersion and skips the check: it only fills in the default of a field root left empty,
+-- never a choice of root's that could conflict with another.
+CREATE OR REPLACE FUNCTION cartlify.shop_settings_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_max integer;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.shop_settings'));
+
+  v_max := coalesce((SELECT max(s.version) FROM cartlify.shop_settings AS s), 0);
+
+  IF NEW."basedOnVersion" IS NOT NULL AND NEW."basedOnVersion" IS DISTINCT FROM v_max THEN
+    RAISE EXCEPTION 'SHOP_SETTINGS_OUTDATED' USING ERRCODE = '23514';
+  END IF;
+
+  NEW.version := v_max + 1;
+  NEW."createdAt" := clock_timestamp() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_settings_before_insert ON cartlify.shop_settings;
+
+CREATE TRIGGER trg_shop_settings_before_insert
+BEFORE INSERT ON cartlify.shop_settings FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_settings_before_insert ();
+
+-- Guard: a version is history, added once and never changed or removed. The policies of db/03
+-- deny every update and delete already; this guard says it a second time for a role that would
+-- skip them (a superuser is not checked, as rls does not check it either). The refusal is
+-- SHOP_SETTINGS_APPEND_ONLY with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.shop_settings_append_only () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'SHOP_SETTINGS_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_settings_append_only ON cartlify.shop_settings;
+
+CREATE TRIGGER trg_shop_settings_append_only
+BEFORE UPDATE OR DELETE ON cartlify.shop_settings FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_settings_append_only ();
+
 
 ------------------------------------------------------------
 -- TEMPORARY: the product versions of the functions that now take a variant. Remove this block

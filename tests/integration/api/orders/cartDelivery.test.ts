@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { resetDelivery, setDelivery } from '../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -31,7 +31,7 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
 });
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 afterAll(async () => {
   try {
@@ -58,7 +58,7 @@ const cartOf = (user: TestUser) =>
 
 describe('GET /api/orders/current: the delivery of a cart', () => {
   it('has no delivery yet and quotes each method of the shop for the items in it', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 30 });
+    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
     const buyer = await newUser();
     await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).variantId, 2);
 
@@ -79,7 +79,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
   });
 
   it('quotes a free delivery once the items reach the sum, and shows it again when they fall under', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 30 });
+    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
     const buyer = await newUser();
     const product = await createProduct({ price: 10, stock: 10 });
     const added = await addToCart(buyer, product.variantId, 3);
@@ -103,7 +103,7 @@ describe('GET /api/orders/current: the delivery of a cart', () => {
   });
 
   it('quotes only the methods the shop has enabled, and no price when the shop names none', async () => {
-    setDelivery({ DELIVERY_METHODS: ['pickup'] });
+    setShopSettings({ deliveryMethods: ['pickup'] });
     const buyer = await newUser();
     await addToCart(buyer, (await createProduct({ price: 10, stock: 5 })).variantId, 1);
 

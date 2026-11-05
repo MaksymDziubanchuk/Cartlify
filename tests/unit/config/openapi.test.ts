@@ -1,27 +1,16 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { importWithEnv } from '../../helpers/freshImport.js';
+import { openApiInfo } from '@config/openapi.js';
 
-type OpenApiConfig = typeof import('@config/openapi.js');
-
-// the documentation names the shop it serves (SHOP_NAME, Cartlify unless set)
+// the title names the shop. shopName can change at runtime (root, PUT /api/root/shop-settings);
+// the title is read once, when the server starts the swagger plugin, before the current data of
+// the shop is loaded (src/app.ts registers it ahead of loadShopSettings), so it is fixed in code
+// instead of reflecting the live name
 describe('openApiInfo', () => {
-  it('names the shop', async () => {
-    const { openApiInfo } = await importWithEnv<OpenApiConfig>('@config/openapi.js', {
-      SHOP_NAME: 'Lamp House',
-    });
-
+  it('names the shop, fixed in code', () => {
     expect(openApiInfo).toMatchObject({
-      title: 'Lamp House REST API',
-      description: 'REST API documentation for Lamp House.',
+      title: 'Cartlify REST API',
+      description: 'REST API documentation for Cartlify.',
     });
-  });
-
-  it('names Cartlify without the setting', async () => {
-    const { openApiInfo } = await importWithEnv<OpenApiConfig>('@config/openapi.js', {
-      SHOP_NAME: '',
-    });
-
-    expect(openApiInfo.title).toBe('Cartlify REST API');
   });
 });

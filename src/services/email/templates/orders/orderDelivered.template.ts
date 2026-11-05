@@ -1,4 +1,6 @@
+import { t } from '@config/i18n.js';
 import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
@@ -41,6 +43,7 @@ export type OrderDeliveredTemplateArgs = WithdrawalOfferArgs & {
   pickup?: string | null;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
 // the mail itself is orderDelivered.html and orderDelivered.txt next to this file
@@ -51,54 +54,101 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
   if (!args.items?.length) throw new Error('ORDER_ITEMS_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
   const price = (value: number | string) => money.format(Number(value));
 
-  const noRight = withdrawalNoticeOf(args.items, 'none');
+  const noRight = withdrawalNoticeOf(args.items, 'none', locale);
+  const collected = Boolean(args.pickup?.trim());
+  const orderId = String(args.orderId);
+  const statement = t(
+    collected ? 'orderDelivered.statementCollected' : 'orderDelivered.statementDelivered',
+    locale,
+  );
 
   const values = {
     appName,
-    orderId: String(args.orderId),
+    orderId,
     orderUrl,
     items: args.items.map((item) => ({
       name: item.name.trim(),
       quantity: String(item.quantity),
       lineTotal: price(item.totalPrice),
     })),
-    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price, locale),
     total: price(args.total),
-    ...withdrawalOfferOf('delivered', args.items, args),
-    noRightLine: noRight.length ? 'No right of withdrawal applies to these goods:' : '',
+    ...withdrawalOfferOf('delivered', args.items, args, locale),
+    noRightLine: noRight.length ? t('common.noRightLine', locale) : '',
     noRightItems: noRight,
-    // the products to rate, each with the page of its reviews
+    // the products to rate, each with the page of its reviews; the text line names the product
+    // itself, the html button its own translated label (the mark inside {{#ratings}} takes the
+    // fields of the item, not of values)
     ratings: args.items
       .filter((item) => item.reviewUrl?.trim())
-      .map((item) => ({
-        name: item.reviewName?.trim() || item.name.trim(),
-        reviewUrl: item.reviewUrl!.trim(),
-      })),
+      .map((item) => {
+        const name = item.reviewName?.trim() || item.name.trim();
+        return {
+          name,
+          reviewUrl: item.reviewUrl!.trim(),
+          rateButton: t('orderDelivered.rateButton', locale, { name }),
+        };
+      }),
     hasRatings: args.items.some((item) => item.reviewUrl?.trim()) ? 'yes' : '',
     shippingAddress: args.shippingAddress?.trim() || '',
     pickup: args.pickup?.trim() || '',
-    // how the mail says the order came to the buyer
-    statement: args.pickup?.trim() ? 'is collected' : 'is delivered',
-    heading: args.pickup?.trim() ? 'Order collected' : 'Order delivered',
+    statement,
+    heading: t(
+      collected ? 'orderDelivered.headingCollected' : 'orderDelivered.headingDelivered',
+      locale,
+    ),
     // the name and the phone in one line
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t(
+      collected ? 'orderDelivered.subjectCollected' : 'orderDelivered.subjectDelivered',
+      locale,
+      {
+        appName,
+        orderId,
+      },
+    ),
+    preview: t(
+      collected ? 'orderDelivered.previewCollected' : 'orderDelivered.previewDelivered',
+      locale,
+      {
+        orderId,
+      },
+    ),
+    leadTxt: t('orderDelivered.leadTxt', locale, { appName, orderId, statement }),
+    body: t('orderDelivered.body', locale, { orderId, statement }),
+    greeting: greetingOf(args.userName, locale),
+    itemHeader: t('common.itemHeader', locale),
+    qtyHeader: t('common.qtyHeader', locale),
+    totalHeader: t('common.totalHeader', locale),
+    deliveryLabel: t('common.deliveryLabel', locale),
+    deliveredToLabel: t('orderDelivered.deliveredToLabel', locale),
+    collectedAtLabel: t('orderDelivered.collectedAtLabel', locale),
+    recipientLabel: t('common.recipientLabel', locale),
+    ratingsIntro: t('orderDelivered.ratingsIntro', locale),
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
+    withdrawContract: t('common.withdrawContract', locale),
   };
 
   return {
-    subject: `${appName} — Order #${args.orderId} ${args.pickup?.trim() ? 'is collected' : 'is delivered'}`,
+    subject: values.title,
     text: renderTemplate('orders/orderDelivered.txt', values),
     html: renderTemplate('orders/orderDelivered.html', values),
   };

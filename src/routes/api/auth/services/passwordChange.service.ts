@@ -3,6 +3,7 @@ import type { Role } from '@prisma/client';
 
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { hashPass, verifyPass } from '@helpers/safePass.js';
 import {
   BadRequestError,
@@ -45,7 +46,7 @@ export async function changePassword({
   const passwordHash = await hashPass(cleanNewPassword);
   const now = new Date();
 
-  let mail: { to: string; userName?: string };
+  let mail: { to: string; userName?: string; locale: string };
   try {
     mail = await prisma.$transaction(async (tx) => {
       await setUserContext(tx, { userId, role });
@@ -58,6 +59,7 @@ export async function changePassword({
           passwordHash: true,
           authProvider: true,
           deletedAt: true,
+          locale: true,
         },
       });
       if (!user || user.deletedAt) throw new NotFoundError('USER_NOT_FOUND');
@@ -91,7 +93,11 @@ export async function changePassword({
         data: { usedAt: now },
       });
 
-      return { to: user.email, ...(user.name ? { userName: user.name } : {}) };
+      return {
+        to: user.email,
+        locale: mailLocaleOf(user.locale),
+        ...(user.name ? { userName: user.name } : {}),
+      };
     });
   } catch (err) {
     if (isAppError(err)) throw err;
@@ -101,7 +107,7 @@ export async function changePassword({
 
   // the password is changed either way: a mail that did not go is only logged, without the address
   try {
-    await sendPasswordChangedEmail({ ...mail, changedAt: now });
+    await sendPasswordChangedEmail({ ...mail, changedAt: now }, log);
   } catch (err) {
     log.warn({ err, userId }, 'password changed mail was not sent');
   }

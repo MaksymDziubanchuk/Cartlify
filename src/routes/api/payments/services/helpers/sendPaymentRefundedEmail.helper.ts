@@ -1,6 +1,8 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { buildOrderPaymentRefundedTemplate } from '@services/email/templates/orders/orderPaymentRefunded.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -10,6 +12,7 @@ import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type PaymentRefundedMailLogger = {
   error: (obj: unknown, msg?: string) => void;
+  warn: (obj: unknown, msg?: string) => void;
 };
 
 type SendPaymentRefundedEmailArgs = {
@@ -38,22 +41,25 @@ export async function sendPaymentRefundedEmail(
       await setAdminContext(tx);
       return tx.user.findUnique({
         where: { id: args.userId },
-        select: { email: true, name: true, deletedAt: true },
+        select: { email: true, name: true, locale: true, deletedAt: true },
       });
     });
 
     if (!user || user.deletedAt) return;
 
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildOrderPaymentRefundedTemplate({
       // the name of the shop the mail is from
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: args.orderId,
       orderUrl: orderPage(args.orderId),
       amount: args.amount,
       currency: args.currency,
       reason: args.reason,
       ...(user.name ? { userName: user.name } : {}),
-      logoCid: SHOP_LOGO_CID,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      locale: mailLocaleOf(user.locale),
     });
 
     await sendEmail({
@@ -61,7 +67,7 @@ export async function sendPaymentRefundedEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, orderId: args.orderId }, 'payment refunded mail was not sent');

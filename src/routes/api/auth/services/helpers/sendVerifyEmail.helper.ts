@@ -1,4 +1,7 @@
+import type { FastifyBaseLogger } from 'fastify';
+
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
 import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
@@ -11,20 +14,26 @@ export type SendVerifyEmailArgs = {
   token: string;
   expiresAt: Date;
   userName?: string;
+  locale?: string;
 };
 
 // build verify url
 // add expiry hint
 // send email via provider
-export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ status: number }> {
+export async function sendVerifyEmail(
+  args: SendVerifyEmailArgs,
+  log: Pick<FastifyBaseLogger, 'warn'>,
+): Promise<{ status: number }> {
   const verifyUrl = buildWebLoginVerifyUrl(args.token);
-  const expiresInText = formatExpiresIn(args.expiresAt);
+  const expiresInText = formatExpiresIn(args.expiresAt, args.locale);
+  const logo = await shopLogoAttachment(log);
 
   const { subject, text, html } = buildVerifyEmailTemplate({
     verifyUrl,
     userName: args.userName || '',
-    appName: env.SHOP_NAME,
-    logoCid: SHOP_LOGO_CID,
+    appName: shopSettings().shopName,
+    ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+    ...(args.locale ? { locale: args.locale } : {}),
     expiresInText,
   });
 
@@ -34,7 +43,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     // only a failure of the mail provider is a bad gateway, our own error stays a server error

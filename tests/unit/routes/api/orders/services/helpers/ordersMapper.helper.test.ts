@@ -6,9 +6,9 @@ import {
   orderResponseSelect,
 } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
 
-import { resetDelivery, setDelivery } from '../../../../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../../../../helpers/shopSettings.js';
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 const primaryUrl = 'https://res.cloudinary.com/demo/image/upload/v1/products/4/0.jpg';
 
@@ -360,10 +360,10 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('gives a pickup with the place and the hours of the shop, and no address', () => {
-    setDelivery({
-      DELIVERY_METHODS: ['manual', 'pickup'],
-      PICKUP_ADDRESS: 'Lichtstrasse 4',
-      PICKUP_HOURS: 'Mon-Fri',
+    setShopSettings({
+      deliveryMethods: ['manual', 'pickup'],
+      pickupAddress: 'Lichtstrasse 4',
+      pickupHours: 'Mon-Fri',
     });
 
     const out = map({
@@ -387,7 +387,7 @@ describe('mapOrderRowToResponse', () => {
 
   // the price is fixed at the confirmation; before it the order shows the price of now
   it('shows the price the confirmation fixed, and before it the price of now', () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 5, DELIVERY_FREE_FROM: 50 });
+    setShopSettings({ deliveryFlatPrice: 5, deliveryFreeFrom: 50 });
     const fixed = delivery({ price: new Prisma.Decimal('3.50') });
 
     expect(map({ confirmed: true, delivery: fixed }).delivery?.price).toBe(3.5);
@@ -396,7 +396,7 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('adds the delivery of now to the items of an order that is not confirmed', () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 5, DELIVERY_FREE_FROM: 50 });
+    setShopSettings({ deliveryFlatPrice: 5, deliveryFreeFrom: 50 });
 
     const out = map({ delivery: delivery() });
 
@@ -417,10 +417,10 @@ describe('mapOrderRowToResponse', () => {
   });
 
   it('gives what each method would cost to an order that is not confirmed, and not to one that is', () => {
-    setDelivery({
-      DELIVERY_METHODS: ['manual', 'pickup'],
-      DELIVERY_FLAT_PRICE: 5,
-      DELIVERY_FREE_FROM: 50,
+    setShopSettings({
+      deliveryMethods: ['manual', 'pickup'],
+      deliveryFlatPrice: 5,
+      deliveryFreeFrom: 50,
     });
 
     // 19.98 of items: 30.02 short of the free delivery

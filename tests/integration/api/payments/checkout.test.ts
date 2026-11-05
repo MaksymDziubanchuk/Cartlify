@@ -58,8 +58,8 @@ const newProduct = async (opts: { price?: number; stock?: number } = {}) => {
 };
 
 // a buyer with an order waiting for its payment
-async function waitingOrder(opts: { price?: number; quantity?: number } = {}) {
-  const user = await newUser();
+async function waitingOrder(opts: { price?: number; quantity?: number; locale?: string } = {}) {
+  const user = await newUser(opts.locale ? { locale: opts.locale } : {});
   const product = await newProduct(opts.price !== undefined ? { price: opts.price } : {});
   const orderId = await placeOrder(app, csrf, user, product, 'waiting', opts.quantity ?? 2);
   return { user, product, orderId };
@@ -402,6 +402,48 @@ describe('POST /api/payments/checkout/sessions', () => {
         client_reference_id: String(orderId),
         metadata: { entityType: 'order', entityId: String(orderId), userId: String(user.id) },
       });
+    });
+
+    // the page opens in the buyer's own language when Stripe has it (mailLocaleOf, the same as a
+    // mail); Stripe has no Ukrainian, the buyer gets its own guess instead ("auto")
+    it.each([
+      ['es', 'es'],
+      ['uk', 'auto'],
+    ])("opens in the buyer's language, %s as %s", async (locale, stripeLocale) => {
+      const { user, orderId } = await waitingOrder({ locale });
+
+      const res = await checkout(app, csrf, user, orderId);
+
+      const sessionId = rememberSession(res.json().checkoutSession.sessionId);
+      expect(await readSession(sessionId)).toMatchObject({ locale: stripeLocale });
+    });
+
+    // the page carries values that can change while the reservation lasts (the buyer's language, a
+    // setting root changed): the same key with other values is refused by Stripe, and the buyer
+    // got a 500 until the reservation ran out. The page opened before is closed instead and a new
+    // one opened, so one page of the order is ever payable
+    it('closes the page opened before and opens a new one when its values changed since', async () => {
+      const { user, orderId } = await waitingOrder({ locale: 'es' });
+
+      const first = await checkout(app, csrf, user, orderId);
+      const firstId = rememberSession(first.json().checkoutSession.sessionId);
+
+      const changed = await app.inject({
+        method: 'PATCH',
+        url: '/api/users/me',
+        headers: withCsrf(csrf, accessCookie(user)),
+        payload: { locale: 'uk' },
+      });
+      expect(changed.statusCode).toBe(200);
+
+      const second = await checkout(app, csrf, user, orderId);
+
+      expect(second.statusCode).toBe(201);
+      const secondId = rememberSession(second.json().checkoutSession.sessionId);
+      expect(secondId).not.toBe(firstId);
+      expect((await readSession(firstId)).status).toBe('expired');
+      expect(await readSession(secondId)).toMatchObject({ status: 'open', locale: 'auto' });
+      expect((await redisStateOf(orderId)).pageLink).toBe(`stripe:${secondId}`);
     });
 
     // a page the reservation timer could not close (Stripe out of reach) stayed payable for a day:

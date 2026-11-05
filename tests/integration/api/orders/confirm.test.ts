@@ -5,7 +5,7 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
-import { resetDelivery, setDelivery } from '../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -76,7 +76,7 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
 });
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 afterAll(async () => {
   try {
@@ -393,7 +393,7 @@ describe('POST /api/orders/current/confirm: where the order goes', () => {
 
   it('refuses a method the shop has not enabled', async () => {
     const { user, orderId } = await newCart();
-    setDelivery({ DELIVERY_METHODS: ['pickup'] });
+    setShopSettings({ deliveryMethods: ['pickup'] });
 
     const res = await confirm(user, { orderId, delivery: deliveryBody });
 
@@ -456,12 +456,12 @@ describe('POST /api/orders/current/confirm: where the order goes', () => {
   it.each([
     [
       'a country the shop stopped to deliver to',
-      { DELIVERY_COUNTRIES: ['PL'] },
+      { deliveryCountries: ['PL'] },
       'DELIVERY_COUNTRY_NOT_ALLOWED',
     ],
     [
       'a method the shop turned off',
-      { DELIVERY_METHODS: ['pickup' as const] },
+      { deliveryMethods: ['pickup' as const] },
       'DELIVERY_METHOD_NOT_AVAILABLE',
     ],
   ])(
@@ -471,7 +471,7 @@ describe('POST /api/orders/current/confirm: where the order goes', () => {
       await confirm(user, { orderId, delivery: deliveryBody });
       await loseReservation(orderId);
 
-      setDelivery(settings);
+      setShopSettings(settings);
       const res = await confirm(user, { orderId });
 
       expect(res.statusCode).toBe(400);
@@ -523,7 +523,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   };
 
   it('adds the flat price of the manual method to the total and fixes it', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { user, orderId } = await cartOfTwenty();
 
     const res = await confirm(user, {
@@ -540,11 +540,11 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('keeps the price it was confirmed with when the shop changes its price after that', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { user, orderId } = await cartOfTwenty();
     await confirm(user, { orderId, delivery: deliveryBody, expectedDeliveryPrice: 4.99 });
 
-    setDelivery({ DELIVERY_FLAT_PRICE: 9.99 });
+    setShopSettings({ deliveryFlatPrice: 9.99 });
     const res = await app.inject({
       method: 'GET',
       url: `/api/orders/${orderId}`,
@@ -558,9 +558,9 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
     const at = await cartOfTwenty();
     const below = await cartOfTwenty();
 
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 20 });
+    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 20 });
     const free = await confirm(at.user, { orderId: at.orderId, delivery: deliveryBody });
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 20.01 });
+    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 20.01 });
     const paid = await confirm(below.user, {
       orderId: below.orderId,
       delivery: deliveryBody,
@@ -572,7 +572,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('asks nothing for a pickup, whatever the flat price is', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { user, orderId } = await cartOfTwenty();
     const { address: _address, ...person } = deliveryBody;
 
@@ -582,7 +582,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('lets a buyer whose order went back to a cart change a priced manual delivery to a pickup', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { user, orderId } = await cartOfTwenty();
     await confirm(user, { orderId, delivery: deliveryBody, expectedDeliveryPrice: 4.99 });
     // the buyer gives up paying: the order is a cart again and keeps the price of its delivery
@@ -618,7 +618,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('confirms when the price the buyer saw is the price now', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { user, orderId } = await cartOfTwenty();
 
     const res = await confirm(user, {
@@ -632,7 +632,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('refuses when the price the buyer saw is not the price now, names the price and confirms nothing', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 5.99 });
+    setShopSettings({ deliveryFlatPrice: 5.99 });
     const { user, orderId } = await cartOfTwenty();
 
     const res = await confirm(user, {
@@ -651,7 +651,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('refuses a free delivery the buyer saw when the cart is not free any more', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 30 });
+    setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
     const { user, orderId } = await cartOfTwenty();
 
     const res = await confirm(user, { orderId, delivery: deliveryBody, expectedDeliveryPrice: 0 });
@@ -664,7 +664,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('counts the delivery in the smallest payment: free items with a delivery that reaches it are let through', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 1 });
+    setShopSettings({ deliveryFlatPrice: 1 });
     const user = await newUser();
     const product = await createProduct({ price: 0, stock: 5 });
     products.push(product);
@@ -686,7 +686,7 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('refuses a total below the smallest payment when the delivery does not reach it', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 0.1 });
+    setShopSettings({ deliveryFlatPrice: 0.1 });
     const user = await newUser();
     const product = await createProduct({ price: 0.3, stock: 5 });
     products.push(product);
@@ -704,13 +704,13 @@ describe('POST /api/orders/current/confirm: the price of the delivery', () => {
   });
 
   it('prices the delivery again when an order that lost its reservation is confirmed again', async () => {
-    setDelivery({ DELIVERY_FLAT_PRICE: 4.99 });
+    setShopSettings({ deliveryFlatPrice: 4.99 });
     const { user, orderId } = await cartOfTwenty();
     await confirm(user, { orderId, delivery: deliveryBody, expectedDeliveryPrice: 4.99 });
     await loseReservation(orderId);
     expect((await orderOf(orderId)).total.toString()).toBe('20');
 
-    setDelivery({ DELIVERY_FLAT_PRICE: 7 });
+    setShopSettings({ deliveryFlatPrice: 7 });
     const res = await confirm(user, { orderId, expectedDeliveryPrice: 7 });
 
     expect(res.statusCode).toBe(200);

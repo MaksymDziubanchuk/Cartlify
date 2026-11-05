@@ -1,6 +1,6 @@
 import type { Prisma, ReturnStatus } from '@prisma/client';
 
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { variantNamesOf, type VariantNameInfo } from '@db/variantNames.helper.js';
 
@@ -520,7 +520,10 @@ function mapDelivery(row: OrderResponseRow, itemsTotal: number): OrderDeliveryDt
           }
         : null,
     note: d.note,
-    pickup: d.method === 'pickup' ? { address: env.PICKUP_ADDRESS, hours: env.PICKUP_HOURS } : null,
+    pickup:
+      d.method === 'pickup'
+        ? { address: shopSettings().pickupAddress, hours: shopSettings().pickupHours }
+        : null,
     shipment:
       sent && d.method === 'manual' && onItsWay
         ? {

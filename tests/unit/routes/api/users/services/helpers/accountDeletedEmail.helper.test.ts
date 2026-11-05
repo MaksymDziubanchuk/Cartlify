@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import type { SendEmailInput } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
+import type { ShopLogoAttachment } from '@services/email/shopLogo.js';
 
-// the provider is replaced: what the mail says is tested on the template, here only what goes out
+// the provider is replaced: what the mail says is tested on the template, here only what goes out.
+// shopLogo.js is replaced too: whether it finds a logo or not is its own test (shopLogo.test.ts),
+// here only whether this helper wires what it gives into the mail
 const sendEmail = jest.fn<(input: SendEmailInput) => Promise<{ status: number }>>();
+const shopLogoAttachment = jest.fn<(log: unknown) => Promise<ShopLogoAttachment | null>>();
 
 jest.unstable_mockModule('@routes/api/auth/services/helpers/sendEmail.helper.js', () => ({
   sendEmail,
+}));
+jest.unstable_mockModule('@services/email/shopLogo.js', () => ({
+  SHOP_LOGO_CID: 'cartlify-logo',
+  shopLogoAttachment,
 }));
 
 const { sendAccountDeletedEmail } =
@@ -14,10 +22,19 @@ const { sendAccountDeletedEmail } =
 
 const log = () => ({ warn: jest.fn(), error: jest.fn() });
 
+const LOGO: ShopLogoAttachment = {
+  content: 'aGk=',
+  type: 'image/png',
+  filename: 'logo.png',
+  disposition: 'inline',
+  content_id: 'cartlify-logo',
+};
+
 const args = {
   userId: 15,
   to: 'anna@example.com',
   userName: 'Anna',
+  locale: 'en',
   deliveries: [
     { orderId: 3, status: 'paid' as const, total: '10.00', items: [{ name: 'Lamp', quantity: 1 }] },
   ],
@@ -27,6 +44,8 @@ const args = {
 beforeEach(() => {
   sendEmail.mockReset();
   sendEmail.mockResolvedValue({ status: 202 });
+  shopLogoAttachment.mockReset();
+  shopLogoAttachment.mockResolvedValue(LOGO);
 });
 
 describe('sendAccountDeletedEmail', () => {
@@ -41,13 +60,19 @@ describe('sendAccountDeletedEmail', () => {
     });
     expect(mail.text).toContain('Order #3');
     expect(mail.html).toContain('cid:cartlify-logo');
-    expect(mail.attachments).toEqual([
-      expect.objectContaining({
-        content_id: 'cartlify-logo',
-        disposition: 'inline',
-        type: 'image/png',
-      }),
-    ]);
+    expect(mail.attachments).toEqual([LOGO]);
+  });
+
+  // no logo, or a Cloudinary fetch that failed, is not a reason to refuse the mail
+  // (shopLogoAttachment already turned that into null; notes/i18n-shop-steps.md, step 4)
+  it('mails the old address without the logo when the shop has none', async () => {
+    shopLogoAttachment.mockResolvedValue(null);
+
+    await sendAccountDeletedEmail(args, log());
+
+    const mail = sendEmail.mock.calls[0]![0];
+    expect(mail.html).not.toContain('cid:cartlify-logo');
+    expect(mail.attachments).toEqual([]);
   });
 
   // the account is already deleted when the mail goes: a failure must not reach the request

@@ -194,6 +194,25 @@ describe('PATCH /api/orders/:orderId/delivery', () => {
     expect(mails[0]!.text).toContain('Recipient: Anna Shevchenko, +380501234567');
   });
 
+  // the language of the buyer's account, the parts of the address it names too (the apartment),
+  // and the hidden line a mail program shows next to the subject
+  it("mails the change in the language of the buyer's account", async () => {
+    const buyer = await newUser({ name: 'Ana', locale: 'es' });
+    const orderId = await paidOrder(buyer);
+    const mails = watchMail();
+
+    await edit(orderId, { address: { ...deliveryBody.address, apartment: '7' } });
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toBe(
+      `Cartlify — Los datos de envío del pedido #${orderId} cambiaron`,
+    );
+    expect(mails[0]!.text).toContain('Hola, Ana:');
+    expect(mails[0]!.text).toContain('Enviar a: Test street 1, apto. 7, 01001 Kyiv, UA');
+    expect(mails[0]!.html).toContain(`Datos de envío actualizados, pedido #${orderId}.`);
+    expect(mails[0]!.html).not.toMatch(/\border #/);
+  });
+
   it('changes nothing, writes no line and mails nobody when it is as it was', async () => {
     const orderId = await paidOrder();
     const mails = watchMail();

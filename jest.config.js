@@ -72,7 +72,10 @@ export default {
       displayName: 'unit',
       testMatch: ['<rootDir>/tests/unit/**/*.test.ts'],
       setupFiles: ['<rootDir>/tests/setup/unit.setup.ts'],
-      setupFilesAfterEnv: ['<rootDir>/tests/setup/timeout.ts'],
+      setupFilesAfterEnv: [
+        '<rootDir>/tests/setup/unit.shopSettings.ts',
+        '<rootDir>/tests/setup/timeout.ts',
+      ],
     },
     {
       ...shared,

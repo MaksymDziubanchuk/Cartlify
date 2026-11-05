@@ -145,6 +145,15 @@ const authRegisterBodySchema = {
       maxLength: PROFILE_TEXT_MAX_LENGTH,
       description: `Display name, up to ${PROFILE_TEXT_MAX_LENGTH} characters. Spaces around it are cut.`,
     },
+    locale: {
+      type: 'string',
+      maxLength: PROFILE_TEXT_MAX_LENGTH,
+      description:
+        'A language the shop answers in (GET /api/shop-settings, enabledLocales), case and a ' +
+        'region ignored: uk-UA and UK both read as uk. Never refused: the wrong shape or a ' +
+        'language the shop does not answer in is only dropped, the account keeps no locale and ' +
+        "the confirmation mail goes in the shop's own language.",
+    },
     acceptedDocumentIds: {
       ...legalDocumentIdsSchema,
       description:

@@ -1,28 +1,17 @@
 import { afterEach, describe, expect, it } from '@jest/globals';
 
-import env from '@config/env.js';
-
 import { deliveryPriceOf, deliveryQuotesOf } from '@helpers/deliveryPrice.js';
+
+import { resetShopSettings, setShopSettings } from '../../helpers/shopSettings.js';
 
 // what a buyer pays for the delivery by the settings of the shop: the manual method the flat price,
 // nothing from the free-from sum of the items on (the sum itself included), a pickup nothing.
 // cartlify.delivery_price in the database holds the same rule (tests/integration/db/delivery.test.ts)
 
-const original = {
-  methods: env.DELIVERY_METHODS,
-  flat: env.DELIVERY_FLAT_PRICE,
-  freeFrom: env.DELIVERY_FREE_FROM,
-};
-
-afterEach(() => {
-  env.DELIVERY_METHODS = original.methods;
-  env.DELIVERY_FLAT_PRICE = original.flat;
-  env.DELIVERY_FREE_FROM = original.freeFrom;
-});
+afterEach(resetShopSettings);
 
 const shop = (flat: number | null, freeFrom: number | null = null) => {
-  env.DELIVERY_FLAT_PRICE = flat;
-  env.DELIVERY_FREE_FROM = freeFrom;
+  setShopSettings({ deliveryFlatPrice: flat, deliveryFreeFrom: freeFrom });
 };
 
 describe('deliveryPriceOf', () => {
@@ -69,7 +58,7 @@ describe('deliveryPriceOf', () => {
 
 describe('deliveryQuotesOf', () => {
   it('quotes each enabled method, with what is left to the free delivery', () => {
-    env.DELIVERY_METHODS = ['manual', 'pickup'];
+    setShopSettings({ deliveryMethods: ['manual', 'pickup'] });
     shop(4.99, 50);
 
     expect(deliveryQuotesOf(30)).toEqual([
@@ -79,7 +68,7 @@ describe('deliveryQuotesOf', () => {
   });
 
   it('has nothing left to the free delivery once it is free, and no sum when the shop names none', () => {
-    env.DELIVERY_METHODS = ['manual'];
+    setShopSettings({ deliveryMethods: ['manual'] });
     shop(4.99, 50);
     expect(deliveryQuotesOf(80)).toEqual([
       { method: 'manual', price: 0, freeFrom: 50, remainingToFree: 0 },
@@ -92,7 +81,7 @@ describe('deliveryQuotesOf', () => {
   });
 
   it('quotes only the methods the shop enabled', () => {
-    env.DELIVERY_METHODS = ['pickup'];
+    setShopSettings({ deliveryMethods: ['pickup'] });
     shop(null);
 
     expect(deliveryQuotesOf(10)).toEqual([
@@ -101,7 +90,7 @@ describe('deliveryQuotesOf', () => {
   });
 
   it('keeps the cents of what is left', () => {
-    env.DELIVERY_METHODS = ['manual'];
+    setShopSettings({ deliveryMethods: ['manual'] });
     shop(4.99, 50);
 
     expect(deliveryQuotesOf(19.9)[0]!.remainingToFree).toBe(30.1);

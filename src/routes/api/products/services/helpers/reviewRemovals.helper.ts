@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import type { Prisma } from '@prisma/client';
 
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -34,6 +34,7 @@ export async function sendReviewRemovedEmail(
     userId: number;
     to: string;
     userName: string | null;
+    locale: string;
     productName: string;
     removals: number;
     limit: number;
@@ -41,14 +42,17 @@ export async function sendReviewRemovedEmail(
   log: ReviewRemovalLogger,
 ): Promise<void> {
   try {
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildReviewRemovedTemplate({
       // the name of the shop the mail is from
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       productName: args.productName,
       removals: args.removals,
       limit: args.limit,
       userName: args.userName,
-      logoCid: SHOP_LOGO_CID,
+      locale: args.locale,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
     });
 
     await sendEmail({
@@ -56,7 +60,7 @@ export async function sendReviewRemovedEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.warn({ err, userId: args.userId }, 'review removed mail was not sent');

@@ -87,6 +87,19 @@ describe('buildReturnRefundedTemplate', () => {
       'ORDER_ITEMS_REQUIRED',
     );
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const en = buildReturnRefundedTemplate(base);
+    const uk = buildReturnRefundedTemplate({ ...base, locale: 'uk' });
+    const es = buildReturnRefundedTemplate({ ...base, locale: 'es' });
+
+    expect(en.text).toContain('It goes back the way you paid.');
+    expect(uk.text).toContain('Кошти повертаються тим самим способом, яким ви платили.');
+    expect(es.text).toContain('Se devuelve por el mismo medio con el que pagaste.');
+    expect(uk.subject).toContain('Кошти повернено');
+    expect(es.subject).toContain('Dinero devuelto');
+  });
 });
 
 describe('buildReturnRefundedTemplate and the way back', () => {
@@ -280,6 +293,17 @@ describe('buildReturnChangedTemplate', () => {
     expect(html).not.toContain('<b>Anna</b>');
     expect(html).toContain('&lt;b&gt;Anna&lt;/b&gt;');
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const uk = buildReturnChangedTemplate({ ...base, allTaken: false, locale: 'uk' });
+    const es = buildReturnChangedTemplate({ ...base, allTaken: false, locale: 'es' });
+
+    expect(uk.text).toContain('розглядають в іншій заяві цього замовлення');
+    expect(es.text).toContain('se gestiona en otra declaración de este pedido');
+    expect(uk.subject).toContain('Вашу заяву за замовленням');
+    expect(es.subject).toContain('Tu declaración del pedido');
+  });
 });
 
 describe('buildReturnReimbursedTemplate', () => {
@@ -299,6 +323,26 @@ describe('buildReturnReimbursedTemplate', () => {
     expect(text).toContain('We sent it by cash on 3 November 2026.');
     expect(html).toContain('We sent it by cash on 3 November 2026.');
     expect(text).toContain(`Questions? Write to us in the chat on our site or to ${supportEmail}.`);
+  });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const base = {
+      orderId: 42,
+      orderUrl,
+      amount: 6.5,
+      currency: 'eur',
+      method: 'cash',
+      sentOn: new Date('2026-11-03T09:30:00Z'),
+      supportEmail,
+    };
+    const uk = buildReturnReimbursedTemplate({ ...base, locale: 'uk' });
+    const es = buildReturnReimbursedTemplate({ ...base, locale: 'es' });
+
+    expect(uk.text).toContain('Ми надіслали кошти готівкою');
+    expect(es.text).toContain('Lo enviamos en efectivo');
+    expect(uk.subject).toContain('відшкодували вартість');
+    expect(es.subject).toContain('reembolsamos el coste');
   });
 });
 
@@ -377,6 +421,19 @@ describe('buildReturnClosedTemplate', () => {
       'ORDER_ITEMS_REQUIRED',
     );
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const en = buildReturnClosedTemplate(base);
+    const uk = buildReturnClosedTemplate({ ...base, locale: 'uk' });
+    const es = buildReturnClosedTemplate({ ...base, locale: 'es' });
+
+    expect(en.text).toContain('Returned to you:');
+    expect(uk.text).toContain('Повернено вам:');
+    expect(es.text).toContain('Devuelto a ti:');
+    expect(uk.subject).toContain('закрито');
+    expect(es.subject).toContain('cerró');
+  });
 });
 
 describe('buildReturnRefundFailedTemplate', () => {
@@ -414,6 +471,17 @@ describe('buildReturnRefundFailedTemplate', () => {
 
     expect(text).toContain(`Questions? Write to us in the chat on our site or to ${supportEmail}.`);
     expect(html).toContain(`href="${orderUrl}"`);
+  });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const uk = buildReturnRefundFailedTemplate({ ...base, locale: 'uk' });
+    const es = buildReturnRefundFailedTemplate({ ...base, locale: 'es' });
+
+    expect(uk.text).toContain('Ми напишемо вам про інший спосіб повернення коштів.');
+    expect(es.text).toContain('Te contactaremos sobre otra forma de devolverlo.');
+    expect(uk.subject).toContain('Ми не змогли повернути кошти');
+    expect(es.subject).toContain('No pudimos devolver el dinero');
   });
 });
 
@@ -517,6 +585,17 @@ describe('buildReturnReceivedTemplate', () => {
     expect(() => buildReturnReceivedTemplate({ ...base, items: [] })).toThrow(
       'ORDER_ITEMS_REQUIRED',
     );
+  });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const uk = buildReturnReceivedTemplate({ ...base, locale: 'uk' });
+    const es = buildReturnReceivedTemplate({ ...base, locale: 'es' });
+
+    expect(uk.text).toContain('Ви платите за доставку назад.');
+    expect(es.text).toContain('Tú pagas el transporte de vuelta.');
+    expect(uk.subject).toContain('Відмову за замовленням');
+    expect(es.subject).toContain('Desistimiento del pedido');
   });
 
   describe('for a statement of the public form', () => {

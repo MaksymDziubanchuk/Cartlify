@@ -1,7 +1,9 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { returnCodeOf } from '@helpers/returns.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -53,7 +55,7 @@ function loadReturn(returnId: number) {
 
     const buyer = await tx.order.findUnique({
       where: { id: row.orderId },
-      select: { user: { select: { deletedAt: true, name: true } } },
+      select: { user: { select: { deletedAt: true, name: true, locale: true } } },
     });
 
     return { ...row, items, buyer: buyer?.user ?? null };
@@ -84,8 +86,10 @@ export async function sendReturnByShopEmail(
       units.set(name, (units.get(name) ?? 0) + item.quantity);
     }
 
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildReturnByShopTemplate({
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: row.orderId,
       code: returnCodeOf(row.basis, row.orderId, row.number),
       timeZone: env.SHOP_TIME_ZONE,
@@ -94,10 +98,11 @@ export async function sendReturnByShopEmail(
       reason: row.reason,
       description: row.description,
       statedAt: row.statedAt,
-      supportEmail: env.EMAIL_REPLY_TO,
+      supportEmail: shopSettings().emailReplyTo,
       extended: row.extendsId !== null,
       ...(row.buyer?.name ? { userName: row.buyer.name } : {}),
-      logoCid: SHOP_LOGO_CID,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      locale: mailLocaleOf(row.buyer?.locale),
     });
 
     await sendEmail({
@@ -105,7 +110,7 @@ export async function sendReturnByShopEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return mail was not sent');

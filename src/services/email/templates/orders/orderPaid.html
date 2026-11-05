@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="x-apple-disable-message-reformatting">
-    <title>{{appName}} — Order #{{orderId}} is paid</title>
+    <title>{{title}}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f3ff;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;">
-      Payment received for order #{{orderId}}.
+      {{preview}}
     </div>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f5f3ff;">
@@ -23,23 +23,23 @@
 
             <tr>
               <td style="background:#ffffff;border:1px solid #ddd6fe;border-radius:14px;padding:28px;font-family:Arial,Helvetica,sans-serif;">
-                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Payment received</div>
+                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">{{heading}}</div>
 
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 10px 0;">
-                  Hi{{#userName}} {{userName}}{{/userName}},<br>
-                  We have received the payment for your order <b>#{{orderId}}</b>. We will let you know when it ships.
+                  {{greeting}}<br>
+                  {{body}}
                 </div>
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 14px 0;">
-                  Paid on {{paidAt}}
+                  {{paidOn}}
                 </div>
 
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;color:#111827;">
                   <tr>
-                    <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Item</td>
-                    <td align="center" style="padding:0 8px 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Qty</td>
-                    <td align="right" style="padding:0 8px 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Price</td>
-                    <td align="right" style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Total</td>
+                    <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{itemHeader}}</td>
+                    <td align="center" style="padding:0 8px 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{qtyHeader}}</td>
+                    <td align="right" style="padding:0 8px 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{priceHeader}}</td>
+                    <td align="right" style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{totalHeader}}</td>
                   </tr>
                   {{#items}}<tr>
                     <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">{{name}}</td>
@@ -48,11 +48,11 @@
                     <td align="right" style="padding:10px 0;border-bottom:1px solid #ede9fe;white-space:nowrap;">{{lineTotal}}</td>
                   </tr>{{/items}}
                   {{#deliveryLine}}<tr>
-                    <td colspan="3" align="right" style="padding:10px 8px 0 0;">Delivery</td>
+                    <td colspan="3" align="right" style="padding:10px 8px 0 0;">{{deliveryLabel}}</td>
                     <td align="right" style="padding:10px 0 0 0;white-space:nowrap;">{{deliveryLine}}</td>
                   </tr>{{/deliveryLine}}
                   <tr>
-                    <td colspan="3" align="right" style="padding:12px 8px 0 0;font-weight:800;">Total</td>
+                    <td colspan="3" align="right" style="padding:12px 8px 0 0;font-weight:800;">{{totalHeader}}</td>
                     <td align="right" style="padding:12px 0 0 0;font-weight:800;white-space:nowrap;">{{total}}</td>
                   </tr>
                 </table>
@@ -68,22 +68,22 @@
                 </div>{{/conditionalLine}}
 
                 {{#shippingAddress}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:18px 0 0 0;">
-                  <span style="font-size:12px;color:#6b7280;">Shipping to</span><br>
+                  <span style="font-size:12px;color:#6b7280;">{{shippingToLabel}}</span><br>
                   {{shippingAddress}}
                 </div>{{/shippingAddress}}
 
                 {{#pickup}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:18px 0 0 0;">
-                  <span style="font-size:12px;color:#6b7280;">Pick up at</span><br>
+                  <span style="font-size:12px;color:#6b7280;">{{pickupAtLabel}}</span><br>
                   {{pickup}}
                 </div>{{/pickup}}
 
                 {{#recipient}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:12px 0 0 0;">
-                  <span style="font-size:12px;color:#6b7280;">Recipient</span><br>
+                  <span style="font-size:12px;color:#6b7280;">{{recipientLabel}}</span><br>
                   {{recipient}}
                 </div>{{/recipient}}
 
                 {{#withdrawalLine}}<div style="font-size:14px;color:#111827;line-height:1.5;margin:18px 0 0 0;">
-                  {{withdrawalLine}} <a href="{{withdrawalUrl}}" style="color:#6d28d9;text-decoration:underline;">Withdraw from the contract</a>
+                  {{withdrawalLine}} <a href="{{withdrawalUrl}}" style="color:#6d28d9;text-decoration:underline;">{{withdrawContract}}</a>
                 </div>{{/withdrawalLine}}
 
                 <div style="padding:18px 0 18px 0;">
@@ -92,7 +92,7 @@
                       <td bgcolor="#6d28d9" style="border-radius:10px;">
                         <a href="{{orderUrl}}"
                            style="display:inline-block;padding:12px 18px;font-size:14px;font-weight:800;color:#ffffff;text-decoration:none;font-family:Arial,Helvetica,sans-serif;">
-                          View order
+                          {{viewOrderButton}}
                         </a>
                       </td>
                     </tr>
@@ -100,7 +100,7 @@
                 </div>
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  If the button does not work, open this link:
+                  {{openLinkFallback}}
                 </div>
 
                 <div style="font-size:12px;line-height:1.5;margin:6px 0 0 0;word-break:break-all;">
@@ -111,7 +111,7 @@
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
                   {{#attachedLine}}{{attachedLine}}<br>{{/attachedLine}}
-                  Questions? Write to us in the chat on our site{{#supportEmail}} or to <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
+                  {{questionsIntro}}{{#supportEmail}} {{orTo}} <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
                 </div>
               </td>
             </tr>

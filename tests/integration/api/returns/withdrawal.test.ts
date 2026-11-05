@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { settlePendingReturnRefunds } from '@routes/api/returns/services/settlePendingReturnRefunds.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
@@ -86,8 +87,9 @@ const newProduct = async (opts: Parameters<typeof createProduct>[0] = {}) => {
 async function order(
   lines: Array<{ item: TestProduct; quantity: number }>,
   stage: 'paid' | 'shipped' = 'paid',
+  owner: TestUser = buyer,
 ) {
-  const { orderId, paymentId } = await placePaidOrderOf(app, csrf, buyer, lines, { stage });
+  const { orderId, paymentId } = await placePaidOrderOf(app, csrf, owner, lines, { stage });
   const items = await asAdmin((tx) =>
     tx.orderItem.findMany({ where: { orderId }, orderBy: { id: 'asc' }, select: { id: true } }),
   );
@@ -104,6 +106,27 @@ const read = async (orderId: number, actor = buyer) =>
   ).json();
 
 describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sent', () => {
+  // the language of the buyer's account (mailLocaleOf): the notice and the money alike
+  it("mails the notice and the money in the language of the buyer's account", async () => {
+    const owner = await createUser({ name: 'Ana', locale: 'es' });
+    userIds.push(owner.id);
+    const product = await newProduct();
+    const { orderId } = await order([{ item: product, quantity: 1 }], 'paid', owner);
+    const mails = watchMail();
+
+    const res = await withdraw(orderId, {}, owner);
+
+    expect(res.statusCode).toBe(201);
+    const own = mails.filter((mail) => mail.to.includes(owner.email));
+    expect(own.map((mail) => mail.subject)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining(`Cartlify — Desistimiento del pedido #${orderId} registrado`),
+        expect.stringContaining(`Cartlify — Se cerró la devolución del pedido #${orderId}`),
+      ]),
+    );
+    expect(own.every((mail) => mail.text.includes('Hola, Ana:'))).toBe(true);
+  });
+
   it('takes the goods back at once, cancels the order and gives all the money back, mailing the notice and the money', async () => {
     const product = await newProduct();
     const { orderId, paymentId } = await order([{ item: product, quantity: 2 }]);
@@ -146,7 +169,7 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
     expect(own).toHaveLength(2);
     const notice = own.find((mail) => mail.subject.includes('Withdrawal from order'))!;
     expect(notice.text).toContain('Your order had not been sent, so the goods stay with us.');
-    expect(notice.text).toContain(env.EMAIL_REPLY_TO);
+    expect(notice.text).toContain(shopSettings().emailReplyTo);
     expect(own.some((mail) => mail.subject.includes('is closed'))).toBe(true);
 
     // the log names the buyer, the money was given back in the name of the shop

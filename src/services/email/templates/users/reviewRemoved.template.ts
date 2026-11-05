@@ -1,3 +1,5 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 
 export type ReviewRemovedTemplateArgs = {
@@ -5,11 +7,12 @@ export type ReviewRemovedTemplateArgs = {
   productName: string;
   // which removal of a review of the author by a moderator this is, this one counted
   removals: number;
-  // the removals the rules allow (REVIEW_REMOVALS_LIMIT)
+  // the removals the rules allow (reviewRemovalsLimit, root sets it)
   limit: number;
   userName?: string | null;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
 // the mail itself is reviewRemoved.html and reviewRemoved.txt next to this file. Before the limit
@@ -21,6 +24,9 @@ export function buildReviewRemovedTemplate(args: ReviewRemovedTemplateArgs): {
   html: string;
 } {
   const appName = args.appName?.trim() || 'Cartlify';
+  const locale = args.locale || 'en';
+  const removals = String(args.removals);
+  const limit = String(args.limit);
 
   const values = {
     appName,
@@ -28,15 +34,22 @@ export function buildReviewRemovedTemplate(args: ReviewRemovedTemplateArgs): {
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
-    removals: String(args.removals),
-    limit: String(args.limit),
-    beforeLimit: args.removals < args.limit ? 'yes' : '',
-    atLimit: args.removals === args.limit ? 'yes' : '',
-    pastLimit: args.removals > args.limit ? 'yes' : '',
+    beforeLimit:
+      args.removals < args.limit ? t('common.removalBeforeLimit', locale, { removals, limit }) : '',
+    atLimit: args.removals === args.limit ? t('common.removalAtLimit', locale, { limit }) : '',
+    pastLimit:
+      args.removals > args.limit ? t('common.removalPastLimit', locale, { removals, limit }) : '',
+    title: t('reviewRemoved.subject', locale, { appName }),
+    preview: t('reviewRemoved.preview', locale, { appName }),
+    heading: t('reviewRemoved.heading', locale),
+    body: t('reviewRemoved.body', locale, { appName, productName: args.productName }),
+    greeting: greetingOf(args.userName, locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
   return {
-    subject: `${appName} — Your review was removed`,
+    subject: values.title,
     text: renderTemplate('users/reviewRemoved.txt', values),
     html: renderTemplate('users/reviewRemoved.html', values),
   };

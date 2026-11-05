@@ -321,7 +321,8 @@ const usersGetByIdResponseSchema = {
     },
     avatarRemovalsLimit: {
       type: 'number',
-      description: 'Admin or root only: the removals the rules allow (AVATAR_REMOVALS_LIMIT).',
+      description:
+        'Admin or root only: the removals the rules allow (avatarRemovalsLimit, root sets it).',
     },
     returns: {
       type: 'object',
@@ -358,7 +359,7 @@ const usersGetByIdResponseSchema = {
     reviewRemovalsLimit: {
       type: 'number',
       description:
-        'Admin or root only: the review removals the rules allow (REVIEW_REMOVALS_LIMIT).',
+        'Admin or root only: the review removals the rules allow (reviewRemovalsLimit, root sets it).',
     },
     period: {
       type: 'object',
@@ -514,7 +515,7 @@ const usersAvatarRemovalResponseSchema = {
     avatarRemovalsLimit: {
       type: 'number',
       description:
-        'The removals the rules allow (AVATAR_REMOVALS_LIMIT); past it the page tells the admin ' +
+        'The removals the rules allow (avatarRemovalsLimit, root sets it); past it the page tells the admin ' +
         'to take the account to root.',
     },
   },
@@ -531,7 +532,11 @@ const profileNameField = {
 const profileLocaleField = {
   type: 'string',
   maxLength: PROFILE_TEXT_MAX_LENGTH,
-  description: `Locale of the user, for example en or uk-UA, up to ${PROFILE_TEXT_MAX_LENGTH} characters. An empty value removes the locale.`,
+  description:
+    'Locale of the user, a language the shop answers in (GET /api/shop-settings, ' +
+    'enabledLocales), case and a region ignored: uk-UA and UK both read as uk. Up to ' +
+    `${PROFILE_TEXT_MAX_LENGTH} characters (LOCALE_TOO_LONG above it), the wrong shape or a ` +
+    'language the shop does not answer in is LOCALE_INVALID. An empty value removes the locale.',
 } as const;
 
 // empty removes the phone; a non-empty one is an international number and nothing else

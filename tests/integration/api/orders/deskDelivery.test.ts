@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { resetDelivery, setDelivery } from '../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createProduct,
@@ -38,7 +38,7 @@ beforeAll(async () => {
   admin = await newUser({ role: 'ADMIN' });
 });
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 afterAll(async () => {
   try {
@@ -72,7 +72,7 @@ const pickupBody = { ...person, method: 'pickup' };
 // a buyer with four orders: paid to Kyiv, shipped to Warsaw by DHL with a number and a cost, shipped to
 // Berlin by DPD without either (and a free delivery, a product without weight), paid for a pickup
 async function buyerWithOrders() {
-  setDelivery({ DELIVERY_FLAT_PRICE: 4.99, DELIVERY_FREE_FROM: 30 });
+  setShopSettings({ deliveryFlatPrice: 4.99, deliveryFreeFrom: 30 });
   const buyer = await newUser({ name: 'Olena' });
   const light = await createProduct({
     price: 10,

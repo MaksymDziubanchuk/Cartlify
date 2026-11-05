@@ -70,7 +70,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
   req,
   reply,
 ) => {
-  const { email, password, name, acceptedDocumentIds } = req.body;
+  const { email, password, name, locale, acceptedDocumentIds } = req.body;
   const { id, role } = req.user as User;
   // build register dto
   const args = pickDefined<RegisterDto>(
@@ -80,10 +80,10 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
       userId: id,
       role,
     },
-    { name, acceptedDocumentIds },
+    { name, locale, acceptedDocumentIds },
   );
   // create user in service
-  const result = await authServices.register(args);
+  const result = await authServices.register(args, req.log);
   return reply.code(201).send(result);
 };
 

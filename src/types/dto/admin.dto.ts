@@ -750,6 +750,8 @@ export type AdminAlertKind =
   | 'returns_money_late'
   | 'returns_goods_late'
   | 'worker_stalled'
+  | 'shop_settings_incomplete'
+  | 'shop_locale_missing'
   | 'admin_actions';
 
 export type AdminAlertThresholdUnit = 'days' | 'units' | 'seconds' | 'hours';

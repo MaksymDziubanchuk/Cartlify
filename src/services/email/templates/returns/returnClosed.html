@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="x-apple-disable-message-reformatting">
-    <title>{{appName}} — Return of order #{{orderId}} is closed</title>
+    <title>{{title}}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f3ff;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;">
-      The return of order #{{orderId}} is closed.
+      {{preview}}
     </div>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f5f3ff;">
@@ -18,23 +18,23 @@
             <tr>
               <td style="padding:0 0 12px 0;text-align:left;font-family:Arial,Helvetica,sans-serif;">
                 {{#logoCid}}<img src="cid:{{logoCid}}" alt="{{appName}}" width="160" style="display:block;max-width:160px;height:auto;border:0;outline:none;text-decoration:none;">{{/logoCid}}{{^logoCid}}<div style="font-size:18px;font-weight:800;letter-spacing:0.2px;color:#4c1d95;">{{appName}}</div>{{/logoCid}}
-                {{#code}}<div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 10px 0;">Statement {{code}}</div>{{/code}}
+                {{#code}}<div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 10px 0;">{{statementLine}}</div>{{/code}}
               </td>
             </tr>
 
             <tr>
               <td style="background:#ffffff;border:1px solid #ddd6fe;border-radius:14px;padding:28px;font-family:Arial,Helvetica,sans-serif;">
-                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Return closed</div>
+                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">{{heading}}</div>
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 14px 0;">
-                  Hi{{#userName}} {{userName}}{{/userName}},<br>
-                  The return for your order <b>#{{orderId}}</b> is closed.<br>
+                  {{greeting}}<br>
+                  {{body}}<br>
                   {{outcomeLine}}{{#withheldLine}}<br>{{withheldLine}}{{/withheldLine}}{{#closeLine}}<br>{{closeLine}}{{/closeLine}}
                 </div>
                 {{#showRefunded}}
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;color:#111827;">
                   <tr>
-                    <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Returned to you</td>
-                    <td align="center" style="padding:0 0 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Qty</td>
+                    <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{returnedToYouHeader}}</td>
+                    <td align="center" style="padding:0 0 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{qtyHeader}}</td>
                   </tr>
                   {{#refunded}}<tr>
                     <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">{{name}}</td>
@@ -45,8 +45,8 @@
                 {{#showDeclined}}
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;color:#111827;">
                   <tr>
-                    <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Not returned</td>
-                    <td align="center" style="padding:0 0 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">Qty</td>
+                    <td style="padding:0 0 8px 0;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{notReturnedHeader}}</td>
+                    <td align="center" style="padding:0 0 8px 8px;border-bottom:1px solid #ddd6fe;font-size:12px;color:#6b7280;">{{qtyHeader}}</td>
                   </tr>
                   {{#declined}}<tr>
                     <td style="padding:10px 0;border-bottom:1px solid #ede9fe;">{{name}}<br><span style="font-size:12px;color:#6b7280;">{{why}}</span></td>
@@ -61,7 +61,7 @@
                       <td bgcolor="#6d28d9" style="border-radius:10px;">
                         <a href="{{orderUrl}}"
                            style="display:inline-block;padding:12px 18px;font-size:14px;font-weight:800;color:#ffffff;text-decoration:none;font-family:Arial,Helvetica,sans-serif;">
-                          View order
+                          {{viewOrderButton}}
                         </a>
                       </td>
                     </tr>
@@ -69,7 +69,7 @@
                 </div>
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  If the button does not work, open this link:
+                  {{openLinkFallback}}
                 </div>
 
                 <div style="font-size:12px;line-height:1.5;margin:6px 0 0 0;word-break:break-all;">
@@ -79,7 +79,7 @@
                 <hr style="border:none;border-top:1px solid #ddd6fe;margin:18px 0;">
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  Questions? Write to us in the chat on our site{{#supportEmail}} or to <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
+                  {{questionsIntro}}{{#supportEmail}} {{orTo}} <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
                 </div>
               </td>
             </tr>

@@ -10,6 +10,7 @@ import {
 } from '@utils/errors.js';
 
 import env from '@config/env.js';
+import { enabledLocaleOf } from '@helpers/locale.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 
 import {
@@ -98,18 +99,11 @@ export async function googleCallback({
   const emailVerified = idp.email_verified === true;
   if (!emailVerified) throw new ForbiddenError('GOOGLE_EMAIL_NOT_VERIFIED');
 
-  // normalize locale for app
-  const normalizeLocale = (raw?: string | null) => {
-    if (!raw) return undefined;
-    const base = raw.trim().toLowerCase().split('-')[0];
-    if (base === 'en' || base === 'uk') return base;
-    return undefined;
-  };
-
   const name = typeof idp.name === 'string' && idp.name.trim() ? idp.name.trim() : null;
   const avatarUrl =
     typeof idp.picture === 'string' && idp.picture.trim() ? idp.picture.trim() : null;
-  const locale = normalizeLocale(typeof idp.locale === 'string' ? idp.locale : null) ?? null;
+  // a language the shop does not answer in, or the wrong shape, is dropped
+  const locale = enabledLocaleOf(typeof idp.locale === 'string' ? idp.locale : null);
 
   let login: OAuthLoginOutcome;
 

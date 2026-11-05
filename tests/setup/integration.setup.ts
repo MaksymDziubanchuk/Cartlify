@@ -74,7 +74,8 @@ isolateEnv(
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
     // a shop that sends by hand to four countries and lets a buyer collect an order; no price for
-    // the delivery unless a test sets one (tests/helpers/delivery.ts)
+    // the delivery unless a test sets one (tests/helpers/shopSettings.ts; startApp applies these
+    // under their new names, applyTestShopSettingsBaseline)
     DELIVERY_METHODS: 'manual,pickup',
     DELIVERY_COUNTRIES: 'UA,PL,DE,GB',
     PICKUP_ADDRESS: 'Test shop, Main street 1, Kyiv',

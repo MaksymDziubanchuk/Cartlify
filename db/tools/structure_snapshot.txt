@@ -42,6 +42,7 @@ table | return_shipments | cartlify_owner | rls=true | force=true | cartlify_app
 table | returns | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | review_votes | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | reviews | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
+table | shop_settings | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | stock_log | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | user_tokens | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
 table | users | cartlify_owner | rls=true | force=true | cartlify_app=arwd/cartlify_owner,cartlify_owner=arwdDxtm/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -392,6 +393,35 @@ column | reviews | 6 | createdAt | timestamp(3) without time zone | notnull=true
 column | reviews | 7 | downVotes | integer | notnull=true | default=0 | identity=- | generated=- | -
 column | reviews | 8 | upVotes | integer | notnull=true | default=0 | identity=- | generated=- | -
 column | reviews | 9 | updatedAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
+column | shop_settings | 1 | id | integer | notnull=true | default=nextval('shop_settings_id_seq'::regclass) | identity=- | generated=- | -
+column | shop_settings | 2 | version | integer | notnull=true | default=- | identity=- | generated=- | -
+column | shop_settings | 3 | setById | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 4 | basedOnVersion | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 5 | deliveryMethods | text[] | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 6 | deliveryFlatPrice | numeric(10,2) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 7 | deliveryFreeFrom | numeric(10,2) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 8 | deliveryCountries | text[] | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 9 | pickupAddress | character varying(300) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 10 | pickupHours | character varying(300) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 11 | shopName | character varying(100) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 12 | emailFromName | character varying(100) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 13 | emailReplyTo | character varying(254) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 14 | logoUrl | text | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 15 | logoPublicId | text | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 16 | reservationMinutes | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 17 | stripePageMinutes | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 18 | reviewCheckEnabled | boolean | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 19 | avatarRemovalsLimit | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 20 | reviewRemovalsLimit | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 21 | withdrawalGraceDays | integer | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 22 | shopLocale | character varying(2) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 23 | enabledLocales | text[] | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 24 | sellerLegalName | character varying(200) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 25 | sellerAddress | character varying(500) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 26 | sellerTaxId | character varying(50) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 27 | sellerEmail | character varying(254) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 28 | sellerPhone | character varying(30) | notnull=false | default=- | identity=- | generated=- | -
+column | shop_settings | 29 | createdAt | timestamp(3) without time zone | notnull=true | default=CURRENT_TIMESTAMP | identity=- | generated=- | -
 column | stock_log | 1 | id | integer | notnull=true | default=nextval('stock_log_id_seq'::regclass) | identity=- | generated=- | -
 column | stock_log | 2 | actorId | integer | notnull=false | default=- | identity=- | generated=- | -
 column | stock_log | 3 | actorRole | "Role" | notnull=false | default=- | identity=- | generated=- | -
@@ -619,6 +649,13 @@ constraint | reviews | reviews_rating_1_5 | c | validated=true | CHECK (((rating
 constraint | reviews | reviews_rating_or_comment_required | c | validated=true | CHECK (((rating IS NOT NULL) OR ((comment IS NOT NULL) AND (btrim(comment) <> ''::text))))
 constraint | reviews | reviews_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE CASCADE
 constraint | reviews | reviews_votes_non_negative | c | validated=true | CHECK ((("upVotes" >= 0) AND ("downVotes" >= 0)))
+constraint | shop_settings | shop_settings_countries_chk | c | validated=true | CHECK ((array_matches("deliveryCountries", '^[A-Z]{2}$'::text) AND array_has_no_duplicates("deliveryCountries")))
+constraint | shop_settings | shop_settings_delivery_chk | c | validated=true | CHECK ((("deliveryMethods" <@ ARRAY['manual'::text, 'pickup'::text]) AND array_has_no_duplicates("deliveryMethods") AND (("deliveryFlatPrice" IS NULL) OR ("deliveryFlatPrice" > (0)::numeric)) AND (("deliveryFreeFrom" IS NULL) OR ("deliveryFreeFrom" > (0)::numeric)) AND (("deliveryFreeFrom" IS NULL) OR ("deliveryFlatPrice" IS NOT NULL)) AND ((NOT ('pickup'::text = ANY ("deliveryMethods"))) OR ("pickupAddress" IS NOT NULL)) AND ((NOT ('pickup'::text = ANY ("deliveryMethods"))) OR ("pickupHours" IS NOT NULL))))
+constraint | shop_settings | shop_settings_locales_chk | c | validated=true | CHECK (((("shopLocale" IS NULL) OR (("shopLocale")::text ~ '^[a-z]{2}$'::text)) AND array_matches("enabledLocales", '^[a-z]{2}$'::text) AND array_has_no_duplicates("enabledLocales") AND (("shopLocale" IS NULL) OR (("shopLocale")::text = ANY ("enabledLocales")))))
+constraint | shop_settings | shop_settings_moderation_chk | c | validated=true | CHECK (((("avatarRemovalsLimit" IS NULL) OR ("avatarRemovalsLimit" > 0)) AND (("reviewRemovalsLimit" IS NULL) OR ("reviewRemovalsLimit" > 0)) AND (("withdrawalGraceDays" IS NULL) OR (("withdrawalGraceDays" >= 0) AND ("withdrawalGraceDays" <= 30)))))
+constraint | shop_settings | shop_settings_pkey | p | validated=true | PRIMARY KEY (id)
+constraint | shop_settings | shop_settings_reservation_chk | c | validated=true | CHECK (((("reservationMinutes" IS NULL) OR ("reservationMinutes" > 0)) AND (("stripePageMinutes" IS NULL) OR ("stripePageMinutes" >= 30)) AND (("reservationMinutes" IS NULL) OR ("stripePageMinutes" IS NULL) OR (("reservationMinutes" + "stripePageMinutes") <= 1440))))
+constraint | shop_settings | shop_settings_setById_fkey | f | validated=true | FOREIGN KEY ("setById") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | stock_log | stock_log_actorId_fkey | f | validated=true | FOREIGN KEY ("actorId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | stock_log | stock_log_actor_chk | c | validated=true | CHECK ((("actorId" IS NULL) = ("actorRole" IS NULL)))
 constraint | stock_log | stock_log_change_chk | c | validated=true | CHECK ((("quantityChange" <> 0) AND ("stockAfter" >= 0)))
@@ -636,6 +673,7 @@ constraint | user_tokens | user_tokens_pkey | p | validated=true | PRIMARY KEY (
 constraint | user_tokens | user_tokens_revoked_closed_chk | c | validated=true | CHECK ((("revokedAt" IS NULL) OR (("usedAt" IS NOT NULL) AND ("revokedAt" = "usedAt"))))
 constraint | user_tokens | user_tokens_session_chk | c | validated=false | CHECK (((type = 'REFRESH_TOKEN'::"UserTokenType") = ("sessionId" IS NOT NULL))) NOT VALID
 constraint | user_tokens | user_tokens_userId_fkey | f | validated=true | FOREIGN KEY ("userId") REFERENCES users(id) ON UPDATE CASCADE ON DELETE RESTRICT
+constraint | users | users_locale_chk | c | validated=true | CHECK (((locale IS NULL) OR (locale ~ '^[a-z]{2}$'::text)))
 constraint | users | users_pkey | p | validated=true | PRIMARY KEY (id)
 constraint | variant_attribute_values | variant_attribute_values_attributeId_fkey | f | validated=true | FOREIGN KEY ("attributeId") REFERENCES attributes(id) ON UPDATE CASCADE ON DELETE RESTRICT
 constraint | variant_attribute_values | variant_attribute_values_optionId_fkey | f | validated=true | FOREIGN KEY ("optionId") REFERENCES attribute_options(id) ON UPDATE CASCADE ON DELETE RESTRICT
@@ -782,6 +820,8 @@ index | review_votes | review_votes_userId_reviewId_key | valid=true | ready=tru
 index | reviews | reviews_pkey | valid=true | ready=true | CREATE UNIQUE INDEX reviews_pkey ON cartlify.reviews USING btree (id)
 index | reviews | reviews_productId_idx | valid=true | ready=true | CREATE INDEX "reviews_productId_idx" ON cartlify.reviews USING btree ("productId")
 index | reviews | reviews_userId_productId_key | valid=true | ready=true | CREATE UNIQUE INDEX "reviews_userId_productId_key" ON cartlify.reviews USING btree ("userId", "productId")
+index | shop_settings | shop_settings_pkey | valid=true | ready=true | CREATE UNIQUE INDEX shop_settings_pkey ON cartlify.shop_settings USING btree (id)
+index | shop_settings | shop_settings_version_key | valid=true | ready=true | CREATE UNIQUE INDEX shop_settings_version_key ON cartlify.shop_settings USING btree (version)
 index | stock_log | stock_log_actorId_createdAt_idx | valid=true | ready=true | CREATE INDEX "stock_log_actorId_createdAt_idx" ON cartlify.stock_log USING btree ("actorId", "createdAt")
 index | stock_log | stock_log_createdAt_id_idx | valid=true | ready=true | CREATE INDEX "stock_log_createdAt_id_idx" ON cartlify.stock_log USING btree ("createdAt", id)
 index | stock_log | stock_log_delivery_idx | valid=true | ready=true | CREATE INDEX stock_log_delivery_idx ON cartlify.stock_log USING btree ("deliveryId", id) WHERE ("deliveryId" IS NOT NULL)
@@ -838,6 +878,7 @@ sequence | return_shipments_id_seq | cartlify_owner | integer | increment=1 | st
 sequence | returns_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | review_votes_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | reviews_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
+sequence | shop_settings_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | stock_log_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | user_tokens_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
 sequence | users_id_seq | cartlify_owner | integer | increment=1 | start=1 | cycle=false | cartlify_app=rU/cartlify_owner,cartlify_owner=rwU/cartlify_owner,cartlify_readonly=r/cartlify_owner
@@ -877,6 +918,8 @@ function | admin_alert_settings_update_columns() | cartlify_owner | plpgsql | de
 function | admin_audit_log_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=377012faa85dfe4fe05ada01e67b9055 | extension=-
 function | anonymize_login_logs(p_user_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=integer | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=d0e020c851ae9e99aa0e4bfab21fd709 | extension=-
 function | apply_return_results(p_return_id integer, p_results jsonb, p_actor integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=8327635bf6ca65fc330c0c66c139b5ec | extension=-
+function | array_has_no_duplicates(p_values text[]) | cartlify_owner | sql | definer=false | volatile=i | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=0bdb345e9ecea7bd8ab6c09225d1a9a4 | extension=-
+function | array_matches(p_values text[], p_pattern text) | cartlify_owner | sql | definer=false | volatile=i | strict=false | leakproof=false | parallel=u | returns=boolean | config=- | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=fd4011aeeb75684c4c83f75b4c7335ff | extension=-
 function | assert_return_accepted(p_return_id integer) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=void | config=search_path=cartlify, pg_temp | acl=cartlify_owner=X/cartlify_owner | body=02d4e699324887b834f24938cd6cc3ba | extension=-
 function | attribute_groups_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=80afb875eac98f2bfb4408538efc5885 | extension=-
 function | attribute_options_update_columns() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=9447e03c261bb2a9c5e1c76978f4e204 | extension=-
@@ -1003,6 +1046,8 @@ function | set_current_context(p_role "Role", p_user_id integer, p_guest_id uuid
 function | set_limit(real) | postgres | c | definer=false | volatile=v | strict=true | leakproof=false | parallel=u | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=79156a0336c67021d9428bff7da30542 | extension=pg_trgm
 function | set_return_shipment_cost(p_shipment_id integer, p_cost numeric) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=jsonb | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=9f912f5a059b25b7756b4a520235228c | extension=-
 function | settle_return_dispute(p_order_id integer, p_won boolean, p_note text, p_at timestamp without time zone) | cartlify_owner | plpgsql | definer=true | volatile=v | strict=false | leakproof=false | parallel=u | returns=jsonb | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=983dfa677916210d148e5cf304431296 | extension=-
+function | shop_settings_append_only() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=8f6efc1e24603b83323be1e7148171bb | extension=-
+function | shop_settings_before_insert() | cartlify_owner | plpgsql | definer=false | volatile=v | strict=false | leakproof=false | parallel=u | returns=trigger | config=- | acl=cartlify_owner=X/cartlify_owner | body=a1bf00a4109875d0edfc853c1bf41e10 | extension=-
 function | shop_today() | cartlify_owner | sql | definer=false | volatile=s | strict=false | leakproof=false | parallel=u | returns=date | config=search_path=cartlify, pg_temp | acl=cartlify_app=X/cartlify_owner,cartlify_owner=X/cartlify_owner | body=7a01556ffe84be6aa134efb5ba2bfaa9 | extension=-
 function | show_limit() | postgres | c | definer=false | volatile=s | strict=true | leakproof=false | parallel=s | returns=real | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=3ab6c68b603f0310182efe3695d82a92 | extension=pg_trgm
 function | show_trgm(text) | postgres | c | definer=false | volatile=i | strict=true | leakproof=false | parallel=s | returns=text[] | config=- | acl=cartlify_app=X/postgres,postgres=X/postgres | body=bb20c15988887dca8023fcdec2e15705 | extension=pg_trgm
@@ -1091,6 +1136,8 @@ trigger | reviews | trg_reviews_after_mod_rating | enabled=O | CREATE TRIGGER tr
 trigger | reviews | trg_reviews_lock_rating_and_keys | enabled=O | CREATE TRIGGER trg_reviews_lock_rating_and_keys BEFORE UPDATE ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_lock_rating_and_keys()
 trigger | reviews | trg_reviews_refuse_removed_product | enabled=O | CREATE TRIGGER trg_reviews_refuse_removed_product BEFORE INSERT ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION refuse_removed_product()
 trigger | reviews | trg_reviews_update_columns | enabled=O | CREATE TRIGGER trg_reviews_update_columns BEFORE UPDATE ON cartlify.reviews FOR EACH ROW EXECUTE FUNCTION reviews_update_columns()
+trigger | shop_settings | trg_shop_settings_append_only | enabled=O | CREATE TRIGGER trg_shop_settings_append_only BEFORE DELETE OR UPDATE ON cartlify.shop_settings FOR EACH ROW EXECUTE FUNCTION shop_settings_append_only()
+trigger | shop_settings | trg_shop_settings_before_insert | enabled=O | CREATE TRIGGER trg_shop_settings_before_insert BEFORE INSERT ON cartlify.shop_settings FOR EACH ROW EXECUTE FUNCTION shop_settings_before_insert()
 trigger | stock_log | trg_stock_log_append_only | enabled=O | CREATE TRIGGER trg_stock_log_append_only BEFORE DELETE OR UPDATE ON cartlify.stock_log FOR EACH ROW EXECUTE FUNCTION stock_log_append_only()
 trigger | user_tokens | trg_user_tokens_update_columns | enabled=O | CREATE TRIGGER trg_user_tokens_update_columns BEFORE UPDATE ON cartlify.user_tokens FOR EACH ROW EXECUTE FUNCTION user_tokens_update_columns()
 trigger | users | trg_users_before_write_email | enabled=O | CREATE TRIGGER trg_users_before_write_email BEFORE INSERT OR UPDATE OF email ON cartlify.users FOR EACH ROW EXECUTE FUNCTION users_before_write_email()
@@ -1247,6 +1294,10 @@ policy | reviews | reviews_insert | PERMISSIVE | public | INSERT | using=- | che
 policy | reviews | reviews_select | PERMISSIVE | public | SELECT | using=true | check=-
 policy | reviews | reviews_update_owner_comment_null | PERMISSIVE | public | UPDATE | using=(is_owner("userId") AND ((rating IS NULL) OR (comment IS NULL) OR (btrim(comment) = ''::text))) | check=true
 policy | reviews | reviews_update_owner_votes | PERMISSIVE | cartlify_owner | UPDATE | using=true | check=true
+policy | shop_settings | shop_settings_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
+policy | shop_settings | shop_settings_insert | PERMISSIVE | public | INSERT | using=- | check=((is_root() AND ("setById" = current_actor_id())) OR (is_system() AND ("setById" IS NULL) AND ("basedOnVersion" IS NULL)))
+policy | shop_settings | shop_settings_select | PERMISSIVE | public | SELECT | using=is_admin() | check=-
+policy | shop_settings | shop_settings_update_deny | PERMISSIVE | public | UPDATE | using=false | check=false
 policy | stock_log | stock_log_delete_deny | PERMISSIVE | public | DELETE | using=false | check=-
 policy | stock_log | stock_log_insert_owner | PERMISSIVE | cartlify_owner | INSERT | using=- | check=((is_system() AND ("actorId" IS NULL) AND ("actorRole" IS NULL)) OR (is_admin() AND ("actorId" = current_actor_id()) AND ("actorRole" = current_actor_role())) OR ((current_actor_role() = 'USER'::"Role") AND ((event)::text = ANY ((ARRAY['stock.return'::character varying, 'stock.return_write_off'::character varying])::text[])) AND ("actorId" = current_actor_id()) AND ("actorRole" = 'USER'::"Role") AND (EXISTS ( SELECT 1 FROM (return_items ri JOIN returns rr ON ((rr.id = ri."returnId"))) WHERE ((ri.id = stock_log."returnItemId") AND (rr."createdById" = current_actor_id()))))))
 policy | stock_log | stock_log_select | PERMISSIVE | public | SELECT | using=is_admin() | check=-

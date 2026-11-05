@@ -3,6 +3,7 @@ import { prisma } from '@db/client.js';
 import { AppError, BadRequestError, InternalError, isAppError } from '@utils/errors.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { hashPass } from '@helpers/safePass.js';
 
 import env from '@config/env.js';
@@ -23,11 +24,17 @@ import type { Role } from 'types/user.js';
 // create reset token row
 // return generic response
 // the mail of a link of reset, and the account it is for (the log names the account, not the email)
-type ResetMailJob = { to: string; resetToken: string; expiresAt: Date; userId: number };
+type ResetMailJob = {
+  to: string;
+  resetToken: string;
+  expiresAt: Date;
+  userId: number;
+  locale: string;
+};
 
 export async function passwordForgot(
   { email }: PasswordForgotDto,
-  log: Pick<FastifyBaseLogger, 'error'>,
+  log: Pick<FastifyBaseLogger, 'error' | 'warn'>,
 ): Promise<MessageResponseDto> {
   const cleanEmail = email?.trim().toLowerCase();
   if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
@@ -44,9 +51,14 @@ export async function passwordForgot(
 
       // load user by email
       const rows = await tx.$queryRaw<
-        { id: number; email: string; authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN' }[]
+        {
+          id: number;
+          email: string;
+          authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          locale: string | null;
+        }[]
       >`
-      select id, email, "authProvider" as "authProvider"
+      select id, email, "authProvider" as "authProvider", locale
       from cartlify.users
       where email = ${cleanEmail}
       limit 1
@@ -88,7 +100,13 @@ export async function passwordForgot(
       // the password is really reset (passwordReset below)
 
       // schedule email send
-      sendJob = { to: cleanEmail, resetToken: rawToken, expiresAt, userId: u.id };
+      sendJob = {
+        to: cleanEmail,
+        resetToken: rawToken,
+        expiresAt,
+        userId: u.id,
+        locale: mailLocaleOf(u.locale),
+      };
 
       // return generic ok
       return genericOk;
@@ -100,7 +118,7 @@ export async function passwordForgot(
     // set inside the transaction, which the narrowing of typescript does not follow
     const { userId, ...mail } = sendJob as ResetMailJob;
     try {
-      await sendResetPasswordEmail(mail);
+      await sendResetPasswordEmail(mail, log);
     } catch (err) {
       // a mail the provider did not take is only logged: another answer than the generic one would
       // tell that an account has this email. Our own error stays a server error

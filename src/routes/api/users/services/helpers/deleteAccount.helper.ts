@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { getPgMessage, tx } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { requireSiteDomain } from '@helpers/siteDomain.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import {
@@ -70,6 +71,8 @@ type ErasedAccount = {
   email: string;
   name: string | null;
   publicId: string | null;
+  // read before the row is emptied: the column itself is wiped by the update below
+  locale: string | null;
   open: OpenOrder[];
 };
 
@@ -113,10 +116,11 @@ async function eraseAccount(
           email: string;
           name: string | null;
           publicId: string | null;
+          locale: string | null;
           deletedAt: Date | null;
         }[]
       >`
-        select id, email, name, "publicId" as "publicId", "deletedAt" as "deletedAt"
+        select id, email, name, "publicId" as "publicId", locale, "deletedAt" as "deletedAt"
         from cartlify.users
         where id = ${userId}::int
         for update
@@ -264,7 +268,13 @@ async function eraseAccount(
         });
       }
 
-      return { email: user.email, name: user.name, publicId: user.publicId, open };
+      return {
+        email: user.email,
+        name: user.name,
+        publicId: user.publicId,
+        locale: user.locale,
+        open,
+      };
     },
     {
       maxRetries: 3,
@@ -377,7 +387,14 @@ export async function deleteAccount(args: DeleteAccountArgs): Promise<void> {
   }
 
   await sendAccountDeletedEmail(
-    { userId, to: erased.email, userName: erased.name, deliveries, cancelled },
+    {
+      userId,
+      to: erased.email,
+      userName: erased.name,
+      locale: mailLocaleOf(erased.locale),
+      deliveries,
+      cancelled,
+    },
     log,
   );
 }

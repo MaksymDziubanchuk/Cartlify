@@ -301,7 +301,11 @@ BEGIN
     'cartlify.settle_return_dispute(integer, boolean, text, timestamp without time zone)',
     'cartlify.variant_expired_units(integer)',
     'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
-    'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)'
+    'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',
+    -- the shape of a list shop_settings writes (db/06): a CHECK constraint cannot hold a
+    -- subquery, these run instead; the write runs as the app role (shop_settings_insert, db/03)
+    'cartlify.array_matches(text[], text)',
+    'cartlify.array_has_no_duplicates(text[])'
   ]
   LOOP
     IF to_regprocedure(v_fn) IS NOT NULL THEN

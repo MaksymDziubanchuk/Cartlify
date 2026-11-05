@@ -1,7 +1,7 @@
-Your payment of {{amount}} for order #{{orderId}} is refunded in full: {{reason}}.
-{{orderLine}} Your bank shows the money back within a few days.
+{{body}}
+{{bankNote}}
 
-See your order:
+{{seeOrderTxt}}
 {{orderUrl}}
 
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.

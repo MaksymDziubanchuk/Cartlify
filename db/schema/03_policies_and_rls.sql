@@ -2231,4 +2231,64 @@ WITH
 -- DELETE: denied to every role
 CREATE POLICY stock_log_delete_deny ON cartlify.stock_log FOR DELETE USING (false);
 
+----------------------------------------
+-- SHOP SETTINGS
+----------------------------------------
+-- The data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
+-- seller the shop names): a row is a full version, added, never changed or removed. Root reads
+-- every version (the history); admin reads the current version only (the highest "version"); the
+-- app reads the current version too, under the system context, at the start of the server and
+-- after every write, to fill its own cache (the public fields and the fields guest/user never
+-- see are both in the cache, the routes decide which ones a role is shown, db/shop-settings.md).
+-- A version is written by root, in their own name, or by the server under the system context
+-- (the admin context with no user id, cartlify.is_system), which fills in the server's own
+-- default for a field root left empty. The version number, and the check against the version
+-- root last saw, come from trg_shop_settings_before_insert (db/05).
+ALTER TABLE cartlify.shop_settings ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.shop_settings FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS shop_settings_select ON cartlify.shop_settings;
+
+DROP POLICY IF EXISTS shop_settings_insert ON cartlify.shop_settings;
+
+DROP POLICY IF EXISTS shop_settings_update_deny ON cartlify.shop_settings;
+
+DROP POLICY IF EXISTS shop_settings_delete_deny ON cartlify.shop_settings;
+
+-- Every version is open to admin/root at this level (a self-querying USING clause, such as
+-- "the highest version", makes Postgres recurse into the same policy and refuse the query); the
+-- app shows root every version and admin only the current one (GET /api/root/shop-settings and
+-- GET /api/admin/shop-settings, db/shop-settings.md).
+CREATE POLICY shop_settings_select ON cartlify.shop_settings FOR
+SELECT
+  USING (cartlify.is_admin ());
+
+-- INSERT: root writes a version in their own name, basedOnVersion carries the version they
+-- edited from (trg_shop_settings_before_insert refuses a stale one); the system writes a version
+-- with no author and no basedOnVersion, only to fill in a default of an empty field.
+CREATE POLICY shop_settings_insert ON cartlify.shop_settings FOR INSERT
+WITH
+  CHECK (
+    (
+      cartlify.is_root ()
+      AND "setById" = cartlify.current_actor_id ()
+    )
+    OR (
+      cartlify.is_system ()
+      AND "setById" IS NULL
+      AND "basedOnVersion" IS NULL
+    )
+  );
+
+-- UPDATE: denied to every role
+CREATE POLICY shop_settings_update_deny ON cartlify.shop_settings
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- DELETE: denied to every role
+CREATE POLICY shop_settings_delete_deny ON cartlify.shop_settings FOR DELETE USING (false);
+
 COMMIT;

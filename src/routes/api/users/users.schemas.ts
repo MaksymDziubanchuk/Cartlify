@@ -359,8 +359,9 @@ const patchMeSchema = {
     400: {
       description:
         'Invalid current user update request: nothing to change (NO_FIELDS_TO_UPDATE), a name or ' +
-        'locale over 100 characters (VALIDATION_ERROR, NAME_TOO_LONG, LOCALE_TOO_LONG), a wrong ' +
-        'phone (PHONE_INVALID), two avatar files (AVATAR_MULTIPLE), an empty avatar ' +
+        'locale over 100 characters (VALIDATION_ERROR, NAME_TOO_LONG, LOCALE_TOO_LONG), a locale ' +
+        'of the wrong shape or one the shop does not answer in, uk-UA and UK both read as uk ' +
+        '(LOCALE_INVALID), a wrong phone (PHONE_INVALID), two avatar files (AVATAR_MULTIPLE), an empty avatar ' +
         '(AVATAR_STREAM_ERROR), a text field avatar that is not empty (AVATAR_NOT_A_FILE: only an ' +
         'empty one removes the avatar), a file that is not a jpeg, png or webp image by its content, ' +
         'whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot ' +

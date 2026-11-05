@@ -754,8 +754,8 @@ const postProductReviewRouterSchema = {
     'the shop and by the moderation of OpenAI: a negative opinion is never a reason; obscene ' +
     'words in any form, insults, dangerous content, a text about another thing, ads and ' +
     'personal data are. A refused comment writes nothing, not even the rating of the request. ' +
-    'A check that is unavailable lets the comment through, REVIEW_CHECK_ENABLED false turns it ' +
-    'off. At most ' +
+    'A check that is unavailable lets the comment through, root can turn it off (reviewCheckEnabled, ' +
+    'PUT /api/root/shop-settings). At most ' +
     env.LIMIT_REVIEW_PER_USER +
     ' reviews a user an hour.',
 

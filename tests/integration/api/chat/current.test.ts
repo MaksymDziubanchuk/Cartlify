@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { FastifyInstance } from 'fastify';
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { setUserContext } from '@db/dbContext.service.js';
 
@@ -9,6 +9,7 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { asAdmin, testTx } from '../../../helpers/db.js';
 import { closeSessions, createChatThread, createUser } from '../../../helpers/factories.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 
 let app: FastifyInstance;
 const userIds: number[] = [];
@@ -72,6 +73,10 @@ const messageIdsOf = (threadId: string) =>
     ).map((m) => m.id),
   );
 
+afterEach(() => {
+  resetShopSettings();
+});
+
 describe('GET /api/chat/thread/current', () => {
   it('opens a chat with the bot for a guest, with its welcome, and gives the same chat next time', async () => {
     const cookie = `guestId=${randomUUID()}`;
@@ -88,6 +93,31 @@ describe('GET /api/chat/thread/current', () => {
 
     const second = await getCurrent(cookie);
     expect(second.json().thread.id).toBe(first.json().thread.id);
+  });
+
+  // the welcome of a guest is the shop's own language, with no account to take one from: one
+  // other than English proves it is the shop's and not a fixed English (changed in the memory of
+  // this file only, tests/helpers/shopSettings.ts)
+  it("greets a guest in the shop's language", async () => {
+    setShopSettings({ shopLocale: 'uk' });
+    const cookie = `guestId=${randomUUID()}`;
+
+    const res = await getCurrent(cookie);
+
+    expect(res.json().messages[0].content).toContain('Чим допомогти?');
+  });
+
+  // the dictionary of the account's own language (src/locales), English unless told
+  it.each([
+    ['uk', 'Чим допомогти?'],
+    ['es', '¿Cómo puedo ayudarte?'],
+  ])('greets a user in their own locale (%s)', async (locale, phrase) => {
+    const user = await createUser({ locale });
+    userIds.push(user.id);
+
+    const res = await getCurrent(accessCookie(user));
+
+    expect(res.json().messages[0].content).toContain(phrase);
   });
 
   // the widget of two tabs asks at once: both found no chat and both made one, the second hit the

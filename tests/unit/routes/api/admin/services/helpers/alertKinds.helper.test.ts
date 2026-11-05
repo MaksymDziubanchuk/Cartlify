@@ -431,4 +431,9 @@ describe('alertListOf', () => {
   it('sends nowhere for the stop of the worker', () => {
     expect(listOf('worker_stalled', 180)).toBeNull();
   });
+
+  it('sends nowhere for the empty fields or the missing dictionary of the shop', () => {
+    expect(listOf('shop_settings_incomplete', null)).toBeNull();
+    expect(listOf('shop_locale_missing', null)).toBeNull();
+  });
 });

@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { getPgMessage, isRetryableTxError, tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
@@ -86,7 +87,7 @@ export async function submitWithdrawalForm({
             ${email.trim()}::text,
             null::timestamp,
             null::int,
-            ${env.WITHDRAWAL_GRACE_DAYS}::int,
+            ${shopSettings().withdrawalGraceDays}::int,
             ${env.SHOP_TIME_ZONE}::text
           ) as id
         `);

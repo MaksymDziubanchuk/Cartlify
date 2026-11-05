@@ -1,14 +1,4 @@
-import { statSync } from 'node:fs';
-import path from 'node:path';
-
 import * as dotenv from 'dotenv';
-
-import {
-  DELIVERY_METHOD_NAMES,
-  isDeliveryMethodName,
-  type DeliveryMethodName,
-} from './deliveryMethods.js';
-import { SUPPORTED_DELIVERY_COUNTRIES, isSupportedDeliveryCountry } from './deliveryCountries.js';
 
 declare global {
   namespace NodeJS {
@@ -36,9 +26,6 @@ declare global {
       RESET_TTL_MS: string;
 
       BCRYPT_ROUNDS: string;
-
-      AVATAR_REMOVALS_LIMIT?: string;
-      REVIEW_REMOVALS_LIMIT?: string;
 
       RATE_LIMIT_MAX?: string;
       REQUEST_LIMITS_SCALE?: string;
@@ -70,20 +57,8 @@ declare global {
       ATTRIBUTE_OPTIONS_MAX?: string;
       ATTRIBUTE_MULTI_VALUES_MAX?: string;
       VERIFY_TTL_MS?: string;
-      ORDER_RESERVATION_MINUTES?: string;
-      STRIPE_PAGE_AFTER_RESERVATION_MINUTES?: string;
-      WITHDRAWAL_GRACE_DAYS?: string;
-      REVIEW_CHECK_ENABLED?: string;
-      DELIVERY_METHODS?: string;
-      DELIVERY_FLAT_PRICE?: string;
-      DELIVERY_FREE_FROM?: string;
-      DELIVERY_COUNTRIES?: string;
-      PICKUP_ADDRESS?: string;
-      PICKUP_HOURS?: string;
 
       SHOP_TIME_ZONE?: string;
-      SHOP_NAME?: string;
-      SHOP_LOGO_PATH?: string;
 
       WEB_PAGE_OAUTH_CALLBACK?: string;
       WEB_PAGE_LOGIN?: string;
@@ -112,8 +87,6 @@ declare global {
       SENDGRID_API_KEY: string;
 
       EMAIL_FROM: string;
-      EMAIL_FROM_NAME: string;
-      EMAIL_REPLY_TO: string;
 
       GOOGLE_CLIENT_ID: string;
       GOOGLE_CLIENT_SECRET: string;
@@ -186,19 +159,6 @@ function positiveInt(name: string, fallback: number, max?: number): number {
   }
   if (max !== undefined && value > max) {
     throw new Error(`Invalid env variable: ${name} must be at most ${max}`);
-  }
-
-  return value;
-}
-
-// a whole number from min to max, fallback when unset; the message names the bounds, not the value
-function boundedInt(name: string, fallback: number, min: number, max: number): number {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-
-  const value = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new Error(`Invalid env variable: ${name} must be a whole number from ${min} to ${max}`);
   }
 
   return value;
@@ -299,16 +259,6 @@ function timeZone(name: string, fallback: string): string {
   return raw;
 }
 
-// fail fast on a switch that is not true or false; unset gives the default
-function flag(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-
-  if (raw === 'true') return true;
-  if (raw === 'false') return false;
-  throw new Error(`Invalid env variable: ${name} must be true or false`);
-}
-
 // fail fast on a page of the frontend that is not a path of the site: the links of the mails and
 // the redirect after a login go there, a value like //evil.example would send the people and
 // their tokens to another site. A page of an order or a product names it once by {id}
@@ -334,153 +284,6 @@ function webPage(name: string, fallback: string, takesId: boolean): string {
   }
 
   return raw;
-}
-
-// fail fast on a logo that is not a png or a jpeg file: every mail carries it, a missing one
-// would stop each of them. A path from the folder the server runs in, inside src/static: the logo
-// is a public file of the shop, /static serves it too
-function logoFile(name: string, fallback: string): string {
-  const raw = process.env[name]?.trim();
-  if (!raw) return fallback;
-
-  const file = path.resolve(process.cwd(), raw);
-  const inStatic = path.relative(path.resolve(process.cwd(), 'src', 'static'), file);
-  let isFile: boolean;
-  try {
-    isFile = statSync(file).isFile();
-  } catch {
-    isFile = false;
-  }
-
-  if (
-    !isFile ||
-    !/\.(png|jpe?g)$/i.test(raw) ||
-    inStatic.split(path.sep)[0] === '..' ||
-    path.isAbsolute(inStatic)
-  ) {
-    throw new Error(`Invalid env variable: ${name} must be a png or jpeg file inside src/static`);
-  }
-
-  return raw;
-}
-
-// the ways the shop gets an order to its buyer, written as a list: the ones it has enabled. A shop
-// that sets none sends by hand, as before
-function deliveryMethods(): DeliveryMethodName[] {
-  const raw = process.env.DELIVERY_METHODS?.trim();
-  if (!raw) return ['manual'];
-
-  const names = raw.split(',').map((name) => name.trim());
-  if (!names.every(isDeliveryMethodName) || new Set(names).size !== names.length) {
-    throw new Error(
-      `Invalid env variable: DELIVERY_METHODS must be a list of ${DELIVERY_METHOD_NAMES.join(' and ')}, each once`,
-    );
-  }
-
-  return names;
-}
-
-// an amount of money above zero to the cent, up to what the database holds: 99999999.99
-function money(name: string): number | null {
-  const raw = process.env[name]?.trim();
-  if (!raw) return null;
-
-  if (!/^\d{1,8}(\.\d{1,2})?$/.test(raw) || Number(raw) <= 0) {
-    throw new Error(
-      `Invalid env variable: ${name} must be an amount above zero, to the cent, at most 99999999.99`,
-    );
-  }
-
-  return Number(raw);
-}
-
-// the countries the manual method delivers to, the codes of the ones the app takes whole; a shop
-// with the manual method names them, in every environment: without a list nobody could confirm an
-// order, so the start stops
-function deliveryCountries(methods: DeliveryMethodName[]): string[] {
-  const raw = process.env.DELIVERY_COUNTRIES?.trim();
-  if (!raw) {
-    if (methods.includes('manual')) {
-      throw new Error('Missing required env variable: DELIVERY_COUNTRIES');
-    }
-
-    return [];
-  }
-
-  const codes = raw.split(',').map((code) => code.trim().toUpperCase());
-  if (!codes.every(isSupportedDeliveryCountry) || new Set(codes).size !== codes.length) {
-    throw new Error(
-      'Invalid env variable: DELIVERY_COUNTRIES must be a list of country codes the app delivers to ' +
-        `(${SUPPORTED_DELIVERY_COUNTRIES.join(', ')}), each once`,
-    );
-  }
-
-  return codes;
-}
-
-// where and when a buyer collects an order: text for the buyer, needed once the pickup is enabled
-function pickupText(name: string, methods: DeliveryMethodName[]): string {
-  const raw = process.env[name]?.trim();
-  if (!raw) {
-    if (methods.includes('pickup')) throw new Error(`Missing required env variable: ${name}`);
-
-    return '';
-  }
-
-  if (raw.length > 300) {
-    throw new Error(`Invalid env variable: ${name} must be at most 300 characters`);
-  }
-
-  return raw;
-}
-
-function deliverySettings() {
-  const methods = deliveryMethods();
-  const flat = money('DELIVERY_FLAT_PRICE');
-  const freeFrom = money('DELIVERY_FREE_FROM');
-
-  if (freeFrom !== null && flat === null) {
-    throw new Error('Invalid env variable: DELIVERY_FREE_FROM needs DELIVERY_FLAT_PRICE');
-  }
-
-  return {
-    DELIVERY_METHODS: methods,
-    DELIVERY_FLAT_PRICE: flat,
-    DELIVERY_FREE_FROM: freeFrom,
-    DELIVERY_COUNTRIES: deliveryCountries(methods),
-    PICKUP_ADDRESS: pickupText('PICKUP_ADDRESS', methods),
-    PICKUP_HOURS: pickupText('PICKUP_HOURS', methods),
-  };
-}
-
-// stripe keeps a payment page at least 30 minutes and at most 24 hours from its opening; a page is
-// opened while the order is reserved and closes the minutes after the end of the reservation
-const STRIPE_PAGE_MIN_MINUTES = 30;
-const STRIPE_PAGE_MAX_MINUTES = 24 * 60;
-
-function reservationMinutes(): {
-  ORDER_RESERVATION_MINUTES: number;
-  STRIPE_PAGE_AFTER_RESERVATION_MINUTES: number;
-} {
-  const reservation = positiveInt('ORDER_RESERVATION_MINUTES', 15);
-  const pageAfter = positiveInt('STRIPE_PAGE_AFTER_RESERVATION_MINUTES', 30);
-
-  if (pageAfter < STRIPE_PAGE_MIN_MINUTES) {
-    throw new Error(
-      `Invalid env variable: STRIPE_PAGE_AFTER_RESERVATION_MINUTES must be at least ${STRIPE_PAGE_MIN_MINUTES}`,
-    );
-  }
-  if (reservation + pageAfter > STRIPE_PAGE_MAX_MINUTES) {
-    throw new Error(
-      'Invalid env variable: ORDER_RESERVATION_MINUTES and STRIPE_PAGE_AFTER_RESERVATION_MINUTES ' +
-        `together must be at most ${STRIPE_PAGE_MAX_MINUTES} (24 hours)`,
-    );
-  }
-
-  return {
-    ORDER_RESERVATION_MINUTES: reservation,
-    STRIPE_PAGE_AFTER_RESERVATION_MINUTES: pageAfter,
-  };
 }
 
 // The bounds above which the limits of the catalog and of its files stop the start (positiveInt): a
@@ -560,14 +363,6 @@ export default {
   // bcrypt cost factor
   BCRYPT_ROUNDS: process.env.BCRYPT_ROUNDS ? Number(process.env.BCRYPT_ROUNDS) : 12,
 
-  // the avatar removals by a moderator the rules allow an account; past them the page tells the
-  // admin to ask root about the account
-  AVATAR_REMOVALS_LIMIT: positiveInt('AVATAR_REMOVALS_LIMIT', 5),
-
-  // the removals of the reviews of an author by a moderator the rules allow; past them the page
-  // tells the admin to ask root about the account
-  REVIEW_REMOVALS_LIMIT: positiveInt('REVIEW_REMOVALS_LIMIT', 5),
-
   // the requests a minute one address may make (@fastify/rate-limit)
   RATE_LIMIT_MAX: positiveInt('RATE_LIMIT_MAX', 100),
 
@@ -623,25 +418,6 @@ export default {
     UPLOAD_LIMIT_BOUNDS.multiValues,
   ),
 
-  // the minutes a confirmed order holds its units for the payment, and the minutes stripe keeps
-  // its payment page open after them
-  ...reservationMinutes(),
-
-  // the days after the end of the period of withdrawal in which the shop still takes a withdrawal:
-  // the end of a period that falls on a holiday moves on, the grace covers it. 4 unless given
-  // (Easter), from 0 to 30
-  WITHDRAWAL_GRACE_DAYS: boundedInt('WITHDRAWAL_GRACE_DAYS', 4, 0, 30),
-
-  // the comments of reviews are checked by the model and the moderation of openai before they are
-  // written (src/routes/api/products/services/helpers/reviewCheck.helper.ts); false publishes
-  // them unchecked
-  REVIEW_CHECK_ENABLED: flag('REVIEW_CHECK_ENABLED', true),
-
-  // how the shop gets an order to its buyer: the methods it has enabled, the flat price of the manual
-  // one and the sum of the items from which it is free, the countries it delivers to, and where and
-  // when a buyer collects an order at the shop
-  ...deliverySettings(),
-
   // the proxies in front of the server whose x-forwarded-for is trusted: railway puts one, so the
   // address of a client is the one it names (0 trusts none, the address of the connection counts)
   TRUST_PROXY_HOPS: wholeNumber('TRUST_PROXY_HOPS', 1),
@@ -652,13 +428,6 @@ export default {
 
   // the days, weeks and months of the reports are the ones of the shop
   SHOP_TIME_ZONE: timeZone('SHOP_TIME_ZONE', 'Europe/Madrid'),
-
-  // the name of the shop on a payment and in the mails, Cartlify unless given
-  SHOP_NAME: process.env.SHOP_NAME?.trim() || 'Cartlify',
-
-  // the logo every mail shows, a png or jpeg file from the folder the server runs in; it goes with
-  // every mail, so the one by default is small: 320 px, twice the width a mail shows it at
-  SHOP_LOGO_PATH: logoFile('SHOP_LOGO_PATH', 'src/static/images/logo-mail.png'),
 
   // cloudinary api keys
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
@@ -691,8 +460,6 @@ export default {
   // sendgrid variables
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
   EMAIL_FROM: process.env.EMAIL_FROM || '',
-  EMAIL_FROM_NAME: process.env.EMAIL_FROM_NAME || '',
-  EMAIL_REPLY_TO: process.env.EMAIL_REPLY_TO || '',
 
   // google oauth client config
   GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID || '',

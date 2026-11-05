@@ -1,9 +1,9 @@
-import env from '@config/env.js';
-
-// OpenAPI general project information
+// OpenAPI general project information. The name of the shop (shopName) can change at runtime
+// (root, PUT /api/root/shop-settings); the title of this document is fixed instead, read once
+// when the server starts the swagger plugin, before the current data of the shop is loaded
 export const openApiInfo = {
-    title: `${env.SHOP_NAME} REST API`,
-    description: `REST API documentation for ${env.SHOP_NAME}.`,
+    title: 'Cartlify REST API',
+    description: 'REST API documentation for Cartlify.',
     version: '1.0.0',
 } as const;
 
@@ -53,6 +53,12 @@ export const openApiTags = [
     {
       name: 'delivery',
       description: 'How the shop gets an order to its buyer: methods, prices, countries',
+    },
+    {
+      name: 'shop-settings',
+      description:
+        'The data of the shop a guest or a buyer is shown: the brand, the logo, the languages, ' +
+        'the seller',
     },
 ] as const;
 

@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import type Stripe from 'stripe';
 import { afterAll, describe, expect, it } from '@jest/globals';
 
+import { setShopSettingsForTest } from '@config/shopSettings.js';
 import {
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
@@ -41,6 +42,10 @@ import {
 
 const stripe = stripeOfTests;
 
+// this file calls the stripe helpers directly, no startApp (no loadShopSettings read a row):
+// the server defaults are enough, the checkout description is only ever matched loosely here
+setShopSettingsForTest();
+
 afterAll(closeOpenSessions);
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -68,6 +73,7 @@ function appPage(opts: { items?: { name: string; unitPrice: number; quantity: nu
       reservationExpiresAt,
       items,
       customerEmail: 'buyer@example.com',
+      locale: 'en',
     }),
     idempotencyKey: buildCheckoutIdempotencyKey(orderId, reservationExpiresAt),
   };
