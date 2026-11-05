@@ -9,8 +9,8 @@ npm run dev
 # build: tsc, then tsc-alias puts relative paths in place of the @… aliases in dist
 npm run build
 
-# start the built app with node (dist/index.js); the mail templates, the logo and /static
-# are read from src/ in the working directory, so src/ stays next to dist/
+# start the built app with node (dist/index.js); the mail templates are read from src/ in the
+# working directory, so src/ stays next to dist/
 npm start
 
 # generate prisma client
@@ -38,6 +38,11 @@ npm run db:snapshot:save
 # superuser, last: it hands out the rights on what the others made. Every script runs again without
 # a change, so the whole order runs every time. 01 and 02 run only by hand, the address of a
 # superuser stays off GitHub
+# The scripts set a database up: a new one, or one the app is stopped for. They are not for a
+# database a running server uses: they recreate triggers, policies and checks in one transaction,
+# which takes the strongest locks, and they meet the queries of the server (its workers read the
+# tables every few seconds) in a deadlock; the run stops and nothing changes. Stop the app first
+# (on Railway: remove the active deployment of the service), run the whole order, then redeploy
 psql -v ON_ERROR_STOP=1 -f db/schema/02_extensions.sql "<superuser address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/05_fn_and_triggers.sql "<cartlify_owner address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/03_policies_and_rls.sql "<cartlify_owner address>"

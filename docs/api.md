@@ -21,6 +21,8 @@ Current REST modules exposed by the application:
 - `api/root/*`
 - `api/chat/*`
 - `api/legal/*`
+- `api/shop-settings/*` (the public one; the admin and root routes of the same data are under `api/admin/shop-settings*` and `api/root/shop-settings*`, see [shop settings](shop-settings.md))
+- `api/withdrawals/*` (the public form of withdrawal, see [returns](returns.md))
 
 Examples of implemented business endpoints:
 
@@ -151,9 +153,10 @@ Implemented chat behavior:
 
 - guest bot chat
 - authenticated user bot chat
-- bot welcome message for new threads
+- bot welcome message for new threads, in the customer's own language if one is set and the shop answers in it, else the shop's own language (see [languages](languages.md))
 - product-aware OpenAI chatbot responses
 - automatic response language matching based on the latest customer message
+- fixed replies that need no call of the model (the daily limit used up, a request for an admin without a call of the model, a possible loop) answer in the customer's own language too, not the language of their last message
 - only customers with a confirmed email talk to an admin
 - admin escalation: the bot asks to describe the issue, the description enters the admin queue
 - admin queue model using `adminRequestedAt` and `adminUnreadSince`

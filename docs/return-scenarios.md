@@ -186,7 +186,7 @@ This is for the delivery by hand, until the services of the carriers give the mo
 ## 16. Late statements and the grace
 
 - The buyer is told the end of the period of the contract (`withdrawalEndsAt`, the mails, the bot).
-- The server takes a statement `WITHDRAWAL_GRACE_DAYS` more; the page keeps the button by `withdrawalOpen`, and the bot says the period of the contract ended and the shop still takes a statement.
+- The server takes a statement `withdrawalGraceDays` (root sets it) more; the page keeps the button by `withdrawalOpen`, and the bot says the period of the contract ended and the shop still takes a statement.
 - After that the server refuses (`RETURN_PERIOD_OVER`); the button leads to the chat, and an admin may still take goods back as a return outside the withdrawal ([8](#8-a-return-outside-the-withdrawal)).
 
 ## 17. A statement that extends another
