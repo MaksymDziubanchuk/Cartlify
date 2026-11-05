@@ -71,6 +71,13 @@ const patch = (product: { id: number }, variantId: number, payload: Record<strin
     payload,
   });
 
+// the article number a test then works with: a refusal of the write shows here, not as a later
+// answer that cannot find the number (a 404 of a write-off hid a 409 of a busy database)
+const setSku = async (product: { id: number }, variantId: number, code: string) => {
+  const res = await patch(product, variantId, { sku: code });
+  expect(res.statusCode).toBe(200);
+};
+
 const post = (path: string, payload: Record<string, unknown>) =>
   app.inject({
     method: 'POST',
@@ -131,7 +138,7 @@ describe('the article number of a variant', () => {
     const first = await newProduct();
     const second = await newProduct();
     const sibling = await createVariant(first.id);
-    await patch(first, first.variantId, { sku: code });
+    await setSku(first, first.variantId, code);
 
     const taken = await patch(second, second.variantId, { sku: code });
     const same = await patch(first, sibling.id, { sku: code });
@@ -161,7 +168,7 @@ describe('the article number of a variant', () => {
     const code = sku();
     const first = await newProduct();
     const second = await newProduct();
-    await patch(first, first.variantId, { sku: code });
+    await setSku(first, first.variantId, code);
 
     const taken = await patch(second, second.variantId, { sku: code.toLowerCase() });
 
@@ -175,7 +182,7 @@ describe('the article number of a variant', () => {
     const old = await newProduct({ sku: code });
     await deleteProductFromCatalog(old.id);
     const current = await newProduct();
-    await patch(current, current.variantId, { sku: code });
+    await setSku(current, current.variantId, code);
 
     const res = await app.inject({
       method: 'POST',
@@ -190,7 +197,7 @@ describe('the article number of a variant', () => {
   it('finds the product in the search of an admin and of a buyer', async () => {
     const code = sku();
     const product = await newProduct();
-    await patch(product, product.variantId, { sku: code });
+    await setSku(product, product.variantId, code);
 
     for (const cookie of ['', accessCookie(admin)]) {
       const res = await app.inject({
@@ -212,7 +219,7 @@ describe('goods by the article number', () => {
   it('takes in a delivery that names the variants by their article numbers', async () => {
     const code = sku();
     const product = await newProduct({ stock: 0 });
-    await patch(product, product.variantId, { sku: code });
+    await setSku(product, product.variantId, code);
 
     const res = await post('deliveries', {
       source: 'supplier',
@@ -229,7 +236,7 @@ describe('goods by the article number', () => {
   it('writes off the goods of an article number', async () => {
     const code = sku();
     const product = await newProduct({ stock: 5 });
-    await patch(product, product.variantId, { sku: code });
+    await setSku(product, product.variantId, code);
 
     const res = await post('write-offs', {
       reason: 'damaged',
