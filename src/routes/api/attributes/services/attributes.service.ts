@@ -26,6 +26,7 @@ import {
   mapAttributeRow,
   mapOptionRow,
   optionSelect,
+  writeListOrder,
   type Tx,
 } from './helpers/directory.helper.js';
 import { characteristicUsage } from './helpers/valueUsage.helper.js';
@@ -351,18 +352,12 @@ export async function reorderGroupAttributes(
       ids,
     );
 
-    const before = new Map(rows.map((row) => [row.id, row.position]));
-    for (const [at, id] of ids.entries()) {
-      const position = at + 1;
-      if (before.get(id) === position) continue;
-
-      await tx.attribute.update({ where: { id }, data: { position } });
-      await logDirectory(tx, actor, {
-        event: 'attribute.reorder',
-        entityId: id,
-        changes: [{ field: 'position', old: before.get(id), new: position }],
-      });
-    }
+    await writeListOrder(tx, actor, {
+      table: 'attributes',
+      event: 'attribute.reorder',
+      before: new Map(rows.map((row) => [row.id, row.position])),
+      ids,
+    });
   });
 
   return listAttributes({ ...actor, groupId: actor.groupId });

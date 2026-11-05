@@ -10,6 +10,7 @@ import {
   isForeignKeyViolation,
   isUniqueViolationOn,
   logDirectory,
+  writeListOrder,
   type Tx,
 } from './helpers/directory.helper.js';
 
@@ -160,8 +161,8 @@ export async function updateAttributeGroup(
   );
 }
 
-// writes a new order of all the groups: the rows are written one by one, the places are checked at
-// the end of the transaction. A line of the log for each group that moved
+// writes a new order of all the groups, in one statement however many there are
+// (writeListOrder); a line of the log for each group that moved
 export async function reorderAttributeGroups(
   actor: AttributeActorDto & { body: unknown },
 ): Promise<AttributeGroupsListResponseDto> {
@@ -174,18 +175,12 @@ export async function reorderAttributeGroups(
       ids,
     );
 
-    const before = new Map(rows.map((row) => [row.id, row.position]));
-    for (const [at, id] of ids.entries()) {
-      const position = at + 1;
-      if (before.get(id) === position) continue;
-
-      await tx.attributeGroup.update({ where: { id }, data: { position } });
-      await logDirectory(tx, actor, {
-        event: 'attribute_group.reorder',
-        entityId: id,
-        changes: [{ field: 'position', old: before.get(id), new: position }],
-      });
-    }
+    await writeListOrder(tx, actor, {
+      table: 'attribute_groups',
+      event: 'attribute_group.reorder',
+      before: new Map(rows.map((row) => [row.id, row.position])),
+      ids,
+    });
 
     return { items: await readGroups(tx) };
   });

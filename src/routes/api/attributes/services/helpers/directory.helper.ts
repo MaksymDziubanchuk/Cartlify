@@ -2,7 +2,11 @@ import { Prisma } from '@prisma/client';
 
 import { getPgCode, getPgMessage, prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
-import { writeAdminAuditLog, type AuditChange } from '@db/adminAudit.helper.js';
+import {
+  writeAdminAuditLog,
+  writeAdminAuditLogs,
+  type AuditChange,
+} from '@db/adminAudit.helper.js';
 import type { AuditEvent, WrittenEvent } from '@config/journalEvents.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
@@ -161,6 +165,49 @@ export function logDirectory(
     action: 'OTHER',
     event: line.event,
     changes: line.changes,
+  });
+}
+
+// writes a new order of a whole list of the directory (the groups, the characteristics of a group,
+// the values of a characteristic): the place of each row that moved in one statement, and its line
+// of the log in one more. A statement for each row ran a list of hundreds past the time of its
+// transaction (409 RESOURCE_BUSY). The key of the places is checked at the end of the transaction,
+// so the rows may take each other's places in the one statement
+export async function writeListOrder(
+  tx: Tx,
+  actor: AttributeActorDto,
+  args: {
+    table: 'attribute_groups' | 'attributes' | 'attribute_options';
+    event: WrittenEvent<AuditEvent>;
+    // the place of each row before, by its id
+    before: Map<number, number>;
+    // every id of the list in its new order, the first gets place 1
+    ids: number[];
+  },
+): Promise<void> {
+  const moved = args.ids
+    .map((id, at) => ({ id, old: args.before.get(id), position: at + 1 }))
+    .filter((row) => row.old !== row.position);
+  if (!moved.length) return;
+
+  await tx.$executeRaw(Prisma.sql`
+    UPDATE ${Prisma.raw(`cartlify.${args.table}`)} AS target
+    SET position = moved.position, "updatedAt" = now()
+    FROM unnest(${moved.map((row) => row.id)}::int[], ${moved.map((row) => row.position)}::int[])
+      AS moved(id, position)
+    WHERE target.id = moved.id
+  `);
+
+  await writeAdminAuditLogs(tx, {
+    actorId: actor.actorId,
+    actorRole: actor.actorRole,
+    entityType: 'attribute',
+    action: 'OTHER',
+    event: args.event,
+    lines: moved.map((row) => ({
+      entityId: row.id,
+      changes: [{ field: 'position', old: row.old, new: row.position }],
+    })),
   });
 }
 

@@ -285,6 +285,33 @@ export async function writeAdminAuditLog(
   `;
 }
 
+// many lines of the admin log that differ only in what each is about and what changed (a new order
+// of a list: a line for each row that moved), in one statement: a line for each was a trip to the
+// database, and a list of hundreds ran past the time of its transaction. The lines go in the order
+// given; one with no changes is left out, as writeAdminAuditLog does
+export async function writeAdminAuditLogs(
+  tx: DbClient,
+  args: Omit<Parameters<typeof writeAdminAuditLog>[1], 'entityId' | 'changes'> & {
+    lines: { entityId: number | null; changes: AuditChange[] }[];
+  },
+): Promise<void> {
+  const lines = args.lines.filter((line) => line.changes.length);
+  if (!lines.length) return;
+
+  await tx.$executeRaw`
+    select cartlify.log_admin_action(
+      ${args.actorId}::int,
+      ${args.actorRole}::cartlify."Role",
+      ${args.entityType}::cartlify."AdminAuditEntityType",
+      line."entityId",
+      ${args.action}::cartlify."AdminAuditAction",
+      ${args.event},
+      line.changes
+    )
+    from jsonb_to_recordset(${JSON.stringify(lines)}::jsonb) as line("entityId" int, changes jsonb)
+  `;
+}
+
 // The line of the admin log for a whole delivery or write-off of stock: one line for the operation,
 // however many variants it touched (the line of each variant is in the stock log, db/05). It points
 // at the variant when the operation touched exactly one, and at nothing (other, no id) when it
