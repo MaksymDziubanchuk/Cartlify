@@ -144,6 +144,20 @@ describe('GET /api/auth/google/callback', () => {
     });
   });
 
+  // a language the shop answers in (shopSettings().enabledLocales, src/locales) is saved, the
+  // region and the case make no difference; one it does not answer in is only dropped
+  it.each([
+    ['uk-UA', 'uk'],
+    ['xx', undefined],
+  ])('takes the locale of the account as %s, giving %s', async (raw, expected) => {
+    const claims = account({ locale: raw });
+
+    const { res } = await loginWith(claims);
+
+    const me = await getMe(app, sessionCookie(cookieJar(res)));
+    expect(me.json().locale).toBe(expected);
+  });
+
   // the log of logins names how the person came in
   it('writes the login to the login log as a login with Google', async () => {
     const claims = account();

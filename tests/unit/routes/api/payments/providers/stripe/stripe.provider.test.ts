@@ -70,6 +70,7 @@ describe('stripeProvider', () => {
       deliveryPrice: 0,
       shipping: null,
       customerEmail: 'anna@example.com',
+      locale: 'en',
     };
 
     it('opens a session with one key per order and reservation and names the provider', async () => {

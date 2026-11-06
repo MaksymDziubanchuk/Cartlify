@@ -431,4 +431,16 @@ describe('alertListOf', () => {
   it('sends nowhere for the stop of the worker', () => {
     expect(listOf('worker_stalled', 180)).toBeNull();
   });
+
+  // the cases are the fields root has not set yet: their list is the one the alert counts
+  it('sends to the fields of the data of the shop still empty', () => {
+    expect(listOf('shop_settings_incomplete', null)).toEqual({
+      path: '/api/admin/shop-settings/missing',
+      query: {},
+    });
+  });
+
+  it('sends nowhere for the missing dictionary of the shop', () => {
+    expect(listOf('shop_locale_missing', null)).toBeNull();
+  });
 });

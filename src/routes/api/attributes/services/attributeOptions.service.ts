@@ -20,6 +20,7 @@ import {
   logDirectory,
   mapOptionRow,
   optionSelect,
+  writeListOrder,
   type Tx,
 } from './helpers/directory.helper.js';
 import { optionUsage } from './helpers/valueUsage.helper.js';
@@ -229,18 +230,12 @@ export async function reorderAttributeOptions(
       ids,
     );
 
-    const before = new Map(rows.map((row) => [row.id, row.position]));
-    for (const [at, id] of ids.entries()) {
-      const position = at + 1;
-      if (before.get(id) === position) continue;
-
-      await tx.attributeOption.update({ where: { id }, data: { position } });
-      await logDirectory(tx, actor, {
-        event: 'attribute_option.reorder',
-        entityId: id,
-        changes: [{ field: 'position', old: before.get(id), new: position }],
-      });
-    }
+    await writeListOrder(tx, actor, {
+      table: 'attribute_options',
+      event: 'attribute_option.reorder',
+      before: new Map(rows.map((row) => [row.id, row.position])),
+      ids,
+    });
 
     return readOptions(tx, actor.attributeId);
   });

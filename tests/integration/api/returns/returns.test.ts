@@ -2,7 +2,7 @@ import type { Prisma } from '@prisma/client';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -79,9 +79,9 @@ const get = (url: string, actor: TestUser | null = admin) =>
   });
 
 // a paid order of the buyer with the units asked of the product, and the ids of its items
-async function paidOrder(units: number, product?: TestProduct) {
+async function paidOrder(units: number, product?: TestProduct, owner: TestUser = buyer) {
   const item = product ?? (await newProduct());
-  const orderId = await placeOrderOf(app, csrf, buyer, [{ item, quantity: units }], 'paid');
+  const orderId = await placeOrderOf(app, csrf, owner, [{ item, quantity: units }], 'paid');
   const orderItems = await asAdmin((tx) =>
     tx.orderItem.findMany({ where: { orderId }, orderBy: { id: 'asc' }, select: { id: true } }),
   );
@@ -219,7 +219,23 @@ describe('POST /api/returns', () => {
     expect(own[0]!.subject).toContain(`Return of order #${orderId}`);
     expect(own[0]!.text).toContain('damage');
     // a neutral line with where to write
-    expect(own[0]!.text).toContain(env.EMAIL_REPLY_TO);
+    expect(own[0]!.text).toContain(shopSettings().emailReplyTo);
+  });
+
+  // the language of the buyer's account (mailLocaleOf), not the shop's
+  it("mails the return in the language of the buyer's account", async () => {
+    const owner = await createUser({ name: 'Ana', locale: 'es' });
+    userIds.push(owner.id);
+    const { orderId, itemId } = await paidOrder(2, undefined, owner);
+    const mails = watchMail();
+
+    const res = await make(orderId, [{ orderItemId: itemId, quantity: 1 }], { reason: 'damaged' });
+
+    expect(res.statusCode).toBe(201);
+    const own = mails.filter((mail) => mail.to.includes(owner.email));
+    expect(own).toHaveLength(1);
+    expect(own[0]!.subject).toContain(`Se registró la devolución del pedido #${orderId}`);
+    expect(own[0]!.text).toContain('Hola, Ana:');
   });
 
   it('is dated by the admin when they give a moment of the past, and by the server otherwise', async () => {

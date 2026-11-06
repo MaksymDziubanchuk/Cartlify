@@ -152,6 +152,9 @@ export interface RegisterBodyDto {
   userId: UserId;
   role: Role;
   name?: string;
+  // a language the shop does not answer in, or the wrong shape, is dropped, not refused: the
+  // confirmation mail still goes, in the language of the shop (src/helpers/locale.js)
+  locale?: string;
   // the versions of the terms and of the contract in force the person accepts
   acceptedDocumentIds?: number[];
 }

@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import {
   buildAccountDeletedTemplate,
   type AccountDeletedCancelled,
@@ -18,6 +18,7 @@ export type AccountDeletedEmailArgs = {
   // the address the account had before it was emptied, it lives only until this mail is sent
   to: string;
   userName: string | null;
+  locale: string;
   deliveries: AccountDeletedDelivery[];
   cancelled: AccountDeletedCancelled[];
 };
@@ -30,15 +31,18 @@ export async function sendAccountDeletedEmail(
   log: AccountDeletionLogger,
 ): Promise<void> {
   try {
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildAccountDeletedTemplate({
       // the name of the shop the mail is from
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       deliveries: args.deliveries,
       cancelled: args.cancelled,
       // the orders of the mail are paid or waited for in the money of the shop
       currency: shopCurrency(),
       userName: args.userName,
-      logoCid: SHOP_LOGO_CID,
+      locale: args.locale,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
     });
 
     await sendEmail({
@@ -46,7 +50,7 @@ export async function sendAccountDeletedEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, userId: args.userId }, 'account deleted mail was not sent');

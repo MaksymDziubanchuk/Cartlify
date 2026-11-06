@@ -8,7 +8,7 @@ const MINUTE = 60 * SECOND;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
-const left = (ms: number) => formatExpiresIn(new Date(NOW + ms), NOW);
+const left = (ms: number, locale = 'en') => formatExpiresIn(new Date(NOW + ms), locale, NOW);
 
 describe('formatExpiresIn', () => {
   it.each([
@@ -47,6 +47,26 @@ describe('formatExpiresIn', () => {
     ['is under half a minute away', 20 * SECOND],
   ])('says 0 minutes when the expiry %s', (_case, ms) => {
     expect(left(ms)).toBe('0 minutes');
+  });
+
+  // the words of the language of the mail, each count in its own form: Ukrainian puts the count
+  // after "протягом" in the genitive
+  it.each([
+    ['uk', MINUTE, '1 хвилини'],
+    ['uk', 15 * MINUTE, '15 хвилин'],
+    ['uk', 21 * MINUTE, '21 хвилини'],
+    ['uk', HOUR, '1 години'],
+    ['uk', 2 * HOUR, '2 годин'],
+    ['uk', DAY, '24 годин'],
+    ['uk', 2 * DAY, '2 днів'],
+    ['uk', 0, '0 хвилин'],
+    ['es', MINUTE, '1 minuto'],
+    ['es', 15 * MINUTE, '15 minutos'],
+    ['es', HOUR, '1 hora'],
+    ['es', DAY, '24 horas'],
+    ['es', 2 * DAY, '2 días'],
+  ])('says it in %s: %i ms as %s', (locale, ms, text) => {
+    expect(left(ms, locale)).toBe(text);
   });
 
   it('counts from the current time by default', () => {

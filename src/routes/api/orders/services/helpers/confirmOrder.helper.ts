@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { normalizePostalCode } from '@config/deliveryCountries.js';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import { freeUnits } from '@db/expiredStock.helper.js';
@@ -86,11 +86,12 @@ export type DeliveryWriteData = {
 // the delivery an order already has must still be one the shop offers: the owner may have changed
 // the methods or the countries since the buyer wrote it
 export function assertDeliveryOfShop(method: DeliveryMethodName, country: string | null): void {
-  if (!env.DELIVERY_METHODS.includes(method)) {
+  const settings = shopSettings();
+  if (!settings.deliveryMethods.includes(method)) {
     throw new BadRequestError('DELIVERY_METHOD_NOT_AVAILABLE', { method });
   }
 
-  if (method === 'manual' && (!country || !env.DELIVERY_COUNTRIES.includes(country))) {
+  if (method === 'manual' && (!country || !settings.deliveryCountries.includes(country))) {
     throw new BadRequestError('DELIVERY_COUNTRY_NOT_ALLOWED', { country });
   }
 }
@@ -98,7 +99,7 @@ export function assertDeliveryOfShop(method: DeliveryMethodName, country: string
 // the address of a manual delivery in the form it is written in: the shop delivers to the country,
 // the postal code is one of that country in its own form, the parts are what they should be
 export function buildAddressData(address: NonNullable<ConfirmDeliveryBodyDto['address']>) {
-  if (!env.DELIVERY_COUNTRIES.includes(address.country)) {
+  if (!shopSettings().deliveryCountries.includes(address.country)) {
     throw new BadRequestError('DELIVERY_COUNTRY_NOT_ALLOWED', { country: address.country });
   }
 
@@ -130,7 +131,7 @@ export function buildAddressData(address: NonNullable<ConfirmDeliveryBodyDto['ad
 // shop makes the method, the country is one the shop delivers to, the parts are what they should
 // be. Checked before anything is written, a refusal leaves the order as it was
 export function buildDeliveryData(input: ConfirmDeliveryBodyDto): DeliveryWriteData {
-  if (!env.DELIVERY_METHODS.includes(input.method)) {
+  if (!shopSettings().deliveryMethods.includes(input.method)) {
     throw new BadRequestError('DELIVERY_METHOD_NOT_AVAILABLE', { method: input.method });
   }
 

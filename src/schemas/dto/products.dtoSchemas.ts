@@ -966,7 +966,8 @@ const deleteProductReviewResponseSchema = {
     },
     reviewRemovalsLimit: {
       type: 'integer',
-      description: 'Admin or root only: the removals the rules allow (REVIEW_REMOVALS_LIMIT).',
+      description:
+        'Admin or root only: the removals the rules allow (reviewRemovalsLimit, root sets it).',
     },
   },
   required: ['message'],

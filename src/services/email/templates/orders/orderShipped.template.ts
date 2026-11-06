@@ -1,5 +1,8 @@
+import { t } from '@config/i18n.js';
 import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
 import {
@@ -38,6 +41,7 @@ export type OrderShippedTemplateArgs = WithdrawalOfferArgs & {
   trackingUrl?: string | null;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
 // the mail itself is orderShipped.html and orderShipped.txt next to this file
@@ -48,31 +52,33 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
   if (!args.items?.length) throw new Error('ORDER_ITEMS_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
   const price = (value: number | string) => money.format(Number(value));
 
-  const noRight = withdrawalNoticeOf(args.items, 'none');
+  const noRight = withdrawalNoticeOf(args.items, 'none', locale);
+  const orderId = String(args.orderId);
 
   const values = {
     appName,
-    orderId: String(args.orderId),
+    orderId,
     orderUrl,
     items: args.items.map((item) => ({
       name: item.name.trim(),
       quantity: String(item.quantity),
       lineTotal: price(item.totalPrice),
     })),
-    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price, locale),
     total: price(args.total),
-    ...withdrawalOfferOf('shipped', args.items, args),
-    noRightLine: noRight.length ? 'No right of withdrawal applies to these goods:' : '',
+    ...withdrawalOfferOf('shipped', args.items, args, locale),
+    noRightLine: noRight.length ? t('common.noRightLine', locale) : '',
     noRightItems: noRight,
     shippingAddress: args.shippingAddress?.trim() || '',
     carrier: args.carrier?.trim() || '',
@@ -83,10 +89,32 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('orderShipped.subject', locale, { appName, orderId }),
+    preview: t('orderShipped.preview', locale, { orderId }),
+    leadTxt: t('orderShipped.leadTxt', locale, { appName, orderId }),
+    heading: t('orderShipped.heading', locale),
+    body: t('orderShipped.body', locale, { orderId }),
+    greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
+    itemHeader: t('common.itemHeader', locale),
+    qtyHeader: t('common.qtyHeader', locale),
+    totalHeader: t('common.totalHeader', locale),
+    deliveryLabel: t('common.deliveryLabel', locale),
+    shippingToLabel: t('orderPaid.shippingToLabel', locale),
+    recipientLabel: t('common.recipientLabel', locale),
+    carrierLabel: t('orderNotice.carrierLabel', locale),
+    trackingNumberLabel: t('orderNotice.trackingNumberLabel', locale),
+    followParcelLabel: t('orderNotice.followParcelLabel', locale),
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
+    withdrawContract: t('common.withdrawContract', locale),
   };
 
   return {
-    subject: `${appName} — Order #${args.orderId} is shipped`,
+    subject: values.title,
     text: renderTemplate('orders/orderShipped.txt', values),
     html: renderTemplate('orders/orderShipped.html', values),
   };

@@ -1,34 +1,17 @@
-import { copyFileSync, readFileSync, rmSync } from 'node:fs';
-import path from 'node:path';
+import { readFileSync } from 'node:fs';
 
-import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from '@jest/globals';
 
 import { rejectedBy } from '../../helpers/errors.js';
 import { importWithEnv } from '../../helpers/freshImport.js';
 
 type Env = (typeof import('@config/env.js'))['default'];
 
-// a logo is a file inside src/static: the pictures of the tests are put there as copies for the
-// time of this file
-const JPEG_LOGO = `src/static/images/env-test-${process.pid}.jpg`;
-const WEBP_LOGO = `src/static/images/env-test-${process.pid}.webp`;
-
-beforeAll(() => {
-  copyFileSync('tests/fixtures/images/jpeg-baseline.jpg', JPEG_LOGO);
-  copyFileSync('tests/fixtures/images/webp-lossy.webp', WEBP_LOGO);
-});
-
-afterAll(() => {
-  rmSync(JPEG_LOGO, { force: true });
-  rmSync(WEBP_LOGO, { force: true });
-});
-
 const loadEnv = async (values: Record<string, string> = {}) =>
   (await importWithEnv<typeof import('@config/env.js')>('@config/env.js', values)).default as Env;
 
 // the settings a shop tunes for itself, with the values the code had before they were settings
 const SHOP_DEFAULTS = {
-  REVIEW_REMOVALS_LIMIT: 5,
   TRUST_PROXY_HOPS: 1,
   LIMIT_LOGIN_PER_ADDRESS: 30,
   LIMIT_LOGIN_PER_EMAIL: 10,
@@ -53,11 +36,6 @@ const SHOP_DEFAULTS = {
   PRODUCT_DOCUMENTS_MAX: 20,
   ATTRIBUTE_OPTIONS_MAX: 500,
   VERIFY_TTL_MS: 86_400_000,
-  ORDER_RESERVATION_MINUTES: 15,
-  STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 30,
-  WITHDRAWAL_GRACE_DAYS: 4,
-  REVIEW_CHECK_ENABLED: true,
-  SHOP_LOGO_PATH: 'src/static/images/logo-mail.png',
   WEB_PAGE_OAUTH_CALLBACK: '/auth/callback',
   WEB_PAGE_LOGIN: '/web/login',
   WEB_PAGE_VERIFY_EMAIL: '/web/login',
@@ -82,7 +60,6 @@ const UNSET = Object.fromEntries(
     'GUEST_ID_TTL',
     'RESET_TTL_MS',
     'BCRYPT_ROUNDS',
-    'AVATAR_REMOVALS_LIMIT',
     'RATE_LIMIT_MAX',
     'SHOP_TIME_ZONE',
     'OPENAI_MODEL',
@@ -128,7 +105,6 @@ describe('env', () => {
       GUEST_ID_TTL: 157680000,
       RESET_TTL_MS: 3600000,
       BCRYPT_ROUNDS: 12,
-      AVATAR_REMOVALS_LIMIT: 5,
       RATE_LIMIT_MAX: 100,
       SHOP_TIME_ZONE: 'Europe/Madrid',
       OPENAI_MODEL: 'gpt-4.1-mini',
@@ -155,7 +131,6 @@ describe('env', () => {
         GUEST_ID_TTL: '31536000',
         RESET_TTL_MS: '900000',
         BCRYPT_ROUNDS: '10',
-        AVATAR_REMOVALS_LIMIT: '3',
         RATE_LIMIT_MAX: '300',
         SHOP_TIME_ZONE: ' Europe/Kyiv ',
         REDIS_ORDER_TIMEOUT_WORKER_MS: '5000',
@@ -173,7 +148,6 @@ describe('env', () => {
       GUEST_ID_TTL: 31536000,
       RESET_TTL_MS: 900000,
       BCRYPT_ROUNDS: 10,
-      AVATAR_REMOVALS_LIMIT: 3,
       RATE_LIMIT_MAX: 300,
       SHOP_TIME_ZONE: 'Europe/Kyiv',
       REDIS_ORDER_TIMEOUT_WORKER_MS: 5000,
@@ -192,8 +166,6 @@ describe('env', () => {
     ['RESET_TTL_MS', '1e6'],
     ['REDIS_ORDER_TIMEOUT_WORKER_MS', 'fast'],
     ['REDIS_ORDER_TIMEOUT_WORKER_MS', '0'],
-    ['AVATAR_REMOVALS_LIMIT', 'five'],
-    ['AVATAR_REMOVALS_LIMIT', '0'],
     ['RATE_LIMIT_MAX', 'many'],
     ['RATE_LIMIT_MAX', '0'],
     // a lifetime that is not seconds used to fail only when the first token was signed, and a
@@ -348,10 +320,6 @@ describe('the settings of the shop', () => {
         PRODUCT_DOCUMENTS_MAX: '5',
         ATTRIBUTE_OPTIONS_MAX: '40',
         VERIFY_TTL_MS: '7200000',
-        ORDER_RESERVATION_MINUTES: '20',
-        STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '45',
-        REVIEW_CHECK_ENABLED: 'false',
-        SHOP_LOGO_PATH: ` ${JPEG_LOGO} `,
         WEB_PAGE_OAUTH_CALLBACK: '/login/done',
         WEB_PAGE_LOGIN: '/sign-in',
         WEB_PAGE_VERIFY_EMAIL: '/account/verify',
@@ -386,10 +354,6 @@ describe('the settings of the shop', () => {
       PRODUCT_DOCUMENTS_MAX: 5,
       ATTRIBUTE_OPTIONS_MAX: 40,
       VERIFY_TTL_MS: 7_200_000,
-      ORDER_RESERVATION_MINUTES: 20,
-      STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 45,
-      REVIEW_CHECK_ENABLED: false,
-      SHOP_LOGO_PATH: JPEG_LOGO,
       WEB_PAGE_OAUTH_CALLBACK: '/login/done',
       WEB_PAGE_LOGIN: '/sign-in',
       WEB_PAGE_VERIFY_EMAIL: '/account/verify',
@@ -437,8 +401,6 @@ describe('the settings of the shop', () => {
       'PRODUCT_DOCUMENTS_MAX',
       'ATTRIBUTE_OPTIONS_MAX',
       'VERIFY_TTL_MS',
-      'ORDER_RESERVATION_MINUTES',
-      'STRIPE_PAGE_AFTER_RESERVATION_MINUTES',
     ].flatMap((key) => [
       [key, '0'],
       [key, 'many'],
@@ -474,67 +436,6 @@ describe('the settings of the shop', () => {
     },
   );
 
-  // stripe keeps a page at least 30 minutes and at most 24 hours from its opening; the page is
-  // opened in the reservation and closes the minutes after its end
-  it('stops the start when stripe would refuse the time of the payment page', async () => {
-    const short = await rejectedBy(() => loadEnv({ STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '29' }));
-    const long = await rejectedBy(() =>
-      loadEnv({ ORDER_RESERVATION_MINUTES: '1400', STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '41' }),
-    );
-
-    expect((short as Error).message).toBe(
-      'Invalid env variable: STRIPE_PAGE_AFTER_RESERVATION_MINUTES must be at least 30',
-    );
-    expect((long as Error).message).toBe(
-      'Invalid env variable: ORDER_RESERVATION_MINUTES and STRIPE_PAGE_AFTER_RESERVATION_MINUTES ' +
-        'together must be at most 1440 (24 hours)',
-    );
-    expect(
-      await loadEnv({
-        ORDER_RESERVATION_MINUTES: '1400',
-        STRIPE_PAGE_AFTER_RESERVATION_MINUTES: '40',
-      }),
-    ).toMatchObject({ ORDER_RESERVATION_MINUTES: 1400, STRIPE_PAGE_AFTER_RESERVATION_MINUTES: 40 });
-  });
-
-  it.each([['TRUE'], ['yes'], ['0'], ['off']])(
-    'stops the start when REVIEW_CHECK_ENABLED is %p, not true or false',
-    async (value) => {
-      const err = await rejectedBy(() => loadEnv({ REVIEW_CHECK_ENABLED: value }));
-
-      expect((err as Error).message).toBe(
-        'Invalid env variable: REVIEW_CHECK_ENABLED must be true or false',
-      );
-    },
-  );
-
-  // every mail carries the logo: a file that is not there, or of a type the mails do not show,
-  // would break each one of them
-  it.each([
-    ['a file that is not there', 'src/static/images/no-such-logo.png'],
-    ['a file that is no png or jpeg', WEBP_LOGO],
-    ['a folder', 'src/static/images'],
-    // the logo is public at /static: a file outside src/static is not
-    ['a file outside src/static', 'tests/fixtures/images/jpeg-baseline.jpg'],
-    ['a path that leaves src/static', 'src/static/../../tests/fixtures/images/jpeg-baseline.jpg'],
-    [
-      'an absolute path outside src/static',
-      path.resolve('tests/fixtures/images/jpeg-baseline.jpg'),
-    ],
-  ])('stops the start when SHOP_LOGO_PATH names %s', async (_case, value) => {
-    const err = await rejectedBy(() => loadEnv({ SHOP_LOGO_PATH: value }));
-
-    expect((err as Error).message).toBe(
-      'Invalid env variable: SHOP_LOGO_PATH must be a png or jpeg file inside src/static',
-    );
-  });
-
-  it('takes a logo inside src/static named by its absolute path', async () => {
-    const logo = path.resolve(JPEG_LOGO);
-
-    expect((await loadEnv({ SHOP_LOGO_PATH: logo })).SHOP_LOGO_PATH).toBe(logo);
-  });
-
   // the links of the mails and the redirect after a login go to these pages: a value that leaves
   // the site would send the people and their tokens to another one
   it.each([
@@ -569,34 +470,6 @@ describe('the settings of the shop', () => {
     expect((err as Error).message).toBe(
       `Invalid env variable: ${key} must be a path of the site starting with /, with {id} once`,
     );
-  });
-});
-
-// the days of grace after the period of withdrawal in the contract: the end of a period that falls
-// on a holiday moves on, the grace covers it. Zero is allowed (and is the owner's risk, the docs
-// say so); the start stops outside 0-30 and on what is not a whole number
-describe('env: WITHDRAWAL_GRACE_DAYS', () => {
-  it.each([
-    ['0', 0],
-    ['1', 1],
-    ['30', 30],
-    [' 7 ', 7],
-  ])('takes %p as %p days', async (value, days) => {
-    expect((await loadEnv({ WITHDRAWAL_GRACE_DAYS: value })).WITHDRAWAL_GRACE_DAYS).toBe(days);
-  });
-
-  it('is 4 days when it is not set', async () => {
-    expect((await loadEnv({ WITHDRAWAL_GRACE_DAYS: '' })).WITHDRAWAL_GRACE_DAYS).toBe(4);
-  });
-
-  it.each(['-1', '31', '4.5', 'many', '1e1'])('stops the start when it is %p', async (value) => {
-    const err = await rejectedBy(() => loadEnv({ WITHDRAWAL_GRACE_DAYS: value }));
-
-    expect((err as Error).message).toBe(
-      'Invalid env variable: WITHDRAWAL_GRACE_DAYS must be a whole number from 0 to 30',
-    );
-    // the start error lands in the hosting logs, the value stays out of it
-    expect((err as Error).message).not.toContain(value);
   });
 });
 

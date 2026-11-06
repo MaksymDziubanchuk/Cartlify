@@ -1,25 +1,27 @@
-Payment received for your {{appName}} order #{{orderId}}.
-Paid on {{paidAt}}.
+{{leadTxt}}
+{{paidOn}}.
 
 {{#items}}- {{name}} x {{quantity}} = {{lineTotal}}
 {{/items}}
-{{#deliveryLine}}Delivery: {{deliveryLine}}
-{{/deliveryLine}}Total: {{total}}
+{{#deliveryLine}}{{deliveryLabel}}: {{deliveryLine}}
+{{/deliveryLine}}{{totalHeader}}: {{total}}
 {{#noRightLine}}
 {{noRightLine}}
 {{/noRightLine}}{{#noRightItems}}- {{name}}: {{reason}}
 {{/noRightItems}}{{#conditionalLine}}
 {{conditionalLine}}
 {{/conditionalLine}}{{#conditionalItems}}- {{name}}: {{reason}}
-{{/conditionalItems}}{{#shippingAddress}}Shipping to: {{shippingAddress}}
-{{/shippingAddress}}{{#pickup}}Pick up at: {{pickup}}
-{{/pickup}}{{#recipient}}Recipient: {{recipient}}
+{{/conditionalItems}}{{#shippingAddress}}{{shippingToLabel}}: {{shippingAddress}}
+{{/shippingAddress}}{{#pickup}}{{pickupAtLabel}}: {{pickup}}
+{{/pickup}}{{#recipient}}{{recipientLabel}}: {{recipient}}
 {{/recipient}}
-See your order:
+{{seeOrderTxt}}
 {{orderUrl}}{{#withdrawalLine}}
 
 {{withdrawalLine}}
 {{withdrawalUrl}}{{/withdrawalLine}}
 
 {{#attachedLine}}{{attachedLine}}
-{{/attachedLine}}Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{/attachedLine}}{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

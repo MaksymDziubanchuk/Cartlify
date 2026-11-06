@@ -1,7 +1,7 @@
 import { Prisma } from '@prisma/client';
 import type { AuthProvider } from '@prisma/client';
 
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import {
   UnauthorizedError,
@@ -13,6 +13,7 @@ import {
   InternalError,
 } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
+import { enabledLocaleOf } from '@helpers/locale.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import { verifyPass } from '@helpers/safePass.js';
@@ -266,7 +267,13 @@ async function updateMe({
       throw new BadRequestError('LOCALE_TOO_LONG');
     }
     const v = localeRaw.trim();
-    data.locale = v ? v : null;
+    if (!v) {
+      data.locale = null;
+    } else {
+      const code = enabledLocaleOf(v);
+      if (!code) throw new BadRequestError('LOCALE_INVALID');
+      data.locale = code;
+    }
   }
 
   // clear phone explicitly
@@ -533,9 +540,9 @@ async function findById({
         openChatThreadId: chat?.id ?? null,
         // past the limit the page tells the admin to take the account to root
         avatarRemovals: await countAvatarRemovals(tx, id),
-        avatarRemovalsLimit: env.AVATAR_REMOVALS_LIMIT,
+        avatarRemovalsLimit: shopSettings().avatarRemovalsLimit,
         reviewRemovals: await countReviewRemovals(tx, id),
-        reviewRemovalsLimit: env.REVIEW_REMOVALS_LIMIT,
+        reviewRemovalsLimit: shopSettings().reviewRemovalsLimit,
         returns: {
           total: await tx.orderReturn.count({ where: { order: { userId: id } } }),
           open: await tx.orderReturn.count({ where: { order: { userId: id }, closedAt: null } }),

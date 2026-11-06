@@ -3,6 +3,8 @@ import authGuard from '@middlewares/auth.js';
 import requireRole from '@middlewares/requireRole.js';
 import { adminSchema } from './admin.schemas.js';
 import { adminController } from './admin.controllers.js';
+import { shopSettingsController } from '../shopSettings/shopSettings.controllers.js';
+import { adminShopSettingsSchemas } from '../shopSettings/shopSettings.schemas.js';
 
 export default async function adminRouter(app: FastifyInstance) {
   app.get(
@@ -210,5 +212,23 @@ export default async function adminRouter(app: FastifyInstance) {
       schema: adminSchema.deleteAlertDismissalSchema,
     },
     adminController.deleteAlertDismissal,
+  );
+
+  // the data of the shop: the current value of every setting, the ones root has not set yet
+  app.get(
+    '/shop-settings',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminShopSettingsSchemas.getShopSettingsValuesSchema,
+    },
+    shopSettingsController.getValues,
+  );
+  app.get(
+    '/shop-settings/missing',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminShopSettingsSchemas.getShopSettingsMissingFieldsSchema,
+    },
+    shopSettingsController.getMissing,
   );
 }

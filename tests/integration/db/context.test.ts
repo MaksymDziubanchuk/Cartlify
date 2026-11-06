@@ -3,6 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
+import { loadShopSettings } from '@config/shopSettings.js';
 import { parseDatabaseUrl, prisma } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
@@ -91,6 +92,10 @@ let orderId: number;
 // a row in every table of the shop, made the way the app makes it, so "shows no row" means the
 // rows are there and hidden
 beforeAll(async () => {
+  // this file calls no startApp, which is what every other file fills a default of the data of
+  // the shop with; without one of its own this table would show 0 rows to root and to the owner
+  // alike, unlike every other table of the schema, whenever this file ran before such a file
+  await loadShopSettings();
   owner = await createUser();
   voter = await createUser();
   admin = await createUser({ role: 'ADMIN' });
@@ -436,7 +441,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(36);
+    expect(Object.keys(hidden)).toHaveLength(37);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

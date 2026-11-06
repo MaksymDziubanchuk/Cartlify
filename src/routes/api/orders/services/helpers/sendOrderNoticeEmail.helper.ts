@@ -1,7 +1,9 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { addressLineOf, pickupPlaceOf, recipientNameOf } from '@helpers/deliveryText.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
@@ -46,7 +48,7 @@ function loadOrder(orderId: number) {
 
     const user = await tx.user.findUniqueOrThrow({
       where: { id: order.userId },
-      select: { email: true, name: true, deletedAt: true },
+      select: { email: true, name: true, locale: true, deletedAt: true },
     });
 
     // the send on its way: the latest that was not rolled back
@@ -82,20 +84,24 @@ export async function sendOrderNoticeEmail(
 
     const delivery = order.delivery;
     const send = order.shipments[0];
+    const locale = mailLocaleOf(order.user.locale);
 
     const notice = orderNoticeOf(kind, {
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: order.id,
-      pickup: delivery?.method === 'pickup' ? pickupPlaceOf() : '',
+      pickup: delivery?.method === 'pickup' ? pickupPlaceOf(locale) : '',
       carrier: send?.carrier ?? '',
       trackingNumber: send?.trackingNumber ?? '',
       trackingUrl: send?.trackingUrl ?? '',
       recipient: delivery ? `${recipientNameOf(delivery)}, ${delivery.recipientPhone}` : '',
-      shippingAddress: delivery ? addressLineOf(delivery) : '',
+      shippingAddress: delivery ? addressLineOf(delivery, locale) : '',
+      locale,
     });
 
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildOrderNoticeTemplate({
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: order.id,
       orderUrl: orderPage(order.id),
       subject: notice.subject,
@@ -103,7 +109,8 @@ export async function sendOrderNoticeEmail(
       paragraphs: notice.paragraphs,
       details: notice.details,
       ...(order.user.name ? { userName: order.user.name } : {}),
-      logoCid: SHOP_LOGO_CID,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      locale,
     });
 
     await sendEmail({
@@ -111,7 +118,7 @@ export async function sendOrderNoticeEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, orderId }, `order ${label} mail was not sent`);

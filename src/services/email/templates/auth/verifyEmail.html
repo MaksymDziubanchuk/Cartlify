@@ -4,11 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="x-apple-disable-message-reformatting">
-    <title>{{appName}} — Verify email</title>
+    <title>{{title}}</title>
   </head>
   <body style="margin:0;padding:0;background:#f5f3ff;">
     <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;line-height:1px;">
-      Confirm your email for {{appName}}.
+      {{preview}}
     </div>
 
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:#f5f3ff;">
@@ -23,15 +23,15 @@
 
             <tr>
               <td style="background:#ffffff;border:1px solid #ddd6fe;border-radius:14px;padding:28px;font-family:Arial,Helvetica,sans-serif;">
-                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">Verify your email</div>
+                <div style="font-size:18px;font-weight:800;color:#2e1065;margin:0 0 10px 0;">{{heading}}</div>
 
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 10px 0;">
-                  Hi{{#userName}} {{userName}}{{/userName}},<br>
-                  Please confirm your email address to finish setting up your account.
+                  {{greeting}}<br>
+                  {{body}}
                 </div>
 
                 {{#expiresInText}}<div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0 0 10px 0;">
-                  This link is valid for <b>{{expiresInText}}</b>.
+                  {{validity}}
                 </div>{{/expiresInText}}
 
                 <div style="padding:12px 0 18px 0;">
@@ -40,7 +40,7 @@
                       <td bgcolor="#6d28d9" style="border-radius:10px;">
                         <a href="{{verifyUrl}}"
                            style="display:inline-block;padding:12px 18px;font-size:14px;font-weight:800;color:#ffffff;text-decoration:none;font-family:Arial,Helvetica,sans-serif;">
-                          Verify email
+                          {{button}}
                         </a>
                       </td>
                     </tr>
@@ -48,7 +48,7 @@
                 </div>
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  If the button does not work, open this link:
+                  {{openLinkFallback}}
                 </div>
 
                 <div style="font-size:12px;line-height:1.5;margin:6px 0 0 0;word-break:break-all;">
@@ -58,15 +58,15 @@
                 <hr style="border:none;border-top:1px solid #ddd6fe;margin:18px 0;">
 
                 <div style="font-size:12px;color:#6b7280;line-height:1.5;margin:0;">
-                  If you did not request this, ignore this email.<br>
-                  Questions? Write to us in the chat on our site{{#supportEmail}} or to <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
+                  {{ignoreEmail}}<br>
+                  {{questionsIntro}}{{#supportEmail}} {{orTo}} <a href="mailto:{{supportEmail}}" style="color:#6d28d9;text-decoration:underline;">{{supportEmail}}</a>{{/supportEmail}}.
                 </div>
               </td>
             </tr>
 
             <tr>
               <td style="padding:14px 6px 0 6px;font-family:Arial,Helvetica,sans-serif;color:#9ca3af;font-size:12px;line-height:1.4;">
-                © {{year}} {{appName}}
+                © {{year}} {{appName}}{{#seller}}<br>{{seller}}{{/seller}}
               </td>
             </tr>
 

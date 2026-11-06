@@ -1,0 +1,99 @@
+# Shop settings
+
+This page explains the data of the shop that root changes without a deploy, to a developer who builds the frontend and to the shop owner. The routes, the settings and the error codes are also in [API](api.md) and in Swagger (`/documentation`); the languages the shop answers in have their own page, [languages](languages.md).
+
+## A row a setting, not an environment variable
+
+Delivery, the brand of a mail, the minutes a reservation and a payment page last, the check of a review's comment, how many removals by a moderator the rules allow, the days of grace after the right to withdraw, the logo, the seller and the languages the shop answers in: all of this used to be an environment variable, read once when the server started and changed only by a new deploy. It now lives in one database table, `shop_settings`, and root changes it from the admin pages while the server runs.
+
+A row of the table is **one setting**: its key (`shopName`, `deliveryCountries`, ...), the value it took, who set it and when. The current value of a setting is the latest row of its key. The table is **append-only**: a change is never an update, it is a new row for that one setting; no role, not even root, may change or remove a row once it exists (the database refuses an `UPDATE` or a `DELETE` with `SHOP_SETTINGS_APPEND_ONLY`, besides the row policies that already deny it). The server keeps the current values in memory and reads them everywhere a route used to read `process.env` (`shopSettings()`, `src/config/shopSettings.ts`); it reads the rows once when it starts and again inside every write, so a change by root is live for the next request, no restart needed. The copy in memory is one per server process: the shop runs as one instance today; a second instance would keep its own copy until it restarts, so running more than one needs the copy shared or reloaded first.
+
+**Writing.** Root sets every setting at once (`PUT /api/root/shop-settings`, every setting named, as it should be) or one (`PUT /api/root/shop-settings/:key`, the body `{ "value": ... }`). Either way a row is added only for a setting whose value changes; one given as it already is writes nothing. Nothing to name besides the values: no version, no number to send back, the order of the rows is the order of the changes. Two writes at once wait for each other (an advisory lock), and each checks its rules against the values the rows hold right then.
+
+**Who reads what.** `GET /api/shop-settings` is open to everybody (a guest, a buyer): the settings the site itself needs to show the shop's brand, its logo and the languages it offers, and the seller it must name on the pages and documents that EU law asks for — delivery is its own route, [`GET /api/delivery/methods`](api.md). `GET /api/admin/shop-settings` gives an admin or root the current value of every setting but the internal id of the logo file at Cloudinary. Only root sees the history (`GET /api/root/shop-settings/history`): the rows, the latest first, of every setting or of one (`?key=`), each with its value and who set it (a root's name and email, or `null` for a row the server itself added to fill in a default — a deleted root's own rows keep the name they used, not the address).
+
+## The settings
+
+| Setting               | Type and bounds                                                                                                                                                          | Default                                                      | Public  |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------ | ------- |
+| `deliveryMethods`     | list of `manual`, `pickup`, no repeats                                                                                                                                   | `['manual']`                                                 | no      |
+| `deliveryFlatPrice`   | money, above 0 to the cent, at most 99999999.99                                                                                                                          | none                                                         | no      |
+| `deliveryFreeFrom`    | money, above 0 to the cent, at most 99999999.99 (needs `deliveryFlatPrice` too)                                                                                          | none                                                         | no      |
+| `deliveryCountries`   | list of ISO 3166 alpha-2 codes, no repeats, each one the app knows how to take a postal code of                                                                          | **none**                                                     | no      |
+| `pickupAddress`       | text, up to 300 characters, required (not blank) once `pickup` is a delivery method; shown as root wrote it                                                              | `''`                                                         | no      |
+| `pickupHours`         | text in its format (below), up to 300 characters, required (not blank) once `pickup` is a delivery method                                                                | `''`                                                         | no      |
+| `shopName`            | text, up to 100 characters                                                                                                                                               | `'Cartlify'`                                                 | **yes** |
+| `emailFromName`       | text, up to 100 characters                                                                                                                                               | `''`                                                         | no      |
+| `emailReplyTo`        | an email address, up to 254 characters; **no mail goes out while it is empty**                                                                                           | `''` (counted as not set)                                    | no      |
+| `logoUrl`             | the Cloudinary address of the logo (its own routes write it, see below)                                                                                                  | **none**                                                     | **yes** |
+| `reservationMinutes`  | whole minutes, above 0                                                                                                                                                   | `15`                                                         | no      |
+| `stripePageMinutes`   | whole minutes, at least 30 (Stripe never keeps a page open for less); together with `reservationMinutes`, at most 1440 (Stripe never keeps one open for more than a day) | `30`                                                         | no      |
+| `reviewCheckEnabled`  | boolean                                                                                                                                                                  | `true`                                                       | no      |
+| `avatarRemovalsLimit` | whole number, above 0                                                                                                                                                    | `5`                                                          | no      |
+| `reviewRemovalsLimit` | whole number, above 0                                                                                                                                                    | `5`                                                          | no      |
+| `withdrawalGraceDays` | whole number, 0 to 30                                                                                                                                                    | `4`                                                          | no      |
+| `shopLocale`          | two lower-case letters, one of `enabledLocales`                                                                                                                          | `'en'`                                                       | **yes** |
+| `enabledLocales`      | list of two lower-case letters, no repeats, each with a dictionary file                                                                                                  | every language with a dictionary ([languages](languages.md)) | **yes** |
+| `sellerLegalName`     | text, up to 200 characters                                                                                                                                               | **none**                                                     | **yes** |
+| `sellerAddress`       | text, up to 500 characters                                                                                                                                               | **none**                                                     | **yes** |
+| `sellerTaxId`         | text, up to 50 characters                                                                                                                                                | **none**                                                     | **yes** |
+| `sellerEmail`         | an email address, up to 254 characters                                                                                                                                   | **none**                                                     | **yes** |
+| `sellerPhone`         | text, up to 30 characters                                                                                                                                                | **none**                                                     | **yes** |
+
+The shape of a value is checked by the database by its key (`shop_settings_value_chk`, a function of `db/schema/05_fn_and_triggers.sql`, because a `CHECK` cannot hold a subquery), and by the server before it writes anything, so a mistake of root comes back as a `400` that names it rather than as a refusal of the database: a value out of its shape (a price not above zero, below the cent or over 99999999.99, a list naming a value twice, a reply-to or a seller email that is not an address) is `400 VALIDATION_ERROR`, for a setting written on its own too. The rules between settings are the server's alone (a row cannot see the rows of the other keys), checked on the values the write would leave, the ones it gives over the current ones; they have codes of their own: `DELIVERY_FREE_FROM_WITHOUT_PRICE` (a free-from with no price), `PICKUP_DETAILS_REQUIRED` (the pickup method on with a blank address or hours, `details.fields` the blank ones), `PICKUP_HOURS_INVALID` (hours not in their format), `RESERVATION_MINUTES_TOO_LONG` (the reservation and the page together over a day, `details.max`) and `SHOP_LOCALE_NOT_ENABLED` (`shopLocale` not among `enabledLocales`). So turning the pickup on alone, with `PUT .../deliveryMethods`, is refused while its address or hours are still blank: set them first. Two more are lists the app itself keeps: a country of `deliveryCountries` the app does not actually know how to take a postal code of (`400 DELIVERY_COUNTRY_NOT_SUPPORTED`, `details.countries` the ones refused, `details.supported` the full list) and a language of `enabledLocales` with no dictionary file (`400 LOCALE_NOT_SUPPORTED`, `details.locales`/`details.supported`, see [languages](languages.md)).
+
+### The format of the pickup hours
+
+`pickupHours` is text, but in one format, which the server checks (`PICKUP_HOURS_INVALID` for another) and the frontend parses to show the hours in the language of its page (`GET /api/delivery/methods` gives the text as root wrote it):
+
+```
+Mon-Fri 09:00-18:00; Sat 10:00-14:00
+Mon,Wed,Fri 09:00-13:00,14:00-18:00
+```
+
+- parts by `; `, in each the days and the hours by one space;
+- a day is `Mon`, `Tue`, `Wed`, `Thu`, `Fri`, `Sat` or `Sun`; a range of days `Mon-Fri`, the earlier day first; several of them by `,`;
+- the hours `HH:MM-HH:MM` on 24 hours, the end after the start (`24:00` at most); several of them by `,`, one after another (a lunch break);
+- every day in one part only.
+
+A mail shows the hours with the days in the language of its reader (`Mon-Fri 09:00-18:00` is `пн-пт 09:00-18:00` in Ukrainian, `lun-vie 09:00-18:00` in Spanish); the address is shown as root wrote it.
+
+## A setting with no default
+
+Most settings have a default: until root sets one, the server uses the same value the code used to have, so nothing changes the day this table replaced the environment variables. Seven have **no** default at all, bold above: `deliveryCountries`, `logoUrl` and the five of the seller. `emailReplyTo` has one, but an empty one the shop cannot work with: no mail goes out without an address to reply to (the mail itself names it as the one to write to), so while it is blank it counts as not set, the same as these seven. Until root sets one of these:
+
+- the start of the server does not stop, and no setting anywhere falls back to a made-up value;
+- a request that genuinely needs it is refused with its own error code instead (confirming an order of the manual delivery method needs `deliveryCountries`, for instance);
+- root and the admins see it on the alert `shop_settings_incomplete`, which stays lit for as long as any of these eight is empty: its count is how many are, and its `list` leads to `GET /api/admin/shop-settings/missing`, which names exactly which, the way every other alert leads to the list of its cases;
+- a mail or a page that only _names_ the seller or the shop simply says less, it is never a reason to refuse anything on its own; the one exception is `emailReplyTo`: every mail is refused while it is empty (`EMAIL_REPLY_TO_REQUIRED` in the log of the server).
+
+The seller the shop names is at the foot of every mail too, once root filled in any of it: the parts root filled in, as root wrote them (a legal name and an address are not translated), the words around them in the language of the mail (`Seller: ...`, `Продавець: ...`, `Vendedor: ...`).
+
+A setting that **does** have a default, and one newly added to the code later, gets a row of its own the first time the server starts with no row for it: its default, written under the system's own name rather than root's (`setBy: null` in the history). From then on the rows say what the shop runs with, and a developer adding a new setting with a default never has to ask root to go and set it first.
+
+## Languages
+
+`shopLocale` and `enabledLocales` decide which language a guest's mail, the chat bot and the Stripe payment page use when nobody has a language of their own (and `enabledLocales`, together with a dictionary file per language, decides which language a signed-in person is even allowed to pick). The full model — the dictionaries, how a person's own language is chosen, and how to add a new one — is [languages](languages.md); `shop_locale_missing` is the alert for when `shopLocale` names a language whose dictionary file was removed by a later deploy (mail still goes out, in English, until root picks another language that still has one).
+
+## The logo
+
+The logo is not among the settings the two `PUT` routes write: it has two routes of its own, because it is a file. `POST /api/root/shop-settings/logo` takes a form with one file, `image` (a jpeg, png or webp file, checked by its content, not by the name or the type the browser sent), uploads it to Cloudinary, writes the row of the logo (its address, and its internal id at Cloudinary, which no answer sends out) and deletes the old file if there was one; `DELETE /api/root/shop-settings/logo` takes it off the same way (`409 SHOP_LOGO_NOT_SET` when there already is none).
+
+Without a logo the shop's mails simply go out without one (the template shows the shop's name in text instead), never a reason to refuse sending a mail. When there is one, `src/services/email/shopLogo.ts` fetches the file from `logoUrl` and keeps it in memory as long as that address does not change (a new upload always gets a new address, so the cache can never show a stale file); a fetch that takes more than 8 seconds, or fails outright, is logged and the mail goes out without the logo; the mails of the next minute then go without it at once, rather than each waiting the 8 seconds again while Cloudinary is out of reach.
+
+## Routes
+
+| Route                                  | Who         | What                                                                                    |
+| -------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| `GET /api/shop-settings`               | everybody   | the public settings                                                                     |
+| `GET /api/admin/shop-settings`         | admin, root | the current value of every setting but the logo's internal Cloudinary id                |
+| `GET /api/admin/shop-settings/missing` | admin, root | the settings with no default that are still empty, and `emailReplyTo` while it is blank |
+| `PUT /api/root/shop-settings`          | root        | every setting at once; a row for each that changes                                      |
+| `PUT /api/root/shop-settings/:key`     | root        | one setting, `{ "value": ... }`; a row for it when it changes                           |
+| `GET /api/root/shop-settings/history`  | root        | the rows, the latest first, of every setting or of one (`?key=`), who set each          |
+| `POST /api/root/shop-settings/logo`    | root        | sets or replaces the logo                                                               |
+| `DELETE /api/root/shop-settings/logo`  | root        | takes the logo off                                                                      |
+
+## After a deploy
+
+The variables these settings replaced are gone from `src/config/env.ts` and `.env.example` for good — they are not read as a fallback, there is no transition period. A deploy that brings this table needs root to open the admin pages and fill in, at least, `emailReplyTo` (without it no mail goes out at all) and the settings with no default (`deliveryCountries` above all: without it the manual delivery method, if it is on, refuses every order), and to enter the pickup hours in their format; until then the `shop_settings_incomplete` alert says so. The table of one row a setting replaced an earlier one of full versions: its rows were not carried over (`prisma/migrations/20261106120000_shop_settings_by_key`). See [configuration](configuration.md) for what is left in the environment and why.

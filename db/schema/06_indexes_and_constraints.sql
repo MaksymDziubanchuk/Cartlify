@@ -1654,3 +1654,38 @@ CREATE INDEX IF NOT EXISTS stock_log_write_off_idx
 CREATE INDEX IF NOT EXISTS stock_log_order_idx
   ON cartlify.stock_log ("orderId", id)
   WHERE "orderId" IS NOT NULL;
+
+----------------------------------------
+-- USERS: the form of a language code
+----------------------------------------
+-- A language is two lower-case letters (en, uk, es, ...); the ones the app answers in are decided
+-- by the dictionaries that exist (src/locales), not by this form check. A value that predates the
+-- check (PATCH /api/users/me took any text before) is cleared, so the script runs again clean.
+UPDATE cartlify.users SET locale = NULL WHERE locale IS NOT NULL AND locale !~ '^[a-z]{2}$';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_locale_chk') THEN
+    ALTER TABLE cartlify.users
+      ADD CONSTRAINT users_locale_chk
+      CHECK (locale IS NULL OR locale ~ '^[a-z]{2}$');
+  END IF;
+END $$;
+
+----------------------------------------
+-- SHOP_SETTINGS: a row is one setting (docs/shop-settings.md)
+----------------------------------------
+-- The key is one the server knows and the value of the shape that key takes
+-- (shop_setting_value_valid, db/05); the rules between settings are the server's.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_value_chk') THEN
+    ALTER TABLE cartlify.shop_settings
+      ADD CONSTRAINT shop_settings_value_chk
+      CHECK (cartlify.shop_setting_value_valid (key, value));
+  END IF;
+END $$;
+
+-- The current value of a setting is the latest row of its key (the start of the server and every
+-- write read it); the history goes newest first, of every key or of one.
+CREATE INDEX IF NOT EXISTS shop_settings_key_id_idx ON cartlify.shop_settings (key, id DESC);

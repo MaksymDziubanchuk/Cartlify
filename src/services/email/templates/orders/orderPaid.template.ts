@@ -1,5 +1,8 @@
+import { t } from '@config/i18n.js';
 import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
 import {
@@ -38,23 +41,18 @@ export type OrderPaidTemplateArgs = WithdrawalOfferArgs & {
   deliveryPrice?: number | string | null;
   appName?: string;
   logoCid?: string;
+  locale?: string;
   // the documents attached to the mail as files: the versions of the terms and of the contract the
   // order was confirmed with (sendOrderPaidEmail); the mail names them in its last lines
   attachedDocuments?: ('terms' | 'contract')[];
 };
 
-const ATTACHED_LINES = {
-  both: 'The terms and the contract you accepted are attached to this mail.',
-  terms: 'The terms you accepted are attached to this mail.',
-  contract: 'The contract you accepted is attached to this mail.',
-} as const;
-
-const attachedLineOf = (kinds: readonly ('terms' | 'contract')[] = []) => {
+const attachedLineOf = (kinds: readonly ('terms' | 'contract')[] = [], locale: string) => {
   const terms = kinds.includes('terms');
   const contract = kinds.includes('contract');
-  if (terms && contract) return ATTACHED_LINES.both;
-  if (terms) return ATTACHED_LINES.terms;
-  if (contract) return ATTACHED_LINES.contract;
+  if (terms && contract) return t('orderPaid.attachedBoth', locale);
+  if (terms) return t('orderPaid.attachedTerms', locale);
+  if (contract) return t('orderPaid.attachedContract', locale);
   return '';
 };
 
@@ -66,29 +64,32 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
   if (!args.items?.length) throw new Error('ORDER_ITEMS_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
   const price = (value: number | string) => money.format(Number(value));
 
   // the time zone of the buyer is unknown, the time is given in utc and says so
-  const paidAt = `${new Intl.DateTimeFormat('en-GB', {
+  const dateLocale = locale === 'en' ? 'en-GB' : locale;
+  const paidAt = `${new Intl.DateTimeFormat(dateLocale, {
     dateStyle: 'long',
     timeStyle: 'short',
     timeZone: 'UTC',
   }).format(args.paidAt)} UTC`;
 
-  const noRight = withdrawalNoticeOf(args.items, 'none');
-  const conditional = withdrawalNoticeOf(args.items, 'conditional');
+  const noRight = withdrawalNoticeOf(args.items, 'none', locale);
+  const conditional = withdrawalNoticeOf(args.items, 'conditional', locale);
+  const orderId = String(args.orderId);
 
   const values = {
     appName,
-    orderId: String(args.orderId),
+    orderId,
     orderUrl,
     paidAt,
     items: args.items.map((item) => ({
@@ -97,14 +98,12 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
       unitPrice: price(item.unitPrice),
       lineTotal: price(item.totalPrice),
     })),
-    deliveryLine: deliveryLineOf(args.deliveryPrice, price),
+    deliveryLine: deliveryLineOf(args.deliveryPrice, price, locale),
     total: price(args.total),
-    ...withdrawalOfferOf('paid', args.items, args),
-    noRightLine: noRight.length ? 'No right of withdrawal applies to these goods:' : '',
+    ...withdrawalOfferOf('paid', args.items, args, locale),
+    noRightLine: noRight.length ? t('common.noRightLine', locale) : '',
     noRightItems: noRight,
-    conditionalLine: conditional.length
-      ? 'You may withdraw from these goods only while the condition holds:'
-      : '',
+    conditionalLine: conditional.length ? t('orderPaid.conditionalLine', locale) : '',
     conditionalItems: conditional,
     shippingAddress: args.shippingAddress?.trim() || '',
     pickup: args.pickup?.trim() || '',
@@ -112,13 +111,35 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
     // has neither, then the line is left out
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
-    attachedLine: attachedLineOf(args.attachedDocuments),
+    attachedLine: attachedLineOf(args.attachedDocuments, locale),
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('orderPaid.subject', locale, { appName, orderId }),
+    preview: t('orderPaid.preview', locale, { orderId }),
+    leadTxt: t('orderPaid.leadTxt', locale, { appName, orderId }),
+    heading: t('orderPaid.heading', locale),
+    body: t('orderPaid.body', locale, { orderId }),
+    paidOn: t('orderPaid.paidOn', locale, { paidAt }),
+    greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
+    itemHeader: t('common.itemHeader', locale),
+    qtyHeader: t('common.qtyHeader', locale),
+    priceHeader: t('common.priceHeader', locale),
+    totalHeader: t('common.totalHeader', locale),
+    deliveryLabel: t('common.deliveryLabel', locale),
+    shippingToLabel: t('orderPaid.shippingToLabel', locale),
+    pickupAtLabel: t('orderPaid.pickupAtLabel', locale),
+    recipientLabel: t('common.recipientLabel', locale),
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
+    withdrawContract: t('common.withdrawContract', locale),
   };
 
   return {
-    subject: `${appName} — Order #${args.orderId} is paid`,
+    subject: values.title,
     text: renderTemplate('orders/orderPaid.txt', values),
     html: renderTemplate('orders/orderPaid.html', values),
   };

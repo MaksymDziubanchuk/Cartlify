@@ -89,4 +89,17 @@ describe('buildResetPasswordTemplate', () => {
   ])('refuses to build the email when the link is %s', (_case, url) => {
     expect(() => buildResetPasswordTemplate({ resetUrl: url })).toThrow();
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const en = buildResetPasswordTemplate({ resetUrl });
+    const uk = buildResetPasswordTemplate({ resetUrl, locale: 'uk' });
+    const es = buildResetPasswordTemplate({ resetUrl, locale: 'es' });
+
+    expect(en.html).toContain('Reset your password');
+    expect(uk.html).toContain('Відновіть свій пароль');
+    expect(es.html).toContain('Restablece tu contraseña');
+    expect(uk.subject).toContain('Відновлення пароля');
+    expect(es.subject).toContain('Restablece tu contraseña');
+  });
 });

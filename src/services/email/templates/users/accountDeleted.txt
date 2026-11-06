@@ -1,14 +1,16 @@
-{{#userName}}Hi {{userName}},
+{{#userName}}{{greeting}}
 
-{{/userName}}Your {{appName}} account is deleted. Your profile is removed and you can no longer sign in to it.
+{{/userName}}{{body}}
 {{#hasDeliveries}}
-These orders are paid and will still be delivered to the address given in each order, or kept for you to collect at the shop:
-{{#deliveries}}- Order #{{orderId}}, {{total}}: {{statusText}}
+{{deliveriesIntroTxt}}
+{{#deliveries}}- {{orderLabel}} #{{orderId}}, {{total}}: {{statusText}}
   {{itemsText}}
-{{/deliveries}}You will get no more mails about them.
+{{/deliveries}}{{deliveriesOutroTxt}}
 {{/hasDeliveries}}{{#hasCancelled}}
-These orders were waiting for payment and are cancelled:
-{{#cancelled}}- Order #{{orderId}}, {{total}}: {{paymentText}}
+{{cancelledIntro}}
+{{#cancelled}}- {{orderLabel}} #{{orderId}}, {{total}}: {{paymentText}}
   {{itemsText}}
 {{/cancelled}}{{/hasCancelled}}
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

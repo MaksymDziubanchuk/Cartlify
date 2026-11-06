@@ -82,6 +82,9 @@ model User {
   // the versions of the terms and of the contract this account published (only root does)
   legalDocumentsPublished LegalDocument[]         @relation("LegalDocumentPublisher")
   legalAcceptances        LegalAcceptance[]
+  // the settings of the data of the shop this account wrote (only root does; a row the server
+  // wrote to fill in a default has no one here)
+  shopSettingsSet         ShopSetting[]
   // the statements of withdrawal this account made or confirmed the proof of
   returnsCreated          OrderReturn[]           @relation("ReturnCreator")
   returnsProofConfirmed   OrderReturn[]           @relation("ReturnProofConfirmer")
@@ -1657,4 +1660,30 @@ model LegalAcceptance {
   @@index([orderId])
   @@index([event, createdAt])
   @@map("legal_acceptances")
+}
+
+// One setting of the data of the shop (delivery, brand, reservation, moderation, withdrawal,
+// languages, the seller, the logo): a row is the value one key took, written by root or, for a
+// key that has a default in the code and no row yet, by the server at its start (setById null,
+// "the system"; docs/shop-settings.md). The current value of a key is its latest row; a row is
+// never changed or removed (db/03, db/05). The shape of a value is checked by key (db/06,
+// shop_settings_value_chk), the rules between keys by the server.
+model ShopSetting {
+  id Int @id @default(autoincrement())
+
+  // which setting, one of the keys the server knows (db/06)
+  key String
+
+  // the value, of the shape of its key: a text, a number, a list of texts, true or false, or null
+  // for a setting without a value
+  value Json
+
+  // root who wrote it; null for a row the server wrote to fill in a default
+  setById Int?
+  setBy   User? @relation(fields: [setById], references: [id], onDelete: Restrict)
+
+  // set by trg_shop_settings_before_insert (db/05): the time of the database
+  createdAt DateTime @default(now())
+
+  @@map("shop_settings")
 }

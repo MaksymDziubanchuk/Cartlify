@@ -1,11 +1,13 @@
-Hi{{#userName}} {{userName}}{{/userName}},
+{{greeting}}
 
-{{#code}}Statement {{code}}.
-{{/code}}We could not return {{amount}} for your {{appName}} order #{{orderId}} to the card it was paid with: the card can no longer take money (it may be closed or expired).
-{{#sentBack}}The money we returned earlier was sent back to us by the bank of the card, so it did not reach you.
-{{/sentBack}}We will contact you about another way to return it. You can also write to us at the address below.
+{{#code}}{{statementLine}}.
+{{/code}}{{leadTxt}}
+{{#sentBack}}{{sentBackLine}}
+{{/sentBack}}{{contactLine}}
 
-See your order:
+{{seeOrderTxt}}
 {{orderUrl}}
 
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

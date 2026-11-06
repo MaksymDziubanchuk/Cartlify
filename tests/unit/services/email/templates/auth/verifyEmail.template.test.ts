@@ -89,4 +89,17 @@ describe('buildVerifyEmailTemplate', () => {
   ])('refuses to build the email when the link is %s', (_case, url) => {
     expect(() => buildVerifyEmailTemplate({ verifyUrl: url })).toThrow();
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const en = buildVerifyEmailTemplate({ verifyUrl });
+    const uk = buildVerifyEmailTemplate({ verifyUrl, locale: 'uk' });
+    const es = buildVerifyEmailTemplate({ verifyUrl, locale: 'es' });
+
+    expect(en.html).toContain('Verify your email');
+    expect(uk.html).toContain('Підтвердьте свою електронну адресу');
+    expect(es.html).toContain('Verifica tu correo electrónico');
+    expect(uk.subject).toContain('Підтвердьте свою електронну адресу');
+    expect(es.subject).toContain('Verifica tu correo');
+  });
 });

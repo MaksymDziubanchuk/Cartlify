@@ -1,10 +1,12 @@
-Hi{{#userName}} {{userName}}{{/userName}},
+{{greeting}}
 
-{{#code}}Statement {{code}}.
-{{/code}}We paid you back {{amount}}, the cost of sending the goods of your {{appName}} order #{{orderId}} back to us.
-We sent it by {{way}} on {{sentOn}}.
+{{#code}}{{statementLine}}.
+{{/code}}{{leadTxt}}
+{{sentOnLine}}
 
-See your order:
+{{seeOrderTxt}}
 {{orderUrl}}
 
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

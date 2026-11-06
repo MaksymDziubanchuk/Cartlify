@@ -1,12 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
-import env from '@config/env.js';
-
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   closeSessions,
   createCategory,
@@ -333,7 +332,7 @@ describe('the check of the comment of a review', () => {
   it('publishes without asking anybody when the check is off', async () => {
     const product = await createProduct();
     const { asked, moderated } = checks(() => ({ reasons: ['profanity'] }));
-    env.REVIEW_CHECK_ENABLED = false;
+    setShopSettings({ reviewCheckEnabled: false });
 
     try {
       const res = await writeReview(await newUser(), product.id, { comment: 'Not checked' });
@@ -342,7 +341,7 @@ describe('the check of the comment of a review', () => {
       expect(asked).toEqual([]);
       expect(moderated).toEqual([]);
     } finally {
-      env.REVIEW_CHECK_ENABLED = true;
+      resetShopSettings();
     }
   });
 

@@ -1,4 +1,7 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 // why the order could not take the payment, the answers of pay_order that give the money back
 export type PaymentRefundReason =
@@ -20,22 +23,14 @@ export type OrderPaymentRefundedTemplateArgs = {
   userName?: string;
   appName?: string;
   logoCid?: string;
-};
-
-// the words of the mail for each reason; it comes after the reservation of the order was over
-const REASONS: Record<PaymentRefundReason, string> = {
-  OUT_OF_STOCK: 'the reservation of the order was over and some items of it were no longer in stock',
-  ALREADY_PAID_OTHER_PAYMENT: 'the order was paid with another payment already',
-  AMOUNT_MISMATCH: 'the order changed after the payment page was opened',
-  ORDER_NOT_PAYABLE: 'the order could not take a payment any more',
-  ORDER_NOT_FOUND: 'the order no longer exists',
+  locale?: string;
 };
 
 // what became of the order: only another payment of it leaves it paid
-const orderLine = (reason: PaymentRefundReason) =>
+const orderLineOf = (reason: PaymentRefundReason, locale: string) =>
   reason === 'ALREADY_PAID_OTHER_PAYMENT'
-    ? 'The order stays paid with your other payment.'
-    : 'The order is not paid and nothing will be sent.';
+    ? t('orderPaymentRefunded.orderStaysPaid', locale)
+    : t('orderPaymentRefunded.orderNotPaid', locale);
 
 // the mail itself is orderPaymentRefunded.html and orderPaymentRefunded.txt next to this file
 export function buildOrderPaymentRefundedTemplate(args: OrderPaymentRefundedTemplateArgs): {
@@ -45,29 +40,48 @@ export function buildOrderPaymentRefundedTemplate(args: OrderPaymentRefundedTemp
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
 
+  const orderId = String(args.orderId);
+  const amount = money.format(Number(args.amount));
+  const reason = t(`paymentRefundReasons.${args.reason}`, locale);
+
   const values = {
     appName,
-    orderId: String(args.orderId),
+    orderId,
     orderUrl,
-    amount: money.format(Number(args.amount)),
-    reason: REASONS[args.reason],
-    orderLine: orderLine(args.reason),
+    amount,
+    reason,
+    orderLine: orderLineOf(args.reason, locale),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('orderPaymentRefunded.subject', locale, { appName, orderId }),
+    preview: t('orderPaymentRefunded.preview', locale, { orderId }),
+    heading: t('orderPaymentRefunded.heading', locale),
+    body: t('orderPaymentRefunded.body', locale, { amount, orderId, reason }),
+    greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
+  // bankNote interpolates the already-translated orderLine, not a dictionary key of its own
+  const bankNote = t('orderPaymentRefunded.bankNote', locale, { orderLine: values.orderLine });
+
   return {
-    subject: `${appName} — The payment for order #${args.orderId} is refunded`,
-    text: renderTemplate('orders/orderPaymentRefunded.txt', values),
-    html: renderTemplate('orders/orderPaymentRefunded.html', values),
+    subject: values.title,
+    text: renderTemplate('orders/orderPaymentRefunded.txt', { ...values, bankNote }),
+    html: renderTemplate('orders/orderPaymentRefunded.html', { ...values, bankNote }),
   };
 }

@@ -22,6 +22,7 @@ import {
   putOnSale,
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import {
   answerAsModel,
   gate,
@@ -309,6 +310,51 @@ describe('the daily turns of the bot', () => {
     }
   });
 
+  // the same fixed text of a request for an admin with no model call, in the account's own
+  // language (src/locales)
+  it('takes a user to an admin past the limit, in their own language', async () => {
+    const limit = env.CHAT_BOT_USER_DAILY_TURNS;
+    env.CHAT_BOT_USER_DAILY_TURNS = 1;
+
+    try {
+      answerAsModel();
+      const chat = await openChat('user', undefined, { locale: 'es' });
+
+      await ask(chat, 'Do you have mugs?');
+      const bot = await ask(chat, 'I need a human please');
+
+      expect(bot.content).toBe(
+        'Describe tu problema para el administrador. Un administrador podrá responder aquí más tarde. El asistente dejará de responder en este chat ahora.',
+      );
+      expect((await threadRowOf(chat.threadId)).type).toBe('admin');
+    } finally {
+      env.CHAT_BOT_USER_DAILY_TURNS = limit;
+    }
+  });
+
+  // a guest has no language of their own: a fixed text goes in the shop's (changed in the memory
+  // of this file only, tests/helpers/shopSettings.ts)
+  it("answers a guest in the shop's language once the limit is used up", async () => {
+    const limit = env.CHAT_BOT_GUEST_DAILY_TURNS;
+    env.CHAT_BOT_GUEST_DAILY_TURNS = 1;
+    setShopSettings({ shopLocale: 'uk' });
+
+    try {
+      answerAsModel();
+      const chat = await openChat('guest');
+
+      await ask(chat, 'Do you have mugs?');
+      const second = await ask(chat, 'And lamps?');
+
+      expect(second.content).toBe(
+        'Я вже відповів на стільки повідомлень, скільки міг сьогодні. Будь ласка, повертайтеся завтра.',
+      );
+    } finally {
+      env.CHAT_BOT_GUEST_DAILY_TURNS = limit;
+      resetShopSettings();
+    }
+  });
+
   it('counts the turns of a guest against the limit of guests', async () => {
     const limit = env.CHAT_BOT_GUEST_DAILY_TURNS;
     env.CHAT_BOT_GUEST_DAILY_TURNS = 1;
@@ -326,6 +372,27 @@ describe('the daily turns of the bot', () => {
       expect(calls).toHaveLength(1);
     } finally {
       env.CHAT_BOT_GUEST_DAILY_TURNS = limit;
+    }
+  });
+
+  // a fixed text with no model call goes in the account's own language (src/locales), not in the
+  // language the model would have matched from the message
+  it("answers a user's own language once the limit is used up, English by default", async () => {
+    const limit = env.CHAT_BOT_USER_DAILY_TURNS;
+    env.CHAT_BOT_USER_DAILY_TURNS = 1;
+
+    try {
+      answerAsModel();
+      const chat = await openChat('user', undefined, { locale: 'uk' });
+
+      await ask(chat, 'Do you have mugs?');
+      const second = await ask(chat, 'And lamps?');
+
+      expect(second.content).toBe(
+        'Я вже відповів на стільки повідомлень, скільки міг сьогодні. Будь ласка, повертайтеся завтра. Якщо потрібна допомога зараз, попросіть поговорити з людиною.',
+      );
+    } finally {
+      env.CHAT_BOT_USER_DAILY_TURNS = limit;
     }
   });
 });
@@ -536,10 +603,10 @@ describe('what the bot knows of the customer', () => {
 
     const orders = ordersMessageOf(calls[0]!)!;
     const line = orders.split('\n').find((one) => one.startsWith(`- order ${orderId}:`))!;
-    expect(line).toContain(`- order ${orderId}: cancelled (cancelled, the money goes back to the card)`);
     expect(line).toContain(
-      '; returns: all statements are closed and all the money went back',
+      `- order ${orderId}: cancelled (cancelled, the money goes back to the card)`,
     );
+    expect(line).toContain('; returns: all statements are closed and all the money went back');
     expect(line).toMatch(/: closed; money: refunded [\d.]+ EUR for 1 unit\(s\) on /);
     expect(line).toContain(`on ${refundedAt.toISOString()} (UTC)`);
     expect(orders).not.toContain('HUMAN ONLY');

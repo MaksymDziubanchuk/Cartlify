@@ -1,6 +1,7 @@
 import { prisma } from '@db/client.js';
 import { AppError, BadRequestError, InternalError } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashToken } from '@helpers/tokenHash.js';
 
@@ -19,13 +20,19 @@ import type { Role } from 'types/user.js';
 
 // the mail of a new link of confirmation, and the account it is for (the log names the account,
 // not the email)
-type VerifyMailJob = { to: string; token: string; expiresAt: Date; userId: number };
+type VerifyMailJob = {
+  to: string;
+  token: string;
+  expiresAt: Date;
+  userId: number;
+  locale: string;
+};
 
 // resend verify email flow
 // create new verify token
 export async function resendVerify(
   { email }: ResendVerifyDto,
-  log: Pick<FastifyBaseLogger, 'error'>,
+  log: Pick<FastifyBaseLogger, 'error' | 'warn'>,
 ): Promise<MessageResponseDto> {
   assertEmail(email);
 
@@ -42,13 +49,21 @@ export async function resendVerify(
       select * from cartlify.auth_resend_verify(${cleanEmail}, ${hashToken(token)}, ${expiresAt})
     `;
 
-    // schedule email only when user exists
+    // schedule email only when user exists; the function above answers no column of the user, so
+    // its language takes a second, sequential query, as the system (a guest reads no user row)
     if (rows.length) {
+      await setAdminContext(tx);
+      const user = await tx.user.findUnique({
+        where: { id: rows[0].user_id },
+        select: { locale: true },
+      });
+
       sendPayload = {
         to: cleanEmail,
         token,
         expiresAt: rows[0].expires_at,
         userId: rows[0].user_id,
+        locale: mailLocaleOf(user?.locale ?? null),
       };
     }
   });
@@ -59,7 +74,7 @@ export async function resendVerify(
     // set inside the transaction, which the narrowing of typescript does not follow
     const { userId, ...mail } = sendPayload as VerifyMailJob;
     try {
-      await sendVerifyEmail(mail);
+      await sendVerifyEmail(mail, log);
     } catch (err) {
       if (err instanceof AppError && err.statusCode === 502) {
         log.error({ err, userId }, 'verification mail was not sent');

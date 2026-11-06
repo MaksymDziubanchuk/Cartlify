@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -152,7 +153,7 @@ describe('the withdrawal in the answers of an order', () => {
     const buyer = await newUser();
     const orderId = await deliveredOrderOf(buyer);
     const ends = new Date((await read(orderId, buyer)).withdrawalEndsAt);
-    const graceEnds = ends.getTime() + env.WITHDRAWAL_GRACE_DAYS * DAY_MS;
+    const graceEnds = ends.getTime() + shopSettings().withdrawalGraceDays * DAY_MS;
 
     clock = moveClock(ends.getTime() - Date.now() - 60_000);
     const last = await read(orderId, buyer);
@@ -166,7 +167,7 @@ describe('the withdrawal in the answers of an order', () => {
     clock = moveClock(graceEnds - Date.now() + 2 * 3_600_000);
     const after = await read(orderId, buyer);
 
-    expect(env.WITHDRAWAL_GRACE_DAYS).toBeGreaterThan(0);
+    expect(shopSettings().withdrawalGraceDays).toBeGreaterThan(0);
     expect(last.withdrawalOpen).toBe(true);
     expect(late.withdrawalOpen).toBe(true);
     expect(lastOfGrace.withdrawalOpen).toBe(true);

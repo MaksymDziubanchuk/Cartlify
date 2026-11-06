@@ -1,4 +1,7 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnRefundFailedTemplateArgs = {
   orderId: number;
@@ -17,6 +20,7 @@ export type ReturnRefundFailedTemplateArgs = {
   userName?: string;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
 
 // the mail itself is returnRefundFailed.html and returnRefundFailed.txt next to this file. It goes
@@ -28,29 +32,48 @@ export function buildReturnRefundFailedTemplate(args: ReturnRefundFailedTemplate
 } {
   const appName = args.appName?.trim() || 'Cartlify';
   const orderUrl = args.orderUrl?.trim() || '';
+  const locale = args.locale || 'en';
 
   if (!orderUrl) throw new Error('ORDER_URL_REQUIRED');
 
-  const money = new Intl.NumberFormat('en', {
+  const money = new Intl.NumberFormat(locale, {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
 
+  const orderId = String(args.orderId);
+  const code = args.code?.trim() || '';
+  const amount = money.format(Number(args.amount));
+
   const values = {
     appName,
-    orderId: String(args.orderId),
-    code: args.code?.trim() || '',
+    orderId,
+    code,
     sentBack: args.sentBack ? 'yes' : '',
     orderUrl,
-    amount: money.format(Number(args.amount)),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('returnRefundFailed.subject', locale, { appName, orderId }),
+    preview: t('returnRefundFailed.preview', locale, { amount }),
+    heading: t('returnRefundFailed.heading', locale),
+    leadTxt: t('returnRefundFailed.leadTxt', locale, { appName, orderId, amount }),
+    body: t('returnRefundFailed.body', locale, { orderId, amount }),
+    sentBackLine: t('returnRefundFailed.sentBackLine', locale),
+    contactLine: t('returnRefundFailed.contactLine', locale),
+    greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
+    statementLine: code ? t('common.statementLine', locale, { code }) : '',
+    viewOrderButton: t('common.viewOrderButton', locale),
+    seeOrderTxt: t('common.seeOrderTxt', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
   return {
-    subject: `${appName} — We could not return the money for order #${args.orderId}${args.code ? ` (${args.code})` : ''}`,
+    subject: `${values.title}${code ? ` (${code})` : ''}`,
     text: renderTemplate('returns/returnRefundFailed.txt', values),
     html: renderTemplate('returns/returnRefundFailed.html', values),
   };

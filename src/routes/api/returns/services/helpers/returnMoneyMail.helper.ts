@@ -1,18 +1,22 @@
+import { t } from '@config/i18n.js';
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { returnCodeOf } from '@helpers/returns.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { paymentProviders } from '@routes/api/payments/providers/index.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import {
-  NOT_ACCEPTED_WORDS,
-  buildReturnClosedTemplate,
-} from '@services/email/templates/returns/returnClosed.template.js';
+  SHOP_LOGO_CID,
+  shopLogoAttachment,
+  type ShopLogoAttachment,
+} from '@services/email/shopLogo.js';
+import { buildReturnClosedTemplate } from '@services/email/templates/returns/returnClosed.template.js';
 import { buildReturnRefundFailedTemplate } from '@services/email/templates/returns/returnRefundFailed.template.js';
 import { buildReturnRefundedTemplate } from '@services/email/templates/returns/returnRefunded.template.js';
 import { buildReturnReimbursedTemplate } from '@services/email/templates/returns/returnReimbursed.template.js';
@@ -85,7 +89,7 @@ async function loadStatement(returnId: number) {
 
     const order = await tx.order.findUnique({
       where: { id: row.orderId },
-      select: { user: { select: { name: true, deletedAt: true } } },
+      select: { user: { select: { name: true, deletedAt: true, locale: true } } },
     });
 
     // a statement of the public form is greeted by the name given there, as its first mail was:
@@ -96,6 +100,8 @@ async function loadStatement(returnId: number) {
       ...row,
       items,
       userName: publicForm ? row.contactName : (order?.user?.name ?? null),
+      // a form has no account to read a language from: its mails go in the shop's language
+      locale: publicForm ? null : (order?.user?.locale ?? null),
       // the email of a statement an admin made is the one of the account; a deleted account has
       // none that leads anywhere
       noAddress: row.source === 'admin' && order?.user?.deletedAt != null,
@@ -155,25 +161,30 @@ const moneyOf = (rows: Row[]) =>
     { total: 0, delivery: 0, deduction: 0 },
   );
 
-const common = (statement: Statement) => ({
+const common = (statement: Statement, logo: ShopLogoAttachment | null) => ({
   orderId: statement.orderId,
   code: returnCodeOf(statement.basis, statement.orderId, statement.number),
   timeZone: env.SHOP_TIME_ZONE,
   orderUrl: orderPage(statement.orderId),
   currency: currency(),
-  supportEmail: env.EMAIL_REPLY_TO,
-  appName: env.SHOP_NAME,
-  logoCid: SHOP_LOGO_CID,
+  supportEmail: shopSettings().emailReplyTo,
+  appName: shopSettings().shopName,
+  locale: mailLocaleOf(statement.locale),
+  ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
   ...(statement.userName ? { userName: statement.userName } : {}),
 });
 
-async function send(statement: Statement, mail: { subject: string; text: string; html: string }) {
+async function send(
+  statement: Statement,
+  mail: { subject: string; text: string; html: string },
+  logo: ShopLogoAttachment | null,
+) {
   if (statement.noAddress) return;
 
   await sendEmail({
     to: statement.contactEmail,
     ...mail,
-    attachments: [await shopLogoAttachment()],
+    attachments: logo ? [logo] : [],
   });
 }
 
@@ -192,9 +203,11 @@ export async function sendReturnMoneyEmail(
       return;
     }
 
+    const logo = await shopLogoAttachment(log);
+
     // closed by the money of this transfer: the code root closed other rows with is not its reason
     if (statement.closedAt) {
-      await sendClosed(statement, false);
+      await sendClosed(statement, false, logo);
       return;
     }
 
@@ -208,7 +221,7 @@ export async function sendReturnMoneyEmail(
     await send(
       statement,
       buildReturnRefundedTemplate({
-        ...common(statement),
+        ...common(statement, logo),
         items: linesOf(rows).map(({ name, quantity }) => ({ name, quantity })),
         amount: money.total / 100,
         deliveryAmount: money.delivery / 100,
@@ -216,6 +229,7 @@ export async function sendReturnMoneyEmail(
         ...withheldOf(rows),
         ...(outside ? { outsideMethod: outside.outsideMethod, sentOn: outside.refundedAt } : {}),
       }),
+      logo,
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return money mail was not sent');
@@ -237,33 +251,40 @@ export async function sendReturnClosedEmail(
     }
     if (!statement.closedAt) return;
 
-    await sendClosed(statement, opts.withCode === true);
+    const logo = await shopLogoAttachment(log);
+    await sendClosed(statement, opts.withCode === true, logo);
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return closed mail was not sent');
   }
 }
 
-async function sendClosed(statement: Statement, withCode: boolean) {
+async function sendClosed(
+  statement: Statement,
+  withCode: boolean,
+  logo: ShopLogoAttachment | null,
+) {
   const refunded = statement.items.filter((row) => row.money === 'refunded');
   const declined = statement.items.filter((row) => row.money === 'refused');
+  const locale = mailLocaleOf(statement.locale);
 
   await send(
     statement,
     buildReturnClosedTemplate({
-      ...common(statement),
+      ...common(statement, logo),
       // a form without a code can come from anybody who knows the number and the name of the
       // recipient: its mails never say what the order holds (its first mail does not either)
       hideItems: statement.source === 'form_manual',
       refunded: linesOf(refunded).map(({ name, quantity }) => ({ name, quantity })),
       declined: linesOf(declined, (row) =>
         row.goods === 'not_accepted' && row.notAcceptedReason
-          ? (NOT_ACCEPTED_WORDS[row.notAcceptedReason] ?? NOT_ACCEPTED_WORDS.other!)
-          : 'the goods did not arrive',
+          ? t(`notAcceptedReasons.${row.notAcceptedReason}`, locale)
+          : t('returnClosed.goodsNotArrived', locale),
       ),
       refundedAmount: moneyOf(refunded).total / 100,
       ...withheldOf(refunded),
       closeCode: withCode ? statement.closeCode : null,
     }),
+    logo,
   );
 }
 
@@ -287,13 +308,15 @@ export async function sendReturnRefundFailedEmail(
     );
     if (!rows.length) return;
 
+    const logo = await shopLogoAttachment(log);
     await send(
       statement,
       buildReturnRefundFailedTemplate({
-        ...common(statement),
+        ...common(statement, logo),
         amount: moneyOf(rows).total / 100,
         sentBack,
       }),
+      logo,
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return refund failed mail was not sent');
@@ -320,14 +343,16 @@ export async function sendReturnReimbursedEmail(
       return;
     }
 
+    const logo = await shopLogoAttachment(log);
     await send(
       statement,
       buildReturnReimbursedTemplate({
-        ...common(statement),
+        ...common(statement, logo),
         amount: decimalToNumber(statement.shippingReimbursed),
         method: statement.shippingReimbursedMethod,
         sentOn: statement.shippingReimbursedAt,
       }),
+      logo,
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return reimbursed mail was not sent');

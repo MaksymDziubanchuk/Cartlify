@@ -1,7 +1,8 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 
 import { ForbiddenError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
@@ -24,13 +25,14 @@ export async function deleteProductReview(
   dto: DeleteProductReviewDto,
 ): Promise<DeleteProductReviewResponseDto> {
   const { productId, reviewId, actorId, actorRole } = normalizeDeleteReviewInput(dto);
-  const limit = env.REVIEW_REMOVALS_LIMIT;
+  const limit = shopSettings().reviewRemovalsLimit;
 
   let removal: {
     removals: number;
     authorId: number;
     mailTo: string | null;
     userName: string | null;
+    locale: string | null;
     productName: string;
   } | null;
 
@@ -82,7 +84,7 @@ export async function deleteProductReview(
       // who gets the mail and of which product; an admin reads both, a removed product too
       const author = await tx.user.findUnique({
         where: { id: review.userId },
-        select: { email: true, name: true, deletedAt: true },
+        select: { email: true, name: true, deletedAt: true, locale: true },
       });
       const product = await tx.product.findUniqueOrThrow({
         where: { id: review.productId },
@@ -95,6 +97,7 @@ export async function deleteProductReview(
         // a deleted account has no address to write to
         mailTo: author && !author.deletedAt ? author.email : null,
         userName: author?.name ?? null,
+        locale: author?.locale ?? null,
         productName: product.name,
       };
     });
@@ -113,6 +116,7 @@ export async function deleteProductReview(
         userId: removal.authorId,
         to: removal.mailTo,
         userName: removal.userName,
+        locale: mailLocaleOf(removal.locale),
         productName: removal.productName,
         removals: removal.removals,
         limit,

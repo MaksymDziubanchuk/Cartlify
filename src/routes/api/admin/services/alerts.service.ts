@@ -1,5 +1,7 @@
 import { Prisma } from '@prisma/client';
 
+import { isAvailableLocale } from '@config/locales.js';
+import { missingShopSettingsFields, shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { shopToday } from '@helpers/shopDay.js';
@@ -51,10 +53,21 @@ import type { Role } from 'types/user.js';
 type Db = Prisma.TransactionClient;
 type Actor = { actorId: UserId; actorRole: Role };
 
-// the kinds whose cases have an id an admin can put aside: all but the stop of the worker
-type CaseKind = Exclude<AdminAlertKind, 'worker_stalled'>;
+// the kinds whose cases have an id an admin can put aside: all but the stop of the worker, the
+// empty fields of the data of the shop and its missing dictionary, which are a single state, not
+// a list of rows
+type CaseKind = Exclude<
+  AdminAlertKind,
+  'worker_stalled' | 'shop_settings_incomplete' | 'shop_locale_missing'
+>;
 
-const isCaseKind = (kind: AdminAlertKind): kind is CaseKind => kind !== 'worker_stalled';
+const SINGLE_STATE_KINDS = new Set<AdminAlertKind>([
+  'worker_stalled',
+  'shop_settings_incomplete',
+  'shop_locale_missing',
+]);
+
+const isCaseKind = (kind: AdminAlertKind): kind is CaseKind => !SINGLE_STATE_KINDS.has(kind);
 
 // the cases of a kind: the rows they are read from (t, t.id the id of a case) and the ones that
 // wait, in the window of the threshold; the same conditions as the filters of the list the
@@ -297,9 +310,13 @@ export async function getAdminAlerts(
           for (const id of cases.found) kept.add(dismissalFieldOf(kind, id));
           countedKinds.add(kind);
           tally = { count: cases.count, dismissed: cases.dismissed };
-        } else {
+        } else if (kind === 'worker_stalled') {
           const stalled = workerStalled(orderTimeoutWorkerState(), threshold ?? 0, now);
           tally = { count: stalled ? 1 : 0, dismissed: 0 };
+        } else if (kind === 'shop_locale_missing') {
+          tally = { count: isAvailableLocale(shopSettings().shopLocale) ? 0 : 1, dismissed: 0 };
+        } else {
+          tally = { count: missingShopSettingsFields().length, dismissed: 0 };
         }
 
         alerts.push({

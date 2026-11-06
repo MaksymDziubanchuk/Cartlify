@@ -1,9 +1,9 @@
-{{#userName}}Hi {{userName}},
+{{#userName}}{{greeting}}
 
-{{/userName}}A moderator removed your review of {{productName}}: it does not follow the rules of {{appName}}. You can write a new review of the product that follows them.
+{{/userName}}{{body}}
 
-{{#beforeLimit}}This is removal {{removals}} of the {{limit}} the rules allow. After them your account can be deleted.
-{{/beforeLimit}}{{#atLimit}}This is the last removal the rules allow, {{limit}} of {{limit}}. The next one can lead to the deletion of your account.
-{{/atLimit}}{{#pastLimit}}This is removal {{removals}}, past the {{limit}} the rules allow. Your account can now be deleted.
-{{/pastLimit}}
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{beforeLimit}}{{atLimit}}{{pastLimit}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

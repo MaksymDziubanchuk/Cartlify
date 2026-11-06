@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 
 // what a buyer pays for the delivery by the settings of the shop: the manual method the flat price,
@@ -17,20 +17,25 @@ export type DeliveryQuote = {
 };
 
 export function deliveryPriceOf(method: DeliveryMethodName, itemsTotal: number): number {
-  if (method !== 'manual' || env.DELIVERY_FLAT_PRICE === null) return 0;
+  const settings = shopSettings();
+  if (method !== 'manual' || settings.deliveryFlatPrice === null) return 0;
 
-  if (env.DELIVERY_FREE_FROM !== null && toCents(itemsTotal) >= toCents(env.DELIVERY_FREE_FROM)) {
+  if (
+    settings.deliveryFreeFrom !== null &&
+    toCents(itemsTotal) >= toCents(settings.deliveryFreeFrom)
+  ) {
     return 0;
   }
 
-  return env.DELIVERY_FLAT_PRICE;
+  return settings.deliveryFlatPrice;
 }
 
 // each method the shop has enabled with the price it asks for these items
 export function deliveryQuotesOf(itemsTotal: number): DeliveryQuote[] {
-  return env.DELIVERY_METHODS.map((method) => {
+  const settings = shopSettings();
+  return settings.deliveryMethods.map((method) => {
     const freeFrom =
-      method === 'manual' && env.DELIVERY_FLAT_PRICE !== null ? env.DELIVERY_FREE_FROM : null;
+      method === 'manual' && settings.deliveryFlatPrice !== null ? settings.deliveryFreeFrom : null;
 
     return {
       method,

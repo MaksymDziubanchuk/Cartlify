@@ -1,4 +1,7 @@
+import { t } from '@config/i18n.js';
+import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnReceivedItem = { name: string; quantity: number };
 
@@ -34,10 +37,8 @@ export type ReturnReceivedTemplateArgs = {
   userName?: string;
   appName?: string;
   logoCid?: string;
+  locale?: string;
 };
-
-const day = (date: Date, zone: string) =>
-  new Intl.DateTimeFormat('en-GB', { dateStyle: 'long', timeZone: zone }).format(date);
 
 // the mail itself is returnReceived.html and returnReceived.txt next to this file. It goes at once
 // when the buyer withdraws from their account: the notice of the law that the statement came, the
@@ -51,70 +52,98 @@ export function buildReturnReceivedTemplate(args: ReturnReceivedTemplateArgs): {
   const orderUrl = args.orderUrl?.trim() || '';
   const proofUrl = args.proofUrl?.trim() || '';
   const manual = args.manualCheck === true;
+  const locale = args.locale || 'en';
+  const dateLocale = locale === 'en' ? 'en-GB' : locale;
   // the goods are on their way back: they were sent, and an admin is not checking the statement yet
   const sentBack = !args.beforeShipment && !manual;
 
   if (!orderUrl && !args.publicForm) throw new Error('ORDER_URL_REQUIRED');
   if (!manual && !args.items?.length) throw new Error('ORDER_ITEMS_REQUIRED');
 
+  const day = (date: Date, zone: string) =>
+    new Intl.DateTimeFormat(dateLocale, { dateStyle: 'long', timeZone: zone }).format(date);
+
   // the time in the time zone of the shop, which the mail names
   const zone = args.timeZone || 'UTC';
-  const statedAt = `${new Intl.DateTimeFormat('en-GB', {
+  const statedAt = `${new Intl.DateTimeFormat(dateLocale, {
     dateStyle: 'long',
     timeStyle: 'short',
     timeZone: zone,
   }).format(args.statedAt)} (${zone})`.replace(',', '');
 
+  const orderId = String(args.orderId);
+  const code = args.code?.trim() || '';
+
   const values = {
     appName,
-    orderId: String(args.orderId),
-    code: args.code?.trim() || '',
+    orderId,
+    code,
     statedAt,
     hasItems: manual ? '' : 'yes',
     items: manual
       ? []
       : args.items.map((item) => ({ name: item.name.trim(), quantity: String(item.quantity) })),
     outcomeLine: manual
-      ? 'Our team checks your statement against the order and writes to you. Please do not send anything until then. If you did not make this statement, write to us.'
+      ? t('returnReceived.manualOutcome', locale)
       : args.beforeShipment
-        ? 'Your order had not been sent, so the goods stay with us. We are returning your money, and you get a mail when it is back.'
-        : 'Please send the goods back to us.',
+        ? t('returnReceived.beforeShipmentOutcome', locale)
+        : t('returnReceived.sendBackOutcome', locale),
     addressLine: !sentBack
       ? ''
       : args.returnAddress?.trim()
-        ? `Send them to: ${args.returnAddress.trim()}`
-        : 'Write to us for the address to send them to.',
-    sendByLine: sentBack && args.sendBy ? `Send them back by ${day(args.sendBy, zone)}.` : '',
+        ? t('returnReceived.addressLine', locale, { address: args.returnAddress.trim() })
+        : t('returnReceived.noAddressLine', locale),
+    sendByLine:
+      sentBack && args.sendBy
+        ? t('returnReceived.sendByLine', locale, { date: day(args.sendBy, zone) })
+        : '',
     payerLine: !sentBack
       ? ''
       : args.shippingPaidBy === 'buyer'
-        ? 'You pay the carrier for sending them back.'
+        ? t('returnReceived.payerBuyer', locale)
         : args.shippingPaidBy === 'shop'
-          ? 'We pay the carrier for sending them back.'
+          ? t('returnReceived.payerShop', locale)
           : '',
     proofLine: !sentBack
       ? ''
       : args.publicForm
         ? proofUrl
-          ? 'When you have sent the parcel, write the carrier and the number on the page of the link below.'
+          ? t('returnReceived.proofLineForm', locale)
           : ''
         : proofUrl
-          ? 'When you have sent the parcel, write the carrier and the number in your order or, if you no longer have the account, on the page of this link:'
-          : 'When you have sent the parcel, write the carrier and the number in your order.',
+          ? t('returnReceived.proofLineAccountWithProof', locale)
+          : t('returnReceived.proofLineAccountNoProof', locale),
     // the page of the parcel for a buyer of an account, next to the order: it needs no sign-in
     proofLinkUrl: sentBack && !args.publicForm ? proofUrl : '',
     // the one link of the mail: the order of an account, the page of the parcel of the form, or none
     linkUrl: args.publicForm ? (sentBack ? proofUrl : '') : orderUrl,
-    linkLabel: args.publicForm ? 'Write the parcel' : 'View order',
-    linkIntro: args.publicForm ? 'Tell us about the parcel here:' : 'See your order:',
+    linkLabel: args.publicForm
+      ? t('returnReceived.linkLabelForm', locale)
+      : t('common.viewOrderButton', locale),
+    linkIntro: args.publicForm
+      ? t('returnReceived.linkIntroForm', locale)
+      : t('common.seeOrderTxt', locale),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
     logoCid: args.logoCid?.trim() || '',
     year: String(new Date().getFullYear()),
+    title: t('returnReceived.subject', locale, { appName, orderId }),
+    preview: t('returnReceived.preview', locale, { orderId }),
+    heading: t('returnReceived.heading', locale),
+    leadTxt: t('returnReceived.leadTxt', locale, { appName, orderId, statedAt }),
+    body: t('returnReceived.body', locale, { orderId, statedAt }),
+    greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
+    statementLine: code ? t('common.statementLine', locale, { code }) : '',
+    itemHeader: t('common.itemHeader', locale),
+    qtyHeader: t('common.qtyHeader', locale),
+    openLinkFallback: t('common.openLinkFallback', locale),
+    questionsIntro: t('common.questionsIntro', locale),
+    orTo: t('common.orTo', locale),
   };
 
   return {
-    subject: `${appName} — Withdrawal from order #${args.orderId} registered${args.code ? ` (${args.code})` : ''}`,
+    subject: `${values.title}${code ? ` (${code})` : ''}`,
     text: renderTemplate('returns/returnReceived.txt', values),
     html: renderTemplate('returns/returnReceived.html', values),
   };

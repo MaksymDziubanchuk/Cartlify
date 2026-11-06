@@ -4,6 +4,8 @@
 
 The repository contains `.env.example` with every variable read by `src/config/env.ts` and `prisma/schema.prisma`, plus `STRIPE_TEST_SECRET_KEY`, which only the tests read.
 
+Some of what used to be an environment variable now lives in the `shop_settings` table instead, because root changes it without a deploy: delivery, the brand of a mail, the reservation and payment page minutes, the check of reviews, the limits a moderator's removals run into, the grace days of withdrawal, the logo, and which languages the shop answers in. See [shop settings](shop-settings.md) for the full list, the versions, and what a request does with a field root never filled in.
+
 A practical local example:
 
 ```env
@@ -55,10 +57,6 @@ RESET_TTL_MS=3600000
 # the life of the link of an email verification in ms (a day unless given)
 VERIFY_TTL_MS=86400000
 BCRYPT_ROUNDS=12
-# the avatar removals by a moderator the rules allow an account (5 unless given)
-AVATAR_REMOVALS_LIMIT=5
-# the removals of the reviews of an author by a moderator the rules allow (5 unless given)
-REVIEW_REMOVALS_LIMIT=5
 # the requests a minute one address may make (100 unless given)
 RATE_LIMIT_MAX=100
 # multiplies every limit of a route (1 unless given)
@@ -115,37 +113,8 @@ ATTRIBUTE_OPTIONS_MAX=500
 # the values of a set (a characteristic that holds several values of its list) one variant has for
 # one characteristic (1000 at most)
 ATTRIBUTE_MULTI_VALUES_MAX=50
-# the minutes a confirmed order holds its units and the minutes stripe keeps its payment page open
-# after them (at least 30); both together at most 1440, the 24 hours stripe takes
-ORDER_RESERVATION_MINUTES=15
-STRIPE_PAGE_AFTER_RESERVATION_MINUTES=30
-# the days after the end of the period of withdrawal in which the shop still takes a withdrawal
-# (4 unless given, 0 to 30): the end of a period that falls on a Saturday, a Sunday or a holiday
-# moves to the next working day, the grace covers it. Under 4 days a buyer can lose a day or two
-# of the period over a holiday, and 0 leaves none: that is on the owner of the shop
-WITHDRAWAL_GRACE_DAYS=4
 # the time zone of the days and months of the reports (Europe/Madrid unless given)
 SHOP_TIME_ZONE=Europe/Madrid
-# the name of the shop on a payment, in the mails, in the chat bot and in the documentation (Cartlify unless given)
-SHOP_NAME=Cartlify
-# the logo of every mail, a png or jpeg file inside src/static/ (served at /static/ too); it goes
-# with every mail, so keep it small: the mails show it 160 px wide
-SHOP_LOGO_PATH=src/static/images/logo-mail.png
-
-# how the shop gets an order to its buyer: a list of manual (the shop sends it itself with a carrier
-# it works with outside the app) and pickup (the buyer collects it at the shop)
-DELIVERY_METHODS=manual,pickup
-# what a buyer pays for the manual delivery, to the cent (nothing unless given)
-DELIVERY_FLAT_PRICE=4.99
-# from this sum of the items on the manual delivery is free, the sum itself included
-DELIVERY_FREE_FROM=50
-# the countries the manual delivery goes to, codes through commas, from AT, BE, BG, HR, CY, CZ, DK, EE,
-# FI, FR, DE, GR, HU, IE, IT, LV, LT, LU, MT, NL, PL, PT, RO, SK, SI, ES, SE, GB, CH, NO, IS, LI, UA;
-# required while the manual delivery is on, in every environment: without it the server does not start
-DELIVERY_COUNTRIES=UA,PL,DE
-# where and when a buyer collects an order, required while the pickup is on
-PICKUP_ADDRESS=Main street 1, Kyiv
-PICKUP_HOURS=Mon-Fri 10:00-18:00
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -167,8 +136,6 @@ CHAT_BOT_IP_DAILY_TURNS=60
 # the turns of the whole shop that call the model in 24 hours (3000 unless given): the ceiling of the
 # bill of the bot, past it the bot answers with its fallback text and asks the model nothing
 CHAT_BOT_SHOP_DAILY_TURNS=3000
-# the model and the moderation of openai check the comments of reviews; false publishes them unchecked
-REVIEW_CHECK_ENABLED=true
 
 # Cloudinary (required: the app does not start without CLOUDINARY_URL or the three keys;
 # the upload tests use them too, see Run Commands)
@@ -180,8 +147,6 @@ CLOUDINARY_URL=
 # SendGrid (required only if you test email flows)
 SENDGRID_API_KEY=
 EMAIL_FROM=
-EMAIL_FROM_NAME=
-EMAIL_REPLY_TO=
 
 # Google OAuth
 GOOGLE_CLIENT_ID=

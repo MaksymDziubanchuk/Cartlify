@@ -92,6 +92,7 @@ describe('buildCheckoutSessionPayload', () => {
     reservationExpiresAt,
     items,
     customerEmail: 'anna@example.com',
+    locale: 'en',
   });
   const payload = () => helper.buildCheckoutSessionPayload(order(19.99));
 
@@ -160,13 +161,29 @@ describe('buildCheckoutSessionPayload', () => {
     ).not.toHaveProperty('customer_email');
   });
 
+  // the page opens in the buyer's own language (mailLocaleOf) when Checkout itself has it, in
+  // its own guess ("auto", the same as leaving it unset) otherwise
+  it.each([
+    ['en', 'en'],
+    ['es', 'es'],
+    // the shop's own languages at the time of writing that Checkout has no dictionary for
+    ['uk', 'auto'],
+    // a locale the shop will never pass, kept to prove the fallback is not just "the shop's three"
+    ['xx', 'auto'],
+  ])('opens %s as %s', (locale, stripeLocale) => {
+    expect(helper.buildCheckoutSessionPayload({ ...order(19.99), locale }).locale).toBe(
+      stripeLocale,
+    );
+  });
+
   // the payment carries the name of the shop, the bank statement and the stripe dashboard show it
   it('names the order with the name of the shop', async () => {
     expect(payload().payment_intent_data).toEqual({ description: 'Cartlify order #12' });
 
     const other = await importWithEnv<Helper>(
       '@routes/api/payments/providers/stripe/stripeCheckout.helper.js',
-      { ...CONFIG, SHOP_NAME: 'Lamp shop' },
+      CONFIG,
+      { shopSettings: { shopName: 'Lamp shop' } },
     );
     expect(other.buildCheckoutSessionPayload(order(19.99)).payment_intent_data).toEqual({
       description: 'Lamp shop order #12',

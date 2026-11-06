@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { Prisma } from '@prisma/client';
@@ -240,13 +240,14 @@ export async function confirmOrder({
           });
         }
 
-        // confirm in db; the order holds its units ORDER_RESERVATION_MINUTES (15 unless set) and
-        // its delivery is priced by the rule of the shop
+        // confirm in db; the order holds its units reservationMinutes (15 unless root set one)
+        // and its delivery is priced by the rule of the shop
+        const settings = shopSettings();
         await db.$executeRaw`select cartlify.confirm_order(
           ${Number(orderId)}::int,
-          ${`${env.ORDER_RESERVATION_MINUTES} minutes`}::interval,
-          ${env.DELIVERY_FLAT_PRICE}::numeric,
-          ${env.DELIVERY_FREE_FROM}::numeric,
+          ${`${settings.reservationMinutes} minutes`}::interval,
+          ${settings.deliveryFlatPrice}::numeric,
+          ${settings.deliveryFreeFrom}::numeric,
           ${expectedDeliveryPrice}::numeric
         )`;
 

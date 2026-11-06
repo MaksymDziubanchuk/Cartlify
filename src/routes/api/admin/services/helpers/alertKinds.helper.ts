@@ -35,6 +35,8 @@ export const ADMIN_ALERT_KINDS = [
   'returns_money_late',
   'returns_goods_late',
   'worker_stalled',
+  'shop_settings_incomplete',
+  'shop_locale_missing',
 ] as const satisfies readonly AdminAlertKind[];
 
 export const ROOT_ALERT_KINDS = ['admin_actions'] as const satisfies readonly AdminAlertKind[];
@@ -339,6 +341,15 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
         },
       };
     case 'worker_stalled':
+      return null;
+    // the fields of the data of the shop root has not set yet (missingShopSettingsFields): the
+    // list names them, its length is the count of the alert; root fills them in with
+    // PUT /api/root/shop-settings
+    case 'shop_settings_incomplete':
+      return { path: '/api/admin/shop-settings/missing', query: {} };
+    // the language of the shop (shopLocale) has no dictionary any more (src/locales): a deploy
+    // that dropped a file after root set the language, not a list of rows either
+    case 'shop_locale_missing':
       return null;
     case 'admin_actions':
       return {

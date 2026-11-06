@@ -1,16 +1,18 @@
-Hi{{#userName}} {{userName}}{{/userName}},
+{{greeting}}
 
-{{#code}}Statement {{code}}.
-{{/code}}The shop registered a return for your {{appName}} order #{{orderId}}.
-Registered on {{statedAt}}.
-{{#reasonWords}}Reason: {{reasonWords}}.
-{{/reasonWords}}{{#extendedLine}}{{extendedLine}}
+{{#code}}{{statementLine}}.
+{{/code}}{{leadTxt}}
+{{registeredOn}}.
+{{#reasonLine}}{{reasonLine}}
+{{/reasonLine}}{{#extendedLine}}{{extendedLine}}
 {{/extendedLine}}
 {{#items}}- {{name}} x {{quantity}}
 {{/items}}{{#note}}
-Note: {{note}}
+{{noteLabel}}: {{note}}
 {{/note}}
-See your order:
+{{seeOrderTxt}}
 {{orderUrl}}
 
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

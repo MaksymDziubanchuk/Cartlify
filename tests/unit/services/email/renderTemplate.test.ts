@@ -141,6 +141,40 @@ describe('renderTemplate', () => {
     // the products a delivered order asks to rate
     hasRatings: 'yes',
     ratings: [{ name: 'Lamp', reviewUrl: 'https://shop.example.com/products/7#reviews' }],
+    // the i18next-resolved phrases every converted template now takes as plain strings
+    title: 'Cartlify — Verify email',
+    preview: 'Confirm your email for Cartlify.',
+    leadTxt: 'Verify your email for Cartlify.',
+    greeting: 'Hi Anna,',
+    // the seller at the foot of every mail (sellerLineOf)
+    seller: 'Seller: Cartlify LLC, Main St 1, Kyiv',
+    body: 'Please confirm your email address to finish setting up your account.',
+    button: 'Verify email',
+    validity: 'This link is valid for 24 hours.',
+    openLinkTxt: 'Open this link:',
+    openLinkFallback: 'If the button does not work, open this link:',
+    ignoreEmail: 'If you did not request this, ignore this email.',
+    questionsIntro: 'Questions? Write to us in the chat on our site',
+    orTo: 'or to',
+    seeOrderTxt: 'See your order:',
+    viewOrderButton: 'View order',
+    withdrawContract: 'Withdraw from the contract',
+    itemHeader: 'Item',
+    qtyHeader: 'Qty',
+    priceHeader: 'Price',
+    totalHeader: 'Total',
+    recipientLabel: 'Recipient',
+    deliveryLabel: 'Delivery',
+    shippingToLabel: 'Shipping to',
+    pickupAtLabel: 'Pick up at',
+    paidOn: 'Paid on 17 October 2026',
+    carrierLabel: 'Carrier',
+    trackingNumberLabel: 'Tracking number',
+    followParcelLabel: 'Follow your parcel',
+    deliveredToLabel: 'Delivered to',
+    collectedAtLabel: 'Collected at',
+    ratingsIntro: 'How is it? Rate what you bought, it helps other buyers choose:',
+    rateButton: 'Rate Lamp',
   };
 
   it.each([
@@ -159,6 +193,26 @@ describe('renderTemplate', () => {
 
     expect(out).not.toContain('{{');
     expect(out).toContain('Cartlify');
+  });
+
+  // the seller at the foot of every mail, only while root named one: the text of a mail without
+  // one is the same as before the seller was there
+  it('names the seller at the foot of a mail, and adds nothing when there is none', () => {
+    const seller = 'Seller: Cartlify LLC, Main St 1, Kyiv, tax ID 12345678';
+
+    expect(renderTemplate('orders/orderPaid.html', { ...values, seller })).toContain(
+      `Cartlify<br>${seller}`,
+    );
+    expect(
+      renderTemplate('orders/orderPaid.txt', { ...values, seller }).endsWith(`.\n\n${seller}`),
+    ).toBe(true);
+
+    const html = renderTemplate('orders/orderPaid.html', { ...values, seller: '' });
+    const text = renderTemplate('orders/orderPaid.txt', { ...values, seller: '' });
+    expect(html).not.toContain('Seller');
+    expect(html).not.toContain('Cartlify<br>');
+    expect(text).not.toContain('Seller');
+    expect(text.endsWith('.')).toBe(true);
   });
 
   it('keeps windows line endings of the checkout out of the mail', () => {

@@ -1,9 +1,11 @@
-Verify your email for {{appName}}.
+{{leadTxt}}
 
-{{#expiresInText}}This link is valid for {{expiresInText}}.
+{{#expiresInText}}{{validity}}
 
-{{/expiresInText}}Open this link:
+{{/expiresInText}}{{openLinkTxt}}
 {{verifyUrl}}
 
-If you did not request this, ignore this email.
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{ignoreEmail}}
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

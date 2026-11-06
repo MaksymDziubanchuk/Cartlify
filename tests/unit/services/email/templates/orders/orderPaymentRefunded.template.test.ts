@@ -32,7 +32,7 @@ describe('buildOrderPaymentRefundedTemplate', () => {
 
     expect(text).toContain('Your payment of €51.00 for order #42 is refunded in full');
     expect(text).toContain('The order is not paid');
-    expect(html).toContain('Your payment of <b>€51.00</b> for order <b>#42</b> is refunded in full');
+    expect(html).toContain('Your payment of €51.00 for order #42 is refunded in full');
     expect(html).toContain('The order is not paid');
   });
 
@@ -86,9 +86,9 @@ describe('buildOrderPaymentRefundedTemplate', () => {
   });
 
   it('escapes the user name in the html', () => {
-    expect(
-      buildOrderPaymentRefundedTemplate(refund({ userName: '<b>x</b>' })).html,
-    ).not.toContain('<b>x</b>');
+    expect(buildOrderPaymentRefundedTemplate(refund({ userName: '<b>x</b>' })).html).not.toContain(
+      '<b>x</b>',
+    );
   });
 
   it('refuses a mail without the order link', () => {

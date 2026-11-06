@@ -1,4 +1,5 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { AppError, InternalError } from '@utils/errors.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
 
@@ -36,7 +37,8 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
   // require email config
   if (!env.SENDGRID_API_KEY) throw new InternalError({ reason: 'SENDGRID_API_KEY_REQUIRED' });
   if (!env.EMAIL_FROM) throw new InternalError({ reason: 'EMAIL_FROM_REQUIRED' });
-  if (!env.EMAIL_REPLY_TO) throw new InternalError({ reason: 'EMAIL_REPLY_TO_REQUIRED' });
+  const settings = shopSettings();
+  if (!settings.emailReplyTo) throw new InternalError({ reason: 'EMAIL_REPLY_TO_REQUIRED' });
 
   const to = input.to?.trim();
   const subject = input.subject?.trim();
@@ -58,8 +60,8 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
     // prepare provider payload
     const payload = {
       personalizations: [{ to: [{ email: to }] }],
-      from: { email: env.EMAIL_FROM, name: env.EMAIL_FROM_NAME || env.SHOP_NAME },
-      reply_to: { email: env.EMAIL_REPLY_TO, name: env.EMAIL_FROM_NAME || env.SHOP_NAME },
+      from: { email: env.EMAIL_FROM, name: settings.emailFromName || settings.shopName },
+      reply_to: { email: settings.emailReplyTo, name: settings.emailFromName || settings.shopName },
       subject,
       content: [
         { type: 'text/plain', value: text },

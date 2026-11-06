@@ -693,11 +693,12 @@ describe('the refusals every route shares', () => {
       'post /api/admin/documents/',
       'post /api/products/',
       'post /api/products/{productId}/images',
+      'post /api/root/shop-settings/logo',
       'put /api/categories/{categoryId}/image',
     ]);
   });
 
-  // the health checks, static files and the events of payment providers are outside the limit
+  // the health checks and the events of payment providers are outside the limit
   it('names RATE_LIMITED for every route the rate limit counts', () => {
     const free = ['/health/', '/ready/', '/api/payments/stripe/webhook'];
     const counted = operations().filter(({ path }) => !free.includes(path));

@@ -1,5 +1,6 @@
 import { app } from './app.js';
 import env from '@config/env.js';
+import { loadShopSettings, shopSettings } from '@config/shopSettings.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
 import { startReturnRefundWorker, stopReturnRefundWorker } from './workers/returnRefund.worker.js';
@@ -18,8 +19,18 @@ const SHUTDOWN_DEADLINE_MS = 10_000;
 
 // initialize external dependencies and start background workers before app listen
 async function bootstrap() {
+  // the data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
+  // seller): fills in the defaults of the fields root left empty, then keeps the current version
+  // in memory (@config/shopSettings.js); every route that used to read env for these reads it
+  await loadShopSettings();
+
   // settings that switch a feature off; production does not start without some of them
-  for (const warning of startupWarnings(env)) app.log.warn(warning);
+  for (const warning of startupWarnings({
+    OPENAI_API_KEY: env.OPENAI_API_KEY,
+    reviewCheckEnabled: shopSettings().reviewCheckEnabled,
+  })) {
+    app.log.warn(warning);
+  }
 
   // wait for redis only for a limited time, the client keeps reconnecting in the background
   const redisReady = await Promise.race([

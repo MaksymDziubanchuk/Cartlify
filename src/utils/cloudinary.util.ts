@@ -72,7 +72,8 @@ function outOfReach(err: unknown): ServiceUnavailableError | null {
 export type MakePublicIdOpts =
   | { kind: 'avatar'; userId: string | number }
   | { kind: 'product'; productId: string | number; imageKey: string | number }
-  | { kind: 'category'; categoryId: string | number; imageKey: string | number };
+  | { kind: 'category'; categoryId: string | number; imageKey: string | number }
+  | { kind: 'shop'; imageKey: string | number };
 
 export type ImageFileMeta = {
   mimetype?: string | null;
@@ -293,6 +294,14 @@ export function makePublicId(opts: MakePublicIdOpts): string {
 
     // a new path for each upload, so a move never replaces the picture the category shows
     return `${ENV_FOLDER}/categories/${categoryId}/${key}`;
+  }
+
+  if (opts.kind === 'shop') {
+    const key = cleanSegment(opts.imageKey);
+    if (!key) throw new BadRequestError('PUBLIC_ID_IMAGEKEY_REQUIRED');
+
+    // one logo for the whole shop, not per id; a new path for each upload, as for a category
+    return `${ENV_FOLDER}/shop/logo/${key}`;
   }
 
   const productId = cleanSegment(opts.productId);

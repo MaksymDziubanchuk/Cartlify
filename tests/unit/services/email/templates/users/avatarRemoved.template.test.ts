@@ -64,4 +64,15 @@ describe('buildAvatarRemovedTemplate', () => {
   it('escapes the name in the html', () => {
     expect(mail({ userName: '<b>Anna</b>' }).html).toContain('&lt;b&gt;Anna&lt;/b&gt;');
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const uk = mail({ removals: 2, limit: 5, locale: 'uk' });
+    const es = mail({ removals: 2, limit: 5, locale: 'es' });
+
+    expect(uk.text).toContain('дозволених правилами');
+    expect(es.text).toContain('que permiten las normas');
+    expect(uk.subject).toBe('Cartlify — Ваше фото профілю видалено');
+    expect(es.subject).toBe('Cartlify — Se eliminó tu foto de perfil');
+  });
 });

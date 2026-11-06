@@ -24,6 +24,7 @@ import { takeLogs } from '../../../helpers/logs.js';
 import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
 import { moveClock } from '../../../helpers/payments.js';
 import { asAdmin, testTx } from '../../../helpers/db.js';
+import { resetShopSettings, setShopSettings } from '../../../helpers/shopSettings.js';
 import { markVariantDeleted, stripVariantImages } from '../../../helpers/variants.js';
 
 // the alerts of an admin (GET /api/admin/alerts): each kind of the work of an admin with how many
@@ -57,6 +58,7 @@ beforeAll(async () => {
 afterEach(() => {
   clock?.restore();
   clock = null;
+  resetShopSettings();
 });
 
 afterAll(async () => {
@@ -102,6 +104,8 @@ const ADMIN_KINDS = [
   'returns_money_late',
   'returns_goods_late',
   'worker_stalled',
+  'shop_settings_incomplete',
+  'shop_locale_missing',
 ];
 
 // the token is signed at each request: a test that runs the clock forward gets one of that time
@@ -314,6 +318,15 @@ describe('GET /api/admin/alerts', () => {
   // the reservation worker does not run in the tests: nothing says it stopped
   it('names no stop of a worker that was not started', async () => {
     expect(await alertOf(admin, 'worker_stalled')).toMatchObject({ count: 0 });
+  });
+
+  // a deploy that drops a dictionary (src/locales) after root set it as the language of the shop
+  it('names the language of the shop missing its dictionary, and names none while it has one', async () => {
+    expect(await alertOf(admin, 'shop_locale_missing')).toMatchObject({ count: 0 });
+
+    setShopSettings({ shopLocale: 'xx' });
+
+    expect(await alertOf(admin, 'shop_locale_missing')).toMatchObject({ count: 1 });
   });
 
   it('refuses a user', async () => {

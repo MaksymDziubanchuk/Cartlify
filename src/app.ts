@@ -5,10 +5,8 @@ import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import { fastifyCookie } from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import staticPlugin from '@fastify/static';
 import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
-import path from 'path';
 import env from '@config/env.js';
 import { allowedWebOrigins } from '@helpers/webOrigin.js';
 import { registerRoutes } from '@routes/api/index.js';
@@ -34,6 +32,7 @@ import { paymentDtoSchemas } from '@schemas/dto/payment.dtoSchema.js';
 import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import { legalDtoSchemas } from '@schemas/dto/legal.dtoSchemas.js';
 import { deliveryDtoSchemas } from '@schemas/dto/delivery.dtoSchemas.js';
+import { shopSettingsDtoSchemas } from '@schemas/dto/shopSettings.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import { holdsNul } from '@helpers/nulText.js';
@@ -145,18 +144,11 @@ app.register(multipart, {
 // parse x-www-form-urlencoded
 app.register(formbody, { bodyLimit: FORM_BODY_LIMIT_BYTES });
 
-// serve static assets
-app.register(staticPlugin, {
-  root: path.join(process.cwd(), 'src', 'static'),
-  prefix: '/static/',
-  // helmet allows a resource only to pages of this origin, public images may show on the frontend
-  setHeaders: (reply) => reply.header('Cross-Origin-Resource-Policy', 'cross-origin'),
-});
 app.register(rateLimit, {
   // protect from abuse: the requests a minute one address may make
   max: env.RATE_LIMIT_MAX,
   timeWindow: '1 minute',
-  // health checks, static files and the events of payment providers are not counted
+  // health checks and the events of payment providers are not counted
   allowList: (req) => isRateLimitFree(req.url ?? ''),
 });
 
@@ -185,6 +177,7 @@ for (const schema of [
   ...paymentDtoSchemas,
   ...legalDtoSchemas,
   ...deliveryDtoSchemas,
+  ...shopSettingsDtoSchemas,
 ]) {
   // add schemas to ajv
   app.addSchema(schema);

@@ -9,10 +9,10 @@ import {
 import { BadRequestError } from '@utils/errors.js';
 import type { ConfirmDeliveryBodyDto } from 'types/dto/orders.dto.js';
 
-import { resetDelivery, setDelivery } from '../../../../../../helpers/delivery.js';
+import { resetShopSettings, setShopSettings } from '../../../../../../helpers/shopSettings.js';
 import { thrownBy } from '../../../../../../helpers/errors.js';
 
-afterEach(resetDelivery);
+afterEach(resetShopSettings);
 
 const address = {
   country: 'UA',
@@ -60,7 +60,7 @@ describe('isRecipientName', () => {
 
 describe('buildAddressData', () => {
   it('cuts the spaces around the parts and gives the postal code in the form of its country', () => {
-    setDelivery({ DELIVERY_COUNTRIES: ['PL'] });
+    setShopSettings({ deliveryCountries: ['PL'] });
 
     expect(
       buildAddressData({
@@ -157,7 +157,7 @@ describe('buildDeliveryData', () => {
   });
 
   it('writes a pickup with the person alone, the parts of the address none', () => {
-    setDelivery({ DELIVERY_METHODS: ['manual', 'pickup'] });
+    setShopSettings({ deliveryMethods: ['manual', 'pickup'] });
     const { address: _address, ...person } = manual;
 
     expect(buildDeliveryData({ ...person, method: 'pickup' })).toEqual({
@@ -176,7 +176,7 @@ describe('buildDeliveryData', () => {
   });
 
   it('refuses an address for a pickup, and a manual delivery without one', () => {
-    setDelivery({ DELIVERY_METHODS: ['manual', 'pickup'] });
+    setShopSettings({ deliveryMethods: ['manual', 'pickup'] });
 
     expect(refusalOf({ method: 'pickup' })).toBe('DELIVERY_ADDRESS_NOT_ALLOWED');
     const { address: _address, ...person } = manual;
@@ -184,7 +184,7 @@ describe('buildDeliveryData', () => {
   });
 
   it('refuses a method the shop has not enabled, and names it', () => {
-    setDelivery({ DELIVERY_METHODS: ['manual'] });
+    setShopSettings({ deliveryMethods: ['manual'] });
     const { address: _address, ...person } = manual;
 
     const err = thrownBy(() => buildDeliveryData({ ...person, method: 'pickup' }));

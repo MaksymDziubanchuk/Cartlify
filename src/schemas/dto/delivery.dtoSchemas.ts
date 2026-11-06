@@ -33,7 +33,10 @@ const deliveryMethodInfoSchema = {
     },
     hours: {
       type: ['string', 'null'],
-      description: 'When a buyer collects an order, the pickup only.',
+      description:
+        'When a buyer collects an order, the pickup only, as root wrote it in its format ' +
+        '("Mon-Fri 09:00-18:00; Sat 10:00-14:00", pickupHours of the data of the shop, ' +
+        'docs/shop-settings.md): the frontend parses it and shows it in its language.',
     },
   },
   required: ['method', 'price', 'freeFrom', 'countries', 'address', 'hours'],

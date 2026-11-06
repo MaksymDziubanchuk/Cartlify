@@ -1,7 +1,9 @@
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { deliveryMailParts } from '@helpers/deliveryText.js';
+import { mailLocaleOf } from '@helpers/locale.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { buildOrderShippedTemplate } from '@services/email/templates/orders/orderShipped.template.js';
@@ -84,7 +86,7 @@ function loadOrder(orderId: number) {
 
     const user = await tx.user.findUniqueOrThrow({
       where: { id: order.userId },
-      select: { email: true, name: true, deletedAt: true },
+      select: { email: true, name: true, locale: true, deletedAt: true },
     });
 
     // the send on its way: the latest that was not rolled back
@@ -163,11 +165,15 @@ export async function sendOrderStatusEmail(
         ).toFixed(2)
       : order.total.toString();
 
+    const logo = await shopLogoAttachment(log);
+    const locale = mailLocaleOf(order.user.locale);
+
     const { subject, text, html } = TEMPLATES[status]({
       // the name of the shop the mail is from
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       orderId: order.id,
       orderUrl: orderPage(order.id),
+      locale,
       // a delivered order asks the buyer to rate each product: a review is of the product, so
       // two variants of one product are one line to rate, named by the product
       items: sent.map(({ item, units }, index) => ({
@@ -188,7 +194,7 @@ export async function sendOrderStatusEmail(
       // the money of the provider that took it
       currency: currencyOf(order.paymentProvider),
       ...(order.user.name ? { userName: order.user.name } : {}),
-      ...deliveryMailParts(order.delivery),
+      ...deliveryMailParts(order.delivery, locale),
       ...(status === 'shipped' && order.shipments[0]
         ? {
             carrier: order.shipments[0].carrier,
@@ -202,7 +208,7 @@ export async function sendOrderStatusEmail(
       ...(status === 'delivered' && order.endsAt
         ? { withdrawalEndsAt: order.endsAt, timeZone: env.SHOP_TIME_ZONE }
         : {}),
-      logoCid: SHOP_LOGO_CID,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
     });
 
     await sendEmail({
@@ -210,7 +216,7 @@ export async function sendOrderStatusEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, orderId }, `order ${status} mail was not sent`);

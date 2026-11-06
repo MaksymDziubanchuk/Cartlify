@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from '@jest/globals';
 
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { botLimits } from '@routes/api/chat/services/bot/chatBotLimits.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
@@ -264,7 +264,7 @@ describe('the withdrawal from an order', () => {
 
     const line = await lineOf(chat, orderId);
 
-    expect(env.WITHDRAWAL_GRACE_DAYS).toBeGreaterThan(0);
+    expect(shopSettings().withdrawalGraceDays).toBeGreaterThan(0);
     expect(line).toContain(
       `the period of the contract ended ${view.withdrawalEndsAt} (UTC), the shop still takes a statement for now`,
     );
@@ -277,7 +277,9 @@ describe('the withdrawal from an order', () => {
     const view = await viewOf(buyer, orderId);
     const ends = new Date(view.withdrawalEndsAt).getTime();
     // the end of the last day of grace; two hours past it whatever change of the clock of the zone
-    clock = moveClock(ends - Date.now() + env.WITHDRAWAL_GRACE_DAYS * DAY_MS + 2 * 3_600_000);
+    clock = moveClock(
+      ends - Date.now() + shopSettings().withdrawalGraceDays * DAY_MS + 2 * 3_600_000,
+    );
 
     const line = await lineOf(chat, orderId);
 

@@ -1,24 +1,19 @@
+import { t } from '@config/i18n.js';
 import { withdrawalRightOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
-
-// what each rule that limits the right of withdrawal says to the buyer (Directive 2011/83, art. 16)
-const WITHDRAWAL_REASONS: Record<Exclude<WithdrawalRuleName, 'allowed'>, string> = {
-  sealed_hygiene:
-    'sealed goods that are not suitable for return for health or hygiene reasons, until the seal is broken',
-  sealed_media: 'sealed audio or video recordings and software, until the seal is broken',
-  mixed: 'goods that are inseparably mixed with other items after delivery, until they are mixed',
-  perishable: 'goods that spoil or expire quickly',
-  personalised: 'goods made to your specification or personalised',
-  periodical: 'newspapers, periodicals and magazines',
-};
 
 type RuledItem = { name: string; withdrawal?: WithdrawalRuleName };
 
 // the items the right of withdrawal does not cover, or covers only under a condition, each with the
-// reason; none for an order whose items may all be taken back freely
-export const withdrawalNoticeOf = (items: readonly RuledItem[], right: 'conditional' | 'none') =>
+// reason (src/locales, withdrawalReasons.*); none for an order whose items may all be taken back
+// freely
+export const withdrawalNoticeOf = (
+  items: readonly RuledItem[],
+  right: 'conditional' | 'none',
+  locale = 'en',
+) =>
   items.flatMap((item) =>
     item.withdrawal && item.withdrawal !== 'allowed' && withdrawalRightOf(item.withdrawal) === right
-      ? [{ name: item.name.trim(), reason: WITHDRAWAL_REASONS[item.withdrawal] }]
+      ? [{ name: item.name.trim(), reason: t(`withdrawalReasons.${item.withdrawal}`, locale) }]
       : [],
   );
 
@@ -32,12 +27,17 @@ export type WithdrawalOfferArgs = {
   timeZone?: string;
 };
 
+// "en" formats dates the way it always has (1 May 2026, not May 1, 2026); the other languages
+// format in their own way
+const dateFormatLocale = (locale: string) => (locale === 'en' ? 'en-GB' : locale);
+
 // the sentence of a mail that tells the buyer they may withdraw, and the link to do it from; both
 // are empty when no item of the order has the right (or the mail has no link)
 export function withdrawalOfferOf(
   stage: 'paid' | 'shipped' | 'delivered',
   items: readonly RuledItem[],
   args: WithdrawalOfferArgs,
+  locale = 'en',
 ): { withdrawalLine: string; withdrawalUrl: string } {
   const url = args.withdrawalUrl?.trim() || '';
   const hasRight = items.some((item) => withdrawalRightOf(item.withdrawal ?? 'allowed') !== 'none');
@@ -45,21 +45,22 @@ export function withdrawalOfferOf(
 
   const period =
     typeof args.withdrawalDays === 'number'
-      ? `${args.withdrawalDays} days`
-      : 'the period of your contract';
+      ? t('withdrawal.daysCount', locale, { count: args.withdrawalDays })
+      : t('withdrawal.contractPeriod', locale);
 
-  const base = 'You may withdraw from the contract without giving a reason';
   const line =
     stage === 'delivered' && args.withdrawalEndsAt
-      ? `${base} until ${new Intl.DateTimeFormat('en-GB', {
-          dateStyle: 'long',
-          timeZone: args.timeZone ?? 'UTC',
-        }).format(args.withdrawalEndsAt)}. Withdraw here:`
+      ? t('withdrawal.untilDate', locale, {
+          date: new Intl.DateTimeFormat(dateFormatLocale(locale), {
+            dateStyle: 'long',
+            timeZone: args.timeZone ?? 'UTC',
+          }).format(args.withdrawalEndsAt),
+        })
       : stage === 'paid'
-        ? `${base}: before the goods are sent, and for ${period} after you receive them. Withdraw here:`
+        ? t('withdrawal.beforeSentThenPeriod', locale, { period })
         : stage === 'delivered'
-          ? `${base} for ${period} after the delivery. Withdraw here:`
-          : `${base} for ${period} after you receive the goods. Withdraw here:`;
+          ? t('withdrawal.periodAfterDelivery', locale, { period })
+          : t('withdrawal.periodAfterReceipt', locale, { period });
 
   return { withdrawalLine: line, withdrawalUrl: url };
 }

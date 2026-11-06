@@ -50,8 +50,8 @@ const userIds: number[] = [];
 const products: TestProduct[] = [];
 
 // a buyer whose order of 2 waits for its payment on a page the app opened
-async function orderWithPage() {
-  const user = await createUser();
+async function orderWithPage(buyer: Parameters<typeof createUser>[0] = {}) {
+  const user = await createUser(buyer);
   userIds.push(user.id);
   const product = await createProduct({ price: 25.5, stock: 5 });
   products.push(product);
@@ -62,8 +62,8 @@ async function orderWithPage() {
 
 // the reservation timer took the stock back and the stock went, one unit left; then the buyer
 // paid the page
-async function paymentAfterTheStockIsGone() {
-  const order = await orderWithPage();
+async function paymentAfterTheStockIsGone(buyer: Parameters<typeof createUser>[0] = {}) {
+  const order = await orderWithPage(buyer);
   await loseReservation(order.orderId);
   await writeOffStock(order.product.id, 4);
   const paid = await payPage(order.sessionId);
@@ -255,6 +255,19 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     ]);
     expect(mails[0]!.text).toContain('Your payment of €51.00');
     expect(mails[0]!.text).toContain('some items of it were no longer in stock');
+  });
+
+  // the language of the buyer's account (mailLocaleOf), the reason of the refund too
+  it("mails the refund in the language of the buyer's account", async () => {
+    const { orderId, event } = await paymentAfterTheStockIsGone({ locale: 'es' });
+    const mails = watchMail();
+
+    await deliver(app, event);
+
+    expect(mails.map((mail) => mail.subject)).toEqual([
+      `Cartlify — El pago del pedido #${orderId} fue reembolsado`,
+    ]);
+    expect(mails[0]!.text).toContain('algunos artículos ya no estaban en stock');
   });
 
   it('returns the money once and records it once when Stripe delivers the event again', async () => {

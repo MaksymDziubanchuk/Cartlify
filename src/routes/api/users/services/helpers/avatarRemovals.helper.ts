@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import type { Prisma } from '@prisma/client';
 
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
@@ -53,17 +53,27 @@ export async function deleteAvatarFile(publicId: string | null, log: AvatarLogge
 // tells the person which removal by a moderator this is; the avatar is gone already, so a mail
 // that fails is only logged, with the id of the account and never its address
 export async function sendAvatarRemovedEmail(
-  args: { userId: number; to: string; userName: string | null; removals: number; limit: number },
+  args: {
+    userId: number;
+    to: string;
+    userName: string | null;
+    locale: string;
+    removals: number;
+    limit: number;
+  },
   log: AvatarLogger,
 ): Promise<void> {
   try {
+    const logo = await shopLogoAttachment(log);
+
     const { subject, text, html } = buildAvatarRemovedTemplate({
       // the name of the shop the mail is from
-      appName: env.SHOP_NAME,
+      appName: shopSettings().shopName,
       removals: args.removals,
       limit: args.limit,
       userName: args.userName,
-      logoCid: SHOP_LOGO_CID,
+      locale: args.locale,
+      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
     });
 
     await sendEmail({
@@ -71,7 +81,7 @@ export async function sendAvatarRemovedEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.warn({ err, userId: args.userId }, 'avatar removed mail was not sent');

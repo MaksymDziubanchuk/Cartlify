@@ -42,6 +42,9 @@ export type PaymentPageOrder = {
   shipping: PaymentPageShipping | null;
   // the email of the buyer, the page fills it in; none for an account without one
   customerEmail: string | null;
+  // the language of the buyer (mailLocaleOf, as for a mail); a provider uses it when it can, else
+  // its own way of guessing one (for example the browser's)
+  locale: string;
 };
 
 export type PaymentPageShipping = {
@@ -67,6 +70,16 @@ export type PaymentPageCloseResult =
   | { state: 'in_progress' }
   | { state: 'open'; cause: unknown };
 
+// a page of the same order and reservation was opened before with other values (the buyer's
+// language, a setting root changed since): the provider will not give that page again for them,
+// the caller closes it and opens a new one (createCheckout.service.ts)
+export class PaymentPageChangedError extends Error {
+  constructor(cause: unknown) {
+    super('PAYMENT_PAGE_CHANGED', { cause });
+    this.name = 'PaymentPageChangedError';
+  }
+}
+
 // what the rest of the app asks of a payment provider by its name. How a provider does it is its
 // own: its pages, its payment events, its refunds and their rules stay in its folder
 export interface PaymentProvider {
@@ -81,7 +94,8 @@ export interface PaymentProvider {
   callbackPath: string;
 
   // opens the payment page of a confirmed order; the same order with the same reservation gets
-  // the same page. Throws PAYMENT_PROVIDER_UNAVAILABLE when the provider cannot be reached
+  // the same page. Throws PAYMENT_PROVIDER_UNAVAILABLE when the provider cannot be reached, and
+  // PaymentPageChangedError when that page was opened with other values
   openPaymentPage(
     order: PaymentPageOrder,
   ): Promise<{ pageId: string; checkoutSession: CheckoutSessionDto }>;

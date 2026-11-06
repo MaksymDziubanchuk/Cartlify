@@ -68,6 +68,21 @@ describe('sendOrderPaidEmail', () => {
     expect(mails[0]!.html).toContain('Hi Anna,');
   });
 
+  // the language of the buyer's account (mailLocaleOf): the words, the money and the date
+  it("mails the order in the language of the buyer's account", async () => {
+    const buyer = await createUser({ name: 'Ana', locale: 'es' });
+    userIds.push(buyer.id);
+    const paid = await placeOrder(app, csrf, buyer, product, 'paid', 1);
+    const mails = watchMail();
+
+    await sendOrderPaidEmail(paid, log());
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toBe(`Cartlify — Pedido #${paid} pagado`);
+    expect(mails[0]!.html).toContain('Hola, Ana:');
+    expect(mails[0]!.text).toContain('25,50');
+  });
+
   // the buyer may withdraw before the goods are sent and after: the link carries the code of the order
   it('offers the withdrawal with the link of the page and the code after the #', async () => {
     const mails = watchMail();

@@ -5039,6 +5039,139 @@ CREATE TRIGGER trg_stock_log_append_only
 BEFORE UPDATE OR DELETE ON cartlify.stock_log FOR EACH ROW
 EXECUTE FUNCTION cartlify.stock_log_append_only ();
 
+------------------------------------------------------------
+-- SHOP SETTINGS
+------------------------------------------------------------
+-- The shape of the value of each setting (db/06, shop_settings_value_chk): a CHECK constraint
+-- cannot hold a subquery, so the shape is checked here, in plain functions. The rules between
+-- settings (a pickup needs its address and hours, a free delivery a price, the language of the
+-- shop is one turned on) are the server's: a row cannot see the rows of the other keys.
+
+-- True for a list of texts, each matching a regular expression, none twice; an empty list is one.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_list_valid (p_value jsonb, p_pattern text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(p_value) = 'array'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(p_value) AS e
+      WHERE jsonb_typeof(e) <> 'string' OR (e #>> '{}') !~ p_pattern
+    )
+    AND jsonb_array_length(p_value) = (SELECT count(DISTINCT e) FROM jsonb_array_elements(p_value) AS e);
+$$;
+
+-- True when the value is of the shape its key takes; false for a key the server does not know.
+-- Money is above zero to the cent and at most what an amount of the shop holds; a count is a
+-- whole number; a text has the length its field allows; null is "no value" for a setting that
+-- may stay without one (the prices, the logo, the seller).
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_value_valid (p_key text, p_value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  v_type text := jsonb_typeof(p_value);
+  v_number numeric := CASE WHEN jsonb_typeof(p_value) = 'number' THEN (p_value)::numeric END;
+  v_text text := CASE WHEN jsonb_typeof(p_value) = 'string' THEN p_value #>> '{}' END;
+  v_whole boolean;
+  v_valid boolean;
+BEGIN
+  v_whole := v_number IS NOT NULL AND v_number = trunc(v_number) AND v_number <= 2147483647;
+
+  CASE p_key
+    WHEN 'deliveryMethods' THEN
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^(manual|pickup)$');
+    WHEN 'deliveryCountries' THEN
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^[A-Z]{2}$');
+    WHEN 'enabledLocales' THEN
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^[a-z]{2}$');
+    WHEN 'deliveryFlatPrice', 'deliveryFreeFrom' THEN
+      v_valid := v_type = 'null'
+        OR (v_number > 0 AND v_number <= 99999999.99 AND v_number = round(v_number, 2));
+    WHEN 'pickupAddress', 'pickupHours' THEN
+      v_valid := char_length(v_text) <= 300;
+    WHEN 'shopName', 'emailFromName' THEN
+      v_valid := char_length(v_text) <= 100;
+    WHEN 'emailReplyTo' THEN
+      v_valid := char_length(v_text) <= 254;
+    WHEN 'logoUrl', 'logoPublicId' THEN
+      v_valid := v_type = 'null' OR v_text <> '';
+    WHEN 'reservationMinutes' THEN
+      v_valid := v_whole AND v_number > 0;
+    WHEN 'stripePageMinutes' THEN
+      v_valid := v_whole AND v_number >= 30;
+    WHEN 'reviewCheckEnabled' THEN
+      v_valid := v_type = 'boolean';
+    WHEN 'avatarRemovalsLimit', 'reviewRemovalsLimit' THEN
+      v_valid := v_whole AND v_number > 0;
+    WHEN 'withdrawalGraceDays' THEN
+      v_valid := v_whole AND v_number BETWEEN 0 AND 30;
+    WHEN 'shopLocale' THEN
+      v_valid := v_text ~ '^[a-z]{2}$';
+    WHEN 'sellerLegalName' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 200;
+    WHEN 'sellerAddress' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 500;
+    WHEN 'sellerTaxId' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 50;
+    WHEN 'sellerEmail' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 254;
+    WHEN 'sellerPhone' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 30;
+    ELSE
+      v_valid := false;
+  END CASE;
+
+  -- a value of another type leaves the test of its key unknown (null), which a CHECK would let
+  -- through: unknown is a refusal
+  RETURN coalesce(v_valid, false);
+END;
+$$;
+
+-- Sets what the database owns in a new row of the data of the shop: the time, whatever the row
+-- says.
+CREATE OR REPLACE FUNCTION cartlify.shop_settings_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."createdAt" := clock_timestamp() AT TIME ZONE 'UTC';
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_settings_before_insert ON cartlify.shop_settings;
+
+CREATE TRIGGER trg_shop_settings_before_insert
+BEFORE INSERT ON cartlify.shop_settings FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_settings_before_insert ();
+
+-- Guard: a row is history, added once and never changed or removed. The policies of db/03
+-- deny every update and delete already; this guard says it a second time for a role that would
+-- skip them (a superuser is not checked, as rls does not check it either). The refusal is
+-- SHOP_SETTINGS_APPEND_ONLY with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.shop_settings_append_only () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'SHOP_SETTINGS_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shop_settings_append_only ON cartlify.shop_settings;
+
+CREATE TRIGGER trg_shop_settings_append_only
+BEFORE UPDATE OR DELETE ON cartlify.shop_settings FOR EACH ROW
+EXECUTE FUNCTION cartlify.shop_settings_append_only ();
+
+
+------------------------------------------------------------
+-- TEMPORARY: the shape of a list of the versions of the data of the shop, which were full rows
+-- of every setting, was checked by these; the rows by key have their own (shop_setting_list_valid).
+-- Remove this block once the structure of dev and prod matches the snapshot
+-- (npm run db:snapshot:check:db).
+------------------------------------------------------------
+DROP FUNCTION IF EXISTS cartlify.array_matches (text[], text);
+
+DROP FUNCTION IF EXISTS cartlify.array_has_no_duplicates (text[]);
 
 ------------------------------------------------------------
 -- TEMPORARY: the product versions of the functions that now take a variant. Remove this block

@@ -109,4 +109,21 @@ describe('buildAccountDeletedTemplate', () => {
 
     expect(text).toContain('$1,234.50');
   });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const uk = mail({
+      locale: 'uk',
+      deliveries: [{ orderId: 3, status: 'paid', total: 10, items: [lamp] }],
+    });
+    const es = mail({
+      locale: 'es',
+      deliveries: [{ orderId: 3, status: 'paid', total: 10, items: [lamp] }],
+    });
+
+    expect(uk.text).toContain('оплачено, його відправлять');
+    expect(es.text).toContain('pagado, se enviará');
+    expect(uk.subject).toBe('Cartlify — Ваш обліковий запис видалено');
+    expect(es.subject).toBe('Cartlify — Tu cuenta está eliminada');
+  });
 });

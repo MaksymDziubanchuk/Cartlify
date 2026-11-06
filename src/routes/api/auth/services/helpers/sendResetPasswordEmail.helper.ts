@@ -1,4 +1,7 @@
+import type { FastifyBaseLogger } from 'fastify';
+
 import env from '@config/env.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
@@ -12,6 +15,7 @@ export type SendResetPasswordEmailArgs = {
   resetToken: string;
   expiresAt: Date;
   userName?: string;
+  locale?: string;
 };
 
 // reset email main flow
@@ -19,15 +23,18 @@ export type SendResetPasswordEmailArgs = {
 // send branded email
 export async function sendResetPasswordEmail(
   args: SendResetPasswordEmailArgs,
+  log: Pick<FastifyBaseLogger, 'warn'>,
 ): Promise<{ status: number }> {
   const resetUrl = buildWebResetUrl(args.resetToken);
-  const expiresInText = formatExpiresIn(args.expiresAt);
+  const expiresInText = formatExpiresIn(args.expiresAt, args.locale);
+  const logo = await shopLogoAttachment(log);
 
   const { subject, text, html } = buildResetPasswordTemplate({
     resetUrl,
     userName: args.userName || '',
-    appName: env.SHOP_NAME,
-    logoCid: SHOP_LOGO_CID,
+    appName: shopSettings().shopName,
+    ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+    ...(args.locale ? { locale: args.locale } : {}),
     expiresInText,
   });
 
@@ -37,7 +44,7 @@ export async function sendResetPasswordEmail(
       subject,
       text,
       html,
-      attachments: [await shopLogoAttachment()],
+      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     // only a failure of the mail provider is a bad gateway, our own error stays a server error

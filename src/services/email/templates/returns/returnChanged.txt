@@ -1,8 +1,10 @@
-Hi{{#userName}} {{userName}}{{/userName}},
+{{greeting}}
 
-Statement {{code}}.
-Your statement of withdrawal for {{appName}} order #{{orderId}} changed.
+{{statementLine}}.
+{{leadTxt}}
 {{changeLine}}
-You need to do nothing for the goods that left it. If you did not expect this, write to us.
+{{noteLine}}
 
-Questions? Write to us in the chat on our site{{#supportEmail}} or to {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

@@ -14,9 +14,10 @@ const SPECIFIER = '@routes/api/auth/services/helpers/sendEmail.helper.js';
 const CONFIG = {
   SENDGRID_API_KEY: 'SG.test-sendgrid-key',
   EMAIL_FROM: 'shop@cartlify.test',
-  EMAIL_FROM_NAME: '',
-  EMAIL_REPLY_TO: 'help@cartlify.test',
 };
+
+// the data of the shop, read at request time, not at import (@config/shopSettings.js)
+const SETTINGS = { emailFromName: '', emailReplyTo: 'help@cartlify.test', shopName: 'Cartlify' };
 
 const message: SendEmailInput = {
   to: '  buyer@cartlify.test ',
@@ -27,7 +28,7 @@ const message: SendEmailInput = {
 let mailer: Mailer;
 
 beforeAll(async () => {
-  mailer = await importWithEnv<Mailer>(SPECIFIER, CONFIG);
+  mailer = await importWithEnv<Mailer>(SPECIFIER, CONFIG, { shopSettings: SETTINGS });
 });
 
 afterEach(() => {
@@ -38,10 +39,14 @@ afterEach(() => {
 const sentPayload = (body: string) => JSON.parse(body) as Record<string, any>;
 
 describe('sendEmail', () => {
-  it.each(['SENDGRID_API_KEY', 'EMAIL_FROM', 'EMAIL_REPLY_TO'])(
+  it.each(['SENDGRID_API_KEY', 'EMAIL_FROM'])(
     'refuses to send without %s and calls nobody',
     async (key) => {
-      const unconfigured = await importWithEnv<Mailer>(SPECIFIER, { ...CONFIG, [key]: '' });
+      const unconfigured = await importWithEnv<Mailer>(
+        SPECIFIER,
+        { ...CONFIG, [key]: '' },
+        { shopSettings: SETTINGS },
+      );
       const calls = stubFetch(() => textResponse('', 202));
 
       expect(await rejectedBy(() => unconfigured.sendEmail(message))).toMatchObject({
@@ -51,6 +56,20 @@ describe('sendEmail', () => {
       expect(calls).toHaveLength(0);
     },
   );
+
+  // emailReplyTo comes from the data of the shop now, not an env variable
+  it('refuses to send without a reply-to address, and calls nobody', async () => {
+    const unconfigured = await importWithEnv<Mailer>(SPECIFIER, CONFIG, {
+      shopSettings: { ...SETTINGS, emailReplyTo: '' },
+    });
+    const calls = stubFetch(() => textResponse('', 202));
+
+    expect(await rejectedBy(() => unconfigured.sendEmail(message))).toMatchObject({
+      statusCode: 500,
+      details: { reason: 'EMAIL_REPLY_TO_REQUIRED' },
+    });
+    expect(calls).toHaveLength(0);
+  });
 
   it.each([
     ['address', { to: '  ' }, 'EMAIL_TO_REQUIRED'],
@@ -90,7 +109,11 @@ describe('sendEmail', () => {
     });
 
     it('does not count a missing setting as a provider failure', async () => {
-      const unconfigured = await importWithEnv<Mailer>(SPECIFIER, { ...CONFIG, EMAIL_FROM: '' });
+      const unconfigured = await importWithEnv<Mailer>(
+        SPECIFIER,
+        { ...CONFIG, EMAIL_FROM: '' },
+        { shopSettings: SETTINGS },
+      );
       const err = await rejectedBy(() => unconfigured.sendEmail(message));
 
       expect(unconfigured.isEmailProviderFailure(err)).toBe(false);
@@ -124,7 +147,7 @@ describe('sendEmail', () => {
     expect(sentPayload(calls[0]!.body)).toMatchObject({
       personalizations: [{ to: [{ email: 'buyer@cartlify.test' }] }],
       from: { email: CONFIG.EMAIL_FROM, name: 'Cartlify' },
-      reply_to: { email: CONFIG.EMAIL_REPLY_TO, name: 'Cartlify' },
+      reply_to: { email: SETTINGS.emailReplyTo, name: 'Cartlify' },
       subject: 'Your order',
       content: [
         { type: 'text/plain', value: 'Thank you!' },

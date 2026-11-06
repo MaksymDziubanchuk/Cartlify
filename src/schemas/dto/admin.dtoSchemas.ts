@@ -1961,6 +1961,8 @@ const ALERT_KINDS = [
   'returns_money_late',
   'returns_goods_late',
   'worker_stalled',
+  'shop_settings_incomplete',
+  'shop_locale_missing',
   'admin_actions',
 ] as const;
 

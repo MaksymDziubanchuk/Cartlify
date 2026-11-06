@@ -6,11 +6,13 @@ import {
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
   expireCheckoutSession,
+  isStripeIdempotencyConflict,
   isStripeUnavailable,
   mapCreatedCheckoutSession,
   readCheckoutSessionStatus,
 } from './stripeCheckout.helper.js';
 import { findStripeRefund, getStripeRefund, refundStripePayment } from './stripeRefund.helper.js';
+import { PaymentPageChangedError } from '../types.js';
 
 import type Stripe from 'stripe';
 import type { PaymentPageCloseResult, PaymentProvider } from '../types.js';
@@ -40,6 +42,7 @@ export const stripeProvider: PaymentProvider = {
     deliveryPrice,
     shipping,
     customerEmail,
+    locale,
   }) {
     // a repeated request for the same order and reservation gets the same session, not a second payment
     let session: Stripe.Checkout.Session;
@@ -55,6 +58,7 @@ export const stripeProvider: PaymentProvider = {
           deliveryPrice,
           shipping,
           customerEmail,
+          locale,
         }),
         {
           idempotencyKey: buildCheckoutIdempotencyKey(orderId, reservationExpiresAt, pageClosedAt),
@@ -65,6 +69,10 @@ export const stripeProvider: PaymentProvider = {
       if (isStripeUnavailable(err)) {
         throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, err);
       }
+
+      // the key of this reservation opened a page with other values (the language of the buyer,
+      // the name of the shop, the minutes of the page): that page is the one to close
+      if (isStripeIdempotencyConflict(err)) throw new PaymentPageChangedError(err);
 
       throw err;
     }

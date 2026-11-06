@@ -1,3 +1,5 @@
+import type { FastifyBaseLogger } from 'fastify';
+
 import { Prisma, Role } from '@prisma/client';
 import { getPgCode, prisma } from '@db/client.js';
 import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
@@ -5,6 +7,7 @@ import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashToken } from '@helpers/tokenHash.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { enabledLocaleOf, mailLocaleOf } from '@helpers/locale.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
@@ -31,15 +34,14 @@ import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
 // While a version of the terms or of the contract is in force the person accepts every one of
 // them here (acceptedDocumentIds): the consent is kept with the account, with the address and the
 // browser of the request
-export async function register({
-  email,
-  password,
-  name,
-  userId: guestId,
-  acceptedDocumentIds = [],
-}: RegisterDto): Promise<RegisterResponseDto> {
+export async function register(
+  { email, password, name, locale, userId: guestId, acceptedDocumentIds = [] }: RegisterDto,
+  log: Pick<FastifyBaseLogger, 'warn'>,
+): Promise<RegisterResponseDto> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = name?.trim() || undefined;
+  // a language the shop does not answer in, or the wrong shape, is dropped, not refused
+  const cleanLocale = enabledLocaleOf(locale) ?? undefined;
 
   if (!cleanEmail) throw new BadRequestError('EMAIL_REQUIRED');
 
@@ -83,7 +85,12 @@ export async function register({
 
         await tx.user.update({
           where: { id },
-          data: { passwordHash, ...(cleanName ? { name: cleanName } : {}), updatedAt: new Date() },
+          data: {
+            passwordHash,
+            ...(cleanName ? { name: cleanName } : {}),
+            ...(cleanLocale ? { locale: cleanLocale } : {}),
+            updatedAt: new Date(),
+          },
           select: { id: true },
         });
 
@@ -97,13 +104,14 @@ export async function register({
 
         // create user row; a guest may create only a USER
         await tx.$executeRaw`
-          insert into cartlify.users (email, "passwordHash", role, "isVerified", name)
+          insert into cartlify.users (email, "passwordHash", role, "isVerified", name, locale)
           values (
             ${cleanEmail},
             ${passwordHash},
             'USER'::cartlify."Role",
             false,
-            ${cleanName ?? null}
+            ${cleanName ?? null},
+            ${cleanLocale ?? null}
           )
         `;
 
@@ -189,12 +197,16 @@ export async function register({
   }
 
   // send verify email after commit
-  await sendVerifyEmail({
-    to: cleanEmail,
-    token,
-    expiresAt,
-    userName: cleanName || '',
-  });
+  await sendVerifyEmail(
+    {
+      to: cleanEmail,
+      token,
+      expiresAt,
+      userName: cleanName || '',
+      locale: mailLocaleOf(result.locale ?? null),
+    },
+    log,
+  );
 
   return result;
 }
