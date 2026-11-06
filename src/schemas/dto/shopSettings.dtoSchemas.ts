@@ -1,5 +1,5 @@
 // SHOP SETTINGS: the data of the shop (delivery, brand, reservation, moderation, withdrawal,
-// languages, the seller), a version root writes (docs/shop-settings.md)
+// languages, the seller, the logo), a row a setting root writes (docs/shop-settings.md)
 
 import { DELIVERY_METHOD_NAMES } from '@config/deliveryMethods.js';
 
@@ -57,8 +57,15 @@ const valueProperties = {
     type: 'string',
     maxLength: 300,
     description:
-      'When a buyer collects a pickup order; required (not blank) once deliveryMethods has ' +
-      '"pickup", may be empty otherwise.',
+      'When a buyer collects a pickup order, in one format (PUT refuses another, ' +
+      'PICKUP_HOURS_INVALID): parts by "; ", in each the days and the hours by one space, for ' +
+      'example "Mon-Fri 09:00-18:00; Sat 10:00-14:00" or "Mon,Wed 09:00-13:00,14:00-18:00". A ' +
+      'day is Mon, Tue, Wed, Thu, Fri, Sat or Sun, a range of days Mon-Fri (the earlier day ' +
+      'first), several of them by ","; the hours HH:MM-HH:MM on 24 hours (the end after the ' +
+      'start, 24:00 at most), several of them by "," one after another; every day in one part ' +
+      'only. The frontend parses it and shows it in its language, a mail shows the days in the ' +
+      'language of its reader. Required (not blank) once deliveryMethods has "pickup", may be ' +
+      'empty otherwise.',
   },
   shopName: {
     type: 'string',
@@ -116,7 +123,7 @@ const valueProperties = {
   sellerLegalName: {
     ...textSchema,
     maxLength: 200,
-    description: 'The seller the shop names on its pages.',
+    description: 'The seller the shop names on its pages and at the foot of every mail.',
   },
   sellerAddress: { ...textSchema, maxLength: 500 },
   sellerTaxId: { ...textSchema, maxLength: 50 },
@@ -162,57 +169,71 @@ const publicShopSettingsResponseSchema = {
   ],
 } as const;
 
-// a version root writes is held to more than one read back: a version written before root set
-// the reply-to reads it as its empty default, a write names a real address (and the seller's
-// email, when it names one, is one too)
+// a setting root writes is held to more than one read back: a setting nobody set yet reads the
+// reply-to as its empty default, a write names a real address (and the seller's email, when it
+// names one, is one too)
+const writeProperties = {
+  ...valueProperties,
+  emailReplyTo: { ...valueProperties.emailReplyTo, format: 'email' },
+  sellerEmail: { ...valueProperties.sellerEmail, format: 'email' },
+} as const;
+
 const putShopSettingsBodySchema = {
   $id: 'putShopSettingsBodySchema',
   type: 'object',
   additionalProperties: false,
-  properties: {
-    baseVersion: {
-      type: 'integer',
-      minimum: 0,
-      description:
-        'The version root edited from: `items[0].version` of GET ' +
-        '/api/root/shop-settings/history?limit=1 when root opened the form (0 before any ' +
-        'version exists); a stale one is refused (409 SHOP_SETTINGS_OUTDATED).',
-    },
-    ...valueProperties,
-    emailReplyTo: { ...valueProperties.emailReplyTo, format: 'email' },
-    sellerEmail: { ...valueProperties.sellerEmail, format: 'email' },
-  },
-  required: ['baseVersion', ...valueRequired],
+  properties: writeProperties,
+  required: valueRequired,
 } as const;
 
-const SHOP_SETTINGS_FIELD_KEYS = [...valueRequired, 'logoUrl'];
+// the settings root writes one by one (PUT /api/root/shop-settings/:key): every one but the logo
+const WRITABLE_KEYS = valueRequired as (keyof typeof writeProperties)[];
 
-const shopSettingsFieldParamsSchema = {
-  $id: 'shopSettingsFieldParamsSchema',
+const shopSettingKeyParamsSchema = {
+  $id: 'shopSettingKeyParamsSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
     key: {
       type: 'string',
-      enum: SHOP_SETTINGS_FIELD_KEYS,
-      description: 'One field of the data of the shop.',
+      enum: WRITABLE_KEYS,
+      description: 'The setting to set: one of the fields of PUT /api/root/shop-settings.',
     },
   },
   required: ['key'],
 } as const;
 
-const shopSettingsFieldResponseSchema = {
-  $id: 'shopSettingsFieldResponseSchema',
+const putShopSettingBodySchema = {
+  $id: 'putShopSettingBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    key: { type: 'string', enum: SHOP_SETTINGS_FIELD_KEYS },
     value: {
-      description: 'The value of the field, its own shape (a string, a number, a list, or null).',
+      description:
+        'The value of the setting, of the shape and within the bounds the same field takes in ' +
+        'PUT /api/root/shop-settings (a text, a number, a list of texts, true or false, or null ' +
+        'where the field may be null).',
     },
   },
-  required: ['key', 'value'],
+  required: ['value'],
 } as const;
+
+// the body of PUT /api/root/shop-settings/:key for each key: the value of the shape of its own
+// field, checked by the controller (the schema of a body cannot depend on the path)
+export const putShopSettingBodySchemas = Object.fromEntries(
+  WRITABLE_KEYS.map((key) => [
+    key,
+    {
+      type: 'object',
+      additionalProperties: false,
+      properties: { value: writeProperties[key] },
+      required: ['value'],
+    },
+  ]),
+) as Record<(typeof WRITABLE_KEYS)[number], object>;
+
+// the settings of the history: the ones root sets and the logo (its id on Cloudinary is internal)
+const HISTORY_KEYS = [...valueRequired, 'logoUrl'];
 
 const shopSettingsHistoryQuerySchema = {
   $id: 'shopSettingsHistoryQuerySchema',
@@ -231,6 +252,11 @@ const shopSettingsHistoryQuerySchema = {
       pattern: '^[A-Za-z0-9_-]+$',
       description: 'nextCursor of the page before.',
     },
+    key: {
+      type: 'string',
+      enum: HISTORY_KEYS,
+      description: 'Only the rows of this setting; every setting unless given.',
+    },
   },
 } as const;
 
@@ -241,15 +267,19 @@ const shopSettingsHistoryResponseSchema = {
   properties: {
     items: {
       type: 'array',
-      description: 'Every version, the latest first.',
+      description: 'Rows of the settings, the latest first: the value one setting took.',
       items: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          version: { type: 'integer' },
-          setBy: {
+          key: { type: 'string', enum: HISTORY_KEYS },
+          value: {
             description:
-              'null for a version the server wrote to fill in a default root left empty.',
+              'The value the setting took, of the shape of its field (null for a setting set ' +
+              'to none, the logo taken away for one).',
+          },
+          setBy: {
+            description: 'null for a row the server wrote to fill in a default.',
             oneOf: [
               { type: 'null' },
               {
@@ -268,10 +298,8 @@ const shopSettingsHistoryResponseSchema = {
             ],
           },
           createdAt: dateTimeSchema,
-          ...valueProperties,
-          logoUrl: textSchema,
         },
-        required: ['version', 'setBy', 'createdAt', ...valueRequired, 'logoUrl'],
+        required: ['key', 'value', 'setBy', 'createdAt'],
       },
     },
     nextCursor: { type: ['string', 'null'] },
@@ -298,8 +326,8 @@ export const shopSettingsDtoSchemas = [
   shopSettingsValuesResponseSchema,
   publicShopSettingsResponseSchema,
   putShopSettingsBodySchema,
-  shopSettingsFieldParamsSchema,
-  shopSettingsFieldResponseSchema,
+  shopSettingKeyParamsSchema,
+  putShopSettingBodySchema,
   shopSettingsHistoryQuerySchema,
   shopSettingsHistoryResponseSchema,
   shopLogoFormSchema,

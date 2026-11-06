@@ -50,19 +50,7 @@ const currentValues = async () =>
     })
   ).json();
 
-const currentVersion = async () => {
-  const history = (
-    await app.inject({
-      method: 'GET',
-      url: '/api/root/shop-settings/history?limit=1',
-      headers: { cookie: accessCookie(root) },
-    })
-  ).json();
-  return history.items[0]?.version ?? 0;
-};
-
 const setShopLocale = async (shopLocale: string, enabledLocales = ['en', 'uk', 'es']) => {
-  const baseVersion = await currentVersion();
   const values = await currentValues();
   const { logoUrl: _logoUrl, ...rest } = values;
 
@@ -70,7 +58,7 @@ const setShopLocale = async (shopLocale: string, enabledLocales = ['en', 'uk', '
     method: 'PUT',
     url: '/api/root/shop-settings',
     headers: withCsrf(csrf, accessCookie(root)),
-    payload: { baseVersion, ...rest, shopLocale, enabledLocales },
+    payload: { ...rest, shopLocale, enabledLocales },
   });
   expect(res.statusCode).toBe(200);
 };

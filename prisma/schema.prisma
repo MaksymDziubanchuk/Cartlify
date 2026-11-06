@@ -82,8 +82,8 @@ model User {
   // the versions of the terms and of the contract this account published (only root does)
   legalDocumentsPublished LegalDocument[]         @relation("LegalDocumentPublisher")
   legalAcceptances        LegalAcceptance[]
-  // the versions of the data of the shop this account wrote (only root does; a row the server
-  // wrote for an empty field has no one here)
+  // the settings of the data of the shop this account wrote (only root does; a row the server
+  // wrote to fill in a default has no one here)
   shopSettingsSet         ShopSetting[]
   // the statements of withdrawal this account made or confirmed the proof of
   returnsCreated          OrderReturn[]           @relation("ReturnCreator")
@@ -1662,69 +1662,28 @@ model LegalAcceptance {
   @@map("legal_acceptances")
 }
 
-// A version of the data of the shop (delivery, brand, reservation, moderation, withdrawal,
-// languages, the seller): added when root changes a setting, or when the server fills in the
-// default of an empty field at startup (setById null, "the system"; db/shop-settings.md). The
-// current version is the one with the highest number; a row is never changed or removed (db/03,
-// db/05). A field left empty here falls back to the default the server code has, or, for a field
-// without one, stays empty until root sets it.
+// One setting of the data of the shop (delivery, brand, reservation, moderation, withdrawal,
+// languages, the seller, the logo): a row is the value one key took, written by root or, for a
+// key that has a default in the code and no row yet, by the server at its start (setById null,
+// "the system"; docs/shop-settings.md). The current value of a key is its latest row; a row is
+// never changed or removed (db/03, db/05). The shape of a value is checked by key (db/06,
+// shop_settings_value_chk), the rules between keys by the server.
 model ShopSetting {
   id Int @id @default(autoincrement())
 
-  // set by trg_shop_settings_before_insert (db/05): the row before this one, plus one
-  version Int
+  // which setting, one of the keys the server knows (db/06)
+  key String
 
-  // root who wrote this version; null for a row the server wrote for an empty field
+  // the value, of the shape of its key: a text, a number, a list of texts, true or false, or null
+  // for a setting without a value
+  value Json
+
+  // root who wrote it; null for a row the server wrote to fill in a default
   setById Int?
   setBy   User? @relation(fields: [setById], references: [id], onDelete: Restrict)
 
-  // the version root saw before writing this one, for the conflict check of the trigger; null
-  // skips the check (the rows the server writes for empty fields)
-  basedOnVersion Int?
-
-  // delivery (public): the ways the shop ships an order, the countries it ships to (ISO 3166
-  // alpha-2), the price and the free-from of the manual method, where and when a buyer collects a
-  // pickup order
-  deliveryMethods   String[]
-  deliveryFlatPrice Decimal? @db.Decimal(10, 2)
-  deliveryFreeFrom  Decimal? @db.Decimal(10, 2)
-  deliveryCountries String[]
-  pickupAddress     String?  @db.VarChar(300)
-  pickupHours       String?  @db.VarChar(300)
-
-  // brand and mail: the name and the logo are public, the sender name and the reply-to are not
-  shopName      String? @db.VarChar(100)
-  emailFromName String? @db.VarChar(100)
-  emailReplyTo  String? @db.VarChar(254)
-  logoUrl       String?
-  logoPublicId  String?
-
-  // reservation, in minutes (not public)
-  reservationMinutes Int?
-  stripePageMinutes  Int?
-
-  // moderation (not public)
-  reviewCheckEnabled  Boolean?
-  avatarRemovalsLimit Int?
-  reviewRemovalsLimit Int?
-
-  // days of grace added to the legal minimum of a withdrawal (not public)
-  withdrawalGraceDays Int?
-
-  // languages (public): the mother tongue of the shop (falls back to it when a buyer's own has no
-  // dictionary), the ones turned on (each needs a dictionary; the shop's own must be among them)
-  shopLocale     String?  @db.VarChar(2)
-  enabledLocales String[]
-
-  // the seller the shop must name on its pages, its mails, its receipts and its invoices (public)
-  sellerLegalName String? @db.VarChar(200)
-  sellerAddress   String? @db.VarChar(500)
-  sellerTaxId     String? @db.VarChar(50)
-  sellerEmail     String? @db.VarChar(254)
-  sellerPhone     String? @db.VarChar(30)
-
+  // set by trg_shop_settings_before_insert (db/05): the time of the database
   createdAt DateTime @default(now())
 
-  @@unique([version])
   @@map("shop_settings")
 }

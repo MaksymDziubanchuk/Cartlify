@@ -5,10 +5,11 @@ import { prisma } from '@db/client.js';
 import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js';
 import { closeSessions, createUser, type TestUser } from '../../helpers/factories.js';
 
-// shop_settings: a version of the data of the shop (delivery, brand, reservation, moderation,
-// withdrawal, languages, the seller), added by root, or by the system to fill in the default of a
-// field root left empty. A row is never changed or removed; the current version is the highest
-// number. All in transactions that roll back: no other file sees a row made here
+// shop_settings: one setting of the data of the shop a row, the value one key took, added by
+// root, or by the system to fill in the default of a setting with no row yet. A row is never
+// changed or removed; the current value of a key is its latest row; the shape of a value is
+// checked by its key (db/06, shop_settings_value_chk). All in transactions that roll back: no
+// other file sees a row made here
 
 let admin: TestUser;
 let root: TestUser;
@@ -31,88 +32,60 @@ afterAll(async () => {
 const as = (user: TestUser): Actor => ({ role: user.role, userId: user.id });
 const SYSTEM: Actor = { role: 'ADMIN', userId: null };
 
-type Written = {
-  id: number;
-  version: number;
-  setById: number | null;
-  basedOnVersion: number | null;
-};
+type Written = { id: number; key: string; value: unknown; setById: number | null };
 
-// the version of the row the rest of the suite already committed (*.shopwide.test.ts and the
-// system fill of every file's startApp write real rows this file only reads, never changes): a
-// fresh table and a well-used one behave the same, this file never assumes which one it is
-const currentVersion = async (db: DbSession) =>
-  (
-    await db.rows<{ version: number }>(
-      'select coalesce(max(version), 0)::int as version from cartlify.shop_settings',
-    )
-  )[0]!.version;
-
-// a full row of fields a write needs, with the value of a field overridable; a write of root's
-// takes the version it claims to have seen (0 for the first one)
-const write = (db: DbSession, opts: { setById?: number | null; basedOnVersion?: number | null }) =>
+// a row of a setting, its value given as json text
+const write = (db: DbSession, key: string, value: string, setById: number | null) =>
   db.attempt<Written>(
-    `insert into cartlify.shop_settings
-       ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById", "basedOnVersion")
-     values ('{manual}', '{UA}', '{en}', 'en', $1, $2)
-     returning id, version, "setById", "basedOnVersion"`,
-    opts.setById ?? null,
-    opts.basedOnVersion ?? null,
+    `insert into cartlify.shop_settings (key, value, "setById")
+     values ($1, $2::jsonb, $3)
+     returning id, key, value, "setById"`,
+    key,
+    value,
+    setById,
   );
 
-describe('shop_settings versions', () => {
-  it('lets root write the next version, claiming the version it saw', async () => {
+describe('shop_settings rows', () => {
+  it('lets root write a setting in their own name, the time the database own', async () => {
     const result = await inRolledBackTx(async (db) => {
       await db.as(as(root));
-      const base = await currentVersion(db);
-      const written = await write(db, { setById: root.id, basedOnVersion: base });
-      return { base, written };
+      const written = await db.attempt<Written & { createdAt: Date }>(
+        `insert into cartlify.shop_settings (key, value, "setById", "createdAt")
+         values ('shopName', '"Cartlify"', $1, '2000-01-01')
+         returning id, key, value, "setById", "createdAt"`,
+        root.id,
+      );
+      const [{ now }] = await db.rows<{ now: Date }>(
+        `select (clock_timestamp() at time zone 'UTC') as now`,
+      );
+      return { written, now };
     });
 
     expect(result.written.ok && result.written.rows[0]).toMatchObject({
-      version: result.base + 1,
+      key: 'shopName',
+      value: 'Cartlify',
       setById: root.id,
-      basedOnVersion: result.base,
     });
+    // the time of a row is the database's, not the one the insert named
+    const createdAt = result.written.ok ? result.written.rows[0]!.createdAt : new Date(0);
+    expect(Math.abs(createdAt.getTime() - result.now.getTime())).toBeLessThan(60_000);
   });
 
-  it('refuses a write of root that claims a version the table has moved past', async () => {
-    const result = await inRolledBackTx(async (db) => {
-      await db.as(as(root));
-      const base = await currentVersion(db);
-      const first = await write(db, { setById: root.id, basedOnVersion: base });
-      const stale = await write(db, { setById: root.id, basedOnVersion: base });
-      const fresh = await write(db, { setById: root.id, basedOnVersion: base + 1 });
-      return { base, first, stale, fresh };
-    });
-
-    expect(result.first.ok).toBe(true);
-    expect(result.stale).toEqual({ ok: false, code: '23514', message: 'SHOP_SETTINGS_OUTDATED' });
-    expect(result.fresh.ok && result.fresh.rows[0]).toMatchObject({ version: result.base + 2 });
-  });
-
-  it('lets the system write a version with no author and no claimed version', async () => {
+  it('lets the system write a setting with no author', async () => {
     const result = await inRolledBackTx(async (db) => {
       await db.as(SYSTEM);
-      const base = await currentVersion(db);
-      const written = await write(db, { setById: null, basedOnVersion: null });
-      return { base, written };
+      return write(db, 'reservationMinutes', '15', null);
     });
 
-    expect(result.written.ok && result.written.rows[0]).toMatchObject({
-      version: result.base + 1,
-      setById: null,
-      basedOnVersion: null,
-    });
+    expect(result.ok && result.rows[0]).toMatchObject({ key: 'reservationMinutes', setById: null });
   });
 
   it("refuses root writing in another root's name, and the system writing with an author", async () => {
     const result = await inRolledBackTx(async (db) => {
       await db.as(as(root));
-      const base = await currentVersion(db);
-      const forOther = await write(db, { setById: other.id, basedOnVersion: base });
+      const forOther = await write(db, 'shopName', '"Other"', other.id);
       await db.as(SYSTEM);
-      const systemNamed = await write(db, { setById: root.id, basedOnVersion: null });
+      const systemNamed = await write(db, 'shopName', '"System"', root.id);
       return { forOther, systemNamed };
     });
 
@@ -123,9 +96,9 @@ describe('shop_settings versions', () => {
   it('refuses a write of a signed-in admin, a buyer or a guest', async () => {
     const result = await inRolledBackTx(async (db) => {
       await db.as(as(admin));
-      const byAdmin = await write(db, { setById: admin.id, basedOnVersion: 0 });
+      const byAdmin = await write(db, 'shopName', '"Admin"', admin.id);
       await db.as(null);
-      const byNobody = await write(db, {});
+      const byNobody = await write(db, 'shopName', '"Nobody"', null);
       return { byAdmin, byNobody };
     });
 
@@ -133,22 +106,21 @@ describe('shop_settings versions', () => {
     expect(result.byNobody.ok).toBe(false);
   });
 
-  it('never lets a version be changed or removed, by root or by the system', async () => {
+  it('never lets a row be changed or removed, by root or by the system', async () => {
     const result = await inRolledBackTx(async (db) => {
       await db.as(as(root));
-      const base = await currentVersion(db);
-      const made = await write(db, { setById: root.id, basedOnVersion: base });
+      const made = await write(db, 'shopName', '"Before"', root.id);
       const id = made.ok ? made.rows[0]!.id : -1;
 
       const updated = await db.attempt(
-        `update cartlify.shop_settings set "shopName" = 'x' where id = $1`,
+        `update cartlify.shop_settings set value = '"After"' where id = $1`,
         id,
       );
       const deleted = await db.attempt(`delete from cartlify.shop_settings where id = $1`, id);
 
       await db.as(SYSTEM);
       const updatedBySystem = await db.attempt(
-        `update cartlify.shop_settings set "shopName" = 'x' where id = $1`,
+        `update cartlify.shop_settings set value = '"After"' where id = $1`,
         id,
       );
 
@@ -163,163 +135,94 @@ describe('shop_settings versions', () => {
     expect(result.updatedBySystem.ok && result.updatedBySystem.rows).toEqual([]);
   });
 
-  it('lets root and a signed-in admin read every version (the app shows admin only the current one, this table alone cannot tell "current" without asking itself and looping forever)', async () => {
+  it('lets root and a signed-in admin read every row, the latest of a key its current value', async () => {
     const result = await inRolledBackTx(async (db) => {
       await db.as(as(root));
-      const base = await currentVersion(db);
-      await write(db, { setById: root.id, basedOnVersion: base });
-      await write(db, { setById: root.id, basedOnVersion: base + 1 });
+      const first = await write(db, 'emailFromName', '"First"', root.id);
+      const second = await write(db, 'emailFromName', '"Second"', root.id);
+      const since = first.ok ? first.rows[0]!.id : -1;
 
-      const byRoot = await db.rows<{ version: number }>(
-        'select version from cartlify.shop_settings where version > $1 order by version',
-        base,
-      );
+      const current = `select distinct on (key) key, value from cartlify.shop_settings
+        where key = 'emailFromName' order by key, id desc`;
+      const mine = `select value from cartlify.shop_settings where id >= $1 order by id`;
+
+      const byRoot = await db.rows<{ value: unknown }>(mine, since);
+      const currentByRoot = await db.rows<{ value: unknown }>(current);
 
       await db.as(as(admin));
-      const byAdmin = await db.rows<{ version: number }>(
-        'select version from cartlify.shop_settings where version > $1 order by version',
-        base,
-      );
+      const byAdmin = await db.rows<{ value: unknown }>(mine, since);
 
-      return { base, byRoot, byAdmin };
+      return { second, byRoot, currentByRoot, byAdmin };
     });
 
-    expect(result.byRoot.map((r) => r.version)).toEqual([result.base + 1, result.base + 2]);
-    expect(result.byAdmin.map((r) => r.version)).toEqual([result.base + 1, result.base + 2]);
+    expect(result.second.ok).toBe(true);
+    expect(result.byRoot.map((row) => row.value)).toEqual(['First', 'Second']);
+    expect(result.byAdmin.map((row) => row.value)).toEqual(['First', 'Second']);
+    expect(result.currentByRoot).toEqual([{ key: 'emailFromName', value: 'Second' }]);
   });
 });
 
+// the shape of each value by its key (shop_setting_value_valid, db/05); the rules between
+// settings are the server's (a row cannot see the rows of the other keys)
 describe('shop_settings values', () => {
-  const insertWith = (db: DbSession, fields: string, values: unknown[]) =>
-    db.attempt(
-      `insert into cartlify.shop_settings
-         ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById", ${fields})
-       values ('{manual}', '{UA}', '{en}', 'en', $1, ${values.map((_, i) => `$${i + 2}`).join(', ')})`,
-      root.id,
-      ...values,
-    );
-
-  it('refuses a delivery method the app does not know, and a method named twice', async () => {
-    const result = await inRolledBackTx(async (db) => {
+  const attempt = (key: string, value: string) =>
+    inRolledBackTx(async (db) => {
       await db.as(as(root));
-      const unknown = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual,courier}', '{UA}', '{en}', 'en', $1)`,
-        root.id,
-      );
-      const twice = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual,manual}', '{UA}', '{en}', 'en', $1)`,
-        root.id,
-      );
-      return { unknown, twice };
+      return write(db, key, value, root.id);
     });
 
-    expect(result.unknown).toMatchObject({ ok: false, code: '23514' });
-    expect(result.twice).toMatchObject({ ok: false, code: '23514' });
+  it.each([
+    ['deliveryMethods', '["manual","pickup"]'],
+    ['deliveryMethods', '[]'],
+    ['deliveryFlatPrice', '4.99'],
+    ['deliveryFlatPrice', 'null'],
+    ['deliveryFreeFrom', '99999999.99'],
+    ['deliveryCountries', '["UA","PL"]'],
+    ['pickupAddress', '""'],
+    ['pickupHours', '"Mon-Fri 09:00-18:00"'],
+    ['shopName', '"Cartlify"'],
+    ['emailReplyTo', '"help@cartlify.test"'],
+    ['logoUrl', 'null'],
+    ['logoPublicId', '"cartlify/shop/logo/abc"'],
+    ['reservationMinutes', '15'],
+    ['stripePageMinutes', '30'],
+    ['reviewCheckEnabled', 'false'],
+    ['avatarRemovalsLimit', '5'],
+    ['withdrawalGraceDays', '0'],
+    ['withdrawalGraceDays', '30'],
+    ['shopLocale', '"uk"'],
+    ['enabledLocales', '["en","uk"]'],
+    ['sellerLegalName', 'null'],
+    ['sellerPhone', '"+380501234567"'],
+  ])('takes %s = %s', async (key, value) => {
+    expect((await attempt(key, value)).ok).toBe(true);
   });
 
-  it('requires the pickup address and hours once pickup is on, and a price above zero', async () => {
-    const result = await inRolledBackTx(async (db) => {
-      await db.as(as(root));
-      const noAddress = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById", "pickupHours")
-         values ('{pickup}', '{UA}', '{en}', 'en', $1, 'Mon-Fri 9-18')`,
-        root.id,
-      );
-      const withBoth = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById", "pickupAddress", "pickupHours")
-         values ('{pickup}', '{UA}', '{en}', 'en', $1, 'Main St 1', 'Mon-Fri 9-18')`,
-        root.id,
-      );
-      const zeroPrice = await insertWith(db, '"deliveryFlatPrice"', [0]);
-      return { noAddress, withBoth, zeroPrice };
-    });
-
-    expect(result.noAddress).toMatchObject({ ok: false, code: '23514' });
-    expect(result.withBoth.ok).toBe(true);
-    expect(result.zeroPrice).toMatchObject({ ok: false, code: '23514' });
-  });
-
-  it('refuses a country that is not two capital letters, and one named twice', async () => {
-    const result = await inRolledBackTx(async (db) => {
-      await db.as(as(root));
-      const lower = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual}', '{ua}', '{en}', 'en', $1)`,
-        root.id,
-      );
-      const twice = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual}', '{UA,UA}', '{en}', 'en', $1)`,
-        root.id,
-      );
-      return { lower, twice };
-    });
-
-    expect(result.lower).toMatchObject({ ok: false, code: '23514' });
-    expect(result.twice).toMatchObject({ ok: false, code: '23514' });
-  });
-
-  it('keeps reservation minutes above zero, the stripe page at least 30, together at most 1440', async () => {
-    const result = await inRolledBackTx(async (db) => {
-      await db.as(as(root));
-      const shortPage = await insertWith(db, '"reservationMinutes", "stripePageMinutes"', [15, 20]);
-      const tooLong = await insertWith(db, '"reservationMinutes", "stripePageMinutes"', [800, 700]);
-      const ok = await insertWith(db, '"reservationMinutes", "stripePageMinutes"', [15, 30]);
-      return { shortPage, tooLong, ok };
-    });
-
-    expect(result.shortPage).toMatchObject({ ok: false, code: '23514' });
-    expect(result.tooLong).toMatchObject({ ok: false, code: '23514' });
-    expect(result.ok.ok).toBe(true);
-  });
-
-  it('keeps the days of grace of a withdrawal from 0 to 30', async () => {
-    const result = await inRolledBackTx(async (db) => {
-      await db.as(as(root));
-      const tooMany = await insertWith(db, '"withdrawalGraceDays"', [31]);
-      const ok = await insertWith(db, '"withdrawalGraceDays"', [30]);
-      return { tooMany, ok };
-    });
-
-    expect(result.tooMany).toMatchObject({ ok: false, code: '23514' });
-    expect(result.ok.ok).toBe(true);
-  });
-
-  it('refuses a language not of two lower-case letters, named twice, or not among the enabled', async () => {
-    const result = await inRolledBackTx(async (db) => {
-      await db.as(as(root));
-      const upper = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual}', '{UA}', '{EN}', 'en', $1)`,
-        root.id,
-      );
-      const twice = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual}', '{UA}', '{en,en}', 'en', $1)`,
-        root.id,
-      );
-      const notEnabled = await db.attempt(
-        `insert into cartlify.shop_settings
-           ("deliveryMethods", "deliveryCountries", "enabledLocales", "shopLocale", "setById")
-         values ('{manual}', '{UA}', '{uk}', 'en', $1)`,
-        root.id,
-      );
-      return { upper, twice, notEnabled };
-    });
-
-    expect(result.upper).toMatchObject({ ok: false, code: '23514' });
-    expect(result.twice).toMatchObject({ ok: false, code: '23514' });
-    expect(result.notEnabled).toMatchObject({ ok: false, code: '23514' });
+  it.each([
+    ['a key the server does not know', 'shopColor', '"violet"'],
+    ['a delivery method the app does not know', 'deliveryMethods', '["manual","courier"]'],
+    ['a method named twice', 'deliveryMethods', '["manual","manual"]'],
+    ['a list that is no list', 'deliveryMethods', '"manual"'],
+    ['a price of zero', 'deliveryFlatPrice', '0'],
+    ['a price below the cent', 'deliveryFlatPrice', '4.995'],
+    ['a price over what an amount holds', 'deliveryFreeFrom', '100000000'],
+    ['a price as text', 'deliveryFlatPrice', '"4.99"'],
+    ['a country that is not two capital letters', 'deliveryCountries', '["ua"]'],
+    ['a country named twice', 'deliveryCountries', '["UA","UA"]'],
+    ['an address over 300 characters', 'pickupAddress', JSON.stringify('x'.repeat(301))],
+    ['a name of the shop that is null', 'shopName', 'null'],
+    ['an empty logo', 'logoUrl', '""'],
+    ['reservation minutes of zero', 'reservationMinutes', '0'],
+    ['reservation minutes that are no whole number', 'reservationMinutes', '15.5'],
+    ['a Stripe page under 30 minutes', 'stripePageMinutes', '20'],
+    ['a check of reviews that is no true or false', 'reviewCheckEnabled', '"yes"'],
+    ['a limit of zero', 'reviewRemovalsLimit', '0'],
+    ['days of grace over 30', 'withdrawalGraceDays', '31'],
+    ['a language not of two lower-case letters', 'shopLocale', '"EN"'],
+    ['a language named twice', 'enabledLocales', '["en","en"]'],
+    ['a tax id over 50 characters', 'sellerTaxId', JSON.stringify('1'.repeat(51))],
+  ])('refuses %s', async (_case, key, value) => {
+    expect(await attempt(key, value)).toMatchObject({ ok: false, code: '23514' });
   });
 });
 

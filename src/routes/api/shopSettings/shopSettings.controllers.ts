@@ -1,12 +1,15 @@
+import { putShopSettingBodySchemas } from '@schemas/dto/shopSettings.dtoSchemas.js';
 import { BadRequestError } from '@utils/errors.js';
 import { discardUploads } from '@utils/cloudinary.util.js';
 
+import type { FastifyRequest } from 'fastify';
+import type { WritableShopSettingKey } from '@config/shopSettings.js';
 import type { ControllerRouter } from 'types/controller.js';
 import type {
   GetShopSettingsHistoryResponseDto,
   PublicShopSettingsDto,
+  PutShopSettingBodyDto,
   PutShopSettingsBodyDto,
-  ShopSettingsFieldDto,
   ShopSettingsValuesDto,
   UploadedShopLogo,
 } from 'types/dto/shopSettings.dto.js';
@@ -14,10 +17,10 @@ import type { UserEntity } from 'types/user.js';
 
 import {
   getPublicShopSettings,
-  getShopSettingsField,
   getShopSettingsHistory,
   getShopSettingsMissingFields,
   getShopSettingsValues,
+  putShopSetting,
   putShopSettings,
 } from './shopSettings.services.js';
 import { beginShopLogoUpload, setShopLogo } from './services/setShopLogo.service.js';
@@ -30,12 +33,6 @@ const getPublic: ControllerRouter<{}, {}, {}, PublicShopSettingsDto> = async (_r
 // admin, root: GET /api/admin/shop-settings
 const getValues: ControllerRouter<{}, {}, {}, ShopSettingsValuesDto> = async (_req, reply) =>
   reply.code(200).send(getShopSettingsValues());
-
-// admin, root: GET /api/admin/shop-settings/:key
-const getField: ControllerRouter<{ key: string }, {}, {}, ShopSettingsFieldDto> = async (
-  req,
-  reply,
-) => reply.code(200).send(getShopSettingsField(req.params.key));
 
 // admin, root: GET /api/admin/shop-settings/missing
 const getMissing: ControllerRouter<{}, {}, {}, { fields: string[] }> = async (_req, reply) =>
@@ -51,11 +48,39 @@ const putValues: ControllerRouter<{}, PutShopSettingsBodyDto, {}, ShopSettingsVa
   return reply.code(200).send(result);
 };
 
+// the body of PUT /api/root/shop-settings/:key is the value of that one setting, of the shape of
+// its own field: a schema of a body cannot depend on the path, so it is checked here, by the
+// validator of the routes (the same rules, coercion and formats as PUT /api/root/shop-settings).
+// A value out of its shape is the 400 VALIDATION_ERROR of a schema (errorNormalizer)
+function assertSettingBody(req: FastifyRequest, key: WritableShopSettingKey): void {
+  const validate = req.compileValidationSchema(putShopSettingBodySchemas[key], 'body');
+  if (validate(req.body)) return;
+
+  throw Object.assign(new Error(`body/value of ${key} is invalid`), {
+    statusCode: 400,
+    validation: validate.errors ?? [],
+    validationContext: 'body',
+  });
+}
+
+// root: PUT /api/root/shop-settings/:key
+const putValue: ControllerRouter<
+  { key: WritableShopSettingKey },
+  PutShopSettingBodyDto,
+  {},
+  ShopSettingsValuesDto
+> = async (req, reply) => {
+  const { id } = req.user as UserEntity;
+  assertSettingBody(req, req.params.key);
+  const result = await putShopSetting({ actorId: id, key: req.params.key, value: req.body.value });
+  return reply.code(200).send(result);
+};
+
 // root: GET /api/root/shop-settings/history
 const getHistory: ControllerRouter<
   {},
   {},
-  { limit?: number; cursor?: string },
+  { limit?: number; cursor?: string; key?: string },
   GetShopSettingsHistoryResponseDto
 > = async (req, reply) => {
   const { id } = req.user as UserEntity;
@@ -64,6 +89,7 @@ const getHistory: ControllerRouter<
     actorRole: 'ROOT',
     limit: req.query.limit ?? 20,
     cursor: req.query.cursor,
+    key: req.query.key,
   });
   return reply.code(200).send(result);
 };
@@ -122,9 +148,9 @@ const deleteLogo: ControllerRouter<{}, {}, {}, ShopSettingsValuesDto> = async (r
 export const shopSettingsController = {
   getPublic,
   getValues,
-  getField,
   getMissing,
   putValues,
+  putValue,
   getHistory,
   postLogo,
   deleteLogo,

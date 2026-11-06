@@ -5,9 +5,9 @@ import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { closeSessions, createUser, type TestUser } from '../../../helpers/factories.js';
 
-// GET /api/admin/shop-settings(/...): the current data of the shop for admin and root, every
-// field (including the ones GET /api/shop-settings leaves out) and one field by its key; the
-// fields that have no server default and still wait for root
+// GET /api/admin/shop-settings(/missing): the current data of the shop for admin and root, every
+// setting (including the ones GET /api/shop-settings leaves out); the settings that have no server
+// default and still wait for root
 
 let app: FastifyInstance;
 let buyer: TestUser;
@@ -82,38 +82,6 @@ describe('GET /api/admin/shop-settings', () => {
       expect(body).toHaveProperty('deliveryCountries');
       expect(body).toHaveProperty('emailReplyTo');
     }
-  });
-});
-
-describe('GET /api/admin/shop-settings/:key', () => {
-  it('refuses a key that is not a field of the data of the shop', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/admin/shop-settings/notAField',
-      headers: { cookie: accessCookie(admin) },
-    });
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json().errorCode).toBe('VALIDATION_ERROR');
-  });
-
-  it('gives the key and the value of one field, the same the full read gives', async () => {
-    const full = (
-      await app.inject({
-        method: 'GET',
-        url: '/api/admin/shop-settings',
-        headers: { cookie: accessCookie(admin) },
-      })
-    ).json();
-
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/admin/shop-settings/shopName',
-      headers: { cookie: accessCookie(admin) },
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ key: 'shopName', value: full.shopName });
   });
 });
 

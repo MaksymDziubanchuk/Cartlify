@@ -22,10 +22,10 @@ import { closeSessions, createUser, type TestUser } from '../../../helpers/facto
 import { multipartBody, type FormPart } from '../../../helpers/multipart.js';
 import { takeLogs } from '../../../helpers/logs.js';
 
-// PUT /api/root/shop-settings and GET /api/root/shop-settings/history: root writes a new version
-// (every field named, not a partial change), nobody else may, a stale baseVersion is refused and
-// the version root saw is still the current one. POST and DELETE /api/root/shop-settings/logo: the
-// logo on its own, carried forward by PUT and by the other one of this pair.
+// PUT /api/root/shop-settings, PUT /api/root/shop-settings/:key and GET
+// /api/root/shop-settings/history: root sets every setting or one, a row for each that changes,
+// nobody else may; the history lists the rows. POST and DELETE /api/root/shop-settings/logo: the
+// logo on its own, a row of its key; PUT leaves it as it is.
 // *.shopwide.test.ts: the table is one for every test file running next to it, this file runs
 // alone while it runs (tests/setup/integration.shopState.ts)
 
@@ -59,21 +59,33 @@ const currentValues = async () =>
     })
   ).json();
 
-const currentVersion = async () => {
-  const history = (
-    await app.inject({
-      method: 'GET',
-      url: '/api/root/shop-settings/history?limit=1',
-      headers: { cookie: accessCookie(root) },
-    })
-  ).json();
-  return history.items[0]?.version ?? 0;
+// the values root sets with PUT: every current one but the logo
+const writableValues = async () => {
+  const { logoUrl: _logoUrl, ...rest } = await currentValues();
+  return rest;
 };
+
+const rowCount = () => asAdmin((tx) => tx.shopSetting.count());
+
+const history = async (query = '') =>
+  app.inject({
+    method: 'GET',
+    url: `/api/root/shop-settings/history${query}`,
+    headers: { cookie: accessCookie(root) },
+  });
 
 const put = (actor: TestUser, body: object) =>
   app.inject({
     method: 'PUT',
     url: '/api/root/shop-settings',
+    headers: withCsrf(csrf, accessCookie(actor)),
+    payload: body,
+  });
+
+const putOne = (actor: TestUser, key: string, body: object) =>
+  app.inject({
+    method: 'PUT',
+    url: `/api/root/shop-settings/${key}`,
     headers: withCsrf(csrf, accessCookie(actor)),
     payload: body,
   });
@@ -98,106 +110,64 @@ const deleteLogo = (actor: TestUser | null = root) =>
     headers: actor ? withCsrf(csrf, accessCookie(actor)) : withCsrf(csrf),
   });
 
+// the id on Cloudinary of the logo the shop has: the value of the latest row of its key
 const currentLogoPublicId = () =>
   asAdmin(async (tx) => {
     const row = await tx.shopSetting.findFirst({
-      orderBy: { version: 'desc' },
-      select: { logoPublicId: true },
+      where: { key: 'logoPublicId' },
+      orderBy: { id: 'desc' },
+      select: { value: true },
     });
-    return row?.logoPublicId ?? null;
+    return (row?.value as string | null | undefined) ?? null;
   });
 
 describe('PUT /api/root/shop-settings', () => {
   it('refuses a signed-in admin', async () => {
-    const baseVersion = await currentVersion();
-    const values = await currentValues();
-    const { logoUrl: _logoUrl, deliveryCountries, ...rest } = values;
-
-    const res = await put(admin, { baseVersion, deliveryCountries, ...rest });
+    const res = await put(admin, await writableValues());
     expect(res.statusCode).toBe(403);
   });
 
-  it('writes a new version root can read right after, and refuses a stale baseVersion', async () => {
-    const baseVersion = await currentVersion();
-    const values = await currentValues();
-    const { logoUrl: _logoUrl, ...rest } = values;
-
+  it('writes a row for the one setting that changed, and root reads the value right after', async () => {
+    const values = await writableValues();
+    // the rows hold what this file sees (the baseline of the tests is in its memory only)
+    await put(root, values);
+    const total = await rowCount();
     const shopName = `Shop ${Date.now()}`;
-    const written = await put(root, { baseVersion, ...rest, shopName });
+
+    const written = await put(root, { ...values, shopName });
+
     expect(written.statusCode).toBe(200);
     expect(written.json()).toMatchObject({ shopName });
-
-    const after = await currentValues();
-    expect(after.shopName).toBe(shopName);
-
-    const stale = await put(root, { baseVersion, ...rest, shopName: 'stale write' });
-    expect(stale.statusCode).toBe(409);
-    expect(stale.json().errorCode).toBe('SHOP_SETTINGS_OUTDATED');
-
-    // the stale write changed nothing
     expect((await currentValues()).shopName).toBe(shopName);
+    expect(await rowCount()).toBe(total + 1);
 
     // this file is the only one allowed to change the data of the whole shop; it leaves the name
     // as it found it, so a mail test elsewhere that names the shop by its default is not fooled by
     // a name this test made up just to prove the write
-    await put(root, { baseVersion: await currentVersion(), ...rest, shopName: values.shopName });
+    expect((await put(root, values)).statusCode).toBe(200);
   });
 
-  it('refuses a country the app does not know how to take a postal code of', async () => {
-    const baseVersion = await currentVersion();
-    const values = await currentValues();
-    const { logoUrl: _logoUrl, ...rest } = values;
+  it('writes no row when every setting is as it already was', async () => {
+    const values = await writableValues();
+    await put(root, values);
+    const total = await rowCount();
 
-    const res = await put(root, { baseVersion, ...rest, deliveryCountries: ['UA', 'ZZ'] });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({
-      errorCode: 'DELIVERY_COUNTRY_NOT_SUPPORTED',
-      details: { countries: ['ZZ'] },
-    });
+    const res = await put(root, values);
 
-    // the refusal wrote no version
-    expect(await currentVersion()).toBe(baseVersion);
+    expect(res.statusCode).toBe(200);
+    expect(await rowCount()).toBe(total);
   });
 
-  // a language with no dictionary (src/locales) cannot be enabled; "xx" is never a real one
-  it('refuses a language of enabledLocales with no dictionary', async () => {
-    const baseVersion = await currentVersion();
-    const values = await currentValues();
-    const { logoUrl: _logoUrl, ...rest } = values;
-
-    // the shop's own language stays on, the refusal is for "xx" alone
-    const res = await put(root, {
-      baseVersion,
-      ...rest,
-      enabledLocales: [values.shopLocale, 'xx'],
-    });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({
-      errorCode: 'LOCALE_NOT_SUPPORTED',
-      details: { locales: ['xx'] },
-    });
-    expect(res.json().details.supported).toContain('en');
-
-    // the refusal wrote no version
-    expect(await currentVersion()).toBe(baseVersion);
-  });
-
-  // the rules the env variables these fields replace were held to at start (a price above zero to
-  // the cent, a free-from needs a price, a pickup needs its address and hours, the reservation
+  // the rules the env variables these settings replace were held to at start (a price above zero
+  // to the cent, a free-from needs a price, a pickup needs its address and hours, the reservation
   // with the page at most a day, the shop's own language among the ones turned on, each list
-  // without repeats, a reply-to that is an address). A version that breaks one is refused with a
-  // code naming it, and nothing is written; the database keeps the same rules (db/06,
-  // shop_settings_*_chk), but its refusal reached root as a 500, and an empty text passed it.
-  // Every row has its details (null for none): a test function with more parameters than its row
-  // is taken by jest for one that waits for done()
+  // without repeats, a reply-to that is an address), and the lists of the app (the countries a
+  // postal code is known of, the languages with a dictionary). A write that breaks one is refused
+  // with a code naming it, and nothing is written. Every row has its details (null for none): a
+  // test function with more parameters than its row is taken by jest for one that waits for done()
   it.each<[string, Record<string, unknown>, string, Record<string, unknown> | null]>([
     ['a price of zero', { deliveryFlatPrice: 0 }, 'VALIDATION_ERROR', null],
-    [
-      'a price over the most the column holds',
-      { deliveryFlatPrice: 1e9 },
-      'VALIDATION_ERROR',
-      null,
-    ],
+    ['a price over the most an amount holds', { deliveryFlatPrice: 1e9 }, 'VALIDATION_ERROR', null],
     ['a price below the cent', { deliveryFlatPrice: 4.995 }, 'VALIDATION_ERROR', null],
     [
       'a free-from below the cent',
@@ -213,7 +183,11 @@ describe('PUT /api/root/shop-settings', () => {
     ],
     [
       'a pickup with no address',
-      { deliveryMethods: ['manual', 'pickup'], pickupAddress: '  ', pickupHours: 'Mon-Fri 9-18' },
+      {
+        deliveryMethods: ['manual', 'pickup'],
+        pickupAddress: '  ',
+        pickupHours: 'Mon-Fri 09:00-18:00',
+      },
       'PICKUP_DETAILS_REQUIRED',
       { fields: ['pickupAddress'] },
     ],
@@ -223,9 +197,35 @@ describe('PUT /api/root/shop-settings', () => {
       'PICKUP_DETAILS_REQUIRED',
       { fields: ['pickupAddress', 'pickupHours'] },
     ],
+    // the one format the frontend parses and a mail translates (src/helpers/pickupHours.ts)
+    [
+      'pickup hours not in their format',
+      { deliveryMethods: ['pickup'], pickupAddress: 'Main St 1', pickupHours: 'Пн-Пт 9-18' },
+      'PICKUP_HOURS_INVALID',
+      null,
+    ],
+    [
+      'pickup hours not in their format while the pickup is off',
+      { deliveryMethods: ['manual'], pickupHours: 'weekdays' },
+      'PICKUP_HOURS_INVALID',
+      null,
+    ],
     ['a method named twice', { deliveryMethods: ['manual', 'manual'] }, 'VALIDATION_ERROR', null],
     ['a country named twice', { deliveryCountries: ['UA', 'UA'] }, 'VALIDATION_ERROR', null],
+    [
+      'a country the app does not know how to take a postal code of',
+      { deliveryCountries: ['UA', 'ZZ'] },
+      'DELIVERY_COUNTRY_NOT_SUPPORTED',
+      { countries: ['ZZ'] },
+    ],
     ['a language named twice', { enabledLocales: ['en', 'en'] }, 'VALIDATION_ERROR', null],
+    // "xx" is never a real one; the shop's own language stays on, the refusal is for "xx" alone
+    [
+      'a language with no dictionary',
+      { shopLocale: 'en', enabledLocales: ['en', 'xx'] },
+      'LOCALE_NOT_SUPPORTED',
+      { locales: ['xx'] },
+    ],
     [
       'a reservation and a page longer than a day',
       { reservationMinutes: 1411, stripePageMinutes: 30 },
@@ -241,52 +241,123 @@ describe('PUT /api/root/shop-settings', () => {
     ['a reply-to that is not an address', { emailReplyTo: 'support' }, 'VALIDATION_ERROR', null],
     ['an empty reply-to', { emailReplyTo: '' }, 'VALIDATION_ERROR', null],
     ['a seller email that is not an address', { sellerEmail: 'seller' }, 'VALIDATION_ERROR', null],
+    ['a body without a setting', { shopName: undefined }, 'VALIDATION_ERROR', null],
   ])('refuses %s', async (_case, change, errorCode, details) => {
-    const baseVersion = await currentVersion();
-    const values = await currentValues();
-    const { logoUrl: _logoUrl, ...rest } = values;
+    const values = await writableValues();
+    const total = await rowCount();
 
-    const res = await put(root, { baseVersion, ...rest, ...change });
+    const res = await put(root, { ...values, ...change });
+
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode, ...(details ? { details } : {}) });
+    // the refusal wrote nothing
+    expect(await rowCount()).toBe(total);
+  });
+});
 
-    // the refusal wrote no version
-    expect(await currentVersion()).toBe(baseVersion);
+describe('PUT /api/root/shop-settings/:key', () => {
+  it('sets the one setting: a row for it, every other setting as it was', async () => {
+    // the rows hold what this file sees (the baseline of the tests is in its memory only)
+    await put(root, await writableValues());
+    const before = await currentValues();
+    const total = await rowCount();
+    const shopName = `One ${Date.now()}`;
+
+    const res = await putOne(root, 'shopName', { value: shopName });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ ...before, shopName });
+    expect(await rowCount()).toBe(total + 1);
+
+    // leaves the name as it found it, for the same reason as the PUT of every setting above
+    expect((await putOne(root, 'shopName', { value: before.shopName })).statusCode).toBe(200);
   });
 
-  it('carries the logo forward, and the history shows who wrote each version', async () => {
-    const beforeVersion = await currentVersion();
-    const beforeValues = await currentValues();
-    const { logoUrl: logoBefore, ...rest } = beforeValues;
+  it('writes no row for a value the setting already has', async () => {
+    const { reservationMinutes } = await currentValues();
+    const total = await rowCount();
 
-    const written = await put(root, {
-      baseVersion: beforeVersion,
-      ...rest,
-      emailFromName: `From ${Date.now()}`,
-    });
-    expect(written.statusCode).toBe(200);
-    expect(written.json().logoUrl).toBe(logoBefore);
+    const res = await putOne(root, 'reservationMinutes', { value: reservationMinutes });
 
-    // leaves emailFromName as it found it, for the same reason as the shopName test above
-    await put(root, {
-      baseVersion: await currentVersion(),
-      ...rest,
-      emailFromName: beforeValues.emailFromName,
-    });
+    expect(res.statusCode).toBe(200);
+    expect(await rowCount()).toBe(total);
+  });
 
-    const history = await app.inject({
-      method: 'GET',
-      url: '/api/root/shop-settings/history?limit=5',
-      headers: { cookie: accessCookie(root) },
+  it('refuses a signed-in admin', async () => {
+    const res = await putOne(admin, 'shopName', { value: 'By admin' });
+    expect(res.statusCode).toBe(403);
+  });
+
+  // the value is held to the shape of its own field, the same as in the PUT of every setting
+  it.each([
+    ['a key that is no setting', 'shopColor', { value: 'violet' }],
+    ['the logo, which has its own routes', 'logoUrl', { value: 'https://x.test/logo.png' }],
+    ['a body without a value', 'shopName', {}],
+    ['a value out of the shape of its field', 'reservationMinutes', { value: 0 }],
+    ['a value of another type', 'reviewCheckEnabled', { value: 'yes' }],
+    ['a reply-to that is not an address', 'emailReplyTo', { value: 'support' }],
+    ['a list naming one value twice', 'enabledLocales', { value: ['en', 'en'] }],
+  ])('refuses %s (VALIDATION_ERROR)', async (_case, key, body) => {
+    const total = await rowCount();
+
+    const res = await putOne(root, key, body);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    expect(await rowCount()).toBe(total);
+  });
+
+  // the rules between settings run on the values with this one changed: a reservation that,
+  // with the page minutes the shop has, lasts over a day
+  it('refuses a value that breaks a rule together with the settings the shop has', async () => {
+    const { stripePageMinutes } = await currentValues();
+    const total = await rowCount();
+
+    const res = await putOne(root, 'reservationMinutes', { value: 1441 - stripePageMinutes });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      errorCode: 'RESERVATION_MINUTES_TOO_LONG',
+      details: { max: 1440 },
     });
-    expect(history.statusCode).toBe(200);
-    const items = history.json().items;
-    expect(items.length).toBeGreaterThan(0);
-    expect(items[0]).toMatchObject({ setBy: { id: root.id, email: root.email } });
-    // the versions come down from the newest
-    expect(items.map((item: { version: number }) => item.version)).toEqual(
-      [...items].map((item: { version: number }) => item.version).sort((a, b) => b - a),
-    );
+    expect(await rowCount()).toBe(total);
+  });
+});
+
+describe('GET /api/root/shop-settings/history', () => {
+  it('lists the rows the latest first, each with its value and who set it', async () => {
+    const { emailFromName } = await currentValues();
+    const sender = `From ${Date.now()}`;
+    await putOne(root, 'emailFromName', { value: sender });
+    await putOne(root, 'emailFromName', { value: emailFromName });
+
+    const res = await history('?limit=2');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items).toEqual([
+      expect.objectContaining({
+        key: 'emailFromName',
+        value: emailFromName,
+        setBy: expect.objectContaining({ id: root.id, email: root.email }),
+      }),
+      expect.objectContaining({ key: 'emailFromName', value: sender }),
+    ]);
+    expect(res.json().nextCursor).toEqual(expect.any(String));
+  });
+
+  it('lists the rows of one setting', async () => {
+    const res = await history('?key=reservationMinutes&limit=100');
+
+    expect(res.statusCode).toBe(200);
+    const keys = res.json().items.map((item: { key: string }) => item.key);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(new Set(keys)).toEqual(new Set(['reservationMinutes']));
+  });
+
+  // the id of the logo on Cloudinary is internal, no answer sends it out
+  it('refuses a key that is no setting of the history', async () => {
+    expect((await history('?key=logoPublicId')).statusCode).toBe(400);
+    expect((await history('?key=shopColor')).statusCode).toBe(400);
   });
 });
 
@@ -323,6 +394,11 @@ describe('POST /api/root/shop-settings/logo and DELETE /api/root/shop-settings/l
 
     const pub = await app.inject({ method: 'GET', url: '/api/shop-settings' });
     expect(pub.json().logoUrl).toBe(logoUrl);
+
+    // the history names the logo by its address, never by its internal id on Cloudinary
+    const items = (await history('?limit=5')).json().items as { key: string; value: unknown }[];
+    expect(items).toContainEqual(expect.objectContaining({ key: 'logoUrl', value: logoUrl }));
+    expect(items.map((item) => item.key)).not.toContain('logoPublicId');
   });
 
   it('moves the logo to its new place without dropping cached copies, 8 s at most', async () => {

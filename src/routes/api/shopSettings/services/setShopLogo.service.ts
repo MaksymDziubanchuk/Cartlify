@@ -22,7 +22,7 @@ import type {
 import type { UserId } from 'types/ids.js';
 
 // reads the file of the form into Cloudinary at once, under an id of its own: setShopLogo moves it
-// to its place once the new version is written, a refused request deletes it (the controller)
+// to its place once the row of the logo is written, a refused request deletes it (the controller)
 export async function beginShopLogoUpload(image: ShopLogoImagePart): Promise<UploadedShopLogo> {
   const safeStream = await requireImageStream(image.file, {
     mimetype: image.mimetype,
@@ -40,7 +40,7 @@ export async function beginShopLogoUpload(image: ShopLogoImagePart): Promise<Upl
   return { publicId: uploaded.publicId };
 }
 
-// puts the picture that waits on Cloudinary at the place of the logo and writes the new version;
+// puts the picture that waits on Cloudinary at the place of the logo and writes the row of it;
 // the one the shop had before is deleted once the write lands
 export async function setShopLogo(dto: {
   actorId: UserId;

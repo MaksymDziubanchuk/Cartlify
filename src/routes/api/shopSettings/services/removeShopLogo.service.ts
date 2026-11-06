@@ -7,7 +7,7 @@ import { ConflictError, InternalError, isAppError } from '@utils/errors.js';
 import type { ShopSettingsValuesDto } from 'types/dto/shopSettings.dto.js';
 import type { UserId } from 'types/ids.js';
 
-// takes the logo off the shop: a new version without it, the file deleted after the write lands.
+// takes the logo off the shop: a row of the logo with none, the file deleted after the write lands.
 // Checked against the cache, not a fresh read: the server is a single process, the cache is never
 // behind a write of its own (writeShopLogo refreshes it before this runs again)
 export async function removeShopLogo(dto: {

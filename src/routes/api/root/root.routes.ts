@@ -53,8 +53,8 @@ export default async function rootRouter(app: FastifyInstance) {
     legalController.getDocuments,
   );
 
-  // the data of the shop: root writes a new version and reads the history (the current fields
-  // and one by its key are at GET /api/admin/shop-settings, shared with admin)
+  // the data of the shop: root sets every setting or one, and reads the history (the current
+  // values are at GET /api/admin/shop-settings, shared with admin)
   app.put(
     '/shop-settings',
     {
@@ -62,6 +62,14 @@ export default async function rootRouter(app: FastifyInstance) {
       schema: rootShopSettingsSchemas.putShopSettingsSchema,
     },
     shopSettingsController.putValues,
+  );
+  app.put(
+    '/shop-settings/:key',
+    {
+      preHandler: [authGuard, requireRole(['ROOT'])],
+      schema: rootShopSettingsSchemas.putShopSettingSchema,
+    },
+    shopSettingsController.putValue,
   );
   app.get(
     '/shop-settings/history',

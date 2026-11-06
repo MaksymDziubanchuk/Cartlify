@@ -111,13 +111,14 @@ The model in one page, for a developer and for a shop admin: [Products, variants
 
 ### Shop settings
 
-The data of the shop that root changes without a deploy lives in a database table, not the environment: see [shop settings](shop-settings.md) for the full model.
+The data of the shop that root changes without a deploy lives in a database table, not the environment, a row a setting (the latest row of a setting is its value, nothing is ever changed or removed): see [shop settings](shop-settings.md) for the full model.
 
 - `GET /api/shop-settings` (everybody): the fields the site needs — the name of the shop, the logo, the languages the shop answers in and the seller the pages must name; delivery (the methods, their prices, the pickup address and hours) is its own route, `GET /api/delivery/methods`
-- `GET /api/admin/shop-settings` (admin, root): every field but the internal id of the logo at Cloudinary; `GET /api/admin/shop-settings/missing` names the fields without a value and without a default that still wait for root, and the reply-to of the mails while it is blank (no mail goes out without it); `GET /api/admin/shop-settings/:key` reads one field on its own
-- `PUT /api/root/shop-settings` (root): writes a new version with the whole set of fields and the version root last saw (`409 SHOP_SETTINGS_OUTDATED` for a stale one; a value that breaks a rule of the fields, such as a free delivery from a sum with no price or a pickup without its address, is `400` with a code naming the rule and writes nothing); `GET /api/root/shop-settings/history` pages through every version, each with who wrote it (the system, when the start filled a field with no value yet)
+- `GET /api/admin/shop-settings` (admin, root): the current value of every setting but the internal id of the logo at Cloudinary; `GET /api/admin/shop-settings/missing` names the settings without a value and without a default that still wait for root, and the reply-to of the mails while it is blank (no mail goes out without it); the alert `shop_settings_incomplete` leads to it
+- `PUT /api/root/shop-settings` (root): every setting at once, `PUT /api/root/shop-settings/:key`: one, `{ "value": ... }`; a row for each setting whose value changes, none for one given as it is (a value that breaks a rule, such as a free delivery from a sum with no price, a pickup without its address or hours not in their format, is `400` with a code naming the rule and writes nothing); `GET /api/root/shop-settings/history` pages through the rows of every setting or of one (`?key=`), each with who set it (the system, when the start filled a setting with no row yet)
 - `POST /api/root/shop-settings/logo`, `DELETE /api/root/shop-settings/logo` (root): the logo as a file at Cloudinary (jpeg, png or webp by its content); without one the mails of the shop go without it, no request is refused for it
-- a field root has not filled in and that has no default of its own (the data of the seller, the countries of delivery) does not stop the start: a request that needs it is refused with its own code, and root and the admins see an alert until it is set
+- a setting root has not filled in and that has no default of its own (the data of the seller, the countries of delivery) does not stop the start: a request that needs it is refused with its own code, and root and the admins see an alert until it is set
+- the seller root filled in is named at the foot of every mail; the pickup hours, written in one format, are shown in the language of the mail
 
 ### Languages
 

@@ -1673,90 +1673,19 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- SHOP_SETTINGS: the shape of a version (the values root may write; the site's own checks name
--- the ones that must be filled before a route that needs it works, db/shop-settings.md)
+-- SHOP_SETTINGS: a row is one setting (docs/shop-settings.md)
 ----------------------------------------
--- Delivery: the methods are of the kinds the app knows, each once; a price is above zero to the
--- cent (mirrors the env check this field replaces); the free-from needs a price; the address and
--- the hours of a pickup are required once the pickup method is on (their length is the column's).
+-- The key is one the server knows and the value of the shape that key takes
+-- (shop_setting_value_valid, db/05); the rules between settings are the server's.
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_delivery_chk') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_value_chk') THEN
     ALTER TABLE cartlify.shop_settings
-      ADD CONSTRAINT shop_settings_delivery_chk
-      CHECK (
-        "deliveryMethods" <@ ARRAY['manual', 'pickup']::text[]
-        AND cartlify.array_has_no_duplicates ("deliveryMethods")
-        AND ("deliveryFlatPrice" IS NULL OR "deliveryFlatPrice" > 0)
-        AND ("deliveryFreeFrom" IS NULL OR "deliveryFreeFrom" > 0)
-        AND ("deliveryFreeFrom" IS NULL OR "deliveryFlatPrice" IS NOT NULL)
-        AND (NOT ('pickup' = ANY ("deliveryMethods")) OR "pickupAddress" IS NOT NULL)
-        AND (NOT ('pickup' = ANY ("deliveryMethods")) OR "pickupHours" IS NOT NULL)
-      );
+      ADD CONSTRAINT shop_settings_value_chk
+      CHECK (cartlify.shop_setting_value_valid (key, value));
   END IF;
 END $$;
 
--- A country is two capital letters; the list of the ones the shop actually delivers to is kept by
--- the app (src/config/deliveryCountries.ts), not duplicated here.
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_countries_chk') THEN
-    ALTER TABLE cartlify.shop_settings
-      ADD CONSTRAINT shop_settings_countries_chk
-      CHECK (
-        cartlify.array_matches ("deliveryCountries", '^[A-Z]{2}$')
-        AND cartlify.array_has_no_duplicates ("deliveryCountries")
-      );
-  END IF;
-END $$;
-
--- Reservation: the minutes of each are above zero, the page stays open at least 30 minutes after
--- the reservation ends (Stripe never closes one sooner), and together they are at most a day
--- (Stripe never keeps a page longer).
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_reservation_chk') THEN
-    ALTER TABLE cartlify.shop_settings
-      ADD CONSTRAINT shop_settings_reservation_chk
-      CHECK (
-        ("reservationMinutes" IS NULL OR "reservationMinutes" > 0)
-        AND ("stripePageMinutes" IS NULL OR "stripePageMinutes" >= 30)
-        AND (
-          "reservationMinutes" IS NULL
-          OR "stripePageMinutes" IS NULL
-          OR "reservationMinutes" + "stripePageMinutes" <= 1440
-        )
-      );
-  END IF;
-END $$;
-
--- Moderation and withdrawal: the limits are above zero, the days of grace are 0 to 30.
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_moderation_chk') THEN
-    ALTER TABLE cartlify.shop_settings
-      ADD CONSTRAINT shop_settings_moderation_chk
-      CHECK (
-        ("avatarRemovalsLimit" IS NULL OR "avatarRemovalsLimit" > 0)
-        AND ("reviewRemovalsLimit" IS NULL OR "reviewRemovalsLimit" > 0)
-        AND ("withdrawalGraceDays" IS NULL OR "withdrawalGraceDays" BETWEEN 0 AND 30)
-      );
-  END IF;
-END $$;
-
--- Languages: the shop's own and each one turned on are two lower-case letters, each once, and the
--- shop's own is among the ones turned on (the server checks a dictionary exists for it, db/01 has
--- no list of dictionaries to check against here).
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shop_settings_locales_chk') THEN
-    ALTER TABLE cartlify.shop_settings
-      ADD CONSTRAINT shop_settings_locales_chk
-      CHECK (
-        ("shopLocale" IS NULL OR "shopLocale" ~ '^[a-z]{2}$')
-        AND cartlify.array_matches ("enabledLocales", '^[a-z]{2}$')
-        AND cartlify.array_has_no_duplicates ("enabledLocales")
-        AND ("shopLocale" IS NULL OR "shopLocale" = ANY ("enabledLocales"))
-      );
-  END IF;
-END $$;
+-- The current value of a setting is the latest row of its key (the start of the server and every
+-- write read it); the history goes newest first, of every key or of one.
+CREATE INDEX IF NOT EXISTS shop_settings_key_id_idx ON cartlify.shop_settings (key, id DESC);

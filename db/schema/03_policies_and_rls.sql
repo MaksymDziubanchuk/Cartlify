@@ -2235,15 +2235,14 @@ CREATE POLICY stock_log_delete_deny ON cartlify.stock_log FOR DELETE USING (fals
 -- SHOP SETTINGS
 ----------------------------------------
 -- The data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
--- seller the shop names): a row is a full version, added, never changed or removed. Root reads
--- every version (the history); admin reads the current version only (the highest "version"); the
--- app reads the current version too, under the system context, at the start of the server and
--- after every write, to fill its own cache (the public fields and the fields guest/user never
--- see are both in the cache, the routes decide which ones a role is shown, db/shop-settings.md).
--- A version is written by root, in their own name, or by the server under the system context
--- (the admin context with no user id, cartlify.is_system), which fills in the server's own
--- default for a field root left empty. The version number, and the check against the version
--- root last saw, come from trg_shop_settings_before_insert (db/05).
+-- seller the shop names, the logo): a row is one setting and the value it took, added, never
+-- changed or removed; the current value of a setting is its latest row. The app reads the rows
+-- under the system context, at the start of the server and inside every write, to fill its own
+-- cache (the public settings and the ones guest/user never see are both in the cache, the routes
+-- decide which ones a role is shown, docs/shop-settings.md); root reads every row (the history).
+-- A row is written by root, in their own name, or by the server under the system context (the
+-- admin context with no user id, cartlify.is_system), which fills in the server's own default
+-- of a setting that has no row yet.
 ALTER TABLE cartlify.shop_settings ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.shop_settings FORCE ROW LEVEL SECURITY;
@@ -2256,17 +2255,16 @@ DROP POLICY IF EXISTS shop_settings_update_deny ON cartlify.shop_settings;
 
 DROP POLICY IF EXISTS shop_settings_delete_deny ON cartlify.shop_settings;
 
--- Every version is open to admin/root at this level (a self-querying USING clause, such as
--- "the highest version", makes Postgres recurse into the same policy and refuse the query); the
--- app shows root every version and admin only the current one (GET /api/root/shop-settings and
--- GET /api/admin/shop-settings, db/shop-settings.md).
+-- Every row is open to admin/root at this level (a self-querying USING clause, such as "the
+-- latest row of each key", makes Postgres recurse into the same policy and refuse the query);
+-- the app shows root every row (GET /api/root/shop-settings/history) and admin only the current
+-- values (GET /api/admin/shop-settings, docs/shop-settings.md).
 CREATE POLICY shop_settings_select ON cartlify.shop_settings FOR
 SELECT
   USING (cartlify.is_admin ());
 
--- INSERT: root writes a version in their own name, basedOnVersion carries the version they
--- edited from (trg_shop_settings_before_insert refuses a stale one); the system writes a version
--- with no author and no basedOnVersion, only to fill in a default of an empty field.
+-- INSERT: root writes a setting in their own name; the system writes one with no author, only to
+-- fill in the default of a setting that has no row yet.
 CREATE POLICY shop_settings_insert ON cartlify.shop_settings FOR INSERT
 WITH
   CHECK (
@@ -2277,7 +2275,6 @@ WITH
     OR (
       cartlify.is_system ()
       AND "setById" IS NULL
-      AND "basedOnVersion" IS NULL
     )
   );
 

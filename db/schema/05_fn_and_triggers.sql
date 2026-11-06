@@ -5042,41 +5042,90 @@ EXECUTE FUNCTION cartlify.stock_log_append_only ();
 ------------------------------------------------------------
 -- SHOP SETTINGS
 ------------------------------------------------------------
--- A CHECK constraint cannot hold a subquery (db/06, shop_settings_delivery_chk and the others of
--- the table check the shape of a list the shop writes), so the shape of a list is checked here,
--- in a plain function instead.
+-- The shape of the value of each setting (db/06, shop_settings_value_chk): a CHECK constraint
+-- cannot hold a subquery, so the shape is checked here, in plain functions. The rules between
+-- settings (a pickup needs its address and hours, a free delivery a price, the language of the
+-- shop is one turned on) are the server's: a row cannot see the rows of the other keys.
 
--- True when every element of an array matches a regular expression; true for an empty or empty
--- array.
-CREATE OR REPLACE FUNCTION cartlify.array_matches (p_values text[], p_pattern text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-  SELECT NOT EXISTS (SELECT 1 FROM unnest(p_values) AS v WHERE v !~ p_pattern);
+-- True for a list of texts, each matching a regular expression, none twice; an empty list is one.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_list_valid (p_value jsonb, p_pattern text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT jsonb_typeof(p_value) = 'array'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM jsonb_array_elements(p_value) AS e
+      WHERE jsonb_typeof(e) <> 'string' OR (e #>> '{}') !~ p_pattern
+    )
+    AND jsonb_array_length(p_value) = (SELECT count(DISTINCT e) FROM jsonb_array_elements(p_value) AS e);
 $$;
 
--- True when no element of an array repeats; true for an empty or empty array.
-CREATE OR REPLACE FUNCTION cartlify.array_has_no_duplicates (p_values text[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
-  SELECT cardinality(p_values) = cardinality(ARRAY(SELECT DISTINCT unnest(p_values)));
-$$;
-
--- Sets what the database owns in a new version of the data of the shop: the next version number
--- and the time, whatever the row says. Two versions written at once wait for each other (an
--- advisory lock). The version root saw when they wrote this one is given in "basedOnVersion"; if
--- the current version moved on since (another write got there first), the write is refused,
--- SHOP_SETTINGS_OUTDATED. A write of the system (cartlify.is_system, no author, db/03) carries no
--- basedOnVersion and skips the check: it only fills in the default of a field root left empty,
--- never a choice of root's that could conflict with another.
-CREATE OR REPLACE FUNCTION cartlify.shop_settings_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+-- True when the value is of the shape its key takes; false for a key the server does not know.
+-- Money is above zero to the cent and at most what an amount of the shop holds; a count is a
+-- whole number; a text has the length its field allows; null is "no value" for a setting that
+-- may stay without one (the prices, the logo, the seller).
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_value_valid (p_key text, p_value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
 DECLARE
-  v_max integer;
+  v_type text := jsonb_typeof(p_value);
+  v_number numeric := CASE WHEN jsonb_typeof(p_value) = 'number' THEN (p_value)::numeric END;
+  v_text text := CASE WHEN jsonb_typeof(p_value) = 'string' THEN p_value #>> '{}' END;
+  v_whole boolean;
+  v_valid boolean;
 BEGIN
-  PERFORM pg_advisory_xact_lock(hashtext('cartlify.shop_settings'));
+  v_whole := v_number IS NOT NULL AND v_number = trunc(v_number) AND v_number <= 2147483647;
 
-  v_max := coalesce((SELECT max(s.version) FROM cartlify.shop_settings AS s), 0);
+  CASE p_key
+    WHEN 'deliveryMethods' THEN
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^(manual|pickup)$');
+    WHEN 'deliveryCountries' THEN
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^[A-Z]{2}$');
+    WHEN 'enabledLocales' THEN
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^[a-z]{2}$');
+    WHEN 'deliveryFlatPrice', 'deliveryFreeFrom' THEN
+      v_valid := v_type = 'null'
+        OR (v_number > 0 AND v_number <= 99999999.99 AND v_number = round(v_number, 2));
+    WHEN 'pickupAddress', 'pickupHours' THEN
+      v_valid := char_length(v_text) <= 300;
+    WHEN 'shopName', 'emailFromName' THEN
+      v_valid := char_length(v_text) <= 100;
+    WHEN 'emailReplyTo' THEN
+      v_valid := char_length(v_text) <= 254;
+    WHEN 'logoUrl', 'logoPublicId' THEN
+      v_valid := v_type = 'null' OR v_text <> '';
+    WHEN 'reservationMinutes' THEN
+      v_valid := v_whole AND v_number > 0;
+    WHEN 'stripePageMinutes' THEN
+      v_valid := v_whole AND v_number >= 30;
+    WHEN 'reviewCheckEnabled' THEN
+      v_valid := v_type = 'boolean';
+    WHEN 'avatarRemovalsLimit', 'reviewRemovalsLimit' THEN
+      v_valid := v_whole AND v_number > 0;
+    WHEN 'withdrawalGraceDays' THEN
+      v_valid := v_whole AND v_number BETWEEN 0 AND 30;
+    WHEN 'shopLocale' THEN
+      v_valid := v_text ~ '^[a-z]{2}$';
+    WHEN 'sellerLegalName' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 200;
+    WHEN 'sellerAddress' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 500;
+    WHEN 'sellerTaxId' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 50;
+    WHEN 'sellerEmail' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 254;
+    WHEN 'sellerPhone' THEN
+      v_valid := v_type = 'null' OR char_length(v_text) <= 30;
+    ELSE
+      v_valid := false;
+  END CASE;
 
-  IF NEW."basedOnVersion" IS NOT NULL AND NEW."basedOnVersion" IS DISTINCT FROM v_max THEN
-    RAISE EXCEPTION 'SHOP_SETTINGS_OUTDATED' USING ERRCODE = '23514';
-  END IF;
+  -- a value of another type leaves the test of its key unknown (null), which a CHECK would let
+  -- through: unknown is a refusal
+  RETURN coalesce(v_valid, false);
+END;
+$$;
 
-  NEW.version := v_max + 1;
+-- Sets what the database owns in a new row of the data of the shop: the time, whatever the row
+-- says.
+CREATE OR REPLACE FUNCTION cartlify.shop_settings_before_insert () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
   NEW."createdAt" := clock_timestamp() AT TIME ZONE 'UTC';
 
   RETURN NEW;
@@ -5089,7 +5138,7 @@ CREATE TRIGGER trg_shop_settings_before_insert
 BEFORE INSERT ON cartlify.shop_settings FOR EACH ROW
 EXECUTE FUNCTION cartlify.shop_settings_before_insert ();
 
--- Guard: a version is history, added once and never changed or removed. The policies of db/03
+-- Guard: a row is history, added once and never changed or removed. The policies of db/03
 -- deny every update and delete already; this guard says it a second time for a role that would
 -- skip them (a superuser is not checked, as rls does not check it either). The refusal is
 -- SHOP_SETTINGS_APPEND_ONLY with the code 42501.
@@ -5113,6 +5162,16 @@ CREATE TRIGGER trg_shop_settings_append_only
 BEFORE UPDATE OR DELETE ON cartlify.shop_settings FOR EACH ROW
 EXECUTE FUNCTION cartlify.shop_settings_append_only ();
 
+
+------------------------------------------------------------
+-- TEMPORARY: the shape of a list of the versions of the data of the shop, which were full rows
+-- of every setting, was checked by these; the rows by key have their own (shop_setting_list_valid).
+-- Remove this block once the structure of dev and prod matches the snapshot
+-- (npm run db:snapshot:check:db).
+------------------------------------------------------------
+DROP FUNCTION IF EXISTS cartlify.array_matches (text[], text);
+
+DROP FUNCTION IF EXISTS cartlify.array_has_no_duplicates (text[]);
 
 ------------------------------------------------------------
 -- TEMPORARY: the product versions of the functions that now take a variant. Remove this block

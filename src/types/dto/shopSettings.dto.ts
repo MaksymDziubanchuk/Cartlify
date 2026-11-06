@@ -1,8 +1,9 @@
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 
 // the data of the shop (delivery, brand, reservation, moderation, withdrawal, languages, the
-// seller): a version in cartlify.shop_settings, root writes a new one, nobody changes or removes
-// one (docs/shop-settings.md); the same shape of values as @config/shopSettings.ts
+// seller, the logo): a row a setting in cartlify.shop_settings, root adds one for each setting
+// they change, nobody changes or removes one (docs/shop-settings.md); the same shape of values as
+// @config/shopSettings.ts
 
 export interface ShopSettingsValuesDto {
   deliveryMethods: DeliveryMethodName[];
@@ -49,22 +50,14 @@ export interface PublicShopSettingsDto {
   sellerPhone: string | null;
 }
 
-// one field of the current version, admin and root (GET /api/admin/shop-settings/:key)
-export interface ShopSettingsFieldDto {
-  key: string;
-  value: string | number | boolean | string[] | null;
-}
-
 // a field that has no default of the server and root has not set yet
 export interface ShopSettingsMissingFieldsDto {
   fields: string[];
 }
 
-// root writes a full version; PUT /api/root/shop-settings. baseVersion is the version root edited
-// from (0 before any root wrote one, GET /api/root/shop-settings gives the current one); the logo
-// is not here (POST /api/root/shop-settings/logo), the database refuses a stale baseVersion
+// root sets every setting at once, PUT /api/root/shop-settings: a row is added for each one whose
+// value changes; the logo is not here (POST /api/root/shop-settings/logo)
 export interface PutShopSettingsBodyDto {
-  baseVersion: number;
   deliveryMethods: DeliveryMethodName[];
   deliveryFlatPrice: number | null;
   deliveryFreeFrom: number | null;
@@ -89,15 +82,22 @@ export interface PutShopSettingsBodyDto {
   sellerPhone: string | null;
 }
 
-export interface ShopSettingsVersionDto extends ShopSettingsValuesDto {
-  version: number;
-  // null for a version the server wrote to fill in a default root left empty
+// root sets one setting, PUT /api/root/shop-settings/:key: the value of the shape of that key
+export interface PutShopSettingBodyDto {
+  value: unknown;
+}
+
+// a row of the history: the value one setting took, who set it, when
+export interface ShopSettingsHistoryItemDto {
+  key: string;
+  value: unknown;
+  // null for a row the server wrote to fill in a default
   setBy: { id: number; name: string | null; email: string | null } | null;
   createdAt: string;
 }
 
 export interface GetShopSettingsHistoryResponseDto {
-  items: ShopSettingsVersionDto[];
+  items: ShopSettingsHistoryItemDto[];
   nextCursor: string | null;
 }
 

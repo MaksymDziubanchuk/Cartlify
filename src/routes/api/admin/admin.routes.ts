@@ -214,7 +214,7 @@ export default async function adminRouter(app: FastifyInstance) {
     adminController.deleteAlertDismissal,
   );
 
-  // the data of the shop: every current field, the ones root has not set yet, one by its key
+  // the data of the shop: the current value of every setting, the ones root has not set yet
   app.get(
     '/shop-settings',
     {
@@ -230,13 +230,5 @@ export default async function adminRouter(app: FastifyInstance) {
       schema: adminShopSettingsSchemas.getShopSettingsMissingFieldsSchema,
     },
     shopSettingsController.getMissing,
-  );
-  app.get(
-    '/shop-settings/:key',
-    {
-      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
-      schema: adminShopSettingsSchemas.getShopSettingsFieldSchema,
-    },
-    shopSettingsController.getField,
   );
 }
