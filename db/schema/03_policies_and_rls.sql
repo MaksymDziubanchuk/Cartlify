@@ -586,8 +586,8 @@ CREATE POLICY products_delete ON cartlify.products FOR DELETE USING (cartlify.is
 -- PRODUCT BATCHES
 ----------------------------------------
 -- The batches a product came in with, and what each cost. For the shop, never for a buyer: only
--- admin/root read them. Only the functions of the database write them: receive_product_batch
--- brings a batch in; a sale, write_off_product_stock and a cancel of an order change what is left.
+-- admin/root read them. Only the functions of the database write them: receive_variant_batch
+-- brings a batch in; a sale, write_off_variant_stock and a cancel of an order change what is left.
 ALTER TABLE cartlify.product_batches ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.product_batches FORCE ROW LEVEL SECURITY;
@@ -633,7 +633,7 @@ CREATE POLICY product_batches_delete_deny ON cartlify.product_batches FOR DELETE
 -- ORDER BATCH ALLOCATIONS
 ----------------------------------------
 -- The units a paid order took from each batch: the cost of the goods it sold. History: pay_order
--- writes the lines (through consume_product_stock), nobody changes or removes them, a cancel of
+-- writes the lines (through consume_variant_stock), nobody changes or removes them, a cancel of
 -- the order leaves them too. Read: admin/root.
 ALTER TABLE cartlify.order_batch_allocations ENABLE ROW LEVEL SECURITY;
 
@@ -644,8 +644,6 @@ DROP POLICY IF EXISTS order_batch_allocations_select ON cartlify.order_batch_all
 DROP POLICY IF EXISTS order_batch_allocations_select_owner ON cartlify.order_batch_allocations;
 
 DROP POLICY IF EXISTS order_batch_allocations_insert_owner ON cartlify.order_batch_allocations;
-
-DROP POLICY IF EXISTS order_batch_allocations_update_deny ON cartlify.order_batch_allocations;
 
 DROP POLICY IF EXISTS order_batch_allocations_delete_deny ON cartlify.order_batch_allocations;
 
@@ -871,7 +869,7 @@ SELECT
   USING (true);
 
 -- INSERT: admin/root. A new variant starts with no stock and no reserve (the stock comes with the
--- batches of a delivery, receive_product_batch). It starts with no sale either: a sale is set on a
+-- batches of a delivery, receive_variant_batch). It starts with no sale either: a sale is set on a
 -- variant that is in the catalog (the check of the end of a sale in db/05 runs on UPDATE only).
 CREATE POLICY product_variants_insert ON cartlify.product_variants FOR INSERT
 WITH
@@ -1207,8 +1205,6 @@ DROP POLICY IF EXISTS orders_update_admin_shipping_status ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_update_owner ON cartlify.orders;
 
-DROP POLICY IF EXISTS orders_update_owner_cancel ON cartlify.orders;
-
 DROP POLICY IF EXISTS orders_update_owner_returns ON cartlify.orders;
 
 DROP POLICY IF EXISTS orders_delete ON cartlify.orders;
@@ -1323,10 +1319,6 @@ DROP POLICY IF EXISTS order_deliveries_update_admin ON cartlify.order_deliveries
 
 DROP POLICY IF EXISTS order_deliveries_update_owner ON cartlify.order_deliveries;
 
--- No delete policy is created for this table; this line only removes one that a draft of this
--- script may have left on a database.
-DROP POLICY IF EXISTS order_deliveries_delete ON cartlify.order_deliveries;
-
 -- SELECT: through the parent order (the buyer, admin/root)
 CREATE POLICY order_deliveries_select ON cartlify.order_deliveries FOR
 SELECT
@@ -1433,10 +1425,6 @@ DROP POLICY IF EXISTS order_shipments_select_owner ON cartlify.order_shipments;
 DROP POLICY IF EXISTS order_shipments_insert ON cartlify.order_shipments;
 
 DROP POLICY IF EXISTS order_shipments_update ON cartlify.order_shipments;
-
--- No delete policy is created for this table; this line only removes one that a draft of this
--- script may have left on a database.
-DROP POLICY IF EXISTS order_shipments_delete ON cartlify.order_shipments;
 
 -- SELECT: through the parent order (the buyer, admin/root)
 CREATE POLICY order_shipments_select ON cartlify.order_shipments FOR
@@ -1919,7 +1907,7 @@ CREATE POLICY chat_messages_delete ON cartlify.chat_messages FOR DELETE USING (f
 -- PRODUCT PRICE CHANGE LOGS
 ----------------------------------------
 -- The history of the price changes of products. Read: admin/root. Written only by
--- log_product_price_change; no role changes or removes a line.
+-- log_variant_price_change; no role changes or removes a line.
 ALTER TABLE cartlify.product_price_change_logs ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.product_price_change_logs FORCE ROW LEVEL SECURITY;
@@ -1939,12 +1927,12 @@ SELECT
   USING (cartlify.is_admin ());
 
 -- INSERT: denied to the app, which writes no line straight into the table; the policy below
--- lets log_product_price_change through
+-- lets log_variant_price_change through
 CREATE POLICY ppcl_insert ON cartlify.product_price_change_logs FOR INSERT
 WITH
   CHECK (false);
 
--- INSERT for log_product_price_change: the line of a signed-in admin, in their name. The system
+-- INSERT for log_variant_price_change: the line of a signed-in admin, in their name. The system
 -- has no user id, so it cannot write a line.
 CREATE POLICY ppcl_insert_owner ON cartlify.product_price_change_logs FOR INSERT TO cartlify_owner
 WITH
