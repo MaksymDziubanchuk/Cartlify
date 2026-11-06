@@ -2,6 +2,7 @@ import { t } from '@config/i18n.js';
 import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 import { deliveryLineOf } from './deliveryLine.js';
 import {
@@ -131,6 +132,7 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
     leadTxt: t('orderDelivered.leadTxt', locale, { appName, orderId, statement }),
     body: t('orderDelivered.body', locale, { orderId, statement }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     itemHeader: t('common.itemHeader', locale),
     qtyHeader: t('common.qtyHeader', locale),
     totalHeader: t('common.totalHeader', locale),

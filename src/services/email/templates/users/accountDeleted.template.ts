@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type AccountDeletedItem = { name: string; quantity: number };
 
@@ -97,6 +98,7 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
     heading: t('accountDeleted.heading', locale),
     body: t('accountDeleted.body', locale, { appName }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     deliveriesHeading: t('accountDeleted.deliveriesHeading', locale),
     deliveriesIntro: t('accountDeleted.deliveriesIntro', locale),
     deliveriesIntroTxt: t('accountDeleted.deliveriesIntroTxt', locale),

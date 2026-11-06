@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnChangedTemplateArgs = {
   orderId: number;
@@ -48,6 +49,7 @@ export function buildReturnChangedTemplate(args: ReturnChangedTemplateArgs): {
     body: t('returnChanged.body', locale, { orderId }),
     noteLine: t('returnChanged.noteLine', locale),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: t('common.statementLine', locale, { code }),
     questionsIntro: t('common.questionsIntro', locale),
     orTo: t('common.orTo', locale),

@@ -19,4 +19,6 @@
 {{withdrawalLine}}
 {{withdrawalUrl}}{{/withdrawalLine}}
 
-{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

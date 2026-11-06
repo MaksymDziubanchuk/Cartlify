@@ -15,4 +15,6 @@
 {{#linkUrl}}{{linkIntro}}
 {{linkUrl}}
 
-{{/linkUrl}}{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.
+{{/linkUrl}}{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

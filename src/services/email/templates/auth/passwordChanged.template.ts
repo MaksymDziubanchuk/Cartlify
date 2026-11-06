@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type PasswordChangedTemplateArgs = {
   loginUrl: string;
@@ -43,6 +44,7 @@ export function buildPasswordChangedTemplate(args: PasswordChangedTemplateArgs):
     button: t('passwordChanged.button', locale),
     leadTxt: t('passwordChanged.leadTxt', locale, { appName, changedAt }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     openLinkFallback: t('common.openLinkFallback', locale),
     questionsIntro: t('common.questionsIntro', locale),
     orTo: t('common.orTo', locale),

@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnByShopItem = { name: string; quantity: number };
 
@@ -82,6 +83,7 @@ export function buildReturnByShopTemplate(args: ReturnByShopTemplateArgs): {
     body: t('returnByShop.body', locale, { orderId }),
     registeredOn: t('returnByShop.registeredOn', locale, { statedAt }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',
     itemHeader: t('common.itemHeader', locale),
     qtyHeader: t('common.qtyHeader', locale),

@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnRefundFailedTemplateArgs = {
   orderId: number;
@@ -62,6 +63,7 @@ export function buildReturnRefundFailedTemplate(args: ReturnRefundFailedTemplate
     sentBackLine: t('returnRefundFailed.sentBackLine', locale),
     contactLine: t('returnRefundFailed.contactLine', locale),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',
     viewOrderButton: t('common.viewOrderButton', locale),
     seeOrderTxt: t('common.seeOrderTxt', locale),

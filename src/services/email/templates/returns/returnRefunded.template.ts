@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnRefundedItem = { name: string; quantity: number };
 
@@ -112,6 +113,7 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
     heading: t('returnRefunded.heading', locale),
     body: t('returnRefunded.body', locale, { orderId, amount }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',
     itemHeader: t('common.itemHeader', locale),
     qtyHeader: t('common.qtyHeader', locale),

@@ -11,4 +11,6 @@
 {{#cancelled}}- {{orderLabel}} #{{orderId}}, {{total}}: {{paymentText}}
   {{itemsText}}
 {{/cancelled}}{{/hasCancelled}}
-{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

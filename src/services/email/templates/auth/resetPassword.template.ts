@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ResetPasswordTemplateArgs = {
   resetUrl: string;
@@ -37,6 +38,7 @@ export function buildResetPasswordTemplate(args: ResetPasswordTemplateArgs): {
     button: t('resetPassword.button', locale),
     leadTxt: t('resetPassword.leadTxt', locale, { appName }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     validity: t('common.validity', locale, { expiresInText: args.expiresInText?.trim() || '' }),
     openLinkFallback: t('common.openLinkFallback', locale),
     openLinkTxt: t('common.openLinkTxt', locale),

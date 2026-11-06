@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 // how money sent outside the app went (src/locales, returnWayWords.*); none for other
 const WAY_KEYS = ['bank_transfer', 'cash'];
@@ -76,6 +77,7 @@ export function buildReturnReimbursedTemplate(args: ReturnReimbursedTemplateArgs
     body: t('returnReimbursed.body', locale, { orderId, amount }),
     sentOnLine: t('returnReimbursed.sentOn', locale, { way, date: sentOn }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',
     viewOrderButton: t('common.viewOrderButton', locale),
     seeOrderTxt: t('common.seeOrderTxt', locale),

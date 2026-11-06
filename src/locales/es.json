@@ -4,6 +4,8 @@
     "greetingNamed": "Hola, {{name}}:",
     "questionsIntro": "¿Tienes preguntas? Escríbenos por el chat de nuestro sitio",
     "orTo": "o a",
+    "seller": "Vendedor: {{details}}",
+    "sellerTaxId": "identificación fiscal {{taxId}}",
     "openLinkFallback": "Si el botón no funciona, abre este enlace:",
     "openLinkTxt": "Abre este enlace:",
     "ignoreEmail": "Si no solicitaste esto, ignora este correo.",

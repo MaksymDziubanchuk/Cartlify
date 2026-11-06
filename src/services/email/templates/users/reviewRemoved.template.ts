@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReviewRemovedTemplateArgs = {
   // the product the review was of
@@ -44,6 +45,7 @@ export function buildReviewRemovedTemplate(args: ReviewRemovedTemplateArgs): {
     heading: t('reviewRemoved.heading', locale),
     body: t('reviewRemoved.body', locale, { appName, productName: args.productName }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     questionsIntro: t('common.questionsIntro', locale),
     orTo: t('common.orTo', locale),
   };

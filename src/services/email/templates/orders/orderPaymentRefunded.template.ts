@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 // why the order could not take the payment, the answers of pay_order that give the money back
 export type PaymentRefundReason =
@@ -67,6 +68,7 @@ export function buildOrderPaymentRefundedTemplate(args: OrderPaymentRefundedTemp
     heading: t('orderPaymentRefunded.heading', locale),
     body: t('orderPaymentRefunded.body', locale, { amount, orderId, reason }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     viewOrderButton: t('common.viewOrderButton', locale),
     seeOrderTxt: t('common.seeOrderTxt', locale),
     openLinkFallback: t('common.openLinkFallback', locale),

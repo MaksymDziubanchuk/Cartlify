@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type OrderNoticeTemplateArgs = {
   orderId: number;
@@ -52,6 +53,7 @@ export function buildOrderNoticeTemplate(args: OrderNoticeTemplateArgs): {
       orderId: String(args.orderId),
     }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     viewOrderButton: t('common.viewOrderButton', locale),
     seeOrderTxt: t('common.seeOrderTxt', locale),
     openLinkFallback: t('common.openLinkFallback', locale),

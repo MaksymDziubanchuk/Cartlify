@@ -146,6 +146,8 @@ describe('renderTemplate', () => {
     preview: 'Confirm your email for Cartlify.',
     leadTxt: 'Verify your email for Cartlify.',
     greeting: 'Hi Anna,',
+    // the seller at the foot of every mail (sellerLineOf)
+    seller: 'Seller: Cartlify LLC, Main St 1, Kyiv',
     body: 'Please confirm your email address to finish setting up your account.',
     button: 'Verify email',
     validity: 'This link is valid for 24 hours.',
@@ -191,6 +193,26 @@ describe('renderTemplate', () => {
 
     expect(out).not.toContain('{{');
     expect(out).toContain('Cartlify');
+  });
+
+  // the seller at the foot of every mail, only while root named one: the text of a mail without
+  // one is the same as before the seller was there
+  it('names the seller at the foot of a mail, and adds nothing when there is none', () => {
+    const seller = 'Seller: Cartlify LLC, Main St 1, Kyiv, tax ID 12345678';
+
+    expect(renderTemplate('orders/orderPaid.html', { ...values, seller })).toContain(
+      `Cartlify<br>${seller}`,
+    );
+    expect(
+      renderTemplate('orders/orderPaid.txt', { ...values, seller }).endsWith(`.\n\n${seller}`),
+    ).toBe(true);
+
+    const html = renderTemplate('orders/orderPaid.html', { ...values, seller: '' });
+    const text = renderTemplate('orders/orderPaid.txt', { ...values, seller: '' });
+    expect(html).not.toContain('Seller');
+    expect(html).not.toContain('Cartlify<br>');
+    expect(text).not.toContain('Seller');
+    expect(text.endsWith('.')).toBe(true);
   });
 
   it('keeps windows line endings of the checkout out of the mail', () => {

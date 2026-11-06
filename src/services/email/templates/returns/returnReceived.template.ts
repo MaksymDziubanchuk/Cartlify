@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnReceivedItem = { name: string; quantity: number };
 
@@ -132,6 +133,7 @@ export function buildReturnReceivedTemplate(args: ReturnReceivedTemplateArgs): {
     leadTxt: t('returnReceived.leadTxt', locale, { appName, orderId, statedAt }),
     body: t('returnReceived.body', locale, { orderId, statedAt }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',
     itemHeader: t('common.itemHeader', locale),
     qtyHeader: t('common.qtyHeader', locale),

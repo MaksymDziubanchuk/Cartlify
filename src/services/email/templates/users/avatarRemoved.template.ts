@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type AvatarRemovedTemplateArgs = {
   // which removal by a moderator this is, this one counted
@@ -41,6 +42,7 @@ export function buildAvatarRemovedTemplate(args: AvatarRemovedTemplateArgs): {
     heading: t('avatarRemoved.heading', locale),
     body: t('avatarRemoved.body', locale, { appName }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     questionsIntro: t('common.questionsIntro', locale),
     orTo: t('common.orTo', locale),
   };

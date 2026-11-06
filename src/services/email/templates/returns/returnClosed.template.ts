@@ -1,6 +1,7 @@
 import { t } from '@config/i18n.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
+import { sellerLineOf } from '@services/email/seller.js';
 
 export type ReturnClosedLine = { name: string; quantity: number };
 export type ReturnDeclinedLine = ReturnClosedLine & {
@@ -106,6 +107,7 @@ export function buildReturnClosedTemplate(args: ReturnClosedTemplateArgs): {
     heading: t('returnClosed.heading', locale),
     body: t('returnClosed.body', locale, { orderId }),
     greeting: greetingOf(args.userName, locale),
+    seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',
     returnedToYouHeader: t('returnClosed.returnedToYouHeader', locale),
     notReturnedHeader: t('returnClosed.notReturnedHeader', locale),
