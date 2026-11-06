@@ -342,10 +342,11 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
       };
     case 'worker_stalled':
       return null;
-    // a field without a server default (the seller, the logo, deliveryCountries) root has not
-    // set yet: not a list of rows, root goes to GET /api/root/shop-settings to fill them in
+    // the fields of the data of the shop root has not set yet (missingShopSettingsFields): the
+    // list names them, its length is the count of the alert; root fills them in with
+    // PUT /api/root/shop-settings
     case 'shop_settings_incomplete':
-      return null;
+      return { path: '/api/admin/shop-settings/missing', query: {} };
     // the language of the shop (shopLocale) has no dictionary any more (src/locales): a deploy
     // that dropped a file after root set the language, not a list of rows either
     case 'shop_locale_missing':

@@ -790,9 +790,9 @@ const getAlertsSchema = {
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
     'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
     'some last days (`refunded_payments`), a reservation worker that has not run for some ' +
-    'seconds (`worker_stalled`), a field of the data of the shop with no default of the ' +
-    'server that root has not set yet (`shop_settings_incomplete`; 1 while any is empty, 0 ' +
-    'once every one is set), the language of the shop with no dictionary any more ' +
+    'seconds (`worker_stalled`), the fields of the data of the shop root has not set yet ' +
+    '(`shop_settings_incomplete`; how many, the ones GET /api/admin/shop-settings/missing ' +
+    'names), the language of the shop with no dictionary any more ' +
     '(`shop_locale_missing`; 1 while it is gone, 0 once it is set to one that has one). Root ' +
     'also gets the lines the admins wrote in some last hours ' +
     '(`admin_actions`). Each kind names the request to the list of the app with its cases ' +
