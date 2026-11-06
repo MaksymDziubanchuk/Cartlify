@@ -29,18 +29,18 @@ const realOpenAi = isRealService('openai');
 const OPENAI_TEST_KEY = 'OPENAI_API_TEST_KEY';
 
 // sendgrid: a mock unless the run takes it for real (service:sendgrid). For real the tests take the
-// key of SENDGRID_API_TEST_KEY (never SENDGRID_API_KEY, the key of dev) and the addresses of the
-// authenticated domain from .env locally, from the secrets of the same names in ci; every mail
-// goes to SendGrid in sandbox mode (tests/helpers/mail.ts), so none reaches a mailbox
+// key of SENDGRID_API_TEST_KEY (never SENDGRID_API_KEY, the key of dev) and the sender EMAIL_FROM,
+// an address of the authenticated domain, from .env locally, from the secrets of the same names in
+// ci; the name and the reply address of the mails are the data of the shop of the tests
+// (tests/helpers/shopSettings.ts). Every mail goes to SendGrid in sandbox mode
+// (tests/helpers/mail.ts), so none reaches a mailbox
 const realSendGrid = isRealService('sendgrid');
 const SENDGRID_TEST_KEY = 'SENDGRID_API_TEST_KEY';
-const MAIL_ADDRESS_KEYS = ['EMAIL_FROM', 'EMAIL_FROM_NAME', 'EMAIL_REPLY_TO'];
+const SENDER_KEY = 'EMAIL_FROM';
 const MOCK_SENDGRID = {
-  // a made-up key and the addresses of the made-up site, the mock takes any key
+  // a made-up key and a sender of the made-up site, the mock takes any key
   SENDGRID_API_KEY: 'SG.cartlify-tests-mock',
   EMAIL_FROM: 'no-reply@shop.example.com',
-  EMAIL_FROM_NAME: 'Cartlify',
-  EMAIL_REPLY_TO: 'support@shop.example.com',
 };
 
 // docker test stack from docker-compose.test.yml, built by npm run db:test:up
@@ -73,16 +73,6 @@ isolateEnv(
     // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
     STRIPE_CURRENCY: 'eur',
-    // a shop that sends by hand to four countries and lets a buyer collect an order; no price for
-    // the delivery unless a test sets one (tests/helpers/shopSettings.ts; startApp applies these
-    // under their new names, applyTestShopSettingsBaseline)
-    DELIVERY_METHODS: 'manual,pickup',
-    DELIVERY_COUNTRIES: 'UA,PL,DE,GB',
-    PICKUP_ADDRESS: 'Test shop, Main street 1, Kyiv',
-    PICKUP_HOURS: 'Mon-Fri 10:00-18:00',
-    // short limits of avatar and review removals: a test passes each in three removals
-    AVATAR_REMOVALS_LIMIT: '2',
-    REVIEW_REMOVALS_LIMIT: '2',
     // every request of the tests comes from 127.0.0.1; each test file has an app and a count of its
     // own, a file of many requests would hit the 100 a minute of the app
     RATE_LIMIT_MAX: '1000',
@@ -101,7 +91,7 @@ isolateEnv(
     fromLocalEnv: [
       ...(realCloudinary ? CLOUDINARY_KEYS : []),
       ...(realStripe ? [STRIPE_TEST_KEY] : []),
-      ...(realSendGrid ? [SENDGRID_TEST_KEY, ...MAIL_ADDRESS_KEYS] : []),
+      ...(realSendGrid ? [SENDGRID_TEST_KEY, SENDER_KEY] : []),
       ...(realOpenAi ? [OPENAI_TEST_KEY] : []),
     ],
   },
@@ -124,9 +114,7 @@ if (realOpenAi && !process.env[OPENAI_TEST_KEY]?.trim()) {
 
 // the same for sendgrid: the key of the app in the tests is the test key, never one of the shell
 if (realSendGrid) {
-  const missing = [SENDGRID_TEST_KEY, ...MAIL_ADDRESS_KEYS].filter(
-    (key) => !process.env[key]?.trim(),
-  );
+  const missing = [SENDGRID_TEST_KEY, SENDER_KEY].filter((key) => !process.env[key]?.trim());
   if (missing.length) {
     throw new Error(
       `service:sendgrid takes these from .env or the environment: ${missing.join(', ')}`,

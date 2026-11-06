@@ -109,9 +109,10 @@ npm test -- --workers=1
 # the notice, so a place of this kind is found by the test that runs it
 
 # external services answer from mocks unless the run names them (the Services checkboxes,
-# or service:<name>). Real SendGrid takes SENDGRID_API_TEST_KEY and EMAIL_FROM, EMAIL_FROM_NAME,
-# EMAIL_REPLY_TO from .env (never SENDGRID_API_KEY); the tests send every mail in sandbox mode,
-# SendGrid checks it and delivers nothing. GitHub Actions takes the secrets of the same names
+# or service:<name>). Real SendGrid takes SENDGRID_API_TEST_KEY and EMAIL_FROM, an address of the
+# authenticated domain, from .env (never SENDGRID_API_KEY); the name and the reply address of the
+# mails are the data of the shop of the tests. The tests send every mail in sandbox mode, SendGrid
+# checks it and delivers nothing. GitHub Actions takes the secrets of the same names
 npm test -- api:auth service:sendgrid
 
 # real Cloudinary takes CLOUDINARY_* from .env: Cloudinary has no test mode, the upload tests

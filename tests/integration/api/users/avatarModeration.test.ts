@@ -16,7 +16,7 @@ import { refuseMail, watchMail } from '../../../helpers/mail.js';
 // takes it from a user, root from any account, through cartlify.remove_user_avatar. Every removal
 // goes to the journal of the admins and mails the person which removal it is; the answer and the
 // profile an admin reads count the removals of the account against the limit
-// (AVATAR_REMOVALS_LIMIT, 2 in the tests), and past the limit the page tells the admin to ask
+// (avatarRemovalsLimit, 2 in the tests), and past the limit the page tells the admin to ask
 // root about the account. The file goes from Cloudinary after the commit, only a file of the
 // folder of this environment
 

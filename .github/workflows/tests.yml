@@ -105,7 +105,8 @@ jobs:
       # name them (service:sendgrid, service:cloudinary, service:stripe, service:openai).
       # Real Stripe takes the key of its test sandbox, real OpenAI its test key, one value each that
       # github masks whole; a real service without its secret stops the run. Real SendGrid takes its
-      # test key and the addresses of the authenticated domain, each a secret github masks whole;
+      # test key and the sender, an address of the authenticated domain, each a secret github masks
+      # whole (the name and the reply address of the mails are the data of the shop of the tests);
       # every mail goes in sandbox mode, none is delivered
       - name: Run tests
         env:
@@ -115,8 +116,6 @@ jobs:
           OPENAI_API_TEST_KEY: ${{ secrets.OPENAI_API_TEST_KEY }}
           SENDGRID_API_TEST_KEY: ${{ secrets.SENDGRID_API_TEST_KEY }}
           EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_FROM_NAME: ${{ secrets.EMAIL_FROM_NAME }}
-          EMAIL_REPLY_TO: ${{ secrets.EMAIL_REPLY_TO }}
         run: npm test -- $PARTS
 
       - name: Upload coverage report
