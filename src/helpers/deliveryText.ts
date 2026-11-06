@@ -1,5 +1,6 @@
 import { t } from '@config/i18n.js';
 import { shopSettings } from '@config/shopSettings.js';
+import { pickupHoursText } from '@helpers/pickupHours.js';
 
 // where and to whom an order goes, as the mails, the lists and the files of the shop print it
 
@@ -34,10 +35,13 @@ export function addressLineOf(d: DeliveryTextParts, locale: string): string {
 export const recipientNameOf = (d: DeliveryTextParts): string =>
   `${d.recipientFirstName} ${d.recipientLastName}`.trim();
 
-// where and when a buyer collects an order at the shop
-export const pickupPlaceOf = (): string => {
+// where and when a buyer collects an order at the shop: the address as root wrote it, the days
+// of the hours in the language of the mail (pickupHoursText)
+export const pickupPlaceOf = (locale: string): string => {
   const settings = shopSettings();
-  return [settings.pickupAddress, settings.pickupHours].filter(Boolean).join(', ');
+  return [settings.pickupAddress, pickupHoursText(settings.pickupHours, locale)]
+    .filter(Boolean)
+    .join(', ');
 };
 
 // the parts of the mails of an order that show where it goes; empty when the order has no delivery
@@ -46,6 +50,6 @@ export function deliveryMailParts(d: DeliveryTextParts | null, locale: string) {
     shippingAddress: d ? addressLineOf(d, locale) : '',
     recipientName: d ? recipientNameOf(d) : '',
     recipientPhone: d?.recipientPhone ?? '',
-    pickup: d?.method === 'pickup' ? pickupPlaceOf() : '',
+    pickup: d?.method === 'pickup' ? pickupPlaceOf(locale) : '',
   };
 }

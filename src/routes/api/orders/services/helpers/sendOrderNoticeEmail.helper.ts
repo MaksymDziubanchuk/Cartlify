@@ -89,7 +89,7 @@ export async function sendOrderNoticeEmail(
     const notice = orderNoticeOf(kind, {
       appName: shopSettings().shopName,
       orderId: order.id,
-      pickup: delivery?.method === 'pickup' ? pickupPlaceOf() : '',
+      pickup: delivery?.method === 'pickup' ? pickupPlaceOf(locale) : '',
       carrier: send?.carrier ?? '',
       trackingNumber: send?.trackingNumber ?? '',
       trackingUrl: send?.trackingUrl ?? '',

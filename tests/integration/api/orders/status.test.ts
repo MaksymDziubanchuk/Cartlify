@@ -699,6 +699,19 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
     expect(mails[0]!.text).toContain(`https://shop.example.com/orders/${orderId}`);
   });
 
+  // the address as root wrote it, the days of the hours in the language of the buyer
+  it("names the days of the pickup hours in the language of the buyer's account", async () => {
+    const buyer = await newUser({ name: 'Ana', locale: 'es' });
+    const orderId = await paidOrder(buyer, pickupBody);
+    const mails = watchMail();
+
+    await setStatus(admin, orderId, 'shipped');
+
+    expect(mails).toHaveLength(1);
+    expect(mails[0]!.subject).toBe(`Cartlify — El pedido #${orderId} está listo para recoger`);
+    expect(mails[0]!.text).toContain('Test shop, Main street 1, Kyiv, lun-vie 10:00-18:00');
+  });
+
   it('mails the buyer that the order is delivered, where and to whom', async () => {
     const buyer = await newUser({ name: 'Anna' });
     const orderId = await shippedOrder({}, buyer);
