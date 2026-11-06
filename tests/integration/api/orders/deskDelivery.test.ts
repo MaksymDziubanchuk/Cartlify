@@ -240,12 +240,26 @@ describe('GET /api/orders: the text an admin looks for in the delivery', () => {
     }
   });
 
-  // a postal code is digits, and digits are the number of an order too: both are looked for
+  // a postal code is digits, and digits are the number of an order too: both are looked for. The
+  // number of an order is whatever the database gave it, its digits may be in a postal code or a
+  // tracking number of another order of the buyer (50 in 00-950): that one is found as well
   it('finds an order by a postal code written in digits, which is the number of an order too', async () => {
-    const { buyer, berlin } = await buyerWithOrders();
+    const { buyer, kyiv, warsaw, berlin, pickup } = await buyerWithOrders();
+    const digitsOf: Record<number, string[]> = {
+      [kyiv]: ['01001'],
+      [warsaw]: ['00-950', 'JD0146000123'],
+      [berlin]: ['10115'],
+      [pickup]: [],
+    };
+    const holding = (digits: string) =>
+      [kyiv, warsaw, berlin, pickup].filter((id) =>
+        digitsOf[id]!.some((text) => text.includes(digits)),
+      );
 
     expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&q=10115`))).toEqual([berlin]);
-    expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&q=${berlin}`))).toEqual([berlin]);
+    expect(sortedIdsOf(await listAs(admin, `userId=${buyer.id}&q=${berlin}`))).toEqual(
+      [...new Set([berlin, ...holding(String(berlin))])].sort((a, b) => a - b),
+    );
   });
 
   it('finds an order by the name or the phone of the recipient', async () => {
