@@ -19,6 +19,7 @@ What this repo already shows well:
 - withdrawal and returns ([Returns](returns.md)): the withdrawal from the contract within its term (the function EU law asks for from 19 June 2026), by the account or by a public form with a code from the mails, the cancel of an order, the goods an admin takes back, the money back through the provider, the reports and alerts for the admins, the personal data of a statement emptied after the terms of the privacy policy, and the export of the data of a person
 - the safety and origin data an offer needs in the EU (GPSR): manufacturers and persons responsible in the EU, warnings and PDF documents of products
 - stock in batches with expiry dates, delivery, a stock log (a line for every change of the stock of a variant) and an accounting report
+- the data of the shop (delivery, the brand, the seller, the languages) that root changes without a deploy ([Shop settings](shop-settings.md)), and every mail in the language of its reader through dictionaries ([Languages](languages.md))
 - Swagger/OpenAPI documentation for the REST API, held to the code by tests: every answer of the integration tests is checked against it, and the whole document is checked for descriptions, codes, examples and lists of values
 
 What is important to state honestly:
@@ -35,5 +36,6 @@ What is important to state honestly:
 
 ## Next
 
+- marketing newsletters: a consent of their own, one unsubscribe, a mail stream of their own
 - delivery through carriers, a tax model, fiscal receipts and a second payment provider (LiqPay)
 - a Docker deployment of the API, then a storefront on it
