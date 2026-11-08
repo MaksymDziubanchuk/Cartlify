@@ -226,7 +226,8 @@ const describeDelivery = (methods: DeliveryMethodInfoDto[], currency: string): s
   ];
 };
 
-// builds the permanent behavior rules for the assistant of the shop (SHOP_NAME)
+// builds the permanent behavior rules for the assistant of the shop (its name is shopName of the
+// shop settings)
 const buildSystemInstructions = (
   actorRole: ChatBotActorRole,
   emailConfirmed: boolean,
