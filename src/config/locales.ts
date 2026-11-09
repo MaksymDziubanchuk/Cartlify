@@ -2,9 +2,9 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 
 // the languages the server can answer in: one dictionary file per language, read from src the
-// way the mail templates and the logo (until step 4) are, so a new language is a file plus a
-// deploy, no change of code or of the database (notes/i18n-shop-steps.md, step 5). "en" is the
-// base language and must be there; shopSettings.ts defaults enabledLocales to this whole list
+// way the mail templates are, so a new language is a file plus a deploy, no change of code or of
+// the database. "en" is the base language and must be there; shopSettings.ts defaults
+// enabledLocales to this whole list
 
 export const LOCALES_DIR = path.join(process.cwd(), 'src', 'locales');
 

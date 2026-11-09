@@ -24,8 +24,8 @@ export const isPhone = (value: string): boolean => PHONE_FORMAT.test(value);
 
 // a locale is two lower-case letters (en, uk, ...), the form the database itself requires
 // (users_locale_chk, db/06); the languages the server actually answers in are the ones with a
-// dictionary (src/locales, a later step), this only normalizes the shape: uk-UA and UK both
-// become uk, a value the database would refuse gives null
+// dictionary (src/locales, see src/config/locales.ts), this only normalizes the shape: uk-UA and
+// UK both become uk, a value the database would refuse gives null
 const LOCALE_FORMAT = /^[a-z]{2}$/;
 
 export function normalizeLocaleCode(raw: string): string | null {
