@@ -87,8 +87,9 @@ The buyer withdraws from the account or with the code while a statement without 
 1. The order shows those units as free (`withdrawable`), and the button takes them.
 2. `POST /api/orders/:orderId/withdrawal` or `POST /api/withdrawals` with the code. The database takes the units the new statement needs from the statement without the code, oldest rows first: those rows become `not_arrived` with the money refused and the code `stated_again`. A statement left with nothing is closed by its results; the rest of a partial one stays open for the admin.
 3. The person of the statement without the code is mailed that its goods are now handled in another statement of the order, without saying who made it and without the units ("yours is closed" when nothing is left): the person of the form may not be the buyer. The line of the new statement in the admin log names the statements it took units from (`takenFrom`).
+4. The new statement goes on as [1](#1-the-buyer-withdraws-before-the-order-is-sent) or [2](#2-the-buyer-withdraws-after-the-order-was-sent).
 
-An accepted statement is the buyer's already: its units are not taken over, and the buyer states only the units left. 4. The new statement goes on as [1](#1-the-buyer-withdraws-before-the-order-is-sent) or [2](#2-the-buyer-withdraws-after-the-order-was-sent).
+An accepted statement is the buyer's already: its units are not taken over, and the buyer states only the units left.
 
 A statement of an admin never takes units over: it is refused while they are held (`RETURN_QUANTITY_EXCEEDED`).
 
