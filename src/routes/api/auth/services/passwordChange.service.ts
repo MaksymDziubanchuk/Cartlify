@@ -107,7 +107,7 @@ export async function changePassword({
 
   // the password is changed either way: a mail that did not go is only logged, without the address
   try {
-    await sendPasswordChangedEmail({ ...mail, changedAt: now }, log);
+    await sendPasswordChangedEmail({ ...mail, changedAt: now });
   } catch (err) {
     log.warn({ err, userId }, 'password changed mail was not sent');
   }

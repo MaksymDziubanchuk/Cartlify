@@ -4,6 +4,7 @@ import { assertEmail } from '@helpers/validateEmail.js';
 import { mailLocaleOf } from '@helpers/locale.js';
 import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashToken } from '@helpers/tokenHash.js';
+import { subscribeAtRegistration } from '@routes/api/newsletters/services/helpers/registrationSubscription.helper.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
 
@@ -74,7 +75,7 @@ export async function resendVerify(
     // set inside the transaction, which the narrowing of typescript does not follow
     const { userId, ...mail } = sendPayload as VerifyMailJob;
     try {
-      await sendVerifyEmail(mail, log);
+      await sendVerifyEmail(mail);
     } catch (err) {
       if (err instanceof AppError && err.statusCode === 502) {
         log.error({ err, userId }, 'verification mail was not sent');
@@ -91,8 +92,14 @@ export async function resendVerify(
 }
 
 // the link proves the email: the favorites, the chats and the cart of the guest of the browser
-// that opens it move to the account, the same as at a login
-export async function verifyEmail({ token, guestId }: VerifyEmailDto): Promise<MessageResponseDto> {
+// that opens it move to the account, the same as at a login. The person also says here whether the
+// account subscribes to the newsletter (the box of the page): when it does and this call is what
+// confirmed the email, the subscription is made after the confirmation is committed, in a step of
+// its own that never undoes the confirmation and never changes the answer
+export async function verifyEmail(
+  { token, guestId, newsletter, ip = null, userAgent = null }: VerifyEmailDto,
+  log: Pick<FastifyBaseLogger, 'warn'>,
+): Promise<MessageResponseDto> {
   const cleanToken = token?.trim();
   if (!cleanToken) throw new BadRequestError('TOKEN_REQUIRED');
 
@@ -100,7 +107,7 @@ export async function verifyEmail({ token, guestId }: VerifyEmailDto): Promise<M
   const tokenHash = hashToken(cleanToken);
 
   try {
-    const ok = await prisma.$transaction(async (tx) => {
+    const confirmed = await prisma.$transaction(async (tx) => {
       // the account of the link, read by the system: a guest sees neither links nor users
       await setAdminContext(tx);
       const [link] = await tx.$queryRaw<{ userId: number; role: Role }[]>`
@@ -120,11 +127,16 @@ export async function verifyEmail({ token, guestId }: VerifyEmailDto): Promise<M
         await migrateGuestDataToUser(tx, guestId, { id: link.userId, role: link.role });
       }
 
-      return verified;
+      return verified ? { userId: link?.userId ?? null } : null;
     });
 
     // reject invalid token
-    if (!ok) throw new BadRequestError('VERIFY_TOKEN_INVALID_OR_EXPIRED');
+    if (!confirmed) throw new BadRequestError('VERIFY_TOKEN_INVALID_OR_EXPIRED');
+
+    // the box of the page: only the choice that comes with the token counts, not the hint of the link
+    if (newsletter === true && confirmed.userId !== null) {
+      await subscribeAtRegistration({ userId: confirmed.userId, ip, userAgent }, log);
+    }
 
     return { message: 'Email verified' };
   } catch (err) {

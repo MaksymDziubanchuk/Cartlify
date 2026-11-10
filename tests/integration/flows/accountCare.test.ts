@@ -8,19 +8,23 @@ import { cookieJar } from '../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { closeSessions, createUser, uniqueEmail, type TestUser } from '../../helpers/factories.js';
 import { mailedToken, watchMail } from '../../helpers/mail.js';
+import { forget, rowsOf } from '../../helpers/newsletterApi.js';
 import { multipartBody } from '../../helpers/multipart.js';
 import { journeyOf } from '../../helpers/returnJourney.js';
+import { withCaptcha } from '../../helpers/turnstile.js';
 
 // The care of an account, each step with what its actor sees: a person whose mail of confirmation
 // got lost asks for another one; a buyer who forgot the password sets a new one by the link of the
 // mail, changes the profile and the avatar (an admin takes the avatar away), takes the data and
-// deletes the account; root takes the data of another account and deletes it. The refusals of each
+// deletes the account (a subscription to the newsletter is in the data and ends with the account,
+// the mail of the deletion says so); root takes the data of another account and deletes it. The refusals of each
 // step are the tests of the routes (api/auth, api/users).
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
 let root: TestUser;
 const userIds: number[] = [];
+const addresses: string[] = [];
 const j = journeyOf(
   () => app,
   () => csrf,
@@ -37,6 +41,7 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await closeSessions(userIds);
+    await forget(addresses);
   } finally {
     await stopApp();
   }
@@ -57,21 +62,22 @@ describe('the care of an account', () => {
     const password = 'flow-care-password-1';
     const mails = watchMail();
 
-    const registered = await j.post(null, '/api/auth/register', {
-      email,
-      password,
-      name: 'Lost Mail',
-    });
+    const registered = await j.post(
+      null,
+      '/api/auth/register',
+      withCaptcha({ email, password, name: 'Lost Mail' }),
+    );
     expect(registered.statusCode).toBe(201);
     userIds.push(registered.json().id);
 
     // the first mail never reached the person: they ask for another one and open its link
-    expect((await j.post(null, '/api/auth/verify/resend', { email })).statusCode).toBe(200);
+    expect((await j.post(null, '/api/auth/verify/resend', withCaptcha({ email }))).statusCode).toBe(
+      200,
+    );
     expect(mails.filter((mail) => mail.to.includes(email))).toHaveLength(2);
     const token = mailedToken(mails, '/web/login');
-    expect(
-      (await j.get(null, `/api/auth/verify?token=${encodeURIComponent(token)}`)).statusCode,
-    ).toBe(200);
+    // the page of the link reads the token after the # and posts it
+    expect((await j.post(null, '/api/auth/verify', { token })).statusCode).toBe(200);
 
     const session = await loggedIn(email, password);
     expect((await getAs(session, '/api/users/me')).json()).toMatchObject({
@@ -83,21 +89,18 @@ describe('the care of an account', () => {
   it('sets a new password by the link of the mail, changes the profile, takes the data and deletes the account', async () => {
     const buyer = await createUser({ name: 'Forgetful Buyer' });
     userIds.push(buyer.id);
+    addresses.push(buyer.email);
     const mails = watchMail();
 
     // the link of the mail sets a new password, the login takes it
     expect(
-      (await j.post(null, '/api/auth/password/forgot', { email: buyer.email })).statusCode,
+      (await j.post(null, '/api/auth/password/forgot', withCaptcha({ email: buyer.email })))
+        .statusCode,
     ).toBe(200);
     const token = mailedToken(mails, '/web/auth/reset');
     const newPassword = 'flow-care-new-password-1';
-    const reset = await j.post(
-      null,
-      `/api/auth/password/reset?token=${encodeURIComponent(token)}`,
-      {
-        newPassword,
-      },
-    );
+    // the page of the link reads the token after the # and posts it with the new password
+    const reset = await j.post(null, '/api/auth/password/reset', { token, newPassword });
     expect(reset.statusCode).toBe(200);
     const session = await loggedIn(buyer.email, newPassword);
 
@@ -129,7 +132,16 @@ describe('the care of an account', () => {
     expect(removed.json()).toMatchObject({ removed: true, avatarRemovals: 1 });
     expect((await getAs(session, '/api/users/me')).json().avatarIsDefault).toBe(true);
 
-    // the buyer takes the data and leaves
+    // the buyer subscribes to the newsletter from the profile
+    const subscribed = await app.inject({
+      method: 'POST',
+      url: '/api/newsletters/subscriptions',
+      headers: withCsrf(csrf, sessionCookie(session)),
+      payload: {},
+    });
+    expect(subscribed.statusCode).toBe(201);
+
+    // the buyer takes the data, the subscription in it, and leaves
     const data = await getAs(session, '/api/users/me/export');
     expect(data.statusCode).toBe(200);
     expect(data.json().profile).toMatchObject({
@@ -137,6 +149,13 @@ describe('the care of an account', () => {
       name: 'Careful Buyer',
       phone: '+380501112233',
     });
+    expect(data.json().newsletterSubscriptions).toEqual([
+      expect.objectContaining({
+        source: 'account',
+        status: 'active',
+        events: [expect.objectContaining({ event: 'subscribed', place: 'profile' })],
+      }),
+    ]);
     const left = await app.inject({
       method: 'DELETE',
       url: '/api/users/me',
@@ -144,6 +163,15 @@ describe('the care of an account', () => {
       payload: { password: newPassword },
     });
     expect(left.statusCode).toBe(204);
+
+    // the mail of the deletion tells that the subscription ended with the account
+    expect(mails.at(-1)!.to).toEqual([buyer.email]);
+    expect(mails.at(-1)!.text).toContain(
+      'Your newsletter subscription has been cancelled as well.',
+    );
+    expect(await rowsOf(buyer.email)).toEqual([
+      expect.objectContaining({ status: 'ended', endReason: 'account_deleted' }),
+    ]);
 
     // root sees the account deleted
     const gone = await j.get(root, `/api/users/${buyerId}`);

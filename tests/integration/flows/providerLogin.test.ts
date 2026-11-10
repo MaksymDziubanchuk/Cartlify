@@ -7,6 +7,7 @@ import { cookieHeader, cookieJar } from '../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { asAdmin } from '../../helpers/db.js';
 import { closeSessions, createProduct, uniqueEmail, uniqueTag } from '../../helpers/factories.js';
+import { forget, rowsOf } from '../../helpers/newsletterApi.js';
 import {
   answerAsGithub,
   callback,
@@ -20,7 +21,8 @@ import {
 // guest likes a product and signs in with GitHub, lands on the page of the frontend signed in, with
 // the favorite of the guest now the account's, and comes back later with GitHub to the same
 // account; other people come with Google and LinkedIn. An account stays with the provider it was
-// made by. The refusals of each
+// made by. The newsletter the page asked for at the first login subscribes the new account and
+// is not asked again at the next one. The refusals of each
 // provider are the tests of api/auth (oauth*).
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -43,6 +45,7 @@ afterAll(async () => {
       tx.user.findMany({ where: { email: { in: emails } }, select: { id: true } }),
     );
     await closeSessions(users.map(({ id }) => id));
+    await forget(emails);
   } finally {
     await stopApp();
   }
@@ -79,7 +82,7 @@ describe('a login with an account of a provider', () => {
       name: 'Octo Flow',
       emails: [{ email, primary: true, verified: true }],
     });
-    const started = await startLogin(app, 'github', guest);
+    const started = await startLogin(app, 'github', guest, { newsletter: 'true' });
     const { me, session } = await signedIn(
       await callback(app, 'github', { code: 'flow-code', state: started.state }, guest),
     );
@@ -93,8 +96,20 @@ describe('a login with an account of a provider', () => {
       (favorites.json().items as { variant: { id: number } }[]).map(({ variant }) => variant.id),
     ).toEqual([product.variantId]);
 
+    // the profile shows the subscription the page asked for with the login
+    const subscription = await app.inject({
+      method: 'GET',
+      url: '/api/newsletters/me',
+      headers: { cookie: session },
+    });
+    expect(subscription.json()).toMatchObject({
+      subscribed: true,
+      source: 'account',
+      status: 'active',
+    });
+
     // later, in another browser, GitHub again: the same account
-    const again = await startLogin(app, 'github');
+    const again = await startLogin(app, 'github', '', { newsletter: 'true' });
     const back = await signedIn(
       await callback(
         app,
@@ -104,6 +119,14 @@ describe('a login with an account of a provider', () => {
       ),
     );
     expect(back.me.id).toBe(me.id);
+    // an account the shop has asks nothing of the newsletter: the subscription is the one it was
+    const kept = await app.inject({
+      method: 'GET',
+      url: '/api/newsletters/me',
+      headers: { cookie: back.session },
+    });
+    expect(kept.json()).toEqual(subscription.json());
+    expect(await rowsOf(email)).toHaveLength(1);
   });
 
   it('a person signs in with Google, another with LinkedIn, each a new account', async () => {

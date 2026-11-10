@@ -16,6 +16,7 @@ import {
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { mailedToken, refuseMail, watchMail, type SentMail } from '../../../helpers/mail.js';
+import { withCaptcha } from '../../../helpers/turnstile.js';
 
 // the resent link comes from the mail the SendGrid mock took (tests/helpers/mail.ts); the
 // verification tests take a link stored the way the registration stores one
@@ -31,7 +32,7 @@ const register = (email: string) =>
     method: 'POST',
     url: '/api/auth/register',
     headers: withCsrf(csrf),
-    payload: { email, password: 'password123' },
+    payload: withCaptcha({ email, password: 'password123' }),
   });
 
 const resend = (email: string, cookie = '') =>
@@ -39,14 +40,16 @@ const resend = (email: string, cookie = '') =>
     method: 'POST',
     url: '/api/auth/verify/resend',
     headers: withCsrf(csrf, cookie),
-    payload: { email },
+    payload: withCaptcha({ email }),
   });
 
+// the page of the link reads the token after the # and posts it, with the csrf token every post needs
 const verify = (token: string, cookie = '') =>
   app.inject({
-    method: 'GET',
-    url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
-    headers: cookie ? { cookie } : {},
+    method: 'POST',
+    url: '/api/auth/verify',
+    headers: withCsrf(csrf, cookie),
+    payload: { token },
   });
 
 // a new account and the token of the link in its mail
@@ -90,7 +93,7 @@ afterAll(async () => {
   }
 });
 
-describe('GET /api/auth/verify', () => {
+describe('POST /api/auth/verify', () => {
   it('verifies the email with a valid link', async () => {
     const { email, token } = await unverified();
 
@@ -202,10 +205,53 @@ describe('GET /api/auth/verify', () => {
   });
 
   it('refuses a request without a token', async () => {
-    const res = await app.inject({ method: 'GET', url: '/api/auth/verify' });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: withCsrf(csrf),
+      payload: {},
+    });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+
+  // like every post: a page of another site cannot make the browser of a person verify an email
+  it('refuses a request without the csrf token', async () => {
+    const { email, token } = await unverified();
+
+    const res = await app.inject({ method: 'POST', url: '/api/auth/verify', payload: { token } });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ errorCode: 'CSRF_TOKEN_INVALID' });
+    expect(await isVerified(email)).toBe(false);
+  });
+
+  // a GET changes nothing: a mail scanner or a link preview that opens an address verifies nobody
+  it('has no GET: opening the address with a token verifies nothing', async () => {
+    const { email, token } = await unverified();
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(await isVerified(email)).toBe(false);
+  });
+
+  it('refuses a token in the query: only the body carries it', async () => {
+    const { email, token } = await unverified();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
+      headers: withCsrf(csrf),
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(await isVerified(email)).toBe(false);
   });
 });
 

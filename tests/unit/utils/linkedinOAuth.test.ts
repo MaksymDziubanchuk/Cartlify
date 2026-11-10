@@ -65,6 +65,44 @@ describe('buildLinkedInAuthUrl', () => {
   });
 });
 
+describe('the choice of the newsletter in the state of LinkedIn', () => {
+  const payloadOf = (state: string) =>
+    JSON.parse(Buffer.from(state.split('.')[0]!, 'base64url').toString('utf8'));
+
+  it('signs the choice into the state when the page asked for the subscription', () => {
+    const state = linkedin.createLinkedInOAuthState('guest-1', [], true);
+
+    expect(payloadOf(state)).toMatchObject({ guestId: 'guest-1', newsletter: true });
+    expect(linkedin.verifyLinkedInOAuthState(state, 'guest-1')).toMatchObject({ newsletter: true });
+  });
+
+  it('leaves the choice out of the state when the page did not ask', () => {
+    for (const state of [
+      linkedin.createLinkedInOAuthState('guest-1'),
+      linkedin.createLinkedInOAuthState('guest-1', [17], false),
+    ]) {
+      expect(payloadOf(state)).not.toHaveProperty('newsletter');
+    }
+  });
+
+  it('carries the versions of the terms and the choice side by side, in the url too', () => {
+    const url = new URL(linkedin.buildLinkedInAuthUrl('guest-1', [17, 12], true));
+    const state = url.searchParams.get('state')!;
+
+    expect(payloadOf(state)).toMatchObject({ accepted: [17, 12], newsletter: true });
+  });
+
+  // the choice added to a signed state breaks the signature
+  it('rejects a state to which the choice was added after the signing', () => {
+    const [payload, signature] = linkedin.createLinkedInOAuthState('guest-1').split('.');
+    const forged = `${b64urlJson({ ...payloadOf(`${payload}.x`), newsletter: true })}.${signature}`;
+
+    expect(thrownBy(() => linkedin.verifyLinkedInOAuthState(forged, 'guest-1'))).toMatchObject({
+      statusCode: 400,
+    });
+  });
+});
+
 describe('verifyLinkedInOAuthState', () => {
   // login csrf: a state from a login another browser started must not finish here
   it('rejects a valid state when another guest finishes the login', () => {

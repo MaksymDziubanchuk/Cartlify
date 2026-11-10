@@ -7,16 +7,21 @@ import { cookieHeader, cookieJar } from '../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { asAdmin } from '../../helpers/db.js';
 import { closeSessions, createProduct, uniqueEmail } from '../../helpers/factories.js';
-import { mailedToken, watchMail } from '../../helpers/mail.js';
+import { linkParams, watchMail } from '../../helpers/mail.js';
+import { forget } from '../../helpers/newsletterApi.js';
+import { withCaptcha } from '../../helpers/turnstile.js';
 
 // an account from the first visit to the logout, through the routes of auth, favorites, chat and
 // users: a guest likes a product and talks to the bot, registers (the data of the guest stay its
 // own until the email is confirmed), confirms the email in the same browser (the favorite and the
 // chat become the account's), logs in, renews the session, loses every session to a stolen
-// refresh token, logs in again and out
+// refresh token, logs in again and out. The box of the newsletter ticked at the registration rides
+// to the page of the confirmation as a hint in the link and subscribes the account when the person
+// keeps it there
 let app: FastifyInstance;
 let csrf: Csrf;
 const userIds: number[] = [];
+const addresses: string[] = [];
 
 beforeAll(async () => {
   app = await startApp();
@@ -26,6 +31,7 @@ beforeAll(async () => {
 afterAll(async () => {
   try {
     await closeSessions(userIds);
+    await forget(addresses);
   } finally {
     await stopApp();
   }
@@ -39,6 +45,7 @@ describe('an account from the first visit to the logout', () => {
     const product = await createProduct();
     const likedVariant = { productId: product.id, variantId: product.variantId };
     const email = uniqueEmail('flow-account');
+    addresses.push(email);
     const password = 'flow-password-1';
     const mails = watchMail();
 
@@ -64,18 +71,22 @@ describe('an account from the first visit to the logout', () => {
       method: 'POST',
       url: '/api/auth/register',
       headers: withCsrf(csrf, guest),
-      payload: { email, password, name: 'Flow Buyer' },
+      payload: withCaptcha({ email, password, name: 'Flow Buyer', newsletter: true }),
     });
     expect(registered.statusCode).toBe(201);
     userIds.push(registered.json().id);
     expect(await favoritesOf({ guestId })).toEqual([likedVariant]);
 
-    // the link of the mail, opened in the browser of the guest, confirms the email and gives the
-    // account the favorite and the chat
+    // the link of the mail, opened in the browser of the guest, shows the box ticked; the person
+    // keeps it and presses the button: the email is confirmed, the account gets the favorite and the
+    // chat, and the subscription
+    const link = linkParams(mails.at(-1)!, '/web/login')!;
+    expect(link.get('newsletter')).toBe('1');
     const verified = await app.inject({
-      method: 'GET',
-      url: `/api/auth/verify?token=${encodeURIComponent(mailedToken(mails, '/web/login'))}`,
-      headers: { cookie: guest },
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: withCsrf(csrf, guest),
+      payload: { token: link.get('token')!, newsletter: true },
     });
     expect(verified.statusCode).toBe(200);
     const userId = registered.json().id as number;
@@ -93,6 +104,16 @@ describe('an account from the first visit to the logout', () => {
 
     const me = await app.inject({ method: 'GET', url: '/api/users/me', headers: { cookie } });
     expect(me.json()).toMatchObject({ id: userId, email, isVerified: true, name: 'Flow Buyer' });
+    const subscription = await app.inject({
+      method: 'GET',
+      url: '/api/newsletters/me',
+      headers: { cookie },
+    });
+    expect(subscription.json()).toMatchObject({
+      subscribed: true,
+      source: 'account',
+      status: 'active',
+    });
     const favorites = await app.inject({
       method: 'GET',
       url: '/api/favorites',

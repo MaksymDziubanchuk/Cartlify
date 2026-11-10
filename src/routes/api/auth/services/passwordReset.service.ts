@@ -118,7 +118,7 @@ export async function passwordForgot(
     // set inside the transaction, which the narrowing of typescript does not follow
     const { userId, ...mail } = sendJob as ResetMailJob;
     try {
-      await sendResetPasswordEmail(mail, log);
+      await sendResetPasswordEmail(mail);
     } catch (err) {
       // a mail the provider did not take is only logged: another answer than the generic one would
       // tell that an account has this email. Our own error stays a server error

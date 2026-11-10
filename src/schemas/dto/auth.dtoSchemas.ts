@@ -1,4 +1,6 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
+import { captchaTokenField } from '@schemas/captchaField.js';
+import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
 import { legalDocumentIdsSchema } from '@schemas/dto/legal.dtoSchemas.js';
 import { PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 
@@ -53,6 +55,7 @@ const authLoginResponseSchema = {
     name: { type: 'string' },
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
+    canManageNewsletters: canManageNewslettersField,
     locale: { type: 'string' },
     phone: { type: 'string' },
   },
@@ -65,6 +68,7 @@ const authLoginResponseSchema = {
     'updatedAt',
     'avatarUrls',
     'avatarIsDefault',
+    'canManageNewsletters',
   ],
 } as const;
 
@@ -160,8 +164,18 @@ const authRegisterBodySchema = {
         'The versions of the terms and of the contract in force the person accepts, each kind ' +
         'in force once; none while root has published none.',
     },
+    newsletter: {
+      type: 'boolean',
+      description:
+        'The box "Subscribe to the newsletter" of the form, ticked. It is not stored and subscribes ' +
+        'nobody: when true, the link of the confirmation mail carries `newsletter=1`, a hint for ' +
+        'the page that confirms the email, which then shows the box already ticked. The choice ' +
+        'that counts is the one the page sends with the token (POST /api/auth/verify). The mail ' +
+        'sent again by POST /api/auth/verify/resend carries no hint.',
+    },
+    captchaToken: captchaTokenField,
   },
-  required: ['email', 'password'],
+  required: ['email', 'password', 'captchaToken'],
 } as const;
 
 const authRegisterResponseSchema = {
@@ -178,6 +192,7 @@ const authRegisterResponseSchema = {
     name: { type: 'string' },
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
+    canManageNewsletters: canManageNewslettersField,
     locale: { type: 'string' },
   },
   required: [
@@ -189,6 +204,7 @@ const authRegisterResponseSchema = {
     'updatedAt',
     'avatarUrls',
     'avatarIsDefault',
+    'canManageNewsletters',
   ],
 } as const;
 
@@ -198,16 +214,33 @@ const authResendVerifyBodySchema = {
   additionalProperties: false,
   properties: {
     email: { type: 'string', format: 'email' },
+    captchaToken: captchaTokenField,
   },
-  required: ['email'],
+  required: ['email', 'captchaToken'],
 } as const;
 
-const authVerifyEmailQuerySchema = {
-  $id: 'authVerifyEmailQuerySchema',
+const authVerifyEmailBodySchema = {
+  $id: 'authVerifyEmailBodySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    token: { type: 'string', minLength: 10, description: 'The token from the link in the mail.' },
+    token: {
+      type: 'string',
+      minLength: 10,
+      description:
+        'The token from the link in the mail: the page of the link reads it after the # of the address.',
+    },
+    newsletter: {
+      type: 'boolean',
+      description:
+        'The choice of the person on the page that confirms the email: the box "Subscribe to the ' +
+        'newsletter", ticked (true) or not (false). When true and the email is confirmed by this ' +
+        'call, the account is subscribed to the newsletter (the language of the account if the ' +
+        'shop answers in it, none otherwise). The answer does not tell whether the address was ' +
+        'subscribed already. A link that does not confirm the email subscribes nobody. The ' +
+        '`newsletter=1` hint after the # of the link of the mail is only a hint for the box; what ' +
+        'counts is this field.',
+    },
   },
   required: ['token'],
 } as const;
@@ -218,18 +251,9 @@ const authPasswordForgotBodySchema = {
   additionalProperties: false,
   properties: {
     email: { type: 'string', format: 'email' },
+    captchaToken: captchaTokenField,
   },
-  required: ['email'],
-} as const;
-
-const authPasswordResetQuerySchema = {
-  $id: 'authPasswordResetQuerySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    token: { type: 'string', description: 'The token from the link in the mail.' },
-  },
-  required: ['token'],
+  required: ['email', 'captchaToken'],
 } as const;
 
 const authPasswordResetBodySchema = {
@@ -237,9 +261,15 @@ const authPasswordResetBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    token: {
+      type: 'string',
+      minLength: 10,
+      description:
+        'The token from the link in the mail: the page of the link reads it after the # of the address.',
+    },
     newPassword: newPasswordSchema,
   },
-  required: ['newPassword'],
+  required: ['token', 'newPassword'],
 } as const;
 
 const authLogoutBodySchema = {
@@ -338,9 +368,8 @@ export const authDtoSchemas = [
   authRegisterBodySchema,
   authRegisterResponseSchema,
   authResendVerifyBodySchema,
-  authVerifyEmailQuerySchema,
+  authVerifyEmailBodySchema,
   authPasswordForgotBodySchema,
-  authPasswordResetQuerySchema,
   authPasswordResetBodySchema,
   authLogoutResponseSchema,
   authLogoutBodySchema,

@@ -6,6 +6,7 @@ import { startApp, stopApp } from '../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { closeSessions, createUser, uniqueEmail, type TestUser } from '../../helpers/factories.js';
 import { watchMail } from '../../helpers/mail.js';
+import { withCaptcha } from '../../helpers/turnstile.js';
 
 // a person with no language of their own (a guest, or an account that never set one) is mailed
 // in the shop's own language (shopSettings().shopLocale), and a different one once root changes
@@ -68,7 +69,7 @@ const forgot = (email: string) =>
     method: 'POST',
     url: '/api/auth/password/forgot',
     headers: withCsrf(csrf),
-    payload: { email },
+    payload: withCaptcha({ email }),
   });
 
 describe('a mail to a person with no language of their own', () => {
