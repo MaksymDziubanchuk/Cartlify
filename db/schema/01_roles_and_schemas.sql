@@ -241,6 +241,8 @@ BEGIN
     'cartlify.is_system()',
     'cartlify.is_owner(integer)',
     'cartlify.is_owner_or_admin(integer)',
+    -- the policies of the newsletter tables ask it: root, or an admin root allowed to run them
+    'cartlify.newsletter_manager()',
     -- product search
     'cartlify.immutable_unaccent(text)',
     -- accounts and login: they run as the owner, each checks the role of the actor first
@@ -250,6 +252,40 @@ BEGIN
     'cartlify.users_get_public_profile(integer)',
     'cartlify.remove_user_avatar(integer)',
     'cartlify.migrate_guest_data_to_user(uuid, integer)',
+    -- subscriptions to the newsletters: a guest by the link of a mail, an account on its own
+    -- address; each checks the actor itself (the helpers they call stay closed)
+    'cartlify.newsletter_request(text, text, text, text, text, text, text, text, text)',
+    'cartlify.newsletter_request_mail_failed(text, text)',
+    'cartlify.newsletter_confirm(text, text, text)',
+    'cartlify.newsletter_not_me(text, text, text)',
+    'cartlify.newsletter_manage_get(text)',
+    'cartlify.newsletter_manage_set_locale(text, text, text, text)',
+    'cartlify.newsletter_manage_unsubscribe(text, integer, text, text, text)',
+    'cartlify.newsletter_manage_resume(text, text, text)',
+    'cartlify.newsletter_unsubscribe_one_click(text, integer, text, text)',
+    'cartlify.newsletter_manage_export(text)',
+    'cartlify.newsletter_subscribe_account(integer, text, text, text, text, text, text, text)',
+    'cartlify.newsletter_profile_get(integer)',
+    'cartlify.newsletter_profile_unsubscribe(integer, text, text)',
+    'cartlify.newsletter_profile_set_locale(integer, text, text, text)',
+    'cartlify.newsletter_profile_resume(integer, text, text)',
+    'cartlify.newsletter_profile_export(integer)',
+    'cartlify.newsletter_end_for_account(integer)',
+    -- the webhook of the newsletters (the system), the people who run them (an address erased, an
+    -- address blocked) and root (the right of an admin, the languages); each checks the
+    -- actor itself, the helpers they call (newsletter_erase_subscription and the other internal
+    -- steps) stay closed
+    'cartlify.newsletter_apply_event(integer, text, text)',
+    'cartlify.newsletter_admin_erase_address(integer)',
+    'cartlify.newsletter_block_add(text, text)',
+    'cartlify.newsletter_set_manager(integer, boolean)',
+    'cartlify.newsletter_locale_counts()',
+    'cartlify.newsletter_reset_locale(text)',
+    -- the sending of the newsletters (the system): a campaign started, a portion of the mails taken,
+    -- the ones a pass did not try given back
+    'cartlify.newsletter_start_campaign(integer, jsonb, text)',
+    'cartlify.newsletter_claim_recipients(integer, integer[], integer, integer)',
+    'cartlify.newsletter_release_recipients(integer[])',
     -- orders and payments: the same; unconfirm_order, pay_order and expire_order_reservation
     -- answer to the system only
     'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
@@ -267,6 +303,9 @@ BEGIN
     'cartlify.cleanup_return_addresses()',
     'cartlify.cleanup_return_personal()',
     'cartlify.cleanup_deleted_accounts_recipients()',
+    'cartlify.cleanup_newsletter_pending()',
+    'cartlify.cleanup_newsletter_consent()',
+    'cartlify.cleanup_newsletter_recipients()',
     -- admin only: the price journal, deliveries and write-offs of stock
     'cartlify.log_variant_price_change(integer, numeric, numeric, cartlify."PriceChangeMode", numeric, text, timestamp without time zone)',
     'cartlify.receive_variant_batch(uuid, integer, cartlify."StockSource", integer, numeric, date, text, text, text, text)',
@@ -348,8 +387,12 @@ BEGIN
     'cartlify.current_actor_role()',
     'cartlify.is_admin()',
     'cartlify.is_root()',
+    'cartlify.is_system()',
     'cartlify.is_owner(integer)',
     'cartlify.is_owner_or_admin(integer)',
+    -- the policies of the newsletter tables ask these two; with no context both answer false, so the
+    -- role reads the tables without any row being opened to it
+    'cartlify.newsletter_manager()',
     'cartlify.unaccent(text)',
     'cartlify.unaccent(regdictionary, text)',
     'cartlify.immutable_unaccent(text)'

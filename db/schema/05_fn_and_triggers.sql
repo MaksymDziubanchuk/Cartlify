@@ -3247,7 +3247,9 @@ $$;
 -- address and the browser of old logins and of closed statements of return, make the personal
 -- data of closed statements and of the recipients of the orders of deleted accounts anonymous,
 -- remove the favorites and the chats of guests who stopped coming, and the chats of accounts
--- deleted long ago. The time each kind of data is kept is in the privacy policy of the shop
+-- deleted long ago; three more clear what the newsletters leave (a request to subscribe that was
+-- never confirmed, the proof of the consent of an ended subscription with its journal, the mails of
+-- a campaign that ended). The time each kind of data is kept is in the privacy policy of the shop
 -- (legal_documents, kind privacy, one column of days for each): a row is kept for the SHORTER of
 -- the term of the version in force when the data was collected and the term of the version in force
 -- now, and cleaned a day before the term ends, so a task that runs once a day never cleans late
@@ -3288,6 +3290,8 @@ BEGIN
     WHEN 'retentionReturnAddressesDays' THEN p_policy."retentionReturnAddressesDays"
     WHEN 'retentionReturnPersonalDays' THEN p_policy."retentionReturnPersonalDays"
     WHEN 'retentionRecipientDays' THEN p_policy."retentionRecipientDays"
+    WHEN 'retentionNewsletterConsentDays' THEN p_policy."retentionNewsletterConsentDays"
+    WHEN 'retentionNewsletterRecipientsDays' THEN p_policy."retentionNewsletterRecipientsDays"
     ELSE NULL
   END;
 END;
@@ -3309,7 +3313,8 @@ DECLARE
 BEGIN
   IF p_field NOT IN (
     'retentionLoginAddressesDays', 'retentionGuestDataDays', 'retentionDeletedChatsDays',
-    'retentionReturnAddressesDays', 'retentionReturnPersonalDays', 'retentionRecipientDays'
+    'retentionReturnAddressesDays', 'retentionReturnPersonalDays', 'retentionRecipientDays',
+    'retentionNewsletterConsentDays', 'retentionNewsletterRecipientsDays'
   ) THEN
     RAISE EXCEPTION 'RETENTION_FIELD_INVALID' USING ERRCODE = '22023';
   END IF;
@@ -3674,6 +3679,124 @@ BEGIN
 END;
 $$;
 
+-- Removes the requests to subscribe that were not confirmed in time: the link of the mail works for
+-- three days (confirmExpiresAt), and a request whose deadline has passed is ended (expired), then
+-- its lines of the journal and its row go (the guard of the journal lets a line go only with an
+-- ended subscription). Nothing of it is kept, nobody agreed to anything, so this cleanup has no
+-- term in the privacy policy and works without one. A request that is confirmed, or asked again
+-- (a new deadline), meanwhile is not taken: the update waits for its row and looks at it again.
+-- Returns how many requests went.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_newsletter_pending () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_ids   integer[];
+  v_count integer;
+BEGIN
+  WITH ended AS (
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      status = 'ended',
+      "confirmHash" = NULL,
+      "confirmExpiresAt" = NULL,
+      "endedAt" = v_now,
+      "endReason" = 'expired',
+      "updatedAt" = v_now
+    WHERE s.status = 'pending' AND s."confirmExpiresAt" <= v_now
+    RETURNING s.id
+  )
+  SELECT coalesce(array_agg(e.id), ARRAY[]::integer[]) INTO v_ids FROM ended AS e;
+
+  DELETE FROM cartlify.newsletter_subscription_events AS e WHERE e."subscriptionId" = ANY (v_ids);
+
+  DELETE FROM cartlify.newsletter_subscriptions AS s WHERE s.id = ANY (v_ids);
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+-- Removes the proof of the consent of the subscriptions that ended long ago: an ended subscription,
+-- or one stopped by a bounce, with its journal and its mails (the rows of recipients go with it).
+-- The term counts from the end of the subscription; the data was collected when it was made, so the
+-- version of the policy in force then counts too. A subscription in force, paused or waiting is
+-- never taken. Returns how many subscriptions went.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_newsletter_consent () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionNewsletterConsentDays');
+  v_ids   integer[];
+  v_count integer;
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  SELECT coalesce(array_agg(s.id), ARRAY[]::integer[])
+  INTO v_ids
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.status IN ('ended', 'stopped_bounce')
+    AND s."endedAt" <= v_now - make_interval(days => v_floor - 1)
+    AND cartlify.retention_due ('retentionNewsletterConsentDays', s."createdAt", s."endedAt", v_now);
+
+  DELETE FROM cartlify.newsletter_subscription_events AS e WHERE e."subscriptionId" = ANY (v_ids);
+
+  DELETE FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.id = ANY (v_ids) AND s.status IN ('ended', 'stopped_bounce');
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
+-- Removes the rows of the mails of the campaigns that ended (finished, stopped or cancelled) once
+-- their term has passed; the campaign with its totals, the subscriptions and their journals stay. A
+-- campaign that is scheduled or sending has not ended, its mails are kept. The term counts from the
+-- end of the campaign (the finish, the stop or the cancellation); the data was collected when the
+-- rows were made, so the version in force then counts too. The rows of one campaign are made at
+-- once, so the policy is asked once for each campaign and moment, not for each mail. Returns how
+-- many rows went.
+CREATE OR REPLACE FUNCTION cartlify.cleanup_newsletter_recipients () RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := cartlify.retention_now();
+  v_floor integer := cartlify.retention_floor ('retentionNewsletterRecipientsDays');
+  v_count integer;
+BEGIN
+  IF v_floor IS NULL THEN
+    RETURN 0;
+  END IF;
+
+  DELETE FROM cartlify.newsletter_recipients AS r
+  USING (
+    SELECT g."campaignId", g.collected
+    FROM (
+      SELECT
+        m."campaignId",
+        m."createdAt" AS collected,
+        coalesce(c."finishedAt", c."stoppedAt", c."cancelledAt") AS ended
+      FROM cartlify.newsletter_recipients AS m
+      JOIN cartlify.newsletter_campaigns AS c ON c.id = m."campaignId"
+      WHERE c.status IN ('finished', 'stopped', 'cancelled')
+        AND coalesce(c."finishedAt", c."stoppedAt", c."cancelledAt") <= v_now - make_interval(days => v_floor - 1)
+      GROUP BY m."campaignId", m."createdAt", c."finishedAt", c."stoppedAt", c."cancelledAt"
+    ) AS g
+    WHERE cartlify.retention_due ('retentionNewsletterRecipientsDays', g.collected, g.ended, v_now)
+  ) AS due
+  WHERE r."campaignId" = due."campaignId" AND r."createdAt" = due.collected;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+
 -- Moves the data of a guest to the account of a user who has just signed in: the favorites (a
 -- variant the user has already is dropped) and the chats. Every guest chat becomes a chat of the user;
 -- an open guest chat is closed, with its counters and its request for an admin cleared, when
@@ -3938,7 +4061,13 @@ EXECUTE FUNCTION cartlify.legal_acceptances_before_insert ();
 
 -- Guard of users: the owner changes its own row but not its email, role, verification or
 -- deletion (the one exception: an unverified LOCAL account taken over by an OAuth provider);
--- root changes anything; the steps of the database verify an email or remove an avatar.
+-- root changes anything; the steps of the database verify an email or remove an avatar, and reset
+-- a language that was turned off (locale emptied, nothing else).
+-- The right to run the newsletters (canManageNewsletters) is the one column nobody changes by a
+-- statement of their own, root included: it is set and taken off by the function of the database
+-- that works for root (it runs as the owner, newsletter_set_manager), and it goes off by itself
+-- when the role stops being ADMIN (trg_users_clear_newsletter_manager, which runs before this
+-- guard and leaves the column off). A new account never has it either (trg_users_insert_columns).
 CREATE OR REPLACE FUNCTION cartlify.users_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -3948,6 +4077,12 @@ DECLARE
 BEGIN
   IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
     RETURN NEW;
+  END IF;
+
+  IF NEW."canManageNewsletters" IS DISTINCT FROM OLD."canManageNewsletters"
+     AND NOT (current_user = 'cartlify_owner' AND cartlify.is_root())
+     AND NOT (OLD."canManageNewsletters" AND NOT NEW."canManageNewsletters" AND NEW.role <> 'ADMIN') THEN
+    RAISE EXCEPTION 'USER_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
   END IF;
 
   IF cartlify.is_owner(NEW.id)
@@ -3978,6 +4113,10 @@ BEGIN
          NEW."avatarUrl" IS NULL
          AND NEW."publicId" IS NULL
          AND v_changed <@ ARRAY['avatarUrl', 'publicId', 'updatedAt']
+       )
+       OR (
+         NEW.locale IS NULL
+         AND v_changed <@ ARRAY['locale', 'updatedAt']
        )
      ) THEN
     RETURN NEW;
@@ -5022,6 +5161,23 @@ BEGIN
       v_valid := char_length(v_text) <= 300;
     WHEN 'shopName', 'emailFromName' THEN
       v_valid := char_length(v_text) <= 100;
+    WHEN 'newsletterFromName' THEN
+      -- the name the newsletters are sent under: one line of up to 100 characters, no control
+      -- character (a line break in a name would split the header of the mail); empty falls back to
+      -- emailFromName, then to the name of the shop
+      v_valid := v_type = 'string' AND char_length(v_text) <= 100 AND v_text !~ '[[:cntrl:]]';
+    WHEN 'newsletterTrustedDomains' THEN
+      -- up to 50 host names, each in lower case with at least two labels of letters, digits and
+      -- hyphens (a label of up to 63 characters, not starting or ending with a hyphen), the last one
+      -- starting with a letter, the whole name of up to 253 characters; no scheme, path, port or dot
+      -- at the end; none twice
+      v_valid := CASE
+        WHEN cartlify.shop_setting_list_valid(
+          p_value,
+          '^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$'
+        ) THEN jsonb_array_length(p_value) <= 50
+        ELSE false
+      END;
     WHEN 'emailReplyTo' THEN
       v_valid := char_length(v_text) <= 254;
     WHEN 'logoUrl', 'logoPublicId' THEN
@@ -5036,6 +5192,10 @@ BEGIN
       v_valid := v_whole AND v_number > 0;
     WHEN 'withdrawalGraceDays' THEN
       v_valid := v_whole AND v_number BETWEEN 0 AND 30;
+    WHEN 'newsletterLimitCount' THEN
+      v_valid := v_whole AND v_number BETWEEN 1 AND 100;
+    WHEN 'newsletterLimitDays' THEN
+      v_valid := v_whole AND v_number BETWEEN 1 AND 365;
     WHEN 'shopLocale' THEN
       v_valid := v_text ~ '^[a-z]{2}$';
     WHEN 'sellerLegalName' THEN
@@ -7329,5 +7489,2501 @@ DROP TRIGGER IF EXISTS trg_return_items_touch_return ON cartlify.return_items;
 CREATE TRIGGER trg_return_items_touch_return
 AFTER INSERT OR UPDATE ON cartlify.return_items FOR EACH ROW
 EXECUTE FUNCTION cartlify.return_items_touch_return ();
+
+------------------------------------------------------------
+-- NEWSLETTERS
+------------------------------------------------------------
+-- The tables: newsletter_subscriptions (the present state of one address), newsletter_subscription_events
+-- (its journal), newsletter_campaigns, newsletter_recipients (one mail of a campaign),
+-- newsletter_form_blocklist (addresses blocked for the public form). Their policies are in db/03,
+-- their checks and indexes in db/06. Nobody writes a subscription, a journal line, a recipient or a
+-- blocked address with a statement of the app: the functions of the database do (they run as the
+-- owner); a campaign is written by the one who runs the newsletters, and moved along by the system.
+-- A guard says what an update may change, comparing NEW with OLD (the rules of UPDATE GUARDS above).
+
+-- True for root, and for an ADMIN, signed in, whose account root allowed to run the newsletters
+-- (users."canManageNewsletters") and which is not deleted. The system (the admin context without a
+-- user id) is not one. The column is read here as the owner, so a policy of another table can ask
+-- it for the actor of the statement, whoever that is: this is data, not a flag of the session.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_manager () RETURNS boolean LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_id integer;
+BEGIN
+  IF cartlify.is_root() THEN
+    RETURN true;
+  END IF;
+
+  IF cartlify.current_actor_role() IS DISTINCT FROM 'ADMIN' THEN
+    RETURN false;
+  END IF;
+
+  v_id := cartlify.current_actor_id();
+
+  IF v_id IS NULL THEN
+    RETURN false;
+  END IF;
+
+  RETURN COALESCE(
+    (
+      SELECT u."canManageNewsletters"
+      FROM cartlify.users AS u
+      WHERE u.id = v_id AND u.role = 'ADMIN' AND u."deletedAt" IS NULL
+    ),
+    false
+  );
+END;
+$$;
+
+-- The version of the privacy policy in force, for the events of consent of a subscription; none
+-- while no policy is published. Internal: the functions of the newsletters call it.
+CREATE OR REPLACE FUNCTION cartlify.current_privacy_version () RETURNS integer LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT d.version
+  FROM cartlify.legal_documents AS d
+  WHERE d.kind = 'privacy'
+  ORDER BY d.version DESC
+  LIMIT 1;
+$$;
+
+-- The right to run the newsletters goes off when the account stops being an ADMIN. It runs before
+-- the guard of users (trg_users_update_columns, named to come after the other triggers), which
+-- then sees a column that is off together with the role that left. It does not set anything on.
+CREATE OR REPLACE FUNCTION cartlify.users_clear_newsletter_manager () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  NEW."canManageNewsletters" := false;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_users_clear_newsletter_manager ON cartlify.users;
+
+CREATE TRIGGER trg_users_clear_newsletter_manager
+BEFORE UPDATE OF role ON cartlify.users FOR EACH ROW
+WHEN (OLD.role = 'ADMIN' AND NEW.role <> 'ADMIN' AND NEW."canManageNewsletters")
+EXECUTE FUNCTION cartlify.users_clear_newsletter_manager ();
+
+-- Guard of a new account: it never brings the right to run the newsletters. The policy of db/03
+-- (users_insert) lets root insert an ADMIN and the system a verified buyer, and the column is off
+-- by default, but a statement may name it; the right is given afterwards, to an account that
+-- exists, by the function of the database for root (newsletter_set_manager), and by nobody else.
+-- A superuser (a data script by hand) is not checked, as rls does not check it either. The refusal
+-- is USER_INSERT_FORBIDDEN with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.users_insert_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF NEW."canManageNewsletters" THEN
+    RAISE EXCEPTION 'USER_INSERT_FORBIDDEN' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_users_insert_columns ON cartlify.users;
+
+CREATE TRIGGER trg_users_insert_columns
+BEFORE INSERT ON cartlify.users FOR EACH ROW
+EXECUTE FUNCTION cartlify.users_insert_columns ();
+
+-- The address a subscription takes when an admin erases its address
+-- (newsletter_admin_erase_address): the placeholder of the row, deleted+<id>@deleted.invalid ("invalid"
+-- is a top level domain nobody can register or mail). The guards of the subscriptions and of the
+-- journal and a policy of db/03 know an erased row by it. Internal: no execute right for the app.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_erased_email (p_id integer) RETURNS text LANGUAGE sql IMMUTABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT 'deleted+' || p_id || '@deleted.invalid';
+$$;
+
+-- 64 random characters in hex, from the generator of the database that is made for secrets: the new
+-- salt and the new hashes of the links of a subscription an admin erased, which nobody holds. Internal:
+-- no execute right for the app.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_random_hex () RETURNS text LANGUAGE sql VOLATILE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT encode(sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex');
+$$;
+
+-- Guard of the subscriptions: only the steps of the database (the owner) change a row, and these
+-- never: the id, the email, the time it was made. The account and the source change together,
+-- once, when the account asks for its own address and that address waits for the confirmation of a
+-- subscription of the form: the row becomes the subscription of the account. A subscription goes
+-- one way: waiting to in force or ended; in force to paused by a complaint, stopped by a bounce or
+-- ended; paused back to in force or on to stopped and ended; stopped to ended. An ended row is the
+-- proof of the consent and changes no more (but the time of the change).
+-- Two things are the exception, each a shape of its own that nothing else can pass:
+--   the erasing of an address (newsletter_admin_erase_address): the email becomes the placeholder of
+--     the row, the HMAC, the confirmation link and the account that ended it are emptied, the salt and
+--     both hashes of the links are replaced by new ones, a live row ends, an ended or stopped one
+--     keeps its state; the row may be ended or stopped already. Nothing else changes in that step, and
+--     a row that is anonymous already cannot be anonymized again;
+--   the account that ended a subscription of the form (endedUserId): written in the move that ends it,
+--     and emptied (alone) by the foreign key when the account row goes.
+-- The HMAC of the address changes in no other step but the erasing and the turn of a request of the
+-- form into the subscription of the account that asked for its own address. A superuser is not
+-- checked. The refusal is NEWSLETTER_SUBSCRIPTION_UPDATE_FORBIDDEN with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_subscriptions_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+  -- the step that erases an address, in the one shape it has
+  v_erasing boolean := coalesce(
+    current_user = 'cartlify_owner'
+    AND NEW.email <> OLD.email
+    AND NEW.email = cartlify.newsletter_erased_email (NEW.id)
+    AND NEW."emailHmac" IS NULL
+    AND NEW."confirmHash" IS NULL
+    AND NEW."confirmExpiresAt" IS NULL
+    AND NEW."endedUserId" IS NULL
+    AND NEW.status IN ('ended', 'stopped_bounce')
+    AND NEW."manageSalt" <> OLD."manageSalt"
+    AND NEW."manageHash" <> OLD."manageHash"
+    AND NEW."unsubscribeHash" <> OLD."unsubscribeHash"
+    AND v_changed <@ ARRAY[
+      'email', 'emailHmac', 'confirmHash', 'confirmExpiresAt', 'endedUserId', 'manageSalt',
+      'manageHash', 'unsubscribeHash', 'status', 'endedAt', 'endReason', 'updatedAt'
+    ],
+    false
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  -- the foreign key empties the account that ended a subscription, when that account row goes
+  IF current_user = 'cartlify_owner'
+     AND v_changed = ARRAY['endedUserId']
+     AND NEW."endedUserId" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND NEW.id = OLD.id
+     AND (NEW.email = OLD.email OR v_erasing)
+     AND NEW."createdAt" = OLD."createdAt"
+     AND (
+       NEW."emailHmac" IS NOT DISTINCT FROM OLD."emailHmac"
+       OR v_erasing
+       OR (OLD.source = 'form' AND NEW.source = 'account' AND OLD.status = 'pending')
+     )
+     AND (
+       NEW."endedUserId" IS NOT DISTINCT FROM OLD."endedUserId"
+       OR v_erasing
+       OR (OLD.status IN ('pending', 'active', 'paused_complaint') AND NEW.status = 'ended')
+     )
+     AND (
+       NEW.source = OLD.source
+       OR (OLD.source = 'form' AND NEW.source = 'account' AND OLD.status = 'pending')
+     )
+     AND (
+       NEW."userId" IS NOT DISTINCT FROM OLD."userId"
+       OR (
+         OLD.source = 'form' AND NEW.source = 'account' AND OLD.status = 'pending'
+         AND OLD."userId" IS NULL
+       )
+     )
+     AND (
+       (
+         NEW.status = OLD.status
+         AND (OLD.status <> 'ended' OR v_changed <@ ARRAY['updatedAt'] OR v_erasing)
+       )
+       OR (OLD.status = 'pending' AND NEW.status IN ('active', 'ended'))
+       OR (OLD.status = 'active' AND NEW.status IN ('paused_complaint', 'stopped_bounce', 'ended'))
+       OR (OLD.status = 'paused_complaint' AND NEW.status IN ('active', 'stopped_bounce', 'ended'))
+       OR (OLD.status = 'stopped_bounce' AND NEW.status = 'ended')
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'NEWSLETTER_SUBSCRIPTION_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_newsletter_subscriptions_update_columns ON cartlify.newsletter_subscriptions;
+
+CREATE TRIGGER trg_newsletter_subscriptions_update_columns
+BEFORE UPDATE ON cartlify.newsletter_subscriptions FOR EACH ROW
+EXECUTE FUNCTION cartlify.newsletter_subscriptions_update_columns ();
+
+-- Guard of the journal of a subscription: a line is history, written once and never changed. The
+-- policies of db/03 deny every update already; this guard says it a second time for a role that
+-- would skip them. The one change is the owner's, who empties the address and the browser of a line
+-- (nothing else of it) when its subscription was erased by an admin (it ended or stopped and has the
+-- placeholder of its id in the place of the address, newsletter_erased_email). A line is removed only
+-- by the owner (the cleanup of the retention terms, the removal of a subscriber by an admin, the
+-- removal of a request that was not confirmed) and only when its subscription has ended or stopped: a
+-- subscription in force keeps its proof. A superuser is not checked. The refusal is
+-- NEWSLETTER_EVENTS_APPEND_ONLY with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_subscription_events_append_only () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    IF TG_OP = 'DELETE' THEN
+      RETURN OLD;
+    END IF;
+
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'DELETE'
+     AND current_user = 'cartlify_owner'
+     AND EXISTS (
+       SELECT 1
+       FROM cartlify.newsletter_subscriptions AS s
+       WHERE s.id = OLD."subscriptionId" AND s.status IN ('ended', 'stopped_bounce')
+     ) THEN
+    RETURN OLD;
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+     AND current_user = 'cartlify_owner'
+     AND NEW.ip IS NULL
+     AND NEW."userAgent" IS NULL
+     AND to_jsonb(NEW) - 'ip' - 'userAgent' = to_jsonb(OLD) - 'ip' - 'userAgent'
+     AND EXISTS (
+       SELECT 1
+       FROM cartlify.newsletter_subscriptions AS s
+       WHERE s.id = OLD."subscriptionId"
+         AND s.status IN ('ended', 'stopped_bounce')
+         AND s.email = cartlify.newsletter_erased_email (s.id)
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'NEWSLETTER_EVENTS_APPEND_ONLY' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_newsletter_subscription_events_append_only ON cartlify.newsletter_subscription_events;
+
+CREATE TRIGGER trg_newsletter_subscription_events_append_only
+BEFORE UPDATE OR DELETE ON cartlify.newsletter_subscription_events FOR EACH ROW
+EXECUTE FUNCTION cartlify.newsletter_subscription_events_append_only ();
+
+-- Guard of the campaigns. A campaign goes draft, scheduled, sending, then finished or stopped; a
+-- scheduled one may go back to a draft or be cancelled. Who moves it: the one who runs the
+-- newsletters (newsletter_manager) schedules, unschedules, cancels and stops; the system (the admin
+-- context without a user id) starts a scheduled campaign and finishes a sending one, and cancels a
+-- scheduled one when the limit of the campaigns is reached at its start (the reason "limit" is
+-- written with the time of it, and nothing else changes; a cancellation of a manager has no reason).
+-- The text (the name, the language rule, the content, the time) changes only in a draft or a scheduled
+-- campaign,
+-- by a manager, who names themselves as the editor (updatedById). The data of the products and the
+-- start are the system's, at the start. The totals move only with the sending and after it (the
+-- system, and the steps of the database for a bounce, a complaint or an unsubscribe, which run as
+-- the owner for whoever asked): never by a manager, never while the campaign is a draft or
+-- scheduled; the number of planned mails only while it is sending. Nothing else changes, besides
+-- the link to the original: it is emptied by the foreign key (as the owner) when that draft is
+-- deleted. A superuser is not checked. The refusal is NEWSLETTER_CAMPAIGN_UPDATE_FORBIDDEN with
+-- the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_campaigns_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+  v_totals CONSTANT text[] := ARRAY[
+    'plannedCount', 'sentCount', 'rejectedCount', 'undeliveredCount', 'complaintCount',
+    'unsubscribedCount'
+  ];
+  v_text CONSTANT text[] := ARRAY['name', 'missingLocale', 'content', 'scheduledAt', 'updatedById', 'updatedAt'];
+  v_system boolean := cartlify.is_system();
+  v_actor integer := cartlify.current_actor_id();
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  -- the foreign key empties the link to a deleted draft, at any state of the copy
+  IF current_user = 'cartlify_owner'
+     AND v_changed = ARRAY['copiedFromId']
+     AND NEW."copiedFromId" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  -- the totals
+  IF NEW.status = OLD.status
+     AND OLD.status IN ('sending', 'finished', 'stopped', 'cancelled')
+     AND (v_system OR current_user = 'cartlify_owner')
+     AND v_changed <@ (v_totals || ARRAY['updatedAt'])
+     AND (NOT v_changed @> ARRAY['plannedCount'] OR OLD.status = 'sending') THEN
+    RETURN NEW;
+  END IF;
+
+  -- the system starts a scheduled campaign and ends a sending one
+  IF v_system
+     AND OLD.status = 'scheduled'
+     AND NEW.status = 'sending'
+     AND NEW."startedAt" IS NOT NULL
+     AND v_changed <@ ARRAY['status', 'startedAt', 'productsSnapshot', 'plannedCount', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_system
+     AND OLD.status = 'sending'
+     AND NEW.status = 'finished'
+     AND NEW."finishedAt" IS NOT NULL
+     AND v_changed <@ (ARRAY['status', 'finishedAt', 'updatedAt'] || v_totals) THEN
+    RETURN NEW;
+  END IF;
+
+  IF v_system
+     AND OLD.status = 'scheduled'
+     AND NEW.status = 'cancelled'
+     AND NEW."cancelledAt" IS NOT NULL
+     AND NEW."cancelReason" = 'limit'
+     AND v_changed <@ ARRAY['status', 'cancelledAt', 'cancelReason', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  -- the one who runs the newsletters
+  IF cartlify.newsletter_manager() AND NEW."updatedById" = v_actor THEN
+    IF OLD.status IN ('draft', 'scheduled')
+       AND NEW.status = OLD.status
+       AND v_changed <@ v_text THEN
+      RETURN NEW;
+    END IF;
+
+    IF OLD.status = 'draft'
+       AND NEW.status = 'scheduled'
+       AND NEW."scheduledAt" IS NOT NULL
+       AND v_changed <@ (v_text || ARRAY['status']) THEN
+      RETURN NEW;
+    END IF;
+
+    IF OLD.status = 'scheduled'
+       AND NEW.status = 'draft'
+       AND v_changed <@ (v_text || ARRAY['status']) THEN
+      RETURN NEW;
+    END IF;
+
+    IF OLD.status = 'scheduled'
+       AND NEW.status = 'cancelled'
+       AND NEW."cancelledAt" IS NOT NULL
+       AND v_changed <@ ARRAY['status', 'cancelledAt', 'updatedById', 'updatedAt'] THEN
+      RETURN NEW;
+    END IF;
+
+    IF OLD.status = 'sending'
+       AND NEW.status = 'stopped'
+       AND NEW."stoppedAt" IS NOT NULL
+       AND v_changed <@ ARRAY['status', 'stoppedAt', 'updatedById', 'updatedAt'] THEN
+      RETURN NEW;
+    END IF;
+  END IF;
+
+  RAISE EXCEPTION 'NEWSLETTER_CAMPAIGN_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_newsletter_campaigns_update_columns ON cartlify.newsletter_campaigns;
+
+CREATE TRIGGER trg_newsletter_campaigns_update_columns
+BEFORE UPDATE ON cartlify.newsletter_campaigns FOR EACH ROW
+EXECUTE FUNCTION cartlify.newsletter_campaigns_update_columns ();
+
+-- Guard of the recipients: the system and the steps of the database record how the sending went
+-- (the status, the tries, the id of the mail, the time), but a row keeps its campaign, its
+-- subscription and the language it was made in. The status goes one way: a mail that waits (queued)
+-- becomes any other; a mail that was sent can only be reported on by the provider (bounced, dropped,
+-- complained); a mail the provider refused (rejected), one the sending left out (skipped) and one
+-- reported on keep their status. A superuser is not checked. The refusal is
+-- NEWSLETTER_RECIPIENT_UPDATE_FORBIDDEN with the code 42501.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_recipients_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF (cartlify.is_system() OR current_user = 'cartlify_owner')
+     AND NEW.id = OLD.id
+     AND NEW."campaignId" = OLD."campaignId"
+     AND NEW."subscriptionId" = OLD."subscriptionId"
+     AND NEW.locale = OLD.locale
+     AND NEW."createdAt" = OLD."createdAt"
+     AND (
+       NEW.status = OLD.status
+       OR OLD.status = 'queued'
+       OR (OLD.status = 'sent' AND NEW.status IN ('bounced', 'dropped', 'complained'))
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'NEWSLETTER_RECIPIENT_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_newsletter_recipients_update_columns ON cartlify.newsletter_recipients;
+
+CREATE TRIGGER trg_newsletter_recipients_update_columns
+BEFORE UPDATE ON cartlify.newsletter_recipients FOR EACH ROW
+EXECUTE FUNCTION cartlify.newsletter_recipients_update_columns ();
+
+-- Guard of the blocklist: an entry is added or removed, never changed. The policies of db/03 deny
+-- every update already; this guard says it a second time for a role that would skip them. A
+-- superuser is not checked. The refusal is NEWSLETTER_FORM_BLOCK_UPDATE_FORBIDDEN with the code
+-- 42501.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_form_blocklist_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'NEWSLETTER_FORM_BLOCK_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_newsletter_form_blocklist_update_columns ON cartlify.newsletter_form_blocklist;
+
+CREATE TRIGGER trg_newsletter_form_blocklist_update_columns
+BEFORE UPDATE ON cartlify.newsletter_form_blocklist FOR EACH ROW
+EXECUTE FUNCTION cartlify.newsletter_form_blocklist_update_columns ();
+
+------------------------------------------------------------
+-- NEWSLETTERS: THE SUBSCRIPTION OF A PERSON
+------------------------------------------------------------
+-- The steps a person takes on their subscription, each a function that runs as the owner (the
+-- tables of the newsletters take no statement of the app, db/03) and checks the actor itself.
+-- Three kinds of caller:
+--   the form of the public page and the links of the mails (newsletter_request, _confirm, _not_me,
+--     _manage_*): a guest, or whoever holds the link. The functions do not look at who asks: the
+--     token in the hand is the key, and the answer of the form does not depend on the actor;
+--   the account on its own address (newsletter_subscribe_account, _profile_*): the owner of the
+--     account, or the system; the address comes from users, never from a parameter, and an address
+--     the account never proved is refused (NEWSLETTER_EMAIL_NOT_VERIFIED);
+--   the end of an account (newsletter_end_for_account): its owner, the system, an admin or root.
+-- Refusals are codes. Every change of state writes a line of the journal in the same transaction
+-- (newsletter_subscription_events); the lines of consent (requested, confirmed, subscribed) keep the
+-- version of the privacy policy in force. The guards of the tables (trg_newsletter_subscriptions_
+-- update_columns and the others) say which change is allowed at all, and an ended subscription is
+-- frozen: it stays as the proof of the consent until its term in the privacy policy.
+-- A subscription is "live" while it is pending, active or paused_complaint (one per address,
+-- db/06); it is "in force" while it is active or paused_complaint (the page of management and the
+-- profile work on those). A step that looks an address up waits for the other steps on the same
+-- address (an advisory lock for the transaction), so two requests cannot both make a row.
+-- The locks of the steps go in one order, so none waits for another in a circle: the HMAC of the
+-- address (the form and the blocklist know it: newsletter_request, _not_me, _block_add), then the
+-- address, then the row (FOR UPDATE). A step by the token of a link takes the row only.
+-- The time of a mail goes by the clock of the database in utc, as the other dates it writes.
+
+-- Writes a line of the journal of a subscription. Internal step: runs with the rights of the
+-- caller, which is a function of the newsletters running as the owner; the app has no execute
+-- right (db/01). The address and the browser are cut to a sane length. The version of the privacy
+-- policy goes to the lines of consent only (none while no policy is published).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_log_event (
+  p_subscription_id integer,
+  p_event text,
+  p_place text,
+  p_ip text,
+  p_user_agent text,
+  p_locale text,
+  p_campaign_id integer DEFAULT NULL,
+  p_actor_id integer DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  INSERT INTO cartlify.newsletter_subscription_events (
+    "subscriptionId",
+    event,
+    place,
+    ip,
+    "userAgent",
+    locale,
+    "campaignId",
+    "privacyVersion",
+    "actorId",
+    "createdAt"
+  )
+  VALUES (
+    p_subscription_id,
+    p_event::cartlify."NewsletterEventKind",
+    p_place::cartlify."NewsletterEventPlace",
+    left(p_ip, 64),
+    left(p_user_agent, 512),
+    p_locale,
+    p_campaign_id,
+    CASE
+      WHEN p_event IN ('requested', 'confirmed', 'subscribed') THEN cartlify.current_privacy_version()
+    END,
+    p_actor_id,
+    now() AT TIME ZONE 'UTC'
+  );
+END;
+$$;
+
+-- Ends a subscription in force with the reason given and writes the line of the journal that says
+-- so (in the language the subscription had). The row stays: it is the proof of the consent.
+-- p_ended_user_id names the account whose deletion ends a subscription of the form (the column
+-- endedUserId, the way the export of a deleted account finds it). Internal step, as above.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_end_subscription (
+  p_subscription_id integer,
+  p_reason text,
+  p_event text,
+  p_place text,
+  p_ip text,
+  p_user_agent text,
+  p_campaign_id integer DEFAULT NULL,
+  p_actor_id integer DEFAULT NULL,
+  p_ended_user_id integer DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now    timestamp := now() AT TIME ZONE 'UTC';
+  v_locale text;
+BEGIN
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    status = 'ended',
+    "confirmHash" = NULL,
+    "confirmExpiresAt" = NULL,
+    "endedAt" = v_now,
+    "endReason" = p_reason::cartlify."NewsletterEndReason",
+    "endedUserId" = p_ended_user_id,
+    "updatedAt" = v_now
+  WHERE s.id = p_subscription_id
+  RETURNING s.locale INTO v_locale;
+
+  PERFORM cartlify.newsletter_log_event (
+    p_subscription_id, p_event, p_place, p_ip, p_user_agent, v_locale, p_campaign_id, p_actor_id
+  );
+END;
+$$;
+
+-- The unsubscribe of the person who holds a link: the campaign whose mail they came from counts it
+-- (the total "unsubscribed", and the line of the journal names the campaign) when it has gone out
+-- (sending, finished or stopped) and has a mail to this very subscription (a row of its recipients).
+-- The id of the campaign comes from the address of the link, so anybody who holds a token could
+-- otherwise raise the totals of any campaign: an id of a campaign that does not exist, has not sent
+-- anything, or never mailed this subscription is passed over (the unsubscribe works, nothing is
+-- counted, the line names no campaign). Then the subscription ends with the reason unsubscribed. The
+-- caller found the subscription by a token and holds its row, and says that it is in force. Internal
+-- step, as above.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_unsubscribe_subscription (
+  p_subscription_id integer,
+  p_campaign_id integer,
+  p_place text,
+  p_ip text,
+  p_user_agent text
+) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now      timestamp := now() AT TIME ZONE 'UTC';
+  v_campaign integer;
+BEGIN
+  IF p_campaign_id IS NOT NULL THEN
+    UPDATE cartlify.newsletter_campaigns AS c
+    SET
+      "unsubscribedCount" = c."unsubscribedCount" + 1,
+      "updatedAt" = v_now
+    WHERE c.id = p_campaign_id
+      AND c.status IN ('sending', 'finished', 'stopped')
+      AND EXISTS (
+        SELECT 1
+        FROM cartlify.newsletter_recipients AS r
+        WHERE r."campaignId" = c.id AND r."subscriptionId" = p_subscription_id
+      );
+
+    IF FOUND THEN
+      v_campaign := p_campaign_id;
+    END IF;
+  END IF;
+
+  PERFORM cartlify.newsletter_end_subscription (
+    p_subscription_id, 'unsubscribed', 'unsubscribed', p_place, p_ip, p_user_agent, v_campaign
+  );
+END;
+$$;
+
+-- The data of subscriptions as a person gets it (the page of management, the export of the
+-- account): for each one the address, where it came from, the language, the state, the dates and
+-- its journal (what, where, from which address and browser, the campaign of an unsubscribe, the
+-- version of the policy). Dates are utc, ISO 8601. No token, no hash, no id of a row, no admin:
+-- these are not the person's data. Only what the person confirmed: a subscription of an account, and
+-- one of the form that has the time of its confirmation; a request that waits, or one that ended
+-- without ever being confirmed, is the doing of whoever typed the address and is not given. Internal
+-- step, as above.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_export_subscriptions (p_ids integer[]) RETURNS jsonb LANGUAGE sql STABLE
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+  SELECT jsonb_build_object(
+    'subscriptions',
+    COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'email', s.email,
+          'source', s.source,
+          'locale', s.locale,
+          'status', s.status,
+          'createdAt', to_char(s."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          'confirmedAt', to_char(s."confirmedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          'endedAt', to_char(s."endedAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          'endReason', s."endReason",
+          'events', (
+            SELECT COALESCE(
+              jsonb_agg(
+                jsonb_build_object(
+                  'event', e.event,
+                  'place', e.place,
+                  'ip', e.ip,
+                  'userAgent', e."userAgent",
+                  'locale', e.locale,
+                  'campaignId', e."campaignId",
+                  'privacyVersion', e."privacyVersion",
+                  'createdAt', to_char(e."createdAt", 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+                )
+                ORDER BY e.id
+              ),
+              '[]'::jsonb
+            )
+            FROM cartlify.newsletter_subscription_events AS e
+            WHERE e."subscriptionId" = s.id
+          )
+        )
+        ORDER BY s.id
+      ),
+      '[]'::jsonb
+    )
+  )
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.id = ANY (p_ids) AND (s.source = 'account' OR s."confirmedAt" IS NOT NULL);
+$$;
+
+-- The address of the account that speaks for itself, for the steps of the profile. Only the owner
+-- of the account or the system may ask (NEWSLETTER_FORBIDDEN, also for an account that does not
+-- exist or is deleted, so the answer says nothing about who has an account), and only for an
+-- address the account proved (NEWSLETTER_EMAIL_NOT_VERIFIED): a subscription sits on the address,
+-- and the one who registers an address they do not own must not see or change what is on it.
+-- Internal step, as above.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_account_email (p_user_id integer) RETURNS text LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_email    text;
+  v_verified boolean;
+BEGIN
+  IF NOT (cartlify.is_system() OR cartlify.is_owner(p_user_id)) THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  SELECT lower(btrim(u.email)), u."isVerified"
+  INTO v_email, v_verified
+  FROM cartlify.users AS u
+  WHERE u.id = p_user_id AND u."deletedAt" IS NULL;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  IF NOT v_verified THEN
+    RAISE EXCEPTION 'NEWSLETTER_EMAIL_NOT_VERIFIED';
+  END IF;
+
+  RETURN v_email;
+END;
+$$;
+
+-- The form of the public page: someone asks to subscribe an address (a guest, or an account that
+-- asks about an address that is not its own). Decides what the server must mail and records the
+-- request; sends nothing itself. The answer is the outcome (confirm: mail the link of the
+-- confirmation; already: mail "you are already subscribed"; nothing: mail nothing), the language
+-- the mail goes in (that of the new request for a confirmation, of the subscription for "already";
+-- empty means no language) and the salt of the link of management of the subscription the mail is
+-- about (the server derives the token from it). The outcome of an address, by its state:
+--   on the blocklist (the HMAC the server computed from the address)   nothing
+--   a live subscription of an account                                  nothing (its owner sees it
+--                                                                      in the profile)
+--   a subscription of the form in force or paused by a complaint       already
+--   a request that waits                                               confirm with a new token, the
+--                                                                      three days counted again, the
+--                                                                      old token dead and the language
+--                                                                      of this request
+--   no live row (also when it only has ended or bounced ones)          a new request, confirm
+-- A mail of either kind goes to an address at most once a day: the day is counted from the later of
+-- the last mail of confirmation (lastConfirmMailAt) and the last "already subscribed"
+-- (lastAlreadyMailAt) of the row, for both kinds, so after the one the other waits for its day too.
+-- A step that mails nothing changes nothing and writes nothing. The request that mails is a line of
+-- the journal (requested, with the version of the policy). The outcome does not depend on the actor:
+-- the server turns every one into the same public answer. The address is trimmed and lower-cased
+-- here. NEWSLETTER_LOCALE_INVALID: the language is not two lower-case letters (the server checks
+-- the languages the shop has before it asks). The step takes the lock of the HMAC, then the lock of
+-- the address, before it looks at the blocklist and the rows: a block of the address made at the
+-- same time (newsletter_block_add, newsletter_not_me) is seen by the request, or sees its request.
+-- p_manage_salt, p_manage_hash and p_unsubscribe_hash are for a new request: the salt, the sha256 of
+-- the token of the page of management and the sha256 of the token of the unsubscribe button of the
+-- mail clients, both tokens made from the salt; a request that finds a row keeps the links it has.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_request (
+  p_email text,
+  p_email_hmac text,
+  p_locale text,
+  p_confirm_hash text,
+  p_manage_salt text,
+  p_manage_hash text,
+  p_unsubscribe_hash text,
+  p_ip text,
+  p_user_agent text
+) RETURNS TABLE (outcome text, locale text, manage_salt text) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := now() AT TIME ZONE 'UTC';
+  v_email text := lower(btrim(p_email));
+  v_sub   cartlify.newsletter_subscriptions%ROWTYPE;
+  v_id    integer;
+  v_last  timestamp;
+BEGIN
+  IF p_locale IS NOT NULL AND p_locale !~ '^[a-z]{2}$' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_INVALID';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.hmac.' || coalesce(p_email_hmac, '')));
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || coalesce(v_email, '')));
+
+  IF EXISTS (
+    SELECT 1 FROM cartlify.newsletter_form_blocklist AS b WHERE b."emailHmac" = p_email_hmac
+  ) THEN
+    RETURN QUERY SELECT 'nothing'::text, NULL::text, NULL::text;
+    RETURN;
+  END IF;
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.email = v_email AND s.status IN ('pending', 'active', 'paused_complaint')
+  FOR UPDATE;
+
+  IF FOUND THEN
+    -- one limit for the mails of both kinds: the later of the two last mails
+    v_last := greatest(v_sub."lastConfirmMailAt", v_sub."lastAlreadyMailAt");
+
+    IF v_sub.status = 'pending' THEN
+      IF v_last IS NOT NULL AND v_last > v_now - interval '1 day' THEN
+        RETURN QUERY SELECT 'nothing'::text, NULL::text, NULL::text;
+        RETURN;
+      END IF;
+
+      UPDATE cartlify.newsletter_subscriptions AS s
+      SET
+        "confirmHash" = p_confirm_hash,
+        "confirmExpiresAt" = v_now + interval '3 days',
+        "lastConfirmMailAt" = v_now,
+        locale = p_locale,
+        "updatedAt" = v_now
+      WHERE s.id = v_sub.id;
+
+      PERFORM cartlify.newsletter_log_event (v_sub.id, 'requested', 'form', p_ip, p_user_agent, p_locale);
+
+      RETURN QUERY SELECT 'confirm'::text, p_locale, v_sub."manageSalt"::text;
+      RETURN;
+    END IF;
+
+    IF v_sub.source = 'account'
+       OR (v_last IS NOT NULL AND v_last > v_now - interval '1 day') THEN
+      RETURN QUERY SELECT 'nothing'::text, NULL::text, NULL::text;
+      RETURN;
+    END IF;
+
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      "lastAlreadyMailAt" = v_now,
+      "updatedAt" = v_now
+    WHERE s.id = v_sub.id;
+
+    RETURN QUERY SELECT 'already'::text, v_sub.locale::text, v_sub."manageSalt"::text;
+    RETURN;
+  END IF;
+
+  INSERT INTO cartlify.newsletter_subscriptions (
+    email,
+    "emailHmac",
+    source,
+    locale,
+    status,
+    "confirmHash",
+    "confirmExpiresAt",
+    "manageSalt",
+    "manageHash",
+    "unsubscribeHash",
+    "lastConfirmMailAt",
+    "createdAt",
+    "updatedAt"
+  )
+  VALUES (
+    v_email,
+    p_email_hmac,
+    'form',
+    p_locale,
+    'pending',
+    p_confirm_hash,
+    v_now + interval '3 days',
+    p_manage_salt,
+    p_manage_hash,
+    p_unsubscribe_hash,
+    v_now,
+    v_now,
+    v_now
+  )
+  RETURNING id INTO v_id;
+
+  PERFORM cartlify.newsletter_log_event (v_id, 'requested', 'form', p_ip, p_user_agent, p_locale);
+
+  RETURN QUERY SELECT 'confirm'::text, p_locale, p_manage_salt;
+END;
+$$;
+
+-- The mail of the form that the provider did not take: the form marked the address when it decided to
+-- mail it (lastConfirmMailAt for a confirmation, lastAlreadyMailAt for "you are already subscribed"),
+-- so that an address is mailed once a day at most, and a mail that never left must not cost the person
+-- their day. p_kind is confirm or already (NEWSLETTER_MAIL_KIND_INVALID otherwise). The mark of that
+-- kind on the live row of the address (a request that waits, a subscription in force or paused) is
+-- taken back, and only while it is a fresh one, set within the last 5 minutes: the mark of a mail that
+-- went long ago is the truth about that mail, whatever a caller says. The other mark stays. Returns
+-- true when a mark was taken back. Any actor, as the form: the server calls it for the request it
+-- just answered. The step holds the lock of the address, the one every step on it takes.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_request_mail_failed (
+  p_email text,
+  p_kind text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now    timestamp := now() AT TIME ZONE 'UTC';
+  v_email  text := lower(btrim(p_email));
+  v_fresh  CONSTANT interval := interval '5 minutes';
+BEGIN
+  IF p_kind IS NULL OR p_kind NOT IN ('confirm', 'already') THEN
+    RAISE EXCEPTION 'NEWSLETTER_MAIL_KIND_INVALID';
+  END IF;
+
+  IF v_email IS NULL OR v_email = '' THEN
+    RETURN false;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  IF p_kind = 'confirm' THEN
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      "lastConfirmMailAt" = NULL,
+      "updatedAt" = v_now
+    WHERE s.email = v_email
+      AND s.status IN ('pending', 'active', 'paused_complaint')
+      AND s."lastConfirmMailAt" > v_now - v_fresh;
+  ELSE
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      "lastAlreadyMailAt" = NULL,
+      "updatedAt" = v_now
+    WHERE s.email = v_email
+      AND s.status IN ('pending', 'active', 'paused_complaint')
+      AND s."lastAlreadyMailAt" > v_now - v_fresh;
+  END IF;
+
+  RETURN FOUND;
+END;
+$$;
+
+-- The link "confirm the subscription" of the mail: p_confirm_hash is the sha256 of its token. The
+-- request that waits (and has not expired) becomes a subscription in force; the token dies with
+-- it. confirmed (with the language of the subscription, empty for none) or invalid (the token is
+-- unknown, was used, was replaced by a newer mail, or is older than its three days). The line of the
+-- journal is confirmed, with the version of the privacy policy.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_confirm (
+  p_confirm_hash text,
+  p_ip text,
+  p_user_agent text
+) RETURNS TABLE (outcome text, locale text) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now timestamp := now() AT TIME ZONE 'UTC';
+  v_sub cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  p_confirm_hash := btrim(p_confirm_hash);
+
+  IF p_confirm_hash IS NULL OR p_confirm_hash = '' THEN
+    RETURN QUERY SELECT 'invalid'::text, NULL::text;
+    RETURN;
+  END IF;
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."confirmHash" = p_confirm_hash AND s.status = 'pending' AND s."confirmExpiresAt" > v_now
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN QUERY SELECT 'invalid'::text, NULL::text;
+    RETURN;
+  END IF;
+
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    status = 'active',
+    "confirmHash" = NULL,
+    "confirmExpiresAt" = NULL,
+    "confirmedAt" = v_now,
+    "updatedAt" = v_now
+  WHERE s.id = v_sub.id;
+
+  PERFORM cartlify.newsletter_log_event (v_sub.id, 'confirmed', 'form', p_ip, p_user_agent, v_sub.locale);
+
+  RETURN QUERY SELECT 'confirmed'::text, v_sub.locale::text;
+END;
+$$;
+
+-- The second button of the same mail, "this was not me, do not send more": p_confirm_hash is the
+-- sha256 of the same token, which works for as long as the confirmation does. The HMAC of the
+-- address goes to the blocklist as the person's own entry (an entry that exists stays), and the
+-- request is removed with its lines: it goes pending, ended (not_me), its lines, the row (the
+-- guards let a journal go only with an ended subscription). Returns true when it did so, false for
+-- a token that is unknown, spent or expired (nothing changes). A subscription in force of the
+-- address, if there is one, is not touched: the blocklist is for new requests. The step looks the
+-- request up first, takes the lock of its HMAC and of its address (the order of newsletter_request
+-- and newsletter_block_add, so a request of the address made at the same time is answered with
+-- nothing, not given a new request beside the entry), then reads the request again with its row
+-- locked, since another step may have changed it while this one waited.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_not_me (
+  p_confirm_hash text,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now timestamp := now() AT TIME ZONE 'UTC';
+  v_sub cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  p_confirm_hash := btrim(p_confirm_hash);
+
+  IF p_confirm_hash IS NULL OR p_confirm_hash = '' THEN
+    RETURN false;
+  END IF;
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."confirmHash" = p_confirm_hash AND s.status = 'pending' AND s."confirmExpiresAt" > v_now;
+
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.hmac.' || coalesce(v_sub."emailHmac", '')));
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_sub.email));
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.id = v_sub.id
+    AND s."confirmHash" = p_confirm_hash
+    AND s.status = 'pending'
+    AND s."confirmExpiresAt" > v_now
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  IF v_sub."emailHmac" IS NOT NULL THEN
+    INSERT INTO cartlify.newsletter_form_blocklist ("emailHmac", "byPerson", "createdAt")
+    VALUES (v_sub."emailHmac", true, v_now)
+    ON CONFLICT ("emailHmac") DO NOTHING;
+  END IF;
+
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    status = 'ended',
+    "confirmHash" = NULL,
+    "confirmExpiresAt" = NULL,
+    "endedAt" = v_now,
+    "endReason" = 'not_me',
+    "updatedAt" = v_now
+  WHERE s.id = v_sub.id;
+
+  DELETE FROM cartlify.newsletter_subscription_events AS e WHERE e."subscriptionId" = v_sub.id;
+
+  DELETE FROM cartlify.newsletter_subscriptions AS s WHERE s.id = v_sub.id;
+
+  RETURN true;
+END;
+$$;
+
+-- The page "manage the subscription" shows the subscription behind the link of a mail:
+-- p_manage_hash is the sha256 of the token of management. The link works while the subscription is
+-- in force or paused by a complaint (the server derives the token of every mail from the salt of
+-- the row); for a request that waits, an ended or a stopped subscription, and for a token nobody
+-- was given, it is NEWSLETTER_LINK_INVALID. can_change_locale: only a subscription of the form has
+-- its language changed here, the one of an account is changed in the profile.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_manage_get (p_manage_hash text) RETURNS TABLE (
+  email text,
+  source text,
+  locale text,
+  status text,
+  can_change_locale boolean
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  RETURN QUERY
+  SELECT s.email::text, s.source::text, s.locale::text, s.status::text, s.source = 'form'
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."manageHash" = btrim(p_manage_hash) AND s.status IN ('active', 'paused_complaint');
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_LINK_INVALID';
+  END IF;
+END;
+$$;
+
+-- Changes the language of a subscription of the form from the page of management. Returns true
+-- when it changed, false when the subscription has that language already (nothing is written).
+-- NEWSLETTER_LOCALE_INVALID: not two lower-case letters (the page cannot choose "no language");
+-- NEWSLETTER_LOCALE_NOT_ALLOWED: the subscription is the one of an account (its language is
+-- changed in the profile); NEWSLETTER_LINK_INVALID: no subscription in force behind the link. The
+-- line of the journal is locale_changed, in the new language.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_manage_set_locale (
+  p_manage_hash text,
+  p_locale text,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now timestamp := now() AT TIME ZONE 'UTC';
+  v_sub cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  IF p_locale IS NULL OR p_locale !~ '^[a-z]{2}$' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_INVALID';
+  END IF;
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."manageHash" = btrim(p_manage_hash) AND s.status IN ('active', 'paused_complaint')
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_LINK_INVALID';
+  END IF;
+
+  IF v_sub.source <> 'form' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_NOT_ALLOWED';
+  END IF;
+
+  IF v_sub.locale IS NOT DISTINCT FROM p_locale THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    locale = p_locale,
+    "updatedAt" = v_now
+  WHERE s.id = v_sub.id;
+
+  PERFORM cartlify.newsletter_log_event (
+    v_sub.id, 'locale_changed', 'manage_page', p_ip, p_user_agent, p_locale
+  );
+
+  RETURN true;
+END;
+$$;
+
+-- Ends the subscription behind the link of management, from the page of management (the place is
+-- manage_page, the only one this step takes: the button of the mail client has a token and a function
+-- of its own, newsletter_unsubscribe_one_click). Returns true when it ended the subscription now;
+-- false for a link whose subscription is not in force any more (ended already, stopped, or only a
+-- request), so a second tap or a double submit changes nothing. NEWSLETTER_LINK_INVALID: a token
+-- nobody was given; NEWSLETTER_PLACE_INVALID: any other place. p_campaign_id is the campaign whose
+-- mail the person came from (newsletter_unsubscribe_subscription counts it).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_manage_unsubscribe (
+  p_manage_hash text,
+  p_campaign_id integer,
+  p_place text,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_sub cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  IF p_place IS NULL OR p_place <> 'manage_page' THEN
+    RAISE EXCEPTION 'NEWSLETTER_PLACE_INVALID';
+  END IF;
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."manageHash" = btrim(p_manage_hash)
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_LINK_INVALID';
+  END IF;
+
+  IF v_sub.status NOT IN ('active', 'paused_complaint') THEN
+    RETURN false;
+  END IF;
+
+  PERFORM cartlify.newsletter_unsubscribe_subscription (
+    v_sub.id, p_campaign_id, p_place, p_ip, p_user_agent
+  );
+
+  RETURN true;
+END;
+$$;
+
+-- The button of the mail client (RFC 8058, the one-click unsubscribe): p_unsubscribe_hash is the
+-- sha256 of the token of the unsubscribe that every mail of the subscription carries in the header
+-- List-Unsubscribe. It is a token of its own, made from the salt of the row with a mark of its own, and
+-- opens this and nothing else: not the page of management, not its export, not the language. Ends the
+-- subscription in force or paused, the place of the line of the journal being mail_client; returns true
+-- when it ended it now, false for a link whose subscription is not in force any more, so a second press
+-- changes nothing. NEWSLETTER_LINK_INVALID: a token nobody was given (the token of the page of
+-- management is one). p_campaign_id is the campaign whose mail the person came from
+-- (newsletter_unsubscribe_subscription counts it). Any actor: the token in the hand is the key.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_unsubscribe_one_click (
+  p_unsubscribe_hash text,
+  p_campaign_id integer,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_sub cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."unsubscribeHash" = btrim(p_unsubscribe_hash)
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_LINK_INVALID';
+  END IF;
+
+  IF v_sub.status NOT IN ('active', 'paused_complaint') THEN
+    RETURN false;
+  END IF;
+
+  PERFORM cartlify.newsletter_unsubscribe_subscription (
+    v_sub.id, p_campaign_id, 'mail_client', p_ip, p_user_agent
+  );
+
+  RETURN true;
+END;
+$$;
+
+-- Puts a subscription paused by a complaint back in force, from the page of management. Returns
+-- true when it did, false when the subscription was in force already. The line of the journal is
+-- restored. (The server takes the address off the list of complaints of the provider.)
+-- NEWSLETTER_LINK_INVALID: no subscription in force or paused behind the link.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_manage_resume (
+  p_manage_hash text,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now timestamp := now() AT TIME ZONE 'UTC';
+  v_sub cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."manageHash" = btrim(p_manage_hash) AND s.status IN ('active', 'paused_complaint')
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_LINK_INVALID';
+  END IF;
+
+  IF v_sub.status = 'active' THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    status = 'active',
+    "updatedAt" = v_now
+  WHERE s.id = v_sub.id;
+
+  PERFORM cartlify.newsletter_log_event (
+    v_sub.id, 'restored', 'manage_page', p_ip, p_user_agent, v_sub.locale
+  );
+
+  RETURN true;
+END;
+$$;
+
+-- The data of the subscription behind the link and its journal, for the person to download:
+-- {"subscriptions": [one]} (newsletter_export_subscriptions). NEWSLETTER_LINK_INVALID: no
+-- subscription in force or paused behind the link.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_manage_export (p_manage_hash text) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_id integer;
+BEGIN
+  SELECT s.id
+  INTO v_id
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s."manageHash" = btrim(p_manage_hash) AND s.status IN ('active', 'paused_complaint');
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_LINK_INVALID';
+  END IF;
+
+  RETURN cartlify.newsletter_export_subscriptions (ARRAY[v_id]);
+END;
+$$;
+
+-- An account subscribes its own address (from the profile, or at the registration). The owner of
+-- the account or the system calls it (NEWSLETTER_FORBIDDEN); the address is the one of the account
+-- and must be verified (NEWSLETTER_EMAIL_NOT_VERIFIED). The blocklist is for the form and is not
+-- asked here. Returns
+--   created    the address had no live subscription: a subscription of the account, in force at once;
+--   converted  a request of the form was waiting on the address: it becomes the subscription of the
+--              account in the same row (the history stays, the language is the one given here, and
+--              the new salt and hash of the link of management replace the old, never mailed);
+--   already    the address has a subscription in force or paused (of the form or of the account):
+--              nothing changes.
+-- p_manage_salt, p_manage_hash and p_unsubscribe_hash are the salt, the sha256 of the token of
+-- management and the sha256 of the token of the unsubscribe the server derived for a new subscription
+-- (or for the one a request is turned into); p_place is profile or registration
+-- (NEWSLETTER_PLACE_INVALID);
+-- p_locale is two lower-case letters or empty for no language (NEWSLETTER_LOCALE_INVALID). The
+-- line of the journal is subscribed, with the version of the privacy policy.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_subscribe_account (
+  p_user_id integer,
+  p_locale text,
+  p_manage_salt text,
+  p_manage_hash text,
+  p_unsubscribe_hash text,
+  p_place text,
+  p_ip text,
+  p_user_agent text
+) RETURNS text LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := now() AT TIME ZONE 'UTC';
+  v_email text := cartlify.newsletter_account_email (p_user_id);
+  v_sub   cartlify.newsletter_subscriptions%ROWTYPE;
+  v_id    integer;
+BEGIN
+  IF p_place IS NULL OR p_place NOT IN ('profile', 'registration') THEN
+    RAISE EXCEPTION 'NEWSLETTER_PLACE_INVALID';
+  END IF;
+
+  IF p_locale IS NOT NULL AND p_locale !~ '^[a-z]{2}$' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_INVALID';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.email = v_email AND s.status IN ('pending', 'active', 'paused_complaint')
+  FOR UPDATE;
+
+  IF FOUND THEN
+    IF v_sub.status <> 'pending' THEN
+      RETURN 'already';
+    END IF;
+
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      source = 'account',
+      "userId" = p_user_id,
+      "emailHmac" = NULL,
+      locale = p_locale,
+      status = 'active',
+      "confirmHash" = NULL,
+      "confirmExpiresAt" = NULL,
+      "confirmedAt" = v_now,
+      "manageSalt" = p_manage_salt,
+      "manageHash" = p_manage_hash,
+      "unsubscribeHash" = p_unsubscribe_hash,
+      "updatedAt" = v_now
+    WHERE s.id = v_sub.id;
+
+    PERFORM cartlify.newsletter_log_event (v_sub.id, 'subscribed', p_place, p_ip, p_user_agent, p_locale);
+
+    RETURN 'converted';
+  END IF;
+
+  INSERT INTO cartlify.newsletter_subscriptions (
+    email,
+    "userId",
+    source,
+    locale,
+    status,
+    "manageSalt",
+    "manageHash",
+    "unsubscribeHash",
+    "confirmedAt",
+    "createdAt",
+    "updatedAt"
+  )
+  VALUES (
+    v_email,
+    p_user_id,
+    'account',
+    p_locale,
+    'active',
+    p_manage_salt,
+    p_manage_hash,
+    p_unsubscribe_hash,
+    v_now,
+    v_now,
+    v_now
+  )
+  RETURNING id INTO v_id;
+
+  PERFORM cartlify.newsletter_log_event (v_id, 'subscribed', p_place, p_ip, p_user_agent, p_locale);
+
+  RETURN 'created';
+END;
+$$;
+
+-- The subscription in force (or paused by a complaint) on the address of the account, whether the
+-- account made it or the form did; no row when there is none (a request that waits is not one
+-- yet). can_change_locale: the language of a subscription of the account is changed here, the one
+-- of the form on its page of management. subscribed_at: when it came into force (utc). The owner
+-- of the account or the system (NEWSLETTER_FORBIDDEN), an address the account proved
+-- (NEWSLETTER_EMAIL_NOT_VERIFIED).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_profile_get (p_user_id integer) RETURNS TABLE (
+  source text,
+  locale text,
+  status text,
+  can_change_locale boolean,
+  subscribed_at timestamp
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_email text := cartlify.newsletter_account_email (p_user_id);
+BEGIN
+  RETURN QUERY
+  SELECT
+    s.source::text,
+    s.locale::text,
+    s.status::text,
+    s.source = 'account',
+    COALESCE(s."confirmedAt", s."createdAt")
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.email = v_email AND s.status IN ('active', 'paused_complaint');
+END;
+$$;
+
+-- Ends the subscription in force (or paused) on the address of the account, whichever made it.
+-- Returns true when it ended one, false when there was none (a request that waits is not ended
+-- here). Afterwards the profile can subscribe the account anew (newsletter_subscribe_account). The
+-- line of the journal is unsubscribed, at the profile. The owner of the account or the system
+-- (NEWSLETTER_FORBIDDEN), an address the account proved (NEWSLETTER_EMAIL_NOT_VERIFIED).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_profile_unsubscribe (
+  p_user_id integer,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_email text := cartlify.newsletter_account_email (p_user_id);
+  v_id    integer;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  SELECT s.id
+  INTO v_id
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.email = v_email AND s.status IN ('active', 'paused_complaint')
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  PERFORM cartlify.newsletter_end_subscription (
+    v_id, 'unsubscribed', 'unsubscribed', 'profile', p_ip, p_user_agent
+  );
+
+  RETURN true;
+END;
+$$;
+
+-- Changes the language of the subscription of the account from the profile. Returns true when it
+-- changed, false when there is no subscription in force or it has that language already (nothing is
+-- written). The language of a subscription made by the form is changed on its page of management
+-- only (NEWSLETTER_LOCALE_NOT_ALLOWED). NEWSLETTER_LOCALE_INVALID: not two lower-case letters. The
+-- owner of the account or the system (NEWSLETTER_FORBIDDEN), an address the account proved
+-- (NEWSLETTER_EMAIL_NOT_VERIFIED). The line of the journal is locale_changed, in the new language.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_profile_set_locale (
+  p_user_id integer,
+  p_locale text,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := now() AT TIME ZONE 'UTC';
+  v_email text := cartlify.newsletter_account_email (p_user_id);
+  v_sub   cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  IF p_locale IS NULL OR p_locale !~ '^[a-z]{2}$' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_INVALID';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.email = v_email AND s.status IN ('active', 'paused_complaint')
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  IF v_sub.source <> 'account' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_NOT_ALLOWED';
+  END IF;
+
+  IF v_sub.locale IS NOT DISTINCT FROM p_locale THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    locale = p_locale,
+    "updatedAt" = v_now
+  WHERE s.id = v_sub.id;
+
+  PERFORM cartlify.newsletter_log_event (v_sub.id, 'locale_changed', 'profile', p_ip, p_user_agent, p_locale);
+
+  RETURN true;
+END;
+$$;
+
+-- Puts the subscription paused by a complaint back in force, from the profile. Returns true when
+-- it did, false when there is none paused. The line of the journal is restored. (The server takes
+-- the address off the list of complaints of the provider.) The owner of the account or the system
+-- (NEWSLETTER_FORBIDDEN), an address the account proved (NEWSLETTER_EMAIL_NOT_VERIFIED).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_profile_resume (
+  p_user_id integer,
+  p_ip text,
+  p_user_agent text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := now() AT TIME ZONE 'UTC';
+  v_email text := cartlify.newsletter_account_email (p_user_id);
+  v_sub   cartlify.newsletter_subscriptions%ROWTYPE;
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  SELECT s.*
+  INTO v_sub
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.email = v_email AND s.status = 'paused_complaint'
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    status = 'active',
+    "updatedAt" = v_now
+  WHERE s.id = v_sub.id;
+
+  PERFORM cartlify.newsletter_log_event (v_sub.id, 'restored', 'profile', p_ip, p_user_agent, v_sub.locale);
+
+  RETURN true;
+END;
+$$;
+
+-- The data of every subscription of the account that the person confirmed, with its journal, for the
+-- export of the account: {"subscriptions": [...]}, oldest first (newsletter_export_subscriptions; a
+-- request that was never confirmed is not given). The subscriptions are those the address of the
+-- account has had (in force, ended, stopped), those that belong to the account (userId) and those of
+-- the form that its deletion ended (endedUserId), which is how a deleted account, whose address is
+-- not its own any more, is found. The owner of the account or the system (NEWSLETTER_FORBIDDEN, also
+-- for an account that does not exist); an account that is not deleted must have proved its address
+-- (NEWSLETTER_EMAIL_NOT_VERIFIED), a deleted one is looked up by its id only.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_profile_export (p_user_id integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_deleted timestamp;
+  v_email   text;
+BEGIN
+  IF NOT (cartlify.is_system() OR cartlify.is_owner(p_user_id)) THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  SELECT u."deletedAt"
+  INTO v_deleted
+  FROM cartlify.users AS u
+  WHERE u.id = p_user_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  IF v_deleted IS NULL THEN
+    v_email := cartlify.newsletter_account_email (p_user_id);
+  END IF;
+
+  RETURN cartlify.newsletter_export_subscriptions (
+    ARRAY(
+      SELECT s.id
+      FROM cartlify.newsletter_subscriptions AS s
+      WHERE s."userId" = p_user_id
+         OR s."endedUserId" = p_user_id
+         OR (v_email IS NOT NULL AND s.email = v_email)
+      ORDER BY s.id
+    )
+  );
+END;
+$$;
+
+-- The account is going away: ends what is in force (or paused) on its address, a subscription of
+-- the account and one of the form alike (the journal line is account_deleted; the reason of the end
+-- is account_deleted). The subscription of the form it ends names the account (endedUserId), as the
+-- address will not be the account's after the deletion and the export of the deleted account finds
+-- the subscription by it. Returns how many it ended. The email comes from users, so call it before the
+-- email is made anonymous. A request that waits is left to its three days. The subscription of the
+-- form sits on the address, not on the account, so it is ended only when the account proved the
+-- address (an unverified account ends only what is its own). Callable by the owner of the account
+-- (the line says profile), the system (system) and an admin or root with an id (admin, with their
+-- id on the line); anyone else is NEWSLETTER_FORBIDDEN. An account that does not exist ends nothing.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_end_for_account (p_user_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_email    text;
+  v_verified boolean;
+  v_place    text;
+  v_actor    integer;
+  v_count    integer := 0;
+  v_row      record;
+BEGIN
+  IF cartlify.is_owner(p_user_id) THEN
+    v_place := 'profile';
+  ELSIF cartlify.is_system() THEN
+    v_place := 'system';
+  ELSIF cartlify.is_admin() AND cartlify.current_actor_id() IS NOT NULL THEN
+    v_place := 'admin';
+    v_actor := cartlify.current_actor_id();
+  ELSE
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  SELECT lower(btrim(u.email)), u."isVerified"
+  INTO v_email, v_verified
+  FROM cartlify.users AS u
+  WHERE u.id = p_user_id;
+
+  IF NOT FOUND THEN
+    RETURN 0;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  FOR v_row IN
+    SELECT s.id, s.source
+    FROM cartlify.newsletter_subscriptions AS s
+    WHERE s.status IN ('active', 'paused_complaint')
+      AND (s."userId" = p_user_id OR (v_verified AND s.email = v_email))
+    ORDER BY s.id
+    FOR UPDATE
+  LOOP
+    PERFORM cartlify.newsletter_end_subscription (
+      v_row.id,
+      'account_deleted',
+      'account_deleted',
+      v_place,
+      NULL,
+      NULL,
+      NULL,
+      v_actor,
+      CASE WHEN v_row.source = 'form' THEN p_user_id END
+    );
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+------------------------------------------------------------
+-- NEWSLETTERS: THE WEBHOOK, THE PEOPLE WHO RUN THEM, ROOT
+------------------------------------------------------------
+-- What SendGrid tells (newsletter_apply_event: the system), what the people who run the newsletters
+-- do to the subscribers and to the blocklist (newsletter_admin_erase_address, newsletter_block_add:
+-- a manager, i.e. root or an admin root allowed), and what only root does (newsletter_set_manager,
+-- newsletter_locale_counts, newsletter_reset_locale). Each is a function that runs as the owner and
+-- checks the actor itself (NEWSLETTER_FORBIDDEN). Taking an address off the blocklist is not a
+-- function: a manager deletes the row, the policy of db/03 allows it. The cleanups of the retention
+-- terms are with the others, above.
+
+-- Removes a subscription and everything of it: a subscription that is live or in force is ended
+-- first, with the reason given (the guard of the journal lets a line go only with an ended or
+-- stopped subscription), then the lines of its journal and the row go, the mails of its campaigns
+-- with it. Nothing is kept: the step for a request that was never confirmed (its address was
+-- blocked). Internal step: runs with the rights of the caller,
+-- which is a function of the newsletters running as the owner; the app has no execute right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_erase_subscription (
+  p_subscription_id integer,
+  p_reason text
+) RETURNS void LANGUAGE plpgsql
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now timestamp := now() AT TIME ZONE 'UTC';
+BEGIN
+  UPDATE cartlify.newsletter_subscriptions AS s
+  SET
+    status = 'ended',
+    "confirmHash" = NULL,
+    "confirmExpiresAt" = NULL,
+    "endedAt" = v_now,
+    "endReason" = p_reason::cartlify."NewsletterEndReason",
+    "updatedAt" = v_now
+  WHERE s.id = p_subscription_id AND s.status IN ('pending', 'active', 'paused_complaint');
+
+  DELETE FROM cartlify.newsletter_subscription_events AS e WHERE e."subscriptionId" = p_subscription_id;
+
+  DELETE FROM cartlify.newsletter_subscriptions AS s WHERE s.id = p_subscription_id;
+END;
+$$;
+
+-- An event of SendGrid about a mail of a campaign, by the id of the row of the mail (the server
+-- puts it into the mail, custom_args). Only the system reports (NEWSLETTER_FORBIDDEN). The event is
+-- one of bounce (the address does not exist), dropped (SendGrid did not deliver) and spamreport
+-- (the person marked the mail as spam); any other is NEWSLETTER_EVENT_INVALID, whoever the mail is.
+-- Returns applied, or unknown for a mail this database has no row for, or one that SendGrid refused
+-- (it has no outcome: the event is of some other mail, e.g. of another environment on the same
+-- account of SendGrid) - never an error. A mail that waits (queued) counts as sent: SendGrid tells
+-- of a mail only after it took it, and it can tell before the sending has written down that it
+-- did (a bounce comes within a second), so the event is not lost; the row then gets the time the
+-- event came as the time it was sent, which the check of the table wants of a mail with an
+-- outcome (the sending that comes late writes only a row that still waits). What an event does:
+--   bounce: the mail is bounced, the subscription stops (stopped_bounce, the reason bounced, a line
+--     bounced from the webhook) if it is in force or paused, the campaign counts it as undelivered;
+--   dropped: the mail is dropped and counted as undelivered; the subscription stays - unless
+--     SendGrid says why (p_reason, the text of its report) and the reason is that the address is one it
+--     knows as bounced ("Bounced Address") or as one that reports spam ("Spam Reporting Address", in
+--     any case): then the subscription is dealt with as the event of that reason would deal with it
+--     (the bounce below, the report below), and the campaign still counts the mail as undelivered, not
+--     as a complaint; any other reason, or none, leaves the subscription;
+--   spamreport: the mail is complained about and counted as a complaint, a subscription in force is
+--     paused (paused_complaint, a line complaint); one that is paused already, ended or stopped is
+--     left as it is.
+-- The reason is read for the event dropped only; on the others it is ignored.
+-- The first outcome of a mail is its outcome: an event for a mail that is bounced, dropped or
+-- complained about already, the same again (SendGrid sends an event twice when a batch fails) or
+-- another one, changes nothing and still answers applied, so nothing is counted twice. A
+-- subscription that ended or stopped meanwhile is not touched (no line, no error), the mail and the
+-- campaign are still told. The lines name the campaign whose mail caused them. Locks: the
+-- subscription, then the mail, then the campaign, the order of the steps of a person.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_apply_event (
+  p_recipient_id integer,
+  p_event text,
+  p_reason text DEFAULT NULL
+) RETURNS text LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now       timestamp := now() AT TIME ZONE 'UTC';
+  v_sub_id    integer;
+  v_sub       cartlify.newsletter_subscriptions%ROWTYPE;
+  v_recipient cartlify.newsletter_recipients%ROWTYPE;
+  v_reason    text := lower(btrim(p_reason));
+  -- what the event does to the subscription: the event itself, or the event its reason stands for
+  v_effect    text;
+BEGIN
+  IF NOT cartlify.is_system() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  IF p_event IS NULL OR p_event NOT IN ('bounce', 'dropped', 'spamreport') THEN
+    RAISE EXCEPTION 'NEWSLETTER_EVENT_INVALID';
+  END IF;
+
+  v_effect := CASE
+    WHEN p_event = 'dropped' AND v_reason = 'bounced address' THEN 'bounce'
+    WHEN p_event = 'dropped' AND v_reason = 'spam reporting address' THEN 'spamreport'
+    ELSE p_event
+  END;
+
+  SELECT r."subscriptionId" INTO v_sub_id FROM cartlify.newsletter_recipients AS r WHERE r.id = p_recipient_id;
+
+  IF NOT FOUND THEN
+    RETURN 'unknown';
+  END IF;
+
+  SELECT s.* INTO v_sub FROM cartlify.newsletter_subscriptions AS s WHERE s.id = v_sub_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN 'unknown';
+  END IF;
+
+  SELECT r.* INTO v_recipient FROM cartlify.newsletter_recipients AS r WHERE r.id = p_recipient_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RETURN 'unknown';
+  END IF;
+
+  IF v_recipient.status IN ('bounced', 'dropped', 'complained') THEN
+    RETURN 'applied';
+  END IF;
+
+  IF v_recipient.status NOT IN ('queued', 'sent') THEN
+    RETURN 'unknown';
+  END IF;
+
+  UPDATE cartlify.newsletter_recipients AS r
+  SET
+    status = (
+      CASE p_event WHEN 'bounce' THEN 'bounced' WHEN 'dropped' THEN 'dropped' ELSE 'complained' END
+    )::cartlify."NewsletterRecipientStatus",
+    "sentAt" = coalesce(r."sentAt", v_now),
+    "updatedAt" = v_now
+  WHERE r.id = v_recipient.id;
+
+  UPDATE cartlify.newsletter_campaigns AS c
+  SET
+    "undeliveredCount" = c."undeliveredCount" + CASE WHEN p_event = 'spamreport' THEN 0 ELSE 1 END,
+    "complaintCount" = c."complaintCount" + CASE WHEN p_event = 'spamreport' THEN 1 ELSE 0 END,
+    "updatedAt" = v_now
+  WHERE c.id = v_recipient."campaignId";
+
+  IF v_effect = 'bounce' AND v_sub.status IN ('active', 'paused_complaint') THEN
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      status = 'stopped_bounce',
+      "confirmHash" = NULL,
+      "confirmExpiresAt" = NULL,
+      "endedAt" = v_now,
+      "endReason" = 'bounced',
+      "updatedAt" = v_now
+    WHERE s.id = v_sub.id;
+
+    PERFORM cartlify.newsletter_log_event (
+      v_sub.id, 'bounced', 'webhook', NULL, NULL, v_sub.locale, v_recipient."campaignId"
+    );
+  ELSIF v_effect = 'spamreport' AND v_sub.status = 'active' THEN
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      status = 'paused_complaint',
+      "updatedAt" = v_now
+    WHERE s.id = v_sub.id;
+
+    PERFORM cartlify.newsletter_log_event (
+      v_sub.id, 'complaint', 'webhook', NULL, NULL, v_sub.locale, v_recipient."campaignId"
+    );
+  END IF;
+
+  RETURN 'applied';
+END;
+$$;
+
+-- An admin erases an address on the word of the person (the request comes to support@): every
+-- subscription the address ever had is made anonymous in place, and the row stays as the proof that
+-- there was a consent (the dates, the states and the lines of the journal remain), without a trace of
+-- who gave it. For each row of the address, whatever its state:
+--   the address becomes the placeholder of the row (newsletter_erased_email), the HMAC of the address
+--     and the confirmation link are emptied, the account that ended it is forgotten;
+--   the salt and the hashes of the links of management and of the unsubscribe are replaced by random
+--     ones that nobody holds, so no link of a mail the address was sent opens anything;
+--   what is live (waiting, in force, paused) ends, with the reason removed_by_admin and the time now;
+--     one that ended or was stopped keeps its state, its reason and its time;
+--   the address and the browser of every line of its journal are emptied.
+-- What the mails of the campaigns say of the row, the totals, and the blocklist are not touched: the
+-- blocklist holds the HMAC of an address that asked for no more mail, which still should not get any.
+-- A mail of a campaign still waiting to be sent to a subscription that ended is left out by the
+-- sending. Only a manager (NEWSLETTER_FORBIDDEN, before the id is looked at). The id names any row of
+-- the address; the rows are the ones that have the address of that row, and a row that is anonymous
+-- already is not done again. Returns how many rows it made anonymous: 0 for an id this database has no
+-- subscription for, or for an address that was erased already. The step takes the lock of the address
+-- (the one every step on it takes) and then its rows, in the order of their ids.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_admin_erase_address (p_subscription_id integer) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now   timestamp := now() AT TIME ZONE 'UTC';
+  v_email text;
+  v_row   record;
+  v_count integer := 0;
+BEGIN
+  IF NOT cartlify.newsletter_manager() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  SELECT s.email INTO v_email FROM cartlify.newsletter_subscriptions AS s WHERE s.id = p_subscription_id;
+
+  IF NOT FOUND THEN
+    RETURN 0;
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_email));
+
+  FOR v_row IN
+    SELECT s.id
+    FROM cartlify.newsletter_subscriptions AS s
+    WHERE s.email = v_email AND s.email <> cartlify.newsletter_erased_email (s.id)
+    ORDER BY s.id
+    FOR UPDATE
+  LOOP
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      email = cartlify.newsletter_erased_email (s.id),
+      "emailHmac" = NULL,
+      "confirmHash" = NULL,
+      "confirmExpiresAt" = NULL,
+      "endedUserId" = NULL,
+      "manageSalt" = cartlify.newsletter_random_hex (),
+      "manageHash" = cartlify.newsletter_random_hex (),
+      "unsubscribeHash" = cartlify.newsletter_random_hex (),
+      status = (
+        CASE WHEN s.status IN ('pending', 'active', 'paused_complaint') THEN 'ended' ELSE s.status END
+      )::cartlify."NewsletterSubscriptionStatus",
+      "endedAt" = coalesce(s."endedAt", v_now),
+      "endReason" = coalesce(s."endReason", 'removed_by_admin'::cartlify."NewsletterEndReason"),
+      "updatedAt" = v_now
+    WHERE s.id = v_row.id;
+
+    UPDATE cartlify.newsletter_subscription_events AS e
+    SET
+      ip = NULL,
+      "userAgent" = NULL
+    WHERE e."subscriptionId" = v_row.id AND (e.ip IS NOT NULL OR e."userAgent" IS NOT NULL);
+
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END;
+$$;
+
+-- A manager blocks an address for the public form, on the word of the person: p_email_hmac is the
+-- HMAC the server makes of the address (of the address trimmed and in lower case, the way this
+-- database keeps it: newsletter_request lower-cases and trims the address itself, and the HMAC of
+-- the server must be of the same text), p_reason a note (trimmed, cut to the 200 characters the
+-- column holds, trimmed again where the cut fell on a space; empty is none). The entry names
+-- the admin (blockedById is the actor, so root needs an account: NEWSLETTER_FORBIDDEN for root
+-- without one, as for anybody who is not a manager). A request of that address that waits for its
+-- confirmation is ended and removed with its journal, the way "this was not me" does (the button of
+-- the mail it sent stops working); a subscription in force stays, the blocklist is for new
+-- requests. An address that is blocked already is no error: the first entry stays, the waiting
+-- request is removed all the same. Returns true when the entry was made now, false when it was
+-- there. A value that is no HMAC is refused by the check of the table (23514). Taking the address
+-- off the list is a DELETE of a manager (the policy of db/03). The step holds the lock of the HMAC
+-- (the one newsletter_request and newsletter_not_me take before the lock of the address) from the
+-- entry to its commit, so a request of the address that is made at the same time is either made
+-- before the step and removed by it, or after it and answered with nothing: it cannot slip past.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_block_add (
+  p_email_hmac text,
+  p_reason text
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_actor integer := cartlify.current_actor_id();
+  v_added integer;
+  v_row   record;
+BEGIN
+  IF NOT cartlify.newsletter_manager() OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.hmac.' || coalesce(p_email_hmac, '')));
+
+  INSERT INTO cartlify.newsletter_form_blocklist ("emailHmac", "blockedById", "byPerson", reason, "createdAt")
+  VALUES (
+    p_email_hmac,
+    v_actor,
+    false,
+    nullif(btrim(left(btrim(p_reason), 200)), ''),
+    now() AT TIME ZONE 'UTC'
+  )
+  ON CONFLICT ("emailHmac") DO NOTHING;
+
+  GET DIAGNOSTICS v_added = ROW_COUNT;
+
+  FOR v_row IN
+    SELECT s.id, s.email
+    FROM cartlify.newsletter_subscriptions AS s
+    WHERE s."emailHmac" = p_email_hmac AND s.status = 'pending'
+    ORDER BY s.id
+  LOOP
+    PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter.' || v_row.email));
+
+    PERFORM 1
+    FROM cartlify.newsletter_subscriptions AS s
+    WHERE s.id = v_row.id AND s.status = 'pending'
+    FOR UPDATE;
+
+    IF FOUND THEN
+      PERFORM cartlify.newsletter_erase_subscription (v_row.id, 'removed_by_admin');
+    END IF;
+  END LOOP;
+
+  RETURN v_added > 0;
+END;
+$$;
+
+-- Root allows an admin to run the newsletters (p_value true) or takes the right away (false; no
+-- value is false). Only root (NEWSLETTER_FORBIDDEN), also without an account. The right is the
+-- column users."canManageNewsletters", which no statement of anybody changes (the guard of users,
+-- db/05): this function runs as the owner for root, the one step the guard lets through. Allowing
+-- an account that is not an admin, one that was deleted or one that does not exist is
+-- NEWSLETTER_TARGET_NOT_ADMIN; taking the right away is allowed for any id and harmless. The right
+-- is read from the database on every call (newsletter_manager), so it works and stops at once, in an
+-- open session too. Returns true when the right changed, false when it was as asked. The line of the
+-- audit log is the server's to write, and only when this says true.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_set_manager (
+  p_admin_id integer,
+  p_value boolean
+) RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_on   boolean := coalesce(p_value, false);
+  v_user record;
+BEGIN
+  IF NOT cartlify.is_root() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  SELECT u.role, u."canManageNewsletters" AS allowed, u."deletedAt" AS deleted
+  INTO v_user
+  FROM cartlify.users AS u
+  WHERE u.id = p_admin_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    IF v_on THEN
+      RAISE EXCEPTION 'NEWSLETTER_TARGET_NOT_ADMIN';
+    END IF;
+
+    RETURN false;
+  END IF;
+
+  IF v_on AND (v_user.role <> 'ADMIN' OR v_user.deleted IS NOT NULL) THEN
+    RAISE EXCEPTION 'NEWSLETTER_TARGET_NOT_ADMIN';
+  END IF;
+
+  IF v_user.allowed = v_on THEN
+    RETURN false;
+  END IF;
+
+  UPDATE cartlify.users AS u
+  SET
+    "canManageNewsletters" = v_on,
+    "updatedAt" = now() AT TIME ZONE 'UTC'
+  WHERE u.id = p_admin_id;
+
+  RETURN true;
+END;
+$$;
+
+-- How many accounts and subscriptions have each language, for the warning root sees before turning
+-- a language off. Only root (NEWSLETTER_FORBIDDEN). One row for each language that at least one
+-- account that is not deleted or one subscription that is not ended has (waiting, in force, paused
+-- or stopped by a bounce: an ended one is frozen as the proof of the consent and keeps its
+-- language), in the order of the codes; the people with no language are no row.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_locale_counts () RETURNS TABLE (
+  locale text,
+  accounts integer,
+  subscriptions integer
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  IF NOT cartlify.is_root() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  RETURN QUERY
+  WITH of_accounts AS (
+    SELECT u.locale::text AS code, count(*) AS n
+    FROM cartlify.users AS u
+    WHERE u."deletedAt" IS NULL AND u.locale IS NOT NULL
+    GROUP BY u.locale
+  ),
+  of_subscriptions AS (
+    SELECT s.locale::text AS code, count(*) AS n
+    FROM cartlify.newsletter_subscriptions AS s
+    WHERE s.status <> 'ended' AND s.locale IS NOT NULL
+    GROUP BY s.locale
+  )
+  SELECT
+    coalesce(a.code, b.code),
+    coalesce(a.n, 0)::integer,
+    coalesce(b.n, 0)::integer
+  FROM of_accounts AS a
+  FULL OUTER JOIN of_subscriptions AS b ON b.code = a.code
+  ORDER BY 1;
+END;
+$$;
+
+-- Root turned a language off: every account that is not deleted, and every subscription that is not
+-- ended, with that language is left with none (the language of the shop is used for its mails). One
+-- line of the journal of each subscription says so (locale_reset, from the admin place, with the id
+-- of root). An ended subscription is frozen and keeps its language. Only root (NEWSLETTER_FORBIDDEN);
+-- NEWSLETTER_LOCALE_INVALID for a code that is not two lower-case letters;
+-- NEWSLETTER_LOCALE_STILL_ENABLED for a language that is still turned on or is the language of the
+-- shop: the current value of the settings enabledLocales and shopLocale (the latest row of the key
+-- in shop_settings) is read here, so the step is taken after the setting without the language is
+-- written, in the same transaction, and a language in use is never emptied. With no row of a key
+-- the key holds nothing. Everything in one call, so one transaction: the accounts and the
+-- subscriptions change together or not at all. Returns how many accounts and subscriptions it
+-- changed. The language that returns later brings no one back.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_reset_locale (p_locale text) RETURNS TABLE (
+  accounts integer,
+  subscriptions integer
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now     timestamp := now() AT TIME ZONE 'UTC';
+  v_actor   integer := cartlify.current_actor_id();
+  v_enabled jsonb;
+  v_shop    jsonb;
+BEGIN
+  IF NOT cartlify.is_root() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  IF p_locale IS NULL OR p_locale !~ '^[a-z]{2}$' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_INVALID';
+  END IF;
+
+  SELECT s.value INTO v_enabled
+  FROM cartlify.shop_settings AS s WHERE s.key = 'enabledLocales' ORDER BY s.id DESC LIMIT 1;
+
+  SELECT s.value INTO v_shop
+  FROM cartlify.shop_settings AS s WHERE s.key = 'shopLocale' ORDER BY s.id DESC LIMIT 1;
+
+  IF coalesce(v_enabled @> to_jsonb(p_locale), false) OR coalesce(v_shop @> to_jsonb(p_locale), false) THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_STILL_ENABLED';
+  END IF;
+
+  UPDATE cartlify.users AS u
+  SET
+    locale = NULL,
+    "updatedAt" = v_now
+  WHERE u.locale = p_locale AND u."deletedAt" IS NULL;
+
+  GET DIAGNOSTICS accounts = ROW_COUNT;
+
+  WITH changed AS (
+    UPDATE cartlify.newsletter_subscriptions AS s
+    SET
+      locale = NULL,
+      "updatedAt" = v_now
+    WHERE s.locale = p_locale AND s.status <> 'ended'
+    RETURNING s.id
+  ),
+  logged AS (
+    INSERT INTO cartlify.newsletter_subscription_events (
+      "subscriptionId", event, place, ip, "userAgent", locale, "campaignId", "privacyVersion", "actorId", "createdAt"
+    )
+    SELECT
+      c.id,
+      'locale_reset'::cartlify."NewsletterEventKind",
+      'admin'::cartlify."NewsletterEventPlace",
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      NULL,
+      v_actor,
+      v_now
+    FROM changed AS c
+    RETURNING 1
+  )
+  SELECT count(*)::integer INTO subscriptions FROM changed;
+
+  RETURN NEXT;
+END;
+$$;
+
+------------------------------------------------------------
+-- NEWSLETTERS: THE SENDING
+------------------------------------------------------------
+-- The system (the admin context without a user id) sends the newsletters in passes
+-- (src/jobs/newsletterPass.job.ts). A pass starts the campaigns whose time has come, takes the mails
+-- that wait in portions, sends each one and writes how it went. Three steps are functions of the
+-- database, because they take rows other sessions may take too, or touch tables the system may only
+-- read: starting a campaign (newsletter_start_campaign), taking a portion of the mails
+-- (newsletter_claim_recipients) and giving back the ones a pass did not send
+-- (newsletter_release_recipients). The queue goes by the tries a mail has used, the fewest first, and by
+-- id among the same: a mail that was refused, or found the provider busy, comes back behind the mails not
+-- tried yet, so a few mails the provider refuses for themselves cannot keep the rest of a campaign
+-- from going. The outcome of a mail is a plain update of the system (the policies
+-- of db/03, the guard above). All three are for the system only (NEWSLETTER_FORBIDDEN).
+
+-- Starts a scheduled campaign: it becomes sending, with the moment of the start, the data of the
+-- products taken for it (p_snapshot, an object) and the number of mails planned; every subscription
+-- in force now gets a row of a mail that waits (queued). A subscription made later, or one that is
+-- paused, stopped or ended, gets none: the people are fixed at this moment. The language of a row is
+-- the language of the subscription, the language of the shop (p_shop_locale) for one with none, as
+-- long as the campaign has a subject in it; when it has not, the campaign's own rule decides:
+-- shop_locale gives the person the language of the shop (if the campaign has a subject in it), skip
+-- gives no row. The people are listed in the order of their subscriptions. The lock planning takes
+-- (cartlify.newsletter_schedule) is taken first, so a start and a planning never read the limit of
+-- the campaigns at the same time. The campaign is locked, so two starts at once give one winner; the
+-- loser finds it already sending. The time (scheduledAt) is not checked here: the pass chooses the
+-- campaigns whose time has come. The limit of the campaigns is not asked: a campaign that was
+-- scheduled goes out. Returns the number of mails planned.
+-- The subscriptions in force are locked for the start with a share lock on the key (FOR KEY SHARE):
+-- a step that removes one, or replaces its links (the erasing of an address), waits for the start to
+-- commit instead of taking the row from under the mails being made - which would end the start in the
+-- foreign key of a mail (23503) - and a start that comes after such a step does not see the row in
+-- force any more. A step that only changes the state, the language or a mark of the row does not
+-- wait. The locks go after the lock of planning and before the lock of the campaign, the order of
+-- the steps of a person (the subscription, then the campaign), so a person who unsubscribes naming
+-- the campaign cannot wait for it while the start waits for them.
+-- NEWSLETTER_LOCALE_INVALID: the language of the shop is not two lower-case letters;
+-- NEWSLETTER_SNAPSHOT_INVALID: the data of the products is not an object;
+-- NEWSLETTER_CAMPAIGN_NOT_FOUND: no such campaign;
+-- NEWSLETTER_CAMPAIGN_NOT_SCHEDULED: it is not scheduled any more (cancelled, started, still a draft).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_start_campaign (
+  p_campaign_id integer,
+  p_snapshot jsonb,
+  p_shop_locale text
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now      timestamp := now() AT TIME ZONE 'UTC';
+  v_campaign cartlify.newsletter_campaigns%ROWTYPE;
+  v_subjects jsonb;
+  v_count    integer;
+BEGIN
+  IF NOT cartlify.is_system() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  IF p_shop_locale IS NULL OR p_shop_locale !~ '^[a-z]{2}$' THEN
+    RAISE EXCEPTION 'NEWSLETTER_LOCALE_INVALID';
+  END IF;
+
+  IF p_snapshot IS NULL OR jsonb_typeof(p_snapshot) <> 'object' THEN
+    RAISE EXCEPTION 'NEWSLETTER_SNAPSHOT_INVALID';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('cartlify.newsletter_schedule'));
+
+  PERFORM 1
+  FROM cartlify.newsletter_subscriptions AS s
+  WHERE s.status = 'active'
+  ORDER BY s.id
+  FOR KEY SHARE OF s;
+
+  SELECT c.* INTO v_campaign FROM cartlify.newsletter_campaigns AS c WHERE c.id = p_campaign_id FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'NEWSLETTER_CAMPAIGN_NOT_FOUND';
+  END IF;
+
+  IF v_campaign.status <> 'scheduled' THEN
+    RAISE EXCEPTION 'NEWSLETTER_CAMPAIGN_NOT_SCHEDULED';
+  END IF;
+
+  -- a language the campaign has a subject in: a text that is not blank
+  v_subjects := v_campaign.content -> 'subject';
+
+  INSERT INTO cartlify.newsletter_recipients ("campaignId", "subscriptionId", locale, "createdAt", "updatedAt")
+  SELECT p_campaign_id, s.id, pick.locale, v_now, v_now
+  FROM cartlify.newsletter_subscriptions AS s
+  CROSS JOIN LATERAL (
+    SELECT
+      CASE
+        WHEN jsonb_typeof(v_subjects -> coalesce(s.locale, p_shop_locale)) = 'string'
+             AND btrim(v_subjects ->> coalesce(s.locale, p_shop_locale)) <> ''
+          THEN coalesce(s.locale, p_shop_locale)
+        WHEN v_campaign."missingLocale" = 'shop_locale'
+             AND jsonb_typeof(v_subjects -> p_shop_locale) = 'string'
+             AND btrim(v_subjects ->> p_shop_locale) <> ''
+          THEN p_shop_locale
+        ELSE NULL
+      END AS locale
+  ) AS pick
+  WHERE s.status = 'active' AND pick.locale IS NOT NULL
+  ORDER BY s.id;
+
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+
+  UPDATE cartlify.newsletter_campaigns AS c
+  SET
+    status = 'sending',
+    "startedAt" = v_now,
+    "productsSnapshot" = p_snapshot,
+    "plannedCount" = v_count,
+    "updatedAt" = v_now
+  WHERE c.id = p_campaign_id;
+
+  RETURN v_count;
+END;
+$$;
+
+-- Takes a portion of the mails that wait, for a pass to send: up to p_limit rows of campaigns that
+-- are sending (a campaign that was stopped or finished is never taken from), the mails with the
+-- fewest tries used first and by id among those with the same, both in the choice of the rows and
+-- in the order they come back in, each leased to the caller: it gets one more try counted and the
+-- time of the lease. A row that is leased
+-- is left to its holder for p_lease_minutes; if the holder did not finish it by then (a crash, a
+-- failure to be tried again), another call takes it again, and this is also how a mail the provider
+-- failed on is tried again later (the lease is the pause between the tries). Rows other sessions hold
+-- at this moment are passed over (SKIP LOCKED), so two calls never take the same row.
+-- p_campaign_ids narrows the call to those campaigns (NULL: all).
+-- What the sender needs comes back: the row, its campaign, the language, the address and the salt of
+-- the token of the subscription (the token itself is made by the server), whether this is the
+-- last try (the p_max_attempts-th): a mail that fails again is then given up, not left for another,
+-- and previous_try, the time the mail was taken before this call (the database clock, the one that
+-- writes the lease), empty for a mail taken for the first time. With it the sender can tell whether
+-- the campaign had a mail taken by the provider since: the rows of such mails (status sent) carry
+-- the database clock in updatedAt from the moment they were written down.
+-- Before the portion is taken, two kinds of rows are put away, for the campaigns in question:
+-- a mail that has been tried p_max_attempts times and not finished (a lease that ran out each time:
+-- the process died on it) is rejected and counted in the campaign (rejectedCount), so one bad row
+-- cannot keep a campaign sending for ever; and a mail whose subscription is not in force any more
+-- (unsubscribed, bounced, complained about meanwhile) is skipped, never returned and counted in no
+-- total of the campaign. The subscription is read without a lock (the steps of a person lock
+-- subscription, then mail, then campaign; this one never takes a lock back). A p_limit below one
+-- takes nothing, the rest is still put away.
+-- The settings are the caller's to give and are checked before anything is done:
+-- NEWSLETTER_LEASE_INVALID: p_lease_minutes is not from 1 minute to 1440 (a day);
+-- NEWSLETTER_ATTEMPTS_INVALID: p_max_attempts is not from 1 to 20;
+-- NEWSLETTER_LIMIT_INVALID: p_limit is over 1000 (a portion has a top).
+CREATE OR REPLACE FUNCTION cartlify.newsletter_claim_recipients (
+  p_limit integer,
+  p_campaign_ids integer[],
+  p_lease_minutes integer,
+  p_max_attempts integer
+) RETURNS TABLE (
+  recipient_id integer,
+  campaign_id integer,
+  locale text,
+  email text,
+  manage_salt text,
+  last_attempt boolean,
+  previous_try timestamp
+) LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_now          timestamp := now() AT TIME ZONE 'UTC';
+  v_lease        interval;
+  v_max_attempts integer := p_max_attempts;
+BEGIN
+  IF NOT cartlify.is_system() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  IF p_lease_minutes IS NULL OR p_lease_minutes < 1 OR p_lease_minutes > 1440 THEN
+    RAISE EXCEPTION 'NEWSLETTER_LEASE_INVALID';
+  END IF;
+
+  IF p_max_attempts IS NULL OR p_max_attempts < 1 OR p_max_attempts > 20 THEN
+    RAISE EXCEPTION 'NEWSLETTER_ATTEMPTS_INVALID';
+  END IF;
+
+  IF p_limit > 1000 THEN
+    RAISE EXCEPTION 'NEWSLETTER_LIMIT_INVALID';
+  END IF;
+
+  v_lease := make_interval(mins => p_lease_minutes);
+
+  -- a mail whose tries are used up, and whose last lease ran out without an answer
+  WITH worn AS (
+    SELECT r.id
+    FROM cartlify.newsletter_recipients AS r
+    JOIN cartlify.newsletter_campaigns AS c ON c.id = r."campaignId"
+    WHERE r.status = 'queued'
+      AND c.status = 'sending'
+      AND r.attempts >= v_max_attempts
+      AND r."updatedAt" <= v_now - v_lease
+      AND (p_campaign_ids IS NULL OR r."campaignId" = ANY (p_campaign_ids))
+    ORDER BY r.id
+    FOR UPDATE OF r SKIP LOCKED
+  ),
+  given_up AS (
+    UPDATE cartlify.newsletter_recipients AS r
+    SET
+      status = 'rejected',
+      "updatedAt" = v_now
+    FROM worn
+    WHERE r.id = worn.id
+    RETURNING r."campaignId"
+  )
+  UPDATE cartlify.newsletter_campaigns AS c
+  SET
+    "rejectedCount" = c."rejectedCount" + g.total,
+    "updatedAt" = v_now
+  FROM (
+    SELECT u."campaignId", count(*)::integer AS total FROM given_up AS u GROUP BY u."campaignId"
+  ) AS g
+  WHERE c.id = g."campaignId";
+
+  -- a mail whose subscription is not in force any more
+  WITH left_out AS (
+    SELECT r.id
+    FROM cartlify.newsletter_recipients AS r
+    JOIN cartlify.newsletter_campaigns AS c ON c.id = r."campaignId"
+    JOIN cartlify.newsletter_subscriptions AS s ON s.id = r."subscriptionId"
+    WHERE r.status = 'queued'
+      AND c.status = 'sending'
+      AND s.status <> 'active'
+      AND (r.attempts = 0 OR r."updatedAt" <= v_now - v_lease)
+      AND (p_campaign_ids IS NULL OR r."campaignId" = ANY (p_campaign_ids))
+    ORDER BY r.id
+    FOR UPDATE OF r SKIP LOCKED
+  )
+  UPDATE cartlify.newsletter_recipients AS r
+  SET
+    status = 'skipped',
+    "updatedAt" = v_now
+  FROM left_out
+  WHERE r.id = left_out.id;
+
+  IF p_limit IS NULL OR p_limit < 1 THEN
+    RETURN;
+  END IF;
+
+  RETURN QUERY
+  WITH picked AS (
+    SELECT r.id, r.attempts AS tried, r."updatedAt" AS tried_at
+    FROM cartlify.newsletter_recipients AS r
+    JOIN cartlify.newsletter_campaigns AS c ON c.id = r."campaignId"
+    JOIN cartlify.newsletter_subscriptions AS s ON s.id = r."subscriptionId"
+    WHERE r.status = 'queued'
+      AND c.status = 'sending'
+      AND s.status = 'active'
+      AND r.attempts < v_max_attempts
+      AND (r.attempts = 0 OR r."updatedAt" <= v_now - v_lease)
+      AND (p_campaign_ids IS NULL OR r."campaignId" = ANY (p_campaign_ids))
+    ORDER BY r.attempts, r.id
+    LIMIT p_limit
+    FOR UPDATE OF r SKIP LOCKED
+  ),
+  leased AS (
+    UPDATE cartlify.newsletter_recipients AS r
+    SET
+      attempts = r.attempts + 1,
+      "updatedAt" = v_now
+    FROM picked
+    WHERE r.id = picked.id
+    RETURNING
+      r.id,
+      r."campaignId",
+      r."subscriptionId",
+      r.locale,
+      r.attempts,
+      CASE WHEN picked.tried > 0 THEN picked.tried_at END AS previous_try
+  )
+  SELECT
+    l.id,
+    l."campaignId",
+    l.locale::text,
+    s.email::text,
+    s."manageSalt"::text,
+    l.attempts >= v_max_attempts,
+    l.previous_try
+  FROM leased AS l
+  JOIN cartlify.newsletter_subscriptions AS s ON s.id = l."subscriptionId"
+  ORDER BY l.attempts, l.id;
+END;
+$$;
+
+-- Gives back mails a pass took and did not try, or found the provider busy for (it was told to stop,
+-- the provider refused its key, the campaign was stopped meanwhile): each one still waiting loses the
+-- try its lease counted and is free to be taken again at once, in its place in the queue, as if it had
+-- not been taken. Without it an outage of the provider would use up the tries of the mails at the head
+-- of the queue, one pass after another. A mail the provider refused is not given back: it keeps its
+-- try and waits out its lease (the sender simply does not call this for it). Rows no longer waiting are
+-- left alone. Returns how many were given back.
+CREATE OR REPLACE FUNCTION cartlify.newsletter_release_recipients (p_recipient_ids integer[]) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_released integer;
+BEGIN
+  IF NOT cartlify.is_system() THEN
+    RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
+  END IF;
+
+  UPDATE cartlify.newsletter_recipients AS r
+  SET
+    attempts = greatest(r.attempts - 1, 0),
+    "updatedAt" = r."createdAt"
+  WHERE r.id = ANY (p_recipient_ids) AND r.status = 'queued' AND r.attempts > 0;
+
+  GET DIAGNOSTICS v_released = ROW_COUNT;
+
+  RETURN v_released;
+END;
+$$;
 
 COMMIT;

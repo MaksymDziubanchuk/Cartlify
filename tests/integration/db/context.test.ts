@@ -27,6 +27,11 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
+import {
+  removeNewsletterFixtures,
+  setupNewsletterFixtures,
+  type NewsletterFixtures,
+} from '../../helpers/newsletterDb.js';
 
 // the actor context every rls policy reads: cartlify.set_current_context writes it for the
 // transaction, current_actor_role, current_actor_id and current_guest_id read it. Without a
@@ -88,6 +93,9 @@ let voter: TestUser;
 let admin: TestUser;
 let product: TestProduct;
 let orderId: number;
+// the rows of the newsletter tables, which only the functions of the database write: made as the
+// owner of the database and committed, because the app role has to find them
+let newsletters: NewsletterFixtures;
 
 // a row in every table of the shop, made the way the app makes it, so "shows no row" means the
 // rows are there and hidden
@@ -96,6 +104,7 @@ beforeAll(async () => {
   // the shop with; without one of its own this table would show 0 rows to root and to the owner
   // alike, unlike every other table of the schema, whenever this file ran before such a file
   await loadShopSettings();
+  newsletters = await setupNewsletterFixtures();
   owner = await createUser();
   voter = await createUser();
   admin = await createUser({ role: 'ADMIN' });
@@ -201,6 +210,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   try {
+    if (newsletters) await removeNewsletterFixtures(newsletters);
     await closeSessions([owner.id, voter.id, admin.id]);
   } finally {
     await prisma.$disconnect();
@@ -441,7 +451,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(37);
+    expect(Object.keys(hidden)).toHaveLength(42);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

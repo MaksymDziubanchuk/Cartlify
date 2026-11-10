@@ -35,6 +35,9 @@ BEGIN
       ('users', 'locale'), ('users', 'phone'), ('users', 'passwordHash'),
       ('users', 'authProvider'), ('users', 'providerSub'), ('users', 'publicId'),
       ('users', 'deletedAt'),
+      -- the right of an admin to run the newsletters: the staff keep their accounts as they are, and
+      -- a flag names no one
+      ('users', 'canManageNewsletters'),
       ('user_tokens', 'id'), ('user_tokens', 'userId'), ('user_tokens', 'type'),
       ('user_tokens', 'token'), ('user_tokens', 'expiresAt'), ('user_tokens', 'usedAt'),
       ('user_tokens', 'createdAt'), ('user_tokens', 'revokedAt'), ('user_tokens', 'sessionId'),
@@ -99,7 +102,11 @@ BEGIN
       ('returns', 'proofProvidedAt'), ('returns', 'proofCarrier'),
       ('returns', 'proofTrackingNumber'), ('returns', 'proofTrackingUrl'),
       ('returns', 'proofConfirmedAt'),
-      ('returns', 'proofConfirmedById'), ('returns', 'closedAt'), ('returns', 'closedById'),
+      ('returns', 'proofConfirmedById'),
+      -- the number of the statement in its order, and when and by which admin it was accepted: the
+      -- work of the shop, no personal data
+      ('returns', 'number'), ('returns', 'acceptedAt'), ('returns', 'acceptedById'),
+      ('returns', 'closedAt'), ('returns', 'closedById'),
       ('returns', 'closeCode'), ('returns', 'closeNote'),
       ('returns', 'shippingReimbursed'), ('returns', 'shippingReimbursedAt'),
       ('returns', 'shippingReimbursedMethod'), ('returns', 'shippingReimbursedNote'),
@@ -120,6 +127,28 @@ BEGIN
       ('reviews', 'id'), ('reviews', 'productId'), ('reviews', 'userId'), ('reviews', 'rating'),
       ('reviews', 'comment'), ('reviews', 'createdAt'), ('reviews', 'downVotes'),
       ('reviews', 'upVotes'), ('reviews', 'updatedAt'),
+      -- a subscription to the newsletters keeps the address of whoever asked, the hashes of the links
+      -- of the mails it was sent (they open the page of the subscription and the unsubscribe) and the
+      -- HMAC of the address
+      -- (a pseudonym of it, made with a secret the copy does not hold, the key of the blocklist); the
+      -- journal of a subscription keeps the address and the browser of each request. They change
+      -- below
+      ('newsletter_subscriptions', 'id'), ('newsletter_subscriptions', 'email'),
+      ('newsletter_subscriptions', 'emailHmac'), ('newsletter_subscriptions', 'userId'),
+      ('newsletter_subscriptions', 'source'), ('newsletter_subscriptions', 'locale'),
+      ('newsletter_subscriptions', 'status'), ('newsletter_subscriptions', 'confirmHash'),
+      ('newsletter_subscriptions', 'confirmExpiresAt'), ('newsletter_subscriptions', 'manageSalt'),
+      ('newsletter_subscriptions', 'manageHash'), ('newsletter_subscriptions', 'lastConfirmMailAt'),
+      ('newsletter_subscriptions', 'lastAlreadyMailAt'), ('newsletter_subscriptions', 'createdAt'),
+      ('newsletter_subscriptions', 'confirmedAt'), ('newsletter_subscriptions', 'endedAt'),
+      ('newsletter_subscriptions', 'endReason'), ('newsletter_subscriptions', 'updatedAt'),
+      ('newsletter_subscriptions', 'unsubscribeHash'), ('newsletter_subscriptions', 'endedUserId'),
+      ('newsletter_subscription_events', 'id'), ('newsletter_subscription_events', 'subscriptionId'),
+      ('newsletter_subscription_events', 'event'), ('newsletter_subscription_events', 'place'),
+      ('newsletter_subscription_events', 'ip'), ('newsletter_subscription_events', 'userAgent'),
+      ('newsletter_subscription_events', 'locale'), ('newsletter_subscription_events', 'campaignId'),
+      ('newsletter_subscription_events', 'privacyVersion'), ('newsletter_subscription_events', 'actorId'),
+      ('newsletter_subscription_events', 'createdAt'),
       -- tables with no personal data: the catalog, the stock, the money, what links them
       ('_prisma_migrations', '*'), ('admin_alert_settings', '*'), ('categories', '*'),
       ('legal_documents', '*'),
@@ -133,7 +162,15 @@ BEGIN
       ('product_variants', '*'), ('variant_images', '*'), ('variant_attribute_values', '*'),
       ('favorites', '*'), ('order_batch_allocations', '*'), ('order_items', '*'),
       ('product_batches', '*'), ('product_images', '*'), ('product_price_change_logs', '*'),
-      ('products', '*'), ('review_votes', '*')
+      ('products', '*'), ('review_votes', '*'),
+      -- the campaigns of the newsletters are the shop's own text, made by its staff; a mail of a
+      -- campaign is a row of ids and a state, with no address; the blocklist holds only the HMACs of
+      -- addresses, who blocked them and why, and stays as it is (a copy without the secret cannot
+      -- tell whose they are)
+      ('newsletter_campaigns', '*'), ('newsletter_recipients', '*'),
+      ('newsletter_form_blocklist', '*'),
+      -- the data of the shop (its name, its contacts, the languages): the shop's, not a person's
+      ('shop_settings', '*')
   )
   SELECT string_agg(c.table_name || '.' || c.column_name, ', ' ORDER BY c.table_name, c.column_name)
   INTO v_unknown
@@ -189,6 +226,44 @@ WHERE NOT (
 
 -- the sessions and the links of prod: their hashes are secrets, and no session of prod is one of dev
 DELETE FROM cartlify.user_tokens;
+
+-- a subscription to the newsletters: the address of a subscription of an account is the address its
+-- account has now (made up above for a buyer; the profile finds the subscription by it), the address
+-- of a subscription of the form becomes newsletter+<id>@example.com - lower case, one at sign, and
+-- one for each subscription, so the unique index of the live addresses and the check of the table
+-- hold. The hashes of the links (the confirmation, the page of the subscription and the unsubscribe
+-- button of the mail clients) are of tokens that sit in mails prod sent: the copy gets the hashes of
+-- random values nobody holds, so such a link opens nothing on dev. The HMAC of the address stays, as
+-- in the blocklist: it names no one without the secret of prod (a subscription an admin erased has
+-- none, and stays without). The account that ended a subscription of the form (endedUserId) is an id
+-- of an account of the copy, which names no one. The language, the state, the dates stay.
+UPDATE cartlify.newsletter_subscriptions AS s
+SET
+  email = CASE
+    WHEN s."userId" IS NOT NULL THEN (
+      SELECT lower(btrim(u.email))
+      FROM cartlify.users AS u
+      WHERE u.id = s."userId"
+    )
+    ELSE 'newsletter+' || s.id || '@example.com'
+  END,
+  "confirmHash" = CASE
+    WHEN s."confirmHash" IS NOT NULL THEN encode(
+      sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex'
+    )
+  END,
+  "manageHash" = encode(
+    sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex'
+  ),
+  "unsubscribeHash" = encode(
+    sha256(convert_to(gen_random_uuid()::text || gen_random_uuid()::text, 'UTF8')), 'hex'
+  );
+
+-- the journal of a subscription keeps what happened and when, not where and from what browser
+UPDATE cartlify.newsletter_subscription_events
+SET
+  ip = NULL,
+  "userAgent" = NULL;
 
 -- a login keeps the email of its account, not where and from what browser it came
 UPDATE cartlify.login_logs AS l
@@ -372,6 +447,28 @@ BEGIN
     WHERE EXISTS (
       SELECT 1
       FROM cartlify.legal_acceptances
+      WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
+    )
+    UNION ALL
+    SELECT 'newsletter_subscriptions'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.newsletter_subscriptions AS s
+      WHERE (s."userId" IS NULL AND s.email <> 'newsletter+' || s.id || '@example.com')
+        OR (
+          s."userId" IS NOT NULL
+          AND s.email IS DISTINCT FROM (
+            SELECT lower(btrim(u.email))
+            FROM cartlify.users AS u
+            WHERE u.id = s."userId"
+          )
+        )
+    )
+    UNION ALL
+    SELECT 'newsletter_subscription_events'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.newsletter_subscription_events
       WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
     )
     UNION ALL

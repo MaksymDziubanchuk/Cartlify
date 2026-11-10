@@ -24,9 +24,11 @@ import { cancelAndRefundIn, refundReturnIn } from '../../helpers/returns.js';
 
 // how long the shop keeps what it needs no longer: the address and the browser of old logins, the
 // favorites and chats of guests who stopped coming, the chats of accounts deleted long ago, the
-// address and the browser of closed statements of return, their personal data, and the recipient of
-// the orders of deleted accounts. The days are in the privacy policy of the shop, one column for each
-// kind; a function takes none. A row is kept for the shorter of the term of the version in force when
+// address and the browser of closed statements of return, their personal data, the recipient of
+// the orders of deleted accounts, and what the newsletters leave (the requests that were not
+// confirmed, the proof of the consent of an ended subscription, the mails of a campaign; their
+// cases are in newsletterRetention.test.ts). The days are in the privacy policy of the shop, one
+// column for each kind; a function takes none. A row is kept for the shorter of the term of the version in force when
 // the data was collected and the term of the version in force now, and is cleaned a day before the
 // term ends. Each function is the work of the system; the periodic tasks of Railway run them.
 //
@@ -95,6 +97,8 @@ type Terms = {
   returnAddresses: number;
   returnPersonal: number;
   recipient: number;
+  newsletterConsent: number;
+  newsletterRecipients: number;
 };
 
 const TERMS: Terms = {
@@ -104,6 +108,8 @@ const TERMS: Terms = {
   returnAddresses: 30,
   returnPersonal: 30,
   recipient: 30,
+  newsletterConsent: 3650,
+  newsletterRecipients: 365,
 };
 
 // root publishes a version of the privacy policy with the terms given (the rest as in TERMS); the
@@ -115,9 +121,10 @@ async function publishPolicy(db: DbSession, terms: Partial<Terms> = {}) {
     `insert into cartlify.legal_documents
        (kind, title, content, "publishedById", "retentionLoginAddressesDays",
         "retentionGuestDataDays", "retentionDeletedChatsDays", "retentionReturnAddressesDays",
-        "retentionReturnPersonalDays", "retentionRecipientDays")
+        "retentionReturnPersonalDays", "retentionRecipientDays",
+        "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays")
      values ('privacy'::cartlify."LegalDocumentKind", 'The privacy policy',
-             'The text of the privacy policy.', $1, $2, $3, $4, $5, $6, $7)
+             'The text of the privacy policy.', $1, $2, $3, $4, $5, $6, $7, $8, $9)
      returning id, version, "createdAt"::text as "createdAt"`,
     root.id,
     t.loginAddresses,
@@ -126,6 +133,8 @@ async function publishPolicy(db: DbSession, terms: Partial<Terms> = {}) {
     t.returnAddresses,
     t.returnPersonal,
     t.recipient,
+    t.newsletterConsent,
+    t.newsletterRecipients,
   );
   return row!;
 }
@@ -168,6 +177,9 @@ describe.each([
   ['cleanup_return_addresses'],
   ['cleanup_return_personal'],
   ['cleanup_deleted_accounts_recipients'],
+  ['cleanup_newsletter_pending'],
+  ['cleanup_newsletter_consent'],
+  ['cleanup_newsletter_recipients'],
 ])('cartlify.%s', (fn) => {
   it.each([
     ['a signed-in admin', () => adminActor()],
