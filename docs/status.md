@@ -20,12 +20,12 @@
 
 ## 🔄 Next Up
 
-- LiqPay as a second payment provider, Google Pay and Apple Pay, the events of Stripe made outside the app
+- Google Pay and Apple Pay through Stripe, and the events of Stripe made outside the app (a refund by hand, a dispute)
 
 ## ⏭️ Later
 
-1. taxes (VAT), fiscal receipts and invoices
-2. delivery through carriers and international delivery
+1. delivery through carriers and international delivery
+2. taxes (VAT), fiscal receipts and invoices
 3. two-factor login for the admins, a full set of audit journals
 4. hardening for heavy traffic: concurrent requests, timeouts and retries
 5. a security review and a polish of the whole code base
@@ -38,5 +38,5 @@
 
 - **Ready for a storefront:** every route, answer and error code is described in Swagger, so a frontend is built against a documented API
 - **A new language is a dictionary:** the mails speak the language of their reader, and one more language needs no change of the code
-- **A new payment provider is a module:** providers stand side by side, LiqPay joins Stripe without bending it
+- **A new payment provider is a module:** providers stand side by side, a new one joins Stripe without bending it
 - **Rules live in the database:** roles, row level security and functions keep every client of the API, present or future, within the same limits
