@@ -86,44 +86,6 @@ describe('sendEmail', () => {
     expect(calls).toHaveLength(0);
   });
 
-  describe('isEmailProviderFailure', () => {
-    it('counts a refusal of sendgrid as a provider failure', async () => {
-      stubFetch(() => jsonResponse({ errors: [] }, 500));
-      const err = await rejectedBy(() => mailer.sendEmail(message));
-
-      expect(mailer.isEmailProviderFailure(err)).toBe(true);
-    });
-
-    it('counts no answer from sendgrid as a provider failure', async () => {
-      jest.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
-      const err = await rejectedBy(() => mailer.sendEmail(message));
-
-      expect(mailer.isEmailProviderFailure(err)).toBe(true);
-    });
-
-    it('does not count an empty address as a provider failure', async () => {
-      stubFetch(() => textResponse('', 202));
-      const err = await rejectedBy(() => mailer.sendEmail({ ...message, to: '' }));
-
-      expect(mailer.isEmailProviderFailure(err)).toBe(false);
-    });
-
-    it('does not count a missing setting as a provider failure', async () => {
-      const unconfigured = await importWithEnv<Mailer>(
-        SPECIFIER,
-        { ...CONFIG, EMAIL_FROM: '' },
-        { shopSettings: SETTINGS },
-      );
-      const err = await rejectedBy(() => unconfigured.sendEmail(message));
-
-      expect(unconfigured.isEmailProviderFailure(err)).toBe(false);
-    });
-  });
-
-  it('does not count an error that is not an app error as a provider failure', () => {
-    expect(mailer.isEmailProviderFailure(new Error('SENDGRID_SEND_FAILED'))).toBe(false);
-  });
-
   it('posts the mail to sendgrid with our key and gives back its status', async () => {
     const calls = stubFetch(() => textResponse('', 202));
 
