@@ -67,6 +67,7 @@ The characteristics a variant is described by (a colour, a memory, a size) are k
 | `option` | one value of the list of the characteristic | can be main; values with a name and a colour swatch |
 | `options` | several values of the list (a set, up to `ATTRIBUTE_MULTI_VALUES_MAX`, 50 unless set, no value twice) | cannot be main |
 
+- **A unit** (`unit` of a number) is a label the API gives as it is; a storefront may show the known symbols in the language of its reader by a table of its own (`mm` as `мм`) and any other label as it is.
 - **Main** (`isMain`): the characteristic splits the products of a list into rows by its value (see Lists). Only a number, a yes/no and a choice of one value can be main (`400 ATTRIBUTE_MAIN_NOT_ALLOWED`); the other characteristics are minor and show on the card only.
 - **In filters** (`inFilters`, true unless said): the characteristic is in the panel of the filter of a category (see Lists). A text never is. The flag only chooses what the panel shows; the filter `f` of the list works for any characteristic that is not a text.
 - **Values of a list** have a name (one in their characteristic, letter case ignored, up to 100 signs), an optional colour `#RRGGBB` and a place; a characteristic has `ATTRIBUTE_OPTIONS_MAX` values at most (500 unless set). A value is renamed or recoloured in one place and shows in every variant that has it.
