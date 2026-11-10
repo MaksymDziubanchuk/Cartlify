@@ -292,7 +292,18 @@ describe('GET /api/admin/alerts', () => {
   it('gives root the actions of the admins too', async () => {
     const { alerts } = await alertsOf(root);
 
-    expect(alerts.map((alert) => alert.kind)).toEqual([...ADMIN_KINDS, 'admin_actions']);
+    // the kinds of the newsletters sit between them (alertsNewsletters.test.ts)
+    expect(alerts.map((alert) => alert.kind)).toEqual([
+      ...ADMIN_KINDS,
+      'newsletter_undelivered',
+      'newsletter_rejected',
+      'newsletter_complaints',
+      'newsletter_running_long',
+      'newsletter_starting_soon',
+      'newsletter_cancelled_by_limit',
+      'newsletter_sending_halted',
+      'admin_actions',
+    ]);
     expect(alerts.find((alert) => alert.kind === 'admin_actions')).toMatchObject({
       threshold: 24,
       list: { path: '/api/admin/audit-log', query: { actorRole: 'ADMIN' } },

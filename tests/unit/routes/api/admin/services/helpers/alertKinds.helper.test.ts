@@ -2,6 +2,8 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   ADMIN_ALERT_KINDS,
+  NEWSLETTER_ALERT_KINDS,
+  ROOT_ALERT_KINDS,
   alertKindsOf,
   alertListOf,
   alertWindowOf,
@@ -20,12 +22,47 @@ const NOW = Date.parse('2026-10-25T12:00:00.000Z');
 const DAY = 86_400_000;
 
 describe('alertKindsOf', () => {
-  it('gives an admin the kinds of the work that waits', () => {
-    expect(alertKindsOf('ADMIN')).toEqual([...ADMIN_ALERT_KINDS]);
+  it('gives an admin without the right to run the newsletters the kinds of the work that waits', () => {
+    expect(alertKindsOf('ADMIN', false)).toEqual([...ADMIN_ALERT_KINDS]);
   });
 
-  it('gives root the actions of the admins too', () => {
-    expect(alertKindsOf('ROOT')).toEqual([...ADMIN_ALERT_KINDS, 'admin_actions']);
+  it('gives an admin who may run the newsletters their kinds after the rest', () => {
+    expect(alertKindsOf('ADMIN', true)).toEqual([
+      ...ADMIN_ALERT_KINDS,
+      'newsletter_undelivered',
+      'newsletter_rejected',
+      'newsletter_complaints',
+      'newsletter_running_long',
+      'newsletter_starting_soon',
+      'newsletter_cancelled_by_limit',
+      'newsletter_sending_halted',
+    ]);
+  });
+
+  it('gives root the kinds of the newsletters and the actions of the admins, in that order', () => {
+    expect(alertKindsOf('ROOT', true)).toEqual([
+      ...ADMIN_ALERT_KINDS,
+      ...NEWSLETTER_ALERT_KINDS,
+      ...ROOT_ALERT_KINDS,
+    ]);
+    expect(alertKindsOf('ROOT', true).at(-1)).toBe('admin_actions');
+  });
+
+  // root has the right always: what the caller read about the account does not matter
+  it('gives root the kinds of the newsletters whatever the caller says of the right', () => {
+    expect(alertKindsOf('ROOT', false)).toEqual(alertKindsOf('ROOT', true));
+  });
+
+  // the right is of the people who run the shop: a buyer or a guest never gets it
+  it.each(['USER', 'GUEST'] as const)('gives %s no kind of the newsletters', (role) => {
+    for (const kind of NEWSLETTER_ALERT_KINDS) {
+      expect(alertKindsOf(role, true)).not.toContain(kind);
+    }
+  });
+
+  it('names seven kinds of the newsletters, none of them in the kinds of every admin', () => {
+    expect(NEWSLETTER_ALERT_KINDS).toHaveLength(7);
+    for (const kind of NEWSLETTER_ALERT_KINDS) expect(ADMIN_ALERT_KINDS).not.toContain(kind);
   });
 });
 
@@ -88,6 +125,12 @@ describe('thresholdOf', () => {
     ['returns_goods_late', 14, 'days'],
     ['worker_stalled', 180, 'seconds'],
     ['admin_actions', 24, 'hours'],
+    ['newsletter_undelivered', 5, 'percent'],
+    ['newsletter_rejected', 5, 'percent'],
+    ['newsletter_complaints', 3, 'permille'],
+    ['newsletter_running_long', 3, 'days'],
+    ['newsletter_starting_soon', 24, 'hours'],
+    ['newsletter_cancelled_by_limit', 7, 'days'],
   ] as const)('gives %s %p %s unless set', (kind, value, unit) => {
     expect(thresholdOf(kind, null)).toMatchObject({ value, unit, custom: false });
   });
@@ -102,6 +145,7 @@ describe('thresholdOf', () => {
     'chats_waiting',
     'failed_refunds',
     'returns_manual_check',
+    'newsletter_sending_halted',
   ] as const)('gives %s no threshold', (kind) => {
     expect(thresholdOf(kind, null)).toBeNull();
   });
@@ -137,12 +181,41 @@ describe('assertThreshold', () => {
     ['worker_stalled', 59, { min: 60, max: 86_400 }],
     ['admin_actions', 721, { min: 1, max: 720 }],
     ['low_stock', 0, { min: 1, max: 100_000 }],
+    ['newsletter_undelivered', 0, { min: 1, max: 100 }],
+    ['newsletter_undelivered', 101, { min: 1, max: 100 }],
+    ['newsletter_rejected', 0, { min: 1, max: 100 }],
+    ['newsletter_rejected', 101, { min: 1, max: 100 }],
+    ['newsletter_complaints', 0, { min: 1, max: 1000 }],
+    ['newsletter_complaints', 1001, { min: 1, max: 1000 }],
+    ['newsletter_running_long', 0, { min: 1, max: 365 }],
+    ['newsletter_running_long', 366, { min: 1, max: 365 }],
+    ['newsletter_starting_soon', 0, { min: 1, max: 720 }],
+    ['newsletter_starting_soon', 721, { min: 1, max: 720 }],
+    ['newsletter_cancelled_by_limit', 0, { min: 1, max: 365 }],
+    ['newsletter_cancelled_by_limit', 366, { min: 1, max: 365 }],
   ] as const)('refuses %s at %p and names the bounds', (kind, value, details) => {
     expect(thrownBy(() => assertThreshold(kind, value))).toMatchObject({
       statusCode: 400,
       errorCode: 'ALERT_THRESHOLD_INVALID',
       details,
     });
+  });
+
+  it.each([
+    ['newsletter_undelivered', 1],
+    ['newsletter_undelivered', 100],
+    ['newsletter_rejected', 1],
+    ['newsletter_rejected', 100],
+    ['newsletter_complaints', 1],
+    ['newsletter_complaints', 1000],
+    ['newsletter_running_long', 1],
+    ['newsletter_running_long', 365],
+    ['newsletter_starting_soon', 1],
+    ['newsletter_starting_soon', 720],
+    ['newsletter_cancelled_by_limit', 1],
+    ['newsletter_cancelled_by_limit', 365],
+  ] as const)('takes %s at %p, the edge of its bounds', (kind, value) => {
+    expect(() => assertThreshold(kind, value)).not.toThrow();
   });
 
   it('answers ALERT_THRESHOLD_NOT_FOUND for a kind without a threshold', () => {
@@ -211,6 +284,49 @@ describe('alertWindowOf', () => {
 
   it('gives a kind without a threshold no window', () => {
     expect(alertWindowOf('paid_orders_waiting', null, NOW, '2026-10-25')).toEqual({});
+  });
+
+  // the shares are watched while a campaign goes out and for two weeks after it started, so the
+  // alert does not light for a campaign of last year; the threshold is the percent
+  it.each(['newsletter_undelivered', 'newsletter_rejected'] as const)(
+    'gives %s the two weeks back from now and the percent of the threshold',
+    (kind) => {
+      expect(alertWindowOf(kind, 7, NOW, '2026-10-25')).toEqual({
+        since: new Date(NOW - 14 * DAY),
+        percent: 7,
+      });
+    },
+  );
+
+  // the complaints are told in thousandths, a part of a percent: 3 of 1000 mails is 0.3%
+  it('gives the complaints the two weeks back from now and the thousandths of the threshold', () => {
+    expect(alertWindowOf('newsletter_complaints', 7, NOW, '2026-10-25')).toEqual({
+      since: new Date(NOW - 14 * DAY),
+      permille: 7,
+    });
+  });
+
+  // a campaign called off by the limit is told of for the days of the threshold after it was
+  it('gives the campaigns called off by the limit the days of the threshold back from now', () => {
+    expect(alertWindowOf('newsletter_cancelled_by_limit', 7, NOW, '2026-10-25')).toEqual({
+      since: new Date(NOW - 7 * DAY),
+    });
+  });
+
+  it('gives the stop of the sending worker no window', () => {
+    expect(alertWindowOf('newsletter_sending_halted', null, NOW, '2026-10-25')).toEqual({});
+  });
+
+  it('gives a campaign that goes out too long the days of the threshold back from now', () => {
+    expect(alertWindowOf('newsletter_running_long', 3, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 3 * DAY),
+    });
+  });
+
+  it('gives a campaign that starts soon the hours of the threshold from now', () => {
+    expect(alertWindowOf('newsletter_starting_soon', 24, NOW, '2026-10-25')).toEqual({
+      until: new Date(NOW + 24 * 3_600_000),
+    });
   });
 });
 
@@ -288,7 +404,7 @@ describe('alertListOf', () => {
   });
 
   it('puts the two kinds of the gaps after the shipping data in the order of the kinds', () => {
-    const kinds = alertKindsOf('ADMIN');
+    const kinds = alertKindsOf('ADMIN', false);
 
     expect(kinds.indexOf('variants_missing_required')).toBe(
       kinds.indexOf('products_without_shipping_data') + 1,
@@ -425,6 +541,66 @@ describe('alertListOf', () => {
     expect(listOf('returns_goods_late', 14)).toEqual({
       path: '/api/returns',
       query: { state: 'open', paidAheadForDays: '14', sortBy: 'statedAt', sortDir: 'asc' },
+    });
+  });
+
+  // the cases of the newsletters are campaigns: the list of the campaigns counts them with the
+  // same filters (a state, a time, a share), so its total is the count of the alert
+  it.each([
+    ['newsletter_undelivered', 'undeliveredOver', 5],
+    ['newsletter_rejected', 'rejectedOver', 5],
+  ] as const)(
+    'sends %s to the campaigns whose share is over the percent',
+    (kind, filter, value) => {
+      expect(listOf(kind, value)).toEqual({
+        path: '/api/newsletters/campaigns',
+        query: {
+          status: 'sending,finished,stopped',
+          startedFrom: new Date(NOW - 14 * DAY).toISOString(),
+          [filter]: String(value),
+        },
+      });
+    },
+  );
+
+  // the complaints are over so many thousandths of the mails (the filter is in the same unit)
+  it('sends the complaints to the campaigns whose share is over the thousandths', () => {
+    expect(listOf('newsletter_complaints', 3)).toEqual({
+      path: '/api/newsletters/campaigns',
+      query: {
+        status: 'sending,finished,stopped',
+        startedFrom: new Date(NOW - 14 * DAY).toISOString(),
+        complaintsOver: '3',
+      },
+    });
+  });
+
+  it('sends to the campaigns the limit called off in the days of the threshold', () => {
+    expect(listOf('newsletter_cancelled_by_limit', 7)).toEqual({
+      path: '/api/newsletters/campaigns',
+      query: {
+        status: 'cancelled',
+        cancelReason: 'limit',
+        cancelledFrom: new Date(NOW - 7 * DAY).toISOString(),
+      },
+    });
+  });
+
+  it('sends nowhere for the stop of the sending worker', () => {
+    expect(listOf('newsletter_sending_halted', null)).toBeNull();
+  });
+
+  it('sends to the campaigns that go out and started before the threshold', () => {
+    expect(listOf('newsletter_running_long', 3)).toEqual({
+      path: '/api/newsletters/campaigns',
+      query: { status: 'sending', startedTo: new Date(NOW - 3 * DAY).toISOString() },
+    });
+  });
+
+  it('sends to the scheduled campaigns that start before the hours of the threshold are over', () => {
+    expect(listOf('newsletter_starting_soon', 24)).toEqual({
+      path: '/api/newsletters/campaigns',
+      query: { status: 'scheduled', scheduledTo: new Date(NOW + 24 * 3_600_000).toISOString() },
     });
   });
 

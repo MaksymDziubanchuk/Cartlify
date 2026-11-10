@@ -808,3 +808,165 @@ describe('GET /api/admin/log-events', () => {
     expect(res.statusCode).toBe(403);
   });
 });
+
+// the newsletters write to the admin log with kinds of thing and actions of their own: root giving
+// an admin the right (the account), a newsletter, a subscriber and an address blocked for the form
+describe('the admin log of the newsletters', () => {
+  const NEWSLETTER_LINES: AuditSeed[] = [
+    {
+      entityType: 'user',
+      entityId: FAR + 41,
+      action: 'NEWSLETTER_MANAGER_CHANGE',
+      event: 'newsletter.manager_granted',
+      ip: null,
+    },
+    {
+      entityType: 'newsletter_campaign',
+      entityId: FAR + 42,
+      action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+      event: 'newsletter.campaign_created',
+      ip: null,
+    },
+    {
+      entityType: 'newsletter_subscriber',
+      entityId: FAR + 43,
+      action: 'NEWSLETTER_SUBSCRIBER_DELETE',
+      event: 'newsletter.subscriber_erased',
+      ip: null,
+    },
+    {
+      entityType: 'newsletter_block',
+      entityId: FAR + 44,
+      action: 'NEWSLETTER_BLOCK_CHANGE',
+      event: 'newsletter.block_added',
+      ip: null,
+    },
+  ];
+
+  let owner: TestUser;
+
+  beforeAll(async () => {
+    owner = await newUser({ role: 'ADMIN' });
+    for (const line of NEWSLETTER_LINES) await auditLine(owner, line);
+  });
+
+  it('keeps the kind of thing, the action and the event of each line', async () => {
+    const page = await all('audit-log', `actorId=${owner.id}&sortBy=id&sortOrder=asc`);
+
+    expect(
+      page.items.map((line) => ({
+        entityType: line.entityType,
+        entityId: line.entityId,
+        action: line.action,
+        event: line.event,
+      })),
+    ).toEqual(
+      NEWSLETTER_LINES.map(({ entityType, entityId, action, event }) => ({
+        entityType,
+        entityId,
+        action,
+        event,
+      })),
+    );
+  });
+
+  it.each(NEWSLETTER_LINES.map((line) => [line.entityType, line] as const))(
+    'finds the line of %s by its kind of thing, for an admin and for root',
+    async (_type, line) => {
+      for (const reader of [admin, root]) {
+        const page = await all(
+          'audit-log',
+          `actorId=${owner.id}&entityType=${line.entityType}`,
+          reader,
+        );
+
+        expect(page.total).toBe(1);
+        expect(page.items[0]).toMatchObject({ entityId: line.entityId, event: line.event });
+      }
+    },
+  );
+
+  it.each(NEWSLETTER_LINES.map((line) => [line.action, line] as const))(
+    'finds the line of %s by its action',
+    async (_action, line) => {
+      const page = await all('audit-log', `actorId=${owner.id}&actions=${line.action}`);
+
+      expect(page.total).toBe(1);
+      expect(page.items[0]).toMatchObject({ event: line.event });
+    },
+  );
+
+  it('finds the lines of several actions and of an event together', async () => {
+    const byActions = await all(
+      'audit-log',
+      `actorId=${owner.id}&actions=NEWSLETTER_CAMPAIGN_CHANGE,NEWSLETTER_BLOCK_CHANGE`,
+    );
+    const byEvents = await all(
+      'audit-log',
+      `actorId=${owner.id}&events=newsletter.subscriber_erased,newsletter.manager_granted`,
+    );
+
+    expect(byActions.items.map((line) => line.event).sort()).toEqual([
+      'newsletter.block_added',
+      'newsletter.campaign_created',
+    ]);
+    expect(byEvents.items.map((line) => line.event).sort()).toEqual([
+      'newsletter.manager_granted',
+      'newsletter.subscriber_erased',
+    ]);
+  });
+
+  it('lists every event the newsletters write, for the checkboxes of the page', async () => {
+    const body = (await read('log-events', '')).json() as { auditLog: string[] };
+
+    expect(body.auditLog).toEqual(
+      expect.arrayContaining([
+        'newsletter.manager_granted',
+        'newsletter.manager_revoked',
+        'newsletter.campaign_created',
+        'newsletter.campaign_updated',
+        'newsletter.campaign_deleted',
+        'newsletter.campaign_copied',
+        'newsletter.campaign_scheduled',
+        'newsletter.campaign_cancelled',
+        'newsletter.campaign_stopped',
+        'newsletter.campaign_test_sent',
+        'newsletter.subscriber_erased',
+        'newsletter.block_added',
+        'newsletter.block_removed',
+      ]),
+    );
+  });
+
+  // each event the newsletters write is one the filter of the log takes, for an admin and for root
+  it.each([
+    'newsletter.manager_granted',
+    'newsletter.manager_revoked',
+    'newsletter.campaign_created',
+    'newsletter.campaign_updated',
+    'newsletter.campaign_deleted',
+    'newsletter.campaign_copied',
+    'newsletter.campaign_scheduled',
+    'newsletter.campaign_cancelled',
+    'newsletter.campaign_stopped',
+    'newsletter.campaign_test_sent',
+    'newsletter.subscriber_erased',
+    'newsletter.block_added',
+    'newsletter.block_removed',
+  ])('takes %s as a filter of the log', async (event) => {
+    for (const reader of [admin, root]) {
+      const page = await all('audit-log', `events=${event}`, reader);
+
+      expect(page.items.every((line) => line.event === event)).toBe(true);
+    }
+  });
+
+  it('refuses a kind of thing and an action the log does not know', async () => {
+    for (const query of ['entityType=newsletter', 'actions=NEWSLETTER_CHANGE']) {
+      const res = await read('audit-log', query);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    }
+  });
+});

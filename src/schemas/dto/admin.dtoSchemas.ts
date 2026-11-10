@@ -1408,6 +1408,10 @@ const AUDIT_ACTIONS = [
   'ORDER_DELIVERY_CHANGE',
   'CATEGORY_UPDATE',
   'REVIEW_DELETE',
+  'NEWSLETTER_MANAGER_CHANGE',
+  'NEWSLETTER_CAMPAIGN_CHANGE',
+  'NEWSLETTER_SUBSCRIBER_DELETE',
+  'NEWSLETTER_BLOCK_CHANGE',
   'OTHER',
 ] as const;
 const AUDIT_ENTITY_TYPES = [
@@ -1420,6 +1424,9 @@ const AUDIT_ENTITY_TYPES = [
   'party',
   'document',
   'attribute',
+  'newsletter_campaign',
+  'newsletter_subscriber',
+  'newsletter_block',
   'other',
 ] as const;
 const auditActionPattern = `(${AUDIT_ACTIONS.join('|')})`;
@@ -1963,10 +1970,17 @@ const ALERT_KINDS = [
   'worker_stalled',
   'shop_settings_incomplete',
   'shop_locale_missing',
+  'newsletter_undelivered',
+  'newsletter_rejected',
+  'newsletter_complaints',
+  'newsletter_running_long',
+  'newsletter_starting_soon',
+  'newsletter_cancelled_by_limit',
+  'newsletter_sending_halted',
   'admin_actions',
 ] as const;
 
-const ALERT_THRESHOLD_UNITS = ['days', 'units', 'seconds', 'hours'] as const;
+const ALERT_THRESHOLD_UNITS = ['days', 'units', 'seconds', 'hours', 'percent', 'permille'] as const;
 
 const adminAlertsQuerySchema = {
   $id: 'adminAlertsQuerySchema',
@@ -2029,10 +2043,18 @@ const adminAlertsResponseSchema = {
               'The request to the list of the app with the cases of the kind, the most urgent ' +
               'first: the path and its query; the frontend adds a limit, a sort of that list or ' +
               'a filter. Its rows are the cases the kind counts, the ones put aside too. null ' +
-              'for the worker.',
+              'for the worker and for the stop of the sending worker.',
+          },
+          occurredAt: {
+            anyOf: [dateTimeSchema, { type: 'null' }],
+            description:
+              'When the thing the alert tells of last happened, for a kind that is an event: ' +
+              'the time of the last stop of the sending worker of the newsletters (it stops ' +
+              'when the whole stream has a problem, and the alert goes out when a pass goes ' +
+              'through). null for every other kind, and for this one while it has not stopped.',
           },
         },
-        required: ['kind', 'subscribed', 'count', 'dismissed', 'threshold', 'list'],
+        required: ['kind', 'subscribed', 'count', 'dismissed', 'threshold', 'list', 'occurredAt'],
       },
     },
     total: { type: 'integer', minimum: 0, description: 'The counts of every alert together.' },
@@ -2136,8 +2158,8 @@ const adminAlertDismissalParamsSchema = {
       maxLength: 64,
       pattern: '^[A-Za-z0-9-]+$',
       description:
-        'The id of the case in the list of its kind: an order, a product, a batch, a chat or a ' +
-        'line of the admin log.',
+        'The id of the case in the list of its kind: an order, a product, a batch, a chat, a ' +
+        'statement of return, a newsletter campaign or a line of the admin log.',
     },
   },
   required: ['kind', 'id'],

@@ -124,6 +124,24 @@ export const AUDIT_EVENTS = [
   'user.export',
   'user.role_grant',
   'user.role_revoke',
+  // the newsletters: root gave an admin the right to run them or took it away (the line is about the
+  // account of the admin); a newsletter (a campaign) made, changed, deleted, copied, planned,
+  // cancelled before it started, stopped while it went, and a test mail of it sent to an admin; a
+  // subscriber deleted by an admin with the data of the subscription; an address blocked for the
+  // public form of the newsletters, or taken off the list
+  'newsletter.manager_granted',
+  'newsletter.manager_revoked',
+  'newsletter.campaign_created',
+  'newsletter.campaign_updated',
+  'newsletter.campaign_deleted',
+  'newsletter.campaign_copied',
+  'newsletter.campaign_scheduled',
+  'newsletter.campaign_cancelled',
+  'newsletter.campaign_stopped',
+  'newsletter.campaign_test_sent',
+  'newsletter.subscriber_erased',
+  'newsletter.block_added',
+  'newsletter.block_removed',
   LEGACY_EVENT,
 ] as const;
 
