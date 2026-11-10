@@ -1,4 +1,5 @@
 import { t } from '@config/i18n.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 import { sellerLineOf } from '@services/email/seller.js';
@@ -21,7 +22,7 @@ export function buildPasswordChangedTemplate(args: PasswordChangedTemplateArgs):
   text: string;
   html: string;
 } {
-  const appName = args.appName?.trim() || 'Cartlify';
+  const appName = args.appName?.trim() || shopSettings().shopName;
   const loginUrl = args.loginUrl?.trim() || '';
   const locale = args.locale || 'en';
 
