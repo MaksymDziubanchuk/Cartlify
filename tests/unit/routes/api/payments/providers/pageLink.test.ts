@@ -28,7 +28,7 @@ describe('payment page link', () => {
   // there is no page it could close
   it.each([
     ['a link of the old form without a provider', 'cs_test_1'],
-    ['a provider this server has not', 'liqpay:dev-12-1700000000000'],
+    ['a provider this server has not', 'paypal:dev-12-1700000000000'],
     ['a link without a page', 'stripe:'],
     ['a link without a provider', ':cs_test_1'],
     ['an empty link', ''],

@@ -817,10 +817,9 @@ enum OrderStatus {
   cancelled
 }
 
-// Who took the money of an order. Only stripe has a module in the app, liqpay is not built yet.
+// Who took the money of an order: a provider the app has a module for.
 enum PaymentProvider {
   stripe
-  liqpay
 }
 
 // How an order gets to its buyer. manual: the shop sends it to an address itself, with a carrier it
@@ -852,8 +851,8 @@ model Order {
   // delivery on top of it (confirm_order, db/05)
   total Decimal @db.Decimal(10, 2)
 
-  // who took the money and the id of the payment there (a Stripe PaymentIntent, a LiqPay order
-  // id); pay_order sets both together
+  // who took the money and the id of the payment there (a Stripe PaymentIntent); pay_order sets
+  // both together
   paymentProvider PaymentProvider?
   paymentId       String?          @unique
 

@@ -25,17 +25,17 @@ describe('payment providers', () => {
     expect(getPaymentProvider('stripe')).toBe(stripeProvider);
   });
 
-  // the database knows liqpay already, this server has no such provider yet
+  // a name the server has no provider for: an order paid through a provider that was taken off
   it('refuses a provider this server has not as a server error', () => {
-    expect(thrownBy(() => getPaymentProvider('liqpay'))).toMatchObject({
+    expect(thrownBy(() => getPaymentProvider('paypal' as never))).toMatchObject({
       statusCode: 500,
-      details: { reason: 'PAYMENT_PROVIDER_NOT_AVAILABLE', provider: 'liqpay' },
+      details: { reason: 'PAYMENT_PROVIDER_NOT_AVAILABLE', provider: 'paypal' },
     });
   });
 
   it.each([
     ['stripe', true],
-    ['liqpay', false],
+    ['paypal', false],
     ['Stripe', false],
     ['', false],
     [undefined, false],

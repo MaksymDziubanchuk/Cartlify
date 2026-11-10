@@ -727,14 +727,11 @@ describe('cartlify.pay_order', () => {
     expect(stock).toEqual({ stock: 8, reserved: 0 });
   });
 
-  it.each([
-    ['another payment id', { paymentId: 'pi_db_second' }],
-    ['the same id at another provider', { paymentId: 'pi_db_first', provider: 'liqpay' }],
-  ])('tells %s of a paid order apart', async (_case, second) => {
+  it('tells another payment of a paid order apart', async () => {
     const result = await inRolledBackTx(async (db) => {
       const orderId = await waitingOrderOf(db, owner.id, [[product.variantId, 1]]);
       await pay(db, admin.id, orderId, { paymentId: 'pi_db_first' });
-      return pay(db, admin.id, orderId, { ...second, amount: '10' });
+      return pay(db, admin.id, orderId, { paymentId: 'pi_db_second', amount: '10' });
     });
 
     expect(result).toBe('ALREADY_PAID_OTHER_PAYMENT');
@@ -832,8 +829,8 @@ describe('cartlify.pay_order', () => {
     expect(result).toBe('ORDER_NOT_FOUND');
   });
 
-  // a provider delivers the same event twice at the same moment (stripe sends duplicates, the
-  // callback of liqpay meets the status check of the return page): the second delivery waits for
+  // a provider delivers the same event twice at the same moment (stripe sends duplicates, a
+  // callback meets the status check of the return page): the second delivery waits for
   // the lock of the first and finds the order paid by the same payment. Taken as not payable, it
   // made the webhook refund a payment the order had just taken
   it('answers a delivery of the same payment at the same moment as a repeated one', async () => {

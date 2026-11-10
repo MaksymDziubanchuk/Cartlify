@@ -1022,7 +1022,7 @@ enum | NewsletterRecipientStatus | cartlify_owner | queued,sent,rejected,bounced
 enum | NewsletterSource | cartlify_owner | form,account | -
 enum | NewsletterSubscriptionStatus | cartlify_owner | pending,active,paused_complaint,stopped_bounce,ended | -
 enum | OrderStatus | cartlify_owner | pending,paid,shipped,delivered,cancelled,waiting,unconfirmed | -
-enum | PaymentProvider | cartlify_owner | stripe,liqpay | -
+enum | PaymentProvider | cartlify_owner | stripe | -
 enum | PriceChangeMode | cartlify_owner | percent,fixed | -
 enum | ReturnBasis | cartlify_owner | withdrawal,other | -
 enum | ReturnCloseCode | cartlify_owner | buyer_changed_mind,not_buyer,goods_not_returned,other,stated_again | -

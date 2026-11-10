@@ -154,8 +154,8 @@ describe('POST /api/payments/checkout/sessions', () => {
       expect((await redisStateOf(orderId)).pageLink).toBeNull();
     });
 
-    // the database knows liqpay already, this server takes no payments through it yet
-    it.each(['liqpay', 'paypal', 'Stripe', '', 1])(
+    // a name that is no provider of this server (paypal is a way to pay at stripe, not a provider)
+    it.each(['paypal', 'Stripe', '', 1])(
       'answers VALIDATION_ERROR for the provider %p',
       async (provider) => {
         const res = await checkout(app, csrf, await newUser(), 1, provider);
