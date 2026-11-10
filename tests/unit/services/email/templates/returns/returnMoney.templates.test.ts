@@ -54,6 +54,19 @@ describe('buildReturnRefundedTemplate', () => {
     expect(outside.text).not.toContain('the way you paid');
   });
 
+  // a transfer to the card can still fail at the bank, and the buyer is then mailed
+  // (returnRefundFailed); money sent outside the app has no such later answer
+  it('promises a mail if the transfer to the card goes wrong later, not for money sent outside the app', () => {
+    const promise = 'If anything happens to this refund, we will write to you.';
+    const { text, html } = buildReturnRefundedTemplate(base);
+
+    expect(text).toContain(`Your bank shows it within a few days. ${promise}`);
+    expect(html).toContain(promise);
+    expect(buildReturnRefundedTemplate({ ...base, outsideMethod: 'cash' }).text).not.toContain(
+      promise,
+    );
+  });
+
   it.each([
     ['cash', 'cash'],
     ['other', 'another way'],
@@ -97,6 +110,8 @@ describe('buildReturnRefundedTemplate', () => {
     expect(en.text).toContain('It goes back the way you paid.');
     expect(uk.text).toContain('Кошти повертаються тим самим способом, яким ви платили.');
     expect(es.text).toContain('Se devuelve por el mismo medio con el que pagaste.');
+    expect(uk.text).toContain('Якщо з цим поверненням щось станеться, ми вам напишемо.');
+    expect(es.text).toContain('Si pasa algo con esta devolución, te escribiremos.');
     expect(uk.subject).toContain('Кошти повернено');
     expect(es.subject).toContain('Dinero devuelto');
   });

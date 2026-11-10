@@ -22,7 +22,7 @@ export type OrderPaymentRefundedTemplateArgs = {
   reason: PaymentRefundReason;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -61,7 +61,7 @@ export function buildOrderPaymentRefundedTemplate(args: OrderPaymentRefundedTemp
     reason,
     orderLine: orderLineOf(args.reason, locale),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('orderPaymentRefunded.subject', locale, { appName, orderId }),
     preview: t('orderPaymentRefunded.preview', locale, { orderId }),

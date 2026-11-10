@@ -81,6 +81,54 @@ describe('renderSource', () => {
     expect(out).toBe('Hi {{year}}, {{name}} {{');
   });
 
+  // a value that is html already (a block of a newsletter the code has built and escaped itself) goes
+  // in as it is with three braces; the plain mark still escapes
+  describe('a value that is html already, {{{name}}}', () => {
+    it('goes into an html template as it is, where {{name}} would escape it', () => {
+      const values = { block: '<p>Hello <b>you</b> &amp; me</p>' };
+
+      expect(renderSource('<div>{{{block}}}</div>', values, html)).toBe(
+        '<div><p>Hello <b>you</b> &amp; me</p></div>',
+      );
+      expect(renderSource('<div>{{block}}</div>', values, html)).toBe(
+        '<div>&lt;p&gt;Hello &lt;b&gt;you&lt;/b&gt; &amp;amp; me&lt;/p&gt;</div>',
+      );
+    });
+
+    it('is the value as it is in a text template, as {{name}} is', () => {
+      expect(renderSource('{{{block}}}', { block: 'a < b & c' }, text)).toBe('a < b & c');
+    });
+
+    it('is filled in once: braces inside the value are not a mark', () => {
+      expect(
+        renderSource('{{{block}}} {{year}}', { block: '{{year}} {{{year}}}', year: '2031' }, html),
+      ).toBe('{{year}} {{{year}}} 2031');
+    });
+
+    it('works inside a section and a list', () => {
+      expect(
+        renderSource('{{#show}}[{{{block}}}]{{/show}}', { show: 'y', block: '<i>x</i>' }, html),
+      ).toBe('[<i>x</i>]');
+      expect(
+        renderSource(
+          '{{#items}}{{{part}}}{{/items}}',
+          { items: [{ part: '<i>1</i>' }, { part: '<i>2</i>' }] },
+          html,
+        ),
+      ).toBe('<i>1</i><i>2</i>');
+    });
+
+    it('refuses a list, a missing value and a broken mark, as {{name}} does', () => {
+      expect(() => renderSource('{{{items}}}', { items: [] }, text)).toThrow(
+        /EMAIL_TEMPLATE_LIST_AS_TEXT/,
+      );
+      expect(() => renderSource('{{{missing}}}', {}, text)).toThrow(/EMAIL_TEMPLATE_VALUE_MISSING/);
+      expect(() => renderSource('{{{ block }}}', { block: 'x' }, text)).toThrow(
+        /EMAIL_TEMPLATE_MARK_BROKEN/,
+      );
+    });
+  });
+
   it('refuses a list where a text is expected', () => {
     expect(() => renderSource('{{items}}', { items: [] }, text)).toThrow(
       /EMAIL_TEMPLATE_LIST_AS_TEXT/,
@@ -108,9 +156,9 @@ describe('renderTemplate', () => {
   const values = {
     appName: 'Cartlify',
     verifyUrl: 'https://shop.example.com/web/login?token=t',
-    resetUrl: 'https://shop.example.com/web/auth/reset?token=t',
+    resetUrl: 'https://shop.example.com/web/auth/reset#token=t',
     userName: 'Anna',
-    logoCid: 'cartlify-logo',
+    logoUrl: 'https://res.cloudinary.com/cartlify-test/image/upload/v1/test/shop/logo/a.png',
     expiresInText: '24 hours',
     year: '2031',
     orderId: '42',

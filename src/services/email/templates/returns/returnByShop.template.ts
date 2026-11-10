@@ -29,7 +29,7 @@ export type ReturnByShopTemplateArgs = {
   timeZone?: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -74,7 +74,7 @@ export function buildReturnByShopTemplate(args: ReturnByShopTemplateArgs): {
     extendedLine: args.extended ? t('returnByShop.extendedLine', locale) : '',
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnByShop.subject', locale, { appName, orderId }),
     preview: t('returnByShop.preview', locale, { orderId }),

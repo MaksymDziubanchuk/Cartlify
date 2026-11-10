@@ -7,7 +7,7 @@ export type VerifyEmailTemplateArgs = {
   verifyUrl: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   expiresInText?: string;
   locale?: string;
 };
@@ -28,7 +28,7 @@ export function buildVerifyEmailTemplate(args: VerifyEmailTemplateArgs): {
     appName,
     verifyUrl,
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     expiresInText: args.expiresInText?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('verifyEmail.title', locale, { appName }),

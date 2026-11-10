@@ -6,7 +6,6 @@ import {
 } from '@services/email/templates/users/accountDeleted.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { shopCurrency } from '@routes/api/payments/providers/index.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type AccountDeletionLogger = {
   warn: (obj: unknown, msg?: string) => void;
@@ -21,6 +20,8 @@ export type AccountDeletedEmailArgs = {
   locale: string;
   deliveries: AccountDeletedDelivery[];
   cancelled: AccountDeletedCancelled[];
+  // the deletion ended a subscription to the newsletter: the mail says so
+  newsletterEnded: boolean;
 };
 
 // mails the person that the account is gone, with the orders still on their way and the orders
@@ -31,18 +32,17 @@ export async function sendAccountDeletedEmail(
   log: AccountDeletionLogger,
 ): Promise<void> {
   try {
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildAccountDeletedTemplate({
       // the name of the shop the mail is from
       appName: shopSettings().shopName,
       deliveries: args.deliveries,
       cancelled: args.cancelled,
+      newsletterEnded: args.newsletterEnded,
       // the orders of the mail are paid or waited for in the money of the shop
       currency: shopCurrency(),
       userName: args.userName,
       locale: args.locale,
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
     });
 
     await sendEmail({
@@ -50,7 +50,6 @@ export async function sendAccountDeletedEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, userId: args.userId }, 'account deleted mail was not sent');

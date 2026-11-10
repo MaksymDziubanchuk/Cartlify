@@ -3,7 +3,6 @@ import type { Prisma } from '@prisma/client';
 
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { buildReviewRemovedTemplate } from '@services/email/templates/users/reviewRemoved.template.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 // a review an admin or root deletes is a removal of the author: a line of the journal of the admins
 // (REVIEW_DELETE, the author as the old userId of its changes). The journal keeps them for good, so
@@ -42,8 +41,6 @@ export async function sendReviewRemovedEmail(
   log: ReviewRemovalLogger,
 ): Promise<void> {
   try {
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildReviewRemovedTemplate({
       // the name of the shop the mail is from
       appName: shopSettings().shopName,
@@ -52,7 +49,7 @@ export async function sendReviewRemovedEmail(
       limit: args.limit,
       userName: args.userName,
       locale: args.locale,
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
     });
 
     await sendEmail({
@@ -60,7 +57,6 @@ export async function sendReviewRemovedEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.warn({ err, userId: args.userId }, 'review removed mail was not sent');

@@ -19,7 +19,7 @@ export type ReturnRefundFailedTemplateArgs = {
   sentBack?: boolean;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -53,7 +53,7 @@ export function buildReturnRefundFailedTemplate(args: ReturnRefundFailedTemplate
     orderUrl,
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnRefundFailed.subject', locale, { appName, orderId }),
     preview: t('returnRefundFailed.preview', locale, { amount }),

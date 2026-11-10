@@ -1,13 +1,11 @@
-import type { FastifyBaseLogger } from 'fastify';
-
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
-import { isEmailProviderFailure, sendEmail } from './sendEmail.helper.js';
+import { sendEmail } from './sendEmail.helper.js';
+import { isEmailProviderFailure } from '@services/email/sendGrid.js';
 import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type SendVerifyEmailArgs = {
   to: string;
@@ -15,24 +13,23 @@ export type SendVerifyEmailArgs = {
   expiresAt: Date;
   userName?: string;
   locale?: string;
+  // the box of the newsletter the registration form ticked: the link carries it as a hint for the
+  // page that confirms the email. A mail sent again does not know it and carries none
+  newsletter?: boolean;
 };
 
 // build verify url
 // add expiry hint
 // send email via provider
-export async function sendVerifyEmail(
-  args: SendVerifyEmailArgs,
-  log: Pick<FastifyBaseLogger, 'warn'>,
-): Promise<{ status: number }> {
-  const verifyUrl = buildWebLoginVerifyUrl(args.token);
+export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ status: number }> {
+  const verifyUrl = buildWebLoginVerifyUrl(args.token, args.newsletter === true);
   const expiresInText = formatExpiresIn(args.expiresAt, args.locale);
-  const logo = await shopLogoAttachment(log);
 
   const { subject, text, html } = buildVerifyEmailTemplate({
     verifyUrl,
     userName: args.userName || '',
     appName: shopSettings().shopName,
-    ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+    logoUrl: shopSettings().logoUrl,
     ...(args.locale ? { locale: args.locale } : {}),
     expiresInText,
   });
@@ -43,7 +40,6 @@ export async function sendVerifyEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     // only a failure of the mail provider is a bad gateway, our own error stays a server error
@@ -60,7 +56,12 @@ export async function sendVerifyEmail(
 }
 
 // frontend verify entrypoint (WEB_PAGE_VERIFY_EMAIL)
-// a mail from production must link to the live site, a localhost link opens nothing there
-function buildWebLoginVerifyUrl(token: string): string {
-  return webPageUrl(env.WEB_PAGE_VERIFY_EMAIL, { query: { token } });
+// a mail from production must link to the live site, a localhost link opens nothing there.
+// The token follows the # (no server sees a fragment, so no log holds the token); the page reads it
+// and posts it to POST /api/auth/verify. newsletter=1 is only a hint for the page (the box of the
+// form was ticked); what counts is the choice the page sends with the token
+function buildWebLoginVerifyUrl(token: string, newsletter: boolean): string {
+  return webPageUrl(env.WEB_PAGE_VERIFY_EMAIL, {
+    fragment: { token, ...(newsletter ? { newsletter: '1' } : {}) },
+  });
 }

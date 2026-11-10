@@ -31,11 +31,13 @@ export type AccountDeletedCancelled = {
 export type AccountDeletedTemplateArgs = {
   deliveries: AccountDeletedDelivery[];
   cancelled: AccountDeletedCancelled[];
+  // the deletion ended a subscription to the newsletter of the account: one more sentence
+  newsletterEnded?: boolean;
   // the currency checkout charges in, for example "eur"
   currency: string;
   userName?: string | null;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -77,8 +79,9 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
   const values = {
     appName,
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
+    hasNewsletter: args.newsletterEnded ? 'yes' : '',
     hasDeliveries: args.deliveries.length ? 'yes' : '',
     deliveries: args.deliveries.map((order) => ({
       orderId: String(order.orderId),
@@ -97,6 +100,7 @@ export function buildAccountDeletedTemplate(args: AccountDeletedTemplateArgs): {
     preview: t('accountDeleted.preview', locale, { appName }),
     heading: t('accountDeleted.heading', locale),
     body: t('accountDeleted.body', locale, { appName }),
+    newsletterEnded: t('accountDeleted.newsletterEnded', locale),
     greeting: greetingOf(args.userName, locale),
     seller: sellerLineOf(locale),
     deliveriesHeading: t('accountDeleted.deliveriesHeading', locale),

@@ -10,7 +10,6 @@ import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPa
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 import { currencyOf } from '../../providers/index.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { withdrawalPeriodDaysOf } from '@routes/api/orders/services/helpers/withdrawal.helper.js';
 
@@ -119,7 +118,6 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       return row ? [{ kind, content: row.document.content }] : [];
     });
 
-    const logo = await shopLogoAttachment(log);
     const locale = mailLocaleOf(order.user.locale);
 
     const { subject, text, html } = buildOrderPaidTemplate({
@@ -149,7 +147,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       // the link of the page of withdrawal, with the code of the order after the #
       withdrawalUrl: withdrawalLinkOf(order.id),
       withdrawalDays: withdrawalPeriodDaysOf(order.withdrawalDays),
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
     });
 
     await sendEmail({
@@ -157,15 +155,12 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       subject,
       text,
       html,
-      attachments: [
-        ...(logo ? [logo] : []),
-        ...documents.map((doc) => ({
-          content: Buffer.from(doc.content, 'utf8').toString('base64'),
-          type: 'text/plain',
-          filename: `${doc.kind}.txt`,
-          disposition: 'attachment' as const,
-        })),
-      ],
+      attachments: documents.map((doc) => ({
+        content: Buffer.from(doc.content, 'utf8').toString('base64'),
+        type: 'text/plain',
+        filename: `${doc.kind}.txt`,
+        disposition: 'attachment' as const,
+      })),
     });
   } catch (err) {
     log.error({ err, orderId }, 'order paid mail was not sent');

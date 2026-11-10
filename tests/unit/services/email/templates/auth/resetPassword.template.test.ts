@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import { buildResetPasswordTemplate } from '@services/email/templates/auth/resetPassword.template.js';
 
-const resetUrl = 'https://shop.test/reset-password?token=abc123';
+// the logo of the shop is shown by its address at Cloudinary: the mail carries no attachment
+const LOGO_URL = 'https://res.cloudinary.com/cartlify-test/image/upload/v1/test/shop/logo/a.png';
+
+const resetUrl = 'https://shop.test/reset-password#token=abc123';
 
 afterEach(() => {
   jest.useRealTimers();
@@ -31,7 +34,7 @@ describe('buildResetPasswordTemplate', () => {
   });
 
   it('keeps the plain text version free of html', () => {
-    const { text } = buildResetPasswordTemplate({ resetUrl, userName: 'Anna', logoCid: 'logo' });
+    const { text } = buildResetPasswordTemplate({ resetUrl, userName: 'Anna', logoUrl: LOGO_URL });
 
     expect(text).not.toMatch(/<[a-z!/]/i);
   });
@@ -70,11 +73,11 @@ describe('buildResetPasswordTemplate', () => {
     expect(html).toContain('token=a&amp;b=');
   });
 
-  it('shows the attached logo when a content id is given, the shop name otherwise', () => {
-    expect(buildResetPasswordTemplate({ resetUrl, logoCid: 'cartlify-logo' }).html).toContain(
-      'src="cid:cartlify-logo"',
+  it('shows the logo by its address when the shop has one, the shop name otherwise', () => {
+    expect(buildResetPasswordTemplate({ resetUrl, logoUrl: LOGO_URL }).html).toContain(
+      `src="${LOGO_URL}"`,
     );
-    expect(buildResetPasswordTemplate({ resetUrl }).html).not.toContain('cid:');
+    expect(buildResetPasswordTemplate({ resetUrl }).html).not.toMatch(/<img\b/);
   });
 
   it('puts the current year into the footer', () => {

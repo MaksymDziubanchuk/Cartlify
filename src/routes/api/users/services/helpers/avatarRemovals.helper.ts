@@ -4,7 +4,6 @@ import type { Prisma } from '@prisma/client';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { buildAvatarRemovedTemplate } from '@services/email/templates/users/avatarRemoved.template.js';
 import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 // the avatar of an account taken away: by its owner through PATCH /api/users/me, or by a moderator
 // through DELETE /api/users/:userId/avatar. A removal by a moderator is a line of the journal of the
@@ -64,8 +63,6 @@ export async function sendAvatarRemovedEmail(
   log: AvatarLogger,
 ): Promise<void> {
   try {
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildAvatarRemovedTemplate({
       // the name of the shop the mail is from
       appName: shopSettings().shopName,
@@ -73,7 +70,7 @@ export async function sendAvatarRemovedEmail(
       limit: args.limit,
       userName: args.userName,
       locale: args.locale,
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
     });
 
     await sendEmail({
@@ -81,7 +78,6 @@ export async function sendAvatarRemovedEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.warn({ err, userId: args.userId }, 'avatar removed mail was not sent');

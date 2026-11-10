@@ -17,7 +17,7 @@
           <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="border-collapse:collapse;max-width:600px;width:100%;">
             <tr>
               <td style="padding:0 0 12px 0;text-align:left;font-family:Arial,Helvetica,sans-serif;">
-                {{#logoCid}}<img src="cid:{{logoCid}}" alt="{{appName}}" width="160" style="display:block;max-width:160px;height:auto;border:0;outline:none;text-decoration:none;">{{/logoCid}}{{^logoCid}}<div style="font-size:18px;font-weight:800;letter-spacing:0.2px;color:#4c1d95;">{{appName}}</div>{{/logoCid}}
+                {{#logoUrl}}<img src="{{logoUrl}}" alt="{{appName}}" width="160" style="display:block;max-width:160px;height:auto;border:0;outline:none;text-decoration:none;">{{/logoUrl}}{{^logoUrl}}<div style="font-size:18px;font-weight:800;letter-spacing:0.2px;color:#4c1d95;">{{appName}}</div>{{/logoUrl}}
               </td>
             </tr>
 
@@ -27,7 +27,8 @@
 
                 <div style="font-size:14px;color:#111827;line-height:1.5;margin:0 0 10px 0;">
                   {{greeting}}<br>
-                  {{body}}
+                  {{body}}{{#hasNewsletter}}<br>
+                  {{newsletterEnded}}{{/hasNewsletter}}
                 </div>
 
                 {{#hasDeliveries}}<div style="font-size:14px;font-weight:800;color:#2e1065;margin:18px 0 6px 0;">{{deliveriesHeading}}</div>

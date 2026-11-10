@@ -40,7 +40,7 @@ export type OrderPaidTemplateArgs = WithdrawalOfferArgs & {
   // what the buyer pays for the delivery, part of the total: free when 0, no line for a pickup
   deliveryPrice?: number | string | null;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
   // the documents attached to the mail as files: the versions of the terms and of the contract the
   // order was confirmed with (sendOrderPaidEmail); the mail names them in its last lines
@@ -112,7 +112,7 @@ export function buildOrderPaidTemplate(args: OrderPaidTemplateArgs): {
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
     attachedLine: attachedLineOf(args.attachedDocuments, locale),
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('orderPaid.subject', locale, { appName, orderId }),
     preview: t('orderPaid.preview', locale, { orderId }),

@@ -11,7 +11,6 @@ import { buildOrderDeliveredTemplate } from '@services/email/templates/orders/or
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { sendOrderNoticeEmail } from './sendOrderNoticeEmail.helper.js';
 import { currencyOf } from '@routes/api/payments/providers/index.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { itemNameOf } from './itemName.helper.js';
 import { withdrawalEndsOf, withdrawalPeriodDaysOf } from './withdrawal.helper.js';
 
@@ -165,7 +164,6 @@ export async function sendOrderStatusEmail(
         ).toFixed(2)
       : order.total.toString();
 
-    const logo = await shopLogoAttachment(log);
     const locale = mailLocaleOf(order.user.locale);
 
     const { subject, text, html } = TEMPLATES[status]({
@@ -208,7 +206,7 @@ export async function sendOrderStatusEmail(
       ...(status === 'delivered' && order.endsAt
         ? { withdrawalEndsAt: order.endsAt, timeZone: env.SHOP_TIME_ZONE }
         : {}),
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
     });
 
     await sendEmail({
@@ -216,7 +214,6 @@ export async function sendOrderStatusEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, orderId }, `order ${status} mail was not sent`);

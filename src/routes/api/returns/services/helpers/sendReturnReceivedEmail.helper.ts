@@ -9,7 +9,6 @@ import { webPageUrl } from '@helpers/webOrigin.js';
 import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { buildReturnReceivedTemplate } from '@services/email/templates/returns/returnReceived.template.js';
 
 import type { ReturnMailLogger } from './sendReturnByShopEmail.helper.js';
@@ -110,8 +109,6 @@ export async function sendReturnReceivedEmail(
       userName: string | null | undefined,
       locale: string | null,
     ) => {
-      const logo = await shopLogoAttachment(log);
-
       const { subject, text, html } = buildReturnReceivedTemplate({
         appName: shopSettings().shopName,
         orderId: row.orderId,
@@ -141,7 +138,7 @@ export async function sendReturnReceivedEmail(
         shippingPaidBy: row.order?.returnShippingPaidBy ?? null,
         supportEmail: shopSettings().emailReplyTo,
         ...(userName ? { userName } : {}),
-        ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+        logoUrl: shopSettings().logoUrl,
       });
 
       await sendEmail({
@@ -149,7 +146,6 @@ export async function sendReturnReceivedEmail(
         subject,
         text,
         html,
-        attachments: logo ? [logo] : [],
       });
     };
 

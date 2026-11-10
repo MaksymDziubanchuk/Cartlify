@@ -8,7 +8,6 @@ import { buildOrderPaymentRefundedTemplate } from '@services/email/templates/ord
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 
 export type PaymentRefundedMailLogger = {
   error: (obj: unknown, msg?: string) => void;
@@ -47,8 +46,6 @@ export async function sendPaymentRefundedEmail(
 
     if (!user || user.deletedAt) return;
 
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildOrderPaymentRefundedTemplate({
       // the name of the shop the mail is from
       appName: shopSettings().shopName,
@@ -58,7 +55,7 @@ export async function sendPaymentRefundedEmail(
       currency: args.currency,
       reason: args.reason,
       ...(user.name ? { userName: user.name } : {}),
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
       locale: mailLocaleOf(user.locale),
     });
 
@@ -67,7 +64,6 @@ export async function sendPaymentRefundedEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, orderId: args.orderId }, 'payment refunded mail was not sent');

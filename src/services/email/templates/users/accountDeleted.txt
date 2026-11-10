@@ -1,6 +1,6 @@
 {{#userName}}{{greeting}}
 
-{{/userName}}{{body}}
+{{/userName}}{{body}}{{#hasNewsletter}} {{newsletterEnded}}{{/hasNewsletter}}
 {{#hasDeliveries}}
 {{deliveriesIntroTxt}}
 {{#deliveries}}- {{orderLabel}} #{{orderId}}, {{total}}: {{statusText}}

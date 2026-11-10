@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
 import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 
+// the logo of the shop is shown by its address at Cloudinary: the mail carries no attachment
+const LOGO_URL = 'https://res.cloudinary.com/cartlify-test/image/upload/v1/test/shop/logo/a.png';
+
 const verifyUrl = 'https://shop.test/login?verify=abc123';
 
 afterEach(() => {
@@ -31,7 +34,7 @@ describe('buildVerifyEmailTemplate', () => {
   });
 
   it('keeps the plain text version free of html', () => {
-    const { text } = buildVerifyEmailTemplate({ verifyUrl, userName: 'Anna', logoCid: 'logo' });
+    const { text } = buildVerifyEmailTemplate({ verifyUrl, userName: 'Anna', logoUrl: LOGO_URL });
 
     expect(text).not.toMatch(/<[a-z!/]/i);
   });
@@ -70,11 +73,11 @@ describe('buildVerifyEmailTemplate', () => {
     expect(html).toContain('verify=a&amp;b=');
   });
 
-  it('shows the attached logo when a content id is given, the shop name otherwise', () => {
-    expect(buildVerifyEmailTemplate({ verifyUrl, logoCid: 'cartlify-logo' }).html).toContain(
-      'src="cid:cartlify-logo"',
+  it('shows the logo by its address when the shop has one, the shop name otherwise', () => {
+    expect(buildVerifyEmailTemplate({ verifyUrl, logoUrl: LOGO_URL }).html).toContain(
+      `src="${LOGO_URL}"`,
     );
-    expect(buildVerifyEmailTemplate({ verifyUrl }).html).not.toContain('cid:');
+    expect(buildVerifyEmailTemplate({ verifyUrl }).html).not.toMatch(/<img\b/);
   });
 
   it('puts the current year into the footer', () => {

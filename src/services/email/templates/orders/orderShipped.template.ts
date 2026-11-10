@@ -40,7 +40,7 @@ export type OrderShippedTemplateArgs = WithdrawalOfferArgs & {
   trackingNumber?: string | null;
   trackingUrl?: string | null;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -87,7 +87,7 @@ export function buildOrderShippedTemplate(args: OrderShippedTemplateArgs): {
     // the name and the phone in one line
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('orderShipped.subject', locale, { appName, orderId }),
     preview: t('orderShipped.preview', locale, { orderId }),

@@ -28,7 +28,7 @@ export type ReturnReimbursedTemplateArgs = {
   timeZone?: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -68,7 +68,7 @@ export function buildReturnReimbursedTemplate(args: ReturnReimbursedTemplateArgs
     orderUrl,
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnReimbursed.subject', locale, { appName, orderId }),
     preview: t('returnReimbursed.preview', locale, { amount }),

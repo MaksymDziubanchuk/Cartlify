@@ -6,7 +6,6 @@ import { addressLineOf, pickupPlaceOf, recipientNameOf } from '@helpers/delivery
 import { mailLocaleOf } from '@helpers/locale.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { buildOrderNoticeTemplate } from '@services/email/templates/orders/orderNotice.template.js';
 
 import { ORDER_NOTICE_LABELS, orderNoticeOf, type OrderNoticeKind } from './orderNotices.helper.js';
@@ -98,8 +97,6 @@ export async function sendOrderNoticeEmail(
       locale,
     });
 
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildOrderNoticeTemplate({
       appName: shopSettings().shopName,
       orderId: order.id,
@@ -109,7 +106,7 @@ export async function sendOrderNoticeEmail(
       paragraphs: notice.paragraphs,
       details: notice.details,
       ...(order.user.name ? { userName: order.user.name } : {}),
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
       locale,
     });
 
@@ -118,7 +115,6 @@ export async function sendOrderNoticeEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ err, orderId }, `order ${label} mail was not sent`);
