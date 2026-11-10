@@ -18,6 +18,7 @@ import {
   type TestProduct,
 } from '../../../helpers/factories.js';
 import { drawnAvatarOf } from '../../../helpers/avatar.js';
+import { giveNewsletterRight } from '../../../helpers/newsletterManager.js';
 import { takeLogs } from '../../../helpers/logs.js';
 
 // the profile a signed-in user reads and edits for themselves: GET /api/users/me and PATCH with
@@ -83,6 +84,7 @@ describe('GET /api/users/me', () => {
       updatedAt: expect.any(String),
       avatarUrls: expect.any(Object),
       avatarIsDefault: true,
+      canManageNewsletters: false,
       reviews: [],
     });
   });
@@ -222,6 +224,54 @@ describe('GET /api/users/me', () => {
 
       expect(reviews[0]).toMatchObject({ upVotes: 1, downVotes: 1, userVote: null });
     });
+  });
+});
+
+// the right to run the newsletters, next to the role: the page decides by it whether to show the
+// section of the newsletters. The access token holds the role only; the right is read from the
+// database at every request
+describe('the right to run the newsletters in GET /api/users/me', () => {
+  const rightOf = async (cookie: string) => {
+    const res = await getMe(app, cookie);
+    expect(res.statusCode).toBe(200);
+    return res.json().canManageNewsletters as unknown;
+  };
+
+  it('is false for a user', async () => {
+    expect(await rightOf(accessCookie(await newUser()))).toBe(false);
+  });
+
+  it('is false for an admin root did not allow', async () => {
+    expect(await rightOf(accessCookie(await newUser({ role: 'ADMIN' })))).toBe(false);
+  });
+
+  it('is true for an admin root allowed', async () => {
+    const root = await newUser({ role: 'ROOT' });
+    const admin = await newUser({ role: 'ADMIN' });
+    await giveNewsletterRight(root.id, admin.id);
+
+    expect(await rightOf(accessCookie(admin))).toBe(true);
+  });
+
+  it('is true for root, who runs the newsletters with no mark', async () => {
+    const root = await newUser({ role: 'ROOT' });
+
+    expect(await rightOf(accessCookie(root))).toBe(true);
+  });
+
+  it('is in the answer of the change of the profile too, with the same value', async () => {
+    const root = await newUser({ role: 'ROOT' });
+    const admin = await newUser({ role: 'ADMIN' });
+    const plain = await newUser({ role: 'ADMIN' });
+    await giveNewsletterRight(root.id, admin.id);
+
+    const answers = [];
+    for (const who of [admin, plain, root]) {
+      answers.push(await patch(accessCookie(who), { name: 'Same name' }));
+    }
+
+    expect(answers.map((res) => res.statusCode)).toEqual([200, 200, 200]);
+    expect(answers.map((res) => res.json().canManageNewsletters)).toEqual([true, false, true]);
   });
 });
 

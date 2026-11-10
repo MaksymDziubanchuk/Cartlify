@@ -3,6 +3,10 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { variantNamesOf } from '@db/variantNames.helper.js';
 import { returnCodeOf } from '@helpers/returns.js';
+import {
+  newsletterSubscriptionsOf,
+  type ExportedNewsletterSubscription,
+} from './helpers/exportNewsletter.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { InternalError, isAppError, NotFoundError } from '@utils/errors.js';
 
@@ -29,12 +33,16 @@ export type ExportPersonResponseDto = {
   logins: Record<string, unknown>[];
   sessions: Record<string, unknown>[];
   legalAcceptances: Record<string, unknown>[];
+  // the subscriptions to the newsletter the address of the account has had, with their journal
+  newsletterSubscriptions: ExportedNewsletterSubscription[];
 };
 
 // everything the shop keeps of the person, read with the rights of whoever asks (rls shows a person
 // their own rows only, root all): the profile, the orders with what they held, where they went and
 // the statements of return made on them, the favorites, the reviews and votes, the chats with their
-// messages, the logins, the open sessions and the consents to the terms and the contract. What is
+// messages, the logins, the open sessions, the consents to the terms and the contract and the
+// subscriptions to the newsletter on the address of the account with their journal (the fields
+// are agreed by name, see exportNewsletter.helper.ts). What is
 // no data of the person stays out: the hash of the password, the id of the provider account, the
 // ids of payments and of files, what a send cost the shop, and of a statement of return what became
 // of the goods, what the shop paid to carry them back, the ids of the provider and who of the admins
@@ -51,7 +59,7 @@ export async function exportPerson({
     return await prisma.$transaction(async (tx) => {
       await setUserContext(tx, { userId: actorId, role: actorRole });
 
-      const profile = await tx.user.findUnique({
+      const row = await tx.user.findUnique({
         where: { id: userId },
         select: {
           id: true,
@@ -65,9 +73,12 @@ export async function exportPerson({
           isVerified: true,
           createdAt: true,
           updatedAt: true,
+          deletedAt: true,
         },
       });
-      if (!profile) throw new NotFoundError('USER_NOT_FOUND');
+      if (!row) throw new NotFoundError('USER_NOT_FOUND');
+      // the mark of the deletion decides what the newsletter has to say; it is no field of the profile
+      const { deletedAt, ...profile } = row;
 
       const orderRows = await tx.order.findMany({
         where: { userId },
@@ -356,6 +367,15 @@ export async function exportPerson({
         },
       });
 
+      // the subscriptions on the address of the account, read last of the person's tables
+      const newsletterSubscriptions = await newsletterSubscriptionsOf(tx, {
+        subjectId: userId,
+        actorId,
+        actorRole,
+        isVerified: profile.isVerified,
+        isDeleted: deletedAt !== null,
+      });
+
       // a person's data given on the request of root: the journal of the admins names it
       if (audit) {
         await writeAdminAuditLog(tx, {
@@ -421,6 +441,7 @@ export async function exportPerson({
           event: consent.event,
           createdAt: consent.createdAt,
         })),
+        newsletterSubscriptions,
       };
     });
   } catch (err) {

@@ -14,6 +14,7 @@ import {
 } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import { verifyPass } from '@helpers/safePass.js';
@@ -80,6 +81,8 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
           avatarUrl: true,
           locale: true,
           phone: true,
+          canManageNewsletters: true,
+          deletedAt: true,
         },
       });
 
@@ -156,6 +159,8 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
         ...(user.name ? { name: user.name } : {}),
         // the own picture in its sizes, or the drawn letter
         ...avatarOf(user),
+        // read from the row now, the access token holds no right: root's change shows at once
+        canManageNewsletters: canManageNewslettersOf(user),
         ...(user.locale ? { locale: user.locale } : {}),
         ...(user.phone ? { phone: user.phone } : {}),
         reviews,
@@ -211,6 +216,8 @@ const profileSelect = {
   avatarUrl: true,
   locale: true,
   phone: true,
+  canManageNewsletters: true,
+  deletedAt: true,
 } satisfies Prisma.UserSelect;
 
 async function updateMe({
@@ -401,6 +408,7 @@ async function updateMe({
           updatedAt: user.updatedAt,
           ...(user.name ? { name: user.name } : {}),
           ...avatarOf(user),
+          canManageNewsletters: canManageNewslettersOf(user),
           ...(user.locale ? { locale: user.locale } : {}),
           ...(user.phone ? { phone: user.phone } : {}),
           reviews,
