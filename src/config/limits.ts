@@ -39,3 +39,8 @@ export const FORM_BODY_LIMIT_BYTES = 1_048_576;
 export const FILTER_ENTRIES_MAX = 20;
 export const FILTER_VALUES_MAX = 100;
 export const FILTER_ENTRY_MAX_LENGTH = 1000;
+
+// the biggest body of the Event Webhook of SendGrid, in bytes. SendGrid delivers the events in batches
+// (up to about 3 MB, as far as its documentation tells), where every other json body is cut at 1 MB.
+// The body is read whole before the signature can be checked, so the limit is no bigger than a batch
+export const SENDGRID_WEBHOOK_BODY_LIMIT_BYTES = 4 * 1024 * 1024;

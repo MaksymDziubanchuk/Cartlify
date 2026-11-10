@@ -1,6 +1,5 @@
 import fastify, { LogController } from 'fastify';
 import websocket from '@fastify/websocket';
-import { LoggerOptions, TransportSingleOptions } from 'pino';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import { fastifyCookie } from '@fastify/cookie';
@@ -8,6 +7,7 @@ import rateLimit from '@fastify/rate-limit';
 import multipart from '@fastify/multipart';
 import formbody from '@fastify/formbody';
 import env from '@config/env.js';
+import { loggerOptions } from '@config/logger.js';
 import { allowedWebOrigins } from '@helpers/webOrigin.js';
 import { registerRoutes } from '@routes/api/index.js';
 import { isRateLimitFree } from '@helpers/rateLimitFree.js';
@@ -33,6 +33,9 @@ import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import { legalDtoSchemas } from '@schemas/dto/legal.dtoSchemas.js';
 import { deliveryDtoSchemas } from '@schemas/dto/delivery.dtoSchemas.js';
 import { shopSettingsDtoSchemas } from '@schemas/dto/shopSettings.dtoSchemas.js';
+import { newslettersDtoSchemas } from '@schemas/dto/newsletters.dtoSchemas.js';
+import { newslettersAdminDtoSchemas } from '@schemas/dto/newslettersAdmin.dtoSchemas.js';
+import { newslettersCampaignDtoSchemas } from '@schemas/dto/newslettersCampaign.dtoSchemas.js';
 import requestResponseLogger from '@middlewares/requestResponseLogger.js';
 import errorNormalizer from '@middlewares/errorNormalizer.js';
 import { holdsNul } from '@helpers/nulText.js';
@@ -43,31 +46,10 @@ import csrfPlugin from './plugins/csrf.plugin.js';
 import notFoundHandler from '@middlewares/notFoundHandler.js';
 import { FORM_BODY_LIMIT_BYTES, MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 
-// allow pino transport type
-type LoggerOptionsWithTransport = LoggerOptions & {
-  transport?: TransportSingleOptions;
-};
-
-// base logger config
-const loggerOptions: LoggerOptionsWithTransport = {
-  level: 'info',
-  // hide sensitive headers
-  redact: ['req.headers.authorization', 'request.headers.cookie', "res.headers['set-cookie']"],
-};
-
-// dev pretty logs
-if (env.NODE_ENV === 'development') {
-  loggerOptions.transport = {
-    // pretty log options
-    target: 'pino-pretty',
-    options: { singleLine: true },
-  };
-}
-
 // create fastify instance
 // enable ajv coercion
 export const app = fastify({
-  logger: loggerOptions,
+  logger: loggerOptions(),
 
   // disable fastify built-in request logs (incoming/completed); fastify 5.12 moved the option
   // into the log controller, the top-level one is deprecated
@@ -178,6 +160,9 @@ for (const schema of [
   ...legalDtoSchemas,
   ...deliveryDtoSchemas,
   ...shopSettingsDtoSchemas,
+  ...newslettersDtoSchemas,
+  ...newslettersAdminDtoSchemas,
+  ...newslettersCampaignDtoSchemas,
 ]) {
   // add schemas to ajv
   app.addSchema(schema);
