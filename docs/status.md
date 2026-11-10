@@ -20,6 +20,7 @@ What this repo already shows well:
 - the safety and origin data an offer needs in the EU (GPSR): manufacturers and persons responsible in the EU, warnings and PDF documents of products
 - stock in batches with expiry dates, delivery, a stock log (a line for every change of the stock of a variant) and an accounting report
 - the data of the shop (delivery, the brand, the seller, the languages) that root changes without a deploy ([Shop settings](shop-settings.md)), and every mail in the language of its reader through dictionaries ([Languages](languages.md))
+- marketing newsletters ([Newsletters](newsletters.md)): a subscription of a guest (a double opt-in, a captcha, the same answer for every address, a blocklist) or of an account, one unsubscribe by the page or by the button of a mail program, campaigns of blocks of text and products in several languages that the admins root allowed write, preview, test and schedule under a limit of the shop, a sending pass with a daily limit and retries, a mail stream of its own with an Event Webhook for the bounces and the complaints, alerts and journals for the people who run them, and the terms the privacy policy gives to what is kept
 - Swagger/OpenAPI documentation for the REST API, held to the code by tests: every answer of the integration tests is checked against it, and the whole document is checked for descriptions, codes, examples and lists of values
 
 What is important to state honestly:
@@ -36,6 +37,7 @@ What is important to state honestly:
 
 ## Next
 
-- marketing newsletters: a consent of their own, one unsubscribe, a mail stream of their own
+- a service of periodic tasks that runs the pass of the newsletters (`npm run newsletter:run`, by hand until then) and the cleanups of the data kept too long, which nothing calls yet
+- the tightening of DMARC for the mail domain, after some weeks of clean reports
 - delivery through carriers, a tax model, fiscal receipts and a second payment provider (LiqPay)
 - a Docker deployment of the API, then a storefront on it

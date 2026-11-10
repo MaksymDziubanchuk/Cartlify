@@ -31,9 +31,10 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 | AI assistant                  | OpenAI-powered chatbot service with product/support context                 | Implemented |
 | Payments                      | Stripe payment pages and webhook, refunds through the provider of the order | Implemented |
 | Media                         | Cloudinary                                                                  | Implemented |
-| Email                         | SendGrid                                                                    | Implemented |
+| Email                         | SendGrid: a stream for the orders, one of its own for the newsletters       | Implemented |
+| Captcha                       | Cloudflare Turnstile on the forms that mail or open an account              | Implemented |
 | OAuth                         | Google, GitHub, LinkedIn                                                    | Implemented |
-| Cache / background processing | Redis, order timeout worker                                                 | Implemented |
+| Cache / background processing | Redis, order timeout worker, the lock of the newsletter pass                | Implemented |
 | Internationalization          | i18next, a dictionary file per language (`src/locales/`)                   | Implemented |
 | Lint / formatting             | ESLint, Prettier                                                            | Implemented |
 | Testing                       | Jest unit and integration tests, PostgreSQL and Redis in Docker             | Implemented |
@@ -53,6 +54,7 @@ Cartlify/
 │   ├── locales/                # one dictionary file per language the server answers in (en.json, uk.json, es.json)
 │   ├── db/                     # Prisma client and transactions, DB actor context, admin log writer, names of variants, expired stock, cost of the last delivery
 │   ├── helpers/                # shared helpers / normalizers (fields of variants, characteristics, parties, the filter by characteristics, locale)
+│   ├── jobs/                   # commands run on a schedule, not by a request: the pass of the newsletters (npm run newsletter:run)
 │   ├── middlewares/            # auth, RBAC, logging, error handling, id validation
 │   ├── plugins/                # Fastify plugins, including Swagger/OpenAPI registration
 │   ├── redis/                  # Redis client and keys
@@ -73,13 +75,14 @@ Cartlify/
 │   │   ├── reviews/
 │   │   ├── admin/
 │   │   ├── root/
+│   │   ├── newsletters/        # the subscription, the pages behind the mail links, campaigns, subscribers, the blocklist, the SendGrid webhook
 │   │   ├── shopSettings/       # the data of the shop root changes without a deploy (public, admin and root routes)
 │   │   ├── system/             # health, readiness, project info
 │   │   ├── chat/
 │   │   └── legal/
 │   ├── schemas/                # shared AJV schemas and DTO schemas
 │   ├── services/               # cross-module services
-│   │   └── email/templates/    # mails as .html and .txt files with {{marks}}: auth/, orders/, returns/, users/
+│   │   └── email/templates/    # mails as .html and .txt files with {{marks}}: auth/, newsletters/, orders/, returns/, users/
 │   ├── types/                  # DTOs and shared TypeScript types
 │   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
 │   └── workers/                # background workers
@@ -114,6 +117,8 @@ The order of a build is `01`, the migrations, `02`, `05`, `03`, `04`, `06`, `01`
 The scripts are for setting a database up, a new one or one the app is stopped for, never for a database a running server uses: they recreate triggers, policies and checks in one transaction with the strongest locks, and the queries of a running server (its workers read the tables every few seconds) end such a run in a deadlock, with nothing changed. The commands and the order are in [commands](commands.md).
 
 The catalog model, in tables: `products` (what variants share), `product_variants` (price, sale, stock, codes, weight and sizes), `product_images` (the gallery) and `variant_images` (the pictures a variant shows, in its own order), `attribute_groups`, `attributes`, `attribute_options`, `category_attributes` (the directory of characteristics and the sets a category asks for) and `variant_attribute_values` (the values a variant has), `parties` and `documents` with `product_documents` (GPSR data), `product_batches` with `order_batch_allocations` (stock in batches and which batch a sale took) and `stock_log` (a line for every change of the stock of a variant, only added to). Orders, carts, favorites and the log of prices point to the variant (`variantId`) next to the product. See [Products, variants and characteristics](variants.md).
+
+The newsletters, in tables: `newsletter_subscriptions` (the current state of a subscription), `newsletter_subscription_events` (its journal, only added to), `newsletter_campaigns`, `newsletter_recipients` (a row for each subscriber a campaign goes to) and `newsletter_form_blocklist` (a keyed hash of an address, no address). Nobody but the database functions of `05` writes the subscriptions and their journal; the right to run the newsletters is a column of `users` that only a function of root changes ([newsletters](newsletters.md)).
 
 ## Production Notes
 

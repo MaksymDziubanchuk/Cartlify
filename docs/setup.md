@@ -18,13 +18,15 @@ cp .env.example .env
 
 Then update `.env` using the example in [configuration](configuration.md).
 
+The start stops without the variables of the newsletters and the captcha (`SENDGRID_NEWSLETTER_API_KEY`, `SENDGRID_NEWSLETTER_WEBHOOK_KEY`, `NEWSLETTER_EMAIL_FROM`, `NEWSLETTER_BLOCK_SECRET`, `NEWSLETTER_LINK_SECRET`, `NEWSLETTER_DAILY_LIMIT`, `TURNSTILE_SECRET_KEY`), also on your machine. The rules of each are in [configuration](configuration.md): the two secrets are random and differ, the key of the webhook is a P-256 public key (base64 of its DER form; the Verification Key of an Event Webhook of SendGrid is one), and for the captcha locally you can use the public test secret of Cloudflare written there. `API_ORIGIN` (the address the API is reached on from outside, an https address without a path in production) is required in development and production too, the start stops without it; the header `List-Unsubscribe` of a newsletter names it. How the newsletters work and what to set up outside the code: [newsletters](newsletters.md).
+
 ### 3. Create PostgreSQL databases
 
 You need:
 
 - main database for development
 - shadow database for Prisma dev migrations
-- Redis instance for the order timeout worker
+- Redis instance for the order timeout worker (and for the lock of the pass of the newsletters)
 
 Example:
 

@@ -13,6 +13,17 @@ npm run build
 # working directory, so src/ stays next to dist/
 npm start
 
+# one pass of the newsletters, then exit (dist/jobs/newsletterRun.js, build first): it starts the
+# campaigns whose time has come and sends their mails within NEWSLETTER_DAILY_LIMIT per day of the
+# shop. It needs the same environment as the server and a reachable redis (it holds a lock there, so
+# two passes never run at once). Exit code 0 when the pass ran (also when another pass held the lock),
+# 1 when it could not do its work: redis or the database are out of reach, or the stream has a problem
+# the pass stopped on (SendGrid refuses the key, a setting is missing, ten mails in a row are
+# refused; the log says which, and the stop leaves a mark in Redis for the alert "the sending worker
+# stopped", which the next pass that gets a mail taken takes away).
+# Run it by hand, or from the service of periodic tasks on a schedule (every few minutes)
+npm run newsletter:run
+
 # generate prisma client
 npm run prisma:generate
 
@@ -139,6 +150,13 @@ npm test -- api:payments api:orders service:stripe
 # OPENAI_API_TEST_KEY secret
 npm test -- api:chat api:products service:openai
 
+# the captcha (Cloudflare Turnstile) answers from a mock of siteverify unless the run takes it for
+# real: then the requests go to the real service with the dummy secret keys Cloudflare publishes for
+# testing, which need no widget, no account and no secret of ours (the secret of the app in the
+# tests is the dummy one that passes). The answers the mock gives are checked against the real
+# service by tests/integration/api/auth/turnstileAnswers.test.ts in both modes
+npm test -- api:auth service:turnstile
+
 # unit or integration tests only
 npm run test:unit
 npm run test:integration
@@ -148,7 +166,10 @@ npm run test:integration
 # stock of each variant by a delivery, sales, three buyers with carts, orders, reviews and
 # favorites of variants; what is there stays, a run adds only what is missing. The shop lets a buyer in only with a confirmed
 # email: the first run registers the buyers, confirm the mails, the next run gives them their
-# orders. DEMO_EMAIL_DOMAIN is the domain of their addresses (example.com reaches nobody)
+# orders. DEMO_EMAIL_DOMAIN is the domain of their addresses (example.com reaches nobody). The
+# registration asks for the answer of the captcha: the script sends the one of a dummy widget, which
+# a server whose TURNSTILE_SECRET_KEY is the dummy secret of Cloudflare (local, dev until the
+# frontend has its widget) takes, and a server with the secret of a real widget refuses
 DEMO_API_URL='<api url>' DEMO_ADMIN_EMAIL='<admin email>' DEMO_ADMIN_PASSWORD='<password>' \
   DEMO_USERS_PASSWORD='<password of the buyers>' node db/tools/demo_data.mjs
 

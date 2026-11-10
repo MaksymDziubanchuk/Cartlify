@@ -8,6 +8,7 @@
 | [Return scenarios](return-scenarios.md) | each case of a withdrawal or a return, step by step, with the routes      |
 | [Shop settings](shop-settings.md)       | the data of the shop root changes without a deploy, a row a setting       |
 | [Languages](languages.md)               | how the server picks a language, mails, the chat bot and payment pages    |
+| [Newsletters](newsletters.md)           | subscription, the pages behind the mail links, campaigns, sending, setup  |
 | [API](api.md)                           | the REST modules, Swagger / OpenAPI, the realtime chat                    |
 | [Architecture](architecture.md)         | goals, stack, structure of the repository, the database, production notes |
 | [Configuration](configuration.md)       | every environment variable                                                |

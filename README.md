@@ -29,6 +29,7 @@ Cartlify is a portfolio project: a REST API with the parts a real shop needs, fr
 | 📦 **Stock**               | batches with expiry dates, deliveries, write-offs, reservation for orders, a log of every change                                        |
 | 💳 **Orders and payments** | cart, delivery, consents to the terms, Stripe payment pages and webhook, refunds, mails                                                 |
 | 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, data export                                    |
+| 📣 **Newsletters**         | a consent of its own with a double opt-in for guests, one unsubscribe, campaigns in several languages, a mail stream of its own         |
 | 💬 **Support**             | real-time chat over WebSocket with an OpenAI assistant that knows the catalog and hands a talk over to an admin                         |
 | 📊 **Admin**               | journals, alerts, statistics, accounting reports, the product safety data an offer needs in the EU                                      |
 
@@ -39,7 +40,7 @@ Cartlify is a portfolio project: a REST API with the parts a real shop needs, fr
 - **Tests on the real stack.** Unit and integration tests run against a disposable PostgreSQL and Redis in Docker on every push; the structure of the built database is compared with a committed snapshot.
 - **An API held to its docs.** Every answer of the integration tests is checked against the OpenAPI document, and a test checks that the document describes every route, code and example.
 
-Also in use: Stripe, Cloudinary, SendGrid, OpenAI, Jest, GitHub Actions. More in [architecture](docs/architecture.md).
+Also in use: Stripe, Cloudinary, SendGrid, OpenAI, Cloudflare Turnstile, Jest, GitHub Actions. More in [architecture](docs/architecture.md).
 
 ## 🚀 Quick Start
 
@@ -65,6 +66,7 @@ Every command: [commands](docs/commands.md).
 | -------------------------------------- | ------------------------------------------------------------------------- |
 | [Features](docs/features.md)           | what the API does, module by module                                       |
 | [Variants](docs/variants.md)           | products, variants, characteristics, stock, lists and filters             |
+| [Newsletters](docs/newsletters.md)     | subscription, the pages behind the mail links, campaigns, sending, setup  |
 | [API](docs/api.md)                     | the REST modules, Swagger / OpenAPI, the realtime chat                    |
 | [Architecture](docs/architecture.md)   | goals, stack, structure of the repository, the database, production notes |
 | [Configuration](docs/configuration.md) | every environment variable                                                |
