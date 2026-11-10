@@ -28,6 +28,13 @@ const ADMIN_PASSWORD = process.env.DEMO_ADMIN_PASSWORD ?? '';
 const USERS_PASSWORD = process.env.DEMO_USERS_PASSWORD ?? '';
 const EMAIL_DOMAIN = process.env.DEMO_EMAIL_DOMAIN || 'example.com';
 
+// The registration asks for the answer of the captcha (Cloudflare Turnstile). The script has no widget:
+// it sends the answer a dummy widget gives, which the dummy secret of Cloudflare takes for any answer.
+// That secret is the TURNSTILE_SECRET_KEY of the tests, of a local server and of dev until the
+// frontend has its widget; a server that holds the secret of a real widget refuses the answer
+// (400 CAPTCHA_INVALID), and the buyers are not registered there
+const CAPTCHA_TOKEN = 'XXXX.DUMMY.TOKEN.XXXX';
+
 // a limit of the server is waited out when it is short, a longer one stops the run
 const MAX_WAIT_SECONDS = 90;
 const MAX_ATTEMPTS = 5;
@@ -837,6 +844,7 @@ async function buyerSession(base, index, buyer, inForce) {
       email,
       password: USERS_PASSWORD,
       name: buyer.name,
+      captchaToken: CAPTCHA_TOKEN,
       ...(inForce.length ? { acceptedDocumentIds: inForce } : {}),
     },
   });
