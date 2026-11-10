@@ -142,7 +142,7 @@ async function listOf(actor: TestUser, kind: string, narrow: Record<string, stri
   });
   const res = await get(actor, `${list!.path}?${query}`);
   expect(res.statusCode).toBe(200);
-  return res.json() as { items: Array<{ id: number }>; total: number };
+  return res.json() as { items: Array<{ id: number | string }>; total: number };
 }
 
 // the alert counts the case now: the server lets the admin put it aside, and names it aside
@@ -191,7 +191,10 @@ async function expectCases(
 ) {
   const page = await listOf(actor, kind, { userId: buyer.id, limit: 100 });
 
-  expect(page.items.map((row) => row.id).sort(byNumber)).toEqual([...counted].sort(byNumber));
+  // the id of a case of the failed refunds is text (the id of a statement, or of a refund at the provider)
+  expect(page.items.map((row) => Number(row.id)).sort(byNumber)).toEqual(
+    [...counted].sort(byNumber),
+  );
   expect(page.total).toBe(counted.length);
   for (const id of counted) await expectCounted(actor, kind, id);
   for (const id of notCounted) await expectNotCounted(actor, kind, id);
@@ -275,6 +278,7 @@ describe('the new kinds in GET /api/admin/alerts', () => {
     );
     expect(kinds.slice(kinds.indexOf('refunded_payments'))).toEqual([
       'refunded_payments',
+      'refunded_payments_not_sent',
       ...NEW_KINDS,
       'worker_stalled',
       'shop_settings_incomplete',
@@ -296,7 +300,7 @@ describe('the new kinds in GET /api/admin/alerts', () => {
     expect(of('shipped_without_tracking').list!.query.shippedTo).toEqual(expect.any(String));
     expect(of('failed_refunds')).toMatchObject({
       threshold: null,
-      list: { path: '/api/returns', query: { state: 'open', money: 'failed' } },
+      list: { path: '/api/payments/refunds', query: { state: 'failed' } },
     });
     expect(of('returns_manual_check')).toMatchObject({
       threshold: null,

@@ -156,7 +156,7 @@ describe('the period and the life of a statement', () => {
     ).toBe(200);
     expect((await j.post(admin, `/api/returns/${found.id}/refund`)).statusCode).toBe(200);
 
-    expect(mailTo(mails, buyer.email, 'is closed').text).toContain('€10.00 went back to you.');
+    expect(mailTo(mails, buyer.email, 'is closed').text).toContain('We sent you €10.00.');
     expect((await refundsOf(paymentId)).map((refund) => refund.amount)).toEqual([1000]);
   });
 });

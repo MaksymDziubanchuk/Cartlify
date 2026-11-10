@@ -782,8 +782,9 @@ const getAlertsSchema = {
     'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
     'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
     'written for some days (`shipped_without_cost`), orders shipped by hand whose send has no ' +
-    'tracking number for some days (`shipped_without_tracking`), statements of return: ' +
-    'a transfer of the money that failed (`failed_refunds`), a statement made without the code ' +
+    'tracking number for some days (`shipped_without_tracking`), refunds that failed: the ' +
+    'transfer of the money of a statement, or the refund of a late payment that root has not ' +
+    'sent another way yet (`failed_refunds`), statements of return: a statement made without the code ' +
     'that waits for a check (`returns_manual_check`), a proof of the parcel told and not ' +
     'confirmed for some days (`returns_proof_waiting`), no goods and no word of the parcel ' +
     'some days after the statement (`returns_goods_not_sent`), the money due and not back some ' +
@@ -796,7 +797,8 @@ const getAlertsSchema = {
     'one), batches whose last good ' +
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
     'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
-    'some last days (`refunded_payments`), a reservation worker that has not run for some ' +
+    'some last days (`refunded_payments`), refunds of late payments made some days ago whose ' +
+    'money was not told sent or failed (`refunded_payments_not_sent`), a reservation worker that has not run for some ' +
     'seconds (`worker_stalled`), the fields of the data of the shop root has not set yet ' +
     '(`shop_settings_incomplete`; how many, the ones GET /api/admin/shop-settings/missing ' +
     'names), the language of the shop with no dictionary any more ' +

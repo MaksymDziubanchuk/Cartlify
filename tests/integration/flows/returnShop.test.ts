@@ -89,7 +89,7 @@ describe('the returns the shop starts', () => {
     expect(made.json().code).toBe(`R${orderId}-1`);
     const notice = mailTo(mails, buyer.email, `Return of order #${orderId} registered`);
     expect(statementCodeIn(notice)).toBe(`R${orderId}-1`);
-    expect(mailTo(mails, buyer.email, 'is closed').text).toContain('€20.00 went back to you.');
+    expect(mailTo(mails, buyer.email, 'is closed').text).toContain('We sent you €20.00.');
     expect(await orderCardOf(orderId)).toMatchObject({ status: 'cancelled', returnStatus: 'full' });
     expect((await stockOf(product)).stock).toBe(before.stock + 2);
     expect((await refundsOf(paymentId)).map((refund) => refund.amount)).toEqual([2000]);

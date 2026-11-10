@@ -251,9 +251,9 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     await deliver(app, event);
 
     expect(mails.map((mail) => mail.subject)).toEqual([
-      `Cartlify — The payment for order #${orderId} is refunded`,
+      `Cartlify — We sent your payment for order #${orderId} back`,
     ]);
-    expect(mails[0]!.text).toContain('Your payment of €51.00');
+    expect(mails[0]!.text).toContain('We sent your payment of €51.00');
     expect(mails[0]!.text).toContain('some items of it were no longer in stock');
   });
 
@@ -265,7 +265,7 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     await deliver(app, event);
 
     expect(mails.map((mail) => mail.subject)).toEqual([
-      `Cartlify — El pago del pedido #${orderId} fue reembolsado`,
+      `Cartlify — Te enviamos de vuelta el pago del pedido #${orderId}`,
     ]);
     expect(mails[0]!.text).toContain('algunos artículos ya no estaban en stock');
   });

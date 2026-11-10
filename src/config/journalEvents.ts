@@ -90,9 +90,13 @@ export const AUDIT_EVENTS = [
   'order.pickup_ready_back_bulk',
   'order.pickup_collected_back',
   'order.pickup_collected_back_bulk',
-  // a payment given back late, a change of a send (the details mailed to the buyer, or the cost the
-  // shop pays the carrier), of the delivery data
+  // a payment the order could not take and the shop gives back: the refund is made, its money is
+  // sent (the buyer is mailed), the refund fails (the buyer is mailed), root sends the money another
+  // way after it failed (the buyer is mailed)
   'order.refund_late',
+  'order.refund_late_sent',
+  'order.refund_late_failed',
+  'order.refund_late_outside',
   // a statement of withdrawal or of return: made, its goods taken in, the proof of the buyer
   // confirmed, its money returned or failed to return, money sent outside the app, rows closed
   // without a refund
@@ -115,6 +119,8 @@ export const AUDIT_EVENTS = [
   // the shop paid to carry the goods back: a parcel recorded, its cost written
   'return.shipment_record',
   'return.shipment_cost',
+  // a change of a send (the details mailed to the buyer, or the cost the shop pays the carrier), of
+  // the delivery data
   'order.shipment_tracking_change',
   'order.shipment_cost_change',
   'order.delivery_change',

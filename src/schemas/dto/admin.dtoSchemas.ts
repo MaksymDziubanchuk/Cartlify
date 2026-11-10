@@ -1961,6 +1961,7 @@ const ALERT_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'refunded_payments_not_sent',
   'failed_refunds',
   'returns_manual_check',
   'returns_proof_waiting',
@@ -2156,10 +2157,11 @@ const adminAlertDismissalParamsSchema = {
       type: 'string',
       minLength: 1,
       maxLength: 64,
-      pattern: '^[A-Za-z0-9-]+$',
+      pattern: '^[A-Za-z0-9_-]+$',
       description:
         'The id of the case in the list of its kind: an order, a product, a batch, a chat, a ' +
-        'statement of return, a newsletter campaign or a line of the admin log.',
+        'statement of return, a newsletter campaign, a line of the admin log or the id of a refund ' +
+        'at the payment provider (re_..., the failed and the unsent refunds).',
     },
   },
   required: ['kind', 'id'],

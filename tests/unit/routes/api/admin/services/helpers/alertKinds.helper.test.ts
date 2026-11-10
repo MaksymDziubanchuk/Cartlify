@@ -26,6 +26,18 @@ describe('alertKindsOf', () => {
     expect(alertKindsOf('ADMIN', false)).toEqual([...ADMIN_ALERT_KINDS]);
   });
 
+  // the refunds of the late payments go together: the refunds made, those not told sent, those that failed
+  it('puts the late refunds not told sent between the late refunds and the failed ones', () => {
+    const kinds = alertKindsOf('ADMIN', false);
+    const at = kinds.indexOf('refunded_payments');
+
+    expect(kinds.slice(at, at + 3)).toEqual([
+      'refunded_payments',
+      'refunded_payments_not_sent',
+      'failed_refunds',
+    ]);
+  });
+
   it('gives an admin who may run the newsletters their kinds after the rest', () => {
     expect(alertKindsOf('ADMIN', true)).toEqual([
       ...ADMIN_ALERT_KINDS,
@@ -118,6 +130,7 @@ describe('thresholdOf', () => {
     ['shipped_without_cost', 3, 'days'],
     ['expiring_batches', 7, 'days'],
     ['refunded_payments', 7, 'days'],
+    ['refunded_payments_not_sent', 3, 'days'],
     ['shipped_without_tracking', 2, 'days'],
     ['returns_proof_waiting', 2, 'days'],
     ['returns_goods_not_sent', 21, 'days'],
@@ -160,6 +173,7 @@ describe('assertThreshold', () => {
 
   it.each([
     'shipped_without_tracking',
+    'refunded_payments_not_sent',
     'returns_proof_waiting',
     'returns_goods_not_sent',
     'returns_money_late',
@@ -240,6 +254,10 @@ describe('alertWindowOf', () => {
     });
     expect(alertWindowOf('refunded_payments', 7, NOW, '2026-10-25')).toEqual({
       since: new Date(NOW - 7 * DAY),
+    });
+    // a refund made before the time and not told sent: the older ones
+    expect(alertWindowOf('refunded_payments_not_sent', 3, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 3 * DAY),
     });
     expect(alertWindowOf('admin_actions', 24, NOW, '2026-10-25')).toEqual({
       since: new Date(NOW - 24 * 3_600_000),
@@ -482,15 +500,25 @@ describe('alertListOf', () => {
     });
   });
 
-  // the cases of the statements are statements: the alert names the list of the statements with
-  // its own filters, the days of the threshold as text, the oldest statement first
-  it('sends to the open statements whose transfer failed', () => {
+  // the refunds that failed are the transfers of the statements and the refunds of the payments the
+  // order could not take: one list of both, the waiting ones
+  it('sends to the list of the refunds that failed and wait for the shop', () => {
     expect(listOf('failed_refunds', null)).toEqual({
-      path: '/api/returns',
-      query: { state: 'open', money: 'failed', sortBy: 'statedAt', sortDir: 'asc' },
+      path: '/api/payments/refunds',
+      query: { state: 'failed' },
     });
   });
 
+  // the refunds of the late payments made before the time, the money of which was not told sent
+  it('sends to the list of the late refunds not told sent, those made before the days', () => {
+    expect(listOf('refunded_payments_not_sent', 3)).toEqual({
+      path: '/api/payments/refunds',
+      query: { state: 'unsent', to: new Date(NOW - 3 * DAY).toISOString() },
+    });
+  });
+
+  // the cases of the statements are statements: the alert names the list of the statements with
+  // its own filters, the days of the threshold as text, the oldest statement first
   it('sends to the open statements of the form that no admin accepted yet', () => {
     expect(listOf('returns_manual_check', null)).toEqual({
       path: '/api/returns',

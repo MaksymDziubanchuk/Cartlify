@@ -51,7 +51,7 @@ A dictionary file is flat JSON, grouped into namespaces (`verifyEmail`, `orderPa
 
 ## Mail
 
-All 21 mails of the shop (one folder of `src/services/email/templates/` per topic; the newsletters have three: the confirmation of a subscription, "you are already subscribed" and the mail of a campaign) build their subject, their `.html` and their `.txt` from the dictionary, in the recipient's own language by the rule above. The one exception that needs its own care: the mail that tells a person their account was deleted is sent **after** the deletion has already wiped `users.locale` from the row, so the language is read and kept aside before that happens, not from the row as it stands when the mail actually goes out.
+All 23 mails of the shop (one folder of `src/services/email/templates/` per topic; the newsletters have three: the confirmation of a subscription, "you are already subscribed" and the mail of a campaign) build their subject, their `.html` and their `.txt` from the dictionary, in the recipient's own language by the rule above. The one exception that needs its own care: the mail that tells a person their account was deleted is sent **after** the deletion has already wiped `users.locale` from the row, so the language is read and kept aside before that happens, not from the row as it stands when the mail actually goes out.
 
 ## The chat bot
 

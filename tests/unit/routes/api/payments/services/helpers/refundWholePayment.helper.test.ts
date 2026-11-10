@@ -21,7 +21,7 @@ describe('refundWholePayment', () => {
       .spyOn(stripeProvider, 'refundPayment')
       .mockResolvedValue({ refundId: 're_1', status: 'succeeded' });
 
-    expect(await refundWholePayment(args)).toEqual({ refundId: 're_1' });
+    expect(await refundWholePayment(args)).toEqual({ refundId: 're_1', status: 'succeeded' });
     expect(refund).toHaveBeenCalledWith({
       orderId: 12,
       paymentId: 'pi_test_1',
@@ -30,16 +30,17 @@ describe('refundWholePayment', () => {
     });
   });
 
-  // a refund that is on its way counts as made: the bank of the card takes a few days
+  // a refund that is on its way counts as made, and the answer says it is not sent yet: the bank of
+  // the card takes a few days
   it('takes a refund that is on its way as made', async () => {
     jest
       .spyOn(stripeProvider, 'refundPayment')
       .mockResolvedValue({ refundId: 're_2', status: 'pending' });
 
-    expect(await refundWholePayment(args)).toEqual({ refundId: 're_2' });
+    expect(await refundWholePayment(args)).toEqual({ refundId: 're_2', status: 'pending' });
   });
 
-  it('answers no refund for a payment that was refunded before', async () => {
+  it('answers no refund, and the money sent, for a payment that was refunded before', async () => {
     jest.spyOn(stripeProvider, 'refundPayment').mockResolvedValue({
       refundId: null,
       status: 'failed',
@@ -48,16 +49,34 @@ describe('refundWholePayment', () => {
       alreadyRefunded: true,
     });
 
-    expect(await refundWholePayment(args)).toEqual({ refundId: null });
+    expect(await refundWholePayment(args)).toEqual({ refundId: null, status: 'succeeded' });
   });
 
   // the money did not go back: the order must not become cancelled, the event must come again
-  it('fails with PAYMENT_REFUND_FAILED when the money did not go back', async () => {
+  // the refund is made and has ended: its failure is the answer, settled like one that fails later
+  it('answers the refund that failed at once, with its id and its reason', async () => {
     jest.spyOn(stripeProvider, 'refundPayment').mockResolvedValue({
       refundId: 're_3',
       status: 'failed',
       failure: 'card_unavailable',
       failureText: 'expired_or_canceled_card',
+    });
+
+    expect(await refundWholePayment(args)).toEqual({
+      refundId: 're_3',
+      status: 'failed',
+      failure: 'card_unavailable',
+      failureText: 'expired_or_canceled_card',
+    });
+  });
+
+  // no refund was made: the same key asks again with the next delivery of the event
+  it('fails with PAYMENT_REFUND_FAILED when the provider refused the request itself', async () => {
+    jest.spyOn(stripeProvider, 'refundPayment').mockResolvedValue({
+      refundId: null,
+      status: 'failed',
+      failure: 'unknown',
+      failureText: 'refused',
     });
 
     expect(await rejectedBy(() => refundWholePayment(args))).toMatchObject({
@@ -66,7 +85,7 @@ describe('refundWholePayment', () => {
         provider: 'stripe',
         paymentId: 'pi_test_1',
         orderId: 12,
-        refundId: 're_3',
+        refundId: null,
         refundStatus: 'failed',
       },
     });

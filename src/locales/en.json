@@ -143,13 +143,28 @@
     "body": "Your order #{{orderId}} is shipped and on its way to you. We will let you know when it is delivered."
   },
   "orderPaymentRefunded": {
-    "subject": "{{appName}} — The payment for order #{{orderId}} is refunded",
-    "preview": "The payment for order #{{orderId}} is refunded in full.",
-    "heading": "Payment refunded",
-    "body": "Your payment of {{amount}} for order #{{orderId}} is refunded in full: {{reason}}.",
-    "bankNote": "{{orderLine}} Your bank shows the money back within a few days.",
+    "subject": "{{appName}} — We sent your payment for order #{{orderId}} back",
+    "preview": "We sent {{amount}} for order #{{orderId}} back to you.",
+    "heading": "Payment sent back",
+    "body": "We sent your payment of {{amount}} for order #{{orderId}} back: {{reason}}.",
+    "bankNote": "{{orderLine}} Your bank shows the money within a few days. If anything happens to this refund, we will write to you.",
     "orderStaysPaid": "The order stays paid with your other payment.",
     "orderNotPaid": "The order is not paid and nothing will be sent."
+  },
+  "orderPaymentRefundFailed": {
+    "subject": "{{appName}} — We could not send your payment back for order #{{orderId}}",
+    "preview": "We could not send {{amount}} back to you.",
+    "heading": "We could not send your payment back",
+    "bodyCard": "We could not send your payment of {{amount}} for order #{{orderId}} back to the card it was paid with: the card can no longer take money (it may be closed or expired).",
+    "bodyGeneral": "We could not send your payment of {{amount}} for order #{{orderId}} back to you.",
+    "sentBackLine": "The money we sent earlier was sent back to us by your bank, so it did not reach you.",
+    "contactLine": "We will contact you about another way to send it. You can also write to us at the address below."
+  },
+  "orderPaymentRefundOutside": {
+    "subject": "{{appName}} — We sent you money for order #{{orderId}}",
+    "preview": "We sent you {{amount}} for order #{{orderId}}.",
+    "heading": "Money sent",
+    "body": "We sent you {{amount}} for your order #{{orderId}}."
   },
   "paymentRefundReasons": {
     "OUT_OF_STOCK": "the reservation of the order was over and some items of it were no longer in stock",
@@ -182,7 +197,7 @@
     "leadTxt": "The return for your {{appName}} order #{{orderId}} is closed.",
     "heading": "Return closed",
     "body": "The return for your order #{{orderId}} is closed.",
-    "moneyBack": "{{amount}} went back to you.",
+    "moneyBack": "We sent you {{amount}}.",
     "noMoney": "No money is returned for this statement.",
     "withheldLine": "We kept {{amount}} of the price for the value the goods lost: {{names}}.",
     "returnedToYouHeader": "Returned to you",
@@ -209,11 +224,11 @@
     "other": "another way"
   },
   "returnRefunded": {
-    "subject": "{{appName}} — Money returned for order #{{orderId}}",
-    "preview": "Money for order #{{orderId}} is on its way back to you.",
-    "leadTxt": "We returned {{amount}} for your {{appName}} order #{{orderId}}.",
-    "heading": "Money returned",
-    "body": "We returned {{amount}} for your order #{{orderId}}.",
+    "subject": "{{appName}} — Money sent for order #{{orderId}}",
+    "preview": "We sent you money for order #{{orderId}}.",
+    "leadTxt": "We sent you {{amount}} for your {{appName}} order #{{orderId}}.",
+    "heading": "Money sent",
+    "body": "We sent you {{amount}} for your order #{{orderId}}.",
     "wayBack": "It goes back the way you paid. Your bank shows it within a few days.",
     "laterLine": "If anything happens to this refund, we will write to you.",
     "sentWithDate": "We sent it by {{way}} on {{date}}.",

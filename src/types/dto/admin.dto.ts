@@ -743,6 +743,7 @@ export type AdminAlertKind =
   | 'expired_batches'
   | 'chats_waiting'
   | 'refunded_payments'
+  | 'refunded_payments_not_sent'
   | 'failed_refunds'
   | 'returns_manual_check'
   | 'returns_proof_waiting'

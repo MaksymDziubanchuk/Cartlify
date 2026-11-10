@@ -83,17 +83,141 @@ const postCheckoutSessionSchema = {
   },
 } satisfies FastifySchema;
 
+const refundsParamsExample = { refundId: 're_3QxYzAbCdEfGhIjK' };
+
+const refundItemExample = {
+  id: 're_3QxYzAbCdEfGhIjK',
+  source: 'payment',
+  orderId: 42,
+  userId: 7,
+  returnId: null,
+  provider: 'stripe',
+  paymentId: 'pi_3QxYzAbCdEfGhIjK',
+  refundId: 're_3QxYzAbCdEfGhIjK',
+  amount: 51,
+  currency: 'eur',
+  failure: 'card_unavailable',
+  failureText: 'expired_or_canceled_card',
+  at: '2026-11-10T09:30:00.000Z',
+};
+
+const refundOutsideBodyExample = {
+  method: 'bank_transfer',
+  note: 'Sent to the account the buyer wrote by mail.',
+  at: '2026-11-10T09:30:00.000Z',
+};
+
+const refundOutsideResponseExample = {
+  refundId: 're_3QxYzAbCdEfGhIjK',
+  orderId: 42,
+  userId: 7,
+  provider: 'stripe',
+  paymentId: 'pi_3QxYzAbCdEfGhIjK',
+  amount: 51,
+  currency: 'eur',
+  state: 'outside',
+  failure: 'card_unavailable',
+  failureText: 'expired_or_canceled_card',
+  outside: {
+    method: 'bank_transfer',
+    note: 'Sent to the account the buyer wrote by mail.',
+    at: '2026-11-10T09:30:00.000Z',
+    by: 1,
+  },
+};
+
+// Schema for the list of the refunds that wait for the shop
+const getRefundsSchema = {
+  operationId: 'listPaymentRefunds',
+  summary: 'List the refunds that wait for the shop',
+  description:
+    'The refunds the shop has to look after, the oldest first, a page at a time (`limit`, ' +
+    '`cursor`, `total` of the filter). `state=failed`: money that did not reach the buyer: the ' +
+    'transfers of the open statements of return whose last try failed (`source: return`, `id` is ' +
+    'the statement, see `GET /api/returns/{returnId}`) and the refunds of the payments an order ' +
+    'could not take that failed and that root has not marked sent another way (`source: payment`, ' +
+    '`id` and `refundId` name the refund at the provider, root marks it with `POST ' +
+    '/api/payments/refunds/{refundId}/outside`); a refund of a payment fails when the provider ' +
+    'says so, also after its money was sent (the bank sent it back). `state=unsent`: the refunds ' +
+    'of late payments that the provider has told neither sent nor failed (a refund on its way, ' +
+    'or whose event did not come). Filters: `userId`, `orderId`, `to` (only the refunds that came ' +
+    'to their state before the time). The alerts `failed_refunds` and `refunded_payments_not_sent` ' +
+    'name this list with the filters of their cases, so the count of an alert is the `total` of ' +
+    'its list. Only admin and root read it.',
+
+  querystring: { $ref: 'paymentsRefundsQuerySchema#', examples: [{ state: 'failed' }] },
+
+  response: {
+    200: {
+      description: 'The page of refunds.',
+      $ref: 'paymentsRefundsResponseSchema#',
+      examples: [{ items: [refundItemExample], total: 1, limit: 20, nextCursor: null }],
+    },
+    400: {
+      description:
+        '`CURSOR_INVALID`: the cursor is not one of this list. `VALIDATION_ERROR`: a wrong field, ' +
+        'or no `state`.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+// Schema for root marking a failed refund of a late payment as sent another way
+const postRefundOutsideSchema = {
+  operationId: 'markPaymentRefundOutside',
+  summary: 'Record a failed refund sent another way',
+  description:
+    'A root records that the money of a payment an order could not take, whose refund failed, ' +
+    'went to the buyer another way (a bank transfer, cash, another way), on the day it really ' +
+    'went. Only a refund that failed and is not marked yet; the refund is named by its id at the ' +
+    'provider (`refundId` of the list `GET /api/payments/refunds?state=failed`). It writes the ' +
+    'line `order.refund_late_outside` once (the way, the day, the note, the sum) and leaves the ' +
+    'alert `failed_refunds`; the buyer is mailed how much, how and when (the note is for the ' +
+    'shop). Two marks at the same time make one: the second is refused.',
+
+  params: { $ref: 'paymentsRefundOutsideParamsSchema#', examples: [refundsParamsExample] },
+  body: { $ref: 'paymentsRefundOutsideBodySchema#', examples: [refundOutsideBodyExample] },
+
+  response: {
+    200: {
+      description: 'The money was recorded.',
+      $ref: 'paymentsRefundOutsideResponseSchema#',
+      examples: [refundOutsideResponseExample],
+    },
+    400: {
+      description:
+        '`VALIDATION_ERROR`: a wrong field. `LATE_REFUND_OUTSIDE_AT_INVALID`: the day is of the ' +
+        'future or before the refund was made.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`LATE_REFUND_NOT_FOUND`: the app made no refund of a payment with this id (one made by ' +
+        'hand at the provider is none of its refunds).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`LATE_REFUND_NOT_FAILED`: the refund did not fail (it is made, or its money is sent). ' +
+        '`LATE_REFUND_ALREADY_MARKED`: root recorded the money of this refund already.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group payment routes under the payments Swagger tag
 const taggedPaymentsSchema = withOpenApiTag(
   {
     postCheckoutSessionSchema,
+    getRefundsSchema,
+    postRefundOutsideSchema,
   },
   'payments',
 );
 
-// Add access token security to the user checkout route
+// Add access token security to the user checkout route and to the routes of the refunds
 export const paymentsSchema = withOpenApiSecurityFor(
   taggedPaymentsSchema,
   openApiSecurity.accessTokenCookie,
-  ['postCheckoutSessionSchema'],
+  ['postCheckoutSessionSchema', 'getRefundsSchema', 'postRefundOutsideSchema'],
 );

@@ -34,6 +34,7 @@ export const ADMIN_ALERT_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'refunded_payments_not_sent',
   'failed_refunds',
   'returns_manual_check',
   'returns_proof_waiting',
@@ -97,6 +98,8 @@ const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
   expiring_batches: { unit: 'days', default: 7, min: 1, max: 365 },
   // the refunds of late payments of so many last days
   refunded_payments: { unit: 'days', default: 7, min: 1, max: 365 },
+  // a refund of a late payment made so many days ago whose money was not told sent or failed
+  refunded_payments_not_sent: { unit: 'days', default: 3, min: 1, max: 365 },
   // a worker that has not run for so many seconds; it runs every few seconds
   worker_stalled: { unit: 'seconds', default: 180, min: 60, max: 86_400 },
   // root: the lines the admins wrote in so many last hours
@@ -196,6 +199,8 @@ export function alertWindowOf(
       return { expiresBy: dayAfter(today, threshold) };
     case 'refunded_payments':
       return { since: new Date(now - threshold * DAY) };
+    case 'refunded_payments_not_sent':
+      return { before: new Date(now - threshold * DAY) };
     case 'admin_actions':
       return { since: new Date(now - threshold * HOUR) };
     // the shares are watched for SHARE_WATCH_DAYS after a campaign started
@@ -219,6 +224,7 @@ export function alertWindowOf(
 const isoOf = (date: Date | undefined) => (date ?? new Date(0)).toISOString();
 
 const CAMPAIGNS_PATH = '/api/newsletters/campaigns';
+const REFUNDS_PATH = '/api/payments/refunds';
 
 // the request to the list of the app with the cases of a kind, the most urgent first; the
 // frontend adds a limit, its own sort or a filter of its rows. The stop of the worker and the stop of
@@ -272,13 +278,14 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sortDir: 'asc',
         },
       };
+    // the refunds that failed are transfers of statements and refunds of late payments: the list of
+    // the refunds that wait counts them both (waitingRefunds.helper.ts is the rule of its rows)
+    case 'failed_refunds':
+      return { path: REFUNDS_PATH, query: { state: 'failed' } };
+    case 'refunded_payments_not_sent':
+      return { path: REFUNDS_PATH, query: { state: 'unsent', to: isoOf(window.before) } };
     // the cases of the statements of return are statements: the list of the statements counts
     // them with the same filters (returnFilters.helper.ts)
-    case 'failed_refunds':
-      return {
-        path: '/api/returns',
-        query: { state: 'open', money: 'failed', sortBy: 'statedAt', sortDir: 'asc' },
-      };
     case 'returns_manual_check':
       return {
         path: '/api/returns',

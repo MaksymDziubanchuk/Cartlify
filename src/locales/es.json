@@ -143,13 +143,28 @@
     "body": "Tu pedido #{{orderId}} se envió y va en camino hacia ti. Te avisaremos cuando se entregue."
   },
   "orderPaymentRefunded": {
-    "subject": "{{appName}} — El pago del pedido #{{orderId}} fue reembolsado",
-    "preview": "El pago del pedido #{{orderId}} se reembolsó por completo.",
-    "heading": "Pago reembolsado",
-    "body": "Tu pago de {{amount}} del pedido #{{orderId}} se reembolsó por completo: {{reason}}.",
-    "bankNote": "{{orderLine}} Tu banco mostrará el reembolso en unos días.",
+    "subject": "{{appName}} — Te enviamos de vuelta el pago del pedido #{{orderId}}",
+    "preview": "Te enviamos de vuelta {{amount}} del pedido #{{orderId}}.",
+    "heading": "Pago enviado de vuelta",
+    "body": "Te enviamos de vuelta tu pago de {{amount}} del pedido #{{orderId}}: {{reason}}.",
+    "bankNote": "{{orderLine}} Tu banco mostrará el dinero en unos días. Si pasa algo con este reembolso, te escribiremos.",
     "orderStaysPaid": "El pedido sigue pagado con tu otro pago.",
     "orderNotPaid": "El pedido no está pagado y no se enviará nada."
+  },
+  "orderPaymentRefundFailed": {
+    "subject": "{{appName}} — No pudimos enviarte de vuelta el pago del pedido #{{orderId}}",
+    "preview": "No pudimos enviarte de vuelta {{amount}}.",
+    "heading": "No pudimos enviarte de vuelta el pago",
+    "bodyCard": "No pudimos enviar de vuelta tu pago de {{amount}} del pedido #{{orderId}} a la tarjeta con la que se pagó: la tarjeta ya no acepta pagos (puede estar cancelada o caducada).",
+    "bodyGeneral": "No pudimos enviarte de vuelta tu pago de {{amount}} del pedido #{{orderId}}.",
+    "sentBackLine": "El dinero que enviamos antes nos lo envió de vuelta tu banco, así que no llegó a ti.",
+    "contactLine": "Te contactaremos sobre otra forma de enviártelo. También puedes escribirnos a la dirección de abajo."
+  },
+  "orderPaymentRefundOutside": {
+    "subject": "{{appName}} — Te enviamos dinero del pedido #{{orderId}}",
+    "preview": "Te enviamos {{amount}} del pedido #{{orderId}}.",
+    "heading": "Dinero enviado",
+    "body": "Te enviamos {{amount}} de tu pedido #{{orderId}}."
   },
   "paymentRefundReasons": {
     "OUT_OF_STOCK": "la reserva del pedido terminó y algunos artículos ya no estaban en stock",
@@ -182,7 +197,7 @@
     "leadTxt": "La devolución de tu pedido de {{appName}} #{{orderId}} está cerrada.",
     "heading": "Devolución cerrada",
     "body": "La devolución de tu pedido #{{orderId}} está cerrada.",
-    "moneyBack": "Se te devolvió {{amount}}.",
+    "moneyBack": "Te enviamos {{amount}}.",
     "noMoney": "No se devuelve dinero por esta declaración.",
     "withheldLine": "Retuvimos {{amount}} del precio por la pérdida de valor del producto: {{names}}.",
     "returnedToYouHeader": "Devuelto a ti",
@@ -209,11 +224,11 @@
     "other": "por otro medio"
   },
   "returnRefunded": {
-    "subject": "{{appName}} — Dinero devuelto del pedido #{{orderId}}",
-    "preview": "El dinero del pedido #{{orderId}} va de vuelta hacia ti.",
-    "leadTxt": "Te devolvimos {{amount}} de tu pedido de {{appName}} #{{orderId}}.",
-    "heading": "Dinero devuelto",
-    "body": "Te devolvimos {{amount}} de tu pedido #{{orderId}}.",
+    "subject": "{{appName}} — Dinero enviado del pedido #{{orderId}}",
+    "preview": "Te enviamos dinero del pedido #{{orderId}}.",
+    "leadTxt": "Te enviamos {{amount}} de tu pedido de {{appName}} #{{orderId}}.",
+    "heading": "Dinero enviado",
+    "body": "Te enviamos {{amount}} de tu pedido #{{orderId}}.",
     "wayBack": "Se devuelve por el mismo medio con el que pagaste. Tu banco mostrará el reembolso en unos días.",
     "laterLine": "Si pasa algo con esta devolución, te escribiremos.",
     "sentWithDate": "Lo enviamos {{way}} el {{date}}.",

@@ -173,7 +173,7 @@ describe('the link of a mail after the account is deleted', () => {
     expect((await j.post(admin, `/api/returns/${found.id}/refund`)).statusCode).toBe(200);
 
     // the end goes to the address of the form; the unit is on the shelf and its money at Stripe
-    expect(mailTo(mails, FORM_EMAIL, 'is closed').text).toContain('€10.00 went back to you.');
+    expect(mailTo(mails, FORM_EMAIL, 'is closed').text).toContain('We sent you €10.00.');
     expect((await stockOf(product)).stock).toBe(before.stock + 1);
     expect((await refundsOf(paymentId)).map((refund) => refund.amount)).toEqual([1000]);
   });

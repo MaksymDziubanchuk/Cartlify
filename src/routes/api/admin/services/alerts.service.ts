@@ -19,6 +19,7 @@ import {
 } from '../../newsletters/services/helpers/campaignShares.helper.js';
 import { readSendingHalt } from '../../newsletters/services/helpers/sendingHalt.helper.js';
 import { andOf, returnConditions } from '../../returns/services/helpers/returnFilters.helper.js';
+import { waitingRefunds } from '../../payments/services/helpers/waitingRefunds.helper.js';
 import { utcTime } from './helpers/accountingSql.helper.js';
 import {
   dismissalFieldOf,
@@ -182,8 +183,19 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
           and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
       )`,
   }),
+  // refunds that failed: the open statements with a transfer that failed and the refunds of late
+  // payments that failed and root has not marked sent another way, the rows of the list of the
+  // refunds that wait (a case is a statement or a refund: t.id is the id of either)
+  failed_refunds: () => ({
+    from: Prisma.sql`from (${waitingRefunds('failed', Date.now())}) as t`,
+    where: Prisma.sql`true`,
+  }),
+  // the refunds of late payments made before the time whose money was not told sent or failed
+  refunded_payments_not_sent: (window) => ({
+    from: Prisma.sql`from (${waitingRefunds('unsent', Date.now())}) as t`,
+    where: Prisma.sql`t."at" < ${utcTime(window.before ?? new Date(0))}`,
+  }),
   // statements of return: the same conditions as the filters of the list of the statements
-  failed_refunds: () => returnCases({ state: 'open', money: 'failed' }),
   returns_manual_check: () =>
     returnCases({ state: 'open', source: 'form_manual', accepted: false }),
   returns_proof_waiting: (window) =>

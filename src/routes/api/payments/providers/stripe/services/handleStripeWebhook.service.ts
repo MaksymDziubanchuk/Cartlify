@@ -213,7 +213,8 @@ export async function handleStripeWebhook(
         break;
       }
 
-      // a refund of the app ended or changed: the transfer of a statement of return is settled by it
+      // a refund of the app ended or changed: the transfer of a statement of return, or the refund of a
+      // payment the order could not take, is settled by it
       case 'refund.updated':
       case 'refund.failed': {
         const refund = event.data.object;

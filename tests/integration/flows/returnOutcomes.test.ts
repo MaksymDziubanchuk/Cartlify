@@ -134,7 +134,7 @@ describe('the goods that come back', () => {
 
     const end = mailTo(mails, buyer.email, 'is closed');
     expect(end.text).toContain('the goods arrived damaged');
-    expect(end.text).toContain('€10.00 went back to you.');
+    expect(end.text).toContain('We sent you €10.00.');
     expect((await stockOf(product)).stock).toBe(before.stock + 1);
     expect((await refundsOf(paymentId)).map((refund) => refund.amount)).toEqual([1000]);
   });

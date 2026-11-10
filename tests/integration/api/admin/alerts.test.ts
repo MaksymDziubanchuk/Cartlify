@@ -97,6 +97,7 @@ const ADMIN_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'refunded_payments_not_sent',
   'failed_refunds',
   'returns_manual_check',
   'returns_proof_waiting',
@@ -897,6 +898,14 @@ describe('the subscriptions to the alerts', () => {
       low_stock: { value: 5, default: 5, min: 1, max: 100_000, unit: 'units', custom: false },
       expiring_batches: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
       refunded_payments: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
+      refunded_payments_not_sent: {
+        value: 3,
+        default: 3,
+        min: 1,
+        max: 365,
+        unit: 'days',
+        custom: false,
+      },
       worker_stalled: {
         value: 180,
         default: 180,
