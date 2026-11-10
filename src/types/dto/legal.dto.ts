@@ -31,6 +31,10 @@ export interface PrivacyRetentionDto {
   returnPersonalDays: number;
   // the recipient and the address of an order, counted from the deletion of the account of its buyer
   recipientDays: number;
+  // an ended newsletter subscription with its journal (the proof of the consent), counted from its end
+  newsletterConsentDays: number;
+  // the rows of the recipients of a newsletter campaign, counted from the end of the campaign
+  newsletterRecipientsDays: number;
 }
 
 // a version with its text; contract is the terms of a contract and retention the terms of a privacy

@@ -95,6 +95,26 @@ const retentionProperties = {
     description:
       'The recipient and the address of an order, from the deletion of the account of its buyer.',
   },
+  newsletterConsentDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description:
+      'The proof of the consent to the newsletters: a subscription that ended, or that a ' +
+      'bounce stopped, with its journal (when, from which address and browser, under which ' +
+      'version of the policy) is kept this many days after it ended, then removed. A request ' +
+      'to subscribe that nobody confirmed has no term here: it goes with its link after three ' +
+      'days.',
+  },
+  newsletterRecipientsDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: LEGAL_MAX_DAYS,
+    description:
+      'The rows of the mails of a newsletter campaign (one for each subscriber it went to) ' +
+      'are kept this many days after the campaign ended (finished, stopped or cancelled), then ' +
+      'removed; the campaign with its totals stays.',
+  },
 } as const;
 
 const contractRequired = ['withdrawalDays', 'returnAddress', 'returnShippingPaidBy'] as const;
@@ -105,6 +125,8 @@ const retentionRequired = [
   'returnAddressesDays',
   'returnPersonalDays',
   'recipientDays',
+  'newsletterConsentDays',
+  'newsletterRecipientsDays',
 ] as const;
 
 const dateTimeSchema = { type: 'string', format: 'date-time' } as const;
@@ -222,7 +244,10 @@ const legalDocumentPublishBodySchema = {
       additionalProperties: false,
       description:
         'How long a privacy policy keeps each kind of personal data; required for a privacy ' +
-        'policy, refused for any other kind.',
+        'policy, refused for any other kind. All the terms are needed, each in whole days from ' +
+        `1 to ${LEGAL_MAX_DAYS}. Data is kept for the shorter of the term of the version in ` +
+        'force when it was collected and of the version in force now, and cleaned a day before ' +
+        'the term ends; with no privacy policy published nothing is cleaned.',
       properties: retentionProperties,
       required: retentionRequired,
     },

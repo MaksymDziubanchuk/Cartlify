@@ -39,10 +39,12 @@ type KindFields = Pick<
   | 'retentionReturnAddressesDays'
   | 'retentionReturnPersonalDays'
   | 'retentionRecipientDays'
+  | 'retentionNewsletterConsentDays'
+  | 'retentionNewsletterRecipientsDays'
 >;
 
 // the columns a kind keeps beside its text (db/06): a contract the three of the contract, a privacy
-// policy the six terms of keeping personal data, the terms none. A kind without its own fields, or
+// policy the eight terms of keeping personal data, the terms none. A kind without its own fields, or
 // with the fields of another, is refused; the address loses the spaces at its edges
 export function kindFieldsOf(args: {
   kind: LegalDocumentKind;
@@ -83,6 +85,8 @@ export function kindFieldsOf(args: {
       retentionReturnAddressesDays: retention.returnAddressesDays,
       retentionReturnPersonalDays: retention.returnPersonalDays,
       retentionRecipientDays: retention.recipientDays,
+      retentionNewsletterConsentDays: retention.newsletterConsentDays,
+      retentionNewsletterRecipientsDays: retention.newsletterRecipientsDays,
     };
   }
 

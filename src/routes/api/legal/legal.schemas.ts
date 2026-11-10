@@ -138,14 +138,38 @@ const postRootLegalDocumentSchema = {
     'who pays the carrier for it): an order keeps the days and the payer of the contract in ' +
     'force at its confirmation. A privacy policy carries `retention` (how long each kind of ' +
     'personal data is kept, in days): the cleanups of the data read these terms, and nobody ' +
-    'accepts the policy. The terms carry neither. The database numbers the versions of each ' +
+    'accepts the policy. Its text should also say what the newsletters keep: the admins who ' +
+    'run them see the emails of the subscribers, the list of the addresses the form refuses ' +
+    '(a person said the address is not theirs, or an admin added it) is kept as hashes with ' +
+    'no term until an admin removes a record, and the proof of the consent and the rows of ' +
+    'the mails of a campaign are kept for `newsletterConsentDays` and ' +
+    '`newsletterRecipientsDays`. The terms carry neither. The database numbers the versions of each ' +
     'kind and keeps the sha256 of the text; nobody changes or takes a version away, the next one ' +
     'replaces it. The text of the version an order is confirmed with goes to the buyer as a file ' +
     'of the mail of the payment, the copy of the contract: the terms and the contract together ' +
     'have to give what a buyer must have in it, the right to withdraw within 14 days, how to ' +
     'withdraw and return the goods and who pays for the return, and the model withdrawal form.',
 
-  body: { $ref: 'legalDocumentPublishBodySchema#' },
+  body: {
+    $ref: 'legalDocumentPublishBodySchema#',
+    examples: [
+      {
+        kind: 'privacy',
+        title: 'Privacy policy',
+        content: 'What the shop keeps about you, why, and for how long.',
+        retention: {
+          loginAddressesDays: 90,
+          guestDataDays: 180,
+          deletedChatsDays: 30,
+          returnAddressesDays: 1095,
+          returnPersonalDays: 3650,
+          recipientDays: 3650,
+          newsletterConsentDays: 3650,
+          newsletterRecipientsDays: 365,
+        },
+      },
+    ],
+  },
 
   response: {
     201: {
