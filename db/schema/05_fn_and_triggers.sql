@@ -492,7 +492,7 @@ EXECUTE FUNCTION cartlify.categories_before_parent_change ();
 
 -- Gives the price a product sells at now: the sale price while the end of the sale is ahead,
 -- the price otherwise. A sale that is over keeps its fields until the next sale writes over
--- them or the price goes down to them (products_before_price_change), but it is no price any
+-- them or the price goes down to them (product_variants_before_price_change), but it is no price any
 -- more. The order items, the price check of confirm_order and the catalog (sort, filters) take
 -- this price. Prisma keeps dates as utc in columns without a time zone, so the end is compared
 -- in utc.
@@ -698,22 +698,6 @@ SET
   GROUP BY i."productId";
 $$;
 
--- TEMPORARY: take_from_batches took a product, and a parameter cannot be renamed in place. Remove
--- this block once the structure of dev and prod matches the snapshot.
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM pg_proc AS p
-    WHERE p.pronamespace = 'cartlify'::regnamespace
-      AND p.proname = 'take_from_batches'
-      AND p.proargnames[1] = 'p_product_id'
-  ) THEN
-    DROP FUNCTION cartlify.take_from_batches (integer, integer, boolean);
-  END IF;
-END
-$$;
-
 -- Takes units out of the batches of a variant: first the batch that ends first, then the ones
 -- without an end, the oldest first. Returns what each batch gave and its cost of a unit. A sale
 -- skips the batches that are over (p_skip_expired), a write-off takes them first. Raises
@@ -775,9 +759,6 @@ BEGIN
   END IF;
 END;
 $$;
-
--- Removes the old signature of log_stock_change, from before the row of a statement of return.
-DROP FUNCTION IF EXISTS cartlify.log_stock_change (integer, text, integer, integer, jsonb, uuid, uuid, integer);
 
 -- Writes a line of the stock log: the change of the stock of a variant and what made it
 -- (p_event, see src/config/journalEvents.ts), with the stock after it and the operation the change
@@ -860,11 +841,6 @@ BEGIN
   );
 END;
 $$;
-
--- The cancel of a paid order is a statement of return now (create_return with the reason shop_cancel):
--- its units go back through return_units_to_batches. The old function is dropped here until dev and
--- prod no longer have it.
-DROP FUNCTION IF EXISTS cartlify.return_order_stock (integer);
 
 -- Takes in a batch of a variant and returns its id: the stock grows by it, and the stock log
 -- keeps a line (stock.delivery) with the delivery it came with, the batch with its cost, the
@@ -1910,9 +1886,6 @@ CREATE OR REPLACE FUNCTION cartlify.delivery_price (
   END
 $$;
 
--- Removes the old signature of confirm_order, from before the delivery arguments.
-DROP FUNCTION IF EXISTS cartlify.confirm_order (integer, interval);
-
 -- Confirms an order: reserves the stock, checks the prices, fixes the delivery price and sets the
 -- reservation deadline (the status becomes waiting). System function: runs as the owner, acts
 -- only for a USER (ORDER_CONFIRM_FORBIDDEN) and only on an order of their own: the order of
@@ -2262,12 +2235,6 @@ BEGIN
   WHERE o.id = p_order_id;
 END;
 $$;
-
--- The cancel of an order by the shop is a statement of return (create_return with the reason
--- shop_cancel for a paid order, refused for a parcel the buyer refused), and the order becomes
--- cancelled by its statements (refresh_return_state). The old function is dropped here until dev and
--- prod no longer have it.
-DROP FUNCTION IF EXISTS cartlify.cancel_paid_order (integer);
 
 -- Records a payment that a provider confirmed (the payment webhook) and turns the order into a
 -- paid one. It returns a text, not an error, so the server decides what to do with the money:
@@ -3141,16 +3108,6 @@ BEGIN
 END;
 $$;
 
--- Removes the old signature, from before p_event.
-DROP FUNCTION IF EXISTS cartlify.log_product_price_change (
-  integer,
-  numeric,
-  numeric,
-  cartlify."PriceChangeMode",
-  numeric,
-  timestamp
-);
-
 ------------------------------------------------------------
 -- LOGIN LOGS
 ------------------------------------------------------------
@@ -3249,16 +3206,6 @@ BEGIN
 END;
 $$;
 
--- Removes the old signature, from before p_event.
-DROP FUNCTION IF EXISTS cartlify.log_admin_action (
-  integer,
-  cartlify."Role",
-  cartlify."AdminAuditEntityType",
-  integer,
-  cartlify."AdminAuditAction",
-  jsonb
-);
-
 ------------------------------------------------------------
 -- MIGRATION AND MAINTENANCE
 ------------------------------------------------------------
@@ -3308,17 +3255,6 @@ $$;
 -- is the work of the system (the admin context without a user id), meant for a periodic task, e.g.
 -- SELECT * FROM cartlify.cleanup_guest_data(). The ones that run as the owner reach the rows
 -- through narrow policies (db/03) and the guards of the tables (db/05).
-
--- The functions that took the days to keep as an argument are replaced by the ones that read them
--- from the policy; the old ones go (a temporary removal, to be taken out of this script when dev
--- and prod have been compared).
-DROP FUNCTION IF EXISTS cartlify.cleanup_login_log_addresses (integer);
-
-DROP FUNCTION IF EXISTS cartlify.cleanup_guest_data (integer);
-
-DROP FUNCTION IF EXISTS cartlify.cleanup_deleted_accounts_chats (integer);
-
-DROP FUNCTION IF EXISTS cartlify.retention_cutoff (integer);
 
 -- The moment the cleanups count from, utc as the columns keep it. Only the system may ask
 -- (RETENTION_CLEANUP_FORBIDDEN). Internal.
@@ -5162,58 +5098,6 @@ CREATE TRIGGER trg_shop_settings_append_only
 BEFORE UPDATE OR DELETE ON cartlify.shop_settings FOR EACH ROW
 EXECUTE FUNCTION cartlify.shop_settings_append_only ();
 
-
-------------------------------------------------------------
--- TEMPORARY: the shape of a list of the versions of the data of the shop, which were full rows
--- of every setting, was checked by these; the rows by key have their own (shop_setting_list_valid).
--- Remove this block once the structure of dev and prod matches the snapshot
--- (npm run db:snapshot:check:db).
-------------------------------------------------------------
-DROP FUNCTION IF EXISTS cartlify.array_matches (text[], text);
-
-DROP FUNCTION IF EXISTS cartlify.array_has_no_duplicates (text[]);
-
-------------------------------------------------------------
--- TEMPORARY: the product versions of the functions that now take a variant. Remove this block
--- once the structure of dev and prod matches the snapshot (npm run db:snapshot:check:db).
-------------------------------------------------------------
-DROP FUNCTION IF EXISTS cartlify.product_expired_units (integer);
-
-DROP FUNCTION IF EXISTS cartlify.reserve_product_stock (integer, integer);
-
-DROP FUNCTION IF EXISTS cartlify.release_product_stock (integer, integer);
-
-DROP FUNCTION IF EXISTS cartlify.consume_product_stock (integer, integer, integer);
-
-DROP FUNCTION IF EXISTS cartlify.receive_product_batch (
-  uuid,
-  integer,
-  cartlify."StockSource",
-  integer,
-  numeric,
-  date,
-  text,
-  text,
-  text,
-  text
-);
-
-DROP FUNCTION IF EXISTS cartlify.write_off_product_stock (uuid, integer, integer, integer, text, text);
-
-DROP FUNCTION IF EXISTS cartlify.check_product_stock_batches ();
-
-DROP FUNCTION IF EXISTS cartlify.products_before_price_change ();
-
-DROP FUNCTION IF EXISTS cartlify.log_product_price_change (
-  integer,
-  numeric,
-  numeric,
-  cartlify."PriceChangeMode",
-  numeric,
-  text,
-  timestamp
-);
-
 ------------------------------------------------------------
 -- RETURNS: THE STATEMENTS OF WITHDRAWAL AND OF RETURN
 ------------------------------------------------------------
@@ -6453,10 +6337,6 @@ EXECUTE FUNCTION cartlify.order_batch_allocations_update_columns ();
 -- only a withdrawal whose contract says the buyer pays (RETURN_DEDUCTION_NOT_ALLOWED), above 0 and
 -- leaving the transfer above 0 (RETURN_DEDUCTION_INVALID), at most what the parcels of the
 -- statement cost the shop less what other transfers took (RETURN_DEDUCTION_EXCEEDS_COST).
--- The function took no deduction of the way back before; the old signature is dropped here until
--- dev and prod no longer have it.
-DROP FUNCTION IF EXISTS cartlify.begin_return_refund (integer, integer[], jsonb);
-
 CREATE OR REPLACE FUNCTION cartlify.begin_return_refund (
   p_return_id integer,
   p_item_ids integer[],

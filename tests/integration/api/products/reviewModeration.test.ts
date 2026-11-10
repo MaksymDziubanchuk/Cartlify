@@ -19,7 +19,7 @@ import { refuseMail, watchMail } from '../../../helpers/mail.js';
 // DELETE /api/products/:productId/reviews/:reviewId by an admin or root: a review that breaks the
 // rules goes. Every such removal is a line of the journal of the admins (REVIEW_DELETE, the author
 // in its changes) and mails the author which removal it is; the answer and the profile an admin
-// reads count the removals of the reviews of the author against the limit (REVIEW_REMOVALS_LIMIT,
+// reads count the removals of the reviews of the author against the limit (reviewRemovalsLimit,
 // 2 in the tests), and past it the page tells the admin to ask root about the account. An author
 // who deletes an own review is no removal
 

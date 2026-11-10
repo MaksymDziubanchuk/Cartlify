@@ -1,7 +1,7 @@
 // the countries a shop may deliver to: the ones whose address the app takes whole, with a postal
 // code of a form it knows and no region or state to ask for. The member states of the EU, the
 // United Kingdom, Switzerland, Norway, Iceland, Liechtenstein and Ukraine. A shop names the ones it
-// delivers to (DELIVERY_COUNTRIES), the others are refused
+// delivers to (deliveryCountries of the data of the shop), the others are refused
 
 type PostalRule = {
   // the form of a code as a buyer writes it: capital letters, one space where spaces are

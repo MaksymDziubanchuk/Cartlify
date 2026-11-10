@@ -1175,10 +1175,6 @@ WHERE
 -- (chat_messages_threadId_createdAt_idx).
 -- chat_messages_unread_by_thread_sender_idx: the unread messages of a thread by sender; it holds
 -- only unread rows.
--- chat_messages_thread_created_idx was the same index a second time, it is dropped (a temporary
--- line: remove it once dev and prod have run this script).
-DROP INDEX IF EXISTS cartlify.chat_messages_thread_created_idx;
-
 CREATE INDEX IF NOT EXISTS chat_messages_unread_by_thread_sender_idx ON cartlify.chat_messages ("threadId", "senderType")
 WHERE
   "isRead" = false;

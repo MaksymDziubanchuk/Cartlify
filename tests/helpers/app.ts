@@ -8,7 +8,7 @@ import { prisma } from '@db/client.js';
 
 import { captureLogs } from './logs.js';
 import { installContractCheck } from './contract.js';
-import { applyTestShopSettingsBaseline } from './shopSettings.js';
+import { applyTestShopSettingsBaseline, INTEGRATION_SHOP_BASELINE } from './shopSettings.js';
 
 // the server builds a serializer for every answer of every route when it starts, about 3 s of
 // every test file; a file calls a few routes, so here each one is built on its first use. It is
@@ -51,9 +51,9 @@ export async function startApp(
   // in the server's defaults the same way src/index.ts does, so routes that read shopSettings()
   // have something to read
   await loadShopSettings();
-  // the server defaults alone give no delivery and no seller; the baseline every test had before
-  // this table existed (tests/setup/integration.setup.ts still sets the env vars of it)
-  applyTestShopSettingsBaseline();
+  // the server defaults alone give no delivery and no seller; the shop every integration test
+  // starts with (tests/helpers/shopSettings.ts)
+  applyTestShopSettingsBaseline(INTEGRATION_SHOP_BASELINE);
   await app.ready();
 
   return app;

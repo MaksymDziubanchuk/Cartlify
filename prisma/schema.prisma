@@ -1401,7 +1401,7 @@ enum AdminAuditAction {
 }
 
 // The journal of price changes of products. Only added: nobody edits or deletes a line, and the app
-// writes a line only through log_product_price_change, in the name of the admin of the request
+// writes a line only through log_variant_price_change, in the name of the admin of the request
 // (db/05).
 model ProductPriceChangeLog {
   id Int @id @default(autoincrement())

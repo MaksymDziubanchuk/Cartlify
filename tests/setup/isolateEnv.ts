@@ -22,8 +22,6 @@ const REQUIRED_AT_IMPORT: Record<string, string> = {
   STRIPE_WEBHOOK_SECRET: 'whsec_placeholder',
   // signs the codes of the links of withdrawal
   WITHDRAWAL_CODE_SECRET: 'test-withdrawal-code-secret-of-the-integration-tests',
-  // the manual delivery needs its countries in every environment
-  DELIVERY_COUNTRIES: 'UA',
   ...CLOUDINARY_PLACEHOLDERS,
 };
 

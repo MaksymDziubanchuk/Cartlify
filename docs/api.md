@@ -111,16 +111,16 @@ Local OpenAPI JSON:
 http://localhost:3000/documentation/json
 ```
 
-Deployed Swagger UI:
+Deployed Swagger UI, on the domain the API of the environment is served from:
 
 ```bash
-https://cartlify.up.railway.app/documentation
+https://<api-domain>/documentation
 ```
 
 Deployed OpenAPI JSON:
 
 ```bash
-https://cartlify.up.railway.app/documentation/json
+https://<api-domain>/documentation/json
 ```
 
 The current documentation includes:
