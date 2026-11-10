@@ -1,0 +1,9 @@
+{{body}}
+
+{{button}}:
+{{manageUrl}}
+
+{{ignoreEmail}}
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}
