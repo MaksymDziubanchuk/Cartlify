@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
+import requireCaptcha from '@middlewares/requireCaptcha.js';
 import requireRole from '@middlewares/requireRole.js';
 import { requestLimits } from '../../../plugins/requestLimits.js';
 import { authSchema } from './auth.schemas.js';
@@ -9,7 +10,18 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/register',
     {
-      preHandler: [authGuard, requireRole(['GUEST']), ...requestLimits.register],
+      // the limit of the address before the captcha, the limit of the email after it: a request the
+      // guards and the limit of the address refuse costs no call to Cloudflare, and a captcha that
+      // fails takes no place of the email. The place is given back when the registration does not end
+      // in 201, so only the registrations that succeed count
+      preHandler: [
+        authGuard,
+        requireRole(['GUEST']),
+        ...requestLimits.register,
+        requireCaptcha,
+        ...requestLimits.registerToEmail,
+      ],
+      onSend: requestLimits.registerToEmailDone,
       schema: authSchema.setRegisterSchema,
     },
     authController.postRegister,
@@ -77,18 +89,28 @@ export default async function authRouter(app: FastifyInstance) {
   app.post(
     '/verify/resend',
     {
-      preHandler: [authGuard, requireRole(['GUEST']), ...requestLimits.mail],
+      // the limit of the address before the captcha, the limit of the email after it: a captcha that
+      // fails spends no count of the email
+      preHandler: [
+        authGuard,
+        requireRole(['GUEST']),
+        ...requestLimits.mail,
+        requireCaptcha,
+        ...requestLimits.mailToEmail,
+      ],
       schema: authSchema.setVerifyResendSchema,
     },
     authController.postVerifyResend,
   );
-  app.get('/verify', { schema: authSchema.authVerifyEmailSchema }, authController.getVerifyEmail);
+  // a post and not a get: opening a link (a mail scanner, a preview) must verify nobody. The page of
+  // the link reads the token after the # and posts it here
+  app.post('/verify', { schema: authSchema.authVerifyEmailSchema }, authController.postVerifyEmail);
   // open to everyone: a guest changes the cart too, so the token is needed before any login
   app.get('/csrf', { schema: authSchema.setCsrfTokenSchema }, authController.getCsrfToken);
   app.post(
     '/password/forgot',
     {
-      preHandler: [authGuard, ...requestLimits.mail],
+      preHandler: [authGuard, ...requestLimits.mail, requireCaptcha, ...requestLimits.mailToEmail],
       schema: authSchema.setPasswordForgotSchema,
     },
     authController.postPasswordForgot,

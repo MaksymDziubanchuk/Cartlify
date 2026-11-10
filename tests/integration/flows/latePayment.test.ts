@@ -67,7 +67,7 @@ describe('a payment that comes after the units were sold', () => {
     expect(await refundAuditOf(lateOrder)).toHaveLength(1);
     expect(
       mails.filter((mail) => mail.to.includes(late.email)).map((mail) => mail.subject),
-    ).toEqual([expect.stringContaining(`payment for order #${lateOrder} is refunded`)]);
+    ).toEqual([expect.stringContaining(`We sent your payment for order #${lateOrder} back`)]);
 
     // the admins see the refund among their alerts, and the list the alert names holds its line
     const alerts = await app.inject({

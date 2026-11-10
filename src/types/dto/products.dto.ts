@@ -161,6 +161,12 @@ export interface FindAllProductsDto {
   order: SortOrder;
 }
 
+// the same question for the code that reads the catalog itself and is no route of it: it may name the
+// products it wants (the newsletters read a block of products by hand)
+export interface ReadProductsDto extends FindAllProductsDto {
+  productIds?: number[];
+}
+
 export interface ProductCategoryDto {
   id: CategoryId;
   name: string;
@@ -294,6 +300,8 @@ export interface GetProductReviewsQueryDto {
   cursor?: string;
   limit?: number;
   sort?: ReviewSortName;
+  // true: the reviews of the authors who bought the product, false: the others; absent: all
+  verifiedPurchase?: boolean;
 }
 
 export interface FindProductReviewsDto {
@@ -301,6 +309,7 @@ export interface FindProductReviewsDto {
   limit: number;
   cursor?: string;
   sort?: ReviewSortName;
+  verifiedPurchase?: boolean;
 
   actorId: UserId;
   actorRole: Role;

@@ -90,7 +90,7 @@ describe('the buyer withdraws from their account', () => {
     const notice = mailTo(mails, buyer.email, `Withdrawal from order #${orderId}`);
     expect(statementCodeIn(notice)).toBe(statement.code);
     expect(notice.text).toContain('the goods stay with us');
-    expect(mailTo(mails, buyer.email, 'is closed').text).toContain('€10.00 went back to you.');
+    expect(mailTo(mails, buyer.email, 'is closed').text).toContain('We sent you €10.00.');
 
     // the admin sees on the order what is left to send
     const card = (await j.get(admin, `/api/orders/${orderId}`)).json();

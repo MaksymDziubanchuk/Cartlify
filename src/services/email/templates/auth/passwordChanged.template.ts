@@ -8,7 +8,7 @@ export type PasswordChangedTemplateArgs = {
   changedAt: Date;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -34,7 +34,7 @@ export function buildPasswordChangedTemplate(args: PasswordChangedTemplateArgs):
     loginUrl,
     changedAt,
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('passwordChanged.title', locale, { appName }),
     preview: t('passwordChanged.preview', locale, { appName }),

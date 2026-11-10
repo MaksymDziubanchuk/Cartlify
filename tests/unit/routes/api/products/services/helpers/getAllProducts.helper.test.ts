@@ -16,7 +16,11 @@ import {
   type ProductListQuery,
 } from '@routes/api/products/services/helpers/getAllProducts.helper.js';
 
-import type { FindAllProductsDto, ProductsSortField } from 'types/dto/products.dto.js';
+import type {
+  FindAllProductsDto,
+  ProductsSortField,
+  ReadProductsDto,
+} from 'types/dto/products.dto.js';
 
 import { thrownBy } from '../../../../../../helpers/errors.js';
 
@@ -25,14 +29,14 @@ import { thrownBy } from '../../../../../../helpers/errors.js';
 // goes through one raw query of ids (the price a variant sells at and its sale depend on the time),
 // Prisma reads the rows of the page (the rows of the page: productList.helper.test.ts)
 
-const dto = (patch: Partial<FindAllProductsDto> = {}): FindAllProductsDto =>
+const dto = (patch: Partial<ReadProductsDto> = {}): ReadProductsDto =>
   ({
     actorRole: 'GUEST',
     limit: 20,
     sort: 'popularity',
     order: 'desc',
     ...patch,
-  }) as FindAllProductsDto;
+  }) as ReadProductsDto;
 
 // whitespace-free sql text, so checks do not depend on how the query is indented
 const sqlText = (sql: Prisma.Sql) => sql.sql.replace(/\s+/g, ' ').trim();
@@ -138,6 +142,27 @@ describe('normalizeFindAllProductsInput', () => {
       errorCode: 'CATEGORY_IDS_INVALID',
     });
   });
+
+  // the products a block of a newsletter names: the catalog filtered to them, no route takes it
+  it('keeps only positive whole ids of the products named', () => {
+    expect(
+      normalizeFindAllProductsInput(dto({ productIds: [4, 0, -1, 1.5, 9] })).productIds,
+    ).toEqual([4, 9]);
+    expect(normalizeFindAllProductsInput(dto()).productIds).toBeUndefined();
+  });
+
+  it.each([
+    ['empty', []],
+    ['only zero and negative ids', [0, -1]],
+  ])(
+    'rejects a list of products that is %s, it never turns into every product',
+    (_case, productIds) => {
+      expect(thrownBy(() => normalizeFindAllProductsInput(dto({ productIds })))).toMatchObject({
+        statusCode: 400,
+        errorCode: 'PRODUCT_IDS_INVALID',
+      });
+    },
+  );
 
   it.each([
     ['a negative minimum price', { minPrice: -1 }, 'MIN_PRICE_INVALID'],
@@ -615,6 +640,14 @@ describe('buildProductIdsQuery', () => {
     expect(text).toContain(`${CURRENT_PRICE('v')} <= ?`);
     expect(text).not.toMatch(/v\."price" [<>]=/);
     expect(sql.values).toEqual(expect.arrayContaining([2, 7, 10, 50]));
+  });
+
+  it('limits the rows to the products named, as parameters', () => {
+    const sql = query({ productIds: [4, 9] });
+
+    expect(sqlText(sql)).toContain('p."id" IN (?,?)');
+    expect(sql.values).toEqual(expect.arrayContaining([4, 9]));
+    expect(sqlText(query({}))).not.toContain('p."id" IN');
   });
 
   it('takes only the products of each category itself with branch false', () => {

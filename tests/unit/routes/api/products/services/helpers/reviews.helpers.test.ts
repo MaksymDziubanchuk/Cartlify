@@ -1,11 +1,15 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
+  PURCHASE_ORDER_STATUSES,
+  boughtProductWhere,
   mapReviewRowToResponse,
   normalizeCreateReviewInput,
   normalizeDeleteReviewInput,
   readReviewCursor,
   reviewOrderOf,
+  reviewPurchaseOf,
+  reviewPurchaseWhere,
   reviewSortValueOf,
   reviewsAfter,
 } from '@routes/api/products/services/helpers/reviews.helpers.js';
@@ -220,7 +224,7 @@ describe('mapReviewRowToResponse', () => {
 });
 
 // the reviews of a product page by page in the order of a sort: the cursor keeps the last review,
-// the product, the sort and the value it orders by
+// the product, the sort, the filter of the purchase and the value it orders by
 describe('the sorts of the reviews', () => {
   it.each([
     ['newest', [{ id: 'desc' }]],
@@ -232,18 +236,20 @@ describe('the sorts of the reviews', () => {
   });
 
   it('goes on after the last review of the page in the order of its sort', () => {
-    expect(reviewsAfter({ id: 9, v: 3, s: 'newest', k: null })).toEqual({ id: { lt: 9 } });
-    expect(reviewsAfter({ id: 9, v: 3, s: 'helpful', k: 2 })).toEqual({
+    expect(reviewsAfter({ id: 9, v: 3, s: 'newest', f: 'all', k: null })).toEqual({
+      id: { lt: 9 },
+    });
+    expect(reviewsAfter({ id: 9, v: 3, s: 'helpful', f: 'all', k: 2 })).toEqual({
       OR: [{ upVotes: { lt: 2 } }, { upVotes: 2, id: { lt: 9 } }],
     });
-    expect(reviewsAfter({ id: 9, v: 3, s: 'ratingLow', k: 4 })).toEqual({
+    expect(reviewsAfter({ id: 9, v: 3, s: 'ratingLow', f: 'all', k: 4 })).toEqual({
       OR: [{ rating: { gt: 4 } }, { rating: 4, id: { lt: 9 } }, { rating: null }],
     });
-    expect(reviewsAfter({ id: 9, v: 3, s: 'ratingHigh', k: 4 })).toEqual({
+    expect(reviewsAfter({ id: 9, v: 3, s: 'ratingHigh', f: 'all', k: 4 })).toEqual({
       OR: [{ rating: { lt: 4 } }, { rating: 4, id: { lt: 9 } }, { rating: null }],
     });
     // after a review without a rating only the older of them
-    expect(reviewsAfter({ id: 9, v: 3, s: 'ratingHigh', k: null })).toEqual({
+    expect(reviewsAfter({ id: 9, v: 3, s: 'ratingHigh', f: 'all', k: null })).toEqual({
       rating: null,
       id: { lt: 9 },
     });
@@ -257,37 +263,96 @@ describe('the sorts of the reviews', () => {
     expect(reviewSortValueOf('newest', { rating: 4, upVotes: 6 })).toBeNull();
   });
 
-  it('reads a cursor of the product and the sort, an old one of the newest too', () => {
-    expect(readReviewCursor({ id: 9, v: 3, s: 'helpful', k: 2 }, 3, 'helpful')).toEqual({
-      id: 9,
-      v: 3,
-      s: 'helpful',
-      k: 2,
-    });
-    expect(readReviewCursor({ id: 9, v: 3 }, 3, 'newest')).toMatchObject({ s: 'newest', k: null });
+  it('reads a cursor of the product, the sort and the filter', () => {
+    expect(
+      readReviewCursor({ id: 9, v: 3, s: 'helpful', f: 'all', k: 2 }, 3, 'helpful', 'all'),
+    ).toEqual({ id: 9, v: 3, s: 'helpful', f: 'all', k: 2 });
+    expect(
+      readReviewCursor(
+        { id: 9, v: 3, s: 'newest', f: 'verified', k: null },
+        3,
+        'newest',
+        'verified',
+      ),
+    ).toEqual({ id: 9, v: 3, s: 'newest', f: 'verified', k: null });
+    expect(
+      readReviewCursor(
+        { id: 9, v: 3, s: 'ratingLow', f: 'unverified', k: 1 },
+        3,
+        'ratingLow',
+        'unverified',
+      ),
+    ).toMatchObject({ f: 'unverified' });
   });
 
   // a cursor coded as text keeps its numbers as text
   it('reads the product of a cursor written as text, and a value of 0', () => {
-    expect(readReviewCursor({ id: '9', v: '3', s: 'helpful', k: 0 }, 3, 'helpful')).toEqual({
-      id: 9,
-      v: 3,
-      s: 'helpful',
-      k: 0,
-    });
+    expect(
+      readReviewCursor({ id: '9', v: '3', s: 'helpful', f: 'all', k: 0 }, 3, 'helpful', 'all'),
+    ).toEqual({ id: 9, v: 3, s: 'helpful', f: 'all', k: 0 });
   });
 
   it.each([
-    ['another product', { id: 9, v: 4, s: 'newest' }],
-    ['another product of the same sort', { id: 9, v: 4, s: 'helpful', k: 1 }],
-    ['a value below 0', { id: 9, v: 3, s: 'helpful', k: -1 }],
-    ['a value written as text', { id: 9, v: 3, s: 'helpful', k: '2' }],
-    ['another sort', { id: 9, v: 3, s: 'ratingLow', k: 2 }],
-    ['a value that is not a whole number', { id: 9, v: 3, s: 'helpful', k: 1.5 }],
-    ['an id that is not one', { id: 0, v: 3, s: 'helpful', k: 1 }],
+    ['another product', { id: 9, v: 4, s: 'helpful', f: 'all', k: 1 }],
+    ['a value below 0', { id: 9, v: 3, s: 'helpful', f: 'all', k: -1 }],
+    ['a value written as text', { id: 9, v: 3, s: 'helpful', f: 'all', k: '2' }],
+    ['another sort', { id: 9, v: 3, s: 'ratingLow', f: 'all', k: 2 }],
+    ['another filter', { id: 9, v: 3, s: 'helpful', f: 'verified', k: 2 }],
+    ['the other filter', { id: 9, v: 3, s: 'helpful', f: 'unverified', k: 2 }],
+    ['a filter it does not know', { id: 9, v: 3, s: 'helpful', f: 'both', k: 2 }],
+    ['no filter', { id: 9, v: 3, s: 'helpful', k: 2 }],
+    ['no sort', { id: 9, v: 3, f: 'all', k: 2 }],
+    ['a value that is not a whole number', { id: 9, v: 3, s: 'helpful', f: 'all', k: 1.5 }],
+    ['an id that is not one', { id: 0, v: 3, s: 'helpful', f: 'all', k: 1 }],
   ])('refuses a cursor of %s', (_case, payload) => {
-    expect(thrownBy(() => readReviewCursor(payload, 3, 'helpful'))).toMatchObject({
+    expect(thrownBy(() => readReviewCursor(payload, 3, 'helpful', 'all'))).toMatchObject({
       errorCode: 'CURSOR_INVALID',
+    });
+  });
+
+  it('refuses a cursor of no filter for a page with a filter, and the other way round', () => {
+    const noFilter = { id: 9, v: 3, s: 'newest', f: 'all', k: null };
+    const verified = { id: 9, v: 3, s: 'newest', f: 'verified', k: null };
+
+    expect(thrownBy(() => readReviewCursor(noFilter, 3, 'newest', 'verified'))).toMatchObject({
+      errorCode: 'CURSOR_INVALID',
+    });
+    expect(thrownBy(() => readReviewCursor(verified, 3, 'newest', 'all'))).toMatchObject({
+      errorCode: 'CURSOR_INVALID',
+    });
+    expect(thrownBy(() => readReviewCursor(verified, 3, 'newest', 'unverified'))).toMatchObject({
+      errorCode: 'CURSOR_INVALID',
+    });
+  });
+});
+
+// The filter of the reviews by the purchase and the mark of a review ("verifiedPurchase") are one rule:
+// the author has an order of the product that is paid, shipped or delivered. The filter is built from
+// the very condition that tells the mark (boughtProductWhere)
+describe('the purchase of the author of a review', () => {
+  it('counts the orders that are paid, shipped or delivered', () => {
+    expect(PURCHASE_ORDER_STATUSES).toEqual(['paid', 'shipped', 'delivered']);
+    expect(boughtProductWhere(7)).toEqual({
+      orders: {
+        some: {
+          status: { in: ['paid', 'shipped', 'delivered'] },
+          items: { some: { productId: 7 } },
+        },
+      },
+    });
+  });
+
+  it('reads the filter of a request: no value is all, true the buyers, false the others', () => {
+    expect(reviewPurchaseOf(undefined)).toBe('all');
+    expect(reviewPurchaseOf(true)).toBe('verified');
+    expect(reviewPurchaseOf(false)).toBe('unverified');
+  });
+
+  it('filters by the same condition as the mark, or by its negation', () => {
+    expect(reviewPurchaseWhere('all', 7)).toEqual({});
+    expect(reviewPurchaseWhere('verified', 7)).toEqual({ user: boughtProductWhere(7) });
+    expect(reviewPurchaseWhere('unverified', 7)).toEqual({
+      user: { NOT: boughtProductWhere(7) },
     });
   });
 });

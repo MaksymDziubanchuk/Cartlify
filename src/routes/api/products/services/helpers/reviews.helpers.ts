@@ -142,9 +142,27 @@ export function mapReviewRowToResponse(
   };
 }
 
-// the authors who bought the product: a paid order of it, shipped or delivered too; a cancelled
-// one gave the money back. No field in the database, read for the page. The caller sees the orders
-// of the authors (the system, or the author of their own)
+// The orders that tell a person has bought a product: paid, shipped or delivered; a cancelled one gave
+// the money back, one that waits for its payment has brought none
+export const PURCHASE_ORDER_STATUSES = ['paid', 'shipped', 'delivered'] as const;
+
+// The one rule of a purchase: the person has an order of the product in one of those states. The mark
+// of a review (verifiedPurchase, by buyersOf) and the filter of the list (reviewPurchaseWhere) are
+// both built from this condition, so they cannot disagree. It reads the orders, which only the system
+// and their owner see
+export function boughtProductWhere(productId: number): Prisma.UserWhereInput {
+  return {
+    orders: {
+      some: {
+        status: { in: [...PURCHASE_ORDER_STATUSES] },
+        items: { some: { productId } },
+      },
+    },
+  };
+}
+
+// The authors who bought the product. No field in the database, read for the page. The caller sees the
+// orders of the authors (the system, or the author of their own)
 export async function buyersOf(
   tx: Prisma.TransactionClient,
   productId: number,
@@ -152,15 +170,33 @@ export async function buyersOf(
 ): Promise<Set<number>> {
   if (!userIds.length) return new Set();
 
-  const rows = await tx.$queryRaw<{ userId: number }[]>`
-    select distinct o."userId"
-    from cartlify.orders o
-    join cartlify.order_items i on i."orderId" = o.id
-    where i."productId" = ${productId}::int
-      and o."userId" = any(${userIds}::int[])
-      and o.status in ('paid', 'shipped', 'delivered')
-  `;
-  return new Set(rows.map((row) => row.userId));
+  const rows = await tx.user.findMany({
+    where: { id: { in: userIds }, ...boughtProductWhere(productId) },
+    select: { id: true },
+  });
+  return new Set(rows.map((row) => row.id));
+}
+
+// The filter of the list by the purchase of the author: every review, only the reviews of the authors
+// who bought the product (verifiedPurchase=true), or only the others (verifiedPurchase=false)
+export const REVIEW_PURCHASES = ['all', 'verified', 'unverified'] as const;
+export type ReviewPurchase = (typeof REVIEW_PURCHASES)[number];
+
+export function reviewPurchaseOf(verifiedPurchase: boolean | undefined): ReviewPurchase {
+  if (verifiedPurchase === undefined) return 'all';
+  return verifiedPurchase ? 'verified' : 'unverified';
+}
+
+// The reviews the filter keeps, by the condition of the purchase (boughtProductWhere). It reads the
+// orders, so the query that has it runs as the system
+export function reviewPurchaseWhere(
+  purchase: ReviewPurchase,
+  productId: number,
+): Prisma.ReviewWhereInput {
+  if (purchase === 'all') return {};
+
+  const bought = boughtProductWhere(productId);
+  return { user: purchase === 'verified' ? bought : { NOT: bought } };
 }
 
 // the orders of the reviews of a product: the newest first (the default), the most helpful (the
@@ -169,8 +205,15 @@ export async function buyersOf(
 export const REVIEW_SORTS = ['newest', 'helpful', 'ratingHigh', 'ratingLow'] as const;
 export type ReviewSort = (typeof REVIEW_SORTS)[number];
 
-// the cursor of a page: the last review, the product and the sort it is of, and its value
-export type ReviewCursor = { id: number; v: number; s: ReviewSort; k: number | null };
+// the cursor of a page: the last review, the product, the sort and the filter of the purchase it is of,
+// and its value
+export type ReviewCursor = {
+  id: number;
+  v: number;
+  s: ReviewSort;
+  f: ReviewPurchase;
+  k: number | null;
+};
 
 export function reviewOrderOf(sort: ReviewSort): Prisma.ReviewOrderByWithRelationInput[] {
   switch (sort) {
@@ -216,24 +259,24 @@ export function reviewSortValueOf(
   return null;
 }
 
-// a cursor of this product and this sort; one of another product or sort, or changed, is invalid.
-// A cursor without a sort is one of the newest first, the only order there was before
+// a cursor of this product, this sort and this filter; one of another product, sort or filter, or one
+// that is changed, is invalid
 export function readReviewCursor(
   payload: Record<string, unknown>,
   productId: number,
   sort: ReviewSort,
+  purchase: ReviewPurchase,
 ): ReviewCursor {
   const v = typeof payload.v === 'number' ? payload.v : Number(payload.v);
-  const s = payload.s ?? 'newest';
   const k = payload.k ?? null;
   const id = Number(payload.id);
 
-  if (!Number.isInteger(v) || v !== productId || s !== sort)
+  if (!Number.isInteger(v) || v !== productId || payload.s !== sort || payload.f !== purchase)
     throw new BadRequestError('CURSOR_INVALID');
   if (!Number.isInteger(id) || id <= 0) throw new BadRequestError('CURSOR_INVALID');
   if (k !== null && (typeof k !== 'number' || !Number.isInteger(k) || k < 0)) {
     throw new BadRequestError('CURSOR_INVALID');
   }
 
-  return { id, v, s: sort, k: k as number | null };
+  return { id, v, s: sort, f: purchase, k: k as number | null };
 }

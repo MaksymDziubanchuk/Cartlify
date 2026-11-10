@@ -60,6 +60,13 @@ export const openApiTags = [
         'The data of the shop a guest or a buyer is shown: the brand, the logo, the languages, ' +
         'the seller',
     },
+    {
+      name: 'newsletters',
+      description:
+        'Subscription to the newsletters: the public form, the links of the mails (confirm, ' +
+        'manage, one-click unsubscribe), the profile of a signed-in user and the Event Webhook ' +
+        'SendGrid reports the bounces and complaints of the mails to',
+    },
 ] as const;
 
 // Cookie-based security schemes used by Swagger authorization UI

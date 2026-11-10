@@ -20,6 +20,25 @@ export default async function paymentsRouter(app: FastifyInstance) {
     paymentsController.postCheckoutSession,
   );
 
+  // the refunds that wait for the shop (admin, root), and root recording one that failed as sent
+  // another way
+  app.get(
+    '/refunds',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: paymentsSchema.getRefundsSchema,
+    },
+    paymentsController.getRefunds,
+  );
+  app.post(
+    '/refunds/:refundId/outside',
+    {
+      preHandler: [authGuard, requireRole(['ROOT'])],
+      schema: paymentsSchema.postRefundOutsideSchema,
+    },
+    paymentsController.postRefundOutside,
+  );
+
   // each provider keeps its own routes (its events, its return page) under its name
   app.register(stripeRouter, { prefix: '/stripe' });
 }

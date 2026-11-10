@@ -9,6 +9,7 @@ import {
   UnauthorizedError,
 } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { verifyPass } from '@helpers/safePass.js';
 
 import type { LoginDto, LoginResponseDto } from 'types/dto/auth.dto.js';
@@ -118,6 +119,8 @@ export async function login({
           avatarUrl: true,
           locale: true,
           phone: true,
+          canManageNewsletters: true,
+          deletedAt: true,
         },
       });
 
@@ -142,6 +145,7 @@ export async function login({
         updatedAt: user.updatedAt,
         ...(user.name ? { name: user.name } : {}),
         ...avatarOf(user),
+        canManageNewsletters: canManageNewslettersOf(user),
         ...(user.locale ? { locale: user.locale } : {}),
         ...(user.phone ? { phone: user.phone } : {}),
       };

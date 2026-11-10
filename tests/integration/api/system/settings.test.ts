@@ -26,6 +26,7 @@ import { answerAsModel, stopModel } from '../../../helpers/openai.js';
 import { placeOrder } from '../../../helpers/orders.js';
 import { openPaymentPage } from '../../../helpers/payments.js';
 import { stripeOfTests } from '../../../helpers/stripe.js';
+import { withCaptcha } from '../../../helpers/turnstile.js';
 
 // the settings a shop tunes, in its environment or in the data of the shop (shopSettings, root
 // sets it), and what each one changes: the pages of the frontend the server links to and sends
@@ -84,7 +85,7 @@ const register = (email: string) =>
     method: 'POST',
     url: '/api/auth/register',
     headers: withCsrf(csrf),
-    payload: { email, password: 'secret-pass-1' },
+    payload: withCaptcha({ email, password: 'secret-pass-1' }),
   });
 
 const forgot = (email: string) =>
@@ -92,7 +93,7 @@ const forgot = (email: string) =>
     method: 'POST',
     url: '/api/auth/password/forgot',
     headers: withCsrf(csrf),
-    payload: { email },
+    payload: withCaptcha({ email }),
   });
 
 const setStatus = (orderId: number, status: string) =>
@@ -149,8 +150,9 @@ describe('the pages of the frontend (WEB_PAGE_*)', () => {
     expect(changed.statusCode).toBeLessThan(300);
 
     const [verify, reset, passwordChanged] = mails;
-    expect(verify!.text).toMatch(new RegExp(`${SITE}/account/verify\\?token=[\\w-]+`));
-    expect(reset!.text).toMatch(new RegExp(`${SITE}/account/password\\?step=new&token=[\\w-]+`));
+    expect(verify!.text).toMatch(new RegExp(`${SITE}/account/verify#token=[\\w-]+`));
+    // the page keeps its own query, the token follows the # (no server sees it)
+    expect(reset!.text).toMatch(new RegExp(`${SITE}/account/password\\?step=new#token=[\\w-]+`));
     expect(passwordChanged!.text).toContain(`${SITE}/sign-in`);
   });
 
@@ -230,7 +232,7 @@ describe('the name of the shop (shopName)', () => {
 });
 
 describe('the logo of the mails (shopSettings.logoUrl)', () => {
-  it('goes inline with every mail, fetched from Cloudinary', async () => {
+  it('is shown in every mail by its address at Cloudinary, nothing attached', async () => {
     const data = pngImage(12, 8);
     const uploaded = await uploadImage({
       file: data,
@@ -243,19 +245,12 @@ describe('the logo of the mails (shopSettings.logoUrl)', () => {
 
     expect((await forgot(user.email)).statusCode).toBe(200);
 
-    expect(mails[0]!.attachments).toEqual([
-      expect.objectContaining({
-        type: 'image/png',
-        filename: 'logo.png',
-        disposition: 'inline',
-        content: data.toString('base64'),
-      }),
-    ]);
-    expect(mails[0]!.html).toContain('cid:cartlify-logo');
+    expect(mails[0]!.attachments).toEqual([]);
+    expect(mails[0]!.html).toContain(`<img src="${uploaded.urlBase}"`);
+    expect(mails[0]!.html).not.toContain('cid:');
   });
 
-  // the plan for this (notes/i18n-shop-steps.md, step 4): no logo, or Cloudinary did not answer,
-  // is not a reason to refuse the mail, only to send it without the logo
+  // no logo is not a reason to refuse the mail, only to send it without one
   it('sends the mail without the logo, and without its place in the html, when the shop has none', async () => {
     setShopSettings({ logoUrl: null, logoPublicId: null });
     const user = await newUser();
@@ -264,7 +259,7 @@ describe('the logo of the mails (shopSettings.logoUrl)', () => {
     expect((await forgot(user.email)).statusCode).toBe(200);
 
     expect(mails[0]!.attachments).toEqual([]);
-    expect(mails[0]!.html).not.toContain('cid:cartlify-logo');
+    expect(mails[0]!.html).not.toMatch(/<img\b/);
   });
 });
 

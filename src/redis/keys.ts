@@ -10,4 +10,9 @@ export const redisKeys = {
   // a chat the bot could not answer for a customer who may talk to an admin: the mark lets the
   // customer call an admin by the button; <prefix><thread id>
   chatAdminCallPrefix: 'chat:admin-call:',
+  // held by the one pass of the newsletters that is running (src/jobs/newsletterPass.job.ts)
+  newsletterPassLock: 'lock:newsletters:pass',
+  // the last time a pass of the newsletters stopped on a problem of the whole stream, until a pass
+  // goes through (src/routes/api/newsletters/services/helpers/sendingHalt.helper.ts)
+  newsletterSendingHalt: 'newsletters:sending-halt',
 } as const;

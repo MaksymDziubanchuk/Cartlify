@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { dictionaryText } from '../../../../../helpers/dictionary.js';
 import {
   buildAccountDeletedTemplate,
   type AccountDeletedTemplateArgs,
@@ -125,5 +126,66 @@ describe('buildAccountDeletedTemplate', () => {
     expect(es.text).toContain('pagado, se enviará');
     expect(uk.subject).toBe('Cartlify — Ваш обліковий запис видалено');
     expect(es.subject).toBe('Cartlify — Tu cuenta está eliminada');
+  });
+});
+
+// the sentence about the newsletter is in the mail only when a subscription was ended with the account
+describe('buildAccountDeletedTemplate and the newsletter', () => {
+  // the sentence of the dictionary of each language, English written out
+  const SENTENCES = [
+    ['en', 'Your newsletter subscription has been cancelled as well.'],
+    ['uk', dictionaryText('uk', 'accountDeleted.newsletterEnded')],
+    ['es', dictionaryText('es', 'accountDeleted.newsletterEnded')],
+  ] as const;
+
+  it('has a sentence of its own in each language', () => {
+    expect(new Set(SENTENCES.map(([, sentence]) => sentence)).size).toBe(SENTENCES.length);
+  });
+
+  it.each(SENTENCES)('says in %s that the subscription is cancelled too', (locale, sentence) => {
+    const { text, html } = mail({ locale, newsletterEnded: true });
+
+    expect(text).toContain(sentence);
+    expect(html).toContain(sentence);
+  });
+
+  it.each(SENTENCES)('says nothing of it in %s when no subscription ended', (locale, sentence) => {
+    for (const args of [{}, { newsletterEnded: false }]) {
+      const { text, html } = mail({ locale, ...args });
+
+      expect(text).not.toContain(sentence);
+      expect(html).not.toContain(sentence);
+    }
+  });
+
+  // it sits with the news that the account is gone, before the orders and the questions
+  it('puts the sentence after the words that the account is deleted and before the orders', () => {
+    const { text } = mail({
+      newsletterEnded: true,
+      deliveries: [{ orderId: 3, status: 'paid', total: 10, items: [lamp] }],
+    });
+
+    const body = text.indexOf('Your Cartlify account is deleted.');
+    const sentence = text.indexOf('Your newsletter subscription has been cancelled as well.');
+    const orders = text.indexOf('Order #3');
+    expect(body).toBeGreaterThanOrEqual(0);
+    expect(sentence).toBeGreaterThan(body);
+    expect(orders).toBeGreaterThan(sentence);
+  });
+
+  it('keeps the lists of orders as they were', () => {
+    const args = {
+      deliveries: [{ orderId: 3, status: 'paid' as const, total: 10, items: [lamp] }],
+      cancelled: [{ orderId: 9, total: 10, items: [lamp], payment: 'not_taken' as const }],
+    };
+
+    const plain = mail(args);
+    const withSentence = mail({ ...args, newsletterEnded: true });
+
+    for (const part of ['Order #3', 'Order #9', 'will still be delivered', 'cancelled']) {
+      expect(withSentence.text).toContain(part);
+      expect(withSentence.html).toContain(part);
+    }
+    expect(withSentence.subject).toBe(plain.subject);
   });
 });

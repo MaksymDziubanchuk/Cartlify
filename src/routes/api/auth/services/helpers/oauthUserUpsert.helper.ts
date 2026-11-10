@@ -18,6 +18,8 @@ export interface OAuthUserRow {
   avatarUrl: string | null;
   locale: string | null;
   phone: string | null;
+  canManageNewsletters: boolean;
+  deletedAt: Date | null;
   authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
   providerSub: string | null;
 }
@@ -63,6 +65,8 @@ export async function upsertOAuthUserByEmail(
       "avatarUrl",
       locale,
       phone,
+      "canManageNewsletters",
+      "deletedAt",
       "authProvider",
       "providerSub"
     from cartlify.users
@@ -109,6 +113,8 @@ export async function upsertOAuthUserByEmail(
         "avatarUrl",
         locale,
         phone,
+        "canManageNewsletters",
+        "deletedAt",
         "authProvider",
         "providerSub"
     `;
@@ -131,6 +137,8 @@ export async function upsertOAuthUserByEmail(
         "avatarUrl",
         locale,
         phone,
+        "canManageNewsletters",
+        "deletedAt",
         "authProvider",
         "providerSub"
       from cartlify.users
@@ -180,6 +188,8 @@ export async function upsertOAuthUserByEmail(
           "avatarUrl",
           locale,
           phone,
+          "canManageNewsletters",
+          "deletedAt",
           "authProvider",
           "providerSub"
       `;
@@ -229,6 +239,8 @@ export async function upsertOAuthUserByEmail(
       "avatarUrl",
       locale,
       phone,
+      "canManageNewsletters",
+      "deletedAt",
       "authProvider",
       "providerSub"
   `;

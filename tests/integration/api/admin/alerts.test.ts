@@ -97,6 +97,7 @@ const ADMIN_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'refunded_payments_not_sent',
   'failed_refunds',
   'returns_manual_check',
   'returns_proof_waiting',
@@ -292,7 +293,18 @@ describe('GET /api/admin/alerts', () => {
   it('gives root the actions of the admins too', async () => {
     const { alerts } = await alertsOf(root);
 
-    expect(alerts.map((alert) => alert.kind)).toEqual([...ADMIN_KINDS, 'admin_actions']);
+    // the kinds of the newsletters sit between them (alertsNewsletters.test.ts)
+    expect(alerts.map((alert) => alert.kind)).toEqual([
+      ...ADMIN_KINDS,
+      'newsletter_undelivered',
+      'newsletter_rejected',
+      'newsletter_complaints',
+      'newsletter_running_long',
+      'newsletter_starting_soon',
+      'newsletter_cancelled_by_limit',
+      'newsletter_sending_halted',
+      'admin_actions',
+    ]);
     expect(alerts.find((alert) => alert.kind === 'admin_actions')).toMatchObject({
       threshold: 24,
       list: { path: '/api/admin/audit-log', query: { actorRole: 'ADMIN' } },
@@ -886,6 +898,14 @@ describe('the subscriptions to the alerts', () => {
       low_stock: { value: 5, default: 5, min: 1, max: 100_000, unit: 'units', custom: false },
       expiring_batches: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
       refunded_payments: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
+      refunded_payments_not_sent: {
+        value: 3,
+        default: 3,
+        min: 1,
+        max: 365,
+        unit: 'days',
+        custom: false,
+      },
       worker_stalled: {
         value: 180,
         default: 180,

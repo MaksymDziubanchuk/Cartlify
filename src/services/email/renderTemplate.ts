@@ -4,7 +4,7 @@ import path from 'node:path';
 import { shopSettings } from '@config/shopSettings.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
 
-// the mail templates live as plain files next to their builders, read the way the logo is read
+// the mail templates live as plain files next to their builders, read once and kept
 const TEMPLATES_DIR = path.join(process.cwd(), 'src', 'services', 'email', 'templates');
 
 const cache = new Map<string, string>();
@@ -13,14 +13,16 @@ const cache = new Map<string, string>();
 export type TemplateValue = string | Record<string, string>[];
 export type TemplateValues = Record<string, TemplateValue>;
 
-// a section with its part, or a single mark
-const MARK = /\{\{([#^])(\w+)\}\}([\s\S]*?)\{\{\/\2\}\}|\{\{(\w+)\}\}/g;
+// a section with its part, a mark whose value is html already ({{{name}}}), or a single mark
+const MARK = /\{\{([#^])(\w+)\}\}([\s\S]*?)\{\{\/\2\}\}|\{\{\{(\w+)\}\}\}|\{\{(\w+)\}\}/g;
 
-// {{name}} becomes the value, html-escaped when html is true. {{#name}}...{{/name}} stays only
-// when the value is not empty and repeats for each item of a list, the marks inside it take the
-// fields of the item; {{^name}}...{{/name}} stays only when the value is empty. Sections of the
-// same name do not nest. The marks are filled in one pass, so a value is never read as a mark.
-// A mark without a value or a broken mark is a mistake in the template, it never reaches a mail
+// {{name}} becomes the value, html-escaped when html is true; {{{name}}} is the value as it is, for a
+// part the code has built as html and escaped itself (a block of a newsletter), never for a value a
+// person typed. {{#name}}...{{/name}} stays only when the value is not empty and repeats for each
+// item of a list, the marks inside it take the fields of the item; {{^name}}...{{/name}} stays only
+// when the value is empty. Sections of the same name do not nest. The marks are filled in one pass,
+// so a value is never read as a mark. A mark without a value or a broken mark is a mistake in the
+// template, it never reaches a mail
 export function renderSource(
   source: string,
   values: TemplateValues,
@@ -47,12 +49,20 @@ function render(
 
   return source.replace(
     MARK,
-    (_m, kind: string | undefined, key: string | undefined, part: string, mark: string): string => {
+    (
+      _m,
+      kind: string | undefined,
+      key: string | undefined,
+      part: string,
+      raw: string | undefined,
+      mark: string,
+    ): string => {
       if (!kind || !key) {
-        const value = valueOf(mark);
+        const name = raw ?? mark;
+        const value = valueOf(name);
         if (typeof value !== 'string')
-          throw new Error(`EMAIL_TEMPLATE_LIST_AS_TEXT: ${mark}${where}`);
-        return opts.html ? escapeHtml(value) : value;
+          throw new Error(`EMAIL_TEMPLATE_LIST_AS_TEXT: ${name}${where}`);
+        return opts.html && raw === undefined ? escapeHtml(value) : value;
       }
 
       const value = valueOf(key);

@@ -1,0 +1,15 @@
+{{body}}
+
+{{button}}:
+{{confirmUrl}}
+
+{{validity}}
+
+{{ignoreEmail}}
+
+{{declineButton}}:
+{{declineUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

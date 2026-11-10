@@ -3,10 +3,10 @@ import { setUserContext } from '@db/dbContext.service.js';
 
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
-import { assertEmail } from '@helpers/validateEmail.js';
 
-import { avatarOf } from '@utils/avatar.util.js';
 import { BadRequestError, InternalError, isAppError } from '@utils/errors.js';
+
+import { adminItemOf, adminItemSelect } from './helpers/adminItem.helper.js';
 
 import type { FindAdminsDto, GetAdminsResponseDto } from 'types/dto/root.dto.js';
 
@@ -75,19 +75,7 @@ export async function findAdmins(dto: FindAdminsDto): Promise<GetAdminsResponseD
         where,
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         take: limit + 1,
-        select: {
-          id: true,
-          email: true,
-          role: true,
-          isVerified: true,
-          createdAt: true,
-          updatedAt: true,
-          name: true,
-          avatarUrl: true,
-          locale: true,
-          phone: true,
-          deletedAt: true,
-        },
+        select: adminItemSelect,
       });
 
       // total count for the same base filter (without cursor window)
@@ -111,24 +99,7 @@ export async function findAdmins(dto: FindAdminsDto): Promise<GetAdminsResponseD
           : null;
 
       // map db rows to response dto
-      const items = pageRows.map((u) => {
-        assertEmail(u.email);
-
-        return {
-          id: u.id as any,
-          email: u.email,
-          role: u.role,
-          isVerified: u.isVerified,
-          createdAt: u.createdAt,
-          updatedAt: u.updatedAt,
-          ...(u.name ? { name: u.name } : {}),
-          ...avatarOf({ ...u, deleted: u.deletedAt !== null }),
-          ...(u.locale ? { locale: u.locale } : {}),
-          ...(u.phone ? { phone: u.phone } : {}),
-          // a deleted admin keeps the role: the page tells it from a working one
-          deletedAt: u.deletedAt,
-        };
-      });
+      const items = pageRows.map(adminItemOf);
 
       return {
         items,

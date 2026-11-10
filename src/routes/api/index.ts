@@ -23,6 +23,7 @@ import { chatRouter } from '@routes/api/chat/index.js';
 import { legalRouter } from '@routes/api/legal/index.js';
 import { deliveryRouter } from '@routes/api/delivery/index.js';
 import { shopSettingsRouter } from '@routes/api/shopSettings/index.js';
+import { newslettersRouter } from '@routes/api/newsletters/index.js';
 
 export async function registerRoutes(app: FastifyInstance) {
   app.register(getHealthRouter, { prefix: '/health' });
@@ -48,4 +49,5 @@ export async function registerRoutes(app: FastifyInstance) {
   app.register(legalRouter, { prefix: 'api/legal' });
   app.register(deliveryRouter, { prefix: 'api/delivery' });
   app.register(shopSettingsRouter, { prefix: 'api/shop-settings' });
+  app.register(newslettersRouter, { prefix: 'api/newsletters' });
 }

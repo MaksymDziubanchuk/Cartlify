@@ -2,6 +2,9 @@ import { describe, expect, it } from '@jest/globals';
 
 import { buildPasswordChangedTemplate } from '@services/email/templates/auth/passwordChanged.template.js';
 
+// the logo of the shop is shown by its address at Cloudinary: the mail carries no attachment
+const LOGO_URL = 'https://res.cloudinary.com/cartlify-test/image/upload/v1/test/shop/logo/a.png';
+
 const args = {
   loginUrl: 'https://shop.test/web/login',
   changedAt: new Date('2026-10-23T09:05:00.000Z'),
@@ -39,7 +42,7 @@ describe('buildPasswordChangedTemplate', () => {
   });
 
   it('keeps the plain text version free of html', () => {
-    const { text } = buildPasswordChangedTemplate({ ...args, userName: 'Anna', logoCid: 'logo' });
+    const { text } = buildPasswordChangedTemplate({ ...args, userName: 'Anna', logoUrl: LOGO_URL });
 
     expect(text).not.toMatch(/<[a-z!/]/i);
   });

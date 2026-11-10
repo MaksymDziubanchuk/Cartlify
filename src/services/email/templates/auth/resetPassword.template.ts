@@ -7,7 +7,7 @@ export type ResetPasswordTemplateArgs = {
   resetUrl: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   expiresInText?: string;
   locale?: string;
 };
@@ -28,7 +28,7 @@ export function buildResetPasswordTemplate(args: ResetPasswordTemplateArgs): {
     appName,
     resetUrl,
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     expiresInText: args.expiresInText?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('resetPassword.title', locale, { appName }),

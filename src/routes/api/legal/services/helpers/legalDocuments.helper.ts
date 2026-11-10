@@ -49,12 +49,14 @@ export const legalDocumentSelect = {
   retentionReturnAddressesDays: true,
   retentionReturnPersonalDays: true,
   retentionRecipientDays: true,
+  retentionNewsletterConsentDays: true,
+  retentionNewsletterRecipientsDays: true,
 } as const;
 
 type LegalDocumentRow = Prisma.LegalDocumentGetPayload<{ select: typeof legalDocumentSelect }>;
 
 // the database keeps the fields of a kind together (db/06), so a contract has all three of its
-// fields and a privacy policy all six of its terms, or the row is not of that kind
+// fields and a privacy policy all eight of its terms, or the row is not of that kind
 const contractOf = (row: LegalDocumentRow): ContractTermsDto | null =>
   row.kind === 'contract' &&
   row.withdrawalDays !== null &&
@@ -74,7 +76,9 @@ const retentionOf = (row: LegalDocumentRow): PrivacyRetentionDto | null =>
   row.retentionDeletedChatsDays !== null &&
   row.retentionReturnAddressesDays !== null &&
   row.retentionReturnPersonalDays !== null &&
-  row.retentionRecipientDays !== null
+  row.retentionRecipientDays !== null &&
+  row.retentionNewsletterConsentDays !== null &&
+  row.retentionNewsletterRecipientsDays !== null
     ? {
         loginAddressesDays: row.retentionLoginAddressesDays,
         guestDataDays: row.retentionGuestDataDays,
@@ -82,6 +86,8 @@ const retentionOf = (row: LegalDocumentRow): PrivacyRetentionDto | null =>
         returnAddressesDays: row.retentionReturnAddressesDays,
         returnPersonalDays: row.retentionReturnPersonalDays,
         recipientDays: row.retentionRecipientDays,
+        newsletterConsentDays: row.retentionNewsletterConsentDays,
+        newsletterRecipientsDays: row.retentionNewsletterRecipientsDays,
       }
     : null;
 

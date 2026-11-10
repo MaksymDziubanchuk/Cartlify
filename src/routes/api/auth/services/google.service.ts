@@ -12,6 +12,7 @@ import {
 import env from '@config/env.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 
 import {
   buildGoogleAuthUrl,
@@ -25,6 +26,8 @@ import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
 import { acceptedOfState, takeConsentAtOAuthLogin } from './helpers/oauthConsent.helper.js';
+import { newsletterOfState } from './helpers/oauthNewsletter.helper.js';
+import { subscribeAtRegistration } from '@routes/api/newsletters/services/helpers/registrationSubscription.helper.js';
 import {
   copyProviderAvatar,
   type OAuthAvatarRole,
@@ -45,11 +48,12 @@ export async function googleStart({
   guestId,
   role,
   acceptedDocumentIds = [],
+  newsletter = false,
 }: GoogleStartDto): Promise<GoogleStartResponseDto> {
   if (role !== 'GUEST') throw new AlreadyAuthenticatedError({ flow: 'GOOGLE_START' });
   if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
   // build oauth redirect url
-  const url = buildGoogleAuthUrl(String(guestId), acceptedDocumentIds);
+  const url = buildGoogleAuthUrl(String(guestId), acceptedDocumentIds, newsletter);
   return { url };
 }
 
@@ -74,7 +78,9 @@ export async function googleCallback({
 
   // verify oauth state payload and that this guest started the login,
   // before the code is used: a code from someone else's login is never redeemed here
-  const accepted = acceptedOfState(verifyGoogleOAuthState(state, String(guestId)));
+  const verified = verifyGoogleOAuthState(state, String(guestId));
+  const accepted = acceptedOfState(verified);
+  const subscribe = newsletterOfState(verified);
 
   // exchange code for google tokens
   const tokens = await exchangeGoogleCodeForTokens(code);
@@ -162,6 +168,7 @@ export async function googleCallback({
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
         ...avatarOf(u),
+        canManageNewsletters: canManageNewslettersOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
@@ -172,6 +179,15 @@ export async function googleCallback({
     if (err instanceof AppError) throw err;
 
     throw new InternalError({ reason: 'GOOGLE_SERVICE_UNEXPECTED' }, err);
+  }
+
+  // the box of the newsletter the page ticked at the start subscribes a new account, never an
+  // account the shop had; whatever comes of it the login goes on
+  if (login.created && subscribe) {
+    await subscribeAtRegistration(
+      { userId: login.userId, ip: ip ?? null, userAgent: userAgent ?? null },
+      log,
+    );
   }
 
   // a new account takes the picture of the provider; the login goes on whatever comes of it

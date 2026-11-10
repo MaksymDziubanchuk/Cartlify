@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { getMe, logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { drawnAvatarOf } from '../../../helpers/avatar.js';
+import { giveNewsletterRight } from '../../../helpers/newsletterManager.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import { asAdmin } from '../../../helpers/db.js';
@@ -91,6 +92,36 @@ describe('POST /api/auth/login', () => {
     // the session lives as long as the defaults: 20 minutes and a day
     expect(cookies.accessToken!.maxAge).toBe(1200);
     expect(cookies.refreshToken!.maxAge).toBe(86400);
+  });
+
+  // the right to run the newsletters comes with the role, so the page knows what to show before
+  // it asks for the profile; the page keeps it fresh from GET /api/users/me
+  describe('the right to run the newsletters in the profile', () => {
+    const loginRight = async (user: Awaited<ReturnType<typeof newUser>>) => {
+      const res = await logIn(app, csrf, { email: user.email, password: user.password });
+      expect(res.statusCode).toBe(200);
+      return res.json().canManageNewsletters as unknown;
+    };
+
+    it('is false for a user', async () => {
+      expect(await loginRight(await newUser())).toBe(false);
+    });
+
+    it('is false for an admin root did not allow', async () => {
+      expect(await loginRight(await newUser({ role: 'ADMIN' }))).toBe(false);
+    });
+
+    it('is true for an admin root allowed', async () => {
+      const root = await newUser({ role: 'ROOT' });
+      const admin = await newUser({ role: 'ADMIN' });
+      await giveNewsletterRight(root.id, admin.id);
+
+      expect(await loginRight(admin)).toBe(true);
+    });
+
+    it('is true for root', async () => {
+      expect(await loginRight(await newUser({ role: 'ROOT' }))).toBe(true);
+    });
   });
 
   it('opens pages for signed-in users with the cookies it sets', async () => {

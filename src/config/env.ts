@@ -1,4 +1,8 @@
+import { createPublicKey } from 'node:crypto';
+
 import * as dotenv from 'dotenv';
+
+import { isEmail } from '@helpers/validateEmail.js';
 
 declare global {
   namespace NodeJS {
@@ -9,6 +13,7 @@ declare global {
       HOST?: string;
 
       WEB_ORIGIN: string;
+      API_ORIGIN: string;
       SITE_DOMAIN: string;
 
       DATABASE_URL: string;
@@ -35,12 +40,17 @@ declare global {
       LIMIT_LOGIN_PER_ADDRESS?: string;
       LIMIT_LOGIN_PER_EMAIL?: string;
       LIMIT_REGISTER_PER_ADDRESS?: string;
+      LIMIT_REGISTER_PER_EMAIL?: string;
       LIMIT_MAIL_PER_ADDRESS?: string;
       LIMIT_MAIL_PER_EMAIL?: string;
       LIMIT_CHECKOUT_PER_USER?: string;
       LIMIT_PASSWORD_CHANGE_PER_USER?: string;
       LIMIT_EXPORT_PER_USER?: string;
       LIMIT_REVIEW_PER_USER?: string;
+      LIMIT_NEWSLETTER_TRANSLATE_PER_USER?: string;
+      LIMIT_NEWSLETTER_TEST_PER_USER?: string;
+      LIMIT_NEWSLETTER_LINK_PER_ADDRESS?: string;
+      LIMIT_NEWSLETTER_UNSUBSCRIBE_PER_ADDRESS?: string;
       LIMIT_CHAT_CALL_ADMIN_PER_USER?: string;
       LIMIT_WITHDRAWAL_PER_USER?: string;
       LIMIT_WITHDRAWAL_FORM_PER_ADDRESS?: string;
@@ -69,6 +79,11 @@ declare global {
       WEB_PAGE_ORDER?: string;
       WEB_PAGE_WITHDRAWAL?: string;
       WEB_PAGE_PRODUCT_REVIEWS?: string;
+      WEB_PAGE_PRODUCT?: string;
+      WEB_PAGE_CATEGORY?: string;
+      WEB_PAGE_NEWSLETTER_CONFIRM?: string;
+      WEB_PAGE_NEWSLETTER_DECLINE?: string;
+      WEB_PAGE_NEWSLETTER_MANAGE?: string;
 
       CLOUDINARY_CLOUD_NAME: string;
       CLOUDINARY_API_KEY: string;
@@ -87,6 +102,17 @@ declare global {
       SENDGRID_API_KEY: string;
 
       EMAIL_FROM: string;
+
+      SENDGRID_NEWSLETTER_API_KEY: string;
+      SENDGRID_NEWSLETTER_WEBHOOK_KEY: string;
+      NEWSLETTER_EMAIL_FROM: string;
+      NEWSLETTER_BLOCK_SECRET: string;
+      NEWSLETTER_LINK_SECRET: string;
+      NEWSLETTER_DAILY_LIMIT: string;
+      NEWSLETTER_RETRY_MINUTES?: string;
+      NEWSLETTER_MAX_ATTEMPTS?: string;
+
+      TURNSTILE_SECRET_KEY: string;
 
       GOOGLE_CLIENT_ID: string;
       GOOGLE_CLIENT_SECRET: string;
@@ -162,6 +188,123 @@ function positiveInt(name: string, fallback: number, max?: number): number {
   }
 
   return value;
+}
+
+// fail fast on a setting of the newsletters or of the captcha that is missing; the tests take theirs
+// from tests/setup/isolateEnv.ts and may go without. A value that is given is read by the same rules
+// in every mode, so a typo in the setup of the tests shows at once. The messages name the setting and
+// the rule, never the value: the start error lands in the hosting logs
+function newsletterSetting(name: string, nodeEnv: string): string {
+  return nodeEnv === 'test' ? process.env[name]?.trim() || '' : required(name).trim();
+}
+
+// SendGrid signs the events of its Event Webhook with ECDSA over the curve P-256 and shows the public
+// half in its settings as the base64 of the DER SPKI. A key that is anything else would refuse every
+// event, and the bounces and the complaints would never reach the subscriptions
+function newsletterWebhookKey(nodeEnv: string): string {
+  const name = 'SENDGRID_NEWSLETTER_WEBHOOK_KEY';
+  const value = newsletterSetting(name, nodeEnv);
+  if (!value) return value;
+
+  let isP256 = false;
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    try {
+      const key = createPublicKey({
+        key: Buffer.from(value, 'base64'),
+        format: 'der',
+        type: 'spki',
+      });
+      isP256 =
+        key.asymmetricKeyType === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1';
+    } catch {
+      isP256 = false;
+    }
+  }
+
+  if (!isP256) {
+    throw new Error(
+      `Invalid env variable: ${name} must be the base64 of a DER public key of an EC P-256 curve`,
+    );
+  }
+  return value;
+}
+
+// the sender of the newsletters is the address of the authenticated domain, a bare address like
+// EMAIL_FROM (the name of the shop is added where the mail is built)
+function newsletterSender(nodeEnv: string): string {
+  const name = 'NEWSLETTER_EMAIL_FROM';
+  const value = newsletterSetting(name, nodeEnv);
+  if (value && !isEmail(value)) {
+    throw new Error(`Invalid env variable: ${name} must be an email address`);
+  }
+  return value;
+}
+
+// The two secrets sign what the person holds in a mail or on a list: the HMAC of a blocked address
+// (NEWSLETTER_BLOCK_SECRET) and the token of the link "Manage the subscription"
+// (NEWSLETTER_LINK_SECRET). Random bytes in base64url (or in base64, what `openssl rand -base64`
+// gives), 32 or more: a short one could be found by trying it offline against a link or an entry
+const NEWSLETTER_SECRET_MIN_BYTES = 32;
+function newsletterSecret(name: string, nodeEnv: string): string {
+  const value = newsletterSetting(name, nodeEnv);
+  if (!value) return value;
+
+  const bytes = /^[A-Za-z0-9+/_-]+={0,2}$/.test(value) ? Buffer.from(value, 'base64').length : 0;
+  if (bytes < NEWSLETTER_SECRET_MIN_BYTES) {
+    throw new Error(
+      `Invalid env variable: ${name} must be base64 or base64url of at least ${NEWSLETTER_SECRET_MIN_BYTES} bytes`,
+    );
+  }
+  return value;
+}
+
+// the settings of the newsletters and of the captcha, in the order of the errors a start gives
+function newsletterSettings(nodeEnv: string) {
+  const SENDGRID_NEWSLETTER_API_KEY = newsletterSetting('SENDGRID_NEWSLETTER_API_KEY', nodeEnv);
+  const SENDGRID_NEWSLETTER_WEBHOOK_KEY = newsletterWebhookKey(nodeEnv);
+  const NEWSLETTER_EMAIL_FROM = newsletterSender(nodeEnv);
+  const NEWSLETTER_BLOCK_SECRET = newsletterSecret('NEWSLETTER_BLOCK_SECRET', nodeEnv);
+  const NEWSLETTER_LINK_SECRET = newsletterSecret('NEWSLETTER_LINK_SECRET', nodeEnv);
+
+  // a link would open an entry of the blocklist and the other way round; the same bytes in another
+  // spelling are the same secret
+  if (
+    NEWSLETTER_BLOCK_SECRET &&
+    NEWSLETTER_LINK_SECRET &&
+    Buffer.from(NEWSLETTER_BLOCK_SECRET, 'base64').equals(
+      Buffer.from(NEWSLETTER_LINK_SECRET, 'base64'),
+    )
+  ) {
+    throw new Error(
+      'Invalid env variable: NEWSLETTER_BLOCK_SECRET and NEWSLETTER_LINK_SECRET must differ',
+    );
+  }
+
+  // the letters of the newsletters one day, set under the plan of SendGrid (its limit is shared with
+  // the mails of the orders); the tests send no more than a hundred
+  if (nodeEnv !== 'test') required('NEWSLETTER_DAILY_LIMIT');
+  const NEWSLETTER_DAILY_LIMIT = positiveInt('NEWSLETTER_DAILY_LIMIT', 100);
+
+  // how long a mail the provider failed on waits before it is tried again (it is also how long the
+  // pass that took it keeps it), and how many times a mail is tried before it is given up. The bounds
+  // are those the database keeps in newsletter_claim_recipients
+  const NEWSLETTER_RETRY_MINUTES = positiveInt('NEWSLETTER_RETRY_MINUTES', 10, 1440);
+  const NEWSLETTER_MAX_ATTEMPTS = positiveInt('NEWSLETTER_MAX_ATTEMPTS', 5, 20);
+
+  return {
+    SENDGRID_NEWSLETTER_API_KEY,
+    SENDGRID_NEWSLETTER_WEBHOOK_KEY,
+    NEWSLETTER_EMAIL_FROM,
+    NEWSLETTER_BLOCK_SECRET,
+    NEWSLETTER_LINK_SECRET,
+    NEWSLETTER_DAILY_LIMIT,
+    NEWSLETTER_RETRY_MINUTES,
+    NEWSLETTER_MAX_ATTEMPTS,
+    // the secret of the widget of Cloudflare Turnstile, which the captcha of the forms is checked
+    // with (src/services/captcha/turnstile.service.ts). TURNSTILE_SECRET_KEY_DEV_WIDGET, the spare
+    // secret of dev, is kept in the environment for the person and never read
+    TURNSTILE_SECRET_KEY: newsletterSetting('TURNSTILE_SECRET_KEY', nodeEnv),
+  };
 }
 
 const NODE_ENV_MODES = ['development', 'test', 'production'] as const;
@@ -286,6 +429,19 @@ function webPage(name: string, fallback: string, takesId: boolean): string {
   return raw;
 }
 
+// a page whose link carries a token after the # (webPageUrl puts the fragment of the link there): a
+// fragment of the page itself would be lost, so the start stops instead of dropping it in silence
+function tokenPage(name: string, fallback: string): string {
+  const page = webPage(name, fallback, false);
+  if (page.includes('#')) {
+    throw new Error(
+      `Invalid env variable: ${name} must not contain a # (the token of the link follows it)`,
+    );
+  }
+
+  return page;
+}
+
 // The bounds above which the limits of the catalog and of its files stop the start (positiveInt): a
 // shop has no use for more, and a value with a zero too many would let one request write thousands of
 // rows, hold a transaction for minutes or fill the memory with a file. They are well above the
@@ -316,6 +472,11 @@ export default {
   HOST: process.env.HOST ? process.env.HOST : '0.0.0.0',
   DATABASE_URL: process.env.DATABASE_URL || '',
   WEB_ORIGIN: process.env.WEB_ORIGIN || '',
+  // the address the API is reached on from outside; the one-click unsubscribe of a newsletter mail
+  // (the header List-Unsubscribe) names it, a mail client posts there. Required in development as in
+  // production (the dev server is a copy of production), only the tests may go without; the form
+  // is checked in helpers/apiOrigin.ts
+  API_ORIGIN: NODE_ENV === 'test' ? process.env.API_ORIGIN || '' : required('API_ORIGIN'),
   // domain the site lives on, the address of a deleted account is built on it
   SITE_DOMAIN: process.env.SITE_DOMAIN || '',
 
@@ -325,10 +486,10 @@ export default {
   WEB_PAGE_OAUTH_CALLBACK: webPage('WEB_PAGE_OAUTH_CALLBACK', '/auth/callback', false),
   // the mail after a change of the password links to the login
   WEB_PAGE_LOGIN: webPage('WEB_PAGE_LOGIN', '/web/login', false),
-  // the link of the verification of an email, with ?token=
-  WEB_PAGE_VERIFY_EMAIL: webPage('WEB_PAGE_VERIFY_EMAIL', '/web/login', false),
-  // the link of a password reset, with ?token=
-  WEB_PAGE_PASSWORD_RESET: webPage('WEB_PAGE_PASSWORD_RESET', '/web/auth/reset', false),
+  // the link of the verification of an email, with #token= (the page posts it to the API)
+  WEB_PAGE_VERIFY_EMAIL: tokenPage('WEB_PAGE_VERIFY_EMAIL', '/web/login'),
+  // the link of a password reset, with #token= (the page posts it with the new password to the API)
+  WEB_PAGE_PASSWORD_RESET: tokenPage('WEB_PAGE_PASSWORD_RESET', '/web/auth/reset'),
   // the stripe payment page sends the buyer back, with ?session_id= or ?orderId=
   WEB_PAGE_CHECKOUT_SUCCESS: webPage('WEB_PAGE_CHECKOUT_SUCCESS', '/checkout/success', false),
   WEB_PAGE_CHECKOUT_CANCEL: webPage('WEB_PAGE_CHECKOUT_CANCEL', '/checkout/cancel', false),
@@ -338,6 +499,15 @@ export default {
   WEB_PAGE_WITHDRAWAL: webPage('WEB_PAGE_WITHDRAWAL', '/orders/{id}/withdrawal', true),
   // the mail of a delivered order asks to rate each product there
   WEB_PAGE_PRODUCT_REVIEWS: webPage('WEB_PAGE_PRODUCT_REVIEWS', '/products/{id}#reviews', true),
+  // the cards of a newsletter mail link to the page of a product and of a category by {id}
+  WEB_PAGE_PRODUCT: webPage('WEB_PAGE_PRODUCT', '/products/{id}', true),
+  WEB_PAGE_CATEGORY: webPage('WEB_PAGE_CATEGORY', '/categories/{id}', true),
+  // the newsletter mails link to these pages, each with #token=: the confirmation of a subscription,
+  // "this is not me" of the same mail, and the management of a subscription (the unsubscribe button
+  // of a mail leads to the last one, with #unsubscribe=)
+  WEB_PAGE_NEWSLETTER_CONFIRM: tokenPage('WEB_PAGE_NEWSLETTER_CONFIRM', '/newsletter/confirm'),
+  WEB_PAGE_NEWSLETTER_DECLINE: tokenPage('WEB_PAGE_NEWSLETTER_DECLINE', '/newsletter/decline'),
+  WEB_PAGE_NEWSLETTER_MANAGE: tokenPage('WEB_PAGE_NEWSLETTER_MANAGE', '/newsletter/manage'),
 
   // access token config
   JWT_ACCESS_SECRET: required('JWT_ACCESS_SECRET'),
@@ -372,18 +542,36 @@ export default {
 
   // the most requests of each limit of a route in its window (src/plugins/requestLimits.ts): the
   // logins from one address and of one email in 10 minutes, the registrations from one address in
-  // an hour, the mails of a reset or a verification from one address in 15 minutes and to one
+  // an hour and of one email in 3 minutes, the mails of a reset or a verification from one address in 15 minutes and to one
   // address in 3 minutes, the payment pages of a user in a minute, the changes of the password of
   // a user in 15 minutes, the exports of the data of a user and the reviews of a user in an hour
   LIMIT_LOGIN_PER_ADDRESS: positiveInt('LIMIT_LOGIN_PER_ADDRESS', 30),
   LIMIT_LOGIN_PER_EMAIL: positiveInt('LIMIT_LOGIN_PER_EMAIL', 10),
   LIMIT_REGISTER_PER_ADDRESS: positiveInt('LIMIT_REGISTER_PER_ADDRESS', 10),
+  LIMIT_REGISTER_PER_EMAIL: positiveInt('LIMIT_REGISTER_PER_EMAIL', 1),
   LIMIT_MAIL_PER_ADDRESS: positiveInt('LIMIT_MAIL_PER_ADDRESS', 10),
   LIMIT_MAIL_PER_EMAIL: positiveInt('LIMIT_MAIL_PER_EMAIL', 1),
   LIMIT_CHECKOUT_PER_USER: positiveInt('LIMIT_CHECKOUT_PER_USER', 10),
   LIMIT_PASSWORD_CHANGE_PER_USER: positiveInt('LIMIT_PASSWORD_CHANGE_PER_USER', 10),
   LIMIT_EXPORT_PER_USER: positiveInt('LIMIT_EXPORT_PER_USER', 1),
   LIMIT_REVIEW_PER_USER: positiveInt('LIMIT_REVIEW_PER_USER', 30),
+  // the translations of the texts of a campaign a manager of the newsletters asks the model for in an
+  // hour; each request is paid for at the provider
+  LIMIT_NEWSLETTER_TRANSLATE_PER_USER: positiveInt('LIMIT_NEWSLETTER_TRANSLATE_PER_USER', 20),
+  // the test mails of a campaign a manager of the newsletters sends in an hour; each is a real mail
+  // of the stream of the newsletters, to the address of an admin
+  LIMIT_NEWSLETTER_TEST_PER_USER: positiveInt('LIMIT_NEWSLETTER_TEST_PER_USER', 30),
+  // the requests from one address to the pages behind the links of the newsletter mails (confirm,
+  // "this is not me", the management of a subscription) in 10 minutes; a person uses a few, so this
+  // only keeps a script from loading the database
+  LIMIT_NEWSLETTER_LINK_PER_ADDRESS: positiveInt('LIMIT_NEWSLETTER_LINK_PER_ADDRESS', 60),
+  // the requests from one address to the unsubscribe button of the mails (the one-click POST of a
+  // mail client and the GET of its link) in 10 minutes, a count of its own: a mailbox provider
+  // unsubscribes many readers from the few addresses of its servers (RFC 8058)
+  LIMIT_NEWSLETTER_UNSUBSCRIBE_PER_ADDRESS: positiveInt(
+    'LIMIT_NEWSLETTER_UNSUBSCRIBE_PER_ADDRESS',
+    1000,
+  ),
   LIMIT_CHAT_CALL_ADMIN_PER_USER: positiveInt('LIMIT_CHAT_CALL_ADMIN_PER_USER', 10),
   LIMIT_WITHDRAWAL_PER_USER: positiveInt('LIMIT_WITHDRAWAL_PER_USER', 10),
   LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: positiveInt('LIMIT_WITHDRAWAL_FORM_PER_ADDRESS', 20),
@@ -496,4 +684,8 @@ export default {
   // signs the number of an order into the code of the links of withdrawal in the mails; the start
   // stops without it in development as in production (withdrawalCodeSecret)
   WITHDRAWAL_CODE_SECRET: withdrawalCodeSecret(NODE_ENV),
+
+  // the newsletters (a SendGrid stream of their own, the blocklist, the links of the mails) and the
+  // captcha of the forms; required outside the tests, in development as in production
+  ...newsletterSettings(NODE_ENV),
 };

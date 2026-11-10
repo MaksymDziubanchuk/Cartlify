@@ -33,6 +33,7 @@ import env from '@config/env.js';
 import { placeOrder, shippingData } from '../../../helpers/orders.js';
 import { openPaymentPage, orderStateOf, payPage } from '../../../helpers/payments.js';
 import { closeOpenSessions, deliver } from '../../../helpers/stripe.js';
+import { withCaptcha } from '../../../helpers/turnstile.js';
 
 // the terms, the contract and the privacy policy of the shop. Root publishes a version of each (POST
 // /api/root/legal-documents), everybody reads the versions in force; a customer accepts the terms
@@ -86,6 +87,8 @@ type Retention = {
   returnAddressesDays: number;
   returnPersonalDays: number;
   recipientDays: number;
+  newsletterConsentDays: number;
+  newsletterRecipientsDays: number;
 };
 
 type LegalDocument = {
@@ -113,6 +116,8 @@ const RETENTION: Retention = {
   returnAddressesDays: 1095,
   returnPersonalDays: 3650,
   recipientDays: 3650,
+  newsletterConsentDays: 3650,
+  newsletterRecipientsDays: 365,
 };
 
 // the fields a kind carries beside its text
@@ -172,7 +177,12 @@ const acceptAs = (user: TestUser, documentIds: unknown) =>
   });
 
 const register = (payload: Record<string, unknown>) =>
-  app.inject({ method: 'POST', url: '/api/auth/register', headers: withCsrf(csrf), payload });
+  app.inject({
+    method: 'POST',
+    url: '/api/auth/register',
+    headers: withCsrf(csrf),
+    payload: withCaptcha(payload),
+  });
 
 const consentsOf = (userId: number) =>
   asAdmin((tx) =>
@@ -406,6 +416,37 @@ describe('the consent at the registration', () => {
     });
   });
 
+  // the count of an email is spent by a registration that succeeds: the form refused for the consent
+  // is corrected and sent again at once, from the limits as the server has them
+  it('lets the corrected form through at once after a refusal for the consent', async () => {
+    const before = env.REQUEST_LIMITS_SCALE;
+    env.REQUEST_LIMITS_SCALE = 1;
+
+    try {
+      const email = uniqueEmail('legal-again');
+      const send = (extra: Record<string, unknown>) =>
+        app.inject({
+          method: 'POST',
+          url: '/api/auth/register',
+          headers: { ...withCsrf(csrf), 'x-forwarded-for': '198.51.100.77' },
+          payload: withCaptcha({ email, password: 'secret-password-1', ...extra }),
+        });
+
+      const refused = await send({});
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json()).toMatchObject({ errorCode: 'LEGAL_ACCEPTANCE_REQUIRED' });
+
+      const corrected = await send({ acceptedDocumentIds: await currentIds() });
+      expect(corrected.statusCode).toBe(201);
+      userIds.push(corrected.json().id);
+
+      // the registration that succeeded is what is counted
+      expect((await send({ acceptedDocumentIds: await currentIds() })).statusCode).toBe(429);
+    } finally {
+      env.REQUEST_LIMITS_SCALE = before;
+    }
+  });
+
   it('refuses a version that is no longer in force and names the ones in force', async () => {
     const old = await published('contract');
     await published('contract');
@@ -624,8 +665,8 @@ describe('the mail of the payment', () => {
     expect(own[0]!.text).toContain(
       'The terms and the contract you accepted are attached to this mail.',
     );
-    // the files of the mail; the logo goes inline, as in every mail of the shop
-    expect(own[0]!.attachments.filter((file) => file.disposition === 'attachment')).toEqual([
+    // the files of the mail, and only they: the logo is shown by its address, not attached
+    expect(own[0]!.attachments).toEqual([
       expect.objectContaining({
         filename: 'terms.txt',
         type: 'text/plain',
@@ -1203,15 +1244,88 @@ describe('POST /api/root/legal-documents: the fields of a kind', () => {
       kind: 'privacy',
       title: 'The policy',
       content: 'P',
-      retention: { ...RETENTION, recipientDays: 365 },
+      retention: { ...RETENTION, recipientDays: 365, newsletterConsentDays: 730 },
     });
 
     expect(res.statusCode).toBe(201);
     expect(res.json()).toMatchObject({
       kind: 'privacy',
       contract: null,
-      retention: { ...RETENTION, recipientDays: 365 },
+      retention: { ...RETENTION, recipientDays: 365, newsletterConsentDays: 730 },
     });
+  });
+
+  // eight different numbers: a term read from, or written to, the column of another one would show
+  it('keeps each term of a privacy policy under its own name, in the answer, by the id, among the versions in force and in the database', async () => {
+    const retention: Retention = {
+      loginAddressesDays: 11,
+      guestDataDays: 22,
+      deletedChatsDays: 33,
+      returnAddressesDays: 44,
+      returnPersonalDays: 55,
+      recipientDays: 66,
+      newsletterConsentDays: 77,
+      newsletterRecipientsDays: 88,
+    };
+
+    const res = await publish(root, {
+      kind: 'privacy',
+      title: 'The policy',
+      content: 'P',
+      retention,
+    });
+
+    expect(res.statusCode).toBe(201);
+    const { id } = res.json() as LegalDocument;
+    expect((res.json() as LegalDocument).retention).toEqual(retention);
+
+    const byId = await app.inject({ method: 'GET', url: `/api/legal/documents/${id}` });
+    expect(byId.statusCode).toBe(200);
+    expect((byId.json() as LegalDocument).retention).toEqual(retention);
+
+    const policyInForce = (await allCurrentDocuments()).find((doc) => doc.kind === 'privacy');
+    expect(policyInForce).toMatchObject({ id, retention });
+
+    const row = await asAdmin((tx) =>
+      tx.legalDocument.findUnique({
+        where: { id },
+        select: {
+          retentionLoginAddressesDays: true,
+          retentionGuestDataDays: true,
+          retentionDeletedChatsDays: true,
+          retentionReturnAddressesDays: true,
+          retentionReturnPersonalDays: true,
+          retentionRecipientDays: true,
+          retentionNewsletterConsentDays: true,
+          retentionNewsletterRecipientsDays: true,
+        },
+      }),
+    );
+    expect(row).toEqual({
+      retentionLoginAddressesDays: 11,
+      retentionGuestDataDays: 22,
+      retentionDeletedChatsDays: 33,
+      retentionReturnAddressesDays: 44,
+      retentionReturnPersonalDays: 55,
+      retentionRecipientDays: 66,
+      retentionNewsletterConsentDays: 77,
+      retentionNewsletterRecipientsDays: 88,
+    });
+  });
+
+  // the range of the check of the table (db/06) is the range of the schema: both ends are taken
+  it.each([1, 36_500])('takes a term of %i days for every kind of data', async (days) => {
+    const retention = Object.fromEntries(Object.keys(RETENTION).map((field) => [field, days]));
+
+    const res = await publish(root, {
+      kind: 'privacy',
+      title: 'The policy',
+      content: 'P',
+      retention,
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect((res.json() as LegalDocument).retention).toEqual(retention);
   });
 
   it.each([
@@ -1280,14 +1394,16 @@ describe('POST /api/root/legal-documents: the fields of a kind', () => {
   });
 
   it.each(Object.keys(RETENTION))(
-    'refuses a privacy policy with %s of no days, of a century or missing (VALIDATION_ERROR)',
+    'refuses a privacy policy with %s of no days, of a century, not whole or missing (VALIDATION_ERROR)',
     async (field) => {
       const without = { ...RETENTION } as Record<string, unknown>;
       delete without[field];
 
       for (const retention of [
         { ...RETENTION, [field]: 0 },
+        { ...RETENTION, [field]: -1 },
         { ...RETENTION, [field]: 36_501 },
+        { ...RETENTION, [field]: 1.5 },
         without,
       ]) {
         const res = await publish(root, { kind: 'privacy', title: 'T', content: 'P', retention });

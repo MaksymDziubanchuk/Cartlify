@@ -110,6 +110,44 @@ const valueProperties = {
     maximum: 30,
     description: 'Days of grace the shop adds to the legal minimum of a withdrawal.',
   },
+  newsletterLimitCount: {
+    type: 'integer',
+    minimum: 1,
+    maximum: 100,
+    description:
+      'How many newsletter campaigns may go out in any window of newsletterLimitDays days ' +
+      '(2 unless set): a campaign that would make one more is refused (NEWSLETTER_LIMIT_REACHED). ' +
+      'Lowering it touches no campaign already scheduled; the limit is checked again when one starts.',
+  },
+  newsletterLimitDays: {
+    type: 'integer',
+    minimum: 1,
+    maximum: 365,
+    description:
+      'The length in days of the window newsletterLimitCount counts in (7 unless set). Two ' +
+      'campaigns exactly this many days apart are not in one window.',
+  },
+  newsletterFromName: {
+    type: 'string',
+    maxLength: 100,
+    pattern: '^[^\\u0000-\\u001f\\u007f]*$',
+    description:
+      'The name the newsletters are sent under, one line of up to 100 characters; empty (the ' +
+      'default) falls back to emailFromName, then to shopName.',
+  },
+  newsletterTrustedDomains: {
+    type: 'array',
+    maxItems: 50,
+    items: {
+      type: 'string',
+      maxLength: 253,
+      pattern: '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$',
+    },
+    uniqueItems: true,
+    description:
+      'Host names (lower case, at least two labels, no scheme, path or port) a text of a newsletter ' +
+      'may link to besides the shop itself; up to 50, none twice. Empty by default.',
+  },
   shopLocale: {
     ...localeSchema,
     description: 'The mail of a buyer with no dictionary of their own gets this.',
@@ -307,6 +345,46 @@ const shopSettingsHistoryResponseSchema = {
   required: ['items', 'nextCursor'],
 } as const;
 
+const shopLocaleCountsResponseSchema = {
+  $id: 'shopLocaleCountsResponseSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      description:
+        'A row for each language that at least one account or one subscription of the ' +
+        'newsletters has, in the order of the codes, whether the shop answers in it now or not. A ' +
+        'language nobody has is no row; the people with no language are no row either.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          locale: localeSchema,
+          accounts: {
+            type: 'integer',
+            minimum: 0,
+            description:
+              'How many accounts that are not deleted have this language as their own (their ' +
+              '`locale`).',
+          },
+          subscriptions: {
+            type: 'integer',
+            minimum: 0,
+            description:
+              'How many subscriptions of the newsletters have this language: the ones that wait ' +
+              'for the confirmation, are in force, are paused after a complaint or stopped because ' +
+              'the address does not exist, from the form and from accounts together. An ended ' +
+              'subscription is not counted (it is the proof of a consent and keeps its language).',
+          },
+        },
+        required: ['locale', 'accounts', 'subscriptions'],
+      },
+    },
+  },
+  required: ['items'],
+} as const;
+
 // the form of the logo of the shop
 const shopLogoFormSchema = {
   $id: 'shopLogoFormSchema',
@@ -330,5 +408,6 @@ export const shopSettingsDtoSchemas = [
   putShopSettingBodySchema,
   shopSettingsHistoryQuerySchema,
   shopSettingsHistoryResponseSchema,
+  shopLocaleCountsResponseSchema,
   shopLogoFormSchema,
 ];

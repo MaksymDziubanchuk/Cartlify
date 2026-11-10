@@ -11,11 +11,6 @@ import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { paymentProviders } from '@routes/api/payments/providers/index.js';
-import {
-  SHOP_LOGO_CID,
-  shopLogoAttachment,
-  type ShopLogoAttachment,
-} from '@services/email/shopLogo.js';
 import { buildReturnClosedTemplate } from '@services/email/templates/returns/returnClosed.template.js';
 import { buildReturnRefundFailedTemplate } from '@services/email/templates/returns/returnRefundFailed.template.js';
 import { buildReturnRefundedTemplate } from '@services/email/templates/returns/returnRefunded.template.js';
@@ -161,7 +156,7 @@ const moneyOf = (rows: Row[]) =>
     { total: 0, delivery: 0, deduction: 0 },
   );
 
-const common = (statement: Statement, logo: ShopLogoAttachment | null) => ({
+const common = (statement: Statement) => ({
   orderId: statement.orderId,
   code: returnCodeOf(statement.basis, statement.orderId, statement.number),
   timeZone: env.SHOP_TIME_ZONE,
@@ -170,22 +165,14 @@ const common = (statement: Statement, logo: ShopLogoAttachment | null) => ({
   supportEmail: shopSettings().emailReplyTo,
   appName: shopSettings().shopName,
   locale: mailLocaleOf(statement.locale),
-  ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+  logoUrl: shopSettings().logoUrl,
   ...(statement.userName ? { userName: statement.userName } : {}),
 });
 
-async function send(
-  statement: Statement,
-  mail: { subject: string; text: string; html: string },
-  logo: ShopLogoAttachment | null,
-) {
+async function send(statement: Statement, mail: { subject: string; text: string; html: string }) {
   if (statement.noAddress) return;
 
-  await sendEmail({
-    to: statement.contactEmail,
-    ...mail,
-    attachments: logo ? [logo] : [],
-  });
+  await sendEmail({ to: statement.contactEmail, ...mail });
 }
 
 // the money of these rows is back: when the statement is over it is the mail that closes it (the
@@ -203,11 +190,9 @@ export async function sendReturnMoneyEmail(
       return;
     }
 
-    const logo = await shopLogoAttachment(log);
-
     // closed by the money of this transfer: the code root closed other rows with is not its reason
     if (statement.closedAt) {
-      await sendClosed(statement, false, logo);
+      await sendClosed(statement, false);
       return;
     }
 
@@ -221,7 +206,7 @@ export async function sendReturnMoneyEmail(
     await send(
       statement,
       buildReturnRefundedTemplate({
-        ...common(statement, logo),
+        ...common(statement),
         items: linesOf(rows).map(({ name, quantity }) => ({ name, quantity })),
         amount: money.total / 100,
         deliveryAmount: money.delivery / 100,
@@ -229,7 +214,6 @@ export async function sendReturnMoneyEmail(
         ...withheldOf(rows),
         ...(outside ? { outsideMethod: outside.outsideMethod, sentOn: outside.refundedAt } : {}),
       }),
-      logo,
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return money mail was not sent');
@@ -251,18 +235,13 @@ export async function sendReturnClosedEmail(
     }
     if (!statement.closedAt) return;
 
-    const logo = await shopLogoAttachment(log);
-    await sendClosed(statement, opts.withCode === true, logo);
+    await sendClosed(statement, opts.withCode === true);
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return closed mail was not sent');
   }
 }
 
-async function sendClosed(
-  statement: Statement,
-  withCode: boolean,
-  logo: ShopLogoAttachment | null,
-) {
+async function sendClosed(statement: Statement, withCode: boolean) {
   const refunded = statement.items.filter((row) => row.money === 'refunded');
   const declined = statement.items.filter((row) => row.money === 'refused');
   const locale = mailLocaleOf(statement.locale);
@@ -270,7 +249,7 @@ async function sendClosed(
   await send(
     statement,
     buildReturnClosedTemplate({
-      ...common(statement, logo),
+      ...common(statement),
       // a form without a code can come from anybody who knows the number and the name of the
       // recipient: its mails never say what the order holds (its first mail does not either)
       hideItems: statement.source === 'form_manual',
@@ -284,7 +263,6 @@ async function sendClosed(
       ...withheldOf(refunded),
       closeCode: withCode ? statement.closeCode : null,
     }),
-    logo,
   );
 }
 
@@ -308,15 +286,13 @@ export async function sendReturnRefundFailedEmail(
     );
     if (!rows.length) return;
 
-    const logo = await shopLogoAttachment(log);
     await send(
       statement,
       buildReturnRefundFailedTemplate({
-        ...common(statement, logo),
+        ...common(statement),
         amount: moneyOf(rows).total / 100,
         sentBack,
       }),
-      logo,
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return refund failed mail was not sent');
@@ -343,16 +319,14 @@ export async function sendReturnReimbursedEmail(
       return;
     }
 
-    const logo = await shopLogoAttachment(log);
     await send(
       statement,
       buildReturnReimbursedTemplate({
-        ...common(statement, logo),
+        ...common(statement),
         amount: decimalToNumber(statement.shippingReimbursed),
         method: statement.shippingReimbursedMethod,
         sentOn: statement.shippingReimbursedAt,
       }),
-      logo,
     );
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return reimbursed mail was not sent');

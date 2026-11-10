@@ -18,6 +18,9 @@ type StatePayload = {
   // the versions of the terms and of the contract the page of the shop sent with the start:
   // an account this login makes takes the consent to them
   accepted?: number[];
+  // the box of the newsletter the page ticked: a new account this login makes is subscribed.
+  // Read from a verified state only, and only the boolean true counts
+  newsletter?: true;
 };
 
 type GithubTokenError = {
@@ -68,7 +71,11 @@ function parseGithubJson<T extends object>(text: string, reason: string): T {
 }
 
 // build signed oauth state
-export function createGithubOAuthState(guestId: string, accepted: readonly number[] = []) {
+export function createGithubOAuthState(
+  guestId: string,
+  accepted: readonly number[] = [],
+  newsletter = false,
+) {
   const secret = GITHUB_STATE_SECRET;
   if (!secret) throw new InternalError({ reason: 'GITHUB_STATE_SECRET_MISSING' });
 
@@ -81,6 +88,7 @@ export function createGithubOAuthState(guestId: string, accepted: readonly numbe
     iat: now,
     exp: now + 10 * 60,
     ...(accepted.length ? { accepted: [...accepted] } : {}),
+    ...(newsletter ? { newsletter: true as const } : {}),
   };
 
   // sign state for tamper check
@@ -91,7 +99,11 @@ export function createGithubOAuthState(guestId: string, accepted: readonly numbe
 }
 
 // build github authorize url
-export function buildGithubAuthUrl(guestId: string, accepted: readonly number[] = []) {
+export function buildGithubAuthUrl(
+  guestId: string,
+  accepted: readonly number[] = [],
+  newsletter = false,
+) {
   const clientId = GITHUB_CLIENT_ID;
   const redirectUri = GITHUB_REDIRECT_URI;
 
@@ -99,7 +111,7 @@ export function buildGithubAuthUrl(guestId: string, accepted: readonly number[] 
   if (!redirectUri) throw new InternalError({ reason: 'GITHUB_REDIRECT_URI_MISSING' });
 
   // attach state to redirect
-  const state = createGithubOAuthState(guestId, accepted);
+  const state = createGithubOAuthState(guestId, accepted, newsletter);
 
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);

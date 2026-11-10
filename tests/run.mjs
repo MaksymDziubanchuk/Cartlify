@@ -67,6 +67,8 @@ const SERVICES = [
   { name: 'cloudinary', real: true },
   { name: 'stripe', real: true },
   { name: 'openai', real: true },
+  // the dummy secrets of Cloudflare need no account and no secret: nothing is taken from .env
+  { name: 'turnstile', real: true },
 ];
 const SERVICE_PREFIX = 'service:';
 

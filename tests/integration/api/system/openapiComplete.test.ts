@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import {
   ADMIN_ALERT_KINDS,
+  NEWSLETTER_ALERT_KINDS,
   ROOT_ALERT_KINDS,
 } from '@routes/api/admin/services/helpers/alertKinds.helper.js';
 
@@ -162,7 +163,9 @@ describe('the lists of values the swagger document gives', () => {
 
     expect(lists.length).toBeGreaterThan(0);
     for (const list of lists) {
-      expect([...list].sort()).toEqual([...ADMIN_ALERT_KINDS, ...ROOT_ALERT_KINDS].sort());
+      expect([...list].sort()).toEqual(
+        [...ADMIN_ALERT_KINDS, ...NEWSLETTER_ALERT_KINDS, ...ROOT_ALERT_KINDS].sort(),
+      );
     }
   });
 });

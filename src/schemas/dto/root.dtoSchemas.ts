@@ -1,4 +1,5 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
+import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
 import { idPathParam } from '@schemas/idPathParam.js';
 
 const rootAdminsGetQuerySchema = {
@@ -40,6 +41,14 @@ const rootAdminsItemSchema = {
     name: { type: 'string' },
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
+    canManageNewsletters: {
+      ...canManageNewslettersField,
+      description:
+        'May the admin run the newsletters: true when root gave the right and the account is ' +
+        'not deleted, false otherwise (a deleted admin has no right, whatever was kept). Root ' +
+        'gives and takes it with PATCH /api/root/admins/{adminId}; it goes away when the person ' +
+        'stops being an admin and does not come back when root makes them an admin again.',
+    },
     locale: { type: 'string' },
     phone: { type: 'string' },
     deletedAt: {
@@ -57,6 +66,7 @@ const rootAdminsItemSchema = {
     'updatedAt',
     'avatarUrls',
     'avatarIsDefault',
+    'canManageNewsletters',
     'deletedAt',
   ],
 } as const;
@@ -91,6 +101,36 @@ const rootAdminsAddResponseSchema = {
   allOf: [{ $ref: 'usersUserResponseSchema#' }],
 } as const;
 
+const rootAdminsUpdateParamsSchema = {
+  $id: 'rootAdminsUpdateParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    adminId: idPathParam('the admin'),
+  },
+  required: ['adminId'],
+} as const;
+
+const rootAdminsUpdateBodySchema = {
+  $id: 'rootAdminsUpdateBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    canManageNewsletters: {
+      // a list of the two values and no type: the server turns a value into the type of the schema
+      // (coerceTypes), so a boolean type would take 1, "true" and null; a right is given by a
+      // boolean only
+      enum: [true, false],
+      description:
+        'A JSON boolean, nothing else is taken (1, "true" and null are refused). true gives the admin the right to run the newsletters (subscribers, the list of ' +
+        'blocked addresses, newsletters), false takes it away. It works at once, also in a ' +
+        'session that is open. The same value again changes nothing and writes nothing to the ' +
+        'admin log.',
+    },
+  },
+  required: ['canManageNewsletters'],
+} as const;
+
 const rootAdminsDeleteParamsSchema = {
   $id: 'rootAdminsDeleteParamsSchema',
   type: 'object',
@@ -117,6 +157,8 @@ export const rootAdminsDtoSchemas = [
   rootAdminsGetResponseSchema,
   rootAdminsAddBodySchema,
   rootAdminsAddResponseSchema,
+  rootAdminsUpdateParamsSchema,
+  rootAdminsUpdateBodySchema,
   rootAdminsDeleteParamsSchema,
   rootAdminsDeleteResponseSchema,
 ];

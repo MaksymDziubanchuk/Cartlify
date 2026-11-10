@@ -1,20 +1,14 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import type { SendEmailInput } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
-import type { ShopLogoAttachment } from '@services/email/shopLogo.js';
 
-// the provider is replaced: what the mail says is tested on the template, here only what goes out.
-// shopLogo.js is replaced too: whether it finds a logo or not is its own test (shopLogo.test.ts),
-// here only whether this helper wires what it gives into the mail
+import { resetShopSettings, setShopSettings } from '../../../../../../helpers/shopSettings.js';
+
+// the provider is replaced: what the mail says is tested on the template, here only what goes out
 const sendEmail = jest.fn<(input: SendEmailInput) => Promise<{ status: number }>>();
-const shopLogoAttachment = jest.fn<(log: unknown) => Promise<ShopLogoAttachment | null>>();
 
 jest.unstable_mockModule('@routes/api/auth/services/helpers/sendEmail.helper.js', () => ({
   sendEmail,
-}));
-jest.unstable_mockModule('@services/email/shopLogo.js', () => ({
-  SHOP_LOGO_CID: 'cartlify-logo',
-  shopLogoAttachment,
 }));
 
 const { sendAccountDeletedEmail } =
@@ -22,13 +16,8 @@ const { sendAccountDeletedEmail } =
 
 const log = () => ({ warn: jest.fn(), error: jest.fn() });
 
-const LOGO: ShopLogoAttachment = {
-  content: 'aGk=',
-  type: 'image/png',
-  filename: 'logo.png',
-  disposition: 'inline',
-  content_id: 'cartlify-logo',
-};
+// the logo of the shop is shown by its address at Cloudinary
+const LOGO_URL = 'https://res.cloudinary.com/cartlify-test/image/upload/v1/test/shop/logo/a.png';
 
 const args = {
   userId: 15,
@@ -39,17 +28,19 @@ const args = {
     { orderId: 3, status: 'paid' as const, total: '10.00', items: [{ name: 'Lamp', quantity: 1 }] },
   ],
   cancelled: [],
+  newsletterEnded: false,
 };
 
 beforeEach(() => {
   sendEmail.mockReset();
   sendEmail.mockResolvedValue({ status: 202 });
-  shopLogoAttachment.mockReset();
-  shopLogoAttachment.mockResolvedValue(LOGO);
+  setShopSettings({ logoUrl: LOGO_URL });
 });
 
+afterEach(() => resetShopSettings());
+
 describe('sendAccountDeletedEmail', () => {
-  it('mails the old address with the logo attached for the html', async () => {
+  it('mails the old address with the logo shown by its address, nothing attached', async () => {
     await sendAccountDeletedEmail(args, log());
 
     expect(sendEmail).toHaveBeenCalledTimes(1);
@@ -59,20 +50,35 @@ describe('sendAccountDeletedEmail', () => {
       subject: 'Cartlify — Your account is deleted',
     });
     expect(mail.text).toContain('Order #3');
-    expect(mail.html).toContain('cid:cartlify-logo');
-    expect(mail.attachments).toEqual([LOGO]);
+    expect(mail.html).toContain(`src="${LOGO_URL}"`);
+    expect(mail.attachments).toBeUndefined();
   });
 
-  // no logo, or a Cloudinary fetch that failed, is not a reason to refuse the mail
-  // (shopLogoAttachment already turned that into null; notes/i18n-shop-steps.md, step 4)
+  // the sentence about the newsletter goes in the mail exactly when the deletion ended a subscription
+  it('tells the person that the subscription to the newsletter was cancelled, only when it was', async () => {
+    await sendAccountDeletedEmail({ ...args, newsletterEnded: true }, log());
+    await sendAccountDeletedEmail(args, log());
+
+    const [withSentence, without] = sendEmail.mock.calls.map(([mail]) => mail);
+    expect(withSentence!.text).toContain(
+      'Your newsletter subscription has been cancelled as well.',
+    );
+    expect(withSentence!.html).toContain(
+      'Your newsletter subscription has been cancelled as well.',
+    );
+    expect(without!.text).not.toContain('newsletter');
+    expect(without!.html).not.toContain('newsletter');
+  });
+
+  // no logo is not a reason to refuse the mail
   it('mails the old address without the logo when the shop has none', async () => {
-    shopLogoAttachment.mockResolvedValue(null);
+    setShopSettings({ logoUrl: null });
 
     await sendAccountDeletedEmail(args, log());
 
     const mail = sendEmail.mock.calls[0]![0];
-    expect(mail.html).not.toContain('cid:cartlify-logo');
-    expect(mail.attachments).toEqual([]);
+    expect(mail.html).not.toMatch(/<img\b/);
+    expect(mail.attachments).toBeUndefined();
   });
 
   // the account is already deleted when the mail goes: a failure must not reach the request

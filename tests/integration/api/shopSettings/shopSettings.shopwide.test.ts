@@ -242,6 +242,21 @@ describe('PUT /api/root/shop-settings', () => {
     ['an empty reply-to', { emailReplyTo: '' }, 'VALIDATION_ERROR', null],
     ['a seller email that is not an address', { sellerEmail: 'seller' }, 'VALIDATION_ERROR', null],
     ['a body without a setting', { shopName: undefined }, 'VALIDATION_ERROR', null],
+    ['a newsletter limit of no campaigns', { newsletterLimitCount: 0 }, 'VALIDATION_ERROR', null],
+    [
+      'a newsletter limit over 100 campaigns',
+      { newsletterLimitCount: 101 },
+      'VALIDATION_ERROR',
+      null,
+    ],
+    [
+      'a newsletter limit that is no whole number',
+      { newsletterLimitCount: 2.5 },
+      'VALIDATION_ERROR',
+      null,
+    ],
+    ['a newsletter window of no days', { newsletterLimitDays: 0 }, 'VALIDATION_ERROR', null],
+    ['a newsletter window over 365 days', { newsletterLimitDays: 366 }, 'VALIDATION_ERROR', null],
   ])('refuses %s', async (_case, change, errorCode, details) => {
     const values = await writableValues();
     const total = await rowCount();
@@ -273,6 +288,54 @@ describe('PUT /api/root/shop-settings/:key', () => {
     expect((await putOne(root, 'shopName', { value: before.shopName })).statusCode).toBe(200);
   });
 
+  // the limit of the newsletters (at most count campaigns in any window of days days): two
+  // settings of root with defaults in the code, and no other say in the matter
+  it('sets the limit of the newsletters, one setting at a time, and the history keeps the rows', async () => {
+    await put(root, await writableValues());
+    const before = await currentValues();
+    const total = await rowCount();
+
+    const count = await putOne(root, 'newsletterLimitCount', { value: 3 });
+    const days = await putOne(root, 'newsletterLimitDays', { value: 10 });
+
+    expect(count.statusCode).toBe(200);
+    expect(days.statusCode).toBe(200);
+    expect(days.json()).toMatchObject({ newsletterLimitCount: 3, newsletterLimitDays: 10 });
+    expect(await currentValues()).toMatchObject({
+      newsletterLimitCount: 3,
+      newsletterLimitDays: 10,
+    });
+    expect(await rowCount()).toBe(total + 2);
+
+    const rows = (await history('?key=newsletterLimitCount')).json().items;
+    expect(rows[0]).toMatchObject({
+      key: 'newsletterLimitCount',
+      value: 3,
+      setBy: { id: root.id },
+    });
+
+    // the PUT of every setting takes both too, and puts them back as they were
+    const all = await put(root, {
+      ...(await writableValues()),
+      newsletterLimitCount: before.newsletterLimitCount,
+      newsletterLimitDays: before.newsletterLimitDays,
+    });
+    expect(all.statusCode).toBe(200);
+    expect(all.json()).toMatchObject({
+      newsletterLimitCount: before.newsletterLimitCount,
+      newsletterLimitDays: before.newsletterLimitDays,
+    });
+  });
+
+  it('refuses a signed-in admin the limit of the newsletters', async () => {
+    const total = await rowCount();
+
+    const res = await putOne(admin, 'newsletterLimitCount', { value: 1 });
+
+    expect(res.statusCode).toBe(403);
+    expect(await rowCount()).toBe(total);
+  });
+
   it('writes no row for a value the setting already has', async () => {
     const { reservationMinutes } = await currentValues();
     const total = await rowCount();
@@ -297,6 +360,12 @@ describe('PUT /api/root/shop-settings/:key', () => {
     ['a value of another type', 'reviewCheckEnabled', { value: 'yes' }],
     ['a reply-to that is not an address', 'emailReplyTo', { value: 'support' }],
     ['a list naming one value twice', 'enabledLocales', { value: ['en', 'en'] }],
+    ['a newsletter limit of no campaigns', 'newsletterLimitCount', { value: 0 }],
+    ['a newsletter limit over 100 campaigns', 'newsletterLimitCount', { value: 101 }],
+    ['a newsletter limit that is no number', 'newsletterLimitCount', { value: 'many' }],
+    ['a newsletter window of no days', 'newsletterLimitDays', { value: 0 }],
+    ['a newsletter window over 365 days', 'newsletterLimitDays', { value: 366 }],
+    ['a newsletter window that is no whole number', 'newsletterLimitDays', { value: 6.5 }],
   ])('refuses %s (VALIDATION_ERROR)', async (_case, key, body) => {
     const total = await rowCount();
 

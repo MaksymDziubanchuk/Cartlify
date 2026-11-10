@@ -42,7 +42,7 @@ export type ReturnClosedTemplateArgs = {
   code?: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -99,7 +99,7 @@ export function buildReturnClosedTemplate(args: ReturnClosedTemplateArgs): {
     })),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnClosed.subject', locale, { appName, orderId }),
     preview: t('returnClosed.preview', locale, { orderId }),

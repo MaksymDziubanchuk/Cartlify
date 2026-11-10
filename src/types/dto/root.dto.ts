@@ -39,6 +39,24 @@ export interface AddAdminDto {
 
 export type AddAdminResponseDto = UserResponseDto;
 
+export interface UpdateAdminParamsDto {
+  adminId: IdParam;
+}
+
+// what root changes in an admin: the right to run the newsletters
+export interface UpdateAdminBodyDto {
+  canManageNewsletters: boolean;
+}
+
+export interface UpdateAdminDto {
+  actorId: UserId;
+  actorRole: Role;
+  adminId: UserId;
+  canManageNewsletters: boolean;
+}
+
+export type UpdateAdminResponseDto = AdminItemDto;
+
 export interface DeleteAdminParamsDto {
   adminId: IdParam;
 }

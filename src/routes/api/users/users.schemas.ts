@@ -38,6 +38,7 @@ const userResponseExample = {
     url256: 'https://example.com/avatars/user-256.webp',
   },
   avatarIsDefault: false,
+  canManageNewsletters: false,
   locale: 'en',
   phone: '+10000000000',
   reviews: [userReviewExample],
@@ -262,8 +263,9 @@ const getMeExportSchema = {
     '(content-disposition attachment): the profile, the orders (each item names its product and its variant, ' +
     'with the name and the prices the order was confirmed with, the sends, and the statements of withdrawal ' +
     'or return made on the order with their rows), the favorites (variants, each with its ' +
-    'product), the reviews and votes, the chats, the logins, the open sessions and the consents to the ' +
-    'terms and the contract. What the cleanups of the retention terms have emptied is not given. At most ' +
+    'product), the reviews and votes, the chats, the logins, the open sessions, the consents to the ' +
+    'terms and the contract and the subscriptions to the newsletter on the address of the account with ' +
+    'their journal. What the cleanups of the retention terms have emptied is not given. At most ' +
     env.LIMIT_EXPORT_PER_USER +
     ' a user an hour.',
 
@@ -291,7 +293,9 @@ const getUserExportSchema = {
     'The same data as `GET /api/users/me/export` (one JSON file, content-disposition attachment), of ' +
     'the user with this id, for root. It also works for an account that was deleted: what is still ' +
     'kept of the person (the orders, the statements of withdrawal or return) is given, what the ' +
-    'cleanups of the retention terms have emptied is not. The person is checked outside the app ' +
+    'cleanups of the retention terms have emptied is not; the subscriptions to the newsletter of such ' +
+    'an account are given too, found by the id of the account (those it made and those of the form ' +
+    'that its deletion ended), the confirmed ones only. The person is checked outside the app ' +
     '(the email of the statement, the phone of the recipient, the number of an order). The request ' +
     'leaves a line in the journal of the admins (OTHER, `user.export`).',
 

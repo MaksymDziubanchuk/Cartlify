@@ -310,8 +310,10 @@ describe('db/tools/demo_data.mjs', () => {
 
     for (const mail of mails) {
       const verify = await app.inject({
-        method: 'GET',
-        url: `/api/auth/verify?token=${encodeURIComponent(mailedToken([mail], '/web/login'))}`,
+        method: 'POST',
+        url: '/api/auth/verify',
+        headers: withCsrf(await getCsrf(app)),
+        payload: { token: mailedToken([mail], '/web/login') },
       });
       expect(verify.statusCode).toBe(200);
     }

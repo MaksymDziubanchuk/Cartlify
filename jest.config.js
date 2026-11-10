@@ -94,6 +94,7 @@ export default {
         '<rootDir>/tests/setup/integration.contract.ts',
         '<rootDir>/tests/setup/integration.cloudinary.ts',
         '<rootDir>/tests/setup/integration.mail.ts',
+        '<rootDir>/tests/setup/integration.turnstile.ts',
         '<rootDir>/tests/setup/integration.stripe.ts',
         '<rootDir>/tests/setup/timeout.ts',
       ],

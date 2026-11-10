@@ -26,6 +26,15 @@ export default async function rootRouter(app: FastifyInstance) {
     },
     rootAdminsController.postAdmin,
   );
+  // root gives an admin the right to run the newsletters, or takes it away
+  app.patch(
+    '/admins/:adminId',
+    {
+      preHandler: [authGuard, requireRole(['ROOT']), validateId('adminId')],
+      schema: rootAdminsSchemas.patchRootAdminSchema,
+    },
+    rootAdminsController.patchAdmin,
+  );
   app.delete(
     '/admins/:adminId',
     {
@@ -78,6 +87,15 @@ export default async function rootRouter(app: FastifyInstance) {
       schema: rootShopSettingsSchemas.getShopSettingsHistorySchema,
     },
     shopSettingsController.getHistory,
+  );
+  // how many people have each language, for the warning before one is turned off
+  app.get(
+    '/shop-settings/locale-counts',
+    {
+      preHandler: [authGuard, requireRole(['ROOT'])],
+      schema: rootShopSettingsSchemas.getShopLocaleCountsSchema,
+    },
+    shopSettingsController.getLocaleCounts,
   );
   app.post(
     '/shop-settings/logo',

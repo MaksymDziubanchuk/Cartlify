@@ -52,6 +52,8 @@ const PRIVACY: Fields = {
   retentionReturnAddressesDays: 1095,
   retentionReturnPersonalDays: 3650,
   retentionRecipientDays: 3650,
+  retentionNewsletterConsentDays: 3650,
+  retentionNewsletterRecipientsDays: 365,
 };
 
 const ENUMS: Record<string, string> = { returnShippingPaidBy: 'cartlify."ReturnShippingPayer"' };
@@ -147,6 +149,26 @@ describe('a contract', () => {
   it.each([
     ['the terms', 'terms', CONTRACT],
     ['the privacy policy', 'privacy', { ...PRIVACY, ...CONTRACT }],
+    [
+      'the contract, with a term of the consents to the newsletters',
+      'contract',
+      { ...CONTRACT, retentionNewsletterConsentDays: 30 },
+    ],
+    [
+      'the contract, with a term of the recipients of the newsletters',
+      'contract',
+      { ...CONTRACT, retentionNewsletterRecipientsDays: 30 },
+    ],
+    [
+      'the terms, with a term of the consents to the newsletters',
+      'terms',
+      { retentionNewsletterConsentDays: 30 },
+    ],
+    [
+      'the terms, with a term of the recipients of the newsletters',
+      'terms',
+      { retentionNewsletterRecipientsDays: 30 },
+    ],
   ] as const)(
     'is the only kind that holds its fields: %s refuse them',
     async (_name, kind, fields) => {
@@ -164,7 +186,8 @@ describe('a privacy policy', () => {
       if (!published.ok) return published;
       const rows = await db.rows<Fields>(
         `select "retentionLoginAddressesDays", "retentionGuestDataDays", "retentionDeletedChatsDays",
-                "retentionReturnAddressesDays", "retentionReturnPersonalDays", "retentionRecipientDays"
+                "retentionReturnAddressesDays", "retentionReturnPersonalDays", "retentionRecipientDays",
+                "retentionNewsletterConsentDays", "retentionNewsletterRecipientsDays"
          from cartlify.legal_documents where id = $1`,
         published.rows[0]!.id,
       );

@@ -7,7 +7,6 @@ import { failureOf } from '@helpers/failureOf.js';
 import { mailLocaleOf } from '@helpers/locale.js';
 import { returnCodeOf } from '@helpers/returns.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { buildReturnChangedTemplate } from '@services/email/templates/returns/returnChanged.template.js';
 
 import type { ReturnMailLogger } from './sendReturnByShopEmail.helper.js';
@@ -68,8 +67,6 @@ export async function sendReturnChangedEmail(
       return;
     }
 
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildReturnChangedTemplate({
       appName: shopSettings().shopName,
       orderId: row.orderId,
@@ -80,7 +77,7 @@ export async function sendReturnChangedEmail(
       // the form has no account to read a language from: the mail goes in the shop's language
       locale: mailLocaleOf(null),
       ...(row.contactName ? { userName: row.contactName } : {}),
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
     });
 
     await sendEmail({
@@ -88,7 +85,6 @@ export async function sendReturnChangedEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return changed mail was not sent');

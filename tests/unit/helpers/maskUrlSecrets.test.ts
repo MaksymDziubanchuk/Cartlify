@@ -59,4 +59,76 @@ describe('maskUrlSecrets', () => {
       '/x?tokenType=bearer&zipcode=01001',
     );
   });
+
+  describe('a secret in the path', () => {
+    // the one-click unsubscribe of a newsletter mail: the token is the last segment of the address
+    it.each([
+      [
+        'a plain link',
+        '/api/newsletters/unsubscribe/abc123',
+        '/api/newsletters/unsubscribe/[hidden]',
+      ],
+      [
+        'a link with the campaign',
+        '/api/newsletters/unsubscribe/abc123?c=5',
+        '/api/newsletters/unsubscribe/[hidden]?c=5',
+      ],
+      [
+        'a link with a secret query as well',
+        '/api/newsletters/unsubscribe/abc123?c=5&token=zzz',
+        '/api/newsletters/unsubscribe/[hidden]?c=5&token=[hidden]',
+      ],
+      [
+        'a path that goes on past the token',
+        '/api/newsletters/unsubscribe/abc123/extra',
+        '/api/newsletters/unsubscribe/[hidden]/extra',
+      ],
+      [
+        'the prefix in another case',
+        '/API/Newsletters/UNSUBSCRIBE/abc123',
+        '/API/Newsletters/UNSUBSCRIBE/[hidden]',
+      ],
+      [
+        'a prefix with a letter encoded, which the router reads as the letter',
+        '/api/newsletters/%75nsubscribe/abc123',
+        '/api/newsletters/unsubscribe/[hidden]',
+      ],
+      [
+        'a prefix with doubled slashes',
+        '//api//newsletters//unsubscribe//abc123',
+        '//api//newsletters//unsubscribe//[hidden]',
+      ],
+    ])('hides the token of %s', (_case, url, masked) => {
+      expect(maskUrlSecrets(url)).toBe(masked);
+    });
+
+    it('leaves the token out of the line however it is written', () => {
+      const token = 'Zq9_-aB3';
+
+      for (const url of [
+        `/api/newsletters/unsubscribe/${token}`,
+        `/api/newsletters/unsubscribe/${token}?c=1`,
+        `/api/newsletters/%75nsubscribe/${token}`,
+        `/api/newsletters/unsubscribe/${token}/`,
+      ]) {
+        expect(maskUrlSecrets(url)).not.toContain(token);
+      }
+    });
+
+    it.each([
+      '/api/newsletters/unsubscribe',
+      '/api/newsletters/unsubscribe/',
+      '/api/newsletters/manage',
+      '/api/newsletters/subscriptions/confirm',
+      '/api/newsletters/me',
+      '/api/products/unsubscribe/7',
+      '/newsletters/unsubscribe/abc123',
+    ])('leaves %s as it is', (url) => {
+      expect(maskUrlSecrets(url)).toBe(url);
+    });
+
+    it('keeps a path that does not decode as it is when it is not a secret one', () => {
+      expect(maskUrlSecrets('/api/products/%E0%A4%A')).toBe('/api/products/%E0%A4%A');
+    });
+  });
 });

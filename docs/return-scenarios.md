@@ -154,7 +154,7 @@ Who pays the carrier for the parcel back is what the contract the order kept say
 
 ## 13. A transfer that fails
 
-`POST /api/returns/:returnId/refund` answers with the rows back at `not_refunded` and the reason of the failure (`refundFailure`); the alert `failed_refunds` lists the statement.
+`POST /api/returns/:returnId/refund` answers with the rows back at `not_refunded` and the reason of the failure (`refundFailure`); the alert `failed_refunds` lists the statement (`GET /api/payments/refunds?state=failed`, `source: return`).
 
 - `card_unavailable`: the card can no longer take money; the buyer is mailed that the shop will contact them. Root sends the money another way and records it: `POST /api/returns/:returnId/refund/outside` (the rows, the way `bank_transfer`, `cash` or `other`, a note, the real day).
 - `shop_balance`, `unknown`: try again later with `POST /api/returns/:returnId/refund`, or send it outside the app as above.
@@ -203,13 +203,13 @@ The account can be deleted at any time, also with an open statement (`DELETE /ap
 
 ## 19. What the admins watch
 
-| Alert                    | A statement is listed when                                                            | What to do                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `returns_manual_check`   | a statement of the form without the code is open and no admin accepted it             | [4](#4-a-statement-of-the-form-without-the-code)                        |
-| `returns_proof_waiting`  | the buyer wrote the parcel and the shop has not confirmed it (2 days unless set)      | confirm it ([9](#9-the-money-before-the-goods)) or wait for it          |
-| `returns_goods_not_sent` | nothing was told of the parcel and the goods are not in (21 days unless set)          | write to the buyer, or close the rows ([11](#11-goods-that-never-come)) |
-| `returns_money_late`     | the money is due (goods in, or the proof confirmed) and not back (10 days unless set) | `POST /api/returns/:returnId/refund`                                    |
-| `returns_goods_late`     | the money went ahead and the goods are not in (14 days unless set)                    | follow the parcel ([11](#11-goods-that-never-come))                     |
-| `failed_refunds`         | a transfer failed                                                                     | [13](#13-a-transfer-that-fails), [14](#14-a-dispute-at-the-bank)        |
+| Alert                    | A statement is listed when                                                                         | What to do                                                              |
+| ------------------------ | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `returns_manual_check`   | a statement of the form without the code is open and no admin accepted it                          | [4](#4-a-statement-of-the-form-without-the-code)                        |
+| `returns_proof_waiting`  | the buyer wrote the parcel and the shop has not confirmed it (2 days unless set)                   | confirm it ([9](#9-the-money-before-the-goods)) or wait for it          |
+| `returns_goods_not_sent` | nothing was told of the parcel and the goods are not in (21 days unless set)                       | write to the buyer, or close the rows ([11](#11-goods-that-never-come)) |
+| `returns_money_late`     | the money is due (goods in, or the proof confirmed) and not back (10 days unless set)              | `POST /api/returns/:returnId/refund`                                    |
+| `returns_goods_late`     | the money went ahead and the goods are not in (14 days unless set)                                 | follow the parcel ([11](#11-goods-that-never-come))                     |
+| `failed_refunds`         | a transfer failed (the list also has the failed refunds of late payments, [Payments](payments.md)) | [13](#13-a-transfer-that-fails), [14](#14-a-dispute-at-the-bank)        |
 
-Each alert names the list of the statements with the filters of its cases (`GET /api/returns`), so the count of an alert is the total of its list. The list also finds a statement by its code (`q=W42-2`), and the card of an order gives for each item the units left to send (`toShip`).
+Each alert but `failed_refunds` names the list of the statements with the filters of its cases (`GET /api/returns`), so the count of an alert is the total of its list; `failed_refunds` names `GET /api/payments/refunds?state=failed`, whose rows with `source: return` are the statements (`id` is the id of the statement) and the others the failed refunds of late payments. The list also finds a statement by its code (`q=W42-2`), and the card of an order gives for each item the units left to send (`toShip`).

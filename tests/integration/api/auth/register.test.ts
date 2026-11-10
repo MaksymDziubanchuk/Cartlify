@@ -18,6 +18,7 @@ import {
   type TestProduct,
 } from '../../../helpers/factories.js';
 import { linkToken, mailedToken, refuseMail, watchMail } from '../../../helpers/mail.js';
+import { withCaptcha } from '../../../helpers/turnstile.js';
 
 // the mails go to the SendGrid mock (tests/helpers/mail.ts), a test reads its link from there
 
@@ -31,7 +32,7 @@ const register = (body: Record<string, unknown>, cookie = '') =>
     method: 'POST',
     url: '/api/auth/register',
     headers: withCsrf(csrf, cookie),
-    payload: body,
+    payload: withCaptcha(body),
   });
 
 const newEmail = () => {
@@ -79,6 +80,8 @@ describe('POST /api/auth/register', () => {
       isVerified: false,
       name: 'Ann',
       avatarIsDefault: true,
+      // a new account is a user, and a user runs no newsletters
+      canManageNewsletters: false,
     });
     expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'A' });
     expect(JSON.stringify(res.json())).not.toMatch(/password/i);
@@ -139,8 +142,10 @@ describe('POST /api/auth/register', () => {
     const token = mailedToken(mails, '/web/login');
 
     const verify = await app.inject({
-      method: 'GET',
-      url: `/api/auth/verify?token=${encodeURIComponent(token)}`,
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: withCsrf(csrf),
+      payload: { token },
     });
     const login = await logIn(app, csrf, { email, password: 'password123' });
 
@@ -218,8 +223,10 @@ describe('POST /api/auth/register', () => {
     expect(mails).toHaveLength(1);
 
     const verify = await app.inject({
-      method: 'GET',
-      url: `/api/auth/verify?token=${encodeURIComponent(mailedToken(mails, '/web/login'))}`,
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: withCsrf(csrf),
+      payload: { token: mailedToken(mails, '/web/login') },
     });
     expect(verify.statusCode).toBe(200);
     expect(
@@ -238,8 +245,10 @@ describe('POST /api/auth/register', () => {
     await register({ email: taken.email, password: 'my-password-2' });
 
     const res = await app.inject({
-      method: 'GET',
-      url: `/api/auth/verify?token=${encodeURIComponent(old)}`,
+      method: 'POST',
+      url: '/api/auth/verify',
+      headers: withCsrf(csrf),
+      payload: { token: old },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VERIFY_TOKEN_INVALID_OR_EXPIRED' });

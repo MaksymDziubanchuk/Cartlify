@@ -73,6 +73,8 @@ type ErasedAccount = {
   publicId: string | null;
   // read before the row is emptied: the column itself is wiped by the update below
   locale: string | null;
+  // how many subscriptions to the newsletter the deletion ended; the mail says so when it is not 0
+  newsletterEnded: number;
   open: OpenOrder[];
 };
 
@@ -230,6 +232,14 @@ async function eraseAccount(
       // every session ends
       await db.userToken.deleteMany({ where: { userId } });
 
+      // what is in force on the address ends with the account: the subscription of the account and
+      // the one of the form. It has to run before the address below is made anonymous, because the
+      // function finds the subscriptions by the address the account has now. The context is the
+      // one of root (root for another account, the person for their own), which the function allows
+      const [{ ended }] = await db.$queryRaw<{ ended: number }[]>`
+        select cartlify.newsletter_end_for_account(${userId}::int) as ended
+      `;
+
       // empty the row of everything personal; the name Guest is what reviews and chats show
       // for the account, deletedAt is what marks it deleted
       const deletedAt = new Date();
@@ -273,6 +283,7 @@ async function eraseAccount(
         name: user.name,
         publicId: user.publicId,
         locale: user.locale,
+        newsletterEnded: ended,
         open,
       };
     },
@@ -394,6 +405,7 @@ export async function deleteAccount(args: DeleteAccountArgs): Promise<void> {
       locale: mailLocaleOf(erased.locale),
       deliveries,
       cancelled,
+      newsletterEnded: erased.newsletterEnded > 0,
     },
     log,
   );

@@ -29,8 +29,8 @@ describe('buildReturnRefundedTemplate', () => {
   it('names the order in the subject and the sum in both versions', () => {
     const { subject, text, html } = buildReturnRefundedTemplate(base);
 
-    expect(subject).toBe('Cartlify — Money returned for order #42');
-    expect(text).toContain('We returned €25.50 for your Cartlify order #42.');
+    expect(subject).toBe('Cartlify — Money sent for order #42');
+    expect(text).toContain('We sent you €25.50 for your Cartlify order #42.');
     expect(html).toContain('€25.50');
   });
 
@@ -52,6 +52,19 @@ describe('buildReturnRefundedTemplate', () => {
     });
     expect(outside.text).toContain('We sent it by a bank transfer on 2 November 2026.');
     expect(outside.text).not.toContain('the way you paid');
+  });
+
+  // a transfer to the card can still fail at the bank, and the buyer is then mailed
+  // (returnRefundFailed); money sent outside the app has no such later answer
+  it('promises a mail if the transfer to the card goes wrong later, not for money sent outside the app', () => {
+    const promise = 'If anything happens to this refund, we will write to you.';
+    const { text, html } = buildReturnRefundedTemplate(base);
+
+    expect(text).toContain(`Your bank shows it within a few days. ${promise}`);
+    expect(html).toContain(promise);
+    expect(buildReturnRefundedTemplate({ ...base, outsideMethod: 'cash' }).text).not.toContain(
+      promise,
+    );
   });
 
   it.each([
@@ -97,8 +110,12 @@ describe('buildReturnRefundedTemplate', () => {
     expect(en.text).toContain('It goes back the way you paid.');
     expect(uk.text).toContain('Кошти повертаються тим самим способом, яким ви платили.');
     expect(es.text).toContain('Se devuelve por el mismo medio con el que pagaste.');
-    expect(uk.subject).toContain('Кошти повернено');
-    expect(es.subject).toContain('Dinero devuelto');
+    expect(uk.text).toContain('Якщо з цим поверненням щось станеться, ми вам напишемо.');
+    expect(es.text).toContain('Si pasa algo con esta devolución, te escribiremos.');
+    expect(uk.subject).toContain('Кошти надіслано');
+    expect(uk.text).toContain('Ми надіслали вам 25,50');
+    expect(es.subject).toContain('Dinero enviado');
+    expect(es.text).toContain('Te enviamos 25,50');
   });
 });
 
@@ -114,7 +131,7 @@ describe('buildReturnRefundedTemplate and the way back', () => {
       supportEmail,
     });
 
-    expect(text).toContain('We returned €6.00');
+    expect(text).toContain('We sent you €6.00');
     expect(text).toContain(
       'The cost of sending the goods back, €4.00, is taken off: the contract says you pay it.',
     );
@@ -361,7 +378,7 @@ describe('buildReturnClosedTemplate', () => {
     const { subject, text, html } = buildReturnClosedTemplate(base);
 
     expect(subject).toBe('Cartlify — Return of order #42 is closed');
-    expect(text).toContain('€10.00 went back to you.');
+    expect(text).toContain('We sent you €10.00.');
     expect(text).toContain('Returned to you:\n- Desk lamp x 1');
     expect(text).toContain('Not returned:\n- Notebook x 2 (the package was opened)');
     expect(html).toContain('the package was opened');
@@ -412,7 +429,7 @@ describe('buildReturnClosedTemplate', () => {
       expect(text).not.toContain(part);
       expect(html).not.toContain(part);
     }
-    expect(text).toContain('€10.00 went back to you.');
+    expect(text).toContain('We sent you €10.00.');
     expect(text).toContain('We could not match the statement to your purchase.');
   });
 
@@ -433,6 +450,8 @@ describe('buildReturnClosedTemplate', () => {
     expect(es.text).toContain('Devuelto a ti:');
     expect(uk.subject).toContain('закрито');
     expect(es.subject).toContain('cerró');
+    expect(uk.text).toContain('Ми надіслали вам 10');
+    expect(es.text).toContain('Te enviamos 10');
   });
 });
 

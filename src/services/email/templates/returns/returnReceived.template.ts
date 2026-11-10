@@ -36,7 +36,7 @@ export type ReturnReceivedTemplateArgs = {
   timeZone?: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -125,7 +125,7 @@ export function buildReturnReceivedTemplate(args: ReturnReceivedTemplateArgs): {
       : t('common.seeOrderTxt', locale),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnReceived.subject', locale, { appName, orderId }),
     preview: t('returnReceived.preview', locale, { orderId }),

@@ -115,6 +115,38 @@ describe('the events of the admin log', () => {
     expect(outcome.ok).toBe(true);
   });
 
+  // the kinds of thing and the actions of the newsletters (root's mark of an admin, a newsletter, a
+  // subscriber, an address blocked for the form) are values of the two enums of the log
+  it.each([
+    ['user', 'NEWSLETTER_MANAGER_CHANGE', 'newsletter.manager_granted'],
+    ['newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE', 'newsletter.campaign_created'],
+    ['newsletter_subscriber', 'NEWSLETTER_SUBSCRIBER_DELETE', 'newsletter.subscriber_erased'],
+    ['newsletter_block', 'NEWSLETTER_BLOCK_CHANGE', 'newsletter.block_added'],
+  ])('keeps a line about %s with the action %s', async (entityType, action, event) => {
+    const line = await inRolledBackTx(async (db) => {
+      await db.as(asAdmin());
+      const written = await db.attempt(
+        `select 1 as done from cartlify.log_admin_action(
+           $1::int, 'ADMIN'::cartlify."Role", $2::cartlify."AdminAuditEntityType", 77,
+           $3::cartlify."AdminAuditAction", $4, '[]'::jsonb)`,
+        admin.id,
+        entityType,
+        action,
+        event,
+      );
+      expect(written.ok).toBe(true);
+      const [row] = await db.rows<{ entityType: string; action: string; event: string }>(
+        `select "entityType"::text as "entityType", action::text as action, event
+         from cartlify.admin_audit_log where "actorId" = $1 and "entityId" = 77
+         order by id desc limit 1`,
+        admin.id,
+      );
+      return row;
+    });
+
+    expect(line).toEqual({ entityType, action, event });
+  });
+
   it.each([...BAD_EVENTS, null])('refuses the event %p', async (event) => {
     const outcome = await inRolledBackTx(async (db) => {
       await db.as(asAdmin());

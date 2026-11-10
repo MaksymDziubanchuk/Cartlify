@@ -19,6 +19,7 @@ import { isPickupHours } from '@helpers/pickupHours.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import type {
+  GetShopLocaleCountsResponseDto,
   GetShopSettingsHistoryResponseDto,
   PublicShopSettingsDto,
   PutShopSettingsBodyDto,
@@ -138,6 +139,30 @@ export async function putShopSetting(args: {
     check: checkSettings,
   });
   return valuesDtoOf(written);
+}
+
+// How many accounts and how many subscriptions of the newsletters have each language (the function
+// of the database counts them for root alone): the warning root is shown before a language is
+// turned off, since the people who have it are left with none and are mailed in the language of the
+// shop (writeShopSettings, @config/shopSettings.js)
+export async function getShopLocaleCounts(args: {
+  actorId: UserId;
+  actorRole: 'ROOT';
+}): Promise<GetShopLocaleCountsResponseDto> {
+  const rows = await tx(async (db) => {
+    await setUserContext(db, { userId: args.actorId, role: args.actorRole });
+    return db.$queryRaw<
+      { locale: string; accounts: number; subscriptions: number }[]
+    >`select locale, accounts, subscriptions from cartlify.newsletter_locale_counts()`;
+  });
+
+  return {
+    items: rows.map((row) => ({
+      locale: row.locale,
+      accounts: Number(row.accounts),
+      subscriptions: Number(row.subscriptions),
+    })),
+  };
 }
 
 // the rows of every setting, or of one, the latest first; logoPublicId is internal (see

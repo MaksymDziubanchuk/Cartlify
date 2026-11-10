@@ -101,6 +101,17 @@ const WRITE_REFUSALS =
   'the full list). `LOCALE_NOT_SUPPORTED`: a language of enabledLocales with no dictionary ' +
   '(`details.locales`/`details.supported`, src/locales).';
 
+// what turning a language off does, in the description of both writes
+const LOCALES_OFF_TEXT =
+  'A language taken out of `enabledLocales` is taken from the people who have it, in the same ' +
+  'transaction as the write: the accounts that are not deleted (their `locale`) and the ' +
+  'subscriptions of the newsletters that are not ended are left with no language, and from then ' +
+  'on are mailed in the language of the shop. A failure of that step refuses the whole write. ' +
+  'The language that is turned on again brings no one back and no mail goes out: people have ' +
+  'it again when they choose it in their profile or on the page that manages the subscription. ' +
+  'The numbers of the people a language would leave are at GET ' +
+  '/api/root/shop-settings/locale-counts, to show before the write.';
+
 // root: every setting at once
 const putShopSettingsSchema = {
   operationId: 'putShopSettings',
@@ -110,7 +121,8 @@ const putShopSettingsSchema = {
     'value changes, none for one given as it already is; a row is never changed or removed, ' +
     'the latest row of a setting is its current value at once (the server keeps the values in ' +
     'memory, @config/shopSettings.js). The logo is not here, it has its own routes ' +
-    '(POST and DELETE /api/root/shop-settings/logo).',
+    '(POST and DELETE /api/root/shop-settings/logo). ' +
+    LOCALES_OFF_TEXT,
 
   body: { $ref: 'putShopSettingsBodySchema#' },
 
@@ -135,7 +147,8 @@ const putShopSettingSchema = {
     'The value of one setting (`key`, a field of PUT /api/root/shop-settings), of the shape ' +
     'that field takes there: a row for it, none when it already has the value. The rules ' +
     'between settings are checked on the values with this one changed (a pickup turned on ' +
-    'needs its address and hours set already, for example). The logo has its own routes.',
+    'needs its address and hours set already, for example). The logo has its own routes. ' +
+    LOCALES_OFF_TEXT,
 
   params: { $ref: 'shopSettingKeyParamsSchema#' },
   body: { $ref: 'putShopSettingBodySchema#' },
@@ -178,6 +191,42 @@ const getShopSettingsHistorySchema = {
     },
     500: {
       description: 'Unexpected server error while listing the history.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const localeCountsExample = {
+  items: [
+    { locale: 'en', accounts: 412, subscriptions: 188 },
+    { locale: 'es', accounts: 37, subscriptions: 21 },
+    { locale: 'uk', accounts: 1204, subscriptions: 760 },
+  ],
+};
+
+// root: how many people each language would leave
+const getShopLocaleCountsSchema = {
+  operationId: 'getShopLocaleCounts',
+  summary: 'Count the people who have each language',
+  description:
+    'How many accounts and how many subscriptions of the newsletters have each language, for the ' +
+    'warning to show root before a language is turned off ("N accounts and M subscriptions will ' +
+    'move to the language of the shop"): turning a language off leaves the people who have it ' +
+    'with none (see PUT /api/root/shop-settings). A row for each language that at least one ' +
+    'account or subscription has, in the order of the codes, whether the shop answers in it now ' +
+    'or not; the people with no language are no row. `accounts` counts the accounts that are ' +
+    'not deleted; `subscriptions` the subscriptions that are not ended (waiting for the ' +
+    'confirmation, in force, paused after a complaint, stopped because the address does not ' +
+    'exist), from the form and from accounts together.',
+
+  response: {
+    200: {
+      description: 'The people of each language.',
+      $ref: 'shopLocaleCountsResponseSchema#',
+      examples: [localeCountsExample],
+    },
+    500: {
+      description: 'Unexpected server error while counting.',
       $ref: 'errorResponseSchema#',
     },
   },
@@ -240,6 +289,7 @@ export const rootShopSettingsSchemas = withOpenApiSecurity(
       putShopSettingsSchema,
       putShopSettingSchema,
       getShopSettingsHistorySchema,
+      getShopLocaleCountsSchema,
       postShopLogoSchema,
       deleteShopLogoSchema,
     },

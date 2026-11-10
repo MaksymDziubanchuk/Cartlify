@@ -586,7 +586,14 @@ const getAuditLogSchema = {
     'columns of the answer and of the csv. `format=csv` gives every line of the filters as a ' +
     'file, without pages. Admin and root read the same lines with the same filters; for an ' +
     'admin the data of root (who, the address, the browser, the things and changes about its ' +
-    'account) are left out, only its role is there.',
+    'account) are left out, only its role is there. The newsletters write lines of their own: ' +
+    'root giving an admin the right to run them or taking it away (the thing is the account, ' +
+    'action `NEWSLETTER_MANAGER_CHANGE`), a newsletter made, changed, planned, stopped and so on ' +
+    '(`newsletter_campaign`, `NEWSLETTER_CAMPAIGN_CHANGE`), a subscriber erased by an admin ' +
+    '(the address made anonymous, `newsletter_subscriber`, `NEWSLETTER_SUBSCRIBER_DELETE`, event ' +
+    '`newsletter.subscriber_erased`), an address blocked for the ' +
+    'public form added or taken off (`newsletter_block`, `NEWSLETTER_BLOCK_CHANGE`); their ' +
+    'events start with `newsletter.`.',
 
   querystring: { $ref: 'adminAuditLogQuerySchema#' },
 
@@ -775,8 +782,9 @@ const getAlertsSchema = {
     'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
     'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
     'written for some days (`shipped_without_cost`), orders shipped by hand whose send has no ' +
-    'tracking number for some days (`shipped_without_tracking`), statements of return: ' +
-    'a transfer of the money that failed (`failed_refunds`), a statement made without the code ' +
+    'tracking number for some days (`shipped_without_tracking`), refunds that failed: the ' +
+    'transfer of the money of a statement, or the refund of a late payment that root has not ' +
+    'sent another way yet (`failed_refunds`), statements of return: a statement made without the code ' +
     'that waits for a check (`returns_manual_check`), a proof of the parcel told and not ' +
     'confirmed for some days (`returns_proof_waiting`), no goods and no word of the parcel ' +
     'some days after the statement (`returns_goods_not_sent`), the money due and not back some ' +
@@ -789,12 +797,30 @@ const getAlertsSchema = {
     'one), batches whose last good ' +
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
     'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
-    'some last days (`refunded_payments`), a reservation worker that has not run for some ' +
+    'some last days (`refunded_payments`), refunds of late payments made some days ago whose ' +
+    'money was not told sent or failed (`refunded_payments_not_sent`), a reservation worker that has not run for some ' +
     'seconds (`worker_stalled`), the fields of the data of the shop root has not set yet ' +
     '(`shop_settings_incomplete`; how many, the ones GET /api/admin/shop-settings/missing ' +
     'names), the language of the shop with no dictionary any more ' +
-    '(`shop_locale_missing`; 1 while it is gone, 0 once it is set to one that has one). Root ' +
-    'also gets the lines the admins wrote in some last hours ' +
+    '(`shop_locale_missing`; 1 while it is gone, 0 once it is set to one that has one). Root, ' +
+    'and an admin root allowed to run the newsletters (the right is read from the database at ' +
+    'every request, so an admin who loses it stops seeing these kinds at once, and one who gets ' +
+    'it starts seeing them), also get the newsletters: campaigns whose mails did not arrive ' +
+    '(`newsletter_undelivered`) or were not taken by the mail provider (`newsletter_rejected`) ' +
+    'over some per cent, or were marked as spam (`newsletter_complaints`) over some in a ' +
+    'thousand (per mille, unit `permille`: a complaint is rare, 3 is 0.3%; a share is judged ' +
+    'on the mails already answered for, when there are at least 20, for the campaigns that go ' +
+    'out and the ones that started in the last 14 days), a campaign that has been going out ' +
+    'for some days (`newsletter_running_long`), a campaign scheduled to start in some ' +
+    'hours, or whose time has passed and that nothing started yet ' +
+    '(`newsletter_starting_soon`), a campaign the limit of the campaigns of the shop called ' +
+    'off when its time came, in some last days (`newsletter_cancelled_by_limit`: copy the ' +
+    'campaign and schedule the copy for a time that fits) and the stop of the sending worker ' +
+    '(`newsletter_sending_halted`: 1 from the moment the worker stopped on a problem of the ' +
+    'whole stream, such as a key the mail provider refuses, until a pass goes through; ' +
+    '`occurredAt` is the time of the last stop; no threshold, no list, nothing to put ' +
+    'aside); the cases of the others are campaigns, their lists are the list of the ' +
+    'campaigns with the filters. Root also gets the lines the admins wrote in some last hours ' +
     '(`admin_actions`). Each kind names the request to the list of the app with its cases ' +
     '(`list`): the page of an admin shows a few of its rows and sorts them the way that list ' +
     'sorts, a click leads to the list or to a case. The cases the actor put aside are left out ' +
@@ -830,7 +856,9 @@ const getAlertSubscriptionsSchema = {
   description:
     'Each kind of alerts of the actor: whether they follow it and its threshold (the one they ' +
     'set or the one the server gives, its bounds and unit; null for a kind without one). Every ' +
-    'kind is followed until the actor turns it off. Each admin and each root has their own.',
+    'kind is followed until the actor turns it off. Each admin and each root has their own. The ' +
+    'kinds of the newsletters are listed for root and for an admin root allowed to run the ' +
+    'newsletters only (the right is read from the database at every request).',
 
   response: {
     200: {
@@ -884,7 +912,8 @@ const alertSubscriptionSchema = (on: boolean) =>
       },
       404: {
         description:
-          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root.',
+          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root, ' +
+          'the newsletter_* kinds are for root and for an admin root allowed to run the newsletters.',
         $ref: 'errorResponseSchema#',
       },
       500: {
@@ -934,8 +963,9 @@ const alertThresholdSchema = (set: boolean) =>
       },
       404: {
         description:
-          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root; ' +
-          'a kind without a threshold (ALERT_THRESHOLD_NOT_FOUND).',
+          'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root, ' +
+          'the newsletter_* kinds are for root and for an admin root allowed to run the ' +
+          'newsletters; a kind without a threshold (ALERT_THRESHOLD_NOT_FOUND).',
         $ref: 'errorResponseSchema#',
       },
       500: {
@@ -1015,10 +1045,12 @@ const alertDismissalSchema = (on: boolean) =>
         description: on
           ? 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled, ' +
             'shop_settings_incomplete and shop_locale_missing have no cases, admin_actions is a ' +
-            'kind of root; no case of the kind waits with the id (ALERT_ITEM_NOT_FOUND).'
+            'kind of root, the newsletter_* kinds are for root and for an admin root allowed to ' +
+            'run the newsletters; no case of the kind waits with the id (ALERT_ITEM_NOT_FOUND).'
           : 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled, ' +
             'shop_settings_incomplete and shop_locale_missing have no cases, admin_actions is a ' +
-            'kind of root.',
+            'kind of root, the newsletter_* kinds are for root and for an admin root allowed to ' +
+            'run the newsletters.',
         $ref: 'errorResponseSchema#',
       },
       500: {

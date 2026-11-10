@@ -1,4 +1,5 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
+import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 import { idPathParam } from '@schemas/idPathParam.js';
@@ -250,6 +251,7 @@ const usersUserResponseSchema = {
     name: { type: 'string' },
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
+    canManageNewsletters: canManageNewslettersField,
     locale: { type: 'string' },
     phone: { type: 'string' },
 
@@ -267,6 +269,7 @@ const usersUserResponseSchema = {
     'updatedAt',
     'avatarUrls',
     'avatarIsDefault',
+    'canManageNewsletters',
   ],
 } as const;
 
@@ -626,6 +629,77 @@ const exportRows = (description: string) => ({
   items: { type: 'object', additionalProperties: true },
 });
 
+// one line of the journal of a subscription in the export: the fields agreed by name, no more
+// (the schema drops any other field from the answer)
+const exportNewsletterEventSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    event: {
+      type: 'string',
+      description:
+        'What happened: requested, confirmed, subscribed, locale_changed, locale_reset, ' +
+        'unsubscribed, complaint, restored, bounced, account_deleted, removed_by_admin, expired.',
+    },
+    place: {
+      type: 'string',
+      description:
+        'Where: form, registration, profile, manage_page, mail_client, webhook, admin or system.',
+    },
+    createdAt: { type: 'string', description: 'When, in UTC.' },
+    ip: { type: ['string', 'null'], description: 'The address the request came from.' },
+    userAgent: { type: ['string', 'null'], description: 'The browser of the request.' },
+    privacyVersion: {
+      type: ['integer', 'null'],
+      description: 'The version of the privacy policy in force when a consent was given.',
+    },
+    campaignId: {
+      type: ['integer', 'null'],
+      description: 'The campaign whose mail an unsubscribe came from.',
+    },
+  },
+  required: ['event', 'place', 'createdAt', 'ip', 'userAgent', 'privacyVersion', 'campaignId'],
+} as const;
+
+const exportNewsletterSubscriptionSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    status: {
+      type: 'string',
+      description: 'active, paused_complaint, stopped_bounce or ended.',
+    },
+    source: {
+      type: 'string',
+      description: 'account (from the profile or the registration) or form.',
+    },
+    locale: { type: ['string', 'null'], description: 'The language of the mails; null for none.' },
+    createdAt: { type: 'string', description: 'When the subscription was asked for, in UTC.' },
+    confirmedAt: { type: ['string', 'null'], description: 'When it came into force, in UTC.' },
+    endedAt: { type: ['string', 'null'], description: 'When it ended or was stopped, in UTC.' },
+    endReason: {
+      type: ['string', 'null'],
+      description:
+        'Why: unsubscribed, account_deleted, removed_by_admin, expired, not_me or bounced.',
+    },
+    events: {
+      type: 'array',
+      description: 'The journal of the subscription, the oldest line first.',
+      items: exportNewsletterEventSchema,
+    },
+  },
+  required: [
+    'status',
+    'source',
+    'locale',
+    'createdAt',
+    'confirmedAt',
+    'endedAt',
+    'endReason',
+    'events',
+  ],
+} as const;
+
 const usersExportResponseSchema = {
   $id: 'usersExportResponseSchema',
   type: 'object',
@@ -657,6 +731,19 @@ const usersExportResponseSchema = {
       'The consents to the terms and the contract: documentId, kind, version, title, orderId (the ' +
         'versions an order was confirmed with), ip, userAgent, event (where the person agreed), createdAt.',
     ),
+    newsletterSubscriptions: {
+      type: 'array',
+      description:
+        'The subscriptions to the newsletter that the person confirmed, the oldest first, those ' +
+        'that ended included (a request that was never confirmed is not given): status, source, ' +
+        'locale, createdAt, confirmedAt, endedAt, endReason and events, the journal of each (event, ' +
+        'place, createdAt, ip, userAgent, privacyVersion, campaignId). They are the ones on the ' +
+        'address of the account, the ones the account made and, for a deleted account, the ones ' +
+        'of the form that its deletion ended. An empty list for an account with none, and for an ' +
+        'account that never proved its address. No token, hash or other secret of the server is ' +
+        'part of it.',
+      items: exportNewsletterSubscriptionSchema,
+    },
   },
   required: [
     'exportedAt',
@@ -669,6 +756,7 @@ const usersExportResponseSchema = {
     'logins',
     'sessions',
     'legalAcceptances',
+    'newsletterSubscriptions',
   ],
 } as const;
 

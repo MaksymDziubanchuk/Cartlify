@@ -1,5 +1,11 @@
 import { BadRequestError, NotFoundError } from '@utils/errors.js';
 
+import {
+  SHARE_STATUSES,
+  SHARE_UNITS,
+  SHARE_WATCH_DAYS,
+} from '../../../newsletters/services/helpers/campaignShares.helper.js';
+
 import type {
   AdminAlertKind,
   AdminAlertListDto,
@@ -28,6 +34,7 @@ export const ADMIN_ALERT_KINDS = [
   'expired_batches',
   'chats_waiting',
   'refunded_payments',
+  'refunded_payments_not_sent',
   'failed_refunds',
   'returns_manual_check',
   'returns_proof_waiting',
@@ -39,10 +46,28 @@ export const ADMIN_ALERT_KINDS = [
   'shop_locale_missing',
 ] as const satisfies readonly AdminAlertKind[];
 
+// the kinds of the newsletters: root sees them, and so does an admin root allowed to run the
+// newsletters (the right is asked of the database at every request, never read from the token)
+export const NEWSLETTER_ALERT_KINDS = [
+  'newsletter_undelivered',
+  'newsletter_rejected',
+  'newsletter_complaints',
+  'newsletter_running_long',
+  'newsletter_starting_soon',
+  'newsletter_cancelled_by_limit',
+  'newsletter_sending_halted',
+] as const satisfies readonly AdminAlertKind[];
+
 export const ROOT_ALERT_KINDS = ['admin_actions'] as const satisfies readonly AdminAlertKind[];
 
-export const alertKindsOf = (role: Role): AdminAlertKind[] =>
-  role === 'ROOT' ? [...ADMIN_ALERT_KINDS, ...ROOT_ALERT_KINDS] : [...ADMIN_ALERT_KINDS];
+// the kinds of a role in the order they are told: those of every admin, the newsletters (for root,
+// and for an admin who may run them: `manager`), those of root. Nobody but root and an admin can have
+// a kind of the newsletters, whatever `manager` says
+export const alertKindsOf = (role: Role, manager: boolean): AdminAlertKind[] => [
+  ...ADMIN_ALERT_KINDS,
+  ...(role === 'ROOT' || (role === 'ADMIN' && manager) ? NEWSLETTER_ALERT_KINDS : []),
+  ...(role === 'ROOT' ? ROOT_ALERT_KINDS : []),
+];
 
 type ThresholdSpec = { unit: AdminAlertThresholdUnit; default: number; min: number; max: number };
 
@@ -73,10 +98,25 @@ const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
   expiring_batches: { unit: 'days', default: 7, min: 1, max: 365 },
   // the refunds of late payments of so many last days
   refunded_payments: { unit: 'days', default: 7, min: 1, max: 365 },
+  // a refund of a late payment made so many days ago whose money was not told sent or failed
+  refunded_payments_not_sent: { unit: 'days', default: 3, min: 1, max: 365 },
   // a worker that has not run for so many seconds; it runs every few seconds
   worker_stalled: { unit: 'seconds', default: 180, min: 60, max: 86_400 },
   // root: the lines the admins wrote in so many last hours
   admin_actions: { unit: 'hours', default: 24, min: 1, max: 720 },
+  // the newsletters: a campaign whose mails did not arrive or were not taken by the provider, over so
+  // many per cent (whole numbers: the least a share can be set to is 1%)
+  newsletter_undelivered: { unit: 'percent', default: 5, min: 1, max: SHARE_UNITS.undelivered.max },
+  newsletter_rejected: { unit: 'percent', default: 5, min: 1, max: SHARE_UNITS.rejected.max },
+  // ...or complained of, over so many in a thousand (per mille): a complaint is rare, the mail
+  // providers judge a sender by a few in a thousand, and a whole per cent would be far too coarse
+  newsletter_complaints: { unit: 'permille', default: 3, min: 1, max: SHARE_UNITS.complaints.max },
+  // a campaign that has been going out for so many days
+  newsletter_running_long: { unit: 'days', default: 3, min: 1, max: 365 },
+  // a campaign scheduled to start within so many hours
+  newsletter_starting_soon: { unit: 'hours', default: 24, min: 1, max: 720 },
+  // a campaign the limit of the campaigns called off, in the last so many days
+  newsletter_cancelled_by_limit: { unit: 'days', default: 7, min: 1, max: 365 },
 };
 
 // the threshold of a kind: the one the admin set (custom) or the one the server gives; null for
@@ -109,10 +149,14 @@ export function assertThreshold(kind: AdminAlertKind, value: number): void {
 }
 
 // the window of the cases of a kind a threshold makes: changed before a time, written since one,
-// a last good day not later than one, at most some free units
+// a last good day not later than one, at most some free units, a time before which a campaign
+// starts, the per cent a share of mails is over (the complaints: the thousandths)
 export type AlertWindow = {
   before?: Date;
   since?: Date;
+  until?: Date;
+  percent?: number;
+  permille?: number;
   expiresBy?: string;
   units?: number;
   // the days of a statement of return (the filters of the list of the statements count in days)
@@ -155,8 +199,23 @@ export function alertWindowOf(
       return { expiresBy: dayAfter(today, threshold) };
     case 'refunded_payments':
       return { since: new Date(now - threshold * DAY) };
+    case 'refunded_payments_not_sent':
+      return { before: new Date(now - threshold * DAY) };
     case 'admin_actions':
       return { since: new Date(now - threshold * HOUR) };
+    // the shares are watched for SHARE_WATCH_DAYS after a campaign started
+    case 'newsletter_undelivered':
+    case 'newsletter_rejected':
+      return { since: new Date(now - SHARE_WATCH_DAYS * DAY), percent: threshold };
+    case 'newsletter_complaints':
+      return { since: new Date(now - SHARE_WATCH_DAYS * DAY), permille: threshold };
+    // the campaigns the limit called off in the last days
+    case 'newsletter_cancelled_by_limit':
+      return { since: new Date(now - threshold * DAY) };
+    case 'newsletter_running_long':
+      return { before: new Date(now - threshold * DAY) };
+    case 'newsletter_starting_soon':
+      return { until: new Date(now + threshold * HOUR) };
     default:
       return {};
   }
@@ -164,8 +223,12 @@ export function alertWindowOf(
 
 const isoOf = (date: Date | undefined) => (date ?? new Date(0)).toISOString();
 
+const CAMPAIGNS_PATH = '/api/newsletters/campaigns';
+const REFUNDS_PATH = '/api/payments/refunds';
+
 // the request to the list of the app with the cases of a kind, the most urgent first; the
-// frontend adds a limit, its own sort or a filter of its rows. The stop of the worker has none
+// frontend adds a limit, its own sort or a filter of its rows. The stop of the worker and the stop of
+// the sending worker have none
 export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAlertListDto | null {
   switch (kind) {
     case 'paid_orders_waiting':
@@ -215,13 +278,14 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sortDir: 'asc',
         },
       };
+    // the refunds that failed are transfers of statements and refunds of late payments: the list of
+    // the refunds that wait counts them both (waitingRefunds.helper.ts is the rule of its rows)
+    case 'failed_refunds':
+      return { path: REFUNDS_PATH, query: { state: 'failed' } };
+    case 'refunded_payments_not_sent':
+      return { path: REFUNDS_PATH, query: { state: 'unsent', to: isoOf(window.before) } };
     // the cases of the statements of return are statements: the list of the statements counts
     // them with the same filters (returnFilters.helper.ts)
-    case 'failed_refunds':
-      return {
-        path: '/api/returns',
-        query: { state: 'open', money: 'failed', sortBy: 'statedAt', sortDir: 'asc' },
-      };
     case 'returns_manual_check':
       return {
         path: '/api/returns',
@@ -356,6 +420,53 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
         path: '/api/admin/audit-log',
         query: { actorRole: 'ADMIN', from: isoOf(window.since) },
       };
+    // the cases of the newsletters are campaigns: the list of the campaigns counts them with the
+    // same filters (campaignShares.helper.ts is the rule of the shares)
+    case 'newsletter_undelivered':
+      return {
+        path: CAMPAIGNS_PATH,
+        query: {
+          status: SHARE_STATUSES.join(','),
+          startedFrom: isoOf(window.since),
+          undeliveredOver: String(window.percent ?? 0),
+        },
+      };
+    case 'newsletter_rejected':
+      return {
+        path: CAMPAIGNS_PATH,
+        query: {
+          status: SHARE_STATUSES.join(','),
+          startedFrom: isoOf(window.since),
+          rejectedOver: String(window.percent ?? 0),
+        },
+      };
+    case 'newsletter_complaints':
+      return {
+        path: CAMPAIGNS_PATH,
+        query: {
+          status: SHARE_STATUSES.join(','),
+          startedFrom: isoOf(window.since),
+          complaintsOver: String(window.permille ?? 0),
+        },
+      };
+    case 'newsletter_running_long':
+      return {
+        path: CAMPAIGNS_PATH,
+        query: { status: 'sending', startedTo: isoOf(window.before) },
+      };
+    case 'newsletter_starting_soon':
+      return {
+        path: CAMPAIGNS_PATH,
+        query: { status: 'scheduled', scheduledTo: isoOf(window.until) },
+      };
+    case 'newsletter_cancelled_by_limit':
+      return {
+        path: CAMPAIGNS_PATH,
+        query: { status: 'cancelled', cancelReason: 'limit', cancelledFrom: isoOf(window.since) },
+      };
+    // the stop of the sending worker is one state, not a list of rows
+    case 'newsletter_sending_halted':
+      return null;
   }
 }
 

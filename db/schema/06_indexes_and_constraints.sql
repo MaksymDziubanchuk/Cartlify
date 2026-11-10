@@ -1257,9 +1257,11 @@ END $$;
 ----------------------------------------
 -- The contract has the days a buyer has to withdraw after the delivery (14 to 36500), the address
 -- the goods go back to (trimmed, 1-500 characters) and who pays the carrier for it. The privacy
--- policy has the six terms of keeping personal data, each 1 to 36500 days. The terms have none of
--- them, and no kind has the fields of another. Each test starts with IS NOT NULL: a check that
--- reads NULL passes.
+-- policy has the eight terms of keeping personal data, each 1 to 36500 days (six for the logins,
+-- the guests, the chats, the statements of return and the recipients of the orders; two for the
+-- newsletters: the proof of the consent of an ended subscription and the rows of the recipients of
+-- a campaign). The terms have none of them, and no kind has the fields of another. Each test
+-- starts with IS NOT NULL: a check that reads NULL passes.
 -- A version published before these columns existed has none of them and breaks the check: clear
 -- those rows (and the consents to them) before the script runs.
 DO $$
@@ -1288,6 +1290,8 @@ BEGIN
           AND "retentionReturnAddressesDays" IS NULL
           AND "retentionReturnPersonalDays" IS NULL
           AND "retentionRecipientDays" IS NULL
+          AND "retentionNewsletterConsentDays" IS NULL
+          AND "retentionNewsletterRecipientsDays" IS NULL
         WHEN 'privacy' THEN
           "retentionLoginAddressesDays" IS NOT NULL
           AND "retentionLoginAddressesDays" >= 1 AND "retentionLoginAddressesDays" <= 36500
@@ -1301,6 +1305,10 @@ BEGIN
           AND "retentionReturnPersonalDays" >= 1 AND "retentionReturnPersonalDays" <= 36500
           AND "retentionRecipientDays" IS NOT NULL
           AND "retentionRecipientDays" >= 1 AND "retentionRecipientDays" <= 36500
+          AND "retentionNewsletterConsentDays" IS NOT NULL
+          AND "retentionNewsletterConsentDays" >= 1 AND "retentionNewsletterConsentDays" <= 36500
+          AND "retentionNewsletterRecipientsDays" IS NOT NULL
+          AND "retentionNewsletterRecipientsDays" >= 1 AND "retentionNewsletterRecipientsDays" <= 36500
           AND "withdrawalDays" IS NULL
           AND "returnAddress" IS NULL
           AND "returnShippingPaidBy" IS NULL
@@ -1314,6 +1322,8 @@ BEGIN
           AND "retentionReturnAddressesDays" IS NULL
           AND "retentionReturnPersonalDays" IS NULL
           AND "retentionRecipientDays" IS NULL
+          AND "retentionNewsletterConsentDays" IS NULL
+          AND "retentionNewsletterRecipientsDays" IS NULL
       END
     );
 END $$;
@@ -1655,10 +1665,7 @@ CREATE INDEX IF NOT EXISTS stock_log_order_idx
 -- USERS: the form of a language code
 ----------------------------------------
 -- A language is two lower-case letters (en, uk, es, ...); the ones the app answers in are decided
--- by the dictionaries that exist (src/locales), not by this form check. A value that predates the
--- check (PATCH /api/users/me took any text before) is cleared, so the script runs again clean.
-UPDATE cartlify.users SET locale = NULL WHERE locale IS NOT NULL AND locale !~ '^[a-z]{2}$';
-
+-- by the dictionaries that exist (src/locales), not by this form check.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_locale_chk') THEN
@@ -1685,3 +1692,359 @@ END $$;
 -- The current value of a setting is the latest row of its key (the start of the server and every
 -- write read it); the history goes newest first, of every key or of one.
 CREATE INDEX IF NOT EXISTS shop_settings_key_id_idx ON cartlify.shop_settings (key, id DESC);
+
+----------------------------------------
+-- USERS: the right to run the newsletters
+----------------------------------------
+-- Only an admin has it (root needs none): it goes off with the role (trg_users_clear_newsletter_manager,
+-- db/05), and the check keeps a buyer from having it whoever sets it.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_newsletter_manager_chk') THEN
+    ALTER TABLE cartlify.users
+      ADD CONSTRAINT users_newsletter_manager_chk
+      CHECK (NOT "canManageNewsletters" OR role = 'ADMIN');
+  END IF;
+END $$;
+
+----------------------------------------
+-- NEWSLETTER_SUBSCRIPTIONS: the address, the language, the source, the state
+----------------------------------------
+-- newsletter_subscriptions_email_chk: an address as the server writes it (lower case, no spaces
+--   around it, one at sign, up to 254 characters); the format of an address is the API's to judge.
+-- newsletter_subscriptions_locale_chk: a language is two lower-case letters or none ("no language",
+--   the language of the shop is used).
+-- newsletter_subscriptions_source_chk: a subscription of an account names its account and has no
+--   HMAC; a subscription of the form has no account, and the HMAC of its address (the key of the
+--   blocklist) while it lives. One that ended or was stopped may have none: an admin who erased the
+--   address (cartlify.newsletter_admin_erase_address) empties it, and the guard of db/05 lets
+--   nothing else do so.
+-- newsletter_subscriptions_ended_user_chk: the account whose deletion ended a subscription of the form
+--   (endedUserId) is named only on a subscription of the form that ended.
+-- newsletter_subscriptions_status_chk: what a state holds. A waiting one has the sha256 of the token
+--   of its link and the deadline, and is not confirmed or ended; one in force or paused has no link
+--   and no end; a stopped one has the time of the end and the reason bounced; an ended one has the
+--   time and a reason other than the bounce. Each positive test starts with IS NOT NULL: a check that
+--   reads NULL passes.
+-- newsletter_subscriptions_tokens_chk: the hash of the link of management and the hash of the link of
+--   the unsubscribe are sha256 in hex and two different ones (the token of the button of a mail client
+--   opens nothing but the unsubscribe), the salt they are made from is a string of 16 to 128
+--   characters.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscriptions_email_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscriptions
+      ADD CONSTRAINT newsletter_subscriptions_email_chk
+      CHECK (
+        email = lower(btrim(email))
+        AND char_length(email) >= 3 AND char_length(email) <= 254
+        AND email ~ '^[^[:space:]@]+@[^[:space:]@]+$'
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscriptions_locale_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscriptions
+      ADD CONSTRAINT newsletter_subscriptions_locale_chk
+      CHECK (locale IS NULL OR locale ~ '^[a-z]{2}$');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscriptions_source_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscriptions
+      ADD CONSTRAINT newsletter_subscriptions_source_chk
+      CHECK (
+        CASE source
+          WHEN 'account' THEN
+            "userId" IS NOT NULL
+            AND "emailHmac" IS NULL
+          WHEN 'form' THEN
+            "userId" IS NULL
+            AND (
+              ("emailHmac" IS NOT NULL AND "emailHmac" ~ '^[0-9a-f]{64}$')
+              OR ("emailHmac" IS NULL AND status IN ('ended', 'stopped_bounce'))
+            )
+        END
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscriptions_status_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscriptions
+      ADD CONSTRAINT newsletter_subscriptions_status_chk
+      CHECK (
+        CASE status
+          WHEN 'pending' THEN
+            "confirmHash" IS NOT NULL
+            AND "confirmHash" ~ '^[0-9a-f]{64}$'
+            AND "confirmExpiresAt" IS NOT NULL
+            AND "confirmedAt" IS NULL
+            AND "endedAt" IS NULL
+            AND "endReason" IS NULL
+          WHEN 'active' THEN
+            "confirmHash" IS NULL
+            AND "confirmExpiresAt" IS NULL
+            AND "endedAt" IS NULL
+            AND "endReason" IS NULL
+          WHEN 'paused_complaint' THEN
+            "confirmHash" IS NULL
+            AND "confirmExpiresAt" IS NULL
+            AND "endedAt" IS NULL
+            AND "endReason" IS NULL
+          WHEN 'stopped_bounce' THEN
+            "confirmHash" IS NULL
+            AND "confirmExpiresAt" IS NULL
+            AND "endedAt" IS NOT NULL
+            AND "endReason" IS NOT NULL
+            AND "endReason" = 'bounced'
+          WHEN 'ended' THEN
+            "confirmHash" IS NULL
+            AND "confirmExpiresAt" IS NULL
+            AND "endedAt" IS NOT NULL
+            AND "endReason" IS NOT NULL
+            AND "endReason" <> 'bounced'
+        END
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscriptions_tokens_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscriptions
+      ADD CONSTRAINT newsletter_subscriptions_tokens_chk
+      CHECK (
+        "manageHash" ~ '^[0-9a-f]{64}$'
+        AND "unsubscribeHash" ~ '^[0-9a-f]{64}$'
+        AND "unsubscribeHash" <> "manageHash"
+        AND char_length("manageSalt") >= 16 AND char_length("manageSalt") <= 128
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscriptions_ended_user_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscriptions
+      ADD CONSTRAINT newsletter_subscriptions_ended_user_chk
+      CHECK ("endedUserId" IS NULL OR (source = 'form' AND status = 'ended'));
+  END IF;
+END $$;
+
+-- An address has at most one subscription that waits, is in force or is paused: the form and the
+-- account share the place, and a second request finds the first. Ended and stopped subscriptions
+-- stay beside it as the proof of the consent. The address is compared as written (lower case, by
+-- the check above).
+CREATE UNIQUE INDEX IF NOT EXISTS newsletter_subscriptions_live_email_uidx
+  ON cartlify.newsletter_subscriptions (email)
+  WHERE status IN ('pending', 'active', 'paused_complaint');
+
+-- The link of a request that waits (the confirmation, "this was not me") finds the request by the
+-- hash of its token. A token belongs to one request: the lookup never has two rows to choose from
+-- (the steps read it into one row), and a second request given the same hash is refused. A request
+-- that is not waiting has no hash (newsletter_subscriptions_status_chk).
+CREATE UNIQUE INDEX IF NOT EXISTS newsletter_subscriptions_pending_confirm_uidx
+  ON cartlify.newsletter_subscriptions ("confirmHash")
+  WHERE status = 'pending';
+
+-- The blocking of an address finds the requests of the address by its HMAC (a subscription of the
+-- form keeps it, one of an account does not). The HMAC is no key: every row an address ever had
+-- carries the same one.
+CREATE INDEX IF NOT EXISTS newsletter_subscriptions_email_hmac_idx
+  ON cartlify.newsletter_subscriptions ("emailHmac")
+  WHERE "emailHmac" IS NOT NULL;
+
+-- The export of an account reads an address among the rows of every state; the index of the live
+-- addresses above holds only the live ones.
+CREATE INDEX IF NOT EXISTS newsletter_subscriptions_email_idx
+  ON cartlify.newsletter_subscriptions (email);
+
+-- The list of subscribers for the people who run the newsletters looks for a part of an address with
+-- ILIKE '%part%', in the rows of every state; a trigram index serves it from 3 characters on (as
+-- users_email_trgm_idx does for the users). Addresses are kept in lower case.
+CREATE INDEX IF NOT EXISTS newsletter_subscriptions_email_trgm_idx
+  ON cartlify.newsletter_subscriptions USING gin (email cartlify.gin_trgm_ops);
+
+-- the cleanup of the requests that were not confirmed in time
+CREATE INDEX IF NOT EXISTS newsletter_subscriptions_pending_expiry_idx
+  ON cartlify.newsletter_subscriptions ("confirmExpiresAt")
+  WHERE status = 'pending';
+
+-- the cleanup of the ended subscriptions whose term of keeping has passed
+CREATE INDEX IF NOT EXISTS newsletter_subscriptions_ended_idx
+  ON cartlify.newsletter_subscriptions ("endedAt")
+  WHERE status IN ('ended', 'stopped_bounce');
+
+----------------------------------------
+-- NEWSLETTER_SUBSCRIPTION_EVENTS: the language, the version of the policy; the campaign
+----------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscription_events_locale_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscription_events
+      ADD CONSTRAINT newsletter_subscription_events_locale_chk
+      CHECK (locale IS NULL OR locale ~ '^[a-z]{2}$');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_subscription_events_privacy_chk') THEN
+    ALTER TABLE cartlify.newsletter_subscription_events
+      ADD CONSTRAINT newsletter_subscription_events_privacy_chk
+      CHECK ("privacyVersion" IS NULL OR "privacyVersion" >= 1);
+  END IF;
+END $$;
+
+-- the lines that name a campaign: the unsubscribes from its mails, and the check of the key when a
+-- draft is deleted
+CREATE INDEX IF NOT EXISTS newsletter_subscription_events_campaign_idx
+  ON cartlify.newsletter_subscription_events ("campaignId", id)
+  WHERE "campaignId" IS NOT NULL;
+
+----------------------------------------
+-- NEWSLETTER_CAMPAIGNS: the name, the text, the totals, the state
+----------------------------------------
+-- newsletter_campaigns_name_chk: a name the admins see, as the service trims it, up to 200
+--   characters.
+-- newsletter_campaigns_content_chk: the text is an object (a language to its subject, preview and
+--   blocks; the schema of the route judges the rest), the data of the products is an object or a
+--   list.
+-- newsletter_campaigns_totals_chk: the totals are not negative.
+-- newsletter_campaigns_cancel_reason_chk: the reason of a cancellation (the limit of the campaigns,
+--   when the system cancelled it) belongs to a cancelled campaign only; one an admin cancelled has none.
+-- newsletter_campaigns_status_chk: what a state holds. A draft and a scheduled campaign have not
+--   started: no start, no end, no data of products, no total; a scheduled one has its time. A
+--   sending one has its start; a finished one the start and the time it finished; a stopped one the
+--   start and the time it was stopped; a cancelled one has its time and never started.
+-- The lists of campaigns (newest first, and the ones that wait for their time) are served by the
+-- indexes of the Prisma model (newsletter_campaigns_createdAt_id_idx,
+-- newsletter_campaigns_status_scheduledAt_idx).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_campaigns_name_chk') THEN
+    ALTER TABLE cartlify.newsletter_campaigns
+      ADD CONSTRAINT newsletter_campaigns_name_chk
+      CHECK (name = btrim(name) AND name <> '' AND char_length(name) <= 200);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_campaigns_content_chk') THEN
+    ALTER TABLE cartlify.newsletter_campaigns
+      ADD CONSTRAINT newsletter_campaigns_content_chk
+      CHECK (
+        jsonb_typeof(content) = 'object'
+        AND ("productsSnapshot" IS NULL OR jsonb_typeof("productsSnapshot") IN ('object', 'array'))
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_campaigns_totals_chk') THEN
+    ALTER TABLE cartlify.newsletter_campaigns
+      ADD CONSTRAINT newsletter_campaigns_totals_chk
+      CHECK (
+        "plannedCount" >= 0 AND "sentCount" >= 0 AND "rejectedCount" >= 0
+        AND "undeliveredCount" >= 0 AND "complaintCount" >= 0 AND "unsubscribedCount" >= 0
+      );
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_campaigns_cancel_reason_chk') THEN
+    ALTER TABLE cartlify.newsletter_campaigns
+      ADD CONSTRAINT newsletter_campaigns_cancel_reason_chk
+      CHECK ("cancelReason" IS NULL OR status = 'cancelled');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_campaigns_status_chk') THEN
+    ALTER TABLE cartlify.newsletter_campaigns
+      ADD CONSTRAINT newsletter_campaigns_status_chk
+      CHECK (
+        CASE status
+          WHEN 'draft' THEN
+            "startedAt" IS NULL AND "finishedAt" IS NULL AND "stoppedAt" IS NULL
+            AND "cancelledAt" IS NULL AND "productsSnapshot" IS NULL
+            AND "plannedCount" = 0 AND "sentCount" = 0 AND "rejectedCount" = 0
+            AND "undeliveredCount" = 0 AND "complaintCount" = 0 AND "unsubscribedCount" = 0
+          WHEN 'scheduled' THEN
+            "scheduledAt" IS NOT NULL
+            AND "startedAt" IS NULL AND "finishedAt" IS NULL AND "stoppedAt" IS NULL
+            AND "cancelledAt" IS NULL AND "productsSnapshot" IS NULL
+            AND "plannedCount" = 0 AND "sentCount" = 0 AND "rejectedCount" = 0
+            AND "undeliveredCount" = 0 AND "complaintCount" = 0 AND "unsubscribedCount" = 0
+          WHEN 'sending' THEN
+            "startedAt" IS NOT NULL
+            AND "finishedAt" IS NULL AND "stoppedAt" IS NULL AND "cancelledAt" IS NULL
+          WHEN 'finished' THEN
+            "startedAt" IS NOT NULL AND "finishedAt" IS NOT NULL
+            AND "stoppedAt" IS NULL AND "cancelledAt" IS NULL
+          WHEN 'stopped' THEN
+            "startedAt" IS NOT NULL AND "stoppedAt" IS NOT NULL
+            AND "finishedAt" IS NULL AND "cancelledAt" IS NULL
+          WHEN 'cancelled' THEN
+            "cancelledAt" IS NOT NULL
+            AND "startedAt" IS NULL AND "finishedAt" IS NULL AND "stoppedAt" IS NULL
+        END
+      );
+  END IF;
+END $$;
+
+----------------------------------------
+-- NEWSLETTER_RECIPIENTS: the language, the tries, the state
+----------------------------------------
+-- newsletter_recipients_status_chk: a mail that waits has not been sent and has no id; one that was
+--   sent, and later bounced, dropped or complained about, has the time it was sent; one the provider
+--   rejected has neither; one the sending left out (skipped: the person unsubscribed meanwhile, or
+--   there was nothing to send) never went out and has neither.
+-- newsletter_recipients_queue_idx: the mails that wait, in the order they are taken (the tries used,
+--   then the id); the sending (newsletter_claim_recipients) reads only these, however many mails of
+--   finished campaigns the table holds, and stops at the first rows that fit.
+-- newsletter_recipients_sent_at_idx: the mails sent in a day (the daily limit of the newsletters
+--   counts them).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_recipients_locale_chk') THEN
+    ALTER TABLE cartlify.newsletter_recipients
+      ADD CONSTRAINT newsletter_recipients_locale_chk
+      CHECK (locale ~ '^[a-z]{2}$');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_recipients_attempts_chk') THEN
+    ALTER TABLE cartlify.newsletter_recipients
+      ADD CONSTRAINT newsletter_recipients_attempts_chk
+      CHECK (attempts >= 0 AND ("providerMessageId" IS NULL OR "providerMessageId" <> ''));
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_recipients_status_chk') THEN
+    ALTER TABLE cartlify.newsletter_recipients
+      ADD CONSTRAINT newsletter_recipients_status_chk
+      CHECK (
+        CASE
+          WHEN status = 'queued' THEN "sentAt" IS NULL AND "providerMessageId" IS NULL
+          WHEN status IN ('sent', 'bounced', 'dropped', 'complained') THEN "sentAt" IS NOT NULL
+          WHEN status = 'skipped' THEN "sentAt" IS NULL AND "providerMessageId" IS NULL
+          ELSE true
+        END
+      );
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS newsletter_recipients_queue_idx
+  ON cartlify.newsletter_recipients (attempts, id)
+  WHERE status = 'queued';
+
+CREATE INDEX IF NOT EXISTS newsletter_recipients_sent_at_idx
+  ON cartlify.newsletter_recipients ("sentAt")
+  WHERE "sentAt" IS NOT NULL;
+
+----------------------------------------
+-- NEWSLETTER_FORM_BLOCKLIST: the HMAC, who blocked, the reason
+----------------------------------------
+-- newsletter_form_blocklist_hmac_chk: the HMAC of an address is a sha256 in hex.
+-- newsletter_form_blocklist_actor_chk: an entry is made by an admin (named) or by the person
+--   (byPerson), exactly one of the two.
+-- newsletter_form_blocklist_reason_chk: a reason is trimmed and not empty, up to 200 characters.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_form_blocklist_hmac_chk') THEN
+    ALTER TABLE cartlify.newsletter_form_blocklist
+      ADD CONSTRAINT newsletter_form_blocklist_hmac_chk
+      CHECK ("emailHmac" ~ '^[0-9a-f]{64}$');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_form_blocklist_actor_chk') THEN
+    ALTER TABLE cartlify.newsletter_form_blocklist
+      ADD CONSTRAINT newsletter_form_blocklist_actor_chk
+      CHECK (("blockedById" IS NOT NULL) <> "byPerson");
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'newsletter_form_blocklist_reason_chk') THEN
+    ALTER TABLE cartlify.newsletter_form_blocklist
+      ADD CONSTRAINT newsletter_form_blocklist_reason_chk
+      CHECK (reason IS NULL OR (reason = btrim(reason) AND reason <> ''));
+  END IF;
+END $$;

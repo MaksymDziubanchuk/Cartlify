@@ -205,4 +205,39 @@ describe('webPageUrl', () => {
       'https://shop.example.com/web/login?token=t',
     );
   });
+
+  // a secret in the query reaches the logs of the hosts and the referrer; one after the # never
+  // leaves the browser of the person
+  it('puts the fragment of the call after the #, encoded, and no query', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(webPageUrl('/newsletter/confirm', { fragment: { token: 'a+b/c=&d' } })).toBe(
+      'https://shop.example.com/newsletter/confirm#token=a%2Bb%2Fc%3D%26d',
+    );
+    expect(new URL(webPageUrl('/x', { fragment: { token: 't' } })).search).toBe('');
+  });
+
+  it('keeps the query of the page and of the call before the fragment of the call', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(
+      webPageUrl('/account?tab=news', { query: { lang: 'uk' }, fragment: { token: 't' } }),
+    ).toBe('https://shop.example.com/account?tab=news&lang=uk#token=t');
+  });
+
+  it('writes several values of the fragment in the order given', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(webPageUrl('/web/login', { fragment: { token: 't', newsletter: '1' } })).toBe(
+      'https://shop.example.com/web/login#token=t&newsletter=1',
+    );
+  });
+
+  it('puts the fragment of the call in place of the one the page has', async () => {
+    const { webPageUrl } = await load(site);
+
+    expect(webPageUrl('/account#top', { fragment: { token: 't' } })).toBe(
+      'https://shop.example.com/account#token=t',
+    );
+  });
 });

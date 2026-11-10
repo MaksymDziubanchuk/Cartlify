@@ -14,6 +14,8 @@ import {
   readReviewCursor,
   reviewAuthorSelect,
   reviewOrderOf,
+  reviewPurchaseOf,
+  reviewPurchaseWhere,
   reviewSortValueOf,
   reviewsAfter,
   type ReviewSort,
@@ -26,6 +28,7 @@ export async function findReviews({
   limit: limitIn,
   cursor: cursorIn,
   sort: sortIn,
+  verifiedPurchase,
   actorId: actorIdIn,
   actorRole,
 }: FindProductReviewsDto): Promise<ReviewsResponseDto> {
@@ -38,10 +41,13 @@ export async function findReviews({
 
   const sort: ReviewSort = sortIn ?? 'newest';
 
-  // the cursor is bound to this product and this sort
+  // the filter of the list by the purchase of the author
+  const purchase = reviewPurchaseOf(verifiedPurchase);
+
+  // the cursor is bound to this product, this sort and this filter
   const cursor = typeof cursorIn === 'string' && cursorIn.trim() ? cursorIn.trim() : undefined;
   const c = cursor
-    ? readReviewCursor(decodeCursor(cursor) as Record<string, unknown>, productId, sort)
+    ? readReviewCursor(decodeCursor(cursor) as Record<string, unknown>, productId, sort, purchase)
     : undefined;
 
   // normalize numeric user id only for user vote lookup
@@ -77,12 +83,18 @@ export async function findReviews({
       const hidden = !product || product.deletedAt !== null || product.variants.length === 0;
       if (!product || (hidden && !isAdmin)) throw new NotFoundError('PRODUCT_NOT_FOUND');
 
+      // The orders that tell a purchase are hidden from guests and buyers: a list filtered by the
+      // purchase is read as the system. Reviews are public, so it shows no review that the list
+      // without the filter does not
+      if (purchase !== 'all') await setAdminContext(tx);
+
       // read page and total, fetch limit + 1 to detect next page. One after the other: the
       // transaction has one connection, and it runs one statement at a time.
       // The cursor is a value: the reviews after the last one of the page in the order of the
       // sort, so a page goes on after that review is deleted
+      const filter = { productId, ...reviewPurchaseWhere(purchase, productId) };
       const rowsPlusOne = await tx.review.findMany({
-        where: { productId, ...(c ? { AND: [reviewsAfter(c)] } : {}) },
+        where: { ...filter, ...(c ? { AND: [reviewsAfter(c)] } : {}) },
         orderBy: reviewOrderOf(sort),
         take: limit + 1,
         select: {
@@ -97,7 +109,7 @@ export async function findReviews({
           updatedAt: true,
         },
       });
-      const total = await tx.review.count({ where: { productId } });
+      const total = await tx.review.count({ where: filter });
 
       const hasNext = rowsPlusOne.length > limit;
       const rows = hasNext ? rowsPlusOne.slice(0, limit) : rowsPlusOne;
@@ -110,6 +122,7 @@ export async function findReviews({
               id: last.id,
               v: productId,
               s: sort,
+              f: purchase,
               k: reviewSortValueOf(sort, last),
             } as never)
           : undefined;
@@ -119,6 +132,9 @@ export async function findReviews({
 
       if (actorRole === 'USER' && rows.length) {
         const reviewIds = rows.map((r) => r.id);
+
+        // the votes of the viewer are read as the viewer
+        if (purchase !== 'all') await setUserContext(tx, { userId: userId, role: actorRole });
 
         const votes = await tx.reviewVote.findMany({
           where: {

@@ -69,6 +69,11 @@ model User {
   // in the international form, +380501234567
   phone     String?
 
+  // an ADMIN that root allowed to run the newsletters (root always may). Only root changes it, in a
+  // function of the database, and it goes off by itself when the account stops being an ADMIN
+  // (db/05, db/06)
+  canManageNewsletters Boolean @default(false)
+
   userTokens              UserToken[]
   loginLogs               LoginLog[]
   reviews                 Review[]
@@ -80,22 +85,31 @@ model User {
   stockLogs               StockLog[]
   alertSettings           AdminAlertSetting[]
   // the versions of the terms and of the contract this account published (only root does)
-  legalDocumentsPublished LegalDocument[]         @relation("LegalDocumentPublisher")
+  legalDocumentsPublished LegalDocument[]               @relation("LegalDocumentPublisher")
   legalAcceptances        LegalAcceptance[]
   // the settings of the data of the shop this account wrote (only root does; a row the server
   // wrote to fill in a default has no one here)
   shopSettingsSet         ShopSetting[]
   // the statements of withdrawal this account made or confirmed the proof of
-  returnsCreated          OrderReturn[]           @relation("ReturnCreator")
-  returnsProofConfirmed   OrderReturn[]           @relation("ReturnProofConfirmer")
-  returnsAccepted         OrderReturn[]           @relation("ReturnAcceptor")
-  returnsClosed           OrderReturn[]           @relation("ReturnCloser")
-  returnsReimbursed       OrderReturn[]           @relation("ReturnShippingReimburser")
-  returnItemsSet          OrderReturnItem[]       @relation("ReturnItemGoodsSetter")
-  returnItemsOutside      OrderReturnItem[]       @relation("ReturnItemOutsideSetter")
-  returnShipmentsRecorded ReturnShipment[]        @relation("ReturnShipmentRecorder")
+  returnsCreated          OrderReturn[]                 @relation("ReturnCreator")
+  returnsProofConfirmed   OrderReturn[]                 @relation("ReturnProofConfirmer")
+  returnsAccepted         OrderReturn[]                 @relation("ReturnAcceptor")
+  returnsClosed           OrderReturn[]                 @relation("ReturnCloser")
+  returnsReimbursed       OrderReturn[]                 @relation("ReturnShippingReimburser")
+  returnItemsSet          OrderReturnItem[]             @relation("ReturnItemGoodsSetter")
+  returnItemsOutside      OrderReturnItem[]             @relation("ReturnItemOutsideSetter")
+  returnShipmentsRecorded ReturnShipment[]              @relation("ReturnShipmentRecorder")
   chatThreads             ChatThread[]
   chatMessages            ChatMessage[]
+  // the newsletter subscriptions of this account, the subscriptions of the form that ended with this
+  // account, the events an admin caused in their journals, the campaigns it made or edited, the
+  // addresses it blocked
+  newsletterSubscriptions NewsletterSubscription[]      @relation("NewsletterSubscriptionAccount")
+  newsletterEnded         NewsletterSubscription[]      @relation("NewsletterSubscriptionEndedBy")
+  newsletterEventsActed   NewsletterSubscriptionEvent[]
+  newsletterCampaignsMade NewsletterCampaign[]          @relation("NewsletterCampaignCreator")
+  newsletterCampaignsEdit NewsletterCampaign[]          @relation("NewsletterCampaignEditor")
+  newsletterBlocks        NewsletterFormBlock[]
 
   // the unique index also serves a search by authProvider alone
   @@unique([authProvider, providerSub])
@@ -1370,6 +1384,11 @@ enum AdminAuditEntityType {
   document
   // a group, a characteristic or a value of a characteristic of the directory of characteristics
   attribute
+  // a newsletter (a campaign), a subscriber of the newsletters, and an address blocked for the
+  // public form of the newsletters; the account of an admin who runs the newsletters is a user
+  newsletter_campaign
+  newsletter_subscriber
+  newsletter_block
   other
 }
 
@@ -1395,6 +1414,14 @@ enum AdminAuditAction {
   ORDER_DELIVERY_CHANGE
   CATEGORY_UPDATE
   REVIEW_DELETE
+  // root gave an admin the right to run the newsletters, or took it away
+  NEWSLETTER_MANAGER_CHANGE
+  // a newsletter made, changed, copied, planned, cancelled, stopped, deleted, or a test mail of it
+  NEWSLETTER_CAMPAIGN_CHANGE
+  // a subscriber of the newsletters deleted by an admin with the data of the subscription
+  NEWSLETTER_SUBSCRIBER_DELETE
+  // an address added to the list of those blocked for the public form, or taken off it
+  NEWSLETTER_BLOCK_CHANGE
   // everything else: an avatar removed, an account deleted, a late payment refunded, a category
   // created or deleted
   OTHER
@@ -1617,14 +1644,18 @@ model LegalDocument {
   returnAddress        String?              @db.VarChar(500)
   returnShippingPaidBy ReturnShippingPayer?
 
-  // the privacy policy only, and all six of it (db/06): how long each kind of personal data is
+  // the privacy policy only, and all eight of it (db/06): how long each kind of personal data is
   // kept, in days, counted the way the cleanups of db/05 say
-  retentionLoginAddressesDays  Int?
-  retentionGuestDataDays       Int?
-  retentionDeletedChatsDays    Int?
-  retentionReturnAddressesDays Int?
-  retentionReturnPersonalDays  Int?
-  retentionRecipientDays       Int?
+  retentionLoginAddressesDays       Int?
+  retentionGuestDataDays            Int?
+  retentionDeletedChatsDays         Int?
+  retentionReturnAddressesDays      Int?
+  retentionReturnPersonalDays       Int?
+  retentionRecipientDays            Int?
+  // an ended newsletter subscription with its journal (the proof of the consent), from its end
+  retentionNewsletterConsentDays    Int?
+  // the rows of the recipients of a newsletter campaign, from the end of the campaign
+  retentionNewsletterRecipientsDays Int?
 
   createdAt DateTime @default(now())
 
@@ -1686,4 +1717,300 @@ model ShopSetting {
   createdAt DateTime @default(now())
 
   @@map("shop_settings")
+}
+
+// -----------------------------------------------------------------------------
+// Newsletters
+// -----------------------------------------------------------------------------
+
+// Where a subscription came from: the public form (a guest, or an account asking for another
+// address; the address is confirmed by a link) or the account itself (its own address, in force at
+// once).
+enum NewsletterSource {
+  form
+  account
+}
+
+// pending: waits for the confirmation (3 days, then it is removed). active: mails go out.
+// paused_complaint: the person marked a mail as spam; no mail until they resume. stopped_bounce: the
+// address does not exist. ended: the person unsubscribed, the account was deleted, an admin removed
+// the subscriber (the row stays as the proof of the consent until its term in the privacy policy).
+enum NewsletterSubscriptionStatus {
+  pending
+  active
+  paused_complaint
+  stopped_bounce
+  ended
+}
+
+// Why a subscription ended. expired and not_me are the steps of a pending one that is removed (the
+// row is ended first, then removed with its journal); bounced belongs to stopped_bounce.
+enum NewsletterEndReason {
+  unsubscribed
+  account_deleted
+  removed_by_admin
+  expired
+  not_me
+  bounced
+}
+
+// What a line of the journal of a subscription says happened.
+enum NewsletterEventKind {
+  requested
+  confirmed
+  subscribed
+  locale_changed
+  locale_reset
+  unsubscribed
+  complaint
+  restored
+  bounced
+  account_deleted
+  removed_by_admin
+  expired
+  not_me
+}
+
+// Where it happened.
+enum NewsletterEventPlace {
+  form
+  registration
+  profile
+  manage_page
+  mail_client
+  webhook
+  admin
+  system
+}
+
+enum NewsletterCampaignStatus {
+  draft
+  scheduled
+  sending
+  finished
+  cancelled
+  stopped
+}
+
+// Why a campaign was cancelled when it was not an admin who did it: the limit of the campaigns was
+// reached when it was to start (limit). A campaign an admin cancelled has no reason.
+enum NewsletterCancelReason {
+  limit
+}
+
+// What to do with a language that has no text in a campaign: send the text of the shop language, or
+// send nothing to those people.
+enum NewsletterMissingLocale {
+  shop_locale
+  skip
+}
+
+// A mail of a campaign: it waits (queued), the provider took it (sent) and may report on it later
+// (bounced, dropped, complained), the provider refused it (rejected), or the sending left it out
+// (skipped: the person unsubscribed before their turn, or there was nothing to send them).
+enum NewsletterRecipientStatus {
+  queued
+  sent
+  rejected
+  bounced
+  dropped
+  complained
+  skipped
+}
+
+// A subscription to the newsletters: one row is the present state of one address (its history is
+// the journal). The address has at most one live row (pending, active or paused_complaint, db/06).
+// Only the functions of the database write it (db/03, db/05): the person asks through the form, the
+// profile or the link of a mail, never with a statement of their own. The tokens are kept as
+// hashes. The email is in lower case without spaces around it (db/06).
+model NewsletterSubscription {
+  id Int @id @default(autoincrement())
+
+  email     String                       @db.VarChar(254)
+  // the HMAC of the address with a secret of the server, to look it up in the blocklist; a form
+  // subscription only (db/06)
+  emailHmac String?                      @db.VarChar(64)
+  // the account of a subscription of the account; empty for a form subscription (db/06)
+  userId    Int?
+  user      User?                        @relation("NewsletterSubscriptionAccount", fields: [userId], references: [id], onDelete: Restrict)
+  source    NewsletterSource
+  // the language of the mails (two letters); empty means "no language": the shop language is used
+  locale    String?                      @db.VarChar(2)
+  status    NewsletterSubscriptionStatus
+
+  // the link that confirms a pending subscription, the sha256 of its token and its deadline; empty
+  // once the subscription is not pending (db/06)
+  confirmHash       String?   @db.VarChar(64)
+  confirmExpiresAt  DateTime?
+  // the link "manage the subscription" and the one-click unsubscribe of the mail client: the server
+  // derives each token from a secret and the salt of the row (two marks, two tokens), the database
+  // keeps the salt and the sha256 of each token. The token of the unsubscribe opens nothing but the
+  // unsubscribe (cartlify.newsletter_unsubscribe_one_click)
+  manageSalt        String    @db.VarChar(128)
+  manageHash        String    @unique @db.VarChar(64)
+  unsubscribeHash   String    @unique @db.VarChar(64)
+  // the last mail "confirm the subscription" and the last mail "you are already subscribed" to the
+  // address: at most one mail of either kind a day (the later of the two counts)
+  lastConfirmMailAt DateTime?
+  lastAlreadyMailAt DateTime?
+
+  createdAt   DateTime             @default(now())
+  confirmedAt DateTime?
+  // set with the reason when the status is ended or stopped_bounce (db/06)
+  endedAt     DateTime?
+  endReason   NewsletterEndReason?
+  // the account whose deletion ended this subscription of the form (the address is the account's, but
+  // the row has no account of its own); the export of a deleted account finds the subscription by it
+  endedUserId Int?
+  endedUser   User?                @relation("NewsletterSubscriptionEndedBy", fields: [endedUserId], references: [id], onDelete: SetNull)
+  updatedAt   DateTime             @default(now()) @updatedAt
+
+  events     NewsletterSubscriptionEvent[]
+  recipients NewsletterRecipient[]
+
+  @@index([userId])
+  @@index([endedUserId])
+  @@index([status, id])
+  @@map("newsletter_subscriptions")
+}
+
+// The journal of a subscription: what happened, when, from which address and browser, and, on the
+// events of consent, the version of the privacy policy in force. Only added; a line is removed only
+// together with its ended subscription, when the term of the proof of the consent has passed (db/05,
+// trg_newsletter_subscription_events_append_only).
+model NewsletterSubscriptionEvent {
+  id Int @id @default(autoincrement())
+
+  subscriptionId Int
+  subscription   NewsletterSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Restrict)
+
+  event NewsletterEventKind
+  place NewsletterEventPlace
+
+  // the address and the browser of the request; empty for what the server did on its own
+  ip        String?
+  userAgent String?
+  // the language of the subscription at that time
+  locale    String? @db.VarChar(2)
+
+  // the campaign whose mail the person unsubscribed from (the one-click button or the link of it)
+  campaignId Int?
+  campaign   NewsletterCampaign? @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+
+  // the version of the privacy policy in force at the moment, on the events of consent
+  privacyVersion Int?
+
+  // the admin that caused the event (removing the subscriber, resetting the language)
+  actorId Int?
+  actor   User? @relation(fields: [actorId], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now())
+
+  @@index([subscriptionId, createdAt])
+  @@map("newsletter_subscription_events")
+}
+
+// A campaign: one newsletter, from the draft to the end of the sending. Root and the admins root
+// allowed make and edit them (db/03, newsletter_manager in db/05). The text and the blocks are
+// edited only in a draft or a scheduled campaign; later only the totals move (db/05,
+// trg_newsletter_campaigns_update_columns).
+model NewsletterCampaign {
+  id Int @id @default(autoincrement())
+
+  // the name the admins see in the lists and in the answer of the limit of campaigns
+  name   String                   @db.VarChar(200)
+  status NewsletterCampaignStatus @default(draft)
+
+  // when it goes out, the time of the shop
+  scheduledAt   DateTime?
+  missingLocale NewsletterMissingLocale
+
+  // the text, a language to {subject, preview, blocks}; checked by the schema of the route
+  content          Json
+  // the data of the products taken once, when the campaign starts, so every mail is the same
+  productsSnapshot Json?
+
+  createdById Int
+  createdBy   User @relation("NewsletterCampaignCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  updatedById Int
+  updatedBy   User @relation("NewsletterCampaignEditor", fields: [updatedById], references: [id], onDelete: Restrict)
+
+  // the campaign this one is a copy of; the link is dropped when that draft is deleted
+  copiedFromId Int?
+  copiedFrom   NewsletterCampaign?  @relation("NewsletterCampaignCopy", fields: [copiedFromId], references: [id], onDelete: SetNull)
+  copies       NewsletterCampaign[] @relation("NewsletterCampaignCopy")
+
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  stoppedAt    DateTime?
+  cancelledAt  DateTime?
+  // set only on a cancelled campaign, and only when the system cancelled it (db/05, db/06)
+  cancelReason NewsletterCancelReason?
+
+  // the totals: planned (the mails that were to go), sent, rejected (not accepted by SendGrid),
+  // undelivered (bounced or dropped later), complaints (spam), unsubscribed from its mails
+  plannedCount      Int @default(0)
+  sentCount         Int @default(0)
+  rejectedCount     Int @default(0)
+  undeliveredCount  Int @default(0)
+  complaintCount    Int @default(0)
+  unsubscribedCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  recipients NewsletterRecipient[]
+  events     NewsletterSubscriptionEvent[]
+
+  @@index([status, scheduledAt])
+  @@index([createdAt, id])
+  @@map("newsletter_campaigns")
+}
+
+// One mail of a campaign: a row for each subscriber the campaign goes to, made when it starts (who
+// subscribes later does not get it). The language is the one the mail goes in.
+model NewsletterRecipient {
+  id Int @id @default(autoincrement())
+
+  campaignId     Int
+  campaign       NewsletterCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  subscriptionId Int
+  subscription   NewsletterSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  locale String                    @db.VarChar(2)
+  status NewsletterRecipientStatus @default(queued)
+
+  // how many times the sending was tried, the id SendGrid gave the mail, when it was accepted
+  attempts          Int       @default(0)
+  providerMessageId String?   @db.VarChar(200)
+  sentAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  // a campaign never mails a subscription twice
+  @@unique([campaignId, subscriptionId])
+  @@index([campaignId, status, id])
+  @@index([subscriptionId])
+  @@map("newsletter_recipients")
+}
+
+// An address blocked for the public form: a guest's request, or an account's request for another
+// address, gets the usual answer but no mail. Only the HMAC of the address is kept (with a secret of
+// the server), so the table does not list addresses. An admin blocks on the request of a person, or
+// the person blocks their own address with the second button of the mail "confirm the subscription"
+// (byPerson). A row has no term: it stays until an admin removes it.
+model NewsletterFormBlock {
+  id Int @id @default(autoincrement())
+
+  emailHmac   String  @unique @db.VarChar(64)
+  // the admin that blocked it; empty when the person did (byPerson). Exactly one of the two (db/06)
+  blockedById Int?
+  blockedBy   User?   @relation(fields: [blockedById], references: [id], onDelete: Restrict)
+  byPerson    Boolean @default(false)
+  reason      String? @db.VarChar(200)
+
+  createdAt DateTime @default(now())
+
+  @@map("newsletter_form_blocklist")
 }

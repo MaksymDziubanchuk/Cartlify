@@ -12,6 +12,7 @@ import {
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { linkToken, refuseMail, watchMail } from '../../../helpers/mail.js';
+import { withCaptcha } from '../../../helpers/turnstile.js';
 
 // the mail goes to the SendGrid mock (tests/helpers/mail.ts); the reset tests take a link made
 // the way /password/forgot stores one (createResetToken)
@@ -33,15 +34,16 @@ const forgot = (email: string) =>
     method: 'POST',
     url: '/api/auth/password/forgot',
     headers: withCsrf(csrf),
-    payload: { email },
+    payload: withCaptcha({ email }),
   });
 
+// the page of the link reads the token after the # of the address and posts it with the new password
 const reset = (token: string, newPassword: string) =>
   app.inject({
     method: 'POST',
-    url: `/api/auth/password/reset?token=${encodeURIComponent(token)}`,
+    url: '/api/auth/password/reset',
     headers: withCsrf(csrf),
-    payload: { newPassword },
+    payload: { token, newPassword },
   });
 
 beforeAll(async () => {
@@ -245,6 +247,64 @@ describe('POST /api/auth/password/reset', () => {
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'RESET_TOKEN_INVALID_OR_EXPIRED' });
+  });
+
+  // the token rides in the body with the password: no log of an address or of a host holds it. A token
+  // left in the query (the way the old link had it) is not read, and the link stays good
+  it('does not read a token from the query', async () => {
+    const user = await newUser();
+    const token = await createResetToken(user.id);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/auth/password/reset?token=${encodeURIComponent(token)}`,
+      headers: withCsrf(csrf),
+      payload: { newPassword: 'new-password-10' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    expect((await reset(token, 'new-password-10')).statusCode).toBe(200);
+  });
+
+  it.each([
+    ['no token', { newPassword: 'new-password-11' }],
+    ['a token that is not a text', { token: { id: 1 }, newPassword: 'new-password-11' }],
+    ['a token of only a few signs', { token: 'short', newPassword: 'new-password-11' }],
+    ['no password', { token: 'made-up-token-0123456789' }],
+  ])('refuses %s', async (_case, payload) => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/reset',
+      headers: withCsrf(csrf),
+      payload,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+
+  it('refuses a token of only spaces as no token', async () => {
+    const res = await reset('            ', 'new-password-12');
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'TOKEN_REQUIRED' });
+  });
+
+  // the route is for the page of the link, the state-changing post carries the csrf token like the others
+  it('refuses a post without the csrf token', async () => {
+    const user = await newUser();
+    const token = await createResetToken(user.id);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/reset',
+      payload: { token, newPassword: 'new-password-13' },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ errorCode: 'CSRF_TOKEN_INVALID' });
+    expect((await reset(token, 'new-password-13')).statusCode).toBe(200);
   });
 
   it('counts the new password without the spaces at its edges', async () => {

@@ -17,7 +17,7 @@ import {
   type CharacteristicFilterEntry,
 } from '@helpers/characteristicFilter.js';
 
-import type { ProductsSortField, SortOrder, FindAllProductsDto } from 'types/dto/products.dto.js';
+import type { ProductsSortField, SortOrder, ReadProductsDto } from 'types/dto/products.dto.js';
 
 import { productViewOf, type ProductView } from './productMapper.helper.js';
 
@@ -139,6 +139,8 @@ export type ProductListQuery = {
   categoryIds?: number[] | undefined;
   // the categories with their whole branch (the default), or only the products of each itself
   branch: boolean;
+  // only these products (no route takes it: the newsletters read a block of products by hand)
+  productIds?: number[] | undefined;
   // the price of a variant: what a buyer pays now, the usual price for an admin
   minPrice?: number | undefined;
   maxPrice?: number | undefined;
@@ -251,7 +253,7 @@ export function listModeOf(
 
 // normalize dto for findAll: a buyer sorts by BUYER_SORTS and uses no flag of an admin; an admin
 // sorts by anything, a field only some products have with their flag
-export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductListQuery {
+export function normalizeFindAllProductsInput(dto: ReadProductsDto): ProductListQuery {
   const view = productViewOf(dto.actorRole);
   const limit = assertLimit(dto.limit ?? 20);
 
@@ -274,6 +276,12 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
     ? dto.categoryIds.filter((n) => Number.isInteger(n) && n > 0)
     : undefined;
   if (categoryIds && !categoryIds.length) throw new BadRequestError('CATEGORY_IDS_INVALID');
+
+  // the same for the products named: ids that are no ids must not turn into "every product"
+  const productIds = Array.isArray(dto.productIds)
+    ? dto.productIds.filter((n) => Number.isInteger(n) && n > 0)
+    : undefined;
+  if (productIds && !productIds.length) throw new BadRequestError('PRODUCT_IDS_INVALID');
 
   const minPrice = dto.minPrice != null ? Number(dto.minPrice) : undefined;
   const maxPrice = dto.maxPrice != null ? Number(dto.maxPrice) : undefined;
@@ -334,6 +342,7 @@ export function normalizeFindAllProductsInput(dto: FindAllProductsDto): ProductL
     search,
     categoryIds,
     branch,
+    productIds,
     minPrice,
     maxPrice,
     inStock,
@@ -789,6 +798,9 @@ function buildWhereSql(q: ProductListQuery): Prisma.Sql {
         : Prisma.sql`p."categoryId" IN (${Prisma.join(q.categoryIds)})`,
     );
   }
+
+  // only the products named
+  if (q.productIds?.length) whereParts.push(Prisma.sql`p."id" IN (${Prisma.join(q.productIds)})`);
 
   // price range of a variant: the price a buyer pays now, the usual price for an admin
   const price = priceSqlOf(q.view);

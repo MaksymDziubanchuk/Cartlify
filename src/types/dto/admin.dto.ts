@@ -743,6 +743,7 @@ export type AdminAlertKind =
   | 'expired_batches'
   | 'chats_waiting'
   | 'refunded_payments'
+  | 'refunded_payments_not_sent'
   | 'failed_refunds'
   | 'returns_manual_check'
   | 'returns_proof_waiting'
@@ -752,9 +753,17 @@ export type AdminAlertKind =
   | 'worker_stalled'
   | 'shop_settings_incomplete'
   | 'shop_locale_missing'
+  | 'newsletter_undelivered'
+  | 'newsletter_rejected'
+  | 'newsletter_complaints'
+  | 'newsletter_running_long'
+  | 'newsletter_starting_soon'
+  | 'newsletter_cancelled_by_limit'
+  | 'newsletter_sending_halted'
   | 'admin_actions';
 
-export type AdminAlertThresholdUnit = 'days' | 'units' | 'seconds' | 'hours';
+export type AdminAlertThresholdUnit =
+  'days' | 'units' | 'seconds' | 'hours' | 'percent' | 'permille';
 
 // the threshold of a kind: the one the admin set (custom) or the one the server gives
 export interface AdminAlertThresholdDto {
@@ -783,6 +792,9 @@ export interface AdminAlertDto {
   // the threshold the kind is counted with, null for a kind without one
   threshold: number | null;
   list: AdminAlertListDto | null;
+  // when the thing the alert tells of last happened, for a kind that is an event (the stop of the
+  // sending worker); null for the others, and while it has not happened
+  occurredAt: string | null;
 }
 
 export interface GetAdminAlertsQueryDto {

@@ -8,7 +8,6 @@ import { returnCodeOf } from '@helpers/returns.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
-import { SHOP_LOGO_CID, shopLogoAttachment } from '@services/email/shopLogo.js';
 import { buildReturnByShopTemplate } from '@services/email/templates/returns/returnByShop.template.js';
 
 export type ReturnMailLogger = {
@@ -86,8 +85,6 @@ export async function sendReturnByShopEmail(
       units.set(name, (units.get(name) ?? 0) + item.quantity);
     }
 
-    const logo = await shopLogoAttachment(log);
-
     const { subject, text, html } = buildReturnByShopTemplate({
       appName: shopSettings().shopName,
       orderId: row.orderId,
@@ -101,7 +98,7 @@ export async function sendReturnByShopEmail(
       supportEmail: shopSettings().emailReplyTo,
       extended: row.extendsId !== null,
       ...(row.buyer?.name ? { userName: row.buyer.name } : {}),
-      ...(logo ? { logoCid: SHOP_LOGO_CID } : {}),
+      logoUrl: shopSettings().logoUrl,
       locale: mailLocaleOf(row.buyer?.locale),
     });
 
@@ -110,7 +107,6 @@ export async function sendReturnByShopEmail(
       subject,
       text,
       html,
-      attachments: logo ? [logo] : [],
     });
   } catch (err) {
     log.error({ ...failureOf(err), returnId }, 'return mail was not sent');

@@ -2276,4 +2276,308 @@ WITH
 -- DELETE: denied to every role
 CREATE POLICY shop_settings_delete_deny ON cartlify.shop_settings FOR DELETE USING (false);
 
+----------------------------------------
+-- NEWSLETTER SUBSCRIPTIONS
+----------------------------------------
+-- The present state of one address: whether it waits for the confirmation, is in force, was paused
+-- by a complaint, stopped by a bounce or ended. Read: the one who runs the newsletters
+-- (cartlify.newsletter_manager: root, or an admin root allowed), the system, and the account a
+-- subscription belongs to. Nobody writes it with a statement of the app: the functions of the
+-- database do (TO cartlify_owner: the guest who asks on the form, the person who follows the link
+-- of a mail, the account that subscribes, the webhook that reports a bounce), and the guard
+-- trg_newsletter_subscriptions_update_columns (db/05) says what they may change. The rows of the
+-- tables below are read by the functions the same way; no policy lets a guest reach one.
+ALTER TABLE cartlify.newsletter_subscriptions ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.newsletter_subscriptions FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS newsletter_subscriptions_select ON cartlify.newsletter_subscriptions;
+
+DROP POLICY IF EXISTS newsletter_subscriptions_select_owner ON cartlify.newsletter_subscriptions;
+
+DROP POLICY IF EXISTS newsletter_subscriptions_insert_owner ON cartlify.newsletter_subscriptions;
+
+DROP POLICY IF EXISTS newsletter_subscriptions_update_owner ON cartlify.newsletter_subscriptions;
+
+DROP POLICY IF EXISTS newsletter_subscriptions_delete_owner ON cartlify.newsletter_subscriptions;
+
+CREATE POLICY newsletter_subscriptions_select ON cartlify.newsletter_subscriptions FOR
+SELECT
+  USING (
+    (SELECT cartlify.newsletter_manager ())
+    OR cartlify.is_system ()
+    OR ("userId" IS NOT NULL AND cartlify.is_owner ("userId"))
+  );
+
+-- the functions read any row (they find a subscription by the hash of a link, or by an address)
+CREATE POLICY newsletter_subscriptions_select_owner ON cartlify.newsletter_subscriptions FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+CREATE POLICY newsletter_subscriptions_insert_owner ON cartlify.newsletter_subscriptions FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+CREATE POLICY newsletter_subscriptions_update_owner ON cartlify.newsletter_subscriptions
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  -- the columns an update may change: trg_newsletter_subscriptions_update_columns (db/05)
+  CHECK (true);
+
+-- DELETE for the functions: a request that was not confirmed, a subscriber an admin removes, an
+-- ended subscription whose term of keeping has passed (the guard of the journal lets the lines go
+-- with an ended one)
+CREATE POLICY newsletter_subscriptions_delete_owner ON cartlify.newsletter_subscriptions FOR DELETE TO cartlify_owner USING (true);
+
+----------------------------------------
+-- NEWSLETTER SUBSCRIPTION EVENTS
+----------------------------------------
+-- The journal of a subscription: what happened, when, from which address and browser, and the
+-- version of the privacy policy on the events of consent. Read: the one who runs the newsletters.
+-- Written by the functions of the database, never changed (UPDATE denied to every role, the owner
+-- too, but for one step: when an admin erases an address, the owner empties the address and the
+-- browser of the lines of the subscription that has become anonymous), removed only by the owner,
+-- and only with an ended subscription: the guard trg_newsletter_subscription_events_append_only
+-- (db/05) says so a second time.
+ALTER TABLE cartlify.newsletter_subscription_events ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.newsletter_subscription_events FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS newsletter_subscription_events_select ON cartlify.newsletter_subscription_events;
+
+DROP POLICY IF EXISTS newsletter_subscription_events_select_owner ON cartlify.newsletter_subscription_events;
+
+DROP POLICY IF EXISTS newsletter_subscription_events_insert_owner ON cartlify.newsletter_subscription_events;
+
+DROP POLICY IF EXISTS newsletter_subscription_events_update_deny ON cartlify.newsletter_subscription_events;
+
+DROP POLICY IF EXISTS newsletter_subscription_events_update_owner ON cartlify.newsletter_subscription_events;
+
+DROP POLICY IF EXISTS newsletter_subscription_events_delete_owner ON cartlify.newsletter_subscription_events;
+
+CREATE POLICY newsletter_subscription_events_select ON cartlify.newsletter_subscription_events FOR
+SELECT
+  USING ((SELECT cartlify.newsletter_manager ()));
+
+-- the functions read the journal of a subscription (the export of the person, the removal)
+CREATE POLICY newsletter_subscription_events_select_owner ON cartlify.newsletter_subscription_events FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+CREATE POLICY newsletter_subscription_events_insert_owner ON cartlify.newsletter_subscription_events FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+-- UPDATE: denied to every role
+CREATE POLICY newsletter_subscription_events_update_deny ON cartlify.newsletter_subscription_events
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- ... but for the owner, on the lines of a subscription an admin erased (it ended or stopped, and has
+-- the placeholder of its id in the place of the address), who empties the address and the browser of
+-- a line: the new row must have neither. The columns that may not change: the guard
+CREATE POLICY newsletter_subscription_events_update_owner ON cartlify.newsletter_subscription_events
+FOR UPDATE
+  TO cartlify_owner USING (
+    EXISTS (
+      SELECT 1
+      FROM cartlify.newsletter_subscriptions AS s
+      WHERE s.id = "subscriptionId"
+        AND s.status IN ('ended', 'stopped_bounce')
+        AND s.email = cartlify.newsletter_erased_email (s.id)
+    )
+  )
+WITH
+  CHECK (ip IS NULL AND "userAgent" IS NULL);
+
+-- DELETE: the owner only; the guard lets it remove the lines of an ended subscription
+CREATE POLICY newsletter_subscription_events_delete_owner ON cartlify.newsletter_subscription_events FOR DELETE TO cartlify_owner USING (true);
+
+----------------------------------------
+-- NEWSLETTER CAMPAIGNS
+----------------------------------------
+-- A newsletter, from the draft to the end of the sending. Read: the one who runs the newsletters
+-- and the system. Written by the one who runs them (a draft, in their own name), moved along by
+-- the system (it starts and finishes a campaign) and by the functions of the database (the totals).
+-- Which columns and which moves: trg_newsletter_campaigns_update_columns (db/05). Deleted by a
+-- manager while it is a draft; what was scheduled or sent is kept.
+ALTER TABLE cartlify.newsletter_campaigns ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.newsletter_campaigns FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS newsletter_campaigns_select ON cartlify.newsletter_campaigns;
+
+DROP POLICY IF EXISTS newsletter_campaigns_select_owner ON cartlify.newsletter_campaigns;
+
+DROP POLICY IF EXISTS newsletter_campaigns_insert ON cartlify.newsletter_campaigns;
+
+DROP POLICY IF EXISTS newsletter_campaigns_update ON cartlify.newsletter_campaigns;
+
+DROP POLICY IF EXISTS newsletter_campaigns_update_owner ON cartlify.newsletter_campaigns;
+
+DROP POLICY IF EXISTS newsletter_campaigns_delete ON cartlify.newsletter_campaigns;
+
+CREATE POLICY newsletter_campaigns_select ON cartlify.newsletter_campaigns FOR
+SELECT
+  USING (
+    (SELECT cartlify.newsletter_manager ())
+    OR cartlify.is_system ()
+  );
+
+-- the functions read any campaign (an unsubscribe by the link of a mail counts it, a guest asks)
+CREATE POLICY newsletter_campaigns_select_owner ON cartlify.newsletter_campaigns FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- INSERT: a manager makes a draft in their own name (the maker and the editor are the one who
+-- inserts it; a draft has no start, no totals and no data of products, db/06)
+CREATE POLICY newsletter_campaigns_insert ON cartlify.newsletter_campaigns FOR INSERT
+WITH
+  CHECK (
+    (SELECT cartlify.newsletter_manager ())
+    AND status = 'draft'
+    AND "createdById" = cartlify.current_actor_id ()
+    AND "updatedById" = cartlify.current_actor_id ()
+  );
+
+-- UPDATE (who): a manager and the system; (what): the guard
+CREATE POLICY newsletter_campaigns_update ON cartlify.newsletter_campaigns
+FOR UPDATE
+  USING (
+    (SELECT cartlify.newsletter_manager ())
+    OR cartlify.is_system ()
+  )
+WITH
+  -- the columns an update may change: trg_newsletter_campaigns_update_columns (db/05)
+  CHECK (true);
+
+-- UPDATE for the functions of the database: the totals of a campaign (an unsubscribe, a bounce, a
+-- complaint) and the link to an original that was deleted
+CREATE POLICY newsletter_campaigns_update_owner ON cartlify.newsletter_campaigns
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  -- the columns an update may change: trg_newsletter_campaigns_update_columns (db/05)
+  CHECK (true);
+
+-- DELETE: a manager, while the campaign is a draft
+CREATE POLICY newsletter_campaigns_delete ON cartlify.newsletter_campaigns FOR DELETE USING (
+  (SELECT cartlify.newsletter_manager ())
+  AND status = 'draft'
+);
+
+----------------------------------------
+-- NEWSLETTER RECIPIENTS
+----------------------------------------
+-- One mail of a campaign, a row for each subscriber it goes to, made when the campaign starts.
+-- Read: the one who runs the newsletters and the system. Added by the functions of the database
+-- (as a mail that waits), changed by the system and by them (the status, the tries, the id of the
+-- mail), removed with the campaign or the subscription. A row keeps its campaign, its subscription
+-- and its language: trg_newsletter_recipients_update_columns (db/05).
+ALTER TABLE cartlify.newsletter_recipients ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.newsletter_recipients FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS newsletter_recipients_select ON cartlify.newsletter_recipients;
+
+DROP POLICY IF EXISTS newsletter_recipients_select_owner ON cartlify.newsletter_recipients;
+
+DROP POLICY IF EXISTS newsletter_recipients_insert_owner ON cartlify.newsletter_recipients;
+
+DROP POLICY IF EXISTS newsletter_recipients_update ON cartlify.newsletter_recipients;
+
+DROP POLICY IF EXISTS newsletter_recipients_update_owner ON cartlify.newsletter_recipients;
+
+DROP POLICY IF EXISTS newsletter_recipients_delete_owner ON cartlify.newsletter_recipients;
+
+CREATE POLICY newsletter_recipients_select ON cartlify.newsletter_recipients FOR
+SELECT
+  USING (
+    (SELECT cartlify.newsletter_manager ())
+    OR cartlify.is_system ()
+  );
+
+CREATE POLICY newsletter_recipients_select_owner ON cartlify.newsletter_recipients FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+-- INSERT for the function that starts a campaign: a mail that waits, not tried, not sent
+CREATE POLICY newsletter_recipients_insert_owner ON cartlify.newsletter_recipients FOR INSERT TO cartlify_owner
+WITH
+  CHECK (
+    status = 'queued'
+    AND attempts = 0
+    AND "providerMessageId" IS NULL
+    AND "sentAt" IS NULL
+  );
+
+-- UPDATE (who): the system, which sends the mails and records how it went
+CREATE POLICY newsletter_recipients_update ON cartlify.newsletter_recipients
+FOR UPDATE
+  USING (cartlify.is_system ())
+WITH
+  -- the columns an update may change: trg_newsletter_recipients_update_columns (db/05)
+  CHECK (true);
+
+-- UPDATE for the functions of the database: the events of the provider (a bounce, a complaint)
+CREATE POLICY newsletter_recipients_update_owner ON cartlify.newsletter_recipients
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  -- the columns an update may change: trg_newsletter_recipients_update_columns (db/05)
+  CHECK (true);
+
+CREATE POLICY newsletter_recipients_delete_owner ON cartlify.newsletter_recipients FOR DELETE TO cartlify_owner USING (true);
+
+----------------------------------------
+-- NEWSLETTER FORM BLOCKLIST
+----------------------------------------
+-- The addresses blocked for the public form, kept as the HMAC of the address (a table that lists
+-- no address). Read: the one who runs the newsletters, who finds an entry by the HMAC of the
+-- address a person gives, and removes it on their word. Added by the functions of the database
+-- (an admin blocks an address, or the person does with the button of a mail). Never changed.
+ALTER TABLE cartlify.newsletter_form_blocklist ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.newsletter_form_blocklist FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS newsletter_form_blocklist_select ON cartlify.newsletter_form_blocklist;
+
+DROP POLICY IF EXISTS newsletter_form_blocklist_select_owner ON cartlify.newsletter_form_blocklist;
+
+DROP POLICY IF EXISTS newsletter_form_blocklist_insert_owner ON cartlify.newsletter_form_blocklist;
+
+DROP POLICY IF EXISTS newsletter_form_blocklist_update_deny ON cartlify.newsletter_form_blocklist;
+
+DROP POLICY IF EXISTS newsletter_form_blocklist_delete ON cartlify.newsletter_form_blocklist;
+
+DROP POLICY IF EXISTS newsletter_form_blocklist_delete_owner ON cartlify.newsletter_form_blocklist;
+
+CREATE POLICY newsletter_form_blocklist_select ON cartlify.newsletter_form_blocklist FOR
+SELECT
+  USING ((SELECT cartlify.newsletter_manager ()));
+
+-- the functions look an address up (the form of a guest asks whether it is blocked)
+CREATE POLICY newsletter_form_blocklist_select_owner ON cartlify.newsletter_form_blocklist FOR
+SELECT
+  TO cartlify_owner USING (true);
+
+CREATE POLICY newsletter_form_blocklist_insert_owner ON cartlify.newsletter_form_blocklist FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+-- UPDATE: denied to every role
+CREATE POLICY newsletter_form_blocklist_update_deny ON cartlify.newsletter_form_blocklist
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+-- DELETE: a manager takes an address off the list
+CREATE POLICY newsletter_form_blocklist_delete ON cartlify.newsletter_form_blocklist FOR DELETE USING ((SELECT cartlify.newsletter_manager ()));
+
+CREATE POLICY newsletter_form_blocklist_delete_owner ON cartlify.newsletter_form_blocklist FOR DELETE TO cartlify_owner USING (true);
+
 COMMIT;

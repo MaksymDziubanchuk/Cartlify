@@ -13,7 +13,7 @@ export type ReturnChangedTemplateArgs = {
   supportEmail: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -40,7 +40,7 @@ export function buildReturnChangedTemplate(args: ReturnChangedTemplateArgs): {
       : t('returnChanged.someTaken', locale),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnChanged.subject', locale, { appName, orderId }),
     preview: t('returnChanged.preview', locale, { code }),

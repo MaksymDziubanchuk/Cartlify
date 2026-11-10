@@ -4,6 +4,8 @@ import type { FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 
 import authGuard, { authGuardWithoutRefresh } from '@middlewares/auth.js';
+import requireCaptcha from '@middlewares/requireCaptcha.js';
+import requireNewsletterManager from '@middlewares/requireNewsletterManager.js';
 import { isRateLimitFree } from '@helpers/rateLimitFree.js';
 
 import { requiresCsrfToken } from './csrf.plugin.js';
@@ -186,6 +188,30 @@ const sharedRefusals = (
             code: 'INSUFFICIENT_ROLE',
             text: `the route is for ${roles.join(', ')} only (a visitor without a login is GUEST).`,
         });
+    }
+    // the routes of the newsletters: root, or an admin whom root allowed, read from the database at
+    // every request (a right root took away stops at once, in a session that is open too)
+    if (hooks.includes(requireNewsletterManager)) {
+        refusals.push({
+            status: '403',
+            code: 'NEWSLETTER_MANAGER_REQUIRED',
+            text: 'the account may not run the newsletters: only root and an admin whom root allowed may (the profile tells it in `canManageNewsletters`); the right is checked in the database at every request, so one root took away stops at once.',
+        });
+    }
+    // the captcha of a form (Cloudflare Turnstile): the same two refusals on every route that has it
+    if (hooks.includes(requireCaptcha)) {
+        refusals.push(
+            {
+                status: '400',
+                code: 'CAPTCHA_INVALID',
+                text: 'the answer of the captcha in `captchaToken` is refused: wrong, expired or used before (an answer works once). Reset the widget and send the new answer with the request again; nothing was changed.',
+            },
+            {
+                status: '503',
+                code: 'CAPTCHA_UNAVAILABLE',
+                text: 'the captcha could not be checked right now (Cloudflare did not answer in time or failed, or the shop secret of the captcha is not taken); nothing was changed. Reset the widget and repeat the request with a new answer in a moment.',
+            },
+        );
     }
     if (needsCsrf) {
         refusals.push({

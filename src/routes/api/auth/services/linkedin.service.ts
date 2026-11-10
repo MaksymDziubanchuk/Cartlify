@@ -11,6 +11,7 @@ import {
 
 import env from '@config/env.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 
 import {
   buildLinkedInAuthUrl,
@@ -34,6 +35,8 @@ import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
 import { acceptedOfState, takeConsentAtOAuthLogin } from './helpers/oauthConsent.helper.js';
+import { newsletterOfState } from './helpers/oauthNewsletter.helper.js';
+import { subscribeAtRegistration } from '@routes/api/newsletters/services/helpers/registrationSubscription.helper.js';
 import {
   copyProviderAvatar,
   type OAuthAvatarRole,
@@ -44,6 +47,7 @@ export async function linkedInStart({
   guestId,
   role,
   acceptedDocumentIds = [],
+  newsletter = false,
 }: LinkedInStartDto): Promise<LinkedInStartResponseDto> {
   if (role !== 'GUEST') {
     throw new AlreadyAuthenticatedError({ flow: 'LINKEDIN_START' });
@@ -51,7 +55,7 @@ export async function linkedInStart({
   if (!guestId) throw new BadRequestError('GUEST_ID_REQUIRED');
 
   // build oauth redirect url
-  const url = buildLinkedInAuthUrl(String(guestId), acceptedDocumentIds);
+  const url = buildLinkedInAuthUrl(String(guestId), acceptedDocumentIds, newsletter);
   return { url };
 }
 
@@ -76,7 +80,9 @@ export async function linkedInCallback({
 
   // verify oauth state payload and that this guest started the login,
   // before the code is used: a code from someone else's login is never redeemed here
-  const accepted = acceptedOfState(verifyLinkedInOAuthState(state, String(guestId)));
+  const verified = verifyLinkedInOAuthState(state, String(guestId));
+  const accepted = acceptedOfState(verified);
+  const subscribe = newsletterOfState(verified);
 
   // exchange code for provider tokens
   const tokens = await exchangeLinkedInCodeForTokens(code);
@@ -172,6 +178,7 @@ export async function linkedInCallback({
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
         ...avatarOf(u),
+        canManageNewsletters: canManageNewslettersOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
@@ -182,6 +189,15 @@ export async function linkedInCallback({
     if (err instanceof AppError) throw err;
 
     throw new InternalError({ reason: 'LINKEDIN_SERVICE_UNEXPECTED' }, err);
+  }
+
+  // the box of the newsletter the page ticked at the start subscribes a new account, never an
+  // account the shop had; whatever comes of it the login goes on
+  if (login.created && subscribe) {
+    await subscribeAtRegistration(
+      { userId: login.userId, ip: ip ?? null, userAgent: userAgent ?? null },
+      log,
+    );
   }
 
   // a new account takes the picture of the provider; the login goes on whatever comes of it

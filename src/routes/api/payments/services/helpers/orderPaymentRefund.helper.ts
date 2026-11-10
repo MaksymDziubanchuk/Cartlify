@@ -3,14 +3,15 @@ import { Prisma } from '@prisma/client';
 import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import { failureOf } from '@helpers/failureOf.js';
 
+import { getPaymentProvider } from '../../providers/index.js';
+import { lockLateRefund } from './lateRefundRows.helper.js';
 import { refundWholePayment } from './refundWholePayment.helper.js';
-import {
-  sendPaymentRefundedEmail,
-  type PaymentRefundedMailLogger,
-} from './sendPaymentRefundedEmail.helper.js';
+import { settleLateRefund } from './settleLateRefund.helper.js';
 
-import type { PaymentProviderName } from '../../providers/types.js';
+import type { PaymentProviderName, RefundAnswer } from '../../providers/types.js';
+import type { PaymentRefundMailLogger } from './paymentRefundMails.helper.js';
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
 
 type RefundLatePaymentArgs = {
@@ -28,10 +29,6 @@ type RefundLatePaymentArgs = {
 type WriteOrderRefundAuditLogArgs = RefundLatePaymentArgs & {
   refundId: string | null;
 };
-
-// logged: the refund has its line in the audit log; created: this call wrote it, the earlier
-// deliveries of the event did not; userId: the buyer it is recorded for
-type RefundAuditResult = { logged: boolean; created: boolean; userId: number | null };
 
 // the line of the audit log that records the refund of this payment
 const refundMarkerOf = (provider: PaymentProviderName, paymentId: string) =>
@@ -54,6 +51,7 @@ async function isPaymentRefunded(args: {
       where "entityType" = 'order'::cartlify."AdminAuditEntityType"
         and "entityId" = ${args.orderId}::int
         and action = 'OTHER'::cartlify."AdminAuditAction"
+        and event = 'order.refund_late'
         and meta @> ${refundMarkerOf(args.provider, args.paymentId)}::jsonb
       limit 1
     `;
@@ -62,7 +60,7 @@ async function isPaymentRefunded(args: {
   });
 }
 
-// write refund into admin audit log, once per payment
+// write refund into admin audit log, once per payment: whether the refund is on the record now
 async function writeOrderRefundAuditLog({
   provider,
   paymentId,
@@ -72,12 +70,15 @@ async function writeOrderRefundAuditLog({
   reason,
   amount,
   currency,
-}: WriteOrderRefundAuditLogArgs): Promise<RefundAuditResult> {
+}: WriteOrderRefundAuditLogArgs): Promise<{ logged: boolean }> {
   return tx(
     async (db) => {
       // set admin context: audit log accepts and shows records only for admin context
       await setAdminContext(db);
       await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
+
+      // two deliveries of the event at the same time wait for each other: the second finds the line
+      await lockLateRefund(db, paymentId);
 
       // skip when this payment is already recorded, a provider can deliver the same event more than once
       const refundMarker = refundMarkerOf(provider, paymentId);
@@ -88,13 +89,12 @@ async function writeOrderRefundAuditLog({
         where "entityType" = 'order'::cartlify."AdminAuditEntityType"
           and "entityId" = ${orderId}::int
           and action = 'OTHER'::cartlify."AdminAuditAction"
+          and event = 'order.refund_late'
           and meta @> ${refundMarker}::jsonb
         limit 1
       `;
 
-      if (recorded.length > 0) {
-        return { logged: true, created: false, userId: null };
-      }
+      if (recorded.length > 0) return { logged: true };
 
       // record actor is the buyer who gets the money back
       const order = await db.order.findUnique({
@@ -115,9 +115,7 @@ async function writeOrderRefundAuditLog({
       }
 
       // audit log requires an existing user as actor
-      if (userId === null) {
-        return { logged: false, created: false, userId: null };
-      }
+      if (userId === null) return { logged: false };
 
       await writeAdminAuditLog(db, {
         actorId: userId,
@@ -143,7 +141,7 @@ async function writeOrderRefundAuditLog({
         ],
       });
 
-      return { logged: true, created: true, userId };
+      return { logged: true };
     },
     {
       maxRetries: 3,
@@ -154,36 +152,61 @@ async function writeOrderRefundAuditLog({
   );
 }
 
-// return money for a payment that the order could not take, and tell the buyer once
+// where the refund stands once its line is written: the answer to the request when the money is
+// sent already or the refund failed at once, otherwise the provider is asked again, because the event that ends the refund may
+// have come before the line was there to find. A provider that cannot be asked is no failure of the
+// payment (the refund is made): the refund stays as it is, the event that ends it comes later and
+// the alert of the refunds not sent covers the rest
+async function answerAfterLine(
+  refund: RefundAnswer,
+  args: RefundLatePaymentArgs,
+  log: PaymentRefundMailLogger,
+): Promise<RefundAnswer> {
+  // a refund that failed at once is settled as the failure it is
+  if (refund.status === 'failed') return refund;
+
+  if (refund.status === 'succeeded' || refund.refundId === null) {
+    return { refundId: refund.refundId, status: 'succeeded' };
+  }
+
+  try {
+    return await getPaymentProvider(args.provider).getRefund(refund.refundId);
+  } catch (err) {
+    log.warn(
+      { ...failureOf(err), orderId: args.orderId, paymentId: args.paymentId },
+      'the state of the refund of a late payment was not read',
+    );
+
+    return { refundId: refund.refundId, status: 'pending' };
+  }
+}
+
+// return money for a payment that the order could not take, record it, and tell the buyer once the
+// money is sent (settleLateRefund)
 async function refundLatePayment(
   args: RefundLatePaymentArgs,
-  log: PaymentRefundedMailLogger,
+  log: PaymentRefundMailLogger,
 ): Promise<{ refundId: string | null; logged: boolean }> {
   // refund first: if the audit write fails, the event is delivered again and the refund is not repeated
-  const { refundId } = await refundWholePayment({
+  const refund = await refundWholePayment({
     provider: args.provider,
     paymentId: args.paymentId,
     orderId: args.orderId,
     amount: args.amount,
   });
 
-  const { logged, created, userId } = await writeOrderRefundAuditLog({ ...args, refundId });
+  const { logged } = await writeOrderRefundAuditLog({ ...args, refundId: refund.refundId });
 
-  // the first record of this refund mails the buyer; a delivery of the same event again does not
-  if (created && userId !== null && args.currency) {
-    await sendPaymentRefundedEmail(
-      {
-        orderId: args.orderId,
-        userId,
-        amount: args.amount,
-        currency: args.currency,
-        reason: args.reason,
-      },
+  // the refund is on the record: its end, if it came, is told now
+  if (logged) {
+    await settleLateRefund(
+      { provider: args.provider, refundId: refund.refundId, paymentId: args.paymentId },
+      await answerAfterLine(refund, args, log),
       log,
     );
   }
 
-  return { refundId, logged };
+  return { refundId: refund.refundId, logged };
 }
 
 export { isPaymentRefunded, refundLatePayment };

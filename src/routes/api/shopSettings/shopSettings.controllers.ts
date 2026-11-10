@@ -6,6 +6,7 @@ import type { FastifyRequest } from 'fastify';
 import type { WritableShopSettingKey } from '@config/shopSettings.js';
 import type { ControllerRouter } from 'types/controller.js';
 import type {
+  GetShopLocaleCountsResponseDto,
   GetShopSettingsHistoryResponseDto,
   PublicShopSettingsDto,
   PutShopSettingBodyDto,
@@ -17,6 +18,7 @@ import type { UserEntity } from 'types/user.js';
 
 import {
   getPublicShopSettings,
+  getShopLocaleCounts,
   getShopSettingsHistory,
   getShopSettingsMissingFields,
   getShopSettingsValues,
@@ -94,6 +96,16 @@ const getHistory: ControllerRouter<
   return reply.code(200).send(result);
 };
 
+// root: GET /api/root/shop-settings/locale-counts
+const getLocaleCounts: ControllerRouter<{}, {}, {}, GetShopLocaleCountsResponseDto> = async (
+  req,
+  reply,
+) => {
+  const { id } = req.user as UserEntity;
+  const result = await getShopLocaleCounts({ actorId: id, actorRole: 'ROOT' });
+  return reply.code(200).send(result);
+};
+
 // root: POST /api/root/shop-settings/logo
 const postLogo: ControllerRouter<{}, {}, {}, ShopSettingsValuesDto> = async (req, reply) => {
   const { id: actorId } = req.user as UserEntity;
@@ -152,6 +164,7 @@ export const shopSettingsController = {
   putValues,
   putValue,
   getHistory,
+  getLocaleCounts,
   postLogo,
   deleteLogo,
 };

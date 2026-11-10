@@ -8,6 +8,7 @@ import {
 } from '@utils/errors.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 
 import {
   buildGithubAuthUrl,
@@ -30,6 +31,8 @@ import { insertLoginLog } from './helpers/loginLogs.helper.js';
 import { issueTokensOnLogin } from './helpers/tokenRotation.helper.js';
 import { upsertOAuthUserByEmail } from './helpers/oauthUserUpsert.helper.js';
 import { acceptedOfState, takeConsentAtOAuthLogin } from './helpers/oauthConsent.helper.js';
+import { newsletterOfState } from './helpers/oauthNewsletter.helper.js';
+import { subscribeAtRegistration } from '@routes/api/newsletters/services/helpers/registrationSubscription.helper.js';
 import {
   copyProviderAvatar,
   type OAuthAvatarRole,
@@ -42,6 +45,7 @@ export async function githubStart({
   guestId,
   role,
   acceptedDocumentIds = [],
+  newsletter = false,
 }: GithubStartDto): Promise<GithubStartResponseDto> {
   if (role !== 'GUEST') {
     throw new AlreadyAuthenticatedError({ flow: 'GITHUB_START' });
@@ -52,7 +56,7 @@ export async function githubStart({
     });
   }
   // build oauth redirect url
-  const url = buildGithubAuthUrl(String(guestId), acceptedDocumentIds);
+  const url = buildGithubAuthUrl(String(guestId), acceptedDocumentIds, newsletter);
   return { url };
 }
 
@@ -89,7 +93,9 @@ export async function githubCallback({
 
   // verify oauth state payload and that this guest started the login,
   // before the code is used: a code from someone else's login is never redeemed here
-  const accepted = acceptedOfState(verifyGithubOAuthState(state, String(guestId)));
+  const verified = verifyGithubOAuthState(state, String(guestId));
+  const accepted = acceptedOfState(verified);
+  const subscribe = newsletterOfState(verified);
 
   // exchange code for oauth tokens
   const tokens = await exchangeGithubCodeForTokens(code, state);
@@ -188,6 +194,7 @@ export async function githubCallback({
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
         ...avatarOf(u),
+        canManageNewsletters: canManageNewslettersOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
@@ -203,6 +210,15 @@ export async function githubCallback({
         flow: 'GITHUB_CALLBACK',
       },
       err,
+    );
+  }
+
+  // the box of the newsletter the page ticked at the start subscribes a new account, never an
+  // account the shop had; whatever comes of it the login goes on
+  if (login.created && subscribe) {
+    await subscribeAtRegistration(
+      { userId: login.userId, ip: ip ?? null, userAgent: userAgent ?? null },
+      log,
     );
   }
 

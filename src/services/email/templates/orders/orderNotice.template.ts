@@ -16,7 +16,7 @@ export type OrderNoticeTemplateArgs = {
   details?: { label: string; value: string }[];
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -46,7 +46,7 @@ export function buildOrderNoticeTemplate(args: OrderNoticeTemplateArgs): {
       .filter((detail) => detail.value.trim())
       .map((detail) => ({ label: detail.label.trim(), value: detail.value.trim() })),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     preview: t('orderNotice.preview', locale, {
       heading: args.heading.trim(),

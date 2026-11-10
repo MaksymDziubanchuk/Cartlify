@@ -39,7 +39,7 @@ export type ReturnRefundedTemplateArgs = {
   timeZone?: string;
   userName?: string;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -78,7 +78,9 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
           }).format(args.sentOn),
         })
       : t('returnRefunded.sentNoDate', locale, { way })
-    : t('returnRefunded.wayBack', locale);
+    : // a transfer to the card can still fail at the bank, and the buyer is then mailed
+      // (returnRefundFailed); money sent outside the app has no such later answer
+      `${t('returnRefunded.wayBack', locale)} ${t('returnRefunded.laterLine', locale)}`;
 
   const values = {
     appName,
@@ -105,7 +107,7 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
     items: args.items.map((item) => ({ name: item.name.trim(), quantity: String(item.quantity) })),
     supportEmail: args.supportEmail.trim(),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t('returnRefunded.subject', locale, { appName, orderId }),
     preview: t('returnRefunded.preview', locale, { orderId }),

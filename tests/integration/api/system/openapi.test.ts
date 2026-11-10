@@ -98,6 +98,7 @@ describe('GET /documentation/json', () => {
     ['get', '/api/favorites'],
     ['get', '/api/auth/csrf'],
     ['post', '/api/payments/stripe/webhook'],
+    ['post', '/api/newsletters/sendgrid/webhook'],
   ])('asks no csrf header of %s %s', (method, path) => {
     const security = operation(method, path).security ?? [];
 
@@ -629,6 +630,13 @@ describe('the payments routes', () => {
       ['200', '400', '401', '403', '404', '409', '429', '500', '503'],
     ],
     ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '409', '500']],
+    // the Event Webhook of SendGrid: 413 and 415 for a body it does not take, 401 for a signature
+    // that fails, 503 for a server without its key
+    [
+      'post',
+      '/api/newsletters/sendgrid/webhook',
+      ['200', '400', '401', '409', '413', '415', '500', '503'],
+    ],
   ])('lists only the answers %s %s can give', (method, path, statuses) => {
     expect(Object.keys(operation(method, path).responses ?? {}).sort()).toEqual(statuses);
   });
@@ -698,9 +706,14 @@ describe('the refusals every route shares', () => {
     ]);
   });
 
-  // the health checks and the events of payment providers are outside the limit
+  // the health checks and the events of the payment and mail providers are outside the limit
   it('names RATE_LIMITED for every route the rate limit counts', () => {
-    const free = ['/health/', '/ready/', '/api/payments/stripe/webhook'];
+    const free = [
+      '/health/',
+      '/ready/',
+      '/api/payments/stripe/webhook',
+      '/api/newsletters/sendgrid/webhook',
+    ];
     const counted = operations().filter(({ path }) => !free.includes(path));
 
     expect(

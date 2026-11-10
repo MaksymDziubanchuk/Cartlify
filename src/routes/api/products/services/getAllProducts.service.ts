@@ -13,7 +13,7 @@ import {
 } from './helpers/index.js';
 import { InternalError, isAppError } from '@utils/errors.js';
 
-import type { FindAllProductsDto, ProductsResponseDto } from 'types/dto/products.dto.js';
+import type { ProductsResponseDto, ReadProductsDto } from 'types/dto/products.dto.js';
 
 // the catalog list of a buyer or of an admin. A row is a product, or a group of variants (the ones
 // of a product with the same main characteristics) when the query asks something of a variant (see
@@ -21,7 +21,7 @@ import type { FindAllProductsDto, ProductsResponseDto } from 'types/dto/products
 // time (cartlify.product_current_price), so one raw query finds the ids of the page (variants or
 // products) and the values of their sort; Prisma reads the rows of those ids. The free units leave
 // out the units of batches that are over by the day of the shop, which the transaction carries
-export async function findAll(dto: FindAllProductsDto): Promise<ProductsResponseDto> {
+export async function findAll(dto: ReadProductsDto): Promise<ProductsResponseDto> {
   const q = normalizeFindAllProductsInput(dto);
 
   try {

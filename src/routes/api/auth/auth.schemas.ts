@@ -19,6 +19,7 @@ const authRegisterResponseExample = {
     url256: 'https://example.com/avatars/user-256.webp',
   },
   avatarIsDefault: false,
+  canManageNewsletters: false,
   locale: 'en',
 };
 
@@ -37,14 +38,19 @@ const authLoginResponseExample = {
     url256: 'https://example.com/avatars/user-256.webp',
   },
   avatarIsDefault: false,
+  canManageNewsletters: false,
   locale: 'en',
   phone: '+10000000000',
 };
+
+// what the Turnstile widget gives the page once the visitor has solved it
+const captchaTokenExample = 'XXXX.DUMMY.TOKEN.XXXX';
 
 const registerBodyExample = {
   email: 'user@example.com',
   password: 'password123',
   name: 'Example User',
+  captchaToken: captchaTokenExample,
 };
 
 const loginBodyExample = {
@@ -60,21 +66,21 @@ const oauthCallbackQueryExample = {
 
 const resendVerifyBodyExample = {
   email: 'user@example.com',
+  captchaToken: captchaTokenExample,
 };
 
-const verifyEmailQueryExample = {
+const verifyEmailBodyExample = {
   token: 'verification-token-example',
+  newsletter: true,
 };
 
 const passwordForgotBodyExample = {
   email: 'user@example.com',
-};
-
-const passwordResetQueryExample = {
-  token: 'password-reset-token-example',
+  captchaToken: captchaTokenExample,
 };
 
 const passwordResetBodyExample = {
+  token: 'password-reset-token-example',
   newPassword: 'newPassword123',
 };
 
@@ -91,11 +97,20 @@ const messageResponseExample = {
 const MAIL_LIMIT_TEXT =
   '`RATE_LIMITED` with `details.limit: mail`: more than ' +
   env.LIMIT_MAIL_PER_EMAIL +
-  ' to an address in 3 minutes (a reset and a verification count together), ' +
+  ' to an address in 3 minutes (a reset and a verification count together; counted after the ' +
+  'captcha, so an answer of the captcha that is refused spends none), ' +
   'or more than ' +
   env.LIMIT_MAIL_PER_ADDRESS +
-  ' from one address in 15 minutes; the same answer for an address with an account or without one. ' +
+  ' from one address in 15 minutes (counted before the captcha); the same answer for an address ' +
+  'with an account or without one. ' +
   '`retry-after` and `details.retryAfterSeconds` tell the wait.';
+
+// the three routes that send a mail or open an account for anybody ask for the captcha
+// (src/middlewares/requireCaptcha.ts); the refusals are named for each of them by the swagger plugin
+const CAPTCHA_TEXT =
+  ' The body carries `captchaToken`, the answer of the Cloudflare Turnstile widget the visitor solved: ' +
+  'it is checked after the body is validated and before anything is done, so a refused one creates ' +
+  'nothing and sends no mail.';
 
 const setRegisterSchema = {
   operationId: 'registerUser',
@@ -107,7 +122,10 @@ const setRegisterSchema = {
     'language the shop answers in is saved and the confirmation mail goes in it, anything else ' +
     "is only dropped and the mail goes in the shop's own language. While a version of the terms " +
     'or of the contract is in force (GET /api/legal/documents/current), the person accepts ' +
-    'every one of them with the registration: `acceptedDocumentIds` names them.',
+    'every one of them with the registration: `acceptedDocumentIds` names them. `newsletter: true` ' +
+    '(the box "Subscribe to the newsletter") is not stored: it only puts `newsletter=1` in the link ' +
+    'of the confirmation mail, a hint for the page that confirms the email.' +
+    CAPTCHA_TEXT,
 
   body: {
     $ref: 'authRegisterBodySchema#',
@@ -146,7 +164,14 @@ const setRegisterSchema = {
       description:
         '`RATE_LIMITED` with `details.limit: register`: more than ' +
         env.LIMIT_REGISTER_PER_ADDRESS +
-        ' registrations from one address in an hour; `retry-after` and `details.retryAfterSeconds` tell the wait.',
+        ' registrations from one address in an hour (counted before the captcha), or more than ' +
+        env.LIMIT_REGISTER_PER_EMAIL +
+        ' registrations of one email in 3 minutes (asked after the captcha, so an answer of the ' +
+        'captcha that is refused takes no place; only a registration that ends in 201 counts, one ' +
+        'refused for any other reason, or whose mail did not go, leaves the count as it was, and ' +
+        'requests at the same time cannot all pass; the ways to write one mailbox, a `+tag` and the ' +
+        'dots of a Gmail name, count as one; the registrations count apart from the mails of a reset ' +
+        'and of a verification); `retry-after` and `details.retryAfterSeconds` tell the wait.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -245,6 +270,14 @@ const oauthStartQuerystring = {
         'Ids of the versions of the terms and of the contract in force the person accepted ' +
         '(GET /api/legal/documents/current), through commas, at most 10.',
       examples: ['17,12'],
+    },
+    newsletter: {
+      type: 'boolean',
+      description:
+        'The box "Subscribe to the newsletter" of the page, ticked (true). A login that makes a ' +
+        'new account then subscribes it to the newsletter; a login to an account the shop has ' +
+        'ignores it. It travels in the signed state of the login to the callback.',
+      examples: [true],
     },
   },
 } as const;
@@ -498,7 +531,8 @@ const setVerifyResendSchema = {
   summary: 'Resend verification email',
   description:
     'Sends a new email verification link to the provided email address; earlier links stop working. ' +
-    'The answer is the same for an unknown or already verified email, so it does not tell which emails have accounts.',
+    'The answer is the same for an unknown or already verified email, so it does not tell which emails have accounts.' +
+    CAPTCHA_TEXT,
 
   body: {
     $ref: 'authResendVerifyBodySchema#',
@@ -536,11 +570,18 @@ const authVerifyEmailSchema = {
   operationId: 'verifyUserEmail',
   summary: 'Verify email',
   description:
-    'Verifies user email by the token of the link from the mail. A link works once and only the newest one does.',
+    'Verifies user email by the token of the link from the mail. The link opens a page of the frontend ' +
+    '(`WEB_PAGE_VERIFY_EMAIL`) with the token after the `#` of the address (`#token=<token>`, and `newsletter=1` ' +
+    'when the box of the newsletter was ticked at the registration), which no server and no log sees; the page ' +
+    'reads it and posts it here, so opening a link verifies nobody (a mail scanner opens every link). ' +
+    'A link works once and only the newest one does. ' +
+    'The page sends the choice of the box "Subscribe to the newsletter" with the token (`newsletter`): when true ' +
+    'and the email is confirmed, the account is subscribed (place registration), and the answer is the same ' +
+    'whatever the state of the address was. A subscription that cannot be made does not undo the confirmation.',
 
-  querystring: {
-    $ref: 'authVerifyEmailQuerySchema#',
-    examples: [verifyEmailQueryExample],
+  body: {
+    $ref: 'authVerifyEmailBodySchema#',
+    examples: [verifyEmailBodyExample],
   },
 
   response: {
@@ -553,7 +594,7 @@ const authVerifyEmailSchema = {
     400: {
       description:
         '`VERIFY_TOKEN_INVALID_OR_EXPIRED`: the link is wrong, used, expired or not the newest one. ' +
-        '`TOKEN_REQUIRED`: the link has no token.',
+        '`TOKEN_REQUIRED`: the body has no token.',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -573,7 +614,8 @@ const setPasswordForgotSchema = {
   summary: 'Request password reset',
   description:
     'Creates a password reset request for the provided email address and mails the link. ' +
-    'The sessions of the account stay: they end only when the password is actually reset.',
+    'The sessions of the account stay: they end only when the password is actually reset.' +
+    CAPTCHA_TEXT,
 
   body: {
     $ref: 'authPasswordForgotBodySchema#',
@@ -607,13 +649,12 @@ const setPasswordResetSchema = {
   operationId: 'resetPassword',
   summary: 'Reset password',
   description:
-    'Resets user password by password reset token and ends every session of the account. ' +
+    'Resets user password by the token of the link from the mail and ends every session of the ' +
+    'account. The link opens a page of the frontend (`WEB_PAGE_PASSWORD_RESET`) with the token after ' +
+    'the `#` of the address (`#token=<token>`), which no server and no log sees; the page reads it ' +
+    'and posts it here in the body with the new password, so the token is in no address of a ' +
+    'request. A link works once and only the newest one does. ' +
     'The new password is 6 to 64 characters: Latin letters, digits, spaces and ASCII symbols.',
-
-  querystring: {
-    $ref: 'authPasswordResetQuerySchema#',
-    examples: [passwordResetQueryExample],
-  },
 
   body: {
     $ref: 'authPasswordResetBodySchema#',
@@ -630,10 +671,12 @@ const setPasswordResetSchema = {
     400: {
       description:
         'Invalid password reset request. VALIDATION_ERROR with field newPassword ' +
-        'when the password is shorter than 6 or longer than 64 characters or has non-ASCII characters; ' +
+        'when the password is shorter than 6 or longer than 64 characters or has non-ASCII characters, ' +
+        'and with field token when the body has none (a token in the query is not read) or it is shorter ' +
+        'than 10 characters; ' +
         'PASSWORD_TOO_SHORT when fewer than 6 characters are left after dropping the edge spaces; ' +
         '`RESET_TOKEN_INVALID_OR_EXPIRED`: the link is wrong, used or expired; ' +
-        '`TOKEN_REQUIRED`, `NEW_PASSWORD_REQUIRED`: the token or the password is missing.',
+        '`TOKEN_REQUIRED`, `NEW_PASSWORD_REQUIRED`: the token or the password is empty (spaces only).',
       $ref: 'errorResponseSchema#',
     },
     500: {

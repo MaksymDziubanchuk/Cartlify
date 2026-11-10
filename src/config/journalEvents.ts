@@ -90,9 +90,13 @@ export const AUDIT_EVENTS = [
   'order.pickup_ready_back_bulk',
   'order.pickup_collected_back',
   'order.pickup_collected_back_bulk',
-  // a payment given back late, a change of a send (the details mailed to the buyer, or the cost the
-  // shop pays the carrier), of the delivery data
+  // a payment the order could not take and the shop gives back: the refund is made, its money is
+  // sent (the buyer is mailed), the refund fails (the buyer is mailed), root sends the money another
+  // way after it failed (the buyer is mailed)
   'order.refund_late',
+  'order.refund_late_sent',
+  'order.refund_late_failed',
+  'order.refund_late_outside',
   // a statement of withdrawal or of return: made, its goods taken in, the proof of the buyer
   // confirmed, its money returned or failed to return, money sent outside the app, rows closed
   // without a refund
@@ -115,6 +119,8 @@ export const AUDIT_EVENTS = [
   // the shop paid to carry the goods back: a parcel recorded, its cost written
   'return.shipment_record',
   'return.shipment_cost',
+  // a change of a send (the details mailed to the buyer, or the cost the shop pays the carrier), of
+  // the delivery data
   'order.shipment_tracking_change',
   'order.shipment_cost_change',
   'order.delivery_change',
@@ -124,6 +130,24 @@ export const AUDIT_EVENTS = [
   'user.export',
   'user.role_grant',
   'user.role_revoke',
+  // the newsletters: root gave an admin the right to run them or took it away (the line is about the
+  // account of the admin); a newsletter (a campaign) made, changed, deleted, copied, planned,
+  // cancelled before it started, stopped while it went, and a test mail of it sent to an admin; a
+  // subscriber deleted by an admin with the data of the subscription; an address blocked for the
+  // public form of the newsletters, or taken off the list
+  'newsletter.manager_granted',
+  'newsletter.manager_revoked',
+  'newsletter.campaign_created',
+  'newsletter.campaign_updated',
+  'newsletter.campaign_deleted',
+  'newsletter.campaign_copied',
+  'newsletter.campaign_scheduled',
+  'newsletter.campaign_cancelled',
+  'newsletter.campaign_stopped',
+  'newsletter.campaign_test_sent',
+  'newsletter.subscriber_erased',
+  'newsletter.block_added',
+  'newsletter.block_removed',
   LEGACY_EVENT,
 ] as const;
 

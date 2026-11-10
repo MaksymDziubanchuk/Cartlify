@@ -109,15 +109,19 @@ export interface UserResponseDto {
   // the own picture, or the drawn letter of an account without one
   avatarUrls: AvatarUrls;
   avatarIsDefault: boolean;
+  // may the account run the newsletters: always true for root, the right root gave for an admin,
+  // false for a user (canManageNewslettersOf)
+  canManageNewsletters: boolean;
   locale?: string;
   phone?: string;
   reviews?: UserReviewResponseDto[];
 }
 
-// public profile of any user: no email, role, verification, phone or reviews
+// public profile of any user: no email, role, verification, phone, right to run the newsletters or
+// reviews
 export type PublicUserProfileDto = Omit<
   UserResponseDto,
-  'email' | 'isVerified' | 'reviews' | 'role' | 'phone' | 'locale'
+  'email' | 'isVerified' | 'reviews' | 'role' | 'phone' | 'locale' | 'canManageNewsletters'
 >;
 
 export interface AdminProfileOrderDto {

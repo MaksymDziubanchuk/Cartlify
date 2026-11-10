@@ -1,8 +1,16 @@
-import { afterAll, describe, expect, it } from '@jest/globals';
+import { randomUUID } from 'node:crypto';
+
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { prisma } from '@db/client.js';
 
 import { inRolledBackTx, type DbSession } from '../../helpers/db.js';
+import {
+  removeNewsletterFixtures,
+  setupNewsletterFixtures,
+  type NewsletterFixtures,
+} from '../../helpers/newsletterDb.js';
+import { inReadonlyTx } from '../../helpers/ownerDb.js';
 
 // what the roles of the app may do in the database at all, before any rls policy: the app
 // connects as cartlify_app, cartlify_readonly is the role for reading by hand. The tests read
@@ -23,6 +31,8 @@ const APP_FUNCTIONS = [
   'cartlify.is_system()',
   'cartlify.is_owner(integer)',
   'cartlify.is_owner_or_admin(integer)',
+  // the policies of the newsletter tables ask it: root, or an admin root allowed
+  'cartlify.newsletter_manager()',
   'cartlify.immutable_unaccent(text)',
   'cartlify.auth_get_user_for_login(text)',
   'cartlify.auth_resend_verify(text, text, timestamp with time zone)',
@@ -30,6 +40,40 @@ const APP_FUNCTIONS = [
   'cartlify.users_get_public_profile(integer)',
   'cartlify.remove_user_avatar(integer)',
   'cartlify.migrate_guest_data_to_user(uuid, integer)',
+  // the subscription to the newsletters: for a guest by the link of a mail, for an account on its
+  // own address; each checks the actor itself
+  'cartlify.newsletter_request(text, text, text, text, text, text, text, text, text)',
+  // the mail of the form the provider refused: the day of the address is given back
+  'cartlify.newsletter_request_mail_failed(text, text)',
+  'cartlify.newsletter_confirm(text, text, text)',
+  'cartlify.newsletter_not_me(text, text, text)',
+  'cartlify.newsletter_manage_get(text)',
+  'cartlify.newsletter_manage_set_locale(text, text, text, text)',
+  'cartlify.newsletter_manage_unsubscribe(text, integer, text, text, text)',
+  'cartlify.newsletter_manage_resume(text, text, text)',
+  // the button of the mail client: its own token, its own function
+  'cartlify.newsletter_unsubscribe_one_click(text, integer, text, text)',
+  'cartlify.newsletter_manage_export(text)',
+  'cartlify.newsletter_subscribe_account(integer, text, text, text, text, text, text, text)',
+  'cartlify.newsletter_profile_get(integer)',
+  'cartlify.newsletter_profile_unsubscribe(integer, text, text)',
+  'cartlify.newsletter_profile_set_locale(integer, text, text, text)',
+  'cartlify.newsletter_profile_resume(integer, text, text)',
+  'cartlify.newsletter_profile_export(integer)',
+  'cartlify.newsletter_end_for_account(integer)',
+  // the work of the system (a bounce, a spam report), of the people who run the newsletters (a
+  // address erased, an address blocked) and of root (the right of an admin, the languages)
+  'cartlify.newsletter_apply_event(integer, text, text)',
+  'cartlify.newsletter_admin_erase_address(integer)',
+  'cartlify.newsletter_block_add(text, text)',
+  'cartlify.newsletter_set_manager(integer, boolean)',
+  'cartlify.newsletter_locale_counts()',
+  'cartlify.newsletter_reset_locale(text)',
+  // the sending of the newsletters: the system starts a campaign, takes a portion of the mails and
+  // gives back the ones it did not try
+  'cartlify.newsletter_start_campaign(integer, jsonb, text)',
+  'cartlify.newsletter_claim_recipients(integer, integer[], integer, integer)',
+  'cartlify.newsletter_release_recipients(integer[])',
   'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
   'cartlify.unconfirm_order(integer)',
   'cartlify.cancel_order_payment(integer)',
@@ -44,6 +88,9 @@ const APP_FUNCTIONS = [
   'cartlify.cleanup_return_addresses()',
   'cartlify.cleanup_return_personal()',
   'cartlify.cleanup_deleted_accounts_recipients()',
+  'cartlify.cleanup_newsletter_pending()',
+  'cartlify.cleanup_newsletter_consent()',
+  'cartlify.cleanup_newsletter_recipients()',
   'cartlify.refresh_order_prices(integer)',
   'cartlify.product_current_price(numeric, numeric, timestamp without time zone)',
   'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',
@@ -83,8 +130,11 @@ const READONLY_FUNCTIONS = [
   'cartlify.current_actor_role()',
   'cartlify.is_admin()',
   'cartlify.is_root()',
+  'cartlify.is_system()',
   'cartlify.is_owner(integer)',
   'cartlify.is_owner_or_admin(integer)',
+  // the policies of the newsletter tables ask these two; with no context both answer false
+  'cartlify.newsletter_manager()',
   'cartlify.unaccent(text)',
   'cartlify.unaccent(regdictionary, text)',
   'cartlify.immutable_unaccent(text)',
@@ -147,8 +197,20 @@ const sequencePrivilege = (db: DbSession, role: string, privilege: string) =>
     privilege,
   );
 
+// rows in the five tables of the newsletters, committed (the functions of the database write them,
+// a test makes them as the owner), so that "sees none" means the rows are there and hidden
+let newsletters: NewsletterFixtures;
+
+beforeAll(async () => {
+  newsletters = await setupNewsletterFixtures();
+});
+
 afterAll(async () => {
-  await prisma.$disconnect();
+  try {
+    if (newsletters) await removeNewsletterFixtures(newsletters);
+  } finally {
+    await prisma.$disconnect();
+  }
 });
 
 describe.each([APP, READONLY])('role %s', (role) => {
@@ -375,6 +437,36 @@ describe(`role ${APP}`, () => {
   });
 });
 
+// the tables of the newsletters are the owner's: a guest is shown no row of them and may write none
+const NEWSLETTER_TABLES = [
+  'newsletter_subscriptions',
+  'newsletter_subscription_events',
+  'newsletter_campaigns',
+  'newsletter_recipients',
+  'newsletter_form_blocklist',
+];
+
+describe(`role ${APP} as a guest`, () => {
+  it.each(NEWSLETTER_TABLES)('sees none of the rows of %s, which hold some', async (table) => {
+    const { held, seen } = await inRolledBackTx(async (db) => {
+      await db.as({ role: 'ROOT', userId: newsletters.root.id });
+      const held = await db.rows<{ n: number }>(`select count(*)::int as n from cartlify.${table}`);
+
+      await db.as({ role: 'GUEST', guestId: randomUUID() });
+      const seen = await db.rows<{ n: number }>(`select count(*)::int as n from cartlify.${table}`);
+
+      await db.as(null);
+      const noContext = await db.rows<{ n: number }>(
+        `select count(*)::int as n from cartlify.${table}`,
+      );
+      return { held, seen: [seen[0], noContext[0]] };
+    });
+
+    expect(held[0]!.n).toBeGreaterThan(0);
+    expect(seen).toEqual([{ n: 0 }, { n: 0 }]);
+  });
+});
+
 describe(`role ${READONLY}`, () => {
   it('runs only the context readers and the search helpers', async () => {
     const { expected, actual } = await inRolledBackTx(async (db) => ({
@@ -408,6 +500,26 @@ describe(`role ${READONLY}`, () => {
     expect(taking).toEqual([]);
     expect(moving).toEqual([]);
   });
+
+  // the policies of the newsletter tables ask who the actor is (root, the system, an owner of a
+  // row, a manager of the newsletters); the role has no context, so every answer is false and it
+  // reads the tables without opening a row
+  // the tables hold committed rows (root counts them), and the role without a context is shown none
+  it.each(NEWSLETTER_TABLES)(
+    'reads %s without an error, and sees none of its rows',
+    async (table) => {
+      const held = await inRolledBackTx(async (db) => {
+        await db.as({ role: 'ROOT', userId: newsletters.root.id });
+        return db.rows<{ n: number }>(`select count(*)::int as n from cartlify.${table}`);
+      });
+      const seen = await inReadonlyTx((db) =>
+        db.rows<{ n: number }>(`select count(*)::int as n from cartlify.${table}`),
+      );
+
+      expect(held[0]!.n).toBeGreaterThan(0);
+      expect(seen).toEqual([{ n: 0 }]);
+    },
+  );
 });
 
 describe('every role the database does not name (public)', () => {
@@ -490,6 +602,34 @@ describe('the tables, views and functions of cartlify', () => {
     );
 
     expect(names(foreign)).toEqual([]);
+  });
+
+  // the steps of the newsletters the app runs are the only way it reaches the tables of the
+  // newsletters: each acts as the owner (security definer) and fixes its search path. A test that
+  // calls one as the owner of the database would pass without either
+  it('make every function of the newsletters the app may run act as the owner', async () => {
+    const { runnable, loose } = await inRolledBackTx(async (db) => {
+      const runnable = await db.rows<{ name: string }>(
+        `select p.oid::regprocedure::text as name
+         from pg_proc p
+         where p.pronamespace = 'cartlify'::regnamespace
+           and p.proname ~ '(^|_)newsletter\\_'
+           and has_function_privilege('cartlify_app', p.oid, 'EXECUTE')`,
+      );
+      const loose = await db.rows<{ name: string }>(
+        `select p.oid::regprocedure::text as name
+         from pg_proc p
+         where p.pronamespace = 'cartlify'::regnamespace
+           and p.proname ~ '(^|_)newsletter\\_'
+           and has_function_privilege('cartlify_app', p.oid, 'EXECUTE')
+           and not (p.prosecdef and coalesce('search_path=cartlify, pg_temp' = any (p.proconfig), false))`,
+      );
+      return { runnable, loose };
+    });
+
+    // the 25 steps and the 3 cleanups of the list above, no fewer (the later steps add to them)
+    expect(runnable.length).toBeGreaterThanOrEqual(28);
+    expect(names(loose)).toEqual([]);
   });
 
   // a function that acts as the owner must not find a table or function of the caller first:

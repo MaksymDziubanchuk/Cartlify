@@ -1,0 +1,11 @@
+{{greeting}}
+
+{{body}}
+{{sentLine}}
+
+{{seeOrderTxt}}
+{{orderUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

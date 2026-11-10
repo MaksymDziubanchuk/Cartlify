@@ -244,6 +244,9 @@ export async function writeAdminAuditLog(
       | 'party'
       | 'document'
       | 'attribute'
+      | 'newsletter_campaign'
+      | 'newsletter_subscriber'
+      | 'newsletter_block'
       | 'other';
     // null for a line that is about no one thing, such as a delivery of many variants (other)
     entityId: number | null;
@@ -263,6 +266,10 @@ export async function writeAdminAuditLog(
       | 'ORDER_DELIVERY_CHANGE'
       | 'CATEGORY_UPDATE'
       | 'REVIEW_DELETE'
+      | 'NEWSLETTER_MANAGER_CHANGE'
+      | 'NEWSLETTER_CAMPAIGN_CHANGE'
+      | 'NEWSLETTER_SUBSCRIBER_DELETE'
+      | 'NEWSLETTER_BLOCK_CHANGE'
       | 'OTHER';
     changes: AuditChange[];
   },
@@ -283,6 +290,92 @@ export async function writeAdminAuditLog(
       ${changesJson}::jsonb
     )
   `;
+}
+
+// The kind of thing and the action each event of the newsletters is written with, so a route names
+// only the event and cannot pair it wrongly (the lines of the whole newsletter work, src/config/
+// journalEvents.ts). The right to run the newsletters is a thing of the account of the admin; a
+// newsletter, a subscriber and an address blocked for the form are things of their own
+export const NEWSLETTER_AUDIT_LINES = {
+  'newsletter.manager_granted': { entityType: 'user', action: 'NEWSLETTER_MANAGER_CHANGE' },
+  'newsletter.manager_revoked': { entityType: 'user', action: 'NEWSLETTER_MANAGER_CHANGE' },
+  'newsletter.campaign_created': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_updated': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_deleted': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_copied': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_scheduled': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_cancelled': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_stopped': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.campaign_test_sent': {
+    entityType: 'newsletter_campaign',
+    action: 'NEWSLETTER_CAMPAIGN_CHANGE',
+  },
+  'newsletter.subscriber_erased': {
+    entityType: 'newsletter_subscriber',
+    action: 'NEWSLETTER_SUBSCRIBER_DELETE',
+  },
+  'newsletter.block_added': { entityType: 'newsletter_block', action: 'NEWSLETTER_BLOCK_CHANGE' },
+  'newsletter.block_removed': {
+    entityType: 'newsletter_block',
+    action: 'NEWSLETTER_BLOCK_CHANGE',
+  },
+} as const satisfies Partial<
+  Record<
+    AuditEvent,
+    {
+      entityType: Parameters<typeof writeAdminAuditLog>[1]['entityType'];
+      action: Parameters<typeof writeAdminAuditLog>[1]['action'];
+    }
+  >
+>;
+
+export type NewsletterAuditEvent = keyof typeof NEWSLETTER_AUDIT_LINES;
+
+// A line of the admin log about the newsletters. entityId is the account of the admin, the
+// newsletter, the subscriber or the blocked address the line is about (null for none). Nothing of a
+// subscriber's address goes into the changes of a line about a subscriber or an address
+export async function writeNewsletterAuditLog(
+  tx: DbClient,
+  args: {
+    actorId: UserId;
+    actorRole: string;
+    event: NewsletterAuditEvent;
+    entityId: number | null;
+    changes: AuditChange[];
+  },
+): Promise<void> {
+  const { entityType, action } = NEWSLETTER_AUDIT_LINES[args.event];
+
+  await writeAdminAuditLog(tx, {
+    actorId: args.actorId,
+    actorRole: args.actorRole,
+    entityType,
+    entityId: args.entityId,
+    action,
+    event: args.event,
+    changes: args.changes,
+  });
 }
 
 // many lines of the admin log that differ only in what each is about and what changed (a new order

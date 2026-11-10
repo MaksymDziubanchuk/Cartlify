@@ -220,7 +220,7 @@ const getProductReviews: ControllerRouter<
 
   const args = pickDefined<FindProductReviewsDto>(
     { productId, limit, actorId, actorRole },
-    { cursor, sort: req.query.sort },
+    { cursor, sort: req.query.sort, verifiedPurchase: req.query.verifiedPurchase },
   );
 
   const result = await productServices.findReviews(args);

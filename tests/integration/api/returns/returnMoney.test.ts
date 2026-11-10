@@ -222,7 +222,7 @@ describe('POST /api/returns/:returnId/refund', () => {
 
     const own = mailTo(mails, `Return of order #${orderId} is closed`);
     expect(own).toHaveLength(1);
-    expect(own[0]!.text).toContain('€20.00 went back to you.');
+    expect(own[0]!.text).toContain('We sent you €20.00.');
     expect(own[0]!.text).toContain(shopSettings().emailReplyTo);
   });
 
@@ -267,9 +267,9 @@ describe('POST /api/returns/:returnId/refund', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().closedAt).toBeNull();
     expect(res.json().order.returnStatus).toBe('open_partial');
-    const own = mailTo(mails, `Money returned for order #${orderId}`);
+    const own = mailTo(mails, `Money sent for order #${orderId}`);
     expect(own).toHaveLength(1);
-    expect(own[0]!.text).toContain('We returned €10.00');
+    expect(own[0]!.text).toContain('We sent you €10.00');
   });
 
   it('pays ahead for goods that still wait, once the proof of the buyer is confirmed', async () => {
@@ -530,7 +530,7 @@ describe('a refund that does not go through at once', () => {
       refundId: expect.stringMatching(/^re_/),
     });
     expect(mailTo(mails, 'is closed')).toHaveLength(0);
-    expect(mailTo(mails, 'Money returned')).toHaveLength(0);
+    expect(mailTo(mails, 'Money sent')).toHaveLength(0);
   });
 
   // the bank of a card that is gone sends the money back after the refund went (the sandbox: the
@@ -739,7 +739,7 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
       ]);
       const own = mailTo(mails, `Return of order #${orderId} is closed`);
       expect(own).toHaveLength(1);
-      expect(own[0]!.text).toContain('€10.00 went back to you.');
+      expect(own[0]!.text).toContain('We sent you €10.00.');
     },
   );
 

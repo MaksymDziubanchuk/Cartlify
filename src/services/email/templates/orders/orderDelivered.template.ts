@@ -43,7 +43,7 @@ export type OrderDeliveredTemplateArgs = WithdrawalOfferArgs & {
   // where the order was collected, a pickup only: the mail then says it is collected
   pickup?: string | null;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -112,7 +112,7 @@ export function buildOrderDeliveredTemplate(args: OrderDeliveredTemplateArgs): {
     // the name and the phone in one line
     recipient: [args.recipientName?.trim(), args.recipientPhone?.trim()].filter(Boolean).join(', '),
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     title: t(
       collected ? 'orderDelivered.subjectCollected' : 'orderDelivered.subjectDelivered',

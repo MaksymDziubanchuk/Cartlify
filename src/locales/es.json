@@ -143,13 +143,28 @@
     "body": "Tu pedido #{{orderId}} se envió y va en camino hacia ti. Te avisaremos cuando se entregue."
   },
   "orderPaymentRefunded": {
-    "subject": "{{appName}} — El pago del pedido #{{orderId}} fue reembolsado",
-    "preview": "El pago del pedido #{{orderId}} se reembolsó por completo.",
-    "heading": "Pago reembolsado",
-    "body": "Tu pago de {{amount}} del pedido #{{orderId}} se reembolsó por completo: {{reason}}.",
-    "bankNote": "{{orderLine}} Tu banco mostrará el reembolso en unos días.",
+    "subject": "{{appName}} — Te enviamos de vuelta el pago del pedido #{{orderId}}",
+    "preview": "Te enviamos de vuelta {{amount}} del pedido #{{orderId}}.",
+    "heading": "Pago enviado de vuelta",
+    "body": "Te enviamos de vuelta tu pago de {{amount}} del pedido #{{orderId}}: {{reason}}.",
+    "bankNote": "{{orderLine}} Tu banco mostrará el dinero en unos días. Si pasa algo con este reembolso, te escribiremos.",
     "orderStaysPaid": "El pedido sigue pagado con tu otro pago.",
     "orderNotPaid": "El pedido no está pagado y no se enviará nada."
+  },
+  "orderPaymentRefundFailed": {
+    "subject": "{{appName}} — No pudimos enviarte de vuelta el pago del pedido #{{orderId}}",
+    "preview": "No pudimos enviarte de vuelta {{amount}}.",
+    "heading": "No pudimos enviarte de vuelta el pago",
+    "bodyCard": "No pudimos enviar de vuelta tu pago de {{amount}} del pedido #{{orderId}} a la tarjeta con la que se pagó: la tarjeta ya no acepta pagos (puede estar cancelada o caducada).",
+    "bodyGeneral": "No pudimos enviarte de vuelta tu pago de {{amount}} del pedido #{{orderId}}.",
+    "sentBackLine": "El dinero que enviamos antes nos lo envió de vuelta tu banco, así que no llegó a ti.",
+    "contactLine": "Te contactaremos sobre otra forma de enviártelo. También puedes escribirnos a la dirección de abajo."
+  },
+  "orderPaymentRefundOutside": {
+    "subject": "{{appName}} — Te enviamos dinero del pedido #{{orderId}}",
+    "preview": "Te enviamos {{amount}} del pedido #{{orderId}}.",
+    "heading": "Dinero enviado",
+    "body": "Te enviamos {{amount}} de tu pedido #{{orderId}}."
   },
   "paymentRefundReasons": {
     "OUT_OF_STOCK": "la reserva del pedido terminó y algunos artículos ya no estaban en stock",
@@ -182,7 +197,7 @@
     "leadTxt": "La devolución de tu pedido de {{appName}} #{{orderId}} está cerrada.",
     "heading": "Devolución cerrada",
     "body": "La devolución de tu pedido #{{orderId}} está cerrada.",
-    "moneyBack": "Se te devolvió {{amount}}.",
+    "moneyBack": "Te enviamos {{amount}}.",
     "noMoney": "No se devuelve dinero por esta declaración.",
     "withheldLine": "Retuvimos {{amount}} del precio por la pérdida de valor del producto: {{names}}.",
     "returnedToYouHeader": "Devuelto a ti",
@@ -209,12 +224,13 @@
     "other": "por otro medio"
   },
   "returnRefunded": {
-    "subject": "{{appName}} — Dinero devuelto del pedido #{{orderId}}",
-    "preview": "El dinero del pedido #{{orderId}} va de vuelta hacia ti.",
-    "leadTxt": "Te devolvimos {{amount}} de tu pedido de {{appName}} #{{orderId}}.",
-    "heading": "Dinero devuelto",
-    "body": "Te devolvimos {{amount}} de tu pedido #{{orderId}}.",
+    "subject": "{{appName}} — Dinero enviado del pedido #{{orderId}}",
+    "preview": "Te enviamos dinero del pedido #{{orderId}}.",
+    "leadTxt": "Te enviamos {{amount}} de tu pedido de {{appName}} #{{orderId}}.",
+    "heading": "Dinero enviado",
+    "body": "Te enviamos {{amount}} de tu pedido #{{orderId}}.",
     "wayBack": "Se devuelve por el mismo medio con el que pagaste. Tu banco mostrará el reembolso en unos días.",
+    "laterLine": "Si pasa algo con esta devolución, te escribiremos.",
     "sentWithDate": "Lo enviamos {{way}} el {{date}}.",
     "sentNoDate": "Lo enviamos {{way}}.",
     "deliveryLine": "El envío está incluido: {{amount}}.",
@@ -285,7 +301,8 @@
     "statusReadyPickup": "listo, te espera en la tienda",
     "paymentNotTaken": "cancelado, no se tomó ningún pago y no se tomará ninguno",
     "paymentRefunding": "cancelado, se recibió tu pago y se reembolsa por completo; tu banco mostrará el reembolso en unos días",
-    "paymentUnknown": "cancelado; si lo pagaste, el pago se reembolsa automáticamente y por completo"
+    "paymentUnknown": "cancelado; si lo pagaste, el pago se reembolsa automáticamente y por completo",
+    "newsletterEnded": "Tu suscripción al boletín también se ha cancelado."
   },
   "avatarRemoved": {
     "subject": "{{appName}} — Se eliminó tu foto de perfil",
@@ -298,6 +315,45 @@
     "preview": "Un moderador eliminó tu reseña de {{appName}}.",
     "heading": "Se eliminó tu reseña",
     "body": "Un moderador eliminó tu reseña de {{productName}}: no cumple las normas de {{appName}}. Puedes escribir una nueva reseña del producto que las cumpla."
+  },
+  "subscriptionConfirm": {
+    "title": "{{appName}} — Confirma tu suscripción",
+    "subject": "{{appName}} — Confirma tu suscripción",
+    "preview": "Confirma que quieres recibir el boletín de {{appName}}.",
+    "heading": "Confirma tu suscripción",
+    "body": "Alguien, quizá tú, pidió suscribir esta dirección al boletín de {{appName}}.",
+    "button": "Confirmar la suscripción",
+    "declineButton": "No he sido yo, no enviar nada más",
+    "ignoreEmail": "Si no has sido tú, no hagas nada y no habrá suscripción."
+  },
+  "subscriptionAlready": {
+    "title": "{{appName}} — La suscripción ya está activa",
+    "subject": "{{appName}} — La suscripción ya está activa",
+    "preview": "Esta dirección ya recibe el boletín de {{appName}}.",
+    "heading": "La suscripción ya está activa",
+    "body": "Esta dirección ya está suscrita al boletín de {{appName}}.",
+    "button": "Gestionar la suscripción",
+    "ignoreEmail": "Si la solicitud no fue tuya, no hagas nada.",
+    "pausedTitle": "{{appName}} — Tu suscripción está en pausa",
+    "pausedSubject": "{{appName}} — Tu suscripción está en pausa",
+    "pausedPreview": "La suscripción al boletín de {{appName}} está en pausa.",
+    "pausedHeading": "Tu suscripción está en pausa",
+    "pausedBody": "La suscripción de esta dirección al boletín de {{appName}} está en pausa tras una marca de spam. Reanúdala en la página «Gestionar la suscripción»."
+  },
+  "campaignMail": {
+    "priceFrom": "desde {{price}}",
+    "lowestPrice": "Precio más bajo de los últimos 30 días: {{price}}",
+    "buttonShop": "Ir a la tienda",
+    "buttonSale": "Ver las rebajas",
+    "buttonNew": "Ver las novedades",
+    "buttonCategory": "Ver la categoría",
+    "buttonProduct": "Ver el producto",
+    "reason": "Recibes este correo porque te suscribiste al boletín de {{appName}}.",
+    "manage": "Gestionar la suscripción",
+    "automatic": "Este es un correo automático, las respuestas no se leen.",
+    "saleUntil": "Oferta hasta el {{date}}",
+    "testSubjectPrefix": "[Prueba]",
+    "testNotice": "Este es un correo de prueba; los suscriptores no lo han recibido."
   },
   "chatBot": {
     "welcome": "¡Hola! Soy el asistente de {{shopName}}. Puedo ayudarte a encontrar productos, responder preguntas sobre la tienda o conectarte con un administrador si lo necesitas. ¿Cómo puedo ayudarte?",

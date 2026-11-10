@@ -25,12 +25,13 @@ import type {
   RegisterBodyDto,
   RegisterResponseDto,
   RegisterDto,
+  ResendVerifyBodyDto,
   ResendVerifyDto,
   VerifyEmailDto,
+  VerifyEmailBodyDto,
   PasswordForgotBodyDto,
   PasswordForgotDto,
   PasswordResetBodyDto,
-  PasswordResetQueryDto,
   PasswordResetDto,
   LogoutBodyDto,
   LogoutDto,
@@ -54,6 +55,7 @@ import {
 } from '@utils/errors.js';
 import env from '@config/env.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
+import { requestContextOf } from '@helpers/requestContext.js';
 import { clearLoginFailures, recordLoginFailure } from '../../../plugins/requestLimits.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { getTtl, verifyRefreshToken } from '@utils/jwt.js';
@@ -70,7 +72,7 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
   req,
   reply,
 ) => {
-  const { email, password, name, locale, acceptedDocumentIds } = req.body;
+  const { email, password, name, locale, acceptedDocumentIds, newsletter } = req.body;
   const { id, role } = req.user as User;
   // build register dto
   const args = pickDefined<RegisterDto>(
@@ -80,10 +82,10 @@ const postRegister: ControllerRouter<{}, RegisterBodyDto, {}, RegisterResponseDt
       userId: id,
       role,
     },
-    { name, locale, acceptedDocumentIds },
+    { name, locale, acceptedDocumentIds, newsletter },
   );
   // create user in service
-  const result = await authServices.register(args, req.log);
+  const result = await authServices.register(args);
   return reply.code(201).send(result);
 };
 
@@ -134,7 +136,7 @@ const postLogin: ControllerRouter<{}, LoginBodyDto, {}, LoginResponseDto> = asyn
   return result;
 };
 
-const postVerifyResend: ControllerRouter<{}, ResendVerifyDto, {}, MessageResponseDto> = async (
+const postVerifyResend: ControllerRouter<{}, ResendVerifyBodyDto, {}, MessageResponseDto> = async (
   req,
   reply,
 ) => {
@@ -173,7 +175,7 @@ const getGoogleStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GoogleStartRe
   const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
   const args = pickDefined<GoogleStartDto>(
     { guestId: id, role },
-    { ip, userAgent, acceptedDocumentIds },
+    { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
   );
 
   const { url } = await authServices.googleStart(args);
@@ -279,7 +281,7 @@ const getGithubStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GithubStartRe
   const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
   const args = pickDefined<GithubStartDto>(
     { guestId: id, role },
-    { ip, userAgent, acceptedDocumentIds },
+    { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
   );
 
   const { url } = await authServices.githubStart(args);
@@ -331,7 +333,7 @@ const getLinkedInStart: ControllerRouter<
   const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
   const args = pickDefined<LinkedInStartDto>(
     { guestId: id, role },
-    { ip, userAgent, acceptedDocumentIds },
+    { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
   );
 
   const { url } = await authServices.linkedInStart(args);
@@ -362,21 +364,22 @@ const getLinkedInCallback: ControllerRouter<{}, {}, LinkedInCallbackQueryDto, vo
   });
 };
 
-const getVerifyEmail: ControllerRouter<{}, {}, VerifyEmailDto, MessageResponseDto> = async (
+const postVerifyEmail: ControllerRouter<{}, VerifyEmailBodyDto, {}, MessageResponseDto> = async (
   req,
   reply,
 ) => {
-  const { token } = req.query;
+  const { token, newsletter } = req.body;
   // the route reads no session: the guest of the browser comes from its cookie
   const guestCookie = req.cookies?.guestId;
+  const { ip, userAgent } = requestContextOf(req);
   const args = pickDefined<VerifyEmailDto>(
     {
       token,
     },
-    { guestId: isUuid(guestCookie) ? guestCookie : undefined },
+    { guestId: isUuid(guestCookie) ? guestCookie : undefined, newsletter, ip, userAgent },
   );
-  // verify email by token
-  const result = await authServices.verifyEmail(args);
+  // verify email by token; the choice of the newsletter subscribes the account once it is verified
+  const result = await authServices.verifyEmail(args, req.log);
   return reply.code(200).send(result);
 };
 
@@ -399,11 +402,10 @@ const postPasswordForgot: ControllerRouter<
 const postPasswordReset: ControllerRouter<
   {},
   PasswordResetBodyDto,
-  PasswordResetQueryDto,
+  {},
   MessageResponseDto
 > = async (req, reply) => {
-  const token = req.query?.token;
-  const newPassword = req.body?.newPassword;
+  const { token, newPassword } = req.body;
   const args = pickDefined<PasswordResetDto>({ token, newPassword }, {});
   // reset password by token
   const result = await authServices.passwordReset(args);
@@ -529,7 +531,7 @@ export const authController = {
   getLinkedInStart,
   getLinkedInCallback,
   postVerifyResend,
-  getVerifyEmail,
+  postVerifyEmail,
   postPasswordForgot,
   postPasswordReset,
   postLogout,

@@ -5,6 +5,9 @@ import {
   type OrderShippedTemplateArgs,
 } from '@services/email/templates/orders/orderShipped.template.js';
 
+// the logo of the shop is shown by its address at Cloudinary: the mail carries no attachment
+const LOGO_URL = 'https://res.cloudinary.com/cartlify-test/image/upload/v1/test/shop/logo/a.png';
+
 const orderUrl = 'https://shop.example.com/orders/42';
 
 const order = (overrides: Partial<OrderShippedTemplateArgs> = {}): OrderShippedTemplateArgs => ({
@@ -145,11 +148,11 @@ describe('buildOrderShippedTemplate', () => {
     expect(text).toContain('- Mug {{orderId}} x 1 = €5.00');
   });
 
-  it('shows the attached logo when a content id is given, the shop name otherwise', () => {
-    expect(buildOrderShippedTemplate(order({ logoCid: 'cartlify-logo' })).html).toContain(
-      'src="cid:cartlify-logo"',
+  it('shows the logo by its address when the shop has one, the shop name otherwise', () => {
+    expect(buildOrderShippedTemplate(order({ logoUrl: LOGO_URL })).html).toContain(
+      `src="${LOGO_URL}"`,
     );
-    expect(buildOrderShippedTemplate(order()).html).not.toContain('cid:');
+    expect(buildOrderShippedTemplate(order()).html).not.toMatch(/<img\b/);
   });
 
   it('puts the current year into the footer', () => {

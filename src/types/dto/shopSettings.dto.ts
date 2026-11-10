@@ -27,6 +27,11 @@ export interface ShopSettingsValuesDto {
 
   withdrawalGraceDays: number;
 
+  newsletterLimitCount: number;
+  newsletterLimitDays: number;
+  newsletterFromName: string;
+  newsletterTrustedDomains: string[];
+
   shopLocale: string;
   enabledLocales: string[];
 
@@ -73,6 +78,10 @@ export interface PutShopSettingsBodyDto {
   avatarRemovalsLimit: number;
   reviewRemovalsLimit: number;
   withdrawalGraceDays: number;
+  newsletterLimitCount: number;
+  newsletterLimitDays: number;
+  newsletterFromName: string;
+  newsletterTrustedDomains: string[];
   shopLocale: string;
   enabledLocales: string[];
   sellerLegalName: string | null;
@@ -99,6 +108,17 @@ export interface ShopSettingsHistoryItemDto {
 export interface GetShopSettingsHistoryResponseDto {
   items: ShopSettingsHistoryItemDto[];
   nextCursor: string | null;
+}
+
+// how many people have a language, for the warning root is shown before turning a language off
+export interface ShopLocaleCountDto {
+  locale: string;
+  accounts: number;
+  subscriptions: number;
+}
+
+export interface GetShopLocaleCountsResponseDto {
+  items: ShopLocaleCountDto[];
 }
 
 // the logo in its form part: the stream is read while the request is parsed

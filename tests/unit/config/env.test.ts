@@ -16,12 +16,17 @@ const SHOP_DEFAULTS = {
   LIMIT_LOGIN_PER_ADDRESS: 30,
   LIMIT_LOGIN_PER_EMAIL: 10,
   LIMIT_REGISTER_PER_ADDRESS: 10,
+  LIMIT_REGISTER_PER_EMAIL: 1,
   LIMIT_MAIL_PER_ADDRESS: 10,
   LIMIT_MAIL_PER_EMAIL: 1,
   LIMIT_CHECKOUT_PER_USER: 10,
   LIMIT_PASSWORD_CHANGE_PER_USER: 10,
   LIMIT_EXPORT_PER_USER: 1,
   LIMIT_REVIEW_PER_USER: 30,
+  LIMIT_NEWSLETTER_TRANSLATE_PER_USER: 20,
+  LIMIT_NEWSLETTER_TEST_PER_USER: 30,
+  LIMIT_NEWSLETTER_LINK_PER_ADDRESS: 60,
+  LIMIT_NEWSLETTER_UNSUBSCRIBE_PER_ADDRESS: 1000,
   LIMIT_CHAT_CALL_ADMIN_PER_USER: 10,
   LIMIT_WITHDRAWAL_PER_USER: 10,
   LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: 20,
@@ -45,6 +50,11 @@ const SHOP_DEFAULTS = {
   WEB_PAGE_ORDER: '/orders/{id}',
   WEB_PAGE_WITHDRAWAL: '/orders/{id}/withdrawal',
   WEB_PAGE_PRODUCT_REVIEWS: '/products/{id}#reviews',
+  WEB_PAGE_PRODUCT: '/products/{id}',
+  WEB_PAGE_CATEGORY: '/categories/{id}',
+  WEB_PAGE_NEWSLETTER_CONFIRM: '/newsletter/confirm',
+  WEB_PAGE_NEWSLETTER_DECLINE: '/newsletter/decline',
+  WEB_PAGE_NEWSLETTER_MANAGE: '/newsletter/manage',
 };
 
 // every setting with a default, given as unset
@@ -84,7 +94,7 @@ describe('env', () => {
   );
 
   // a value of spaces only is no secret: the start stops as if it were missing
-  it.each(['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'STRIPE_WEBHOOK_SECRET'])(
+  it.each(['JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET', 'STRIPE_WEBHOOK_SECRET', 'API_ORIGIN'])(
     'stops the start when %s is only spaces',
     async (key) => {
       const err = await rejectedBy(() => loadEnv({ NODE_ENV: 'production', [key]: '   ' }));
@@ -290,6 +300,48 @@ describe('env', () => {
 
     expect(loaded.STRIPE_WEBHOOK_SECRET).toBe('');
   });
+
+  // the one-click unsubscribe of every newsletter mail names the address of the API (the header
+  // List-Unsubscribe), so the dev server, a copy of production, stops without it as well
+  it.each(['development', 'production'])(
+    'stops the start in %s when API_ORIGIN is missing',
+    async (mode) => {
+      const err = await rejectedBy(() => loadEnv({ NODE_ENV: mode, API_ORIGIN: '' }));
+
+      expect((err as Error).message).toBe('Missing required env variable: API_ORIGIN');
+    },
+  );
+
+  it('lets the tests start without API_ORIGIN, with the address of the tests', async () => {
+    const loaded = await loadEnv({ NODE_ENV: 'test', API_ORIGIN: '' });
+
+    expect(loaded.API_ORIGIN).toBe('');
+  });
+});
+
+// the limits of the pages behind the links of the newsletter mails and of the unsubscribe button:
+// optional, a positive whole number, two counts apart
+describe('env: the limits of the newsletter links', () => {
+  it.each([
+    ['LIMIT_NEWSLETTER_LINK_PER_ADDRESS', 60],
+    ['LIMIT_NEWSLETTER_UNSUBSCRIBE_PER_ADDRESS', 1000],
+  ] as const)('reads %s, %p unless given', async (key, fallback) => {
+    expect((await loadEnv({ [key]: '' }))[key]).toBe(fallback);
+    expect((await loadEnv({ [key]: ' 7 ' }))[key]).toBe(7);
+  });
+
+  it.each(['LIMIT_NEWSLETTER_LINK_PER_ADDRESS', 'LIMIT_NEWSLETTER_UNSUBSCRIBE_PER_ADDRESS'])(
+    'stops the start when %s is not a positive whole number',
+    async (key) => {
+      for (const value of ['0', '-1', '1.5', 'many']) {
+        const err = await rejectedBy(() => loadEnv({ [key]: value }));
+
+        expect((err as Error).message).toBe(
+          `Invalid env variable: ${key} must be a positive whole number`,
+        );
+      }
+    },
+  );
 });
 
 // the settings a buyer of the shop tunes for it: each one unset keeps the value the code had
@@ -300,12 +352,15 @@ describe('the settings of the shop', () => {
         LIMIT_LOGIN_PER_ADDRESS: '60',
         LIMIT_LOGIN_PER_EMAIL: '20',
         LIMIT_REGISTER_PER_ADDRESS: '5',
+        LIMIT_REGISTER_PER_EMAIL: '3',
         LIMIT_MAIL_PER_ADDRESS: '7',
         LIMIT_MAIL_PER_EMAIL: '2',
         LIMIT_CHECKOUT_PER_USER: '3',
         LIMIT_PASSWORD_CHANGE_PER_USER: '4',
         LIMIT_EXPORT_PER_USER: '6',
         LIMIT_REVIEW_PER_USER: '50',
+        LIMIT_NEWSLETTER_TRANSLATE_PER_USER: '12',
+        LIMIT_NEWSLETTER_TEST_PER_USER: '8',
         LIMIT_CHAT_CALL_ADMIN_PER_USER: '4',
         LIMIT_WITHDRAWAL_PER_USER: '7',
         LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: '9',
@@ -329,17 +384,25 @@ describe('the settings of the shop', () => {
         WEB_PAGE_ORDER: '/account/orders/{id}',
         WEB_PAGE_WITHDRAWAL: '/account/orders/{id}/leave',
         WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}?tab=reviews#rate',
+        WEB_PAGE_PRODUCT: '/shop/item/{id}',
+        WEB_PAGE_CATEGORY: '/shop/c/{id}?view=grid',
+        WEB_PAGE_NEWSLETTER_CONFIRM: '/news/yes',
+        WEB_PAGE_NEWSLETTER_DECLINE: '/news/no',
+        WEB_PAGE_NEWSLETTER_MANAGE: '/account/news?tab=manage',
       }),
     ).toMatchObject({
       LIMIT_LOGIN_PER_ADDRESS: 60,
       LIMIT_LOGIN_PER_EMAIL: 20,
       LIMIT_REGISTER_PER_ADDRESS: 5,
+      LIMIT_REGISTER_PER_EMAIL: 3,
       LIMIT_MAIL_PER_ADDRESS: 7,
       LIMIT_MAIL_PER_EMAIL: 2,
       LIMIT_CHECKOUT_PER_USER: 3,
       LIMIT_PASSWORD_CHANGE_PER_USER: 4,
       LIMIT_EXPORT_PER_USER: 6,
       LIMIT_REVIEW_PER_USER: 50,
+      LIMIT_NEWSLETTER_TRANSLATE_PER_USER: 12,
+      LIMIT_NEWSLETTER_TEST_PER_USER: 8,
       LIMIT_CHAT_CALL_ADMIN_PER_USER: 4,
       LIMIT_WITHDRAWAL_PER_USER: 7,
       LIMIT_WITHDRAWAL_FORM_PER_ADDRESS: 9,
@@ -363,6 +426,11 @@ describe('the settings of the shop', () => {
       WEB_PAGE_ORDER: '/account/orders/{id}',
       WEB_PAGE_WITHDRAWAL: '/account/orders/{id}/leave',
       WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}?tab=reviews#rate',
+      WEB_PAGE_PRODUCT: '/shop/item/{id}',
+      WEB_PAGE_CATEGORY: '/shop/c/{id}?view=grid',
+      WEB_PAGE_NEWSLETTER_CONFIRM: '/news/yes',
+      WEB_PAGE_NEWSLETTER_DECLINE: '/news/no',
+      WEB_PAGE_NEWSLETTER_MANAGE: '/account/news?tab=manage',
     });
   });
 
@@ -381,12 +449,15 @@ describe('the settings of the shop', () => {
       'LIMIT_LOGIN_PER_ADDRESS',
       'LIMIT_LOGIN_PER_EMAIL',
       'LIMIT_REGISTER_PER_ADDRESS',
+      'LIMIT_REGISTER_PER_EMAIL',
       'LIMIT_MAIL_PER_ADDRESS',
       'LIMIT_MAIL_PER_EMAIL',
       'LIMIT_CHECKOUT_PER_USER',
       'LIMIT_PASSWORD_CHANGE_PER_USER',
       'LIMIT_EXPORT_PER_USER',
       'LIMIT_REVIEW_PER_USER',
+      'LIMIT_NEWSLETTER_TRANSLATE_PER_USER',
+      'LIMIT_NEWSLETTER_TEST_PER_USER',
       'LIMIT_CHAT_CALL_ADMIN_PER_USER',
       'LIMIT_WITHDRAWAL_PER_USER',
       'LIMIT_WITHDRAWAL_FORM_PER_ADDRESS',
@@ -449,6 +520,13 @@ describe('the settings of the shop', () => {
     ['WEB_PAGE_PASSWORD_RESET', '/reset/{id}'],
     ['WEB_PAGE_CHECKOUT_SUCCESS', '/\tpay'],
     ['WEB_PAGE_CHECKOUT_CANCEL', '//pay/back'],
+    ['WEB_PAGE_NEWSLETTER_CONFIRM', '//evil.example/confirm'],
+    ['WEB_PAGE_NEWSLETTER_CONFIRM', 'https://evil.example/confirm'],
+    ['WEB_PAGE_NEWSLETTER_CONFIRM', '/confirm/{id}'],
+    ['WEB_PAGE_NEWSLETTER_DECLINE', 'newsletter/decline'],
+    ['WEB_PAGE_NEWSLETTER_DECLINE', '/\\evil.example/decline'],
+    ['WEB_PAGE_NEWSLETTER_MANAGE', 'javascript:alert(1)'],
+    ['WEB_PAGE_NEWSLETTER_MANAGE', '/manage subscription'],
   ])('stops the start when %s is %p, not a path of the site', async (key, value) => {
     const err = await rejectedBy(() => loadEnv({ [key]: value }));
 
@@ -464,6 +542,13 @@ describe('the settings of the shop', () => {
     ['WEB_PAGE_ORDER', '//evil.example/{id}'],
     ['WEB_PAGE_WITHDRAWAL', '/withdrawal'],
     ['WEB_PAGE_PRODUCT_REVIEWS', '/products#reviews'],
+    ['WEB_PAGE_PRODUCT', '/products'],
+    ['WEB_PAGE_PRODUCT', '/products/{id}/{id}'],
+    ['WEB_PAGE_PRODUCT', '//evil.example/{id}'],
+    ['WEB_PAGE_PRODUCT', 'https://evil.example/{id}'],
+    ['WEB_PAGE_CATEGORY', '/categories'],
+    ['WEB_PAGE_CATEGORY', '/{id}/categories/{id}'],
+    ['WEB_PAGE_CATEGORY', '/\\evil.example/{id}'],
   ])('stops the start when %s is %p, not a path of the site with {id}', async (key, value) => {
     const err = await rejectedBy(() => loadEnv({ [key]: value }));
 
@@ -471,6 +556,76 @@ describe('the settings of the shop', () => {
       `Invalid env variable: ${key} must be a path of the site starting with /, with {id} once`,
     );
   });
+});
+
+// the token of the link of a mail follows the # of the page (src/helpers/webOrigin.js, webPageUrl): a
+// page that has a fragment of its own would lose it, so the start stops instead
+describe('env: the pages whose link carries a token after the #', () => {
+  it.each([
+    'WEB_PAGE_VERIFY_EMAIL',
+    'WEB_PAGE_PASSWORD_RESET',
+    'WEB_PAGE_NEWSLETTER_CONFIRM',
+    'WEB_PAGE_NEWSLETTER_DECLINE',
+    'WEB_PAGE_NEWSLETTER_MANAGE',
+  ])('stops the start when %s has a # of its own', async (key) => {
+    const err = await rejectedBy(() => loadEnv({ [key]: '/page#top' }));
+
+    expect((err as Error).message).toBe(
+      `Invalid env variable: ${key} must not contain a # (the token of the link follows it)`,
+    );
+  });
+
+  it('lets the pages that carry no token have one', async () => {
+    const loaded = await loadEnv({ WEB_PAGE_PRODUCT_REVIEWS: '/p/{id}#rate' });
+
+    expect(loaded.WEB_PAGE_PRODUCT_REVIEWS).toBe('/p/{id}#rate');
+  });
+});
+
+// the pages of the links of the newsletter mails: the same keys in the example of the env file (left
+// empty, the line before names the page and its default) and in the configuration page of the docs
+describe('env: the pages of the newsletter links in the example and the docs', () => {
+  const pages = [
+    'WEB_PAGE_NEWSLETTER_CONFIRM',
+    'WEB_PAGE_NEWSLETTER_DECLINE',
+    'WEB_PAGE_NEWSLETTER_MANAGE',
+  ] as const;
+
+  it.each(pages)('lists %s with its default in .env.example, left empty', (key) => {
+    const lines = readFileSync('.env.example', 'utf8').split(/\r?\n/);
+    const at = lines.indexOf(`${key}=`);
+
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at - 1]).toContain(`(${SHOP_DEFAULTS[key]} unless given)`);
+    // the token of the page follows the # of the link, never the ? (a query reaches the logs of the hosts)
+    expect(lines[at - 1]).toContain('#token=');
+    expect(lines[at - 1]).not.toContain('?token=');
+  });
+
+  it.each(pages)('lists %s with its default in docs/configuration.md', (key) => {
+    const lines = readFileSync('docs/configuration.md', 'utf8').split(/\r?\n/);
+
+    expect(lines).toContain(`${key}=${SHOP_DEFAULTS[key]}`);
+  });
+});
+
+// the links of the mails of an account: the token follows the # (the page posts it to the API), the
+// example of the env file and the configuration page of the docs say so
+describe('env: the pages of the links of the account mails in the example and the docs', () => {
+  it.each(['WEB_PAGE_VERIFY_EMAIL', 'WEB_PAGE_PASSWORD_RESET'] as const)(
+    'names the token after the # of %s in .env.example and docs/configuration.md',
+    (key) => {
+      for (const file of ['.env.example', 'docs/configuration.md']) {
+        const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+        const at = lines.findIndex((line) => line.startsWith(`${key}=`));
+
+        expect(at).toBeGreaterThan(0);
+        expect(lines[at - 1]).toContain('#token=');
+        expect(lines[at - 1]).not.toContain('?token=');
+        expect(lines[at - 1]).toContain('no # in the value');
+      }
+    },
+  );
 });
 
 // the limits of the routes a shop can set: the example of the env file and the configuration page
@@ -497,5 +652,36 @@ describe('env: the limits of the routes in the example and the docs', () => {
     const lines = readFileSync('docs/configuration.md', 'utf8').split(/\r?\n/);
 
     expect(lines).toContain(`${key}=${fallback}`);
+  });
+});
+
+// the pages of the links of the newsletter cards and the address of the API a mail header names: the
+// same keys in the example of the env file and in the configuration page of the docs
+describe('env: the pages of the product cards and the API address in the example and the docs', () => {
+  const pages = ['WEB_PAGE_PRODUCT', 'WEB_PAGE_CATEGORY'] as const;
+
+  it.each(pages)('lists %s with its default in .env.example, left empty', (key) => {
+    const lines = readFileSync('.env.example', 'utf8').split(/\r?\n/);
+    const at = lines.indexOf(`${key}=`);
+
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at - 1]).toContain(`(${SHOP_DEFAULTS[key]} unless given)`);
+    expect(lines[at - 1]).toContain('{id}');
+  });
+
+  it.each(pages)('lists %s with its default in docs/configuration.md', (key) => {
+    const lines = readFileSync('docs/configuration.md', 'utf8').split(/\r?\n/);
+
+    expect(lines).toContain(`${key}=${SHOP_DEFAULTS[key]}`);
+  });
+
+  it('lists API_ORIGIN in .env.example, with what it is for, and in docs/configuration.md', () => {
+    const lines = readFileSync('.env.example', 'utf8').split(/\r?\n/);
+    const at = lines.findIndex((line) => line.startsWith('API_ORIGIN='));
+    const docs = readFileSync('docs/configuration.md', 'utf8').split(/\r?\n/);
+
+    expect(at).toBeGreaterThan(0);
+    expect(lines[at - 1]).toContain('List-Unsubscribe');
+    expect(docs.some((line) => line.startsWith('API_ORIGIN='))).toBe(true);
   });
 });

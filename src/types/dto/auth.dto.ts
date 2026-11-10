@@ -30,12 +30,15 @@ export interface GoogleStartDto {
   role: Role;
   // the versions of the terms and of the contract the page sent with the start of the login
   acceptedDocumentIds?: number[];
+  // the box of the newsletter the page ticked: a new account the login makes is subscribed
+  newsletter?: boolean;
   ip?: string;
   userAgent?: string;
 }
 
 export interface OAuthStartQueryDto {
   acceptedDocumentIds?: string;
+  newsletter?: boolean;
 }
 
 export interface GoogleStartResponseDto {
@@ -72,6 +75,8 @@ export interface GithubStartDto {
   role: Role;
   // the versions of the terms and of the contract the page sent with the start of the login
   acceptedDocumentIds?: number[];
+  // the box of the newsletter the page ticked: a new account the login makes is subscribed
+  newsletter?: boolean;
   ip?: string;
   userAgent?: string;
 }
@@ -111,6 +116,8 @@ export interface LinkedInStartDto {
   role: Role;
   // the versions of the terms and of the contract the page sent with the start of the login
   acceptedDocumentIds?: number[];
+  // the box of the newsletter the page ticked: a new account the login makes is subscribed
+  newsletter?: boolean;
   ip?: string;
   userAgent?: string;
 }
@@ -157,39 +164,53 @@ export interface RegisterBodyDto {
   locale?: string;
   // the versions of the terms and of the contract in force the person accepts
   acceptedDocumentIds?: number[];
+  // the box of the newsletter the form ticked: stored nowhere, it only puts a hint in the link of
+  // the confirmation mail
+  newsletter?: boolean;
+  // the answer of the captcha, checked before the route runs (src/middlewares/requireCaptcha.ts)
+  captchaToken: string;
 }
-export type RegisterDto = RegisterBodyDto;
+export type RegisterDto = Omit<RegisterBodyDto, 'captchaToken'>;
 
 export type RegisterResponseDto = UserResponseDto;
 
-export interface ResendVerifyDto {
+export interface ResendVerifyBodyDto {
   email: Email;
+  // the answer of the captcha, checked before the route runs (src/middlewares/requireCaptcha.ts)
+  captchaToken: string;
 }
 
-export interface VerifyEmailDto {
+export type ResendVerifyDto = Omit<ResendVerifyBodyDto, 'captchaToken'>;
+
+export interface VerifyEmailBodyDto {
   token: string;
+  // the choice of the person on the page: subscribe the account once the email is confirmed
+  newsletter?: boolean;
+}
+
+export interface VerifyEmailDto extends VerifyEmailBodyDto {
   // the guest of the browser that opens the link
   guestId?: string;
+  // the address and the browser of the request, which the journal of a subscription keeps
+  ip?: string | null;
+  userAgent?: string | null;
 }
 
 export interface PasswordForgotBodyDto {
   email: Email;
+  // the answer of the captcha, checked before the route runs (src/middlewares/requireCaptcha.ts)
+  captchaToken: string;
 }
 
-export type PasswordForgotDto = PasswordForgotBodyDto;
+export type PasswordForgotDto = Omit<PasswordForgotBodyDto, 'captchaToken'>;
 
 export interface PasswordResetBodyDto {
-  newPassword: string;
-}
-
-export interface PasswordResetQueryDto {
-  token: string;
-}
-
-export interface PasswordResetDto {
+  // the token of the link of the mail, which the page of the link reads after the # of the address
   token: string;
   newPassword: string;
 }
+
+export type PasswordResetDto = PasswordResetBodyDto;
 
 export interface LogoutBodyDto {
   allDevices?: boolean;

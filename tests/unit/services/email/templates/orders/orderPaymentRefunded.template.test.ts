@@ -21,19 +21,38 @@ const refund = (
 describe('buildOrderPaymentRefundedTemplate', () => {
   it('names the shop and the order in the subject', () => {
     expect(buildOrderPaymentRefundedTemplate(refund()).subject).toBe(
-      'Cartlify — The payment for order #42 is refunded',
+      'Cartlify — We sent your payment for order #42 back',
     );
   });
 
   // the buyer paid after the reservation and the order could not take the money: the return page
   // said paid, the mail has to say it is not
-  it('says the order is not paid and the money goes back, in both versions', () => {
+  it('says the order is not paid and the money was sent back, in both versions', () => {
     const { text, html } = buildOrderPaymentRefundedTemplate(refund());
 
-    expect(text).toContain('Your payment of €51.00 for order #42 is refunded in full');
+    expect(text).toContain('We sent your payment of €51.00 for order #42 back');
     expect(text).toContain('The order is not paid');
-    expect(html).toContain('Your payment of €51.00 for order #42 is refunded in full');
+    expect(html).toContain('We sent your payment of €51.00 for order #42 back');
     expect(html).toContain('The order is not paid');
+  });
+
+  // the mail goes when the money is sent, not when the bank shows it: the bank may still send it
+  // back, and the buyer is then told
+  it('says the bank shows the money within a few days and promises a mail if the refund goes wrong', () => {
+    const { text, html } = buildOrderPaymentRefundedTemplate(refund());
+
+    for (const version of [text, html]) {
+      expect(version).toContain('Your bank shows the money within a few days.');
+      expect(version).toContain('If anything happens to this refund, we will write to you.');
+    }
+  });
+
+  it('never calls the money returned or refunded: it was sent', () => {
+    const { subject, text, html } = buildOrderPaymentRefundedTemplate(refund());
+
+    for (const version of [subject, text, html]) {
+      expect(version).not.toMatch(/refunded in full|is refunded|were returned|was returned/i);
+    }
   });
 
   // the other payment paid the order: it goes out as it is, only this payment comes back
@@ -63,8 +82,23 @@ describe('buildOrderPaymentRefundedTemplate', () => {
 
   it('gives the amount in the currency it was paid in', () => {
     expect(buildOrderPaymentRefundedTemplate(refund({ currency: 'usd' })).text).toContain(
-      'Your payment of $51.00',
+      'We sent your payment of $51.00',
     );
+  });
+
+  // the dictionary of the recipient's own language (src/locales), English unless told
+  it('writes in the language given, English by default', () => {
+    const uk = buildOrderPaymentRefundedTemplate(refund({ locale: 'uk' }));
+    const es = buildOrderPaymentRefundedTemplate(refund({ locale: 'es' }));
+
+    expect(uk.subject).toContain('Ми надіслали вашу оплату за замовлення #42 назад');
+    expect(uk.text).toContain('Ми надіслали вам назад оплату');
+    expect(uk.text).toContain('Банк покаже кошти протягом кількох днів.');
+    expect(uk.text).toContain('Якщо з цим поверненням щось станеться, ми вам напишемо.');
+    expect(es.subject).toContain('Te enviamos de vuelta el pago del pedido #42');
+    expect(es.text).toContain('Te enviamos de vuelta tu pago de');
+    expect(es.text).toContain('Tu banco mostrará el dinero en unos días.');
+    expect(es.text).toContain('Si pasa algo con este reembolso, te escribiremos.');
   });
 
   it('puts the order link into the text and the html versions', () => {

@@ -1,0 +1,11 @@
+{{#testNotice}}{{testNotice}}
+
+{{/testNotice}}{{{blocks}}}
+
+--
+{{reason}}
+{{manage}}: {{manageUrl}}
+
+{{automatic}} {{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

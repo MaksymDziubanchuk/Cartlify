@@ -4,9 +4,12 @@ import { describe, expect, it, jest } from '@jest/globals';
 import {
   buildProductUpdateAuditChanges,
   buildSaleAuditChanges,
+  NEWSLETTER_AUDIT_LINES,
   writeAdminAuditLog,
+  writeNewsletterAuditLog,
   writeStockOperationAuditLog,
 } from '@db/adminAudit.helper.js';
+import { AUDIT_EVENTS } from '@config/journalEvents.js';
 
 type Tx = Parameters<typeof writeAdminAuditLog>[0];
 type Product = Parameters<typeof buildProductUpdateAuditChanges>[0];
@@ -402,5 +405,83 @@ describe('writeStockOperationAuditLog', () => {
       'variants',
       'quantity',
     ]);
+  });
+});
+
+describe('writeNewsletterAuditLog', () => {
+  const fakeTx = () => {
+    const $executeRaw = jest.fn<RawQuery>(async () => 1);
+    return { tx: { $executeRaw } as unknown as Tx, $executeRaw };
+  };
+
+  // the kind of thing and the action each event of the newsletters is written with
+  const PAIRS = [
+    ['newsletter.manager_granted', 'user', 'NEWSLETTER_MANAGER_CHANGE'],
+    ['newsletter.manager_revoked', 'user', 'NEWSLETTER_MANAGER_CHANGE'],
+    ['newsletter.campaign_created', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_updated', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_deleted', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_copied', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_scheduled', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_cancelled', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_stopped', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.campaign_test_sent', 'newsletter_campaign', 'NEWSLETTER_CAMPAIGN_CHANGE'],
+    ['newsletter.subscriber_erased', 'newsletter_subscriber', 'NEWSLETTER_SUBSCRIBER_DELETE'],
+    ['newsletter.block_added', 'newsletter_block', 'NEWSLETTER_BLOCK_CHANGE'],
+    ['newsletter.block_removed', 'newsletter_block', 'NEWSLETTER_BLOCK_CHANGE'],
+  ] as const;
+
+  const changes = [{ field: 'name', old: 'a', new: 'b' }];
+
+  it.each(PAIRS)('writes %s about %s with the action %s', async (event, entityType, action) => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeNewsletterAuditLog(tx, {
+      actorId: 3,
+      actorRole: 'ROOT',
+      event,
+      entityId: 12,
+      changes,
+    });
+
+    const [strings, ...values] = $executeRaw.mock.calls[0]!;
+    expect(strings.join('?')).toContain('cartlify.log_admin_action(');
+    expect(values).toEqual([3, 'ROOT', entityType, 12, action, event, JSON.stringify(changes)]);
+  });
+
+  it('writes nothing when there are no changes, as every line of the log', async () => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeNewsletterAuditLog(tx, {
+      actorId: 3,
+      actorRole: 'ADMIN',
+      event: 'newsletter.campaign_updated',
+      entityId: 12,
+      changes: [],
+    });
+
+    expect($executeRaw).not.toHaveBeenCalled();
+  });
+
+  it('keeps no id for a line about nothing in particular', async () => {
+    const { tx, $executeRaw } = fakeTx();
+
+    await writeNewsletterAuditLog(tx, {
+      actorId: 3,
+      actorRole: 'ADMIN',
+      event: 'newsletter.block_removed',
+      entityId: null,
+      changes,
+    });
+
+    expect($executeRaw.mock.calls[0]!.slice(1)[3]).toBeNull();
+  });
+
+  // one list of the events the log is filtered by, one table of how each is written
+  it('has a pair for each event of the newsletters in the list of the events, and no other', () => {
+    const inList = AUDIT_EVENTS.filter((event) => event.startsWith('newsletter.')).sort();
+
+    expect(Object.keys(NEWSLETTER_AUDIT_LINES).sort()).toEqual(inList);
+    expect(inList).toEqual(PAIRS.map(([event]) => event).sort());
   });
 });

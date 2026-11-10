@@ -1,5 +1,3 @@
-import type { FastifyBaseLogger } from 'fastify';
-
 import { Prisma, Role } from '@prisma/client';
 import { getPgCode, prisma } from '@db/client.js';
 import { BadRequestError, ConflictError, InternalError } from '@utils/errors.js';
@@ -7,6 +5,7 @@ import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashToken } from '@helpers/tokenHash.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { enabledLocaleOf, mailLocaleOf } from '@helpers/locale.js';
 
 import { sendVerifyEmail } from './helpers/sendVerifyEmail.helper.js';
@@ -33,11 +32,19 @@ import type { RegisterDto, RegisterResponseDto } from 'types/dto/auth.dto.ts';
 // password now, and the new link goes to the owner.
 // While a version of the terms or of the contract is in force the person accepts every one of
 // them here (acceptedDocumentIds): the consent is kept with the account, with the address and the
-// browser of the request
-export async function register(
-  { email, password, name, locale, userId: guestId, acceptedDocumentIds = [] }: RegisterDto,
-  log: Pick<FastifyBaseLogger, 'warn'>,
-): Promise<RegisterResponseDto> {
+// browser of the request.
+// The box of the newsletter the form ticked is stored nowhere and subscribes nobody: it only puts
+// a hint in the link of the mail (newsletter=1), so the page that confirms the email shows the box
+// ticked. The subscription is made when the person confirms the email, with the choice they send then
+export async function register({
+  email,
+  password,
+  name,
+  locale,
+  userId: guestId,
+  acceptedDocumentIds = [],
+  newsletter,
+}: RegisterDto): Promise<RegisterResponseDto> {
   const cleanEmail = email.trim().toLowerCase();
   const cleanName = name?.trim() || undefined;
   // a language the shop does not answer in, or the wrong shape, is dropped, not refused
@@ -162,6 +169,8 @@ export async function register(
           avatarUrl: true,
           locale: true,
           phone: true,
+          canManageNewsletters: true,
+          deletedAt: true,
         },
       });
 
@@ -176,6 +185,7 @@ export async function register(
         updatedAt: u.updatedAt,
         ...(u.name ? { name: u.name } : {}),
         ...avatarOf(u),
+        canManageNewsletters: canManageNewslettersOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };
@@ -197,16 +207,14 @@ export async function register(
   }
 
   // send verify email after commit
-  await sendVerifyEmail(
-    {
-      to: cleanEmail,
-      token,
-      expiresAt,
-      userName: cleanName || '',
-      locale: mailLocaleOf(result.locale ?? null),
-    },
-    log,
-  );
+  await sendVerifyEmail({
+    to: cleanEmail,
+    token,
+    expiresAt,
+    userName: cleanName || '',
+    locale: mailLocaleOf(result.locale ?? null),
+    ...(newsletter === true ? { newsletter: true } : {}),
+  });
 
   return result;
 }

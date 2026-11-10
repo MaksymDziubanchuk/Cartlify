@@ -12,7 +12,7 @@ export type ReviewRemovedTemplateArgs = {
   limit: number;
   userName?: string | null;
   appName?: string;
-  logoCid?: string;
+  logoUrl?: string | null;
   locale?: string;
 };
 
@@ -33,7 +33,7 @@ export function buildReviewRemovedTemplate(args: ReviewRemovedTemplateArgs): {
     appName,
     productName: args.productName,
     userName: args.userName?.trim() || '',
-    logoCid: args.logoCid?.trim() || '',
+    logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
     beforeLimit:
       args.removals < args.limit ? t('common.removalBeforeLimit', locale, { removals, limit }) : '',
