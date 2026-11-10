@@ -19,7 +19,7 @@
 
 ---
 
-Cartlify is a portfolio project: a REST API with the parts a real shop needs, from the catalog to the accounting report. The storefront is not here yet, the API is documented in Swagger, and the project is in active development ([status](docs/status.md)).
+Cartlify is a portfolio project: a REST API with the parts a real shop needs, from the catalog to the accounting report. The API is documented in Swagger, the storefront comes on top of it, and the project is in active development ([status](docs/status.md)).
 
 ## ✨ What It Does
 
@@ -28,9 +28,11 @@ Cartlify is a portfolio project: a REST API with the parts a real shop needs, fr
 | 🛍️ **Catalog**             | products with variants (a size, a colour, a memory), a directory of characteristics, filters of the catalog, search, reviews, favorites |
 | 📦 **Stock**               | batches with expiry dates, deliveries, write-offs, reservation for orders, a log of every change                                        |
 | 💳 **Orders and payments** | cart, delivery, consents to the terms, Stripe payment pages and webhook, refunds, mails                                                 |
-| 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, data export                                    |
+| ↩️ **Returns**             | the withdrawal within the EU term by the account or a public form, the goods taken back, the money back through the provider            |
+| 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, a captcha on the public forms, data export     |
 | 📣 **Newsletters**         | a consent of its own with a double opt-in for guests, one unsubscribe, campaigns in several languages, a mail stream of its own         |
 | 💬 **Support**             | real-time chat over WebSocket with an OpenAI assistant that knows the catalog and hands a talk over to an admin                         |
+| 🌍 **Languages**           | every mail in the language of its reader (English, Ukrainian, Spanish), the data of the shop root changes without a deploy              |
 | 📊 **Admin**               | journals, alerts, statistics, accounting reports, the product safety data an offer needs in the EU                                      |
 
 ## 🧱 How It Is Built
