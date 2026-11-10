@@ -863,7 +863,9 @@ const getProductReviewsQuerySchema = {
       type: 'string',
       minLength: 1,
       pattern: '^[A-Za-z0-9_-]+$',
-      description: 'nextCursor of the previous page, of the same sort (CURSOR_INVALID otherwise).',
+      description:
+        'nextCursor of the previous page, of the same sort and the same verifiedPurchase ' +
+        '(CURSOR_INVALID otherwise).',
     },
     limit: {
       type: 'integer',
@@ -877,6 +879,16 @@ const getProductReviewsQuerySchema = {
       description:
         'newest (the default), helpful (the most votes up first), ratingHigh, ratingLow; a ' +
         'review without a rating comes last, the newest first among the same values.',
+    },
+    verifiedPurchase: {
+      type: 'boolean',
+      description:
+        'true lists only the reviews whose author bought the product, false only the others; ' +
+        'without it every review is listed. The rule is that of the mark verifiedPurchase of a ' +
+        'review: the author has an order of the product that is paid, shipped or delivered (a ' +
+        'cancelled one, or one that waits for its payment, does not count). It works with every ' +
+        'sort; total counts the reviews the filter keeps. true and false are the only values ' +
+        '(VALIDATION_ERROR otherwise).',
     },
   },
 } as const;

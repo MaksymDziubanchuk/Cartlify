@@ -179,6 +179,8 @@ const productIdParamsExample = {
 const productReviewsQueryExample = {
   limit: 10,
   cursor: 'eyJpZCI6MX0',
+  sort: 'helpful',
+  verifiedPurchase: true,
 };
 
 // the author of a review: a name and the pictures of the avatar
@@ -585,7 +587,11 @@ const getProductReviewsRouterSchema = {
     'Returns a paginated list of reviews for a product: the newest first, or `sort` helpful ' +
     '(the most votes up), ratingHigh, ratingLow (a review without a rating last). Each review ' +
     'says whether its author bought the product (`verifiedPurchase`: a paid order of it, ' +
-    'shipped or delivered too, not cancelled); nothing of it is kept, it is read for the page.',
+    'shipped or delivered too, not cancelled); nothing of it is kept, it is read for the page. ' +
+    'The query `verifiedPurchase=true` lists only the reviews whose author bought the product, ' +
+    '`false` only the others, and without it every review is listed: the very rule of the mark, ' +
+    'with every sort, and `total` counts the reviews the filter keeps. A cursor belongs to the ' +
+    'sort and the filter of the page it came from.',
 
   params: {
     $ref: 'productIdParamSchema#',
@@ -606,8 +612,9 @@ const getProductReviewsRouterSchema = {
 
     400: {
       description:
-        'Invalid product reviews request: a sort it does not know (VALIDATION_ERROR), a cursor ' +
-        'of another product or another sort, or a changed one (CURSOR_INVALID).',
+        'Invalid product reviews request: a sort or a `verifiedPurchase` it does not know ' +
+        '(VALIDATION_ERROR), a cursor of another product, sort or `verifiedPurchase`, or a ' +
+        'changed one (CURSOR_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
