@@ -55,11 +55,20 @@ export function webUrl(path: string, params: Record<string, string> = {}): strin
 }
 
 // address of a page a WEB_PAGE_* setting names: the id of the order or the product in place of
-// {id}, the query of the call next to the one of the page and before its fragment
+// {id}, the query of the call next to the one of the page and before the fragment. A secret of the
+// link (the token of a mail) goes in `fragment`, never in the query: the browser sends a fragment to
+// no server, so no log of a host, scanner or proxy and no referrer holds it. The fragment of the call
+// stands in place of the one the page has
 export function webPageUrl(
   page: string,
-  opts: { id?: number; query?: Record<string, string> } = {},
+  opts: { id?: number; query?: Record<string, string>; fragment?: Record<string, string> } = {},
 ): string {
   const path = opts.id === undefined ? page : page.replace('{id}', String(opts.id));
-  return webUrl(path, opts.query);
+  const address = webUrl(path, opts.query);
+  if (!opts.fragment) return address;
+
+  const url = new URL(address);
+  url.hash = new URLSearchParams(opts.fragment).toString();
+
+  return url.toString();
 }

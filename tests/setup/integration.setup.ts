@@ -51,6 +51,8 @@ isolateEnv(
     REDIS_URL: 'redis://127.0.0.1:63799',
     // the one site the cors and websocket origin checks let in, oauth logins return to it
     WEB_ORIGIN: 'https://shop.example.com',
+    // the address of the API itself, which the one-click unsubscribe of a newsletter mail names
+    API_ORIGIN: 'https://api.example.com',
     // the domain of the site, a deleted account gets an address on it
     SITE_DOMAIN: 'shop.example.com',
     // the lowest cost the app takes: every test user gets a password hash, a cost of 12 makes
