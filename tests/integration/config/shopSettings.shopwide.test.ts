@@ -84,6 +84,16 @@ describe('loadShopSettings()', () => {
     expect(Array.isArray(values.deliveryCountries)).toBe(true);
   });
 
+  // the limit of the newsletters has defaults in the code, written as rows of the system at the start
+  it('gives the limit of the newsletters 2 campaigns in 7 days until root says otherwise', async () => {
+    await loadShopSettings();
+
+    expect((await rowsOf('newsletterLimitCount'))[0]).toMatchObject({ value: 2, setById: null });
+    expect((await rowsOf('newsletterLimitDays'))[0]).toMatchObject({ value: 7, setById: null });
+    expect(publicShopSettings()).not.toHaveProperty('newsletterLimitCount');
+    expect(publicShopSettings()).not.toHaveProperty('newsletterLimitDays');
+  });
+
   it('keeps the seller fields and the countries out of the public view, and names only what it needs', () => {
     const pub = publicShopSettings();
 

@@ -39,6 +39,14 @@ export type ShopSettingsValues = {
 
   withdrawalGraceDays: number;
 
+  // at most newsletterLimitCount campaigns in any window of newsletterLimitDays days
+  newsletterLimitCount: number;
+  newsletterLimitDays: number;
+  // the name the newsletters are sent under; empty means emailFromName, then shopName
+  newsletterFromName: string;
+  // hosts (lower case) a text of a newsletter may link to besides the shop's own
+  newsletterTrustedDomains: string[];
+
   shopLocale: string;
   enabledLocales: string[];
 
@@ -70,6 +78,10 @@ export const SHOP_SETTING_KEYS = [
   'avatarRemovalsLimit',
   'reviewRemovalsLimit',
   'withdrawalGraceDays',
+  'newsletterLimitCount',
+  'newsletterLimitDays',
+  'newsletterFromName',
+  'newsletterTrustedDomains',
   'shopLocale',
   'enabledLocales',
   'sellerLegalName',
@@ -116,6 +128,10 @@ export const WRITABLE_SHOP_SETTINGS_FIELDS = [
   'avatarRemovalsLimit',
   'reviewRemovalsLimit',
   'withdrawalGraceDays',
+  'newsletterLimitCount',
+  'newsletterLimitDays',
+  'newsletterFromName',
+  'newsletterTrustedDomains',
   'shopLocale',
   'enabledLocales',
   'sellerLegalName',
@@ -146,6 +162,10 @@ const DEFAULTS: Partial<ShopSettingsValues> = {
   avatarRemovalsLimit: 5,
   reviewRemovalsLimit: 5,
   withdrawalGraceDays: 4,
+  newsletterLimitCount: 2,
+  newsletterLimitDays: 7,
+  newsletterFromName: '',
+  newsletterTrustedDomains: [],
   shopLocale: 'en',
   // every language with a dictionary, until root turns some off (src/locales/*.json)
   enabledLocales: [...AVAILABLE_LOCALES],
@@ -217,6 +237,12 @@ const jsonOf = (value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull 
 
 const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
+// the languages a write takes away: the ones the rows held that the new set leaves out, each once, in
+// the order the rows had them
+export function removedLocalesOf(before: readonly string[], after: readonly string[]): string[] {
+  return [...new Set(before)].filter((code) => !after.includes(code));
+}
+
 let cache: ShopSettingsValues | null = null;
 
 // the current values, the defaults filling what root left empty; throws if nothing loaded them
@@ -239,6 +265,13 @@ export function publicShopSettings(): PublicShopSettings {
   const out = {} as PublicShopSettings;
   for (const key of PUBLIC_SHOP_SETTINGS_FIELDS) out[key] = values[key] as never;
   return out;
+}
+
+// the limit of the newsletters root set (2 campaigns in 7 days until root says otherwise): at most
+// `count` campaigns may go out in any window of `days` days (checkSendingLimit)
+export function newsletterLimit(): { count: number; days: number } {
+  const values = shopSettings();
+  return { count: values.newsletterLimitCount, days: values.newsletterLimitDays };
 }
 
 // the settings root has not set yet: the ones with no default of the server, and a required text
@@ -279,7 +312,13 @@ export async function loadShopSettings(): Promise<void> {
 // on the result (check, a refusal throws and writes nothing), a row added for each setting whose
 // value changes, none for one given as it already was. The writes of the data of the shop wait for
 // each other (an advisory lock), so a check always sees the values the rows hold, not ones another
-// write is about to change
+// write is about to change.
+// A language the write takes out of enabledLocales (the rows held it, the new set does not) is taken
+// from the people who had it in the same transaction: the accounts and the subscriptions of the
+// newsletters that have it are left with none, and are mailed in the language of the shop. The step
+// is a function of the database that reads the rows just written, so it comes after them, and a
+// failure of it takes the write back with it (nothing is changed, the memory of the server is not
+// either). A language that comes back brings no one back
 async function writeSettings(args: {
   actorId: UserId;
   values: Partial<ShopSettingsValues>;
@@ -304,6 +343,10 @@ async function writeSettings(args: {
           setById: Number(args.actorId),
         })),
       });
+    }
+
+    for (const locale of removedLocalesOf(previous.enabledLocales, settings.enabledLocales)) {
+      await db.$executeRaw`select * from cartlify.newsletter_reset_locale(${locale})`;
     }
 
     return { settings, previous };
