@@ -215,6 +215,7 @@
     "heading": "Money returned",
     "body": "We returned {{amount}} for your order #{{orderId}}.",
     "wayBack": "It goes back the way you paid. Your bank shows it within a few days.",
+    "laterLine": "If anything happens to this refund, we will write to you.",
     "sentWithDate": "We sent it by {{way}} on {{date}}.",
     "sentNoDate": "We sent it by {{way}}.",
     "deliveryLine": "The delivery is included: {{amount}}.",
@@ -285,7 +286,8 @@
     "statusReadyPickup": "ready, it waits for you at the shop",
     "paymentNotTaken": "cancelled, no payment was taken and none will be",
     "paymentRefunding": "cancelled, your payment was received and is refunded in full; your bank shows it within a few days",
-    "paymentUnknown": "cancelled; if you paid for it, the payment is refunded in full automatically"
+    "paymentUnknown": "cancelled; if you paid for it, the payment is refunded in full automatically",
+    "newsletterEnded": "Your newsletter subscription has been cancelled as well."
   },
   "avatarRemoved": {
     "subject": "{{appName}} — Your profile picture was removed",
@@ -298,6 +300,45 @@
     "preview": "A moderator removed your {{appName}} review.",
     "heading": "Your review was removed",
     "body": "A moderator removed your review of {{productName}}: it does not follow the rules of {{appName}}. You can write a new review of the product that follows them."
+  },
+  "subscriptionConfirm": {
+    "title": "{{appName}} — Confirm your subscription",
+    "subject": "{{appName}} — Confirm your subscription",
+    "preview": "Confirm that you want to get the newsletter of {{appName}}.",
+    "heading": "Confirm your subscription",
+    "body": "Someone, maybe you, asked to subscribe this address to the newsletter of {{appName}}.",
+    "button": "Confirm the subscription",
+    "declineButton": "This is not me, do not send anything more",
+    "ignoreEmail": "If it was not you, do nothing and there will be no subscription."
+  },
+  "subscriptionAlready": {
+    "title": "{{appName}} — You are already subscribed",
+    "subject": "{{appName}} — You are already subscribed",
+    "preview": "This address already gets the newsletter of {{appName}}.",
+    "heading": "You are already subscribed",
+    "body": "This address is already subscribed to the newsletter of {{appName}}.",
+    "button": "Manage the subscription",
+    "ignoreEmail": "If the request was not yours, do nothing.",
+    "pausedTitle": "{{appName}} — Your subscription is paused",
+    "pausedSubject": "{{appName}} — Your subscription is paused",
+    "pausedPreview": "Your subscription to the newsletter of {{appName}} is paused.",
+    "pausedHeading": "Your subscription is paused",
+    "pausedBody": "The subscription of this address to the newsletter of {{appName}} is paused after a spam mark. Resume it on the page \"Manage the subscription\"."
+  },
+  "campaignMail": {
+    "priceFrom": "from {{price}}",
+    "lowestPrice": "Lowest price in the last 30 days: {{price}}",
+    "buttonShop": "Visit the shop",
+    "buttonSale": "See the sale",
+    "buttonNew": "See what is new",
+    "buttonCategory": "View the category",
+    "buttonProduct": "View the product",
+    "reason": "You received this mail because you subscribed to the newsletter of {{appName}}.",
+    "manage": "Manage the subscription",
+    "automatic": "This is an automatic mail, replies are not read.",
+    "saleUntil": "Sale until {{date}}",
+    "testSubjectPrefix": "[Test]",
+    "testNotice": "This is a test mail; the subscribers did not get it."
   },
   "chatBot": {
     "welcome": "Hi! I am {{shopName}} assistant. I can help you find products, answer store questions, or connect you with an admin if needed. How can I help?",
