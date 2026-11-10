@@ -18,6 +18,15 @@ export type ModelReply = {
 // the answer of the check of the comment of a review: the rules it breaks, none to publish it
 export type ReviewCheckReply = { reasons: string[] };
 
+// the texts of a newsletter the app asks the model to translate, as the json of its message has
+// them, and the answer: a translation for the key of each
+export type TranslateRequest = {
+  from: string;
+  to: string;
+  items: Array<{ key: string; kind: 'line' | 'markup'; text: string; maxChars?: number }>;
+};
+export type TranslationReply = { translations: Array<{ key: string; text: string }> };
+
 type OpenAiRequest = {
   model: string;
   instructions: string;
@@ -29,18 +38,23 @@ type OpenAiRequest = {
 };
 
 // one request of the app to the model: the answer of the bot (with its decision), a fixed text of
-// the app the model puts in the language of the customer, or the check of the comment of a review
+// the app the model puts in the language of the customer, the check of the comment of a review, or
+// the translation of the texts of a newsletter
 export type ModelCall = {
-  purpose: 'answer' | 'fixed_text' | 'review_check';
-  // the text of the customer the request is about: the comment of a review checked
+  purpose: 'answer' | 'fixed_text' | 'review_check' | 'newsletter_translate';
+  // the text of the customer the request is about: the comment of a review checked, the texts of a
+  // newsletter (one to a line)
   customerText: string;
   // what a fixed text has to say, empty for the others
   meaning: string;
+  // the texts of a translation and the languages, only for a translation
+  translate?: TranslateRequest;
   request: OpenAiRequest;
 };
 
-// a reply, the reasons of a check, a fixed text, or a whole answer of openai (a failure, a cut answer)
-export type ModelAnswer = ModelReply | ReviewCheckReply | string | Response;
+// a reply, the reasons of a check, the translations, a fixed text, or a whole answer of openai (a
+// failure, a cut answer)
+export type ModelAnswer = ModelReply | ReviewCheckReply | TranslationReply | string | Response;
 
 // the categories of the moderation of openai (omni-moderation-latest)
 export const MODERATION_CATEGORIES = [
@@ -89,6 +103,18 @@ function callOf(request: OpenAiRequest): ModelCall {
     };
   }
 
+  // the texts come as the json of the message: the languages and the items to translate
+  if (request.text?.format?.name === 'newsletter_translation') {
+    const translate = JSON.parse(last) as TranslateRequest;
+    return {
+      purpose: 'newsletter_translate',
+      customerText: translate.items.map((item) => item.text).join('\n'),
+      meaning: '',
+      translate,
+      request,
+    };
+  }
+
   if (request.text?.format?.name === 'chat_bot_reply') {
     return {
       purpose: 'answer',
@@ -109,10 +135,24 @@ function callOf(request: OpenAiRequest): ModelCall {
   };
 }
 
-// a bot that answers every question and never asks for an admin, a fixed text is its meaning, and a
-// check that lets every comment through
+// the translation of the test: the text with the language it went into added at its end, so the
+// markup, the lines and the links of the text stay as they were
+export const translatedForTest = (text: string, to: string): string => `${text} [${to}]`;
+
+// a bot that answers every question and never asks for an admin, a fixed text is its meaning, a
+// check that lets every comment through, and a translator that keeps every text whole
 export const plainAnswer = (call: ModelCall): ModelAnswer => {
   if (call.purpose === 'review_check') return { reasons: [] };
+
+  if (call.purpose === 'newsletter_translate') {
+    const { to, items } = call.translate!;
+    return {
+      translations: items.map((item) => ({
+        key: item.key,
+        text: translatedForTest(item.text, to),
+      })),
+    };
+  }
 
   return call.purpose === 'answer'
     ? { reply: `Bot answer to: ${call.customerText}`, escalate: false, reason: 'NONE' }
