@@ -4,6 +4,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { revokeAllActiveRefreshTokens } from '@routes/api/auth/services/helpers/tokenRotation.helper.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { avatarOf } from '@utils/avatar.util.js';
 
 import {
@@ -78,6 +79,8 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
           avatarUrl: true,
           locale: true,
           phone: true,
+          canManageNewsletters: true,
+          deletedAt: true,
         },
       });
 
@@ -109,6 +112,8 @@ export async function addAdmin(args: AddAdminDto): Promise<AddAdminResponseDto> 
         updatedAt: updated.updatedAt,
         ...(updated.name ? { name: updated.name } : {}),
         ...avatarOf(updated),
+        // the right to run the newsletters never comes with the role: root gives it apart
+        canManageNewsletters: canManageNewslettersOf(updated),
         ...(updated.locale ? { locale: updated.locale } : {}),
         ...(updated.phone ? { phone: updated.phone } : {}),
       };

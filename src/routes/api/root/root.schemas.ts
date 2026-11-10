@@ -19,6 +19,7 @@ const rootAdminExample = {
     url256: 'https://example.com/avatars/admin-256.webp',
   },
   avatarIsDefault: false,
+  canManageNewsletters: false,
   locale: 'en',
   phone: '+10000000000',
 };
@@ -37,6 +38,14 @@ const rootAdminsGetResponseExample = {
 
 const rootAdminsAddBodyExample = {
   userId: 2,
+};
+
+const rootAdminsUpdateParamsExample = {
+  adminId: '2',
+};
+
+const rootAdminsUpdateBodyExample = {
+  canManageNewsletters: true,
 };
 
 const rootAdminsDeleteParamsExample = {
@@ -132,6 +141,68 @@ const postRootAdminSchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for giving an admin the right to run the newsletters or taking it away
+const patchRootAdminSchema = {
+  operationId: 'updateRootAdmin',
+  summary: 'Give or take the right to run the newsletters',
+  description:
+    'Gives an admin the right to run the newsletters (subscribers, the list of blocked ' +
+    'addresses, newsletters) with `canManageNewsletters: true`, or takes it away with `false`. ' +
+    'Root always has the right; a user cannot have it. The change works at once, also in a ' +
+    'session that is open: the server reads the right from the database at every request, and ' +
+    'the admin sees it as `canManageNewsletters` in GET /api/users/me. The right goes away when ' +
+    'the person stops being an admin and does not come back when root makes them an admin again. ' +
+    'The same value again changes nothing and writes no line to the admin log; a real change ' +
+    'writes one (`newsletter.manager_granted` or `newsletter.manager_revoked`). Answers with ' +
+    'the admin as the list of admins shows one. This operation is restricted to root users.',
+
+  params: {
+    $ref: 'rootAdminsUpdateParamsSchema#',
+    examples: [rootAdminsUpdateParamsExample],
+  },
+
+  body: {
+    $ref: 'rootAdminsUpdateBodySchema#',
+    examples: [rootAdminsUpdateBodyExample],
+  },
+
+  response: {
+    200: {
+      description:
+        'The right is as asked (it changed, or it was so already); the admin is returned.',
+      $ref: 'rootAdminsItemSchema#',
+      examples: [{ ...rootAdminExample, canManageNewsletters: true, deletedAt: null }],
+    },
+
+    400: {
+      description: 'Invalid request: the body names no `canManageNewsletters` boolean.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required to change the right of an admin.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description: 'Only root users can change the right of an admin.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`USER_NOT_FOUND`: there is no account with this id, or the admin was deleted and cannot be given the right (taking it away from a deleted admin works).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        '`USER_NOT_ADMIN`: the account is not an admin (a user, or root, who needs no right).',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while changing the right of an admin.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Schema for demoting admin to user
 const deleteRootAdminSchema = {
   operationId: 'deleteRootAdmin',
@@ -184,6 +255,7 @@ const taggedRootAdminsSchema = withOpenApiTag(
   {
     getRootAdminsSchema,
     postRootAdminSchema,
+    patchRootAdminSchema,
     deleteRootAdminSchema,
   },
   'root',

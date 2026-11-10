@@ -7,6 +7,10 @@ import type {
   AddAdminBodyDto,
   AddAdminDto,
   AddAdminResponseDto,
+  UpdateAdminParamsDto,
+  UpdateAdminBodyDto,
+  UpdateAdminDto,
+  UpdateAdminResponseDto,
   DeleteAdminParamsDto,
   DeleteAdminDto,
   DeleteAdminResponseDto,
@@ -50,6 +54,29 @@ const postAdmin: ControllerRouter<{}, AddAdminBodyDto, {}, AddAdminResponseDto> 
   return reply.code(201).send(result);
 };
 
+// root gives an admin the right to run the newsletters or takes it away
+const patchAdmin: ControllerRouter<
+  UpdateAdminParamsDto,
+  UpdateAdminBodyDto,
+  {},
+  UpdateAdminResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const { adminId: pid } = req.params;
+  const adminId = Number(pid);
+  const { canManageNewsletters } = req.body;
+
+  const args = pickDefined<UpdateAdminDto>(
+    { actorId, actorRole, adminId, canManageNewsletters },
+    {},
+  );
+
+  const result = await rootServices.updateAdmin(args);
+
+  return reply.code(200).send(result);
+};
+
 const deleteAdmin: ControllerRouter<DeleteAdminParamsDto, {}, {}, DeleteAdminResponseDto> = async (
   req,
   reply,
@@ -69,5 +96,6 @@ const deleteAdmin: ControllerRouter<DeleteAdminParamsDto, {}, {}, DeleteAdminRes
 export const rootAdminsController = {
   getAdmins,
   postAdmin,
+  patchAdmin,
   deleteAdmin,
 };
