@@ -1,8 +1,13 @@
 # Local setup
 
-## Local Setup
+## Requirements
 
-### 1. Clone and install
+- Node.js 24 (`engines` of `package.json`) with the npm it comes with
+- PostgreSQL 17 and Redis 8 (the test containers run 17.11 and 8.2)
+- `psql` on the `PATH`, for the scripts of the database and `npm run db:apply`
+- Docker, for the integration tests: `npm test` builds their database and Redis in containers ([commands](commands.md))
+
+## 1. Clone and install
 
 ```bash
 git clone https://github.com/MaksymDziubanchuk/Cartlify.git
@@ -10,7 +15,7 @@ cd Cartlify
 npm install
 ```
 
-### 2. Create local environment file
+## 2. Create local environment file
 
 ```bash
 cp .env.example .env
@@ -20,7 +25,7 @@ Then update `.env` using the example in [configuration](configuration.md).
 
 The start stops without the variables of the newsletters and the captcha (`SENDGRID_NEWSLETTER_API_KEY`, `SENDGRID_NEWSLETTER_WEBHOOK_KEY`, `NEWSLETTER_EMAIL_FROM`, `NEWSLETTER_BLOCK_SECRET`, `NEWSLETTER_LINK_SECRET`, `NEWSLETTER_DAILY_LIMIT`, `TURNSTILE_SECRET_KEY`), also on your machine. The rules of each are in [configuration](configuration.md): the two secrets are random and differ, the key of the webhook is a P-256 public key (base64 of its DER form; the Verification Key of an Event Webhook of SendGrid is one), and for the captcha locally you can use the public test secret of Cloudflare written there. `API_ORIGIN` (the address the API is reached on from outside, an https address without a path in production) is required in development and production too, the start stops without it; the header `List-Unsubscribe` of a newsletter names it. How the newsletters work and what to set up outside the code: [newsletters](newsletters.md).
 
-### 3. Create PostgreSQL databases
+## 3. Create PostgreSQL databases
 
 You need:
 
@@ -35,7 +40,7 @@ createdb cartlify_dev
 createdb cartlify_shadow
 ```
 
-### 4. Initialize DB roles and schema
+## 4. Initialize DB roles and schema
 
 The database is built in the same order as the test database (`db/tools/test_db_build.mjs`);
 the order differs from the file numbers. Run the bootstrap script as a superuser before the
@@ -47,13 +52,13 @@ psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$SUPERUSER_DATA
 psql -v ON_ERROR_STOP=1 -c "ALTER ROLE cartlify_owner PASSWORD '<owner password>'; ALTER ROLE cartlify_app PASSWORD '<app password>'; ALTER ROLE cartlify_readonly PASSWORD '<readonly password>';" "$SUPERUSER_DATABASE_URL"
 ```
 
-### 5. Generate Prisma client
+## 5. Generate Prisma client
 
 ```bash
 npm run prisma:generate
 ```
 
-### 6. Run Prisma migrations
+## 6. Run Prisma migrations
 
 The tables are created by the owner role, the way migrations run on the hosted databases:
 
@@ -61,7 +66,7 @@ The tables are created by the owner role, the way migrations run on the hosted d
 DATABASE_URL="$OWNER_DATABASE_URL" npm run migrate:deploy
 ```
 
-### 7. Apply PostgreSQL hardening layer
+## 7. Apply PostgreSQL hardening layer
 
 These scripts add extensions, RLS, functions, triggers, views, and additional indexes that go beyond basic Prisma migrations. Run them in this order: `02` needs the tables, the policies of `03` call functions from `05`, and the second run of `01` grants rights on everything created after its first run:
 
@@ -76,7 +81,7 @@ psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$SUPERUSER_DATA
 
 Compare the result with the reference of the structure (read only): `DATABASE_URL="$APP_DATABASE_URL" npm run db:snapshot:check:db`.
 
-### 8. Start Redis
+## 8. Start Redis
 
 Example with a local Redis server:
 
@@ -84,7 +89,7 @@ Example with a local Redis server:
 redis-server
 ```
 
-### 9. Start the app
+## 9. Start the app
 
 ```bash
 npm run dev
@@ -110,7 +115,7 @@ Raw OpenAPI JSON is available at:
 http://localhost:3000/documentation/json
 ```
 
-### 10. Fill the catalog
+## 10. Fill the catalog
 
 An empty shop has no products. Either load the demo data through the routes of the running API (see [commands](commands.md): a tree of categories, 16 products with one to three variants each, the stock, three buyers with orders), or fill the catalog by hand as an admin. The order that works, with the rules of each step in [Products, variants and characteristics](variants.md):
 
