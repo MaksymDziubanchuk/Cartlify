@@ -23,7 +23,7 @@ cp .env.example .env
 
 Then update `.env` using the example in [configuration](configuration.md).
 
-The start stops without the variables of the newsletters and the captcha (`SENDGRID_NEWSLETTER_API_KEY`, `SENDGRID_NEWSLETTER_WEBHOOK_KEY`, `NEWSLETTER_EMAIL_FROM`, `NEWSLETTER_BLOCK_SECRET`, `NEWSLETTER_LINK_SECRET`, `NEWSLETTER_DAILY_LIMIT`, `TURNSTILE_SECRET_KEY`), also on your machine. The rules of each are in [configuration](configuration.md): the two secrets are random and differ, the key of the webhook is a P-256 public key (base64 of its DER form; the Verification Key of an Event Webhook of SendGrid is one), and for the captcha locally you can use the public test secret of Cloudflare written there. `API_ORIGIN` (the address the API is reached on from outside, an https address without a path in production) is required in development and production too, the start stops without it; the header `List-Unsubscribe` of a newsletter names it. How the newsletters work and what to set up outside the code: [newsletters](newsletters.md).
+The start stops without the variables of the newsletters and the captcha (`SENDGRID_NEWSLETTER_API_KEY`, `SENDGRID_NEWSLETTER_WEBHOOK_KEY`, `NEWSLETTER_EMAIL_FROM`, `NEWSLETTER_BLOCK_SECRET`, `NEWSLETTER_LINK_SECRET`, `NEWSLETTER_DAILY_LIMIT`, `TURNSTILE_SECRET_KEY`), also on your machine. The rules of each are in [configuration](configuration.md): the two secrets are random and differ, the key of the webhook is a P-256 public key (base64 of its DER form; the Verification Key of an Event Webhook of SendGrid is one), and for the captcha locally you can use the public test secret of Cloudflare written there. `API_ORIGIN` (the address the API is reached on from outside, an https address without a path in production) is required in development and production too, the start stops without it; the header `List-Unsubscribe` of a newsletter names it. The start stops without these as well, on your machine too: the secrets of the tokens (`JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`), the keys of Stripe (`STRIPE_SECRET_KEY`, one that starts with `sk_`, and `STRIPE_WEBHOOK_SECRET`), the secret of the links of withdrawal (`WITHDRAWAL_CODE_SECRET`, 32 characters or more) and Cloudinary (`CLOUDINARY_URL`, or its three keys). How the newsletters work and what to set up outside the code: [newsletters](newsletters.md).
 
 ## 3. Create PostgreSQL databases
 
@@ -80,6 +80,8 @@ psql -v ON_ERROR_STOP=1 -f "db/schema/01_roles_and_schemas.sql" "$SUPERUSER_DATA
 ```
 
 Compare the result with the reference of the structure (read only): `DATABASE_URL="$APP_DATABASE_URL" npm run db:snapshot:check:db`.
+
+Steps 6 and 7 with that check in one command: `npm run db:apply` asks for the addresses of the superuser and of `cartlify_owner`, applies the migrations and the six scripts in this order and compares the structure ([commands](commands.md)).
 
 ## 8. Start Redis
 
