@@ -71,10 +71,11 @@ psql -v ON_ERROR_STOP=1 -f db/schema/04_views.sql "<cartlify_owner address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/06_indexes_and_constraints.sql "<cartlify_owner address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/01_roles_and_schemas.sql "<superuser address>"
 
-# format
+# format: prettier rewrites every file of the project; to format only the files you changed,
+# npx prettier --write <files>
 npm run format
 
-# type check
+# type check: the code of src first, then src together with the tests (tsconfig.test.json)
 npm run typecheck
 
 # tests: pick test parts in a checkbox list (all parts without an interactive terminal);
