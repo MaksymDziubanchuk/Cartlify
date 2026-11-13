@@ -35,7 +35,8 @@ import { inOwnerTx, type OwnerSession } from '../../helpers/ownerDb.js';
 // that moment, in the language the person is mailed in. A campaign that was started cannot be left in
 // the database (only a draft is deleted), so the cases make their rows in a session of the owner of
 // the database that rolls back; the two cases of a race need committed rows and clean up after
-// themselves
+// themselves. *.shopwide: a start takes every subscription in force in the database and holds them,
+// and the race counts the mails of all of them, so no other file may add or remove one meanwhile
 
 let fx: NewsletterFixtures;
 const startedForReal: number[] = [];

@@ -38,7 +38,9 @@ import { inOwnerTx } from '../../helpers/ownerDb.js';
 // actor may touch. The other files of this part try a step as the owner of the database, which
 // would pass without either of these. A case moves the committed rows in a transaction that rolls
 // back, so the rows stay as they were: a campaign that was started cannot be left in the database
-// (only a draft is deleted), so the committed campaigns stay drafts and a case starts them
+// (only a draft is deleted), so the committed campaigns stay drafts and a case starts them.
+// *.shopwide: the cleanups, the start and the reset of a language go over every row of the
+// database and hold them until the case rolls back
 
 let fx: NewsletterFixtures;
 const subscriptionIds: number[] = [];
