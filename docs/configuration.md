@@ -166,7 +166,8 @@ CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
 CLOUDINARY_URL=
 
-# SendGrid (required only if you test email flows)
+# SendGrid (the mails of the shop: the start does not stop without them, but no mail goes out, the
+# confirmation of an account, the orders and the returns included; set them on dev and prod)
 SENDGRID_API_KEY=
 EMAIL_FROM=
 
