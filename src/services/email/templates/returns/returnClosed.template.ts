@@ -19,6 +19,29 @@ const closeLineOf = (closeCode: string | null | undefined, locale: string) => {
   return t(`closeReasons.${key}`, locale);
 };
 
+// how money sent outside the app went (src/locales, returnWayWords.*); none for other
+const WAY_KEYS = ['bank_transfer', 'cash'];
+
+const wayWordsOf = (method: string, locale: string) =>
+  t(`returnWayWords.${WAY_KEYS.includes(method) ? method : 'other'}`, locale);
+
+// money root sent another way: the way (OutsideMethod) and the day it went, when root gave one
+export type ReturnClosedOutside = {
+  amount: number | string;
+  method: string;
+  sentOn?: Date | null;
+};
+
+// where the money that went back with the statement came from, each told as the buyer finds it:
+// what the bank gave back for a dispute the shop lost, what
+// went to the way the buyer paid (a transfer, or a refund made by hand in the dashboard of the
+// provider), what root sent another way
+export type ReturnClosedMoney = {
+  bank: number | string;
+  card: number | string;
+  outside: ReturnClosedOutside[];
+};
+
 export type ReturnClosedTemplateArgs = {
   orderId: number;
   // the order page of the frontend
@@ -26,10 +49,12 @@ export type ReturnClosedTemplateArgs = {
   // the units that went back with their money, and those that did not
   refunded: ReturnClosedLine[];
   declined: ReturnDeclinedLine[];
-  // all the money that went back with the statement
-  refundedAmount?: number | string;
+  // the money that went back with the statement, by where it came from; none: no money went back
+  money?: ReturnClosedMoney;
   // the currency, for example "eur"
   currency: string;
+  // the time zone the day of money sent another way is told in (the shop's), utc unless given
+  timeZone?: string;
   // the code root closed rows with, none when the statement closed by itself
   closeCode?: string | null;
   // the mail names no goods: a statement whose sender the shop did not check
@@ -66,9 +91,43 @@ export function buildReturnClosedTemplate(args: ReturnClosedTemplateArgs): {
     style: 'currency',
     currency: args.currency.trim().toUpperCase(),
   });
-  const amount = Number(args.refundedAmount ?? 0);
+  const dateLocale = locale === 'en' ? 'en-GB' : locale;
   const orderId = String(args.orderId);
   const code = args.code?.trim() || '';
+
+  // the bank first, then what went to the card (the rest of what the bank gave), then each sum root
+  // sent another way with its way and its day
+  const bank = Number(args.money?.bank ?? 0);
+  const card = Number(args.money?.card ?? 0);
+  const moneyLines: string[] = [];
+  if (bank > 0) {
+    moneyLines.push(t('returnClosed.bankLine', locale, { orderId, amount: money.format(bank) }));
+  }
+  if (card > 0) {
+    moneyLines.push(
+      t(bank > 0 ? 'returnClosed.restLine' : 'returnClosed.moneyBack', locale, {
+        amount: money.format(card),
+      }),
+      t('returnClosed.cardLine', locale),
+    );
+  }
+  for (const sent of args.money?.outside ?? []) {
+    const amount = Number(sent.amount);
+    if (!(amount > 0)) continue;
+    const way = wayWordsOf(sent.method, locale);
+    moneyLines.push(
+      sent.sentOn
+        ? t('returnClosed.outsideLine', locale, {
+            amount: money.format(amount),
+            way,
+            date: new Intl.DateTimeFormat(dateLocale, {
+              dateStyle: 'long',
+              timeZone: args.timeZone || 'UTC',
+            }).format(sent.sentOn),
+          })
+        : t('returnClosed.outsideNoDate', locale, { amount: money.format(amount), way }),
+    );
+  }
 
   const values = {
     appName,
@@ -82,10 +141,7 @@ export function buildReturnClosedTemplate(args: ReturnClosedTemplateArgs): {
             names: args.withheldItems.map((name) => name.trim()).join(', '),
           })
         : '',
-    outcomeLine:
-      amount > 0
-        ? t('returnClosed.moneyBack', locale, { amount: money.format(amount) })
-        : t('returnClosed.noMoney', locale),
+    outcomeLine: moneyLines.length ? moneyLines.join(' ') : t('returnClosed.noMoney', locale),
     closeLine: closeLineOf(args.closeCode, locale),
     showRefunded: !hide && args.refunded.length ? 'yes' : '',
     refunded: args.refunded.map((line) => ({

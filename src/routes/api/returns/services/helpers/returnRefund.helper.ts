@@ -1,138 +1,67 @@
 import { Prisma } from '@prisma/client';
 
-import { tx } from '@db/client.js';
-import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
-import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
-import { InternalError } from '@utils/errors.js';
+import type { MoneyActor } from '@routes/api/payments/services/helpers/settleMoneyRefund.helper.js';
 
-import { sendReturnMoneyEmail, sendReturnRefundFailedEmail } from './returnMoneyMail.helper.js';
-
-import type { RefundAnswer } from '@routes/api/payments/providers/types.js';
-import type { UserId } from 'types/ids.js';
-import type { Role } from 'types/user.js';
-import type { ReturnMailLogger } from './sendReturnByShopEmail.helper.js';
-
-// what begin_return_refund (db/05) says to ask the provider for
+// what begin_return_refund (db/05) says to ask the provider for: the key of the request (none when
+// money already sent another way covered all of it: nothing is asked, the rows are refunded at once,
+// settled is true), the sum, the rows (none for a way back left alone, a transfer of its own), and
+// what the journal of the admins keeps of it
 export type StartedRefund = {
-  key: string;
+  key: string | null;
   returnId: number;
   orderId: number;
   provider: string;
   paymentId: string;
   amount: string;
   itemIds: number[];
-  // the rows root lowered in this call, for the journal of the admins
+  // the rows root lowered in this call
   lowered: Array<{ itemId: number; from: string; to: string; note: string | null }>;
-  // the cost of the way back taken off the transfer
+  // the cost of the way back taken off the transfer, and what money already there covered
   deduction: string;
+  covered: string;
+  settled: boolean;
 };
 
-// what finish_return_refund (db/05) says it did; changed is false when no row waited for the key
-export type FinishedRefund = {
-  changed: boolean;
-  status: string;
-  returnId?: number;
-  orderId?: number;
-  itemIds?: number[];
-  amount?: string;
-  // the cost of the way back the buyer owes, taken off the transfer
-  deduction?: string;
-  // the provider took back a refund it had made (the bank of the card sent the money back): the
-  // rows are not refunded again
-  reversed?: boolean;
-};
+// who gives money back: an admin or root, or the system for a buyer's own withdrawal
+export type RefundActor = MoneyActor;
 
-// who settles a transfer: the admin whose request it is, or the system (the payment webhook, the
-// worker) when the provider tells the end later
-export type RefundActor = { id: UserId; role: Role } | null;
+// the lines of a transfer under its key: the way back left alone goes with no row to name them
+export async function linesOfTransfer(
+  db: Prisma.TransactionClient,
+  key: string,
+): Promise<number[]> {
+  const rows = await db.$queryRaw<{ id: number }[]>(Prisma.sql`
+    select l.id from cartlify.money_log as l
+    where l.event = 'money.refund' and l."transferKey" = ${key}
+    order by l.id
+  `);
 
-// Settles the transfer of this key by what the provider answered (the last of the three steps of a
-// refund; the webhook and the worker call it too). The rows change in one transaction with the line
-// of the admin log; the mail follows the commit. It is safe to call twice: only rows still pending
-// under the key are settled, so the second call changes nothing and mails nothing
-export async function settleReturnRefund({
-  key,
-  answer,
-  actor,
-  log,
-}: {
-  key: string;
-  answer: RefundAnswer;
-  actor: RefundActor;
-  log: ReturnMailLogger;
-}): Promise<FinishedRefund> {
-  const finished = await tx(async (db) => {
-    if (actor) await setUserContext(db, { userId: actor.id, role: actor.role });
-    else await setAdminContext(db);
+  return rows.map((row) => row.id);
+}
 
-    const [row] = await db.$queryRaw<{ finished: FinishedRefund }[]>(Prisma.sql`
-      select cartlify.finish_return_refund(
-        ${key}::uuid,
-        ${answer.status}::text,
-        ${answer.refundId}::text,
-        ${answer.failure ?? null}::cartlify."ReturnRefundFailure",
-        ${answer.failureText ?? null}::text
-      ) as finished
-    `);
-    const result = row!.finished;
+// the lines of the money journal a call wrote for the rows: the parts of a transfer under its key, or
+// the parts written with the goods line of the rows when there is no key (money already there paid
+// all of it, money sent outside the app). The goods line is the line the rows name (moneyLogId)
+export async function linesOfMovement(
+  db: Prisma.TransactionClient,
+  event: 'money.refund' | 'money.outside',
+  returnId: number,
+  itemId: number,
+): Promise<number[]> {
+  const rows = await db.$queryRaw<{ id: number }[]>(Prisma.sql`
+    select l.id
+    from cartlify.return_items as i
+    join cartlify.money_log as g on g.id = i."moneyLogId"
+    join cartlify.money_log as l
+      on l.event = ${event}
+      and l."returnId" = ${returnId}::int
+      and (
+        (g."transferKey" is not null and l."transferKey" = g."transferKey")
+        or (g."transferKey" is null and l."transferKey" is null and l."createdAt" = g."createdAt")
+      )
+    where i.id = ${itemId}::int
+    order by l.id
+  `);
 
-    // a transfer that went back or failed is a line of the log; one still pending is not an event yet
-    if (result.changed && result.orderId !== undefined && result.returnId !== undefined) {
-      // the system acts for the buyer of the order, as a payment given back late does
-      const owner = actor
-        ? null
-        : await db.order.findUnique({ where: { id: result.orderId }, select: { userId: true } });
-      if (!actor && !owner) {
-        throw new InternalError({ reason: 'RETURN_ORDER_OWNER_MISSING', orderId: result.orderId });
-      }
-
-      await writeAdminAuditLog(db, {
-        actorId: actor ? actor.id : owner!.userId,
-        actorRole: actor ? actor.role : 'USER',
-        entityType: 'order',
-        entityId: result.orderId,
-        action: 'OTHER',
-        event: answer.status === 'succeeded' ? 'return.refund' : 'return.refund_failed',
-        changes: [
-          { field: 'returnId', old: null, new: result.returnId },
-          {
-            field: 'refund',
-            old: null,
-            new: {
-              initiator: actor ? 'admin' : 'system',
-              amount: result.amount,
-              // the cost of the way back the buyer owes, taken off the transfer
-              ...(result.deduction && Number(result.deduction) > 0
-                ? { returnShippingDeduction: result.deduction }
-                : {}),
-              refundId: answer.refundId,
-              itemIds: result.itemIds,
-              ...(answer.status === 'failed'
-                ? { failure: answer.failure, failureText: answer.failureText }
-                : {}),
-              // the money had gone and the bank of the card sent it back
-              ...(result.reversed ? { sentBack: true } : {}),
-            },
-          },
-        ],
-      });
-    }
-
-    return result;
-  });
-
-  if (finished.changed && finished.returnId !== undefined && finished.itemIds) {
-    if (answer.status === 'succeeded') {
-      await sendReturnMoneyEmail(finished.returnId, finished.itemIds, log);
-    } else if (answer.status === 'failed' && answer.failure === 'card_unavailable') {
-      await sendReturnRefundFailedEmail(
-        finished.returnId,
-        finished.itemIds,
-        log,
-        finished.reversed === true,
-      );
-    }
-  }
-
-  return finished;
+  return rows.map((row) => row.id);
 }

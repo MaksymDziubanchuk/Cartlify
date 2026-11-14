@@ -9,12 +9,16 @@ import type {
   SetReturnShipmentCostBodyDto,
   CreateReturnBodyDto,
   ReceiveReturnItemsBodyDto,
+  RecordMoneyReceivedBodyDto,
+  RecordOverpaidReceivedBodyDto,
+  LoseOverpaidBodyDto,
+  KeepReturnGoodsBodyDto,
   RefundReturnBodyDto,
   RefundReturnOutsideBodyDto,
-  RecordReturnReimbursementBodyDto,
-  SettleReturnDisputeBodyDto,
   ReturnDto,
   ReturnParamsDto,
+  ReturnParcelConfirmDto,
+  SplitReturnBodyDto,
 } from 'types/dto/returns.dto.js';
 
 import { returnsServices } from './returns.services.js';
@@ -94,6 +98,7 @@ const postReceiveItems: ControllerRouter<
     actorRole,
     returnId: Number(req.params.returnId),
     results: req.body.results,
+    ...(req.body.parcel ? { parcel: req.body.parcel } : {}),
     log: req.log,
   });
   return reply.code(200).send(result);
@@ -106,6 +111,73 @@ const postRefund: ControllerRouter<ReturnParamsDto, RefundReturnBodyDto, {}, Ret
   const { id: actorId, role: actorRole } = req.user as User;
 
   const result = await returnsServices.refundReturn({
+    ...req.body,
+    actorId,
+    actorRole,
+    returnId: Number(req.params.returnId),
+    log: req.log,
+  });
+  return reply.code(200).send(result);
+};
+
+const postMoneyReceived: ControllerRouter<
+  ReturnParamsDto,
+  RecordMoneyReceivedBodyDto,
+  {},
+  ReturnDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await returnsServices.recordMoneyReceived({
+    ...req.body,
+    actorId,
+    actorRole,
+    returnId: Number(req.params.returnId),
+  });
+  return reply.code(200).send(result);
+};
+
+const postOverpaidReceived: ControllerRouter<
+  ReturnParamsDto,
+  RecordOverpaidReceivedBodyDto,
+  {},
+  ReturnDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await returnsServices.recordOverpaidReceived({
+    ...req.body,
+    actorId,
+    actorRole,
+    returnId: Number(req.params.returnId),
+  });
+  return reply.code(200).send(result);
+};
+
+const postOverpaidLost: ControllerRouter<
+  ReturnParamsDto,
+  LoseOverpaidBodyDto,
+  {},
+  ReturnDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await returnsServices.loseOverpaid({
+    ...req.body,
+    actorId,
+    actorRole,
+    returnId: Number(req.params.returnId),
+  });
+  return reply.code(200).send(result);
+};
+
+const postKeep: ControllerRouter<ReturnParamsDto, KeepReturnGoodsBodyDto, {}, ReturnDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await returnsServices.keepReturnGoods({
     ...req.body,
     actorId,
     actorRole,
@@ -133,41 +205,6 @@ const postRefundOutside: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-const postReimbursement: ControllerRouter<
-  ReturnParamsDto,
-  RecordReturnReimbursementBodyDto,
-  {},
-  ReturnDto
-> = async (req, reply) => {
-  const { id: actorId, role: actorRole } = req.user as User;
-
-  const result = await returnsServices.recordReturnReimbursement({
-    ...req.body,
-    actorId,
-    actorRole,
-    returnId: Number(req.params.returnId),
-    log: req.log,
-  });
-  return reply.code(200).send(result);
-};
-
-const postDispute: ControllerRouter<
-  ReturnParamsDto,
-  SettleReturnDisputeBodyDto,
-  {},
-  ReturnDto
-> = async (req, reply) => {
-  const { id: actorId, role: actorRole } = req.user as User;
-
-  const result = await returnsServices.settleReturnDispute({
-    ...req.body,
-    actorId,
-    actorRole,
-    returnId: Number(req.params.returnId),
-  });
-  return reply.code(200).send(result);
-};
-
 const postClose: ControllerRouter<ReturnParamsDto, CloseReturnBodyDto, {}, ReturnDto> = async (
   req,
   reply,
@@ -184,16 +221,21 @@ const postClose: ControllerRouter<ReturnParamsDto, CloseReturnBodyDto, {}, Retur
   return reply.code(200).send(result);
 };
 
-const postConfirmProof: ControllerRouter<ReturnParamsDto, {}, {}, ReturnDto> = async (
-  req,
-  reply,
-) => {
+const postConfirmProof: ControllerRouter<
+  ReturnParamsDto,
+  ReturnParcelConfirmDto | undefined,
+  {},
+  ReturnDto
+> = async (req, reply) => {
   const { id: actorId, role: actorRole } = req.user as User;
+  const body = req.body ?? {};
 
   const result = await returnsServices.confirmReturnProof({
     actorId,
     actorRole,
     returnId: Number(req.params.returnId),
+    ...(body.buyerPaid !== undefined ? { buyerPaid: body.buyerPaid } : {}),
+    ...(body.cost !== undefined ? { cost: body.cost } : {}),
   });
   return reply.code(200).send(result);
 };
@@ -209,6 +251,22 @@ const postAccept: ControllerRouter<ReturnParamsDto, {}, {}, ReturnDto> = async (
   return reply.code(200).send(result);
 };
 
+const postSplit: ControllerRouter<ReturnParamsDto, SplitReturnBodyDto, {}, ReturnDto> = async (
+  req,
+  reply,
+) => {
+  const { id: actorId, role: actorRole } = req.user as User;
+
+  const result = await returnsServices.splitReturn({
+    ...req.body,
+    actorId,
+    actorRole,
+    returnId: Number(req.params.returnId),
+    log: req.log,
+  });
+  return reply.code(201).send(result);
+};
+
 const postShipment: ControllerRouter<
   ReturnParamsDto,
   RecordReturnShipmentBodyDto,
@@ -222,6 +280,7 @@ const postShipment: ControllerRouter<
     actorId,
     actorRole,
     returnId: Number(req.params.returnId),
+    log: req.log,
   });
   return reply.code(201).send(result);
 };
@@ -253,9 +312,12 @@ export const returnsController = {
   postAccept,
   postRefund,
   postRefundOutside,
-  postReimbursement,
-  postDispute,
+  postMoneyReceived,
+  postOverpaidReceived,
+  postOverpaidLost,
+  postKeep,
   postClose,
   postShipment,
   patchShipmentCost,
+  postSplit,
 };

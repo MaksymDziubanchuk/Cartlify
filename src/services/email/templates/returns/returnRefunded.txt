@@ -6,7 +6,8 @@
 
 {{#items}}- {{name}} x {{quantity}}
 {{/items}}{{#deliveryLine}}{{deliveryLine}}
-{{/deliveryLine}}{{#deductionLine}}{{deductionLine}}
+{{/deliveryLine}}{{#wayBackLine}}{{wayBackLine}}
+{{/wayBackLine}}{{#deductionLine}}{{deductionLine}}
 {{/deductionLine}}{{#withheldLine}}{{withheldLine}}
 {{/withheldLine}}
 {{seeOrderTxt}}

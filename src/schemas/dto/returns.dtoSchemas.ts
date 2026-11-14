@@ -1,3 +1,4 @@
+import { parcelSumsProperties, receiveParcelField } from '@schemas/parcelFields.js';
 import {
   RETURN_BASES,
   RETURN_CLOSE_CODES,
@@ -8,12 +9,13 @@ import {
   RETURN_MONEY,
   RETURN_NOT_ACCEPTED_REASONS,
   RETURN_NOTE_MAX,
-  RETURN_OUTSIDE_METHODS,
-  RETURN_OUTSIDE_PAYMENT_METHODS,
   RETURN_REASONS,
-  RETURN_REFUND_FAILURES,
   RETURN_SOURCES,
   RETURN_STATUSES,
+  MONEY_PARTS,
+  MONEY_PURPOSES,
+  OUTSIDE_METHODS,
+  REFUND_FAILURES,
 } from '@helpers/returns.js';
 import { MAX_ID, idPathParam } from '@schemas/idPathParam.js';
 
@@ -140,6 +142,34 @@ const returnsListQuerySchema = {
         'statement are over; false: the others. A statement whose goods were not sent is a case ' +
         'of the goods, not of the money.',
     },
+    moneyHeld: {
+      type: 'boolean',
+      description:
+        'true: the money of the statement waits for the bank or for root, not for the shop: a ' +
+        'dispute of the payment of the order is open at the bank, or money of the payment waits ' +
+        'for root to say what it was for: a refund made by hand in the dashboard of the provider, ' +
+        'what a bank took for a dispute lost on an order sent (a transfer is refused meanwhile, ' +
+        'RETURN_REFUND_DISPUTED, RETURN_HAND_REFUND_PENDING, RETURN_BANK_MONEY_PENDING); false: the ' +
+        'others.',
+    },
+    moneyShort: {
+      type: 'boolean',
+      description:
+        'true: a transfer of what the statement owes now would ask the provider for more than is ' +
+        'left of the payment, money already with the buyer taken off, or the way back does not fit ' +
+        'in it with them beside the money the other statements of the order still owe (`moneyLeft` ' +
+        'of the card): it waits for them, or goes outside the app ' +
+        '(`POST /api/returns/{returnId}/refund/outside`); false: the others.',
+    },
+    moneyOverpaid: {
+      type: 'boolean',
+      description:
+        'true: money already with the buyer (a refund made by hand, what a bank took, by the ' +
+        'decisions on them) gave goods of the order that came back more than its statements, all ' +
+        'over, took (a row lowered or refused): the buyer had more than the shop owed. Root records ' +
+        'what the buyer gave back (`POST /api/returns/{returnId}/money-received`) or puts the case ' +
+        'aside; false: the others.',
+    },
     moneyDueWithinDays: listDaysField(
       'The money of some row is due and not back (or on its way), and its 14 days from the ' +
         'statement end within so many days from now.',
@@ -239,6 +269,13 @@ const returnListItemSchema = {
     units: { type: 'integer' },
     amount: { type: 'number', description: 'The money of all the rows.' },
     refundedAmount: { type: 'number', description: 'The money of the rows that went back.' },
+    moneyLeft: {
+      type: ['number', 'null'],
+      description:
+        'What an open statement still has to send the buyer: the rows owed, the delivery that ' +
+        'goes with them and the way back the shop pays (the total of moneyLeft of its card). ' +
+        'Null for a closed statement.',
+    },
     goods: {
       type: 'object',
       additionalProperties: false,
@@ -284,6 +321,7 @@ const returnListItemSchema = {
     'units',
     'amount',
     'refundedAmount',
+    'moneyLeft',
     'goods',
     'money',
   ],
@@ -326,11 +364,41 @@ const returnsShipmentBodySchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
+    direction: {
+      type: 'string',
+      enum: ['to_shop', 'to_buyer'],
+      description:
+        'to_shop: the parcel the goods of the statement come back in (one a statement, while goods ' +
+        'are on their way to the shop); to_buyer: goods the shop did not accept go back to the buyer ' +
+        '(with `items`).',
+    },
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: LIST_MAX,
+      description:
+        'The rows of goods not accepted a parcel to the buyer carries, and their units: fewer ' +
+        'units than a row holds split it. Only with to_buyer (RETURN_ITEMS_NOT_ALLOWED).',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          itemId: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_ID,
+            description: 'A row of the statement whose goods were not accepted.',
+          },
+          quantity: { type: 'integer', minimum: 1, maximum: UNITS_MAX },
+        },
+        required: ['itemId', 'quantity'],
+      },
+    },
     carrier: {
       type: 'string',
       minLength: 1,
       maxLength: 100,
-      description: 'Who carried the parcel.',
+      description: 'Who carries the parcel.',
     },
     trackingNumber: {
       type: 'string',
@@ -349,46 +417,99 @@ const returnsShipmentBodySchema = {
       type: 'string',
       format: 'date-time',
       description:
-        'When the parcel was sent back, or the moment it was refused: never of the future, never ' +
-        'before the order was paid (RETURN_SHIPMENT_TIME_INVALID). The cost counts in the period ' +
-        'of this time.',
+        'When the parcel was sent, or the moment it was refused: never of the future, never ' +
+        'before the order was paid (RETURN_SHIPMENT_TIME_INVALID). The cost is a line of the ' +
+        'money journal and counts in the period it is written.',
     },
   },
-  required: ['shippedAt'],
+  required: ['direction', 'shippedAt'],
 } as const;
 
 const returnsShipmentCostBodySchema = {
   $id: 'returnsShipmentCostBodySchema',
   type: 'object',
   additionalProperties: false,
-  properties: { cost: costField },
-  required: ['cost'],
+  description: 'One of the two: what the shop paid the carrier, or what the buyer paid it.',
+  properties: {
+    cost: costField,
+    buyerPaid: {
+      type: 'number',
+      minimum: 0,
+      maximum: 99_999_999.99,
+      multipleOf: 0.01,
+      description:
+        'What the buyer paid the carrier for the parcel back to the shop, as the receipt says: ' +
+        'corrects the sum set when the parcel was confirmed, while no money of the way back went. ' +
+        'The page shows the sum the buyer told beside the field, never in it.',
+    },
+  },
+  oneOf: [{ required: ['cost'] }, { required: ['buyerPaid'] }],
 } as const;
 
-const returnShipmentSchema = {
+const returnParcelSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'A parcel the shop paid to carry the goods back from the buyer: an expense of the period it ' +
-    'was sent in.',
+    'A parcel of the statement: the goods on their way back to the shop (one a statement: the one ' +
+    'the buyer told of, or the one the shop sent for them) or the goods the shop did not accept ' +
+    'sent back to the buyer. What the shop paid the carrier is an expense of the period it was ' +
+    'written in.',
   properties: {
     id: { type: 'integer' },
+    direction: { type: 'string', enum: ['to_shop', 'to_buyer'] },
     carrier: { type: ['string', 'null'] },
     trackingNumber: { type: ['string', 'null'] },
     trackingUrl: { type: ['string', 'null'] },
-    cost: { type: ['number', 'null'], description: 'None until an admin writes it.' },
-    shippedAt: { type: 'string', format: 'date-time' },
-    recordedBy: person,
+    shippedAt: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'When the parcel was sent: when the buyer told of it, or the time the admin gave (a parcel ' +
+        'refused at the door: the moment of the refusal).',
+    },
+    recordedBy: {
+      ...person,
+      description: 'Who wrote it: an admin, or the buyer of an account; none for the public form.',
+    },
+    confirmedAt: {
+      ...nullableDateTime,
+      description:
+        'A parcel to the shop: when an admin confirmed it (the money may then go before the goods ' +
+        'arrive); none until then.',
+    },
+    confirmedBy: person,
+    buyerPaid: {
+      type: ['number', 'null'],
+      description:
+        'A parcel to the shop: what the buyer paid the carrier, as they told it or as the admin ' +
+        'set it from the receipt; none when nobody told it.',
+    },
+    cost: {
+      type: ['number', 'null'],
+      description:
+        'What the shop paid the carrier, from the money journal (the first cost and its ' +
+        'corrections); none until an admin writes one above 0.',
+    },
+    itemIds: {
+      type: 'array',
+      items: { type: 'integer' },
+      description: 'The rows a parcel to the buyer carried back; none for a parcel to the shop.',
+    },
     createdAt: { type: 'string', format: 'date-time' },
   },
   required: [
     'id',
+    'direction',
     'carrier',
     'trackingNumber',
     'trackingUrl',
-    'cost',
     'shippedAt',
     'recordedBy',
+    'confirmedAt',
+    'confirmedBy',
+    'buyerPaid',
+    'cost',
+    'itemIds',
     'createdAt',
   ],
 } as const;
@@ -493,7 +614,7 @@ const returnsReceiveBodySchema = {
               'to_stock: back on the shelf, in the batches they were sold from; written_off: ' +
               'came back and went out of the stock at once; not_accepted: the shop does not take ' +
               'them (notAcceptedReason says why), their money is refused; lost: gone on the way ' +
-              '(the proof of the buyer must be confirmed first); not_arrived: never came, their ' +
+              '(the parcel must be confirmed); not_arrived: never came, their ' +
               'money is refused.',
           },
           notAcceptedReason: {
@@ -505,8 +626,16 @@ const returnsReceiveBodySchema = {
         required: ['itemId', 'quantity', 'goods'],
       },
     },
+    parcel: receiveParcelField,
   },
   required: ['results'],
+} as const;
+
+const returnsConfirmProofBodySchema = {
+  $id: 'returnsConfirmProofBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: parcelSumsProperties,
 } as const;
 
 // the rows a request names; none named means all that the action applies to
@@ -578,7 +707,7 @@ const returnsRefundOutsideBodySchema = {
     itemIds: itemIdsField,
     method: {
       type: 'string',
-      enum: [...RETURN_OUTSIDE_PAYMENT_METHODS],
+      enum: [...OUTSIDE_METHODS],
       description: 'How the money went: a bank transfer, cash or another way.',
     },
     note: noteField('How the money was sent: for the shop, not mailed to the buyer.'),
@@ -587,58 +716,137 @@ const returnsRefundOutsideBodySchema = {
       description:
         'The day the money really went: never of the future and never before the order was paid.',
     },
+    returnShippingDeduction: {
+      type: 'number',
+      exclusiveMinimum: 0,
+      maximum: 99_999_999.99,
+      description:
+        'The cost of the way back the buyer owes, taken off as with a transfer (a withdrawal whose ' +
+        'contract says the buyer pays it).',
+    },
   },
   required: ['method', 'note', 'at'],
 } as const;
 
-const returnsReimbursementBodySchema = {
-  $id: 'returnsReimbursementBodySchema',
+const returnsMoneyReceivedBodySchema = {
+  $id: 'returnsMoneyReceivedBodySchema',
   type: 'object',
   additionalProperties: false,
+  required: ['items', 'method', 'note', 'at'],
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      description:
+        'The rows of the statement the money came back for, each once, with the money: at most what ' +
+        'a row cost less what came back for it already.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['itemId', 'amount'],
+        properties: {
+          itemId: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_ID,
+            description: 'A row of the statement.',
+          },
+          amount: {
+            type: 'number',
+            exclusiveMinimum: 0,
+            maximum: 99_999_999.99,
+            multipleOf: 0.01,
+            description: 'The money that came back for it, to the cent.',
+          },
+        },
+      },
+    },
+    method: {
+      type: 'string',
+      enum: [...OUTSIDE_METHODS],
+      description: 'How the money came: a bank transfer, cash or another way.',
+    },
+    note: noteField('How the money came: for the shop.'),
+    at: {
+      ...dateTime,
+      description:
+        'The day the money really came: never of the future, never before the statement.',
+    },
+  },
+} as const;
+
+const returnsOverpaidReceivedBodySchema = {
+  $id: 'returnsOverpaidReceivedBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['amount', 'method', 'note', 'at'],
   properties: {
     amount: {
       type: 'number',
       exclusiveMinimum: 0,
       maximum: 99_999_999.99,
-      description: 'What the shop paid the buyer back for the carrier, with up to two decimals.',
+      multipleOf: 0.01,
+      description: 'What the buyer gave back, to the cent: at most what is overpaid.',
     },
     method: {
       type: 'string',
-      enum: [...RETURN_OUTSIDE_PAYMENT_METHODS],
-      description: 'How the money went: a bank transfer, cash or another way.',
+      enum: [...OUTSIDE_METHODS],
+      description: 'How the money came: a bank transfer, cash or another way.',
     },
-    note: noteField('How the money was sent: for the shop, not mailed to the buyer.'),
+    note: noteField('How the money came: for the shop.'),
     at: {
       ...dateTime,
       description:
-        'The day the money really went: never of the future and never before the statement.',
+        'The day the money really came: never of the future, never before the money went to the ' +
+        'buyer.',
     },
   },
-  required: ['amount', 'method', 'note', 'at'],
 } as const;
 
-const returnsDisputeBodySchema = {
-  $id: 'returnsDisputeBodySchema',
+const returnsOverpaidLostBodySchema = {
+  $id: 'returnsOverpaidLostBodySchema',
   type: 'object',
   additionalProperties: false,
+  required: ['note'],
   properties: {
-    outcome: {
-      type: 'string',
-      enum: ['won', 'lost'],
-      description:
-        'lost: the bank gave the buyer the money (the rows are refunded by chargeback, on the day ' +
-        'of at); won: the bank gave the money back to the shop (the rows can be refunded again the ' +
-        'usual way).',
-    },
-    note: noteField('What the bank decided: for the shop, not mailed to the buyer.'),
-    at: {
-      ...dateTime,
-      description:
-        'With lost: the day the dispute closed, never of the future and never before the order was ' +
-        'paid (RETURN_OUTSIDE_AT_INVALID); the reports count the money in its period.',
-    },
+    note: noteField('Why the shop gives the money up: for the shop.'),
   },
-  required: ['outcome', 'note'],
+} as const;
+
+const returnsKeepBodySchema = {
+  $id: 'returnsKeepBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['items', 'note'],
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      description:
+        'The rows of goods not accepted the shop keeps, each once, with what becomes of the goods.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['itemId', 'goods'],
+        properties: {
+          itemId: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_ID,
+            description: 'A row of the statement whose goods were not accepted.',
+          },
+          goods: {
+            type: 'string',
+            enum: ['to_stock', 'written_off'],
+            description: 'Back on the shelf, or written off (in and out at once).',
+          },
+        },
+      },
+    },
+    note: noteField('Why the shop keeps the goods: for the shop.'),
+  },
 } as const;
 
 const returnsCloseBodySchema = {
@@ -684,49 +892,37 @@ const returnItemSchema = {
       type: 'number',
       description: 'What the units cost the buyer, lowered by root when amountNote says why.',
     },
+    paid: {
+      type: 'number',
+      description:
+        'What the buyer has had of the amount: the transfers sent or on their way and the money ' +
+        'sent outside the app. A transfer sends what is left of the payment, so a row may be paid ' +
+        'in parts ("paid X of Y"): the rest goes outside the app, and the row is refunded once ' +
+        'the parts give all of it.',
+    },
     amountNote: { type: ['string', 'null'] },
-    deliveryShare: {
-      type: 'number',
-      description:
-        'The part of the delivery that goes back with this row: the row that makes the order ' +
-        'whole carries all of it, the others 0.',
-    },
-    shippingDeduction: {
-      type: 'number',
-      description:
-        'The cost of the way back the buyer owes, taken off the transfer of this row (0 for none).',
-    },
     goodsSetAt: nullableDateTime,
     goodsSetBy: person,
-    refundId: { type: ['string', 'null'], description: 'The id the provider gave the transfer.' },
-    refundedAt: {
-      ...nullableDateTime,
-      description: 'The day the money went back; for money sent outside the app, the day it went.',
+    moneyLogId: {
+      type: ['integer', 'null'],
+      description:
+        'The line of the money journal that put the money of the row where it is (the goods of ' +
+        'its transfer, the money sent outside the app, or the failure): one of `money`.',
     },
     refundFailure: {
       type: ['object', 'null'],
       additionalProperties: false,
       description:
-        'Why the last transfer failed, until it is tried again: card_unavailable (the card ' +
-        'can no longer take money: a retry is useless), shop_balance (top up the balance of the ' +
-        'shop and retry), disputed (the buyer disputed it at the bank: never send it again), ' +
-        'unknown (retry once, then send it outside the app).',
+        'Why the last transfer failed (money failed), until it is tried again: card_unavailable ' +
+        '(the card can no longer take money: a retry is useless), shop_balance (top up the ' +
+        'balance of the shop and retry), disputed (the buyer disputed the payment at the bank: ' +
+        'the bank settles it), already_refunded (the money of the payment went back already, by ' +
+        'hand in the dashboard), unknown (retry once, then send it outside the app).',
       properties: {
-        code: { type: 'string', enum: [...RETURN_REFUND_FAILURES] },
+        code: { type: 'string', enum: [...REFUND_FAILURES] },
         text: { type: ['string', 'null'], description: 'The words of the provider.' },
       },
       required: ['code', 'text'],
-    },
-    outside: {
-      type: ['object', 'null'],
-      additionalProperties: false,
-      description: 'Money root sent outside the app.',
-      properties: {
-        method: { type: 'string', enum: [...RETURN_OUTSIDE_METHODS] },
-        note: { type: 'string' },
-        by: person,
-      },
-      required: ['method', 'note', 'by'],
     },
     refusedCode: {
       type: ['string', 'null'],
@@ -745,16 +941,128 @@ const returnItemSchema = {
     'notAcceptedReason',
     'money',
     'amount',
+    'paid',
     'amountNote',
-    'deliveryShare',
     'goodsSetAt',
     'goodsSetBy',
-    'refundId',
-    'refundedAt',
+    'moneyLogId',
     'refundFailure',
-    'outside',
     'refusedCode',
   ],
+} as const;
+
+// a movement of the money of a statement, a line of the money journal (db/05, money_log)
+const returnMoneyMoveSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    id: { type: 'integer', description: 'The line of the money journal.' },
+    event: {
+      type: 'string',
+      description:
+        'money.refund (a transfer, in parts, or a refund made by hand tied to the statement), ' +
+        'money.refund_failed (its failure, the sum back), money.outside (sent outside the app), ' +
+        'money.return_parcel_cost (what a ' +
+        'parcel back cost the shop), money.correction (a cost corrected), money.dispute_withdrawn ' +
+        '(what the bank gave the buyer for a dispute, tied to the statement).',
+    },
+    purpose: { type: 'string', enum: [...MONEY_PURPOSES] },
+    part: {
+      type: 'string',
+      enum: [...MONEY_PARTS],
+      description:
+        'goods, delivery: what goes back; deduction: kept for the way back; covered: what money ' +
+        'already sent another way covered; whole: a movement without parts.',
+    },
+    amount: {
+      type: 'number',
+      description: 'Signed: above 0 to the shop, below 0 to the buyer or to a carrier.',
+    },
+    currency: { type: ['string', 'null'] },
+    state: {
+      type: ['string', 'null'],
+      enum: ['in_transit', 'sent', null],
+      description: 'Where a refund stands; null for any other line.',
+    },
+    stateAt: { ...nullableDateTime, description: 'Since when it stands there.' },
+    createdAt: { ...dateTime, description: 'When it was written: the day of the reports.' },
+    happenedAt: {
+      ...nullableDateTime,
+      description: 'The day a person wrote the money really went (outside the app).',
+    },
+    refundId: { type: ['string', 'null'], description: 'The refund at the provider.' },
+    bankReference: {
+      type: ['string', 'null'],
+      description: 'The number the bank of the buyer knows the refund by.',
+    },
+    byDashboard: {
+      type: 'boolean',
+      description: 'Made by hand in the dashboard of the provider, not by this server.',
+    },
+    failure: { type: ['string', 'null'], enum: [...REFUND_FAILURES, null] },
+    failureText: { type: ['string', 'null'], description: 'The words of the provider.' },
+    method: { type: ['string', 'null'], enum: [...OUTSIDE_METHODS, null] },
+    note: { type: ['string', 'null'], description: 'The note of root, for the shop.' },
+    coversId: {
+      type: ['integer', 'null'],
+      description: 'The line this one reverses, corrects or uses.',
+    },
+    shipmentId: { type: ['integer', 'null'], description: 'The parcel back of a cost.' },
+    by: { ...person, description: 'Who wrote it; null for the work of the system.' },
+  },
+  required: [
+    'id',
+    'event',
+    'purpose',
+    'part',
+    'amount',
+    'currency',
+    'state',
+    'stateAt',
+    'createdAt',
+    'happenedAt',
+    'refundId',
+    'bankReference',
+    'byDashboard',
+    'failure',
+    'failureText',
+    'method',
+    'note',
+    'coversId',
+    'shipmentId',
+    'by',
+  ],
+} as const;
+
+const returnsSplitBodySchema = {
+  $id: 'returnsSplitBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: LIST_MAX,
+      description:
+        'The rows and the units that go into the new statement: rows whose goods wait and whose ' +
+        'money did not move; fewer units than a row holds split it. The statement keeps a row.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          itemId: {
+            type: 'integer',
+            minimum: 1,
+            maximum: MAX_ID,
+            description: 'A row of the statement.',
+          },
+          quantity: { type: 'integer', minimum: 1, maximum: UNITS_MAX },
+        },
+        required: ['itemId', 'quantity'],
+      },
+    },
+  },
+  required: ['items'],
 } as const;
 
 const returnsResponseSchema = {
@@ -766,6 +1074,16 @@ const returnsResponseSchema = {
     code: returnCodeField,
     orderId: { type: 'integer' },
     extendsId: { type: ['integer', 'null'], description: 'The statement this one extends.' },
+    splitFromId: {
+      type: ['integer', 'null'],
+      description:
+        'The statement this one was split from: its units went back in a parcel of their own.',
+    },
+    splitIds: {
+      type: 'array',
+      items: { type: 'integer' },
+      description: 'The statements split from this one.',
+    },
     statedAt: { ...dateTime, description: 'The moment the statement states.' },
     source: { type: 'string', enum: [...RETURN_SOURCES] },
     basis: { type: 'string', enum: [...RETURN_BASES] },
@@ -781,29 +1099,6 @@ const returnsResponseSchema = {
     createdBy: person,
     ip: { type: ['string', 'null'] },
     userAgent: { type: ['string', 'null'] },
-    proof: {
-      type: 'object',
-      additionalProperties: false,
-      description:
-        'The proof the buyer sent the goods back: given by the buyer (the carrier and the number ' +
-        'of the parcel, and a link to follow it), confirmed by an admin.',
-      properties: {
-        providedAt: nullableDateTime,
-        carrier: { type: ['string', 'null'] },
-        trackingNumber: { type: ['string', 'null'] },
-        trackingUrl: { type: ['string', 'null'] },
-        confirmedAt: nullableDateTime,
-        confirmedBy: person,
-      },
-      required: [
-        'providedAt',
-        'carrier',
-        'trackingNumber',
-        'trackingUrl',
-        'confirmedAt',
-        'confirmedBy',
-      ],
-    },
     acceptedAt: {
       ...nullableDateTime,
       description:
@@ -820,19 +1115,75 @@ const returnsResponseSchema = {
       description: 'The code of the last time root closed rows without a refund.',
     },
     closeNote: { type: ['string', 'null'] },
-    shippingReimbursement: {
-      type: ['object', 'null'],
-      additionalProperties: false,
+    refundedTotal: {
+      type: 'number',
       description:
-        'The cost of the way back root paid back to the buyer outside the app, none until then.',
+        'How much of the money went back to the buyer by this statement in all: what the ' +
+        'transfers sent or have on their way less what failed, the money sent outside the app, the way back paid ' +
+        'back, what a refund made by hand or the bank covered. The database counts it from the ' +
+        'money journal.',
+    },
+    disputeOpen: {
+      type: 'boolean',
+      description:
+        'A dispute of the payment of the order is open at the bank: a transfer waits for its end ' +
+        '(RETURN_REFUND_DISPUTED) unless the provider lets the payment be refunded.',
+    },
+    handRefundPending: {
+      type: 'boolean',
+      description:
+        'A refund of the payment made by hand in the dashboard of the provider waits for root to ' +
+        'say what it was: no transfer goes until then (RETURN_HAND_REFUND_PENDING).',
+    },
+    bankMoneyPending: {
+      type: 'boolean',
+      description:
+        'What a bank took for a dispute lost on an order sent waits for root to say what it was for ' +
+        '(`POST /api/payments/money-lines/{moneyLogId}/decision`): no transfer goes until then ' +
+        '(RETURN_BANK_MONEY_PENDING).',
+    },
+    moneyLeft: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['rows', 'delivery', 'wayBack', 'total', 'due', 'covered', 'paymentLeft', 'short'],
+      description:
+        'What the statement still owes the buyer: the rows whose money is owed (never sent, or ' +
+        'whose transfer failed), the delivery that goes with them and the way back the shop pays ' +
+        '(total). due: of it, what a transfer takes now (the goods in, lost, or on their way with ' +
+        'the parcel confirmed). covered: what money already with the buyer pays of that (a refund ' +
+        'made by hand, what a bank took, by the decisions on them: "the bank already gave X for ' +
+        'these goods"). paymentLeft: what the provider can still give back of the payment. short: a ' +
+        'transfer of what is due would ask the provider for more than that, or the way back does ' +
+        'not fit in it with them beside the money the other statements of the order still owe: it ' +
+        'waits for them, or goes outside the app; left alone (no row owed), it goes by a transfer ' +
+        'of its own once it fits. A statement that gave the buyer money for goods stays open while ' +
+        'the way back is owed.',
       properties: {
-        amount: { type: 'number' },
-        at: dateTime,
-        method: { type: 'string', enum: [...RETURN_OUTSIDE_METHODS] },
-        note: { type: 'string' },
-        by: person,
+        rows: { type: 'number' },
+        delivery: { type: 'number' },
+        wayBack: { type: 'number' },
+        total: { type: 'number' },
+        due: { type: 'number' },
+        covered: { type: 'number' },
+        paymentLeft: { type: 'number' },
+        short: { type: 'boolean' },
       },
-      required: ['amount', 'at', 'method', 'note', 'by'],
+    },
+    moneyOverpaid: {
+      type: 'number',
+      description:
+        'What money already with the buyer (a refund made by hand, what a bank took, by the ' +
+        'decisions on them) gave the goods of the order more than its statements took: the items ' +
+        'whose every unit came back in statements that are over, a row refused or lowered. 0 when ' +
+        'none. Root or an admin with the right of the money records what the buyer gave back ' +
+        '(`POST /api/returns/{returnId}/overpaid/received`), gives it up ' +
+        '(`POST /api/returns/{returnId}/overpaid/lost`), or keeps the goods not accepted that are ' +
+        'still in the shop (`POST /api/returns/{returnId}/keep`).',
+    },
+    money: {
+      type: 'array',
+      items: returnMoneyMoveSchema,
+      description: 'The movements of the money of the statement, the oldest first.',
     },
     createdAt: dateTime,
     updatedAt: dateTime,
@@ -918,7 +1269,13 @@ const returnsResponseSchema = {
       },
     },
     items: { type: 'array', items: returnItemSchema },
-    shipments: { type: 'array', items: returnShipmentSchema },
+    parcels: {
+      type: 'array',
+      items: returnParcelSchema,
+      description:
+        'The parcels of the statement in the order they were recorded: the parcel to the shop (one a ' +
+        'statement; the proof the goods went back) and the parcels to the buyer.',
+    },
     deductible: {
       type: 'number',
       minimum: 0,
@@ -930,11 +1287,13 @@ const returnsResponseSchema = {
     },
     warnings: {
       type: 'array',
-      items: { type: 'string', enum: ['shop_paid_parcel'] },
+      items: { type: 'string', enum: ['shop_paid_parcel', 'buyer_paid_over_total'] },
       description:
-        'What the admin should see before acting. shop_paid_parcel: the shop paid a parcel of the ' +
-        'statement back, so a reimbursement of the way back to the buyer would pay for it twice; ' +
-        'it is still allowed (the buyer may have sent two parcels), the front asks first.',
+        'What the admin should see before acting. shop_paid_parcel: the shop paid the carrier for ' +
+        'the parcel of the goods back to the shop: no way back is owed to the buyer (the money left ' +
+        'has none), and a withdrawal whose contract makes the buyer pay it may have it taken off the ' +
+        'transfer (returnShippingDeduction). buyer_paid_over_total: what the buyer paid the ' +
+        'carrier for the parcel back is more than the order cost: a typo to check before money goes.',
     },
   },
   required: [
@@ -942,6 +1301,8 @@ const returnsResponseSchema = {
     'code',
     'orderId',
     'extendsId',
+    'splitFromId',
+    'splitIds',
     'statedAt',
     'source',
     'basis',
@@ -951,22 +1312,27 @@ const returnsResponseSchema = {
     'createdBy',
     'ip',
     'userAgent',
-    'proof',
     'acceptedAt',
     'acceptedBy',
     'closedAt',
     'closedBy',
     'closeCode',
     'closeNote',
-    'shippingReimbursement',
     'createdAt',
     'updatedAt',
     'order',
     'history',
     'items',
-    'shipments',
+    'parcels',
     'deductible',
     'warnings',
+    'refundedTotal',
+    'disputeOpen',
+    'handRefundPending',
+    'bankMoneyPending',
+    'moneyLeft',
+    'moneyOverpaid',
+    'money',
   ],
 } as const;
 
@@ -977,12 +1343,16 @@ export const returnsDtoSchemas = [
   returnsShipmentParamsSchema,
   returnsShipmentBodySchema,
   returnsShipmentCostBodySchema,
+  returnsSplitBodySchema,
   returnsCreateBodySchema,
   returnsReceiveBodySchema,
+  returnsConfirmProofBodySchema,
   returnsRefundBodySchema,
   returnsRefundOutsideBodySchema,
-  returnsReimbursementBodySchema,
-  returnsDisputeBodySchema,
+  returnsMoneyReceivedBodySchema,
+  returnsOverpaidReceivedBodySchema,
+  returnsOverpaidLostBodySchema,
+  returnsKeepBodySchema,
   returnsCloseBodySchema,
   returnsResponseSchema,
 ];

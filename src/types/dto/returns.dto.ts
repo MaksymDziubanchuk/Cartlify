@@ -1,12 +1,14 @@
 import type {
+  MoneyPart,
+  MoneyPurpose,
+  OutsideMethod,
+  RefundFailure,
   ReturnBasis,
   ReturnCloseCode,
   ReturnGoods,
   ReturnMoney,
   ReturnNotAcceptedReason,
-  ReturnOutsideMethod,
   ReturnReason,
-  ReturnRefundFailure,
   ReturnSource,
   ReturnStatus,
 } from '@prisma/client';
@@ -40,21 +42,17 @@ export interface ReturnItemDto {
   money: ReturnMoney;
   // what the units cost the buyer, lowered by root when the note says why
   amount: number;
+  // what the buyer has had of it: the transfers sent or on their way and the money sent outside the
+  // app (a row is paid in parts when the payment held only some of it: "paid X of Y")
+  paid: number;
   amountNote: string | null;
-  // the part of the delivery that goes back with this row, 0 for all but the row that makes the
-  // order whole
-  deliveryShare: number;
-  // the cost of the way back the buyer owes, taken off the transfer of this row
-  shippingDeduction: number;
   goodsSetAt: string | null;
   goodsSetBy: ReturnPersonDto | null;
-  // the transfer: the id the provider gave and the day the money went back
-  refundId: string | null;
-  refundedAt: string | null;
-  // why the last transfer failed, in our code and in the words of the provider; until it is tried again
-  refundFailure: { code: ReturnRefundFailure; text: string | null } | null;
-  // money root sent outside the app
-  outside: { method: ReturnOutsideMethod; note: string; by: ReturnPersonDto | null } | null;
+  // the line of the money journal that put the money of the row where it is (one of the money of
+  // the card)
+  moneyLogId: number | null;
+  // why the last transfer failed (money failed), in our code and in the words of the provider
+  refundFailure: { code: RefundFailure; text: string | null } | null;
   // why root closed the row without a refund
   refusedCode: ReturnCloseCode | null;
 }
@@ -66,6 +64,10 @@ export interface ReturnDto {
   orderId: number;
   // the statement this one extends
   extendsId: number | null;
+  // the statement this one was split from (its units went back in a parcel of their own), and the
+  // statements split from this one
+  splitFromId: number | null;
+  splitIds: number[];
   // the moment the statement states (the law counts its period from it)
   statedAt: string;
   source: ReturnSource;
@@ -78,15 +80,6 @@ export interface ReturnDto {
   createdBy: ReturnPersonDto | null;
   ip: string | null;
   userAgent: string | null;
-  proof: {
-    providedAt: string | null;
-    // what the buyer wrote of the parcel, none until they did
-    carrier: string | null;
-    trackingNumber: string | null;
-    trackingUrl: string | null;
-    confirmedAt: string | null;
-    confirmedBy: ReturnPersonDto | null;
-  };
   // a statement of the form without the code: when an admin accepted it as the buyer's, and who;
   // until then its goods and its money wait
   acceptedAt: string | null;
@@ -96,14 +89,30 @@ export interface ReturnDto {
   // the code and the note of the last time root closed rows without a refund
   closeCode: ReturnCloseCode | null;
   closeNote: string | null;
-  // the cost of the way back root paid back to the buyer outside the app, none until then
-  shippingReimbursement: {
-    amount: number;
-    at: string;
-    method: ReturnOutsideMethod;
-    note: string;
-    by: ReturnPersonDto | null;
-  } | null;
+  // how much went back to the buyer by the statement in all, counted by the database
+  refundedTotal: number;
+  // a dispute of the payment is open at the bank; a refund made by hand waits for root
+  disputeOpen: boolean;
+  handRefundPending: boolean;
+  // what a bank took for a dispute lost on an order sent waits for root
+  bankMoneyPending: boolean;
+  // what the statement still owes, what money already with the buyer covers, what the provider can
+  // still give back; short: a transfer would ask the provider for more, or the way back is owed alone
+  // (both go outside the app)
+  moneyLeft: {
+    rows: number;
+    delivery: number;
+    wayBack: number;
+    total: number;
+    due: number;
+    covered: number;
+    paymentLeft: number;
+    short: boolean;
+  };
+  // what money already with the buyer gave the goods of the order more than its statements took
+  moneyOverpaid: number;
+  // the movements of the money of the statement, the lines of the money journal, oldest first
+  money: ReturnMoneyMoveDto[];
   createdAt: string;
   updatedAt: string;
   order: {
@@ -138,8 +147,9 @@ export interface ReturnDto {
     changes: unknown[];
   }>;
   items: ReturnItemDto[];
-  // the parcels the shop paid to carry the goods back, in the order they were recorded
-  shipments: ReturnShipmentDto[];
+  // the parcels of the statement in the order they were recorded: the goods on their way back to the
+  // shop (one a statement), the goods not accepted sent back to the buyer
+  parcels: ReturnParcelDto[];
   // the most the next transfer may still take off for the way back, 0 when it may take none: a
   // withdrawal whose contract says the buyer pays, with rows that wait for their money, the cost of
   // its parcels less what the transfers sent took for them. A hint, the admin decides
@@ -148,21 +158,66 @@ export interface ReturnDto {
   warnings: ReturnWarning[];
 }
 
-// shop_paid_parcel: the shop paid a parcel of the statement back, a reimbursement of the way back to
-// the buyer would pay for it twice (still allowed: the buyer may have sent two parcels)
-export type ReturnWarning = 'shop_paid_parcel';
-
-// a parcel the shop paid to carry goods back from the buyer (an expense of the period it was sent in)
-export interface ReturnShipmentDto {
+// a line of the money journal of a statement
+export interface ReturnMoneyMoveDto {
   id: number;
+  event: string;
+  purpose: MoneyPurpose;
+  part: MoneyPart;
+  // signed: above 0 to the shop
+  amount: number;
+  currency: string | null;
+  state: 'in_transit' | 'sent' | null;
+  stateAt: string | null;
+  createdAt: string;
+  happenedAt: string | null;
+  refundId: string | null;
+  bankReference: string | null;
+  byDashboard: boolean;
+  failure: RefundFailure | null;
+  failureText: string | null;
+  method: OutsideMethod | null;
+  note: string | null;
+  coversId: number | null;
+  // the parcel of a cost (of a statement)
+  shipmentId: number | null;
+  // who wrote it, none for the work of the system
+  by: ReturnPersonDto | null;
+}
+
+// shop_paid_parcel: the shop paid the carrier for the parcel of the goods back to the shop: no way back
+// is owed to the buyer, and a withdrawal whose contract makes the buyer pay it may have it taken off
+// buyer_paid_over_total: what the buyer paid the carrier for the parcel back is more than the order
+// cost (a typo to check before money goes)
+export type ReturnWarning = 'shop_paid_parcel' | 'buyer_paid_over_total';
+
+// where a parcel goes: to the shop (the goods of a statement on their way back) or to the buyer (a
+// send of the order, the goods not accepted sent back)
+export type ShipmentDirection = 'to_buyer' | 'to_shop';
+
+// a parcel of a statement: the goods on their way back to the shop (one a statement: the one the
+// buyer told of, or the one the shop sent for them) or the goods not accepted sent back to the buyer.
+// What the shop paid the carrier is an expense of the period it was written in
+export interface ReturnParcelDto {
+  id: number;
+  direction: ShipmentDirection;
   carrier: string | null;
   trackingNumber: string | null;
   trackingUrl: string | null;
-  // what the shop paid, none until an admin writes it
-  cost: number | null;
-  // when the parcel was sent back, or refused (the time the admin gave)
+  // when the parcel was sent: when the buyer told of it, or the time the admin gave (a parcel
+  // refused at the door: the moment of the refusal)
   shippedAt: string;
+  // who wrote it: an admin, or the buyer of an account; none for the buyer of the public form
   recordedBy: ReturnPersonDto | null;
+  // a parcel to the shop: when an admin confirmed it and who
+  confirmedAt: string | null;
+  confirmedBy: ReturnPersonDto | null;
+  // what the buyer paid the carrier, as they told it or as the admin set it from the receipt
+  buyerPaid: number | null;
+  // what the shop paid the carrier, none until an admin writes it
+  cost: number | null;
+  // the rows a parcel to the buyer carried back; none for a parcel to the shop
+  itemIds: number[];
   createdAt: string;
 }
 
@@ -203,6 +258,18 @@ export interface OrderReturnUnitsDto {
 // confirmed, closed
 export type BuyerReturnStep = 'received' | 'proof_provided' | 'proof_confirmed' | 'closed';
 
+// a parcel of a statement as the buyer sees it: where it goes, the carrier and the number, when it
+// was sent, whether the shop confirmed a parcel to the shop, what the buyer paid the carrier
+export interface BuyerReturnParcelDto {
+  direction: ShipmentDirection;
+  carrier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shippedAt: string;
+  confirmed: boolean;
+  buyerPaid: number | null;
+}
+
 // a statement as the buyer sees it in their order: the path of it and the money of each row, never
 // what became of the goods, who handled it, or the words of the shop
 export interface BuyerReturnDto {
@@ -215,30 +282,49 @@ export interface BuyerReturnDto {
   reason: ReturnReason | null;
   step: BuyerReturnStep;
   closedAt: string | null;
-  // what the buyer wrote of the parcel they sent back, none until they did
-  proof: {
-    carrier: string;
-    trackingNumber: string;
-    trackingUrl: string | null;
-    providedAt: string;
-    confirmed: boolean;
-  } | null;
+  // the parcels of the statement: the one the goods went back to the shop in, the ones the shop sent
+  // the goods it did not accept back in
+  parcels: BuyerReturnParcelDto[];
   // what the shop paid back for sending the goods back, outside the app
-  shippingReimbursement: { amount: number; at: string; method: ReturnOutsideMethod } | null;
+  // how much went back to the buyer by this statement in all
+  refundedTotal: number;
+  // the money the statement sent back, a movement at a time, the oldest first
+  refunds: BuyerReturnRefundDto[];
   items: Array<{
+    // the row of the statement: the parcel of the buyer may name it
+    id: number;
     orderItemId: number;
     quantity: number;
-    // what the units cost, the part of the delivery that goes back with them and the cost of the
-    // way back taken off
+    // what the units cost
     amount: number;
-    deliveryAmount: number;
-    shippingDeduction: number;
     money: ReturnMoney;
+    // when the money of the row was sent
     refundedAt: string | null;
     // why the money of the units was refused: the shop did not accept the goods (the reason) or
     // they never came
     refusal: ReturnNotAcceptedReason | 'not_arrived' | null;
   }>;
+}
+
+// a movement of the money of a statement as the buyer sees it: a transfer to the way they paid, or
+// money root sent outside the app; what it was made of and where it stands
+export interface BuyerReturnRefundDto {
+  way: 'payment' | 'outside';
+  method: OutsideMethod | null;
+  state: 'in_transit' | 'sent' | 'failed';
+  goods: number;
+  delivery: number;
+  // kept for the way back the buyer pays
+  deduction: number;
+  // the way back the shop pays, what the buyer paid the carrier
+  wayBack: number;
+  // what the buyer gets: the goods, the delivery and the way back less the deduction
+  amount: number;
+  // when it was sent (asked, while in transit; failed: when it failed)
+  at: string;
+  // the number the bank gives to follow a transfer to the way the buyer paid (ARN), once the
+  // provider tells it; null for money sent another way
+  bankReference: string | null;
 }
 
 // the units of an item that can still be stated
@@ -284,6 +370,19 @@ export interface ReceiveReturnItemsBodyDto {
     goods: Exclude<ReturnGoods, 'expected'>;
     notAcceptedReason?: ReturnNotAcceptedReason;
   }>;
+  // the parcel the goods came in, confirmed in the same step when it is not confirmed yet
+  parcel?: ReturnParcelConfirmDto & {
+    carrier?: string;
+    trackingNumber?: string;
+    trackingUrl?: string;
+  };
+}
+
+// who paid the carrier of the parcel to the shop, said when an admin confirms it: the shop (cost) or
+// the buyer (buyerPaid, from the receipt)
+export interface ReturnParcelConfirmDto {
+  buyerPaid?: number;
+  cost?: number;
 }
 
 export interface ReceiveReturnItemsDto extends ReceiveReturnItemsBodyDto {
@@ -293,7 +392,7 @@ export interface ReceiveReturnItemsDto extends ReceiveReturnItemsBodyDto {
   log: FastifyBaseLogger;
 }
 
-export interface ConfirmReturnProofDto {
+export interface ConfirmReturnProofDto extends ReturnParcelConfirmDto {
   actorId: UserId;
   actorRole: Role;
   returnId: number;
@@ -323,13 +422,15 @@ export interface RefundReturnDto extends RefundReturnBodyDto {
   log: FastifyBaseLogger;
 }
 
-// POST /api/returns/:returnId/refund/outside
+// POST /api/returns/:returnId/refund/outside: all the statement owes, or the rows named
 export interface RefundReturnOutsideBodyDto {
   itemIds?: number[];
-  method: ReturnOutsideMethod;
+  method: OutsideMethod;
   note: string;
   // the day the money really went, never before the order was paid or of the future
   at: string;
+  // the cost of the way back the buyer owes, taken off
+  returnShippingDeduction?: number;
 }
 
 export interface RefundReturnOutsideDto extends RefundReturnOutsideBodyDto {
@@ -339,34 +440,58 @@ export interface RefundReturnOutsideDto extends RefundReturnOutsideBodyDto {
   log: FastifyBaseLogger;
 }
 
-// POST /api/returns/:returnId/dispute: the end of a dispute of the payment at the bank
-export interface SettleReturnDisputeBodyDto {
-  outcome: 'won' | 'lost';
+// POST /api/returns/:returnId/money-received: money the buyer gave back outside the app for rows
+export interface RecordMoneyReceivedBodyDto {
+  items: { itemId: number; amount: number }[];
+  method: OutsideMethod;
   note: string;
-  // with lost: the day the dispute closed
-  at?: string;
-}
-
-export interface SettleReturnDisputeDto extends SettleReturnDisputeBodyDto {
-  actorId: UserId;
-  actorRole: Role;
-  returnId: number;
-}
-
-// POST /api/returns/:returnId/reimbursement: the shop paid the buyer back the cost of the way back
-export interface RecordReturnReimbursementBodyDto {
-  amount: number;
-  method: ReturnOutsideMethod;
-  note: string;
-  // the day the money really went, never before the statement or of the future
+  // the day the money really came, never before the statement or of the future
   at: string;
 }
 
-export interface RecordReturnReimbursementDto extends RecordReturnReimbursementBodyDto {
+export interface RecordMoneyReceivedDto extends RecordMoneyReceivedBodyDto {
   actorId: UserId;
   actorRole: Role;
   returnId: number;
-  log: FastifyBaseLogger;
+}
+
+// POST /api/returns/:returnId/overpaid/received: money the buyer gave back outside the app of what
+// money already with the buyer gave the goods of the order more than its statements took
+export interface RecordOverpaidReceivedBodyDto {
+  amount: number;
+  method: OutsideMethod;
+  note: string;
+  // the day the money really came, never before the money went or of the future
+  at: string;
+}
+
+export interface RecordOverpaidReceivedDto extends RecordOverpaidReceivedBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  returnId: number;
+}
+
+// POST /api/returns/:returnId/overpaid/lost: the shop gives what is overpaid up
+export interface LoseOverpaidBodyDto {
+  note: string;
+}
+
+export interface LoseOverpaidDto extends LoseOverpaidBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  returnId: number;
+}
+
+// POST /api/returns/:returnId/keep: the shop keeps goods it did not accept that are still with it
+export interface KeepReturnGoodsBodyDto {
+  items: { itemId: number; goods: 'to_stock' | 'written_off' }[];
+  note: string;
+}
+
+export interface KeepReturnGoodsDto extends KeepReturnGoodsBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  returnId: number;
 }
 
 // POST /api/returns/:returnId/close
@@ -385,12 +510,16 @@ export interface CloseReturnDto extends CloseReturnBodyDto {
 
 // POST /api/returns/:returnId/shipments
 export interface RecordReturnShipmentBodyDto {
+  // to_shop: the parcel the goods come back in; to_buyer: goods not accepted go back to the buyer
+  direction: 'to_shop' | 'to_buyer';
+  // the rows of goods not accepted a parcel to the buyer carries, and their units
+  items?: { itemId: number; quantity: number }[];
   carrier?: string;
   trackingNumber?: string;
   trackingUrl?: string;
   cost?: number;
-  // when the parcel was sent back, or the moment it was refused: never of the future, never before
-  // the order was paid
+  // when the parcel was sent, or the moment it was refused: never of the future, never before the
+  // order was paid
   shippedAt: string;
 }
 
@@ -398,6 +527,19 @@ export interface RecordReturnShipmentDto extends RecordReturnShipmentBodyDto {
   actorId: UserId;
   actorRole: Role;
   returnId: number;
+  log: FastifyBaseLogger;
+}
+
+// POST /api/returns/:returnId/split: the rows and the units that go into a new statement
+export interface SplitReturnBodyDto {
+  items: { itemId: number; quantity: number }[];
+}
+
+export interface SplitReturnDto extends SplitReturnBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  returnId: number;
+  log: FastifyBaseLogger;
 }
 
 // PATCH /api/returns/:returnId/shipments/:shipmentId
@@ -406,8 +548,11 @@ export interface ReturnShipmentParamsDto {
   shipmentId: number | string;
 }
 
+// one of the two: what the shop paid the carrier, or what the buyer paid it (a parcel back to the
+// shop, while no money of the way back went)
 export interface SetReturnShipmentCostBodyDto {
-  cost: number;
+  cost?: number;
+  buyerPaid?: number;
 }
 
 export interface SetReturnShipmentCostDto extends SetReturnShipmentCostBodyDto {
@@ -447,6 +592,9 @@ export interface GetReturnsQueryDto {
   moneyOverdue?: boolean;
   moneyDueWithinDays?: number;
   extended?: boolean;
+  moneyHeld?: boolean;
+  moneyShort?: boolean;
+  moneyOverpaid?: boolean;
   sortBy?: ReturnsSortBy;
   sortDir?: ReturnsSortDir;
   limit?: number;
@@ -479,6 +627,9 @@ export interface ReturnListItemDto {
   units: number;
   amount: number;
   refundedAmount: number;
+  // what an open statement still has to send the buyer (the rows owed, their delivery, the way back:
+  // the total of the money left of its card); null for a closed one
+  moneyLeft: number | null;
   // the units by what became of the goods
   goods: { expected: number; received: number; declined: number };
   // the units by the state of the money; failed: a row's last transfer failed

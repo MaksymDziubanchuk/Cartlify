@@ -74,7 +74,8 @@ type Row = {
 
 // the value a sort goes by, in the inner select (sv); a statement not closed has the beginning of
 // time for its closing, so it comes last of the newest first. The end of the days of the money is
-// the statement and the days the law gives while some money is due and not back (on its way too:
+// the statement and the days the law gives while some money is due and not back (on its way, or a
+// failed transfer, too:
 // the goods are in, or the proof of the parcel is confirmed), and the end of time for a statement
 // that owes none yet, which comes last of the nearest first
 const SORT_VALUE: Record<ReturnsSortBy, Prisma.Sql> = {
@@ -86,14 +87,22 @@ const SORT_VALUE: Record<ReturnsSortBy, Prisma.Sql> = {
     when exists (
       select 1 from cartlify.return_items as d
       where d."returnId" = r.id
-        and d.money in ('not_refunded'::cartlify."ReturnMoney", 'pending'::cartlify."ReturnMoney")
+        and d.money in (
+          'not_refunded'::cartlify."ReturnMoney",
+          'pending'::cartlify."ReturnMoney",
+          'failed'::cartlify."ReturnMoney"
+        )
         and (
           d.goods in (
             'to_stock'::cartlify."ReturnGoods",
             'written_off'::cartlify."ReturnGoods",
             'lost'::cartlify."ReturnGoods"
           )
-          or (d.goods = 'expected'::cartlify."ReturnGoods" and r."proofConfirmedAt" is not null)
+          or (d.goods = 'expected'::cartlify."ReturnGoods" and exists (
+            select 1 from cartlify.order_shipments as p
+            where p."returnId" = r.id and p.direction = 'to_shop'::cartlify."ShipmentDirection"
+              and p."confirmedAt" is not null
+          ))
         )
     )
     then r."statedAt" + ${REFUND_DAYS}::int * interval '1 day'
@@ -106,7 +115,9 @@ const isDateSort = (sortBy: ReturnsSortBy) => sortBy !== 'amount';
 const selectOf = (sortBy: ReturnsSortBy) => Prisma.sql`
   select r.id, r."orderId", r.number, r."statedAt", r.source::text as source, r.basis::text as basis,
          r.reason::text as reason, r."contactName", r."contactEmail", r."extendsId", r."closedAt",
-         r."updatedAt", r."proofProvidedAt", r."proofConfirmedAt", r."acceptedAt",
+         r."updatedAt", case when p.carrier is not null then p."shippedAt" end as "proofProvidedAt",
+         p."confirmedAt" as "proofConfirmedAt",
+         r."acceptedAt",
          o.status::text as "orderStatus", o."returnStatus"::text as "returnStatus", o."userId",
          u."deletedAt" is null as "accountAlive",
          a.units, a.amount, a.refunded_amount, a.goods_expected, a.goods_received, a.goods_declined,
@@ -115,6 +126,9 @@ const selectOf = (sortBy: ReturnsSortBy) => Prisma.sql`
   from cartlify.returns as r
   join cartlify.orders as o on o.id = r."orderId"
   join cartlify.users as u on u.id = o."userId"
+  -- the parcel the goods go back to the shop in (one a statement)
+  left join cartlify.order_shipments as p
+    on p."returnId" = r.id and p.direction = 'to_shop'::cartlify."ShipmentDirection"
   cross join lateral (
     select coalesce(sum(i.quantity), 0)::int as units,
            coalesce(sum(i.amount), 0) as amount,
@@ -126,16 +140,17 @@ const selectOf = (sortBy: ReturnsSortBy) => Prisma.sql`
            coalesce(sum(i.quantity) filter (
              where i.goods in ('not_accepted', 'not_arrived')
            ), 0)::int as goods_declined,
-           coalesce(sum(i.quantity) filter (where i.money = 'not_refunded'), 0)::int as money_not_refunded,
+           -- a row whose last transfer failed has its money not back either
+           coalesce(sum(i.quantity) filter (where i.money in ('not_refunded', 'failed')), 0)::int as money_not_refunded,
            coalesce(sum(i.quantity) filter (where i.money = 'pending'), 0)::int as money_pending,
            coalesce(sum(i.quantity) filter (where i.money = 'refunded'), 0)::int as money_refunded,
            coalesce(sum(i.quantity) filter (where i.money = 'refused'), 0)::int as money_refused,
-           coalesce(bool_or(i."refundFailure" is not null and i.money = 'not_refunded'), false) as failed
+           coalesce(bool_or(i.money = 'failed'), false) as failed
     from cartlify.return_items as i
     where i."returnId" = r.id
   ) as a`;
 
-const itemOf = (row: Row, now: number): ReturnListItemDto => ({
+const itemOf = (row: Row, now: number, left: Map<number, string>): ReturnListItemDto => ({
   id: row.id,
   code: returnCodeOf(row.basis, row.orderId, row.number),
   orderId: row.orderId,
@@ -158,6 +173,7 @@ const itemOf = (row: Row, now: number): ReturnListItemDto => ({
   units: row.units,
   amount: decimalToNumber(row.amount),
   refundedAmount: decimalToNumber(row.refunded_amount),
+  moneyLeft: left.has(row.id) ? Number(left.get(row.id)) : null,
   goods: {
     expected: row.goods_expected,
     received: row.goods_received,
@@ -233,7 +249,20 @@ async function readRows(args: ListReturnsDto, page: { limit?: number }) {
         select count(*)::int as total from cartlify.returns as r where ${where}
       `);
 
-      return { rows, total: count?.total ?? 0, now };
+      // what the open statements of the rows still have to send, counted for these rows only: the
+      // function counts a statement in full
+      const open = rows.filter((row) => row.closedAt === null).map((row) => row.id);
+      const left = new Map<number, string>();
+      if (open.length > 0) {
+        const counted = await db.$queryRaw<{ id: number; left: string }[]>(Prisma.sql`
+          select r.id, cartlify.return_money_left(r.id) ->> 'total' as left
+          from cartlify.returns as r
+          where r.id = any(${open}::int[])
+        `);
+        for (const one of counted) left.set(one.id, one.left);
+      }
+
+      return { rows, total: count?.total ?? 0, now, left };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
   );
@@ -242,12 +271,12 @@ async function readRows(args: ListReturnsDto, page: { limit?: number }) {
 export async function listReturns(args: ListReturnsDto): Promise<GetReturnsResponseDto> {
   assertAdminActor(args.actorId, args.actorRole);
 
-  const { rows, total, now } = await readRows(args, { limit: args.limit });
+  const { rows, total, now, left } = await readRows(args, { limit: args.limit });
   const hasNext = rows.length > args.limit;
   const page = hasNext ? rows.slice(0, args.limit) : rows;
 
   return {
-    items: page.map((row) => itemOf(row, now)),
+    items: page.map((row) => itemOf(row, now, left)),
     total,
     limit: args.limit,
     nextCursor: hasNext ? cursorOf(page.at(-1)!, args.sortBy, args.sortDir) : null,
@@ -271,6 +300,7 @@ const COLUMNS: CsvColumn<ReturnListItemDto>[] = [
   { header: 'units', kind: 'number', value: (row) => row.units },
   { header: 'amount', kind: 'money', value: (row) => row.amount },
   { header: 'refunded_amount', kind: 'money', value: (row) => row.refundedAmount },
+  { header: 'money_left', kind: 'money', value: (row) => row.moneyLeft },
   { header: 'goods_expected', kind: 'number', value: (row) => row.goods.expected },
   { header: 'goods_received', kind: 'number', value: (row) => row.goods.received },
   { header: 'goods_declined', kind: 'number', value: (row) => row.goods.declined },
@@ -290,14 +320,14 @@ const COLUMNS: CsvColumn<ReturnListItemDto>[] = [
 export async function listReturnsCsv(args: ListReturnsDto) {
   assertAdminActor(args.actorId, args.actorRole);
 
-  const { rows, now } = await readRows({ ...args, cursor: undefined }, {});
+  const { rows, now, left } = await readRows({ ...args, cursor: undefined }, {});
   const day = new Date(now).toISOString().slice(0, 10);
 
   return {
     fileName: `returns-${day}.csv`,
     body: toCsv(
       COLUMNS,
-      rows.map((row) => itemOf(row, now)),
+      rows.map((row) => itemOf(row, now, left)),
     ),
   };
 }

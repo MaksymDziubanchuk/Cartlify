@@ -19,6 +19,10 @@ import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.
 import { withdrawalRightOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { buyerReturnsOf } from '@routes/api/orders/services/helpers/ordersMapper.helper.js';
 import {
+  readReturnMoneyLines,
+  rowSharesOf,
+} from '@routes/api/returns/services/helpers/returnMoneyLines.helper.js';
+import {
   withdrawalEndsOf,
   withdrawalOpenOf,
 } from '@routes/api/orders/services/helpers/withdrawal.helper.js';
@@ -537,6 +541,38 @@ const rolledBackOrderIds = async (orderIds: number[]): Promise<Set<number>> => {
   return new Set(lines.flatMap((line) => (line.entityId === null ? [] : [line.entityId])));
 };
 
+// the statuses of a dispute that end it; any other is open (an inquiry of the bank too)
+const ENDED_DISPUTES = ['warning_closed', 'won', 'lost', 'prevented'] as const;
+
+// the orders whose payment a dispute at the bank is open for. The disputes are not for the person,
+// so they are read as the system, apart from the transaction of the person
+const disputedOrderIds = async (orderIds: number[]): Promise<Set<number>> => {
+  if (orderIds.length === 0) return new Set();
+
+  const disputes = await prisma.$transaction(async (sys) => {
+    await setAdminContext(sys);
+
+    return sys.paymentDispute.findMany({
+      where: { orderId: { in: orderIds }, status: { notIn: [...ENDED_DISPUTES] } },
+      select: { orderId: true },
+    });
+  });
+
+  return new Set(disputes.flatMap((one) => (one.orderId === null ? [] : [one.orderId])));
+};
+
+// the share of the delivery the money of each row of the statements carries now (the row that
+// made the order whole carries it), from the money journal of the person; a row without one is not
+// in the map
+const deliverySharesOf = async (db: Prisma.TransactionClient, returnIds: number[]) => {
+  const lines = await readReturnMoneyLines(db, returnIds);
+  const shares = new Map<number, number>();
+  for (const one of lines.values()) {
+    for (const [rowId, share] of rowSharesOf(one)) shares.set(rowId, share.delivery);
+  }
+  return shares;
+};
+
 // whether the customer may still withdraw from the contract of the order and for which units; none
 // for an order that is not paid, sent or delivered
 const withdrawalOf = (
@@ -597,6 +633,8 @@ const findOrdersForBotContext = async (
       deliveredAt: true,
       withdrawalDays: true,
       returnStatus: true,
+      // what holds the order back from its sending: a dispute, a refund made by hand, a check
+      holds: true,
       // how it goes, not where: the address and the phone are not for the model
       delivery: { select: { method: true, price: true, country: true } },
       items: {
@@ -615,7 +653,7 @@ const findOrdersForBotContext = async (
 
   // the sends are read apart: a query reads at most two relations side by side
   const sends = await db.orderShipment.findMany({
-    where: { orderId: { in: orders.map((order) => order.id) } },
+    where: { orderId: { in: orders.map((order) => order.id) }, returnId: null },
     orderBy: { id: 'asc' },
     select: {
       orderId: true,
@@ -627,6 +665,7 @@ const findOrdersForBotContext = async (
   });
 
   const rolledBack = await rolledBackOrderIds(orders.map((order) => order.id));
+  const disputed = await disputedOrderIds(orders.map((order) => order.id));
 
   // the statements as the buyer sees them, and the units still free to state, as the order view
   // of the buyer reads them
@@ -637,12 +676,24 @@ const findOrdersForBotContext = async (
   // the orders with money that failed to go back: the bank refused it or disputed it
   const failedTransfers = await db.orderReturnItem.findMany({
     where: {
-      refundFailure: { not: null },
+      money: 'failed',
       return: { orderId: { in: orders.map((order) => order.id) } },
     },
     select: { return: { select: { orderId: true } } },
   });
   const failed = new Set(failedTransfers.map((row) => row.return.orderId));
+
+  // the rows of the statements in the order the buyer sees them, and the delivery their money
+  // carries (the money journal)
+  const statementIds = [...withdrawals.values()].flatMap((list) => list.map((one) => one.id));
+  const statementRows = statementIds.length
+    ? await db.orderReturnItem.findMany({
+        where: { returnId: { in: statementIds } },
+        orderBy: { id: 'asc' },
+        select: { id: true, returnId: true },
+      })
+    : [];
+  const deliveryShares = await deliverySharesOf(db, statementIds);
 
   // the name of the variant of now, for the items of a cart that is not confirmed
   const liveNames = await variantNamesOf(
@@ -664,13 +715,15 @@ const findOrdersForBotContext = async (
       total: Number(order.total),
       createdAt: order.createdAt.toISOString(),
       paidAt: order.paidAt?.toISOString() ?? null,
-      // a send taken back, a step taken back or a transfer of money that failed is for an admin,
-      // the bot says nothing of it. A cancellation is not: the bot tells that it is cancelled and
-      // where the money is
+      // a send taken back, a step taken back, a transfer of money that failed, an order held back
+      // from its sending or a payment the bank disputes is for an admin, the bot says nothing of
+      // it. A cancellation is not: the bot tells that it is cancelled and where the money is
       unusual:
         shipments.some((send) => send.rolledBackAt !== null) ||
         rolledBack.has(order.id) ||
-        failed.has(order.id),
+        failed.has(order.id) ||
+        (Array.isArray(order.holds) && order.holds.length > 0) ||
+        disputed.has(order.id),
       returnStatus: order.returnStatus,
       withdrawal: withdrawalOf(
         order,
@@ -678,21 +731,24 @@ const findOrdersForBotContext = async (
         deadlines.get(order.id),
         withdrawable.get(order.id) ?? [],
       ),
-      returns: (withdrawals.get(order.id) ?? []).map((statement) => ({
-        id: statement.id,
-        statedAt: statement.statedAt,
-        step: statement.step,
-        items: statement.items.map(
-          ({ quantity, amount, deliveryAmount, money, refundedAt, refusal }) => ({
+      returns: (withdrawals.get(order.id) ?? []).map((statement) => {
+        // the rows of the statement in the order of its items
+        const rows = statementRows.filter((row) => row.returnId === statement.id);
+
+        return {
+          id: statement.id,
+          statedAt: statement.statedAt,
+          step: statement.step,
+          items: statement.items.map(({ quantity, amount, money, refundedAt, refusal }, index) => ({
             quantity,
             amount,
-            deliveryAmount,
+            deliveryAmount: deliveryShares.get(rows[index]?.id ?? 0) ?? 0,
             money,
             refundedAt,
             refusal,
-          }),
-        ),
-      })),
+          })),
+        };
+      }),
       delivery: order.delivery
         ? {
             method: order.delivery.method,

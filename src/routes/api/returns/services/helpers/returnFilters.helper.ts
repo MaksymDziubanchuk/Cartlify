@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import { parseReturnCode, REFUND_DAYS } from '@helpers/returns.js';
 import { utcTime } from '@routes/api/admin/services/helpers/accountingSql.helper.js';
+import { statementMoneyHeldOf } from '@routes/api/payments/services/helpers/moneyHeld.helper.js';
 
 import type { ReturnBasis, ReturnReason, ReturnSource } from '@prisma/client';
 
@@ -19,7 +20,8 @@ export const RETURN_GOODS_FILTERS = [
   'proof_provided',
   'received',
 ] as const;
-// failed: a row whose last transfer failed (its money is not back)
+// not_refunded: a row whose money is not back, a failed transfer too; failed: a row whose last
+// transfer failed
 export const RETURN_MONEY_FILTERS = [
   'not_refunded',
   'pending',
@@ -46,7 +48,8 @@ export type ReturnFilters = {
   statedTo?: Date | undefined;
   closedFrom?: Date | undefined;
   closedTo?: Date | undefined;
-  // some row whose money went back in the period
+  // some row whose money went back in the period: the time the line of the money journal that
+  // sent it was written
   refundedFrom?: Date | undefined;
   refundedTo?: Date | undefined;
   // stated more than so many days ago
@@ -66,6 +69,15 @@ export type ReturnFilters = {
   moneyDueWithinDays?: number | undefined;
   // a part of a chain of extensions (it extends one, or one extends it), or not
   extended?: boolean | undefined;
+  // the money waits for the bank or for root (true) or not (false): a dispute of the payment of the
+  // order is open, or a refund of it made by hand waits for root (moneyHeld.helper.ts)
+  moneyHeld?: boolean | undefined;
+  // what is due, or the way back beside the money the other statements of the order owe, does not
+  // fit in what is left of the payment (return_money_left, db/05)
+  moneyShort?: boolean | undefined;
+  // money already with the buyer gave the goods of the order more than its statements took
+  // (order_money_overpaid, db/05)
+  moneyOverpaid?: boolean | undefined;
 };
 
 const DAY = 86_400_000;
@@ -94,22 +106,29 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
   if (filters.goods === 'waiting_no_proof') {
     where.push(
       waiting,
-      Prisma.sql`${a}."proofProvidedAt" is null and ${a}."proofConfirmedAt" is null`,
+      Prisma.sql`not exists (
+        select 1 from cartlify.order_shipments as p
+        where p."returnId" = ${a}.id and p.direction = 'to_shop'::cartlify."ShipmentDirection"
+      )`,
     );
   }
   if (filters.goods === 'proof_provided') {
     where.push(
       waiting,
-      Prisma.sql`${a}."proofProvidedAt" is not null and ${a}."proofConfirmedAt" is null`,
+      Prisma.sql`exists (
+        select 1 from cartlify.order_shipments as p
+        where p."returnId" = ${a}.id and p.direction = 'to_shop'::cartlify."ShipmentDirection"
+          and p."confirmedAt" is null
+      )`,
     );
   }
   if (filters.goods === 'received') where.push(Prisma.sql`not ${waiting}`);
 
-  if (filters.money === 'failed') {
+  if (filters.money === 'not_refunded') {
     where.push(
       someRow(
         a,
-        Prisma.sql`i.money = 'not_refunded'::cartlify."ReturnMoney" and i."refundFailure" is not null`,
+        Prisma.sql`i.money in ('not_refunded'::cartlify."ReturnMoney", 'failed'::cartlify."ReturnMoney")`,
       ),
     );
   } else if (filters.money) {
@@ -176,9 +195,12 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
     where.push(
       someRow(
         a,
-        Prisma.sql`i.money = 'refunded'::cartlify."ReturnMoney"
-          ${filters.refundedFrom ? Prisma.sql`and i."refundedAt" >= ${utcTime(filters.refundedFrom)}` : Prisma.empty}
-          ${filters.refundedTo ? Prisma.sql`and i."refundedAt" < ${utcTime(filters.refundedTo)}` : Prisma.empty}`,
+        Prisma.sql`i.money = 'refunded'::cartlify."ReturnMoney" and exists (
+          select 1 from cartlify.money_log as m
+          where m.id = i."moneyLogId"
+          ${filters.refundedFrom ? Prisma.sql`and m."createdAt" >= ${utcTime(filters.refundedFrom)}` : Prisma.empty}
+          ${filters.refundedTo ? Prisma.sql`and m."createdAt" < ${utcTime(filters.refundedTo)}` : Prisma.empty}
+        )`,
       ),
     );
   }
@@ -191,14 +213,22 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
   // goods were not sent yet is a case of the goods (goods=waiting_no_proof, olderThanDays)
   const moneyOwed = someRow(
     a,
-    Prisma.sql`i.money in ('not_refunded'::cartlify."ReturnMoney", 'pending'::cartlify."ReturnMoney")
+    Prisma.sql`i.money in (
+        'not_refunded'::cartlify."ReturnMoney",
+        'pending'::cartlify."ReturnMoney",
+        'failed'::cartlify."ReturnMoney"
+      )
       and (
         i.goods in (
           'to_stock'::cartlify."ReturnGoods",
           'written_off'::cartlify."ReturnGoods",
           'lost'::cartlify."ReturnGoods"
         )
-        or (i.goods = 'expected'::cartlify."ReturnGoods" and ${a}."proofConfirmedAt" is not null)
+        or (i.goods = 'expected'::cartlify."ReturnGoods" and exists (
+          select 1 from cartlify.order_shipments as p
+          where p."returnId" = ${a}.id and p.direction = 'to_shop'::cartlify."ShipmentDirection"
+            and p."confirmedAt" is not null
+        ))
       )`,
   );
   if (filters.moneyDueForDays !== undefined) {
@@ -227,18 +257,76 @@ export function returnConditions(filters: ReturnFilters, alias: string, now: num
   if (filters.extended === true) where.push(chain);
   if (filters.extended === false) where.push(Prisma.sql`not ${chain}`);
 
+  // the transfers of the statement and its money sent another way are refused meanwhile
+  // (RETURN_REFUND_DISPUTED, RETURN_HAND_REFUND_PENDING, RETURN_BANK_MONEY_PENDING): the money is not
+  // late for the shop
+  const held = Prisma.sql`exists (
+    select 1 from cartlify.orders as ho
+    where ho.id = ${a}."orderId" and ho."paymentId" is not null
+      and ${statementMoneyHeldOf(Prisma.sql`ho."paymentId"`)}
+  )`;
+  if (filters.moneyHeld === true) where.push(held);
+  if (filters.moneyHeld === false) where.push(Prisma.sql`not ${held}`);
+
+  // a transfer of what is due would ask the provider for more than is left of the payment, or the
+  // way back does not fit in it beside the money the other statements of the order still owe: it
+  // waits, or goes outside the app. The function counts a statement in full, which is slow over
+  // every statement of the shop (each read of the alerts of root does it), so it counts only a
+  // statement that could not fit at all: the rows every statement of the order owes, the delivery
+  // of the order and the receipt of the way back above what is left of the payment (more than any
+  // of them can owe, so no case is left out)
+  if (filters.moneyShort !== undefined) {
+    const short = Prisma.sql`(case when (
+        coalesce((
+          select sum(i.amount) from cartlify.return_items as i
+          join cartlify.returns as ir on ir.id = i."returnId"
+          where ir."orderId" = ${a}."orderId"
+            and i.money in ('not_refunded'::cartlify."ReturnMoney", 'failed'::cartlify."ReturnMoney")
+        ), 0)
+        + coalesce((
+          select d.price from cartlify.order_deliveries as d where d."orderId" = ${a}."orderId"
+        ), 0)
+        + coalesce((
+          select max(sh."buyerPaid") from cartlify.order_shipments as sh
+          where sh."returnId" = ${a}.id and sh.direction = 'to_shop'::cartlify."ShipmentDirection"
+        ), 0)
+      ) > coalesce((
+        select sum(ml.amount) from cartlify.money_log as ml
+        join cartlify.orders as po on po."paymentId" = ml."paymentId"
+        where po.id = ${a}."orderId"
+      ), 0)
+      then (cartlify.return_money_left(${a}.id) ->> 'short')::boolean else false end)`;
+    where.push(filters.moneyShort ? short : Prisma.sql`not ${short}`);
+  }
+  // money already with the buyer for goods no statement of the order owes any more; counted only
+  // for an order with money a decision shared
+  if (filters.moneyOverpaid !== undefined) {
+    const overpaid = Prisma.sql`(case when exists (
+      select 1 from cartlify.money_log as ml
+      where ml."orderId" = ${a}."orderId" and ml."moneyUse" is not null
+    ) then cartlify.order_money_overpaid(${a}."orderId") > 0 else false end)`;
+    where.push(filters.moneyOverpaid ? overpaid : Prisma.sql`not ${overpaid}`);
+  }
+
   if (filters.paidAheadForDays !== undefined) {
     where.push(
       someRow(
         a,
         Prisma.sql`i.goods = 'expected'::cartlify."ReturnGoods"
           and i.money = 'refunded'::cartlify."ReturnMoney"
-          and i."refundedAt" < ${before(filters.paidAheadForDays)}`,
+          and exists (
+            select 1 from cartlify.money_log as m
+            where m.id = i."moneyLogId" and m."createdAt" < ${before(filters.paidAheadForDays)}
+          )`,
       ),
     );
   }
   if (filters.proofOlderThanDays !== undefined) {
-    where.push(Prisma.sql`${a}."proofProvidedAt" < ${before(filters.proofOlderThanDays)}`);
+    where.push(Prisma.sql`exists (
+      select 1 from cartlify.order_shipments as p
+      where p."returnId" = ${a}.id and p.direction = 'to_shop'::cartlify."ShipmentDirection"
+        and p.carrier is not null and p."shippedAt" < ${before(filters.proofOlderThanDays)}
+    )`);
   }
   if (filters.accepted !== undefined) {
     where.push(

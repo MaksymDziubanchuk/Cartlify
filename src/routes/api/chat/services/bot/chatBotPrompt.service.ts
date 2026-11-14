@@ -43,15 +43,17 @@ export type ChatBotOrderStatus =
   'unconfirmed' | 'waiting' | 'paid' | 'shipped' | 'delivered' | 'cancelled';
 
 // a statement of withdrawal or return on an order the way its buyer sees it: where it stands and
-// where the money of its units is. What the shop does with the goods is no part of it
+// where the money of its units is, with the delivery that went back with a row (deliveryAmount: the
+// row that made the order whole carries it, from the money journal). What the shop does with the
+// goods is no part of it
 export interface ChatBotReturnContextItemDto {
   id: number;
   statedAt: string;
   step: BuyerReturnStep;
-  items: Pick<
+  items: (Pick<
     BuyerReturnDto['items'][number],
-    'quantity' | 'amount' | 'deliveryAmount' | 'money' | 'refundedAt' | 'refusal'
-  >[];
+    'quantity' | 'amount' | 'money' | 'refundedAt' | 'refusal'
+  > & { deliveryAmount: number })[];
 }
 
 // whether the customer may still withdraw from the contract of an order and for which units
@@ -76,8 +78,8 @@ export interface ChatBotOrderContextItemDto {
   createdAt: string;
   paidAt: string | null;
   items: { name: string; quantity: number }[];
-  // the order had an event the bot does not talk about, a send taken back or a transfer of money
-  // that failed: it is for an admin
+  // the order had an event the bot does not talk about (a send taken back, a transfer of money
+  // that failed, a hold on its sending, a dispute of its payment at the bank): it is for an admin
   unusual: boolean;
   // where the order stands as to its statements of withdrawal and return, one value for it all
   returnStatus: ReturnStatus;
