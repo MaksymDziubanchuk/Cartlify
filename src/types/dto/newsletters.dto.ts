@@ -611,15 +611,15 @@ export interface NewsletterTranslateResponseDto {
   warnings: NewsletterTranslateWarningDto[];
 }
 
-// POST /sendgrid/webhook: the Event Webhook of SendGrid
-export interface HandleSendGridWebhookDto {
-  signature: string;
-  timestamp: string;
+// POST /<mail provider>/webhook: the events of the mails of the newsletters
+export interface HandleMailWebhookDto {
+  // the headers of the request, the signature of the provider among them
+  headers: Readonly<Record<string, string | string[] | undefined>>;
   // the exact bytes of the body, which the signature is made over
   rawBody: Buffer;
 }
 
-export interface SendGridWebhookResponseDto {
+export interface MailWebhookResponseDto {
   received: true;
   // events the database applied to a mail of this environment
   applied: number;

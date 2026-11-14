@@ -25,7 +25,9 @@ export interface LoginDto {
 
 export type LoginResponseDto = UserResponseDto;
 
-export interface GoogleStartDto {
+// the login with an account at a provider (src/providers/identity), the same for every provider:
+// GET /oauth/<provider> starts it, GET /<provider>/callback finishes it
+export interface OAuthStartDto {
   guestId: UserId;
   role: Role;
   // the versions of the terms and of the contract the page sent with the start of the login
@@ -41,107 +43,25 @@ export interface OAuthStartQueryDto {
   newsletter?: boolean;
 }
 
-export interface GoogleStartResponseDto {
+export interface OAuthStartResponseDto {
   url: string;
 }
 
-export interface GoogleCallbackSuccessQueryDto {
+export interface OAuthCallbackSuccessQueryDto {
   code: string;
   state: string;
 }
 
-export interface GoogleCallbackErrorQueryDto {
-  error: string;
-  error_description?: string;
-  state?: string;
-}
-
-export type GoogleCallbackQueryDto = GoogleCallbackSuccessQueryDto | GoogleCallbackErrorQueryDto;
-
-export interface GoogleCallbackDto {
-  code: string;
-  state: string;
-  // who finishes the login: it must be the guest who started it
-  guestId: UserId;
-  role: Role;
-  ip?: string;
-  userAgent?: string;
-  // the copy of the picture of a new account logs what it could not take
-  log: ProviderAvatarLogger;
-}
-
-export interface GithubStartDto {
-  guestId: UserId;
-  role: Role;
-  // the versions of the terms and of the contract the page sent with the start of the login
-  acceptedDocumentIds?: number[];
-  // the box of the newsletter the page ticked: a new account the login makes is subscribed
-  newsletter?: boolean;
-  ip?: string;
-  userAgent?: string;
-}
-
-export interface GithubStartResponseDto {
-  url: string;
-}
-
-export interface GithubCallbackSuccessQueryDto {
-  code: string;
-  state: string;
-}
-
-export interface GithubCallbackErrorQueryDto {
+export interface OAuthCallbackErrorQueryDto {
   error: string;
   error_description?: string;
   error_uri?: string;
   state?: string;
 }
 
-export type GithubCallbackQueryDto = GithubCallbackSuccessQueryDto | GithubCallbackErrorQueryDto;
+export type OAuthCallbackQueryDto = OAuthCallbackSuccessQueryDto | OAuthCallbackErrorQueryDto;
 
-export interface GithubCallbackDto {
-  code: string;
-  state: string;
-  // who finishes the login: it must be the guest who started it
-  guestId: UserId;
-  role: Role;
-  ip?: string;
-  userAgent?: string;
-  // the copy of the picture of a new account logs what it could not take
-  log: ProviderAvatarLogger;
-}
-
-export interface LinkedInStartDto {
-  guestId: UserId;
-  role: Role;
-  // the versions of the terms and of the contract the page sent with the start of the login
-  acceptedDocumentIds?: number[];
-  // the box of the newsletter the page ticked: a new account the login makes is subscribed
-  newsletter?: boolean;
-  ip?: string;
-  userAgent?: string;
-}
-
-export interface LinkedInStartResponseDto {
-  url: string;
-}
-
-export interface LinkedInCallbackSuccessQueryDto {
-  code: string;
-  state: string;
-}
-
-export interface LinkedInCallbackErrorQueryDto {
-  error: string;
-  error_description?: string;
-  error_uri?: string;
-  state?: string;
-}
-
-export type LinkedInCallbackQueryDto =
-  LinkedInCallbackSuccessQueryDto | LinkedInCallbackErrorQueryDto;
-
-export interface LinkedInCallbackDto {
+export interface OAuthCallbackDto {
   code: string;
   state: string;
   // who finishes the login: it must be the guest who started it

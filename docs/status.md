@@ -17,11 +17,12 @@
 | 📊 Admin                                                           | journals filtered by every column with their sums and groups, alerts, statistics, the product safety data of the EU (GPSR)                                                                                                                             |
 | ⚖️ Terms and privacy                                               | versioned terms, contract and privacy policy with consents, terms of keeping personal data, an export of the data                                                                                                                                      |
 | 🌍 [Shop settings](shop-settings.md) and [languages](languages.md) | the data of the shop root changes without a deploy, every mail in English, Ukrainian or Spanish                                                                                                                                                        |
+| 🔌 [Outside services](providers.md)                                | payments, mail, files, the models, the captcha and the login elsewhere, each behind an interface of its kind                                                                                                                                           |
 | 📘 [API docs](api.md)                                              | Swagger / OpenAPI, checked against every answer of the integration tests                                                                                                                                                                               |
 
 ## 🔄 Next Up
 
-- delivery through carriers (Nova Poshta, ShippyPro), their branches and international delivery
+- delivery through an aggregator of carriers (ShippyPro first, the carriers the owner connects to it), their branches and international delivery
 
 ## ⏭️ Later
 
@@ -38,6 +39,6 @@
 
 - **Ready for a storefront:** every route, answer and error code is described in Swagger, so a frontend is built against a documented API
 - **A new language is a dictionary:** the mails speak the language of their reader, and one more language needs no change of the code
-- **A new payment provider is a module:** providers stand side by side, a new one joins Stripe without bending it
+- **A new provider is a folder:** every outside service sits behind an interface of its kind; a new provider of payments, of mail, of files, of the models, of the captcha or of accounts joins the ones of today with a folder and a line in a registry, and runs through the same contract tests
 - **Money that adds up:** every movement of money is a line of one journal, written by the database with the change it belongs to, so the reports, the alerts and the cards never disagree
 - **Rules live in the database:** roles, row level security and functions keep every client of the API, present or future, within the same limits

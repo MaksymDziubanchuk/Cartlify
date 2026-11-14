@@ -3,6 +3,7 @@ import type { FastifySchema } from 'fastify';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurity } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { paymentPageBounds } from '@providers/payments/index.js';
 
 // public: the fields a guest or a buyer is shown
 const getPublicShopSettingsSchema = {
@@ -94,7 +95,8 @@ const WRITE_REFUSALS =
   'deliveryFlatPrice. `PICKUP_DETAILS_REQUIRED`: the pickup method on with a blank ' +
   'pickupAddress or pickupHours (`details.fields` the blank ones). `PICKUP_HOURS_INVALID`: ' +
   'pickupHours not in its format (see the field). `RESERVATION_MINUTES_TOO_LONG`: ' +
-  'reservationMinutes and stripePageMinutes together over a day (`details.max`, 1440). ' +
+  'reservationMinutes and paymentPageMinutes together over what every payment provider keeps a page ' +
+  `(\`details.max\`, ${paymentPageBounds().mostWithReservation}). ` +
   '`SHOP_LOCALE_NOT_ENABLED`: shopLocale not among enabledLocales. ' +
   '`DELIVERY_COUNTRY_NOT_SUPPORTED`: a country of deliveryCountries the app does not know ' +
   'how to take a postal code of (`details.countries` the ones refused, `details.supported` ' +
@@ -251,7 +253,7 @@ const postShopLogoSchema = {
         '`MULTIPART_REQUIRED`: the body is not a form. `SHOP_LOGO_REQUIRED`: the form has no ' +
         '`image` file. `SHOP_LOGO_MULTIPLE`: the form has more than one. ' +
         '`SHOP_LOGO_STREAM_ERROR`: an empty file. `IMAGE_TYPE_NOT_ALLOWED`: not a jpeg, png or ' +
-        'webp file. `IMAGE_INVALID`: Cloudinary cannot read the file.',
+        'webp file. `IMAGE_INVALID`: the file storage cannot read the file.',
       $ref: 'errorResponseSchema#',
     },
     500: {

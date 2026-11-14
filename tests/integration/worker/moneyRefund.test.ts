@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import appStripe from '@config/stripe.js';
+import appStripe from '@providers/payments/stripe/stripeClient.js';
 import { followDisputes } from '@routes/api/payments/services/followDisputes.service.js';
 import { settleRefundsInTransit } from '@routes/api/payments/services/settleRefundsInTransit.service.js';
 
@@ -410,8 +410,8 @@ describe('the refunds of the late payments in transit', () => {
 // yet, a dispute ended with a statement of the order whose money waits. The worker reads each from
 // Stripe and takes the same step as the webhook; a dispute whose steps are done is not asked about
 describe('the disputes whose steps are not done', () => {
-  const disputeRow = (stripeId: string) =>
-    asAdmin((tx) => tx.paymentDispute.findUniqueOrThrow({ where: { stripeId } }));
+  const disputeRow = (providerDisputeId: string) =>
+    asAdmin((tx) => tx.paymentDispute.findUniqueOrThrow({ where: { providerDisputeId } }));
 
   mockOnly('puts the draft of the evidence Stripe could not take, once', async () => {
     const product = await createProduct({ price: 10, stock: 10 });

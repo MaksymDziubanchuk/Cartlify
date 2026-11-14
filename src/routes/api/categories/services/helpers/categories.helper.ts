@@ -2,7 +2,7 @@ import { BadRequestError } from '@utils/errors.js';
 import { toNumberSafe, toStringSafe } from '@helpers/safeNormalizer.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
-import { buildImageUrls, isCloudinaryUrl } from '@utils/cloudinary.util.js';
+import { fileStorage } from '@providers/files/index.js';
 
 import type { WithdrawalRuleName } from '@helpers/withdrawal.js';
 import type { CategoryResponseDto } from 'types/dto/categories.dto.js';
@@ -13,7 +13,7 @@ import type { UserId } from 'types/ids.js';
 // the sizes of the picture of a category, null for a category without one (or with an address that
 // is no picture of ours)
 export const categoryImageUrlsOf = (imageUrl: string | null): ProductImagesUrls | null =>
-  imageUrl && isCloudinaryUrl(imageUrl) ? buildImageUrls(imageUrl, 'product') : null;
+  imageUrl && fileStorage.isOwnUrl(imageUrl) ? fileStorage.imageUrls(imageUrl, 'product') : null;
 
 // the answer for a row of a category: the nullable columns are left out, the picture is its sizes
 export function categoryResponseOf(row: {

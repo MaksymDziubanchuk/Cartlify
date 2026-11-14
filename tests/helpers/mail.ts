@@ -51,7 +51,7 @@ export type SentMail = {
   // the headers the app added to the mail, the custom arguments that come back with its events, and
   // its tracking settings, as the request holds them
   headers: Record<string, string>;
-  customArgs: Record<string, string>;
+  tags: Record<string, string>;
   tracking: Record<string, unknown>;
   // the answer of SendGrid (or of the mock): 2xx means it took the mail
   status: number;
@@ -127,7 +127,7 @@ const mailOf = (payload: SendGridPayload, stream: MailStream): SentMail => {
     replyTo: payload.reply_to?.email ?? null,
     categories: payload.categories ?? [],
     headers: payload.headers ?? {},
-    customArgs: payload.custom_args ?? {},
+    tags: payload.custom_args ?? {},
     tracking: payload.tracking_settings ?? {},
     to: (payload.personalizations ?? [])
       .flatMap((p) => (p.to ?? []).map((t) => t.email ?? ''))

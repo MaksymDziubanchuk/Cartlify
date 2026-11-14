@@ -74,7 +74,7 @@ export function describeLinkEmail(name: string, c: LinkEmailCase): void {
     it('mails a link to our web page with the token', async () => {
       const calls = stubFetch(() => textResponse('', 202));
 
-      expect(await send(mail())).toEqual({ status: 202 });
+      expect(await send(mail())).toBeUndefined();
       expect(JSON.parse(calls[0]!.body).personalizations[0].to).toEqual([
         { email: 'buyer@cartlify.test' },
       ]);
@@ -194,7 +194,7 @@ export function describeLinkEmail(name: string, c: LinkEmailCase): void {
 
       expect(await rejectedBy(() => unconfigured(mail()))).toMatchObject({
         statusCode: 500,
-        details: { reason: 'SENDGRID_API_KEY_REQUIRED' },
+        details: { reason: 'MAIL_PROVIDER_NOT_CONFIGURED' },
       });
     });
 

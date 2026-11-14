@@ -115,6 +115,11 @@ npm test -- --workers=1
 # force) is named *.shopwide.test.ts: it runs after the others and alone
 # (tests/setup/sequencer.mjs, tests/setup/integration.shopState.ts)
 
+# the "estimated" of the line Time of jest is the guess of the launcher, which keeps the time of
+# every file and of the last run of the same parts (node_modules/.cache/cartlify-tests/pace.json,
+# tests/setup/runPace.mjs), the mocks and each set of real services apart; the first run of a file
+# has no time yet. From a minute on the line tells minutes and seconds (20 min 52 s)
+
 # Jest gives every test file its own copy of the modules, and V8 keeps the copy of a finished file
 # reachable from its caches of compiled code until a last resort collection: without one a worker
 # grew by the size of the app (about 70 MB) a file and met the heap limit of Node after some forty

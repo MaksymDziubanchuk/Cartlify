@@ -79,7 +79,7 @@ describe('newsletterMailFor, for a reader', () => {
     expect(mail.subject).toBe('Rebajas');
     expect(mail.warnings).toEqual([]);
     // the ids of the campaign and of the reader that SendGrid hands back are the sender's to add
-    expect(mail).not.toHaveProperty('customArgs');
+    expect(mail).not.toHaveProperty('tags');
   });
 
   it('is an error for a language the campaign has no subject in', () => {

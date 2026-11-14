@@ -10,7 +10,7 @@ import {
   versionsOf,
 } from '@routes/api/legal/services/helpers/legalDocuments.helper.js';
 
-// the consent of a login by Google, GitHub or LinkedIn: the page of the shop sends the versions of
+// the consent of a login with an account at a provider: the page of the shop sends the versions of
 // the terms and of the contract the person accepted with the start of the login
 // (acceptedDocumentIds), the signed state of the login carries them to the callback
 

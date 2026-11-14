@@ -6,7 +6,7 @@ import { variantNamesOf } from '@db/variantNames.helper.js';
 import { saleFieldsOf } from '@helpers/productSale.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { InternalError } from '@utils/errors.js';
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { fileStorage } from '@providers/files/index.js';
 
 import type {
   VariantContext,
@@ -95,7 +95,7 @@ export async function readVariantContext(
 const imageOf = (row: VariantRow['images'][number]): VariantImageDto => ({
   id: row.image.id,
   position: row.position,
-  ...buildImageUrls(row.image.url, 'product'),
+  ...fileStorage.imageUrls(row.image.url, 'product'),
 });
 
 // the sale as an admin gets it: the row as it is, null when empty, a sale past its end too
@@ -122,7 +122,7 @@ export function variantShortOf(
     price: decimalToNumber(row.price),
     ...(view === 'admin' ? rawSaleOf(row) : saleFieldsOf(row)),
     stock: freeUnits(row.stock, row.reservedStock, context.expired.get(row.id) ?? 0),
-    image: first ? buildImageUrls(first.image.url, 'product') : null,
+    image: first ? fileStorage.imageUrls(first.image.url, 'product') : null,
     ...(view === 'admin'
       ? { visible: isVariantVisible(row), deletedAt: row.deletedAt?.toISOString() ?? null }
       : {}),

@@ -704,7 +704,7 @@ const postProductRouterSchema = {
         'file the form does not have), a file no variant shows (GALLERY_IMAGE_UNUSED, ' +
         '`details.files`: their numbers), an empty image (PRODUCT_IMAGE_STREAM_ERROR), more than ' +
         MAX_PRODUCT_IMAGES +
-        ' images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), an image Cloudinary cannot read (IMAGE_INVALID), or a text of the form with a NUL sign (TEXT_NUL_FORBIDDEN).' +
+        ' images (PRODUCT_IMAGES_TOO_MANY, `details.max`), a file that is not a jpeg, png or webp image by its content, whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), an image the file storage cannot read (IMAGE_INVALID), or a text of the form with a NUL sign (TEXT_NUL_FORBIDDEN).' +
         VALUES_400_WRAPPED +
         REQUIRED_400,
       $ref: 'errorResponseSchema#',
@@ -758,7 +758,7 @@ const postProductReviewRouterSchema = {
     'a rating to a comment-only review or a comment to a rating-only review; ' +
     'a rating or a comment that is already set never changes. ' +
     'A comment is checked before anything is written, by a language model with the rules of ' +
-    'the shop and by the moderation of OpenAI: a negative opinion is never a reason; obscene ' +
+    'the shop and by the moderation of the AI provider: a negative opinion is never a reason; obscene ' +
     'words in any form, insults, dangerous content, a text about another thing, ads and ' +
     'personal data are. A refused comment writes nothing, not even the rating of the request. ' +
     'A check that is unavailable lets the comment through, root can turn it off (reviewCheckEnabled, ' +

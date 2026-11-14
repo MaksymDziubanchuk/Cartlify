@@ -4,7 +4,7 @@ import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import env from '@config/env.js';
 import { toCsv, type CsvColumn } from '@helpers/csv.js';
-import { shopCurrency } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import { sortRows } from './helpers/accountingReport.helper.js';

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import cloudinary from '@config/cloudinary.js';
+import cloudinary from '@providers/files/cloudinary/cloudinaryClient.js';
 import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
 import { prisma } from '@db/client.js';
 import { IMAGES_TX_BASE_MS, imagesTxTimeout } from '@routes/api/products/services/helpers/index.js';

@@ -1,4 +1,4 @@
-import type { Role } from '@prisma/client';
+import type { AuthProvider, Role } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
 import {
@@ -59,7 +59,7 @@ export async function login({
           password_hash: string | null;
           role: Role;
           is_verified: boolean;
-          auth_provider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          auth_provider: AuthProvider;
         }[]
       >`select * from cartlify.auth_get_user_for_login(${cleanEmail})`;
 

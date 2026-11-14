@@ -103,7 +103,7 @@ BEGIN
       ('money_log', 'userId'), ('money_log', 'returnId'),
       ('money_log', 'orderShipmentId'), ('money_log', 'disputeId'), ('money_log', 'coversId'),
       ('money_log', 'provider'), ('money_log', 'paymentId'), ('money_log', 'refundId'),
-      ('money_log', 'transferKey'), ('money_log', 'stripeTxId'), ('money_log', 'bankReference'),
+      ('money_log', 'transferKey'), ('money_log', 'balanceTxId'), ('money_log', 'bankReference'),
       ('money_log', 'byDashboard'), ('money_log', 'state'), ('money_log', 'stateAt'),
       ('money_log', 'failure'), ('money_log', 'failureText'), ('money_log', 'method'),
       ('money_log', 'note'), ('money_log', 'happenedAt'), ('money_log', 'moneyUse'),

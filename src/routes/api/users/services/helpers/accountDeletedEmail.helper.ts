@@ -5,7 +5,7 @@ import {
   type AccountDeletedDelivery,
 } from '@services/email/templates/users/accountDeleted.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
-import { shopCurrency } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 
 export type AccountDeletionLogger = {
   warn: (obj: unknown, msg?: string) => void;

@@ -19,7 +19,7 @@ export interface ShopSettingsValuesDto {
   logoUrl: string | null;
 
   reservationMinutes: number;
-  stripePageMinutes: number;
+  paymentPageMinutes: number;
 
   reviewCheckEnabled: boolean;
   avatarRemovalsLimit: number;
@@ -73,7 +73,7 @@ export interface PutShopSettingsBodyDto {
   emailFromName: string;
   emailReplyTo: string;
   reservationMinutes: number;
-  stripePageMinutes: number;
+  paymentPageMinutes: number;
   reviewCheckEnabled: boolean;
   avatarRemovalsLimit: number;
   reviewRemovalsLimit: number;
@@ -128,7 +128,7 @@ export interface ShopLogoImagePart {
   filename?: string;
 }
 
-// a picture waiting on Cloudinary under an id of its own until the write of the logo ends
+// a picture waiting in the file storage under an id of its own until the write of the logo ends
 export interface UploadedShopLogo {
   publicId: string;
 }

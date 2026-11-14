@@ -5,7 +5,7 @@ import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 
 import { sendEmail } from './sendEmail.helper.js';
-import { isEmailProviderFailure } from '@services/email/sendGrid.js';
+import { isMailProviderFailure } from '@providers/mail/index.js';
 import { buildResetPasswordTemplate } from '@services/email/templates/auth/resetPassword.template.js';
 
 export type SendResetPasswordEmailArgs = {
@@ -19,9 +19,7 @@ export type SendResetPasswordEmailArgs = {
 // reset email main flow
 // build reset url
 // send branded email
-export async function sendResetPasswordEmail(
-  args: SendResetPasswordEmailArgs,
-): Promise<{ status: number }> {
+export async function sendResetPasswordEmail(args: SendResetPasswordEmailArgs): Promise<void> {
   const resetUrl = buildWebResetUrl(args.resetToken);
   const expiresInText = formatExpiresIn(args.expiresAt, args.locale);
 
@@ -35,7 +33,7 @@ export async function sendResetPasswordEmail(
   });
 
   try {
-    return await sendEmail({
+    await sendEmail({
       to: args.to,
       subject,
       text,
@@ -43,7 +41,7 @@ export async function sendResetPasswordEmail(
     });
   } catch (err) {
     // only a failure of the mail provider is a bad gateway, our own error stays a server error
-    if (!isEmailProviderFailure(err)) throw err;
+    if (!isMailProviderFailure(err)) throw err;
 
     throw new AppError({
       statusCode: 502,

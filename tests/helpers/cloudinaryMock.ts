@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
 import { crc32, inflateSync } from 'node:zlib';
 
-import cloudinary from '@config/cloudinary.js';
+import cloudinary from '@providers/files/cloudinary/cloudinaryClient.js';
 
 import type { UploadApiOptions, UploadApiResponse } from 'cloudinary';
 

@@ -6,6 +6,7 @@ import {
   PRICE_LOG_EVENTS,
   STOCK_LOG_EVENTS,
 } from '@config/journalEvents.js';
+import { PAYMENT_PROVIDER_NAMES } from '@providers/payments/names.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
 const adminOrderStatusValues = [
@@ -2072,7 +2073,6 @@ const MONEY_FAILURES = [
 ] as const;
 const MONEY_METHODS = ['bank_transfer', 'cash', 'other'] as const;
 const MONEY_USES = ['goods', 'compensation', 'loss'] as const;
-const MONEY_PROVIDERS = ['stripe'] as const;
 
 const MONEY_LOG_COLUMNS = [
   'id',
@@ -2096,7 +2096,7 @@ const MONEY_LOG_COLUMNS = [
   'paymentId',
   'refundId',
   'transferKey',
-  'stripeTxId',
+  'balanceTxId',
   'bankReference',
   'byDashboard',
   'state',
@@ -2163,10 +2163,10 @@ const adminMoneyLogQuerySchema = {
     coversId: logIdFilter(
       'that name this line: its failure, the money sent another way, a part covered',
     ),
-    provider: logEnumFilter(MONEY_PROVIDERS, 'of this provider'),
+    provider: logEnumFilter(PAYMENT_PROVIDER_NAMES, 'of this provider'),
     refundId: logTextFilter('of this refund at the provider (its id there, as it is)'),
     transferKey: logTextFilter('of this transfer of the app (its key, as it is)'),
-    stripeTxId: logTextFilter('of this transaction of the balance of the provider (a dispute)'),
+    balanceTxId: logTextFilter('of this transaction of the balance of the provider (a dispute)'),
     bankReference: logTextFilter('whose reference of the bank has this text, in any case'),
     byDashboard: {
       type: 'boolean',
@@ -2269,7 +2269,7 @@ const adminMoneyLogPageSchema = journalPageSchema(
       description:
         'Another line: the one a failure reverses, a correction corrects, a covered part uses.',
     },
-    provider: nullableEnum(MONEY_PROVIDERS, 'Who took the money.'),
+    provider: nullableEnum(PAYMENT_PROVIDER_NAMES, 'Who took the money.'),
     paymentId: { type: ['string', 'null'], description: 'The payment at the provider.' },
     refundId: {
       type: ['string', 'null'],
@@ -2281,7 +2281,7 @@ const adminMoneyLogPageSchema = journalPageSchema(
         'Our key of the request to the provider, the same in every part of one transfer; kept in ' +
         'the refund at the provider.',
     },
-    stripeTxId: {
+    balanceTxId: {
       type: ['string', 'null'],
       description: 'The balance transaction of a dispute at the provider.',
     },
@@ -2534,10 +2534,10 @@ const adminMoneyLogGroupsQuerySchema = {
     coversId: logIdFilter(
       'that name this line: its failure, the money sent another way, a part covered',
     ),
-    provider: logEnumFilter(MONEY_PROVIDERS, 'of this provider'),
+    provider: logEnumFilter(PAYMENT_PROVIDER_NAMES, 'of this provider'),
     refundId: logTextFilter('of this refund at the provider (its id there, as it is)'),
     transferKey: logTextFilter('of this transfer of the app (its key, as it is)'),
-    stripeTxId: logTextFilter('of this transaction of the balance of the provider (a dispute)'),
+    balanceTxId: logTextFilter('of this transaction of the balance of the provider (a dispute)'),
     bankReference: logTextFilter('whose reference of the bank has this text, in any case'),
     byDashboard: {
       type: 'boolean',

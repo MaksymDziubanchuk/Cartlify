@@ -198,7 +198,7 @@ describe('all of the payment of an order not sent, given back in the dashboard (
         returns: [
           expect.objectContaining({
             source: 'system',
-            reason: 'stripe_refund',
+            reason: 'provider_refund',
             closedAt: expect.any(String),
           }),
         ],

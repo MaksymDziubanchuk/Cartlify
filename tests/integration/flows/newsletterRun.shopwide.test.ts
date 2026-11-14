@@ -286,7 +286,7 @@ describe('a campaign from the draft of an admin to the mail of the readers', () 
         expect(mail.text).toContain('Flow shirt');
         expect(mail.text).not.toContain('Gone shirt');
         // a test mail belongs to no recipient of the campaign
-        expect(mail.customArgs).toEqual({});
+        expect(mail.tags).toEqual({});
       });
 
       // the colleague opens "Manage the subscription" in the test mail: it is nobody's subscription

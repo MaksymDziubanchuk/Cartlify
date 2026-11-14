@@ -9,7 +9,7 @@ import { documentSelect, mapDocumentRow } from './helpers/documents.helper.js';
 
 import type { CreateDocumentDto, DocumentDto } from 'types/dto/documents.dto.js';
 
-// the row of a document for the file that waits on Cloudinary. The file is the business of the
+// the row of a document for the file that waits in the file storage. The file is the business of the
 // caller, which deletes it when this refuses: for a title or a kind that is wrong or a failed write
 export async function createDocument({
   actorId,

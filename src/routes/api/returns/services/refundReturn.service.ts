@@ -4,7 +4,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { tx } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
-import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import { settleMoneyRefund } from '@routes/api/payments/services/helpers/settleMoneyRefund.helper.js';
 import { failureOf } from '@helpers/failureOf.js';
 
@@ -18,7 +18,7 @@ import {
 } from './helpers/returnRefund.helper.js';
 import { getReturn } from './getReturn.service.js';
 
-import type { PaymentProviderName } from '@routes/api/payments/providers/types.js';
+import type { PaymentProviderName } from '@providers/payments/types.js';
 import type { ReturnMailLogger } from './helpers/sendReturnByShopEmail.helper.js';
 import type { RefundReturnDto, ReturnDto } from 'types/dto/returns.dto.js';
 

@@ -226,7 +226,7 @@ describe('decide_money_use', () => {
         5,
       );
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(20)],
@@ -333,9 +333,14 @@ describe('decide_money_use', () => {
   it('waits for the dispute to be lost before what the bank took is decided (MONEY_DECISION_DISPUTE_NOT_LOST)', async () => {
     const out = await inRolledBackTx(async (db) => {
       const { paymentId, itemIds } = await soldOrder(db);
-      const stripeId = newDisputeId();
+      const providerDisputeId = newDisputeId();
       const taken = withdrawal(10);
-      await synced(db, { stripeId, paymentId, status: 'needs_response', transactions: [taken] });
+      await synced(db, {
+        providerDisputeId,
+        paymentId,
+        status: 'needs_response',
+        transactions: [taken],
+      });
       const [bank] = await linesWhere(
         db,
         admin.id,
@@ -344,7 +349,7 @@ describe('decide_money_use', () => {
       );
       const share = [{ orderItemId: itemIds[0], quantity: 1, amount: 10 }];
       const open = await decideAs(db, asRoot(), bank!.id, share);
-      await synced(db, { stripeId, paymentId, status: 'lost', transactions: [taken] });
+      await synced(db, { providerDisputeId, paymentId, status: 'lost', transactions: [taken] });
       return { open, lost: await decideAs(db, asRoot(), bank!.id, share) };
     });
 
@@ -554,7 +559,7 @@ describe('the transfers of an order wait for the decision', () => {
       const { orderId, paymentId, itemIds } = await soldOrder(db);
       const returnId = await cameBack(db, orderId, [itemIds[1]!]);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(10)],
@@ -603,7 +608,7 @@ describe('the money shared by itself, by the sums of the items and the delivery'
     const out = await inRolledBackTx(async (db) => {
       const { orderId, paymentId } = await soldOrder(db, false);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(40)],
@@ -685,7 +690,7 @@ describe('the money shared by itself, by the sums of the items and the delivery'
       const returnId = await cameBack(db, orderId, itemIds);
       await begun(db, admin.id, returnId);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(10)],

@@ -1,7 +1,7 @@
 import type { FastifyBaseLogger } from 'fastify';
 
 import { shopSettings, writeShopLogo } from '@config/shopSettings.js';
-import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
+import { fileStorage, isOwnFile } from '@providers/files/index.js';
 import { ConflictError, InternalError, isAppError } from '@utils/errors.js';
 
 import type { ShopSettingsValuesDto } from 'types/dto/shopSettings.dto.js';
@@ -26,7 +26,7 @@ export async function removeShopLogo(dto: {
 
     if (isOwnFile(oldLogoPublicId)) {
       try {
-        await deleteImage(oldLogoPublicId);
+        await fileStorage.deleteImage(oldLogoPublicId);
       } catch (err) {
         log.warn({ err, publicId: oldLogoPublicId }, 'logo of the shop was not deleted');
       }

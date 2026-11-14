@@ -876,7 +876,7 @@ const getLoginLogSchema = {
   operationId: 'getAdminLoginLog',
   summary: 'Get the log of logins',
   description:
-    'Who came in, with which role and how (`event`: a password, Google, GitHub or LinkedIn), ' +
+    'Who came in, with which role and how (`event`: a password, or an account at a provider), ' +
     'from which address and browser. Filters: `userId`, `roles`, `email` (a part of it). A ' +
     'person reads their own logins in their sessions and in their export. ' +
     JOURNAL_TEXT,

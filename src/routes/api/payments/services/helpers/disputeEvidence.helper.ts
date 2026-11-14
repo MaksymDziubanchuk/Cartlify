@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { returnCodeOf } from '@helpers/returns.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 
-import type { DisputeEvidence } from '../../providers/types.js';
+import type { DisputeEvidence } from '@providers/payments/types.js';
 
 // The draft of the evidence the app puts on a dispute of a payment: what was bought, the delivery (the carrier, the
 // number, when it was sent and delivered), the refunds of the payment (the day, the sum, the number of
@@ -40,7 +40,7 @@ export type DisputeFacts = {
   }[];
 };
 
-// the most text Stripe takes in one field of the evidence
+// the most text a payment provider takes in one field of the evidence
 const FIELD_MAX = 20_000;
 
 const day = (at: Date) => at.toISOString().slice(0, 10);

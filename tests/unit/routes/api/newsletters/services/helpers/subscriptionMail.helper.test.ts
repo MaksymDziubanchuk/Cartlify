@@ -42,7 +42,7 @@ jest.unstable_mockModule('@db/dbContext.service.js', () => ({
 jest.unstable_mockModule('@services/email/sendNewsletterEmail.js', () => ({
   sendNewsletterEmail: sendMock,
 }));
-jest.unstable_mockModule('@services/email/clearSpamReport.js', () => ({
+jest.unstable_mockModule('@providers/mail/sendgrid/sendGridSpamReports.js', () => ({
   clearSpamReport: clearMock,
 }));
 
@@ -55,7 +55,7 @@ const logger = () => ({ warn: jest.fn(), error: jest.fn() });
 
 const refused = () =>
   new InternalError(
-    { reason: 'SENDGRID_SEND_FAILED' },
+    { reason: 'MAIL_PROVIDER_REFUSED' },
     { status: 400, body: 'for reader@example.com' },
   );
 
@@ -107,7 +107,7 @@ describe('the mark of the day of a mail of the form', () => {
       expect(more).toEqual([]);
       expect(lift!.values).toEqual([EMAIL, kind]);
       expect(log.warn).toHaveBeenCalledWith(
-        { reason: 'SENDGRID_SEND_FAILED', status: 400 },
+        { reason: 'MAIL_PROVIDER_REFUSED', status: 400 },
         'newsletter subscription mail was not sent',
       );
     },

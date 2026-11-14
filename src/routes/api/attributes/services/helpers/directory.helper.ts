@@ -41,7 +41,7 @@ export async function inAdminTx<T>(
   reason: string,
   fn: (tx: Tx) => Promise<T>,
   onDbError?: (err: unknown) => Promise<AppError | null>,
-  // a transaction that does more than rows (the pictures move at Cloudinary inside it) needs more
+  // a transaction that does more than rows (the pictures move in the file storage inside it) needs more
   // time than the default of prisma
   opts: { timeout?: number } = {},
 ): Promise<T> {

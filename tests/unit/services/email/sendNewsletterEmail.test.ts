@@ -48,7 +48,7 @@ const sentPayload = (body: string) => JSON.parse(body) as Record<string, any>;
 
 describe('sendNewsletterEmail', () => {
   it.each([
-    ['SENDGRID_NEWSLETTER_API_KEY', 'SENDGRID_NEWSLETTER_API_KEY_REQUIRED'],
+    ['SENDGRID_NEWSLETTER_API_KEY', 'MAIL_PROVIDER_NOT_CONFIGURED'],
     ['NEWSLETTER_EMAIL_FROM', 'NEWSLETTER_EMAIL_FROM_REQUIRED'],
   ])('refuses to send without %s and calls nobody', async (key, reason) => {
     const unconfigured = await importWithEnv<Sender>(
@@ -92,10 +92,10 @@ describe('sendNewsletterEmail', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('posts the mail to sendgrid with the key of the newsletters and gives back its status', async () => {
+  it('posts the mail to sendgrid with the key of the newsletters', async () => {
     const calls = stubFetch(() => textResponse('', 202));
 
-    expect(await sender.sendNewsletterEmail(message)).toEqual({ status: 202 });
+    expect(await sender.sendNewsletterEmail(message)).toEqual({});
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       url: 'https://api.sendgrid.com/v3/mail/send',
@@ -264,7 +264,7 @@ describe('sendNewsletterEmail', () => {
 
       await sender.sendNewsletterEmail({
         ...message,
-        customArgs: { campaignId: '12', recipientId: '345' },
+        tags: { campaignId: '12', recipientId: '345' },
       });
 
       expect(sentPayload(calls[0]!.body).custom_args).toEqual({
@@ -277,7 +277,7 @@ describe('sendNewsletterEmail', () => {
       const calls = stubFetch(() => textResponse('', 202));
 
       await sender.sendNewsletterEmail(message);
-      await sender.sendNewsletterEmail({ ...message, headers: {}, customArgs: {} });
+      await sender.sendNewsletterEmail({ ...message, headers: {}, tags: {} });
 
       for (const call of calls) {
         const payload = sentPayload(call.body);
@@ -348,7 +348,7 @@ describe('sendNewsletterEmail', () => {
 
       expect(await rejectedBy(() => sender.sendNewsletterEmail(message))).toMatchObject({
         statusCode: 500,
-        details: { reason: 'SENDGRID_SEND_FAILED' },
+        details: { reason: 'MAIL_PROVIDER_REFUSED' },
         cause: { status: 403, body: answer },
       });
     });
@@ -359,7 +359,7 @@ describe('sendNewsletterEmail', () => {
 
       expect(await rejectedBy(() => sender.sendNewsletterEmail(message))).toMatchObject({
         statusCode: 500,
-        details: { reason: 'SENDGRID_REQUEST_FAILED' },
+        details: { reason: 'MAIL_PROVIDER_UNREACHABLE' },
         cause: failure,
       });
     });
@@ -388,23 +388,23 @@ describe('sendNewsletterEmail', () => {
 
       await jest.advanceTimersByTimeAsync(1);
       expect(await rejectedBy(() => sending)).toMatchObject({
-        details: { reason: 'SENDGRID_REQUEST_FAILED' },
+        details: { reason: 'MAIL_PROVIDER_UNREACHABLE' },
       });
     });
 
     // the callers tell a failure of the provider (a bad gateway) from our own mistake, for both streams
-    it('fails the way the mails of the orders do, so isEmailProviderFailure reads it', async () => {
+    it('fails the way the mails of the orders do, so isMailProviderFailure reads it', async () => {
       // one registry for the sender and the check: the errors are classes of that copy of the modules
       const fresh = await importWithEnv<Sender>(SPECIFIER, CONFIG, { shopSettings: SETTINGS });
-      const { isEmailProviderFailure } = await import('@services/email/sendGrid.js');
+      const { isMailProviderFailure } = await import('@providers/mail/index.js');
       stubFetch(() => jsonResponse({ errors: [] }, 500));
 
       const failure = await rejectedBy(() => fresh.sendNewsletterEmail(message));
       stubFetch(() => textResponse('', 202));
       const own = await rejectedBy(() => fresh.sendNewsletterEmail({ ...message, to: '' }));
 
-      expect(isEmailProviderFailure(failure)).toBe(true);
-      expect(isEmailProviderFailure(own)).toBe(false);
+      expect(isMailProviderFailure(failure)).toBe(true);
+      expect(isMailProviderFailure(own)).toBe(false);
     });
   });
 });

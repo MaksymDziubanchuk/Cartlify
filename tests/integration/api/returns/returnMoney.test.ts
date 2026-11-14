@@ -904,22 +904,22 @@ describe('while the bank or root has the last word on the money', () => {
   // later look at the dispute shows again)
   const openDispute = (paymentId: string, opening: Partial<Snapshot> = {}) =>
     inCommittedTx(async (db) => {
-      const stripeId = newDisputeId();
+      const providerDisputeId = newDisputeId();
       const taken = withdrawal(10);
       await synced(db, {
-        stripeId,
+        providerDisputeId,
         paymentId,
         status: 'needs_response',
         transactions: [taken],
         ...opening,
       });
-      return { stripeId, taken };
+      return { providerDisputeId, taken };
     });
 
   it('refuses a transfer while a dispute of the payment is open, and lets it go when the shop wins', async () => {
     const { orderId, itemId, paymentId } = await paidByCard(1);
     const card = await comeBack(orderId, itemId, 1);
-    const { stripeId, taken } = await openDispute(paymentId);
+    const { providerDisputeId, taken } = await openDispute(paymentId);
 
     const refused = await refund(card.id);
     const seen: Card = (await get(`/api/returns/${card.id}`)).json();
@@ -932,7 +932,7 @@ describe('while the bank or root has the last word on the money', () => {
     // the bank decides for the shop and gives the money back to it
     await inCommittedTx((db) =>
       synced(db, {
-        stripeId,
+        providerDisputeId,
         paymentId,
         status: 'won',
         transactions: [taken, reinstatement(10)],

@@ -39,23 +39,23 @@ afterEach(() => {
 const sentPayload = (body: string) => JSON.parse(body) as Record<string, any>;
 
 describe('sendEmail', () => {
-  it.each(['SENDGRID_API_KEY', 'EMAIL_FROM'])(
-    'refuses to send without %s and calls nobody',
-    async (key) => {
-      const unconfigured = await importWithEnv<Mailer>(
-        SPECIFIER,
-        { ...CONFIG, [key]: '' },
-        { shopSettings: SETTINGS },
-      );
-      const calls = stubFetch(() => textResponse('', 202));
+  it.each([
+    ['SENDGRID_API_KEY', { reason: 'MAIL_PROVIDER_NOT_CONFIGURED', stream: 'orders' }],
+    ['EMAIL_FROM', { reason: 'EMAIL_FROM_REQUIRED' }],
+  ])('refuses to send without %s and calls nobody', async (key, details) => {
+    const unconfigured = await importWithEnv<Mailer>(
+      SPECIFIER,
+      { ...CONFIG, [key]: '' },
+      { shopSettings: SETTINGS },
+    );
+    const calls = stubFetch(() => textResponse('', 202));
 
-      expect(await rejectedBy(() => unconfigured.sendEmail(message))).toMatchObject({
-        statusCode: 500,
-        details: { reason: `${key}_REQUIRED` },
-      });
-      expect(calls).toHaveLength(0);
-    },
-  );
+    expect(await rejectedBy(() => unconfigured.sendEmail(message))).toMatchObject({
+      statusCode: 500,
+      details,
+    });
+    expect(calls).toHaveLength(0);
+  });
 
   // emailReplyTo comes from the data of the shop now, not an env variable
   it('refuses to send without a reply-to address, and calls nobody', async () => {
@@ -86,10 +86,10 @@ describe('sendEmail', () => {
     expect(calls).toHaveLength(0);
   });
 
-  it('posts the mail to sendgrid with our key and gives back its status', async () => {
+  it('posts the mail to sendgrid with the key of the orders', async () => {
     const calls = stubFetch(() => textResponse('', 202));
 
-    expect(await mailer.sendEmail(message)).toEqual({ status: 202 });
+    expect(await mailer.sendEmail(message)).toEqual({});
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({
       url: 'https://api.sendgrid.com/v3/mail/send',
@@ -119,7 +119,7 @@ describe('sendEmail', () => {
   });
 
   // links in transactional mail carry one-time tokens, tracking would rewrite them
-  it('turns click and open tracking off', async () => {
+  it('turns every kind of tracking off', async () => {
     const calls = stubFetch(() => textResponse('', 202));
 
     await mailer.sendEmail(message);
@@ -127,6 +127,8 @@ describe('sendEmail', () => {
     expect(sentPayload(calls[0]!.body).tracking_settings).toEqual({
       click_tracking: { enable: false, enable_text: false },
       open_tracking: { enable: false },
+      subscription_tracking: { enable: false },
+      ganalytics: { enable: false },
     });
   });
 
@@ -142,14 +144,14 @@ describe('sendEmail', () => {
 
   it('keeps html it was given and the attachments, and leaves out an empty attachment list', async () => {
     const calls = stubFetch(() => textResponse('', 202));
-    const logo = { content: 'aGk=', type: 'image/png', filename: 'logo.png', content_id: 'logo' };
+    const terms = { content: 'aGk=', type: 'text/plain', filename: 'terms.txt' };
 
-    await mailer.sendEmail({ ...message, html: '<h1>Hi</h1>', attachments: [logo] });
+    await mailer.sendEmail({ ...message, html: '<h1>Hi</h1>', attachments: [terms] });
     await mailer.sendEmail({ ...message, attachments: [] });
 
     expect(sentPayload(calls[0]!.body)).toMatchObject({
       content: [{}, { value: '<h1>Hi</h1>' }],
-      attachments: [logo],
+      attachments: [{ ...terms, disposition: 'attachment' }],
     });
     expect(sentPayload(calls[1]!.body)).not.toHaveProperty('attachments');
   });
@@ -160,7 +162,7 @@ describe('sendEmail', () => {
 
     expect(await rejectedBy(() => mailer.sendEmail(message))).toMatchObject({
       statusCode: 500,
-      details: { reason: 'SENDGRID_SEND_FAILED' },
+      details: { reason: 'MAIL_PROVIDER_REFUSED' },
       cause: { status: 403, body: answer },
     });
   });
@@ -204,7 +206,7 @@ describe('sendEmail', () => {
 
     expect(await rejectedBy(() => mailer.sendEmail(message))).toMatchObject({
       statusCode: 500,
-      details: { reason: 'SENDGRID_REQUEST_FAILED' },
+      details: { reason: 'MAIL_PROVIDER_UNREACHABLE' },
       cause: failure,
     });
   });
@@ -231,7 +233,7 @@ describe('sendEmail', () => {
 
     await jest.advanceTimersByTimeAsync(1);
     expect(await rejectedBy(() => sending)).toMatchObject({
-      details: { reason: 'SENDGRID_REQUEST_FAILED' },
+      details: { reason: 'MAIL_PROVIDER_UNREACHABLE' },
     });
   });
 

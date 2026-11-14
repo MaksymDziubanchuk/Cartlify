@@ -307,7 +307,7 @@ const SORTS = [
   'paymentId',
   'refundId',
   'transferKey',
-  'stripeTxId',
+  'balanceTxId',
   'bankReference',
   'byDashboard',
   'state',
@@ -344,7 +344,7 @@ const COLUMNS = [
   'paymentId',
   'refundId',
   'transferKey',
-  'stripeTxId',
+  'balanceTxId',
   'bankReference',
   'byDashboard',
   'state',
@@ -556,7 +556,7 @@ describe('GET /api/admin/money-log', () => {
       orderId: story.disputeOrderId,
       paymentId: story.disputePaymentId,
       disputeId: story.disputeId,
-      stripeTxId: story.disputeTxId,
+      balanceTxId: story.disputeTxId,
       state: null,
     });
   });
@@ -595,7 +595,7 @@ describe('GET /api/admin/money-log', () => {
     it('keeps the lines of a dispute', async () => {
       const page = await all(`disputeId=${story.disputeId}`);
 
-      expect(page.items.map((item) => item.stripeTxId)).toEqual([story.disputeTxId]);
+      expect(page.items.map((item) => item.balanceTxId)).toEqual([story.disputeTxId]);
     });
 
     it('keeps the lines of a payment at the provider', async () => {
@@ -1022,7 +1022,7 @@ describe('GET /api/admin/money-log by every column', () => {
     expect(await keptBy(`transferKey=${encodeURIComponent(story.firstKey)}`)).toEqual(
       idsOf(withKey),
     );
-    expect(await keptBy(`stripeTxId=${story.disputeTxId}`)).toHaveLength(1);
+    expect(await keptBy(`balanceTxId=${story.disputeTxId}`)).toHaveLength(1);
     expect(await keptBy(`coversId=${failed.coversId}`)).toEqual(
       idsOf(lines.filter((line) => line.coversId === failed.coversId)),
     );

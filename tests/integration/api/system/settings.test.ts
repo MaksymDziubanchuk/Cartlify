@@ -4,7 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
 import env from '@config/env.js';
-import { makePublicId, uploadImage } from '@utils/cloudinary.util.js';
+import { fileStorage, makePublicId } from '@providers/files/index.js';
 
 import { accessCookie, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -234,7 +234,7 @@ describe('the name of the shop (shopName)', () => {
 describe('the logo of the mails (shopSettings.logoUrl)', () => {
   it('is shown in every mail by its address at Cloudinary, nothing attached', async () => {
     const data = pngImage(12, 8);
-    const uploaded = await uploadImage({
+    const uploaded = await fileStorage.uploadImage({
       file: data,
       mimetype: 'image/png',
       publicId: makePublicId({ kind: 'shop', imageKey: randomUUID() }),
@@ -288,8 +288,8 @@ describe('the time of a reservation (reservationMinutes)', () => {
   });
 
   // stripe closes the page itself the minutes after the end of the reservation
-  it('keeps the payment page open the minutes of stripePageMinutes after it', async () => {
-    setShopSettings({ stripePageMinutes: 45 });
+  it('keeps the payment page open the minutes of paymentPageMinutes after it', async () => {
+    setShopSettings({ paymentPageMinutes: 45 });
     const buyer = await newUser();
     const orderId = await placeOrder(
       app,

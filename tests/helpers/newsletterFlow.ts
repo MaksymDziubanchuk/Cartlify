@@ -118,7 +118,7 @@ export function newsletterDesk(app: FastifyInstance, csrf: Csrf, cookie: string)
 
     return {
       summary,
-      mails: sent.filter((mail) => ids.includes(Number(mail.customArgs.campaignId))),
+      mails: sent.filter((mail) => ids.includes(Number(mail.tags.campaignId))),
     };
   }
 
@@ -295,6 +295,6 @@ export function reportOf(mail: SentMail, event: 'bounce' | 'spamreport' | 'dropp
   return mailEvent(event, null, {
     email: mail.to[0],
     sg_message_id: `${mail.messageId}.filter0001.1.0`,
-    ...mail.customArgs,
+    ...mail.tags,
   });
 }

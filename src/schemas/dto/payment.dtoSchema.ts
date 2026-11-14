@@ -1,6 +1,6 @@
 import { idPathParam, MAX_ID } from '@schemas/idPathParam.js';
 import { OUTSIDE_METHODS, REFUND_FAILURES, RETURN_NOTE_MAX } from '@helpers/returns.js';
-import { PAYMENT_PROVIDER_NAMES } from '@routes/api/payments/providers/names.js';
+import { PAYMENT_PROVIDER_NAMES } from '@providers/payments/names.js';
 import {
   MONEY_REFUND_NEEDS,
   MONEY_REFUND_PURPOSES,
@@ -103,48 +103,6 @@ const paymentsCheckoutSessionReadResponseSchema = {
             'The money of the payment of this page went back: the page tells the buyer so, the order does not hold the payment.',
         },
       },
-    },
-  },
-} as const;
-
-const paymentsGetCheckoutSessionByIdParamsSchema = {
-  $id: 'paymentsGetCheckoutSessionByIdParamsSchema',
-  type: 'object',
-  additionalProperties: false,
-  required: ['sessionId'],
-  properties: {
-    // the id comes from the address the buyer returns to, so from the browser: only the form of a
-    // stripe checkout session goes on to stripe
-    sessionId: {
-      type: 'string',
-      pattern: '^cs_(test|live)_[A-Za-z0-9]+$',
-      description: 'Id of the Stripe checkout session: `cs_test_…` or `cs_live_…`.',
-    },
-  },
-} as const;
-
-const paymentsStripeWebhookResponseSchema = {
-  $id: 'paymentsStripeWebhookResponseSchema',
-  type: 'object',
-  additionalProperties: false,
-  required: ['received'],
-  properties: {
-    received: { type: 'boolean', const: true },
-    // event was acknowledged without any action, with the reason
-    skipped: {
-      type: 'string',
-      enum: [
-        'ORDER_NOT_FOUND',
-        'ORDER_NOT_CONFIRMED',
-        'ORDER_STATUS_NOT_WAITING',
-        'ORDER_ITEMS_REQUIRED',
-        'NOT_AN_ORDER',
-        'OBJECT_INVALID',
-        'REFUNDED',
-        'UNKNOWN_REFUND',
-      ],
-      description:
-        'Why nothing was done. The event can never pass, so it is acknowledged (an error answer would make Stripe deliver it again for days and turn the endpoint off); all but `REFUNDED` are a warning in the log: `ORDER_NOT_FOUND` the order of the page is deleted; `ORDER_NOT_CONFIRMED`, `ORDER_STATUS_NOT_WAITING`, `ORDER_ITEMS_REQUIRED` the order is not in the state the event needs; `NOT_AN_ORDER` the page is not one the app opened for an order, or the payment of a refund made by hand, a dispute, a warning of fraud or a review is neither the payment of an order nor one an order could not take (another tool in the same Stripe account): its money is left alone; `OBJECT_INVALID` the object of the event is not the kind its type names; `REFUNDED` the payment is one the order could not take (a delivery of its event again), its money goes back or went back and the order never takes it; `UNKNOWN_REFUND` a refund under a key of the app that no refund of the app has.',
     },
   },
 } as const;
@@ -619,7 +577,7 @@ const paymentsDisputesQuerySchema = {
 const disputeItemProperties = {
   id: { type: 'integer', description: 'The dispute in the app.' },
   provider: { type: 'string', description: 'The provider of the payment.' },
-  stripeId: { type: 'string', description: 'The id of the dispute at the provider.' },
+  providerDisputeId: { type: 'string', description: 'The id of the dispute at the provider.' },
   paymentId: { type: 'string', description: 'The payment disputed.' },
   orderId: {
     type: ['integer', 'null'],
@@ -712,13 +670,13 @@ const paymentsDisputeResponseSchema = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['id', 'event', 'amount', 'currency', 'stripeTxId', 'moneyUse', 'createdAt'],
+        required: ['id', 'event', 'amount', 'currency', 'balanceTxId', 'moneyUse', 'createdAt'],
         properties: {
           id: { type: 'integer' },
           event: { type: 'string', enum: ['money.dispute_withdrawn', 'money.dispute_reinstated'] },
           amount: { type: 'number', description: 'Below 0 taken, above 0 given back.' },
           currency: { type: ['string', 'null'] },
-          stripeTxId: { type: ['string', 'null'], description: 'The balance transaction.' },
+          balanceTxId: { type: ['string', 'null'], description: 'The balance transaction.' },
           moneyUse: {
             type: ['string', 'null'],
             enum: ['goods', 'compensation', 'loss', null],
@@ -788,8 +746,6 @@ export const paymentDtoSchemas = [
   paymentsCheckoutSessionPublicSchema,
   paymentsCheckoutSessionResponseSchema,
   paymentsCheckoutSessionReadResponseSchema,
-  paymentsGetCheckoutSessionByIdParamsSchema,
-  paymentsStripeWebhookResponseSchema,
   paymentsRefundsQuerySchema,
   paymentsRefundsResponseSchema,
   paymentsRefundOutsideParamsSchema,

@@ -2,7 +2,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { DisputeStatus, OutsideMethod } from '@prisma/client';
 import type { OrderHold } from '@helpers/orderHolds.js';
 
-import type { AvailablePaymentProviderName } from '@routes/api/payments/providers/names.js';
+import type { AvailablePaymentProviderName } from '@providers/payments/names.js';
 import type {
   MoneyRefundNeed,
   MoneyRefundPurpose,
@@ -55,41 +55,6 @@ export interface CheckoutSessionOrderDto {
 
 export interface CheckoutSessionReadResponseDto extends CheckoutSessionResponseDto {
   order: CheckoutSessionOrderDto;
-}
-
-// GET /stripe/checkout/sessions/:sessionId
-export interface GetCheckoutSessionByIdParamsDto {
-  sessionId: string;
-}
-
-export interface GetCheckoutSessionByIdDto extends GetCheckoutSessionByIdParamsDto {
-  actorId: UserId;
-  actorRole: Role;
-}
-
-// POST /stripe/webhook
-export interface HandleStripeWebhookDto {
-  stripeSignature: string;
-  rawBody: string | Buffer;
-}
-
-// why an event was taken without anything done (the answers of the webhook): a page that is not of
-// an order, an order that is gone or not in the state the event needs, an object of another kind,
-// a payment the order never takes (its money goes back), a refund of a key nobody knows
-export type StripeWebhookSkip =
-  | 'ORDER_NOT_FOUND'
-  | 'ORDER_NOT_CONFIRMED'
-  | 'ORDER_STATUS_NOT_WAITING'
-  | 'ORDER_ITEMS_REQUIRED'
-  | 'NOT_AN_ORDER'
-  | 'OBJECT_INVALID'
-  | 'REFUNDED'
-  | 'UNKNOWN_REFUND';
-
-export interface StripeWebhookResponseDto {
-  received: true;
-  // event was acknowledged without any action, with the reason
-  skipped?: StripeWebhookSkip;
 }
 
 // GET /refunds: the refunds of the money journal
@@ -272,7 +237,7 @@ export interface DisputeItemDto {
   id: number;
   provider: string;
   // the id of the dispute at the provider
-  stripeId: string;
+  providerDisputeId: string;
   paymentId: string;
   orderId: number | null;
   userId: number | null;
@@ -319,7 +284,7 @@ export interface DisputeCardDto extends DisputeItemDto {
     event: string;
     amount: number;
     currency: string | null;
-    stripeTxId: string | null;
+    balanceTxId: string | null;
     // what the money was decided for; null while it waits for root
     moneyUse: string | null;
     createdAt: string;

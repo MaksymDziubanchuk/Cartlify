@@ -4,12 +4,12 @@ import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
 
-import { getPaymentProvider } from '../providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import { settleHandRefund } from './helpers/handRefunds.helper.js';
 import { answerLateRefund } from './helpers/orderPaymentRefund.helper.js';
 import { settleMoneyRefund } from './helpers/settleMoneyRefund.helper.js';
 
-import type { PaymentProviderName, RefundAnswer } from '../providers/types.js';
+import type { PaymentProviderName, RefundAnswer } from '@providers/payments/types.js';
 import type { PaymentRefundMailLogger } from './helpers/paymentRefundMails.helper.js';
 
 type WorkerLogger = PaymentRefundMailLogger & { info: (obj: unknown, msg?: string) => void };

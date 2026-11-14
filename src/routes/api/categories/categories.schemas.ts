@@ -346,7 +346,7 @@ const putCategoryImageSchema = {
         '`MULTIPART_REQUIRED`: the body is not a form. `CATEGORY_IMAGE_REQUIRED`: the form has no ' +
         '`image` file. `CATEGORY_IMAGE_MULTIPLE`: the form has more than one. ' +
         '`CATEGORY_IMAGE_STREAM_ERROR`: an empty file. `IMAGE_TYPE_NOT_ALLOWED`: not a jpeg, png or ' +
-        'webp file. `IMAGE_INVALID`: Cloudinary cannot read the file.',
+        'webp file. `IMAGE_INVALID`: the file storage cannot read the file.',
       $ref: 'errorResponseSchema#',
     },
     401: {

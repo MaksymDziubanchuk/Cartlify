@@ -2,7 +2,7 @@ import { prisma } from '@db/client.js';
 import { Prisma } from '@prisma/client';
 
 import { BadRequestError, InternalError } from '@utils/errors.js';
-import { makeUploadPublicId, requireImageStream, uploadImage } from '@utils/cloudinary.util.js';
+import { fileStorage, makeUploadPublicId, requireImageStream } from '@providers/files/index.js';
 
 import type { ProductImagePart, UploadedProductImage } from 'types/dto/products.dto.js';
 import type { ProductId } from 'types/ids.js';
@@ -45,7 +45,7 @@ export async function beginProductImageUpload(args: {
     throw new BadRequestError('PRODUCT_IMAGE_EMPTY');
   }
 
-  // an empty file and one that is not a jpeg, png or webp by its bytes never reach cloudinary;
+  // an empty file and one that is not a jpeg, png or webp by its bytes never reach the file storage;
   // the stream is consumed at once
   const safeStream = await requireImageStream(image.file, {
     mimetype: image.mimetype,
@@ -54,7 +54,7 @@ export async function beginProductImageUpload(args: {
 
   // the image waits under an id of its own: placeProductImages moves it to its place once the
   // product is written, a refused request deletes it (the controller)
-  const uploaded = await uploadImage({
+  const uploaded = await fileStorage.uploadImage({
     publicId: makeUploadPublicId(),
     file: safeStream,
     mimetype: image.mimetype,

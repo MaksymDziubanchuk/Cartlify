@@ -1,3 +1,4 @@
+import type { AuthProvider } from '@prisma/client';
 import { prisma } from '@db/client.js';
 
 import { AppError, BadRequestError, InternalError, isAppError } from '@utils/errors.js';
@@ -54,7 +55,7 @@ export async function passwordForgot(
         {
           id: number;
           email: string;
-          authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+          authProvider: AuthProvider;
           locale: string | null;
         }[]
       >`

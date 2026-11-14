@@ -2,6 +2,7 @@
 // languages, the seller, the logo), a row a setting root writes (docs/shop-settings.md)
 
 import { DELIVERY_METHOD_NAMES } from '@config/deliveryMethods.js';
+import { paymentPageBounds } from '@providers/payments/index.js';
 
 const dateTimeSchema = { type: 'string', format: 'date-time' } as const;
 
@@ -86,12 +87,13 @@ const valueProperties = {
     minimum: 1,
     description: 'How long the app holds the stock of a cart before it is confirmed.',
   },
-  stripePageMinutes: {
+  paymentPageMinutes: {
     type: 'integer',
-    minimum: 30,
+    minimum: paymentPageBounds().least,
     description:
-      'How long the Stripe page of an order stays open after the reservation ends; together ' +
-      'with reservationMinutes at most 1440 (a day, the most Stripe keeps a page).',
+      'How long the payment page of an order stays open after the reservation ends: at least ' +
+      `${paymentPageBounds().least} minutes, and together with reservationMinutes at most ` +
+      `${paymentPageBounds().mostWithReservation} (the bounds every payment provider keeps a page in).`,
   },
   reviewCheckEnabled: { type: 'boolean', description: 'Whether the AI check of a review is on.' },
   avatarRemovalsLimit: {
@@ -270,7 +272,7 @@ export const putShopSettingBodySchemas = Object.fromEntries(
   ]),
 ) as Record<(typeof WRITABLE_KEYS)[number], object>;
 
-// the settings of the history: the ones root sets and the logo (its id on Cloudinary is internal)
+// the settings of the history: the ones root sets and the logo (its id in the file storage is internal)
 const HISTORY_KEYS = [...valueRequired, 'logoUrl'];
 
 const shopSettingsHistoryQuerySchema = {

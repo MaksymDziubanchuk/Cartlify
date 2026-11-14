@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import type { AiGenerateTextRequestDto } from '@services/ai/ai.types.js';
+import type { AiGenerateTextRequestDto } from '@providers/ai/types.js';
 
 import { jsonResponse, stubFetch } from '../../../../../../helpers/fetchStub.js';
 import { importWithEnv } from '../../../../../../helpers/freshImport.js';

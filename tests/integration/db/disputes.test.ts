@@ -68,7 +68,7 @@ import {
 //   snapshot is stale when its step is earlier than the one kept, or the same step with fewer
 //   submissions, or when the dispute kept has ended and the snapshot names another status (an end is
 //   final). A stale snapshot changes nothing of the row nor of the hold.
-//   Every balance transaction is a line of the money journal, once for its id (stripeTxId), from any
+//   Every balance transaction is a line of the money journal, once for its id (balanceTxId), from any
 //   snapshot, stale or not: below 0 money.dispute_withdrawn, above 0 money.dispute_reinstated (0
 //   writes nothing). The purpose dispute, the part whole, the amount of the transaction (the fee of
 //   the provider is not money of the order), its currency, the dispute, the order and the buyer, the
@@ -147,7 +147,7 @@ const disputeOf = (
   paymentId: string,
   status: DisputeStatus,
   more: Partial<Snapshot> = {},
-): Snapshot => ({ stripeId: newDisputeId(), paymentId, status, ...more });
+): Snapshot => ({ providerDisputeId: newDisputeId(), paymentId, status, ...more });
 
 // the payment an order could not take, as the payment webhook records it
 const LATE = `select cartlify.record_late_payment(
@@ -215,7 +215,7 @@ describe('the state of a dispute', () => {
       expect.objectContaining({
         id: result.answer.id,
         provider: 'stripe',
-        stripeId: result.snapshot.stripeId,
+        providerDisputeId: result.snapshot.providerDisputeId,
         paymentId: result.order.paymentId,
         orderId: result.order.orderId,
         userId: buyer.id,
@@ -457,7 +457,7 @@ describe('the money a dispute moves', () => {
       };
     });
 
-    expect(result.lines.map((l) => [l.event, l.purpose, l.part, l.amount, l.stripeTxId])).toEqual([
+    expect(result.lines.map((l) => [l.event, l.purpose, l.part, l.amount, l.balanceTxId])).toEqual([
       ['money.dispute_withdrawn', 'dispute', 'whole', '-25.00', result.taken.id],
       ['money.dispute_reinstated', 'dispute', 'whole', '25.00', result.given.id],
     ]);
@@ -746,7 +746,7 @@ describe('a lost dispute of an order not sent', () => {
       const transfer = await begun(db, admin.id, returnId);
       return {
         transfer,
-        source: (await linesWhere(db, admin.id, '"stripeTxId" = $1', taken.id))[0]!,
+        source: (await linesWhere(db, admin.id, '"balanceTxId" = $1', taken.id))[0]!,
         covered: await linesWhere(db, admin.id, `"returnId" = $1 and part = 'covered'`, returnId),
       };
     });
@@ -825,7 +825,7 @@ describe('who follows the disputes', () => {
       const order = await paidOrder(db);
       const base = disputeOf(order.paymentId, 'needs_response');
       const outcomes = [
-        await syncOf(db, { ...base, stripeId: '  ' }),
+        await syncOf(db, { ...base, providerDisputeId: '  ' }),
         await syncOf(db, { ...base, paymentId: '' }),
         await syncOf(db, { ...base, status: null }),
         await syncOf(db, { ...base, openedAt: null }),

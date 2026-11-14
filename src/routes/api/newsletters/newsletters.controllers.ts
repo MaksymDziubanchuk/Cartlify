@@ -1,11 +1,5 @@
 import type { FastifyRequest } from 'fastify';
 
-import {
-  SENDGRID_SIGNATURE_HEADER,
-  SENDGRID_TIMESTAMP_HEADER,
-} from '@helpers/sendGridSignature.js';
-import { BadRequestError } from '@utils/errors.js';
-
 import type { ControllerRouter } from 'types/controller.js';
 import type { User } from 'types/user.js';
 import type {
@@ -44,7 +38,7 @@ import type {
   NewsletterTranslateBodyDto,
   NewsletterTranslateResponseDto,
   NewsletterUnsubscribedResponseDto,
-  SendGridWebhookResponseDto,
+  MailWebhookResponseDto,
   OneClickParamsDto,
   OneClickQueryDto,
   ProfileLocaleBodyDto,
@@ -602,29 +596,17 @@ const postTranslate: ControllerRouter<
   return reply.code(200).send(result);
 };
 
-// The Event Webhook of SendGrid. The body of the route is its raw bytes (the parser of the route keeps
-// them, newsletters.webhook.routes.ts): the signature is made over exactly those
-const postSendGridWebhook: ControllerRouter<{}, {}, {}, SendGridWebhookResponseDto> = async (
+// The webhook of the mail provider. The body of the route is its raw bytes (the parser of the route
+// keeps them, newsletters.webhook.routes.ts): the signature is made over exactly those
+const postMailWebhook: ControllerRouter<{}, {}, {}, MailWebhookResponseDto> = async (
   req,
   reply,
 ) => {
-  const signature = req.headers[SENDGRID_SIGNATURE_HEADER];
-  const timestamp = req.headers[SENDGRID_TIMESTAMP_HEADER];
-
-  if (
-    typeof signature !== 'string' ||
-    !signature.trim() ||
-    typeof timestamp !== 'string' ||
-    !timestamp.trim()
-  ) {
-    throw new BadRequestError('SENDGRID_SIGNATURE_REQUIRED');
-  }
-
-  // a request with no body at all has no bytes: the signature then covers the timestamp alone
+  // a request with no body at all has no bytes: the signature then covers the rest alone
   const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.alloc(0);
 
-  const result = await newslettersServices.handleSendGridWebhook(
-    { signature, timestamp, rawBody },
+  const result = await newslettersServices.handleMailWebhook(
+    { headers: req.headers, rawBody },
     req.log,
   );
 
@@ -642,7 +624,7 @@ export const newslettersController = {
   postManageExport,
   postOneClickUnsubscribe,
   getOneClickPage,
-  postSendGridWebhook,
+  postMailWebhook,
   getProfile,
   patchProfile,
   deleteProfile,

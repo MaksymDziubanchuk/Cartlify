@@ -1,7 +1,7 @@
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { sendEmail } from './sendEmail.helper.js';
-import { isEmailProviderFailure } from '@services/email/sendGrid.js';
+import { isMailProviderFailure } from '@providers/mail/index.js';
 import { buildVerifyEmailTemplate } from '@services/email/templates/auth/verifyEmail.template.js';
 import { AppError } from '@utils/errors.js';
 import { formatExpiresIn } from '@helpers/formatExpiresIn.js';
@@ -21,7 +21,7 @@ export type SendVerifyEmailArgs = {
 // build verify url
 // add expiry hint
 // send email via provider
-export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ status: number }> {
+export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<void> {
   const verifyUrl = buildWebLoginVerifyUrl(args.token, args.newsletter === true);
   const expiresInText = formatExpiresIn(args.expiresAt, args.locale);
 
@@ -35,7 +35,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
   });
 
   try {
-    return await sendEmail({
+    await sendEmail({
       to: args.to,
       subject,
       text,
@@ -43,7 +43,7 @@ export async function sendVerifyEmail(args: SendVerifyEmailArgs): Promise<{ stat
     });
   } catch (err) {
     // only a failure of the mail provider is a bad gateway, our own error stays a server error
-    if (!isEmailProviderFailure(err)) throw err;
+    if (!isMailProviderFailure(err)) throw err;
 
     // avoid leaking provider details
     throw new AppError({

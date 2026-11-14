@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { getPgCode } from '@db/client.js';
-import { deleteDocument, requirePdfStream, uploadDocument } from '@utils/cloudinary.util.js';
+import { fileStorage, makeDocumentPublicId, requirePdfStream } from '@providers/files/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import type { FastifyBaseLogger } from 'fastify';
@@ -79,8 +79,8 @@ export const isForeignKeyViolation = (err: unknown) =>
   (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2003') ||
   getPgCode(err) === '23503';
 
-// reads the file of a form into Cloudinary at once: it must be a PDF by its first bytes, an empty
-// file and any other file never reach Cloudinary. The row of the document is written after, and a
+// reads the file of a form into the file storage at once: it must be a PDF by its first bytes, an empty
+// file and any other file never reach the file storage. The row of the document is written after, and a
 // refused request deletes the file (discardDocumentUploads)
 export async function beginDocumentUpload(file: {
   file: NodeJS.ReadableStream;
@@ -99,7 +99,7 @@ export async function beginDocumentUpload(file: {
     emptyCode: 'DOCUMENT_STREAM_ERROR',
   });
 
-  return uploadDocument({ file: safe });
+  return fileStorage.uploadDocument({ file: safe, publicId: makeDocumentPublicId() });
 }
 
 // deletes the files of a request that was refused, once each has finished uploading; it never
@@ -115,7 +115,7 @@ export async function discardDocumentUploads(
       if (result.status !== 'fulfilled') return;
 
       try {
-        await deleteDocument(result.value.publicId);
+        await fileStorage.deleteDocument(result.value.publicId);
       } catch (err) {
         log.warn(
           { err, publicId: result.value.publicId },

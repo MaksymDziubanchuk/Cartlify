@@ -196,7 +196,7 @@ const postSubscriptionSchema = {
     },
     503: {
       description:
-        '`CAPTCHA_UNAVAILABLE`: the captcha could not be checked right now (Cloudflare did not ' +
+        '`CAPTCHA_UNAVAILABLE`: the captcha could not be checked right now (its provider did not ' +
         'answer in time or failed, or the shop secret of the captcha is not taken); nothing was ' +
         'changed. Reset the widget and repeat the request with a new answer in a moment.',
       $ref: 'errorResponseSchema#',

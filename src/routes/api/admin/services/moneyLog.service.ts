@@ -91,7 +91,7 @@ export type MoneyRow = {
   paymentId: string | null;
   refundId: string | null;
   transferKey: string | null;
-  stripeTxId: string | null;
+  balanceTxId: string | null;
   bankReference: string | null;
   byDashboard: boolean;
   state: AdminMoneyState | null;
@@ -130,7 +130,7 @@ const MONEY_SORTS = {
   paymentId: { sql: l('paymentId'), kind: 'text' },
   refundId: { sql: l('refundId'), kind: 'text' },
   transferKey: { sql: l('transferKey'), kind: 'text' },
-  stripeTxId: { sql: l('stripeTxId'), kind: 'text' },
+  balanceTxId: { sql: l('balanceTxId'), kind: 'text' },
   bankReference: { sql: l('bankReference'), kind: 'text' },
   byDashboard: { sql: l('byDashboard'), kind: 'boolean' },
   state: { sql: text('state'), kind: 'text' },
@@ -204,7 +204,7 @@ export function moneyLogItemOf(row: MoneyRow, viewer: Role): MoneyItem {
     paymentId: row.paymentId,
     refundId: row.refundId,
     transferKey: row.transferKey,
-    stripeTxId: row.stripeTxId,
+    balanceTxId: row.balanceTxId,
     bankReference: row.bankReference,
     byDashboard: row.byDashboard,
     state: row.state,
@@ -282,7 +282,7 @@ const MONEY_DEF: JournalDef<MoneyRow, MoneyItem> = {
     l."userId", b.name AS "userName", b.email AS "userEmail", b.role AS "userRoleNow",
     (b."deletedAt" IS NOT NULL) AS "userDeleted", l."returnId",
     l."orderShipmentId", l."disputeId", l."coversId", l.provider::text AS provider, l."paymentId",
-    l."refundId", l."transferKey", l."stripeTxId", l."bankReference", l."byDashboard",
+    l."refundId", l."transferKey", l."balanceTxId", l."bankReference", l."byDashboard",
     l.state::text AS state, l."stateAt", l.failure::text AS failure, l."failureText",
     l.method::text AS method, l.note, l."happenedAt", l."moneyUse"::text AS "moneyUse", l.ip,
     l."userAgent", l.meta`,
@@ -310,7 +310,7 @@ const MONEY_DEF: JournalDef<MoneyRow, MoneyItem> = {
     'paymentId',
     'refundId',
     'transferKey',
-    'stripeTxId',
+    'balanceTxId',
     'bankReference',
     'byDashboard',
     'state',
@@ -352,7 +352,7 @@ const MONEY_DEF: JournalDef<MoneyRow, MoneyItem> = {
     paymentId: textColumn('paymentId'),
     refundId: textColumn('refundId'),
     transferKey: textColumn('transferKey'),
-    stripeTxId: textColumn('stripeTxId'),
+    balanceTxId: textColumn('balanceTxId'),
     bankReference: textColumn('bankReference'),
     byDashboard: [{ header: 'byDashboard', kind: 'text', value: (row) => String(row.byDashboard) }],
     state: textColumn('state'),
@@ -399,7 +399,7 @@ export const MONEY_FILTERS: Record<string, ColumnFilter> = {
   provider: { kind: 'enum', sql: l('provider'), type: 'PaymentProvider' },
   refundId: { kind: 'text', sql: l('refundId') },
   transferKey: { kind: 'text', sql: l('transferKey') },
-  stripeTxId: { kind: 'text', sql: l('stripeTxId') },
+  balanceTxId: { kind: 'text', sql: l('balanceTxId') },
   bankReference: { kind: 'contains', sql: l('bankReference') },
   byDashboard: { kind: 'boolean', sql: l('byDashboard') },
   failure: { kind: 'enum', sql: l('failure'), type: 'RefundFailure' },

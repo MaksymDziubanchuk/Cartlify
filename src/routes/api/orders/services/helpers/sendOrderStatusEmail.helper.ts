@@ -10,7 +10,7 @@ import { buildOrderShippedTemplate } from '@services/email/templates/orders/orde
 import { buildOrderDeliveredTemplate } from '@services/email/templates/orders/orderDelivered.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { sendOrderNoticeEmail } from './sendOrderNoticeEmail.helper.js';
-import { currencyOf } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { itemNameOf } from './itemName.helper.js';
 import { withdrawalEndsOf, withdrawalPeriodDaysOf } from './withdrawal.helper.js';
 
@@ -190,7 +190,7 @@ export async function sendOrderStatusEmail(
       // what the buyer paid for the delivery, none for a pickup
       deliveryPrice,
       // the money of the provider that took it
-      currency: currencyOf(order.paymentProvider),
+      currency: shopCurrency(),
       ...(order.user.name ? { userName: order.user.name } : {}),
       ...deliveryMailParts(order.delivery, locale),
       ...(status === 'shipped' && order.shipments[0]

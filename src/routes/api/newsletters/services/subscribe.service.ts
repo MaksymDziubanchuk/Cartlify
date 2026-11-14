@@ -13,7 +13,7 @@ import {
   normalizeEmail,
   unsubscribeTokenOf,
 } from '@helpers/newsletterTokens.js';
-import { verifyCaptcha } from '@services/captcha/turnstile.service.js';
+import { captchaProvider } from '@providers/captcha/index.js';
 import { BadRequestError, ConflictError, ForbiddenError, InternalError } from '@utils/errors.js';
 import type {
   NewsletterSubscriptionDto,
@@ -195,10 +195,10 @@ export async function subscribe(
     if (dto.email === undefined || dto.email === '') throw new BadRequestError('EMAIL_REQUIRED');
 
     // the language of the mail: the one asked for, from a guest and from a signed-in user alike (the
-    // cheap checks come before the captcha, which costs a call to Cloudflare and works once)
+    // cheap checks come before the captcha, which costs a call to its provider and works once)
     if (!asked) throw new BadRequestError('LOCALE_INVALID');
 
-    await verifyCaptcha({ token: dto.captchaToken, ip: dto.ip ?? undefined, log });
+    await captchaProvider.verify({ token: dto.captchaToken, ip: dto.ip ?? undefined, log });
     await hooks.afterCaptcha?.();
 
     await requestSubscription(dto, normalizeEmail(dto.email), asked, log);

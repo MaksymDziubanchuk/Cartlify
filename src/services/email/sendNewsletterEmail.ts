@@ -1,12 +1,12 @@
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
+import { mailProvider } from '@providers/mail/index.js';
 import { InternalError } from '@utils/errors.js';
-import { postToSendGrid } from '@services/email/sendGrid.js';
 
-// The SendGrid category of every mail of this stream: the lists of complaints, bounces and
-// unsubscribes of the newsletter account are kept per account, the category tells the mails apart
-// in its statistics
+// the category of every mail of this stream at the mail provider: the lists of complaints, bounces
+// and unsubscribes of the newsletter account are kept per account, the category tells the mails
+// apart in its statistics
 export const NEWSLETTER_CATEGORY = 'newsletter';
 
 export type SendNewsletterEmailInput = {
@@ -17,14 +17,14 @@ export type SendNewsletterEmailInput = {
   // extra headers of the mail itself: List-Unsubscribe and List-Unsubscribe-Post of a newsletter
   headers?: Record<string, string>;
   // what comes back with every event of the webhook for this mail (the campaign and the recipient)
-  customArgs?: Record<string, string>;
+  tags?: Record<string, string>;
 };
 
 // a header the stream never sets: there is no Reply-To, the answers go to an address that drops them
 const FORBIDDEN_HEADERS = new Set(['reply-to']);
 const HEADER_NAME = /^[A-Za-z0-9-]+$/;
 
-// the headers as SendGrid takes them: a name of letters, digits and hyphens, a value on one line,
+// the headers as a mail takes them: a name of letters, digits and hyphens, a value on one line,
 // and not the Reply-To this stream does without
 function checkedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
   const given = Object.entries(headers ?? {});
@@ -50,18 +50,14 @@ function senderNameOf(): string {
   return settings.newsletterFromName.trim() || settings.emailFromName.trim() || settings.shopName;
 }
 
-// A mail of the newsletter stream: its own SendGrid key (SENDGRID_NEWSLETTER_API_KEY) and sender
+// A mail of the newsletter stream: its own account at the mail provider and its own sender
 // (NEWSLETTER_EMAIL_FROM, named senderNameOf), so the complaints about newsletters stay on their
-// account and subdomain and do not touch the mails of the orders. No Reply-To, the category
-// "newsletter", and every kind of tracking off on the mail itself: the links are ours and SendGrid
-// must not rewrite them or add a footer. Errors are the ones of the orders' stream (sendGrid.ts).
+// account and subdomain and do not touch the mails of the orders. No Reply-To and the category
+// "newsletter". Errors are the ones of the provider (src/providers/mail/types.ts).
 export async function sendNewsletterEmail(
   input: SendNewsletterEmailInput,
-): Promise<{ status: number; messageId?: string }> {
-  // require the config of the stream, never the key or the sender of the orders
-  if (!env.SENDGRID_NEWSLETTER_API_KEY) {
-    throw new InternalError({ reason: 'SENDGRID_NEWSLETTER_API_KEY_REQUIRED' });
-  }
+): Promise<{ messageId?: string }> {
+  // the sender of the stream, never the one of the orders
   if (!env.NEWSLETTER_EMAIL_FROM)
     throw new InternalError({ reason: 'NEWSLETTER_EMAIL_FROM_REQUIRED' });
 
@@ -76,26 +72,15 @@ export async function sendNewsletterEmail(
   if (!text) throw new InternalError({ reason: 'EMAIL_TEXT_REQUIRED' });
 
   const headers = checkedHeaders(input.headers);
-  const html = input.html?.trim() || `<p>${escapeHtml(text)}</p>`;
 
-  const payload = {
-    personalizations: [{ to: [{ email: to }] }],
+  return mailProvider.send('newsletter', {
+    to,
     from: { email: env.NEWSLETTER_EMAIL_FROM, name: senderNameOf() },
     subject,
-    content: [
-      { type: 'text/plain', value: text },
-      { type: 'text/html', value: html },
-    ],
-    categories: [NEWSLETTER_CATEGORY],
-    tracking_settings: {
-      click_tracking: { enable: false, enable_text: false },
-      open_tracking: { enable: false },
-      subscription_tracking: { enable: false },
-      ganalytics: { enable: false },
-    },
-    headers: Object.keys(headers).length ? headers : undefined,
-    custom_args: Object.keys(input.customArgs ?? {}).length ? input.customArgs : undefined,
-  };
-
-  return postToSendGrid(env.SENDGRID_NEWSLETTER_API_KEY, payload);
+    text,
+    html: input.html?.trim() || `<p>${escapeHtml(text)}</p>`,
+    category: NEWSLETTER_CATEGORY,
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(Object.keys(input.tags ?? {}).length ? { tags: input.tags! } : {}),
+  });
 }

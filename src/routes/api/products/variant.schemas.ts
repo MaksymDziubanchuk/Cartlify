@@ -671,7 +671,7 @@ const postGalleryImagesRouterSchema = {
         'the gallery with the pictures it has (PRODUCT_IMAGES_TOO_MANY, `details.max`, ' +
         '`details.have`: the pictures the gallery has), a file ' +
         'that is not a jpeg, png or webp image by its content (IMAGE_TYPE_NOT_ALLOWED), an image ' +
-        'Cloudinary cannot read (IMAGE_INVALID).',
+        'the file storage cannot read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: { description: 'Authentication is required.', $ref: 'errorResponseSchema#' },
@@ -701,7 +701,7 @@ const deleteGalleryImageRouterSchema = {
   description:
     'Takes a picture out of the gallery. The variants that showed it do not show it any more; the ' +
     'answer names the variants for sale that are left without a picture (`variantsWithoutImages`): ' +
-    'a buyer does not see them until they get one. The file is deleted from Cloudinary. Admin and ' +
+    'a buyer does not see them until they get one. The file is deleted from the file storage. Admin and ' +
     'root only; a line (`product.gallery_remove`) in the admin log.',
 
   params: {

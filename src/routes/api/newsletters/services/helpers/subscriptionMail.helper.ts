@@ -9,8 +9,7 @@ import {
   newsletterManageUrl,
 } from '@helpers/newsletterLinks.js';
 import { manageHashOf } from '@helpers/newsletterTokens.js';
-import { clearSpamReport } from '@services/email/clearSpamReport.js';
-import { isEmailProviderFailure } from '@services/email/sendGrid.js';
+import { isMailProviderFailure, mailProvider } from '@providers/mail/index.js';
 import { sendNewsletterEmail } from '@services/email/sendNewsletterEmail.js';
 import { buildSubscriptionAlreadyTemplate } from '@services/email/templates/newsletters/subscriptionAlready.template.js';
 import { buildSubscriptionConfirmTemplate } from '@services/email/templates/newsletters/subscriptionConfirm.template.js';
@@ -60,7 +59,7 @@ async function deliver(to: string, kind: MailKind, build: () => Mail, log: MailL
     await sendNewsletterEmail({ to, subject, text, html });
     return;
   } catch (err) {
-    if (isEmailProviderFailure(err) && err instanceof AppError) {
+    if (isMailProviderFailure(err) && err instanceof AppError) {
       const status = (err.cause as { status?: unknown } | undefined)?.status;
       const reason = (err.details as { reason?: unknown } | undefined)?.reason;
 
@@ -140,14 +139,14 @@ async function isPausedByComplaint(manageToken: string, log: MailLog): Promise<b
 // "You are already subscribed": the link of management of the subscription that exists, in its
 // language. A subscription a spam mark paused gets another mail, which says so and where to resume it:
 // the provider drops every mail to an address on its list of spam reports, so the address is taken off
-// the list of the newsletter account first (clearSpamReport, which never throws: a removal that
+// the list of the newsletter account first (mailProvider.clearComplaint, which never throws: a removal that
 // fails is only logged and the mail still goes)
 export async function sendSubscriptionAlreadyMail(
   args: { to: string; manageToken: string; locale: string },
   log: MailLog,
 ): Promise<void> {
   const paused = await isPausedByComplaint(args.manageToken, log);
-  if (paused) await clearSpamReport(args.to, log);
+  if (paused) await mailProvider.clearComplaint(args.to, log);
 
   return deliver(
     args.to,

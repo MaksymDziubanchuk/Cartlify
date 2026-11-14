@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
-import { AVATAR_BASE_PUBLIC_ID, ensureAvatarBase } from '@utils/avatar.util.js';
+import { AVATAR_BASE_PUBLIC_ID } from '@providers/files/cloudinary/cloudinaryLetterAvatar.js';
+import { fileStorage } from '@providers/files/index.js';
 
 import { accessCookie, getMe } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -381,17 +382,17 @@ describe('PATCH /api/users/me with an avatar (Cloudinary)', () => {
   // when it starts, if it is not there yet
   describe('the drawn avatar', () => {
     it('puts the plain picture the letters go on into the folder once', async () => {
-      await ensureAvatarBase(app.log);
+      await fileStorage.prepareLetterAvatars(app.log);
       const mark = uploadMark();
 
-      await ensureAvatarBase(app.log);
+      await fileStorage.prepareLetterAvatars(app.log);
 
       expect(uploadsSince(mark)).toEqual([]);
       expect(await storedImage(AVATAR_BASE_PUBLIC_ID)).toMatchObject({ format: 'png' });
     });
 
     it('serves the drawn avatar at the urls it gives', async () => {
-      await ensureAvatarBase(app.log);
+      await fileStorage.prepareLetterAvatars(app.log);
       const user = await newUser();
 
       const me = await getMe(app, accessCookie(user));

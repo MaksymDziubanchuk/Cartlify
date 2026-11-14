@@ -111,7 +111,7 @@ export interface CategoryImagePart {
   filename?: string;
 }
 
-// a picture waiting on Cloudinary under an id of its own until the category is written
+// a picture waiting in the file storage under an id of its own until the category is written
 export interface UploadedCategoryImage {
   publicId: string;
 }

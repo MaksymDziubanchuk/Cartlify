@@ -448,7 +448,9 @@ describe('late_refunds_failed', () => {
 
     await expectCases(someone, kind, { userId: late.user.id }, [], [refund]);
     const answer = await alerts.listOf(someone, 'disputes_to_answer', { orderId: late.orderId });
-    expect(answer.items).toEqual([expect.objectContaining({ stripeId: disputeId, late: true })]);
+    expect(answer.items).toEqual([
+      expect.objectContaining({ providerDisputeId: disputeId, late: true }),
+    ]);
   });
 
   // what the bank decides may give the buyer the money: root does not send it another way meanwhile

@@ -31,7 +31,7 @@ export type ShopSettingsValues = {
   logoPublicId: string | null;
 
   reservationMinutes: number;
-  stripePageMinutes: number;
+  paymentPageMinutes: number;
 
   reviewCheckEnabled: boolean;
   avatarRemovalsLimit: number;
@@ -73,7 +73,7 @@ export const SHOP_SETTING_KEYS = [
   'logoUrl',
   'logoPublicId',
   'reservationMinutes',
-  'stripePageMinutes',
+  'paymentPageMinutes',
   'reviewCheckEnabled',
   'avatarRemovalsLimit',
   'reviewRemovalsLimit',
@@ -123,7 +123,7 @@ export const WRITABLE_SHOP_SETTINGS_FIELDS = [
   'emailFromName',
   'emailReplyTo',
   'reservationMinutes',
-  'stripePageMinutes',
+  'paymentPageMinutes',
   'reviewCheckEnabled',
   'avatarRemovalsLimit',
   'reviewRemovalsLimit',
@@ -157,7 +157,7 @@ const DEFAULTS: Partial<ShopSettingsValues> = {
   emailFromName: '',
   emailReplyTo: '',
   reservationMinutes: 15,
-  stripePageMinutes: 30,
+  paymentPageMinutes: 30,
   reviewCheckEnabled: true,
   avatarRemovalsLimit: 5,
   reviewRemovalsLimit: 5,
@@ -367,7 +367,7 @@ export async function writeShopSettings(args: {
 }
 
 // root sets the logo, or takes it away with null, null. The caller already moved the file to its
-// place on Cloudinary (or has nothing to move, for a removal); the id of the file the shop had is
+// place in the file storage (or has nothing to move, for a removal); the id of the file the shop had is
 // given back, for the caller to delete once this write landed
 export async function writeShopLogo(args: {
   actorId: UserId;

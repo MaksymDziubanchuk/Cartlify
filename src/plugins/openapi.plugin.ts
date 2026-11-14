@@ -208,7 +208,7 @@ const sharedRefusals = (
             text: 'the account may not handle the money this way: only root and an admin whom root allowed may (the profile tells it in `canManageMoney`); the right is checked in the database at every request, so one root took away stops at once.',
         });
     }
-    // the captcha of a form (Cloudflare Turnstile): the same two refusals on every route that has it
+    // the captcha of a form: the same two refusals on every route that has it
     if (hooks.includes(requireCaptcha)) {
         refusals.push(
             {
@@ -219,7 +219,7 @@ const sharedRefusals = (
             {
                 status: '503',
                 code: 'CAPTCHA_UNAVAILABLE',
-                text: 'the captcha could not be checked right now (Cloudflare did not answer in time or failed, or the shop secret of the captcha is not taken); nothing was changed. Reset the widget and repeat the request with a new answer in a moment.',
+                text: 'the captcha could not be checked right now (its provider did not answer in time or failed, or the shop secret of the captcha is not taken); nothing was changed. Reset the widget and repeat the request with a new answer in a moment.',
             },
         );
     }
@@ -245,12 +245,12 @@ const sharedRefusals = (
             text: 'the database was too busy for the request (a lock it could not take in time, or a transaction whose time ran out); nothing was changed, repeat the request.',
         });
     }
-    // a route with a form that has files takes image files, Cloudinary keeps them
+    // a route with a form that has files takes image files, the file storage keeps them
     if (route.config?.formBodySchema && takesFiles) {
         refusals.push({
             status: '503',
             code: 'IMAGE_STORAGE_UNAVAILABLE',
-            text: 'Cloudinary, which keeps the images, did not answer in time, could not be reached or failed; nothing was changed, repeat the request.',
+            text: 'The file storage, which keeps the images, did not answer in time, could not be reached or failed; nothing was changed, repeat the request.',
         });
     }
     refusals.push({

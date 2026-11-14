@@ -65,7 +65,7 @@ export async function cloudinaryQuota(rootDir) {
 
   const secrets = [...Object.values(creds), keys.CLOUDINARY_URL.trim()];
   try {
-    // loaded here, the way src/config/cloudinary.ts does it: the sdk reads CLOUDINARY_URL when it
+    // loaded here, the way src/providers/files/cloudinary/cloudinaryClient.ts does it: the sdk reads CLOUDINARY_URL when it
     // loads, and its errors may quote it
     const { v2: cloudinary } = await import('cloudinary');
     cloudinary.config({ ...creds, secure: true });

@@ -4,12 +4,16 @@ import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
 
-import { getPaymentProvider } from '../../providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import { centsOfAmount, lateRefundKeyOf } from './lateRefundKey.helper.js';
 import { paidLeftOf } from './latePayments.helper.js';
 import { mailLateRefundSent, settleMoneyRefund } from './settleMoneyRefund.helper.js';
 
-import type { PaymentProviderName, PaymentRefund, RefundAnswer } from '../../providers/types.js';
+import type {
+  PaymentProviderName,
+  PaymentRefund,
+  RefundAnswer,
+} from '@providers/payments/types.js';
 import type { PaymentRefundMailLogger } from './paymentRefundMails.helper.js';
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
 

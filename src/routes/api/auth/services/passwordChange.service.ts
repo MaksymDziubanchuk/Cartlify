@@ -29,7 +29,7 @@ type ChangePasswordDto = {
 
 // a signed-in person changes the password, knowing the current one: the other sessions of the
 // account end (a session somebody else holds), this one goes on, the pending reset links close,
-// and the owner gets a mail. An account of google, github or linkedin has no password of ours
+// and the owner gets a mail. An account of a provider of accounts has no password of ours
 export async function changePassword({
   userId,
   role,

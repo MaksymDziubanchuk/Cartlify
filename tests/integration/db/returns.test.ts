@@ -1260,7 +1260,7 @@ describe('the reasons that cancel an order', () => {
     // the server acting by itself: the payment webhook
     const asSystem = (db: DbSession) => db.as({ role: 'ADMIN' });
 
-    it.each([['dispute_lost'], ['stripe_refund']])(
+    it.each([['dispute_lost'], ['provider_refund']])(
       'with the reason %s takes what is left of a paid order back to the stock at once, as a cancel by the shop',
       async (reason) => {
         const result = await inRolledBackTx(async (db) => {
@@ -1369,7 +1369,7 @@ describe('the reasons that cancel an order', () => {
           items: [{ orderItemId: items[0]!.id, quantity: 1 }],
           source: 'system',
           basis,
-          reason: 'stripe_refund',
+          reason: 'provider_refund',
         });
       });
 

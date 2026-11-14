@@ -11,8 +11,8 @@ import type {
 
 // What the sender of the newsletters takes for one reader: the subject, the two bodies, the headers of
 // the one-click unsubscribe and what was wrong with the mail. The marks of the campaign and of the
-// reader that come back with the events of SendGrid (custom_args: the ids of the campaign and of the
-// recipient, never an address or a token) are for the one who sends, who knows the recipient. The mail
+// reader that come back with the events of the mail provider (the tags: the ids of the campaign and
+// of the recipient, never an address or a token) are for the one who sends, who knows the recipient. The mail
 // carries no attachment: the logo is shown by its address
 export type NewsletterMail = {
   subject: string;

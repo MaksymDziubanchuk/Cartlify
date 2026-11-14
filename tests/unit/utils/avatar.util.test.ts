@@ -1,13 +1,13 @@
 import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import cloudinary from '@config/cloudinary.js';
+import { fileStorage } from '@providers/files/index.js';
+import { AVATAR_BASE_PUBLIC_ID } from '@providers/files/cloudinary/cloudinaryLetterAvatar.js';
+import cloudinary from '@providers/files/cloudinary/cloudinaryClient.js';
 import {
-  AVATAR_BASE_PUBLIC_ID,
   AVATAR_COLORS,
   DELETED_AVATAR_COLOR,
   avatarOf,
-  ensureAvatarBase,
   nameGivesLetter,
 } from '@utils/avatar.util.js';
 
@@ -120,7 +120,7 @@ describe('avatarOf', () => {
   });
 });
 
-describe('ensureAvatarBase', () => {
+describe('the base of the drawn letters (prepareLetterAvatars)', () => {
   afterEach(() => {
     jest.restoreAllMocks();
   });
@@ -154,7 +154,7 @@ describe('ensureAvatarBase', () => {
     const upload = uploadAnswers(undefined, {});
     const log = logger();
 
-    await ensureAvatarBase(log);
+    await fileStorage.prepareLetterAvatars(log);
 
     expect(upload).not.toHaveBeenCalled();
     expect(log.warn).not.toHaveBeenCalled();
@@ -168,7 +168,7 @@ describe('ensureAvatarBase', () => {
     });
     const log = logger();
 
-    await ensureAvatarBase(log);
+    await fileStorage.prepareLetterAvatars(log);
 
     expect(upload).toHaveBeenCalledTimes(1);
     expect(upload.mock.calls[0]![0]).toMatchObject({
@@ -183,7 +183,7 @@ describe('ensureAvatarBase', () => {
     const upload = uploadAnswers(undefined, {});
     const log = logger();
 
-    await ensureAvatarBase(log);
+    await fileStorage.prepareLetterAvatars(log);
 
     expect(upload).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith({ httpCode: 500 }, 'avatar base was not checked');
@@ -194,7 +194,7 @@ describe('ensureAvatarBase', () => {
     uploadAnswers({ http_code: 500, message: 'General Error' });
     const log = logger();
 
-    await expect(ensureAvatarBase(log)).resolves.toBeUndefined();
+    await expect(fileStorage.prepareLetterAvatars(log)).resolves.toBeUndefined();
 
     expect(log.warn).toHaveBeenCalledWith(expect.any(Object), 'avatar base was not uploaded');
   });

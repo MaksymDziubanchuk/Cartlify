@@ -29,7 +29,7 @@ import {
   unsubscribeManaged,
 } from './services/manage.service.js';
 import { oneClickUnsubscribe } from './services/oneClick.service.js';
-import { handleSendGridWebhook } from './services/sendGridWebhook.service.js';
+import { handleMailWebhook } from './services/mailWebhook.service.js';
 import {
   getProfileSubscription,
   resumeProfile,
@@ -47,7 +47,7 @@ export const newslettersServices = {
   resumeManaged,
   exportManaged,
   oneClickUnsubscribe,
-  handleSendGridWebhook,
+  handleMailWebhook,
   getProfileSubscription,
   setProfileLocale,
   unsubscribeProfile,

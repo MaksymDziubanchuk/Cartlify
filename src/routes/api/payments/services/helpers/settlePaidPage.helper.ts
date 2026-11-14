@@ -9,7 +9,7 @@ import { refundLatePayment } from './orderPaymentRefund.helper.js';
 import { payOrder } from './orderPaymentTx.helper.js';
 import { sendOrderPaidEmail } from './sendOrderPaidEmail.helper.js';
 
-import type { PaidPage, PaymentProviderName } from '../../providers/types.js';
+import type { PaidPage, PaymentProviderName } from '@providers/payments/types.js';
 import type { PaymentRefundMailLogger } from './paymentRefundMails.helper.js';
 
 // the page was settled before: the payment is one the order could not take and its money goes

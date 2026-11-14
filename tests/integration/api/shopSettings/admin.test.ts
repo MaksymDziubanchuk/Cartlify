@@ -41,7 +41,7 @@ const VALUE_KEYS = [
   'emailReplyTo',
   'logoUrl',
   'reservationMinutes',
-  'stripePageMinutes',
+  'paymentPageMinutes',
   'reviewCheckEnabled',
   'avatarRemovalsLimit',
   'reviewRemovalsLimit',

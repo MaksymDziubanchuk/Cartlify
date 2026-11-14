@@ -4,7 +4,7 @@ import { normalizeDeleteCategoryInput } from './helpers/categories.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
-import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
+import { fileStorage, isOwnFile } from '@providers/files/index.js';
 
 import type { FastifyBaseLogger } from 'fastify';
 
@@ -79,7 +79,7 @@ export async function deleteCategoryById(dto: {
     // the category is gone: so is its picture. A failure is only logged, the file of no one stays
     if (isOwnFile(imagePublicId)) {
       try {
-        await deleteImage(imagePublicId);
+        await fileStorage.deleteImage(imagePublicId);
       } catch (err) {
         dto.log?.warn(
           { err, publicId: imagePublicId },

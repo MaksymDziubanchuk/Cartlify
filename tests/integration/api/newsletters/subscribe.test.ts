@@ -500,7 +500,7 @@ describe('POST /api/newsletters/subscriptions, a guest', () => {
       const logged = takeLogs({ msg: 'newsletter subscription mail was not sent' });
       expect(logged).toHaveLength(2);
       for (const entry of logged) {
-        expect(entry).toMatchObject({ level: 40, reason: 'SENDGRID_SEND_FAILED' });
+        expect(entry).toMatchObject({ level: 40, reason: 'MAIL_PROVIDER_REFUSED' });
         for (const { email } of kinds) expect(JSON.stringify(entry)).not.toContain(email);
       }
     });

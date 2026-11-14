@@ -50,7 +50,7 @@ async function call(sql: Prisma.Sql): Promise<Held> {
   }, TX_OPTIONS);
 }
 
-// an early warning the shop can still act on (Stripe says actionable): an order not sent is held,
+// an early warning the shop can still act on (the provider says so): an order not sent is held,
 // one sent is marked; the buyer is told the payment is checked when it is the first check
 export async function followFraudWarning(
   warning: { id: string; paymentId: string; actionable: boolean },

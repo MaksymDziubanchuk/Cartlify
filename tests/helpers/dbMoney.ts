@@ -63,7 +63,7 @@ export type DisputeTx = { id: string; amount: number; fee?: number; currency?: s
 // a dispute as the provider gives it at the moment the app reads it (a snapshot); what is not said
 // takes the defaults below
 export type Snapshot = {
-  stripeId: string;
+  providerDisputeId: string;
   paymentId: string;
   status: DisputeStatus | null;
   reason?: string | null;
@@ -112,7 +112,7 @@ function syncValues(s: Snapshot): unknown[] {
   if (s.rawTransactions !== undefined) transactions = s.rawTransactions;
 
   return [
-    s.stripeId,
+    s.providerDisputeId,
     s.paymentId,
     s.status,
     s.reason === undefined ? 'fraudulent' : s.reason,
@@ -136,7 +136,7 @@ export const synced = (db: DbSession, s: Snapshot) => answerOf(db, SYSTEM, SYNC,
 export type DisputeRow = {
   id: number;
   provider: string;
-  stripeId: string;
+  providerDisputeId: string;
   paymentId: string;
   orderId: number | null;
   userId: number | null;
@@ -157,7 +157,7 @@ export type DisputeRow = {
 export async function disputesOf(db: DbSession, adminId: number, paymentId: string) {
   await db.as({ role: 'ADMIN', userId: adminId });
   return db.rows<DisputeRow>(
-    `select id, provider::text as provider, "stripeId", "paymentId", "orderId", "userId", reason,
+    `select id, provider::text as provider, "providerDisputeId", "paymentId", "orderId", "userId", reason,
             status::text as status, "evidenceDueBy"::text as "evidenceDueBy", "hasEvidence",
             "submissionCount", "isChargeRefundable", "openedAt"::text as "openedAt",
             "closedAt"::text as "closedAt", "draftedAt"::text as "draftedAt",
@@ -230,7 +230,7 @@ export type Line = {
   paymentId: string | null;
   refundId: string | null;
   transferKey: string | null;
-  stripeTxId: string | null;
+  balanceTxId: string | null;
   coversId: number | null;
   orderId: number | null;
   userId: number | null;
@@ -246,7 +246,7 @@ export type Line = {
 
 const LINE_COLUMNS = `id, event, purpose::text as purpose, part::text as part, amount::text as amount,
   currency, state::text as state, provider::text as provider, "paymentId", "refundId",
-  "transferKey", "stripeTxId", "coversId", "orderId", "userId", "returnId", "disputeId",
+  "transferKey", "balanceTxId", "coversId", "orderId", "userId", "returnId", "disputeId",
   "orderShipmentId", "moneyUse"::text as "moneyUse", meta, "actorId", "actorRole"::text as "actorRole"`;
 
 // the lines an admin reads that match the condition, oldest first

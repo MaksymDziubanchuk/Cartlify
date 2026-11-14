@@ -182,7 +182,7 @@ describe('GET /api/auth/linkedin/callback', () => {
 
     const { res } = await loginWith(claims);
 
-    expectRefused(res, 'LINKEDIN_EMAIL_NOT_VERIFIED');
+    expectRefused(res, 'OAUTH_EMAIL_NOT_VERIFIED');
     expect(await userByEmail(claims.email)).toBeNull();
   });
 
@@ -194,7 +194,7 @@ describe('GET /api/auth/linkedin/callback', () => {
 
     const { res } = await loginWith(account({ email: local.email, email_verified: undefined }));
 
-    expectRefused(res, 'LINKEDIN_EMAIL_NOT_VERIFIED');
+    expectRefused(res, 'OAUTH_EMAIL_NOT_VERIFIED');
     expect(await userByEmail(local.email)).toMatchObject({
       authProvider: 'LOCAL',
       isVerified: false,
@@ -240,7 +240,7 @@ describe('GET /api/auth/linkedin/callback', () => {
       cookieHeader({ guestId: otherBrowser }),
     );
 
-    expectRefused(res, 'LINKEDIN_OAUTH_STATE_GUEST_MISMATCH');
+    expectRefused(res, 'OAUTH_STATE_GUEST_MISMATCH');
     expect(calls).toHaveLength(0);
   });
 

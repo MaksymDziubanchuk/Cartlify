@@ -258,7 +258,7 @@ describe('the picture of a new oauth account', () => {
         const row = await rowOf(account.email);
         expect(row).toMatchObject({ avatarUrl: null, publicId: null });
         const [logged] = takeLogs({ msg: 'provider avatar was not copied' });
-        expect(logged).toMatchObject({ userId: row.id, provider: 'GOOGLE', reason });
+        expect(logged).toMatchObject({ userId: row.id, provider: 'google', reason });
         // the log names no address of the person
         expect(JSON.stringify(logged)).not.toContain(account.picture);
       },

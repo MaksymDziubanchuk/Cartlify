@@ -99,6 +99,11 @@ declare global {
       CHAT_BOT_IP_DAILY_TURNS?: string;
       CHAT_BOT_SHOP_DAILY_TURNS?: string;
 
+      MAIL_PROVIDER?: string;
+      FILE_STORAGE_PROVIDER?: string;
+      AI_PROVIDER?: string;
+      CAPTCHA_PROVIDER?: string;
+
       SENDGRID_API_KEY: string;
 
       EMAIL_FROM: string;
@@ -135,7 +140,7 @@ declare global {
       STRIPE_SECRET_KEY: string;
       STRIPE_WEBHOOK_SECRET: string;
       WITHDRAWAL_CODE_SECRET: string;
-      STRIPE_CURRENCY: string;
+      SHOP_CURRENCY: string;
     }
   }
 }
@@ -301,7 +306,7 @@ function newsletterSettings(nodeEnv: string) {
     NEWSLETTER_RETRY_MINUTES,
     NEWSLETTER_MAX_ATTEMPTS,
     // the secret of the widget of Cloudflare Turnstile, which the captcha of the forms is checked
-    // with (src/services/captcha/turnstile.service.ts). TURNSTILE_SECRET_KEY_DEV_WIDGET, the spare
+    // with (src/providers/captcha/turnstile/turnstile.provider.ts). TURNSTILE_SECRET_KEY_DEV_WIDGET, the spare
     // secret of dev, is kept in the environment for the person and never read
     TURNSTILE_SECRET_KEY: newsletterSetting('TURNSTILE_SECRET_KEY', nodeEnv),
   };
@@ -353,8 +358,13 @@ const CURRENCIES_WITHOUT_CENTS = new Set([
   'tnd',
 ]);
 
+// the name of a provider, in lower case; the given one unless set
+function providerName(name: string, fallback: string): string {
+  return process.env[name]?.trim().toLowerCase() || fallback;
+}
+
 // fail fast on a currency of the shop that is not a code with cents: such a currency would be
-// charged a hundred times off; read in lower case, as stripe names it
+// charged a hundred times off; read in lower case, the way the payment providers name it
 function currencyWithCents(name: string, fallback: string): string {
   const raw = process.env[name]?.trim().toLowerCase();
   if (!raw) return fallback;
@@ -645,6 +655,14 @@ export default {
   // text and asks the model nothing
   CHAT_BOT_SHOP_DAILY_TURNS: positiveInt('CHAT_BOT_SHOP_DAILY_TURNS', 3000),
 
+  // the provider the server works with for each kind of outside service it has one of at a time
+  // (src/providers): its name, the one of the registry of the kind; a name the registry has no
+  // provider for stops the start
+  MAIL_PROVIDER: providerName('MAIL_PROVIDER', 'sendgrid'),
+  FILE_STORAGE_PROVIDER: providerName('FILE_STORAGE_PROVIDER', 'cloudinary'),
+  AI_PROVIDER: providerName('AI_PROVIDER', 'openai'),
+  CAPTCHA_PROVIDER: providerName('CAPTCHA_PROVIDER', 'turnstile'),
+
   // sendgrid variables
   SENDGRID_API_KEY: process.env.SENDGRID_API_KEY || '',
   EMAIL_FROM: process.env.EMAIL_FROM || '',
@@ -679,7 +697,9 @@ export default {
     NODE_ENV === 'test'
       ? process.env.STRIPE_WEBHOOK_SECRET || ''
       : required('STRIPE_WEBHOOK_SECRET'),
-  STRIPE_CURRENCY: currencyWithCents('STRIPE_CURRENCY', 'eur'),
+  // the currency of the shop: of the prices of the catalog, and the one every payment provider
+  // charges in
+  SHOP_CURRENCY: currencyWithCents('SHOP_CURRENCY', 'eur'),
 
   // signs the number of an order into the code of the links of withdrawal in the mails; the start
   // stops without it in development as in production (withdrawalCodeSecret)

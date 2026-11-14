@@ -151,7 +151,7 @@ async function disputeCardOf(id: number) {
 async function disputesListed(orderId: number, query = '') {
   const res = await j.get(admin, `/api/payments/disputes?orderId=${orderId}&${query}`);
   expect(res.statusCode).toBe(200);
-  return res.json().items as { id: number; stripeId: string; status: string }[];
+  return res.json().items as { id: number; providerDisputeId: string; status: string }[];
 }
 
 async function statementCardOf(returnId: number) {
@@ -189,7 +189,7 @@ describeMock('a dispute of an order not sent', () => {
     expect(card.holds).toEqual([expect.objectContaining({ reason: 'dispute' })]);
     const dispute = await disputeCardOf(card.holds[0].ref);
     expect(dispute).toMatchObject({
-      stripeId: disputeId,
+      providerDisputeId: disputeId,
       status: 'needs_response',
       open: true,
       withdrawn: 20,
@@ -314,9 +314,9 @@ describeMock('a dispute of an order not sent', () => {
       draftedAt: expect.any(String),
       money: [],
     });
-    expect((await disputesListed(orderId, 'toAnswer=true')).map((one) => one.stripeId)).toEqual([
-      disputeId,
-    ]);
+    expect(
+      (await disputesListed(orderId, 'toAnswer=true')).map((one) => one.providerDisputeId),
+    ).toEqual([disputeId]);
     expect((await ship(orderId)).statusCode).toBe(409);
 
     await bankEnds(disputeId, 'warning_closed');
@@ -348,7 +348,9 @@ describeMock('a dispute of an order not sent', () => {
 
     await bankEnds(second, 'won');
     expect((await ship(orderId)).statusCode).toBe(200);
-    expect((await disputesListed(orderId)).map((one) => [one.stripeId, one.status]).sort()).toEqual(
+    expect(
+      (await disputesListed(orderId)).map((one) => [one.providerDisputeId, one.status]).sort(),
+    ).toEqual(
       [
         [first, 'won'],
         [second, 'won'],
@@ -395,7 +397,7 @@ describeMock('a dispute while a statement of the order waits for its money', () 
     });
     // the dispute to answer says a statement of the order is open
     expect(await disputesListed(order.orderId, 'toAnswer=true')).toEqual([
-      expect.objectContaining({ stripeId: disputeId, returnOpen: true }),
+      expect.objectContaining({ providerDisputeId: disputeId, returnOpen: true }),
     ]);
     return { ...order, mails, returnId, disputeId, row };
   }
@@ -472,7 +474,11 @@ describeMock('a dispute of an order already sent', () => {
     expect((await orderCardOf(order.orderId)).holds).toEqual([]);
     const [toAnswer, ...others] = await listedIn('disputes_to_answer', { orderId: order.orderId });
     expect(others).toEqual([]);
-    expect(toAnswer).toMatchObject({ stripeId: disputeId, returnOpen: false, late: false });
+    expect(toAnswer).toMatchObject({
+      providerDisputeId: disputeId,
+      returnOpen: false,
+      late: false,
+    });
     expect(await disputeCardOf(toAnswer!.id)).toMatchObject({
       open: true,
       withdrawn: (opening.amount ?? 2000) / 100,
@@ -538,7 +544,7 @@ describeMock('a dispute of an order already sent', () => {
     // root finds the dispute in the alert of the money of the bank that waits for a decision, and
     // gives what the bank took to the lamp
     const [lost] = (await alerts.listOf(root, 'bank_money_to_decide', { orderId })).items;
-    expect(lost).toMatchObject({ stripeId: disputeId });
+    expect(lost).toMatchObject({ providerDisputeId: disputeId });
     const [taken] = (await disputeCardOf(lost!.id)).money;
     expect(taken).toMatchObject({ amount: -10, moneyUse: null });
     const items = (await orderCardOf(orderId)).items as { id: number; product: { id: number } }[];
@@ -629,7 +635,7 @@ describeMock('a dispute of a payment the order could not take', () => {
     // the person who answers finds it among the disputes to answer, marked as a late payment; the
     // refund that waits for the bank is in no alert of the failed refunds
     const [toAnswer] = await listedIn('disputes_to_answer', { orderId: late.orderId });
-    expect(toAnswer).toMatchObject({ stripeId: disputeId, late: true });
+    expect(toAnswer).toMatchObject({ providerDisputeId: disputeId, late: true });
     expect(await listedIn('late_refunds_failed', { userId: late.user.id })).toEqual([]);
     expect((await disputeOf(disputeId)).evidence.uncategorized_text).toContain(
       'This payment came after the order could no longer take it',
@@ -660,9 +666,9 @@ describeMock('a dispute of a payment the order could not take', () => {
     await bankDecides(paymentId, disputeId, 'lost');
 
     expect(await listedIn('disputes_to_answer', { orderId })).toEqual([]);
-    expect((await listedIn('disputes_lost', { orderId })).map((one) => one.stripeId)).toEqual([
-      disputeId,
-    ]);
+    expect(
+      (await listedIn('disputes_lost', { orderId })).map((one) => one.providerDisputeId),
+    ).toEqual([disputeId]);
     expect(await listedIn('late_refunds_failed', { userId: user.id })).toEqual([]);
     // Stripe refused the refund, so it made none
     expect(await refundsOf(paymentId)).toEqual([]);

@@ -5,7 +5,7 @@ import { setAdminContext } from '@db/dbContext.service.js';
 import { InternalError } from '@utils/errors.js';
 import { PAYMENT_WEBHOOK_GRACE_MS } from '@routes/api/orders/services/helpers/index.js';
 
-import type { PaymentProviderName } from '../../providers/types.js';
+import type { PaymentProviderName } from '@providers/payments/types.js';
 
 // answers of db pay_order function
 const PAY_ORDER_RESULTS = [

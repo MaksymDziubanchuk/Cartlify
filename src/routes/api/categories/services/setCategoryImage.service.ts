@@ -6,14 +6,12 @@ import { prisma } from '@db/client.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import {
-  deleteImage,
+  fileStorage,
   isOwnFile,
   makePublicId,
   makeUploadPublicId,
-  moveImage,
   requireImageStream,
-  uploadImage,
-} from '@utils/cloudinary.util.js';
+} from '@providers/files/index.js';
 import { InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { categoryResponseOf } from './helpers/categories.helper.js';
@@ -26,7 +24,7 @@ import type {
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 
-// reads the file of the form into Cloudinary at once, under an id of its own: setCategoryImage moves
+// reads the file of the form into the file storage at once, under an id of its own: setCategoryImage moves
 // it to its place once the category is written, a refused request deletes it (the controller)
 export async function beginCategoryImageUpload(args: {
   categoryId: number;
@@ -34,13 +32,13 @@ export async function beginCategoryImageUpload(args: {
 }): Promise<UploadedCategoryImage> {
   const { categoryId, image } = args;
 
-  // an empty file and one that is not a jpeg, png or webp by its bytes never reach cloudinary
+  // an empty file and one that is not a jpeg, png or webp by its bytes never reach the file storage
   const safeStream = await requireImageStream(image.file, {
     mimetype: image.mimetype,
     emptyCode: 'CATEGORY_IMAGE_STREAM_ERROR',
   });
 
-  const uploaded = await uploadImage({
+  const uploaded = await fileStorage.uploadImage({
     publicId: makeUploadPublicId(),
     file: safeStream,
     mimetype: image.mimetype,
@@ -51,7 +49,7 @@ export async function beginCategoryImageUpload(args: {
   return { publicId: uploaded.publicId };
 }
 
-// puts the picture that waits on Cloudinary at the place of the category, replaces the one it had
+// puts the picture that waits in the file storage at the place of the category, replaces the one it had
 // (deleted after the commit) and writes the change to the admin log
 export async function setCategoryImage(dto: {
   categoryId: number;
@@ -78,7 +76,7 @@ export async function setCategoryImage(dto: {
 
       // a new path for every picture: the move never replaces the one the category shows, and
       // nothing of the path is cached to drop
-      const moved = await moveImage(
+      const moved = await fileStorage.moveImage(
         waiting.publicId,
         makePublicId({ kind: 'category', categoryId, imageKey: randomUUID() }),
         { invalidate: false },
@@ -117,7 +115,7 @@ export async function setCategoryImage(dto: {
     // the picture the category had is no one's now; a failure is only logged
     if (isOwnFile(oldPublicId)) {
       try {
-        await deleteImage(oldPublicId);
+        await fileStorage.deleteImage(oldPublicId);
       } catch (err) {
         log.warn({ err, publicId: oldPublicId }, 'old picture of a category was not deleted');
       }
@@ -127,7 +125,7 @@ export async function setCategoryImage(dto: {
   } catch (err) {
     if (placed) {
       try {
-        await deleteImage(placed);
+        await fileStorage.deleteImage(placed);
       } catch (deleteErr) {
         log.warn(
           { err: deleteErr, publicId: placed },

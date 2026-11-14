@@ -1,3 +1,6 @@
+import { AuthProvider } from '@prisma/client';
+
+import { IDENTITY_PROVIDER_NAMES } from '@providers/identity/names.js';
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { canManageMoneyField } from '@schemas/moneyManagerField.js';
 import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
@@ -157,8 +160,7 @@ const usersAdminProfileListsSchema = {
         userAgent: nullableString,
         event: {
           type: 'string',
-          description:
-            'How the person came in: login.password, login.google, login.github, login.linkedin.',
+          description: `How the person came in: login.password, or login.<provider> (${IDENTITY_PROVIDER_NAMES.join(', ')}).`,
         },
       },
       required: ['id', 'createdAt', 'ipAddress', 'userAgent', 'event'],
@@ -309,7 +311,7 @@ const usersGetByIdResponseSchema = {
     role: { type: 'string', enum: ['USER', 'ADMIN', 'ROOT'], description: 'Admin or root only.' },
     authProvider: {
       type: 'string',
-      enum: ['LOCAL', 'GOOGLE', 'GITHUB', 'LINKEDIN'],
+      enum: Object.values(AuthProvider),
       description: 'Admin or root only: how the account logs in.',
     },
     isVerified: { type: 'boolean', description: 'Admin or root only.' },
@@ -604,8 +606,8 @@ const usersDeleteMeBodySchema = {
       type: 'string',
       maxLength: 256,
       description:
-        'The password of a local account, required for it; an account of Google, GitHub or ' +
-        'LinkedIn has none and sends nothing here. Spaces at the start and the end are dropped.',
+        'The password of a local account, required for it; an account of a provider of accounts ' +
+        '(a login elsewhere) has none and sends nothing here. Spaces at the start and the end are dropped.',
     },
     confirmOpenOrders: {
       type: 'boolean',

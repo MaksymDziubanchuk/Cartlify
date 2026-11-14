@@ -1,4 +1,4 @@
-// the choice of the newsletter of a login by Google, GitHub or LinkedIn: the page of the shop adds
+// the choice of the newsletter of a login with an account at a provider: the page of the shop adds
 // newsletter=true to the start of the login, the signed state carries it to the callback (it is
 // never a cookie of its own, which nobody signs)
 

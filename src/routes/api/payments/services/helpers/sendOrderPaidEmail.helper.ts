@@ -9,7 +9,7 @@ import { withdrawalLinkOf } from '@helpers/withdrawalCode.js';
 import { buildOrderPaidTemplate } from '@services/email/templates/orders/orderPaid.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
-import { currencyOf } from '../../providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 import { withdrawalPeriodDaysOf } from '@routes/api/orders/services/helpers/withdrawal.helper.js';
 
@@ -137,7 +137,7 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
       })),
       total: order.total.toString(),
       // the money of the provider that took it
-      currency: currencyOf(order.paymentProvider),
+      currency: shopCurrency(),
       paidAt,
       ...(order.user.name ? { userName: order.user.name } : {}),
       ...deliveryMailParts(order.delivery, locale),
@@ -159,7 +159,6 @@ export async function sendOrderPaidEmail(orderId: number, log: OrderMailLogger):
         content: Buffer.from(doc.content, 'utf8').toString('base64'),
         type: 'text/plain',
         filename: `${doc.kind}.txt`,
-        disposition: 'attachment' as const,
       })),
     });
   } catch (err) {

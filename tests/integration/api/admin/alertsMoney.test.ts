@@ -185,7 +185,10 @@ describeMock('bank_money_to_decide', () => {
     ).toBe(200);
     const narrow = { orderId: order.orderId };
     const row = await asAdmin((tx) =>
-      tx.paymentDispute.findFirstOrThrow({ where: { stripeId: disputeId }, select: { id: true } }),
+      tx.paymentDispute.findFirstOrThrow({
+        where: { providerDisputeId: disputeId },
+        select: { id: true },
+      }),
     );
 
     await expectCases(root, 'bank_money_to_decide', narrow, [row.id]);

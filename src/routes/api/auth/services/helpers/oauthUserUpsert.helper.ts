@@ -1,11 +1,12 @@
-import type { Prisma, Role } from '@prisma/client';
+import type { AuthProvider, Prisma, Role } from '@prisma/client';
 import { InternalError, ForbiddenError } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { cutProfileText } from '@helpers/profileText.js';
 
 type Tx = Prisma.TransactionClient;
 
-export type OAuthProvider = 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+// the provider of an account made by a login elsewhere
+export type OAuthProvider = Exclude<AuthProvider, 'LOCAL'>;
 
 export interface OAuthUserRow {
   id: number;
@@ -21,7 +22,7 @@ export interface OAuthUserRow {
   canManageNewsletters: boolean;
   canManageMoney: boolean;
   deletedAt: Date | null;
-  authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+  authProvider: AuthProvider;
   providerSub: string | null;
 }
 

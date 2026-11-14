@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import appStripe from '@config/stripe.js';
+import appStripe from '@providers/payments/stripe/stripeClient.js';
 
 import { alertsOf } from '../../../helpers/alerts.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -150,8 +150,8 @@ async function answered(disputeId: string) {
 }
 
 // the dispute in the app: the id of its case
-const caseOf = async (stripeId: string) =>
-  (await asAdmin((tx) => tx.paymentDispute.findUniqueOrThrow({ where: { stripeId } }))).id;
+const caseOf = async (providerDisputeId: string) =>
+  (await asAdmin((tx) => tx.paymentDispute.findUniqueOrThrow({ where: { providerDisputeId } }))).id;
 
 // an admin made a statement for both units of the sent order and took the goods in: its rows wait
 // for their money; the transfer failed when the test says so

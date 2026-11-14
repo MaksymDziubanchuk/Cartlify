@@ -1,3 +1,5 @@
+import { IDENTITY_PROVIDER_NAMES } from '@providers/identity/names.js';
+
 // The events of the five journals: admin_audit_log, product_price_change_logs, login_logs,
 // legal_acceptances and stock_log. An event says what made the line, finer than an action or a
 // role: the route that wrote it, or the condition it was written under. Two lines of the same
@@ -184,11 +186,10 @@ export const PRICE_LOG_EVENTS = [
   LEGACY_EVENT,
 ] as const;
 
+// a login with a password, or with an account at a provider of accounts (src/providers/identity)
 export const LOGIN_EVENTS = [
   'login.password',
-  'login.google',
-  'login.github',
-  'login.linkedin',
+  ...IDENTITY_PROVIDER_NAMES.map((name) => `login.${name}` as const),
   LEGACY_EVENT,
 ] as const;
 

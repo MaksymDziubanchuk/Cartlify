@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 
 import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
-import { shopCurrency } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 
 import {
   RETURN_KINDS,

@@ -16,7 +16,7 @@ import type {
 // DELETE /api/products/:productId/images/:imageId: takes a picture out of the gallery. The
 // variants that showed it do not show it any more (the database takes the bindings with it); the
 // answer names the variants for sale that are left without a picture, which a buyer does not see
-// until they get one. The file goes from Cloudinary after the commit
+// until they get one. The file goes from the file storage after the commit
 export async function deleteGalleryImage(
   dto: DeleteGalleryImageDto,
 ): Promise<DeleteGalleryImageResponseDto> {

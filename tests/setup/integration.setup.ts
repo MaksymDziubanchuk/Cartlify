@@ -74,7 +74,7 @@ isolateEnv(
     // the tests sign the webhook events with this secret the way stripe signs them; the sandbox
     // has no webhook endpoint, a test delivers the event stripe recorded (tests/helpers/stripe.ts)
     STRIPE_WEBHOOK_SECRET: 'whsec_cartlify_tests',
-    STRIPE_CURRENCY: 'eur',
+    SHOP_CURRENCY: 'eur',
     // every request of the tests comes from 127.0.0.1; each test file has an app and a count of its
     // own, a file of many requests would hit the 100 a minute of the app
     RATE_LIMIT_MAX: '1000',

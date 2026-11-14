@@ -371,7 +371,7 @@ describe('an order that a function holds', () => {
       const order = await sentOrder(db, 'shipped');
       const disputeId = newDisputeId();
       const dispute = await synced(db, {
-        stripeId: disputeId,
+        providerDisputeId: disputeId,
         paymentId: order.paymentId,
         status: 'needs_response',
         transactions: [withdrawal(25)],

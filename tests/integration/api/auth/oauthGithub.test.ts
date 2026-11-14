@@ -237,7 +237,7 @@ describe('GET /api/auth/github/callback', () => {
 
     const res = await loginWith(account({ emails: [{ email, primary: true, verified: false }] }));
 
-    expectRefused(res, 'GITHUB_EMAIL_NOT_VERIFIED');
+    expectRefused(res, 'OAUTH_EMAIL_NOT_VERIFIED');
     expect(await userByEmail(email)).toBeNull();
   });
 
@@ -330,7 +330,7 @@ describe('GET /api/auth/github/callback', () => {
       cookieHeader({ guestId: otherBrowser }),
     );
 
-    expectRefused(res, 'GITHUB_OAUTH_STATE_GUEST_MISMATCH');
+    expectRefused(res, 'OAUTH_STATE_GUEST_MISMATCH');
     expect(calls).toHaveLength(0);
   });
 
@@ -363,7 +363,7 @@ describe('GET /api/auth/github/callback', () => {
       cookieHeader({ guestId }),
     );
 
-    expectRefused(res, 'GITHUB_OAUTH_STATE_EXPIRED');
+    expectRefused(res, 'OAUTH_STATE_EXPIRED');
   });
 
   it('refuses to finish a login for a browser that is already signed in', async () => {

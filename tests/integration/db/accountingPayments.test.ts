@@ -119,18 +119,18 @@ describe('the disputes of a period', () => {
   it('counts what the bank took and what it gave back', async () => {
     const { opened, won } = await inRolledBackTx(async (db) => {
       const orderId = await paidOrder(db);
-      const stripeId = newDisputeId();
+      const providerDisputeId = newDisputeId();
       const taken = withdrawal(50);
       const before = await paymentsOf(db);
       await synced(db, {
-        stripeId,
+        providerDisputeId,
         paymentId: `pi_db_${orderId}`,
         status: 'needs_response',
         transactions: [taken],
       });
       const opened = diff(await paymentsOf(db), before);
       await synced(db, {
-        stripeId,
+        providerDisputeId,
         paymentId: `pi_db_${orderId}`,
         status: 'won',
         transactions: [taken, reinstatement(50)],
@@ -151,7 +151,7 @@ describe('the disputes of a period', () => {
       const returnId = await shopCancelOf(db, admin.id, orderId);
       const before = await paymentsOf(db);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId: `pi_db_${orderId}`,
         status: 'lost',
         transactions: [withdrawal(50)],
@@ -283,7 +283,7 @@ describe('the late payments of a period', () => {
         'ALREADY_PAID_OTHER_PAYMENT',
       );
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId: late,
         status: 'lost',
         transactions: [withdrawal(50)],
@@ -348,9 +348,9 @@ describe('what the bank took for a dispute lost on an order sent', () => {
         orderId,
       );
       const before = await paymentsOf(db);
-      const stripeId = newDisputeId();
+      const providerDisputeId = newDisputeId();
       const snapshot = {
-        stripeId,
+        providerDisputeId,
         paymentId: `pi_db_${orderId}`,
         status: 'needs_response' as const,
         transactions: [withdrawal(30)],

@@ -608,12 +608,12 @@ describe('an order held back or disputed at the bank', () => {
   it('is left to an admin while the bank has the money of a dispute, and goes back to the bot once it gave it back', async () => {
     const { chat, buyer, product } = await customer();
     const placed = await sent(buyer, product, 1);
-    const stripeId = newDisputeId();
+    const providerDisputeId = newDisputeId();
     const taken = withdrawal(10);
     // the order is on its way: the dispute holds nothing, the bank took the money
     await inCommittedTx((db) =>
       synced(db, {
-        stripeId,
+        providerDisputeId,
         paymentId: `pi_test_${placed.orderId}`,
         status: 'needs_response',
         transactions: [taken],
@@ -624,7 +624,7 @@ describe('an order held back or disputed at the bank', () => {
 
     await inCommittedTx((db) =>
       synced(db, {
-        stripeId,
+        providerDisputeId,
         paymentId: `pi_test_${placed.orderId}`,
         status: 'won',
         transactions: [taken, reinstatement(10)],

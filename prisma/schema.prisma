@@ -61,7 +61,7 @@ model User {
   deletedAt  DateTime?
 
   name      String?
-  // the avatar in Cloudinary, its url and its public id; without them the app shows a picture
+  // the avatar at the file storage, its url and its public id; without them the app shows a picture
   // with the initials
   avatarUrl String?
   publicId  String?
@@ -227,7 +227,7 @@ model Category {
   slug        String  @unique
   description String?
 
-  // the picture of the category, optional: where it lies on Cloudinary and its id there (both or
+  // the picture of the category, optional: where it lies at the file storage and its id there (both or
   // none, db/06)
   imageUrl      String?
   imagePublicId String?
@@ -349,13 +349,13 @@ model CategoryAttribute {
 }
 
 // The directory of the documents products show to a buyer: an instruction, a certificate, a
-// declaration of conformity, as PDF files kept on Cloudinary as raw files (the public id keeps
-// the .pdf). One row serves every product that names it. db/06 holds the values.
+// declaration of conformity, as PDF files kept at the file storage (the public id keeps the
+// .pdf). One row serves every product that names it. db/06 holds the values.
 model Document {
   id        Int          @id @default(autoincrement())
   title     String
   kind      DocumentKind
-  // where the file lies on Cloudinary, and its public id there
+  // where the file lies at the file storage, and its public id there
   url       String
   publicId  String       @unique
   sizeBytes Int
@@ -458,7 +458,7 @@ model Product {
   @@map("products")
 }
 
-// A picture in the gallery of a product, kept in Cloudinary. The gallery is loaded once for the
+// A picture in the gallery of a product, kept at the file storage. The gallery is loaded once for the
 // product; every variant picks its own pictures from it (VariantImage), and lists, carts and
 // orders show the pictures of the variant.
 model ProductImage {
@@ -468,7 +468,7 @@ model ProductImage {
   product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
 
   url      String
-  // the id of the file in Cloudinary
+  // the id of the file at the file storage
   publicId String?
   alt      String?
 
@@ -860,8 +860,7 @@ model Order {
   // delivery on top of it (confirm_order, db/05)
   total Decimal @db.Decimal(10, 2)
 
-  // who took the money and the id of the payment there (a Stripe PaymentIntent); pay_order sets
-  // both together
+  // who took the money and the id of the payment there; pay_order sets both together
   paymentProvider PaymentProvider?
   paymentId       String?          @unique
 
@@ -1018,7 +1017,7 @@ model OrderShipment {
   updatedAt    DateTime  @default(now()) @updatedAt
 
   // what the shop paid for the parcel, in the money journal
-  moneyLogs MoneyLog[]
+  moneyLogs     MoneyLog[]
   // the rows of a statement a parcel to the buyer carried back
   itemsSentBack OrderReturnItem[] @relation("ReturnItemSentBack")
 
@@ -1137,7 +1136,7 @@ enum ReturnReason {
   // system: the bank decided a dispute against the shop, or the money of the whole payment of an
   // order not sent was sent back by hand in the dashboard of the provider
   dispute_lost
-  stripe_refund
+  provider_refund
 }
 
 // What became of the goods of a row of a statement. expected: not decided yet; to_stock: back on the
@@ -1288,7 +1287,7 @@ model OrderReturn {
   items     OrderReturnItem[]
   // the parcels of the statement: the goods back to the shop, the goods not accepted back to the
   // buyer (db/05)
-  parcels OrderShipment[]
+  parcels   OrderShipment[]
   // the lines of the money journal of the statement
   moneyLogs MoneyLog[]
 
@@ -1354,7 +1353,6 @@ model OrderReturnItem {
   @@index([backShipmentId])
   @@map("return_items")
 }
-
 
 // -----------------------------------------------------------------------------
 // The money
@@ -1477,21 +1475,21 @@ model MoneyLog {
 
   // what the line is about; the order is empty only when its row is gone (a late payment of an order
   // its owner deleted: the number is then in the meta)
-  orderId          Int?
-  order            Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  orderId         Int?
+  order           Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
   // the buyer the money is of
-  userId           Int?
-  user             User?           @relation("MoneyLogBuyer", fields: [userId], references: [id], onDelete: Restrict)
-  returnId         Int?
-  return           OrderReturn?    @relation(fields: [returnId], references: [id], onDelete: Restrict)
-  orderShipmentId  Int?
-  orderShipment    OrderShipment?  @relation(fields: [orderShipmentId], references: [id], onDelete: Restrict)
-  disputeId        Int?
-  dispute          PaymentDispute? @relation(fields: [disputeId], references: [id], onDelete: Restrict)
+  userId          Int?
+  user            User?           @relation("MoneyLogBuyer", fields: [userId], references: [id], onDelete: Restrict)
+  returnId        Int?
+  return          OrderReturn?    @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  orderShipmentId Int?
+  orderShipment   OrderShipment?  @relation(fields: [orderShipmentId], references: [id], onDelete: Restrict)
+  disputeId       Int?
+  dispute         PaymentDispute? @relation(fields: [disputeId], references: [id], onDelete: Restrict)
   // the line this one reverses (a failed refund), corrects (a correction) or uses (a covered part)
-  coversId         Int?
-  covers           MoneyLog?       @relation("MoneyLogCovers", fields: [coversId], references: [id], onDelete: Restrict)
-  coveredBy        MoneyLog[]      @relation("MoneyLogCovers")
+  coversId        Int?
+  covers          MoneyLog?       @relation("MoneyLogCovers", fields: [coversId], references: [id], onDelete: Restrict)
+  coveredBy       MoneyLog[]      @relation("MoneyLogCovers")
 
   // the provider: who took the money, the id of the payment there, the refund the provider made
   // (written once, from empty), our key of the request (the key of the idempotency of the
@@ -1501,7 +1499,7 @@ model MoneyLog {
   paymentId     String?
   refundId      String?
   transferKey   String?          @db.VarChar(100)
-  stripeTxId    String?          @unique
+  balanceTxId   String?          @unique
   bankReference String?          @db.VarChar(100)
   // the refund was made by hand in the dashboard of the provider, not by this server
   byDashboard   Boolean          @default(false)
@@ -1557,9 +1555,9 @@ model MoneyLog {
 model PaymentDispute {
   id Int @id @default(autoincrement())
 
-  provider PaymentProvider
+  provider          PaymentProvider
   // the id of the dispute at the provider
-  stripeId String          @unique
+  providerDisputeId String          @unique
 
   paymentId String
   // the order the payment is of; empty for a payment the order could not take, which has its own
@@ -2188,7 +2186,7 @@ model NewsletterCampaign {
   // set only on a cancelled campaign, and only when the system cancelled it (db/05, db/06)
   cancelReason NewsletterCancelReason?
 
-  // the totals: planned (the mails that were to go), sent, rejected (not accepted by SendGrid),
+  // the totals: planned (the mails that were to go), sent, rejected (not taken by the mail provider),
   // undelivered (bounced or dropped later), complaints (spam), unsubscribed from its mails
   plannedCount      Int @default(0)
   sentCount         Int @default(0)
@@ -2221,7 +2219,7 @@ model NewsletterRecipient {
   locale String                    @db.VarChar(2)
   status NewsletterRecipientStatus @default(queued)
 
-  // how many times the sending was tried, the id SendGrid gave the mail, when it was accepted
+  // how many times the sending was tried, the id the mail provider gave the mail, when it was accepted
   attempts          Int       @default(0)
   providerMessageId String?   @db.VarChar(200)
   sentAt            DateTime?

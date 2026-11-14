@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import stripe from '@config/stripe.js';
+import stripe from '@providers/payments/stripe/stripeClient.js';
 import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 import { setOrderPaymentPageLink } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';

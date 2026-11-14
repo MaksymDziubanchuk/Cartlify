@@ -10,7 +10,7 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "exactOptionalPropertyTypes": true,
+    "exactOptionalPropertyTypes": true,
     "paths": {
       "@services/*": ["./src/services/*"],
       "@middlewares/*": ["./src/middlewares/*"],
@@ -21,6 +21,7 @@
       "@helpers/*": ["./src/helpers/*"],
       "@redis/*": ["./src/redis/*"],
       "@db/*": ["./src/db/*"],
+      "@providers/*": ["./src/providers/*"],
       "types/*": ["./src/types/*"]
     }
   },

@@ -62,7 +62,7 @@ export type CampaignMailArgs = {
   // program (the header List-Unsubscribe), both of the reader
   manageUrl: string;
   unsubscribeUrl: string;
-  // the address of the logo of the shop (at Cloudinary), shown as an image; the name of the shop stands in
+  // the address of the logo of the shop (in the file storage), shown as an image; the name of the shop stands in
   // its place while there is none. The mail carries no attachment
   logoUrl?: string | null;
   // the test mail of an admin: the subject starts with the word "test" of the language, and a line at

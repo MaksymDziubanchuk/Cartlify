@@ -11,6 +11,11 @@ import TestSequencer from '@jest/test-sequencer';
 // newsletters stay in the window of the limit of campaigns for a day and the pass of the newsletters
 // (tests/integration/worker) starts dozens at the real clock, so the files that schedule a campaign
 // for now (api/newsletters/campaignsSchedule, flows/newsletterWatch) must run before it: by path they do
+// The launcher (tests/run.mjs) hands over its guess of how long the tests take, and the files get
+// times that make jest's "estimated" tell the same (tests/setup/runPace.mjs): after the order is
+// set, since jest orders the files by their real times
+import { pacedTests } from './runPace.mjs';
+
 const BaseSequencer = TestSequencer.default ?? TestSequencer;
 
 export const isShopWide = (testPath) => testPath.endsWith('.shopwide.test.ts');
@@ -23,10 +28,16 @@ export default class ShopWideLast extends BaseSequencer {
   async sort(tests) {
     const sorted = await super.sort(tests);
 
-    return [
+    const ordered = [
       ...sorted.filter((test) => isUnit(test.path)),
       ...sorted.filter((test) => !isUnit(test.path) && !isShopWide(test.path)),
       ...sorted.filter((test) => isShopWide(test.path)).sort(byPath),
     ];
+
+    return pacedTests(
+      ordered,
+      Number(process.env.TEST_GUESS_MS),
+      Number(process.env.TEST_GUESS_WORKERS),
+    );
   }
 }

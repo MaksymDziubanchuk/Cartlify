@@ -4,7 +4,7 @@ import type { Email } from 'types/common.js';
 import type { ReviewResponseDto } from './products.dto.js';
 import type { VoteReviewResponseDto } from './reviews.dto.js';
 import type { MultipartFile } from '@fastify/multipart';
-import type { UploadImageResult } from '@utils/cloudinary.util.js';
+import type { UploadImageResult } from '@providers/files/index.js';
 import type { AccountDeletionLogger } from '@routes/api/users/services/helpers/accountDeletedEmail.helper.js';
 import type { ProfileList } from '@routes/api/users/services/helpers/adminProfile.helper.js';
 import type { AvatarLogger } from '@routes/api/users/services/helpers/avatarRemovals.helper.js';

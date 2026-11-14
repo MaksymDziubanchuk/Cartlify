@@ -2,7 +2,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 import type { DocumentKind } from '@helpers/documentFields.js';
-import type { UploadDocumentResult } from '@utils/cloudinary.util.js';
+import type { UploadDocumentResult } from '@providers/files/index.js';
 
 // a document of the directory: its title, its kind and the url of its PDF
 export interface DocumentDto {
@@ -49,7 +49,7 @@ interface DocumentActorDto {
   actorRole: Role;
 }
 
-// the file of a form, waiting on Cloudinary
+// the file of a form, waiting in the file storage
 export type UploadedDocumentFile = UploadDocumentResult;
 
 export interface CreateDocumentDto extends DocumentActorDto {

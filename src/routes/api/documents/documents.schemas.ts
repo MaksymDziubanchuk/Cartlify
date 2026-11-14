@@ -9,7 +9,7 @@ const documentExample = {
   id: 3,
   title: 'User manual',
   kind: 'instruction',
-  url: 'https://res.cloudinary.com/demo/image/upload/v1712345678/prod/documents/0b6c7f1e-7d3a-4c1f-9a64-2f0e5b8d1c33.pdf',
+  url: 'https://example.com/prod/documents/0b6c7f1e-7d3a-4c1f-9a64-2f0e5b8d1c33.pdf',
   sizeBytes: 482113,
   createdAt: '2026-10-31T10:00:00.000Z',
   updatedAt: '2026-10-31T10:00:00.000Z',
@@ -82,7 +82,7 @@ const postDocumentSchema = {
   description:
     'Keeps a PDF file as a document of the directory, from a multipart form: the file in `file`, ' +
     'the `title` and the `kind`. The file is a PDF by its first bytes, whatever type the form names, ' +
-    `up to ${MAX_DOCUMENT_SIZE_BYTES / 1_000_000} MB; it is kept on Cloudinary as a pdf, and the ` +
+    `up to ${MAX_DOCUMENT_SIZE_BYTES / 1_000_000} MB; it is kept in the file storage as a pdf, and the ` +
     '`url` of the answer opens it. A refused request keeps no file. Products name documents by ' +
     'their ids (`documentIds`).',
 

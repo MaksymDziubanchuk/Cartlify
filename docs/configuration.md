@@ -142,6 +142,15 @@ SHOP_TIME_ZONE=Europe/Madrid
 REDIS_URL=redis://localhost:6379
 REDIS_ORDER_TIMEOUT_WORKER_MS=3000
 
+# The provider of each kind of outside service the server has one of at a time (see providers.md):
+# the name of a provider of its registry, the one here unless set; a name the registry has no
+# provider for stops the start. The payment providers and the providers of accounts are offered side
+# by side and need no choice
+MAIL_PROVIDER=sendgrid
+FILE_STORAGE_PROVIDER=cloudinary
+AI_PROVIDER=openai
+CAPTCHA_PROVIDER=turnstile
+
 # OpenAI / AI assistant and the check of the comments of reviews; the check asks the model for
 # temperature 0, a model that does not take it (a reasoning one) lets every comment through
 OPENAI_API_KEY=
@@ -242,8 +251,9 @@ STRIPE_WEBHOOK_SECRET=
 # value on dev than on prod, so the codes of prod do not work there. Changing it stops all the
 # links sent before
 WITHDRAWAL_CODE_SECRET=
+# the currency of the shop, of the prices of the catalog and the one every payment provider charges in:
 # a three letter code of a currency with cents (eur unless given); jpy, kwd and the like stop the start
-STRIPE_CURRENCY=eur
+SHOP_CURRENCY=eur
 
 # tests only, the app never reads it: the secret key of a Stripe test sandbox (sk_test_)
 # the payment tests pay and refund with; never a live key, the tests stop on any other

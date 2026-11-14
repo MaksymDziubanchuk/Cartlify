@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
+import { refusalOf } from '@providers/mail/sendgrid/sendGridClient.js';
 import { InternalError } from '@utils/errors.js';
 
 // The sending of one mail of a campaign and what the pass does with the mails SendGrid did not take.
@@ -54,6 +55,8 @@ jest.unstable_mockModule(
 jest.unstable_mockModule('@helpers/newsletterTokens.js', () => ({
   manageTokenOf: (salt: string) => `manage-${salt}`,
   unsubscribeTokenOf: (salt: string) => `unsubscribe-${salt}`,
+  // the provider of the mails reads it (an address taken off its list of complaints)
+  normalizeEmail: (email: string) => email.trim().toLowerCase(),
 }));
 
 const { FAILURE_STREAK_LIMIT, PassHalt, deliverRecipient, judgeHeld, releaseHeld } =
@@ -90,9 +93,12 @@ const rowOf = (over: Partial<Row> = {}): Row => ({
   ...over,
 });
 
-// the error postToSendGrid throws when SendGrid answers with a status
+// the error the mail provider throws when it refuses a mail with a status, and whose fault it is
 const answer = (status: number) =>
-  new InternalError({ reason: 'SENDGRID_SEND_FAILED' }, { status, body: { errors: [] } });
+  new InternalError(
+    { reason: 'MAIL_PROVIDER_REFUSED', failure: refusalOf(status) },
+    { status, body: { errors: [] } },
+  );
 
 const refuseNext = () => send.mockRejectedValueOnce(answer(400));
 const busyNext = () => send.mockRejectedValueOnce(answer(503));

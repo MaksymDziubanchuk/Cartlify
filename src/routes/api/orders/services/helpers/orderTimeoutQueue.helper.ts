@@ -2,13 +2,13 @@ import { getRedis } from '@redis/client.js';
 import { redisKeys } from '@redis/keys.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import { settlePaidPage } from '@routes/api/payments/services/helpers/settlePaidPage.helper.js';
 import {
   formatPaymentPageLink,
   parsePaymentPageLink,
   type OrderPaymentPage,
-} from '@routes/api/payments/providers/pageLink.js';
+} from '@providers/payments/pageLink.js';
 import { failureOf } from '@helpers/failureOf.js';
 import { InternalError, ServiceUnavailableError, isAppError } from '@utils/errors.js';
 

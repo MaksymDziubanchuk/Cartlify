@@ -308,7 +308,7 @@ describe('a refund made by hand of all of an order that was not sent (B)', () =>
     expect(statement).toMatchObject({
       source: 'system',
       basis: 'other',
-      reason: 'stripe_refund',
+      reason: 'provider_refund',
       closedAt: expect.any(Date),
     });
     expect(statement!.refundedTotal.toFixed(2)).toBe('20.00');
@@ -375,7 +375,7 @@ describe('a refund made by hand of all of an order that was not sent (B)', () =>
 
     expect(await orderOf(order.orderId)).toMatchObject({ status: 'cancelled', holds: [] });
     const [statement] = await statementsOf(order.orderId);
-    expect(statement).toMatchObject({ reason: 'stripe_refund', closedAt: expect.any(Date) });
+    expect(statement).toMatchObject({ reason: 'provider_refund', closedAt: expect.any(Date) });
     expect(statement!.refundedTotal.toFixed(2)).toBe('20.00');
     for (const refund of [first, second]) {
       expect(await handLineOf(order.paymentId, refund.id)).toMatchObject({

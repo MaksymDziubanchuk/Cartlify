@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import cloudinary from '@config/cloudinary.js';
+import cloudinary from '@providers/files/cloudinary/cloudinaryClient.js';
 
 import { accessCookie, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';

@@ -4,7 +4,7 @@ import { tx } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
-import { shopCurrency } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import { utcTime } from './helpers/accountingSql.helper.js';

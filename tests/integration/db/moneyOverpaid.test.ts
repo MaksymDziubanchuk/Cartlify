@@ -448,7 +448,7 @@ describe('lose_overpaid', () => {
       const returnId = await statementFor(db, orderId, [bookItem]);
       await received(db, returnId, 'not_accepted');
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(15)],

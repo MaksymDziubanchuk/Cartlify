@@ -12,13 +12,13 @@ import {
 } from '@routes/api/orders/services/helpers/withdrawal.helper.js';
 import { isRedisReady } from '@redis/client.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
-import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
+import { fileStorage, isOwnFile } from '@providers/files/index.js';
 import {
   cancelOrderReservationExpiry,
   deleteOrderPaymentPageLink,
   getOrderPaymentPageLink,
 } from '@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js';
-import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import type {
   AccountDeletedCancelled,
   AccountDeletedDelivery,
@@ -391,7 +391,7 @@ export async function deleteAccount(args: DeleteAccountArgs): Promise<void> {
   // only a file of this environment: a restored copy of prod points to the avatars of prod
   if (isOwnFile(erased.publicId)) {
     try {
-      await deleteImage(erased.publicId);
+      await fileStorage.deleteImage(erased.publicId);
     } catch (err) {
       log.error({ err, userId }, 'avatar of a deleted account was not removed');
     }

@@ -164,7 +164,7 @@ describe('POST /api/newsletters/campaigns/:campaignId/test, the mail', () => {
 
     // the sender adds the ids of the campaign and of the recipient when a subscriber gets the mail; a
     // test mail has no recipient of the campaign
-    expect(sent[0]!.customArgs).toEqual({});
+    expect(sent[0]!.tags).toEqual({});
   });
 
   it.each([
