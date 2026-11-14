@@ -237,44 +237,48 @@ WITH
             LEFT JOIN cartlify.order_deliveries d ON d."orderId" = o.id
             CROSS JOIN params p
     ),
-    -- What went back with the returns: the money of the rows of the statements (the units and
-    -- their part of the delivery, less the way back the buyer owes) by the time the money went
-    -- back: for all time, in the period, in the last 7 and 30 days.
+    -- What went back with the returns: the money of the statements in the money journal (the
+    -- transfers in their parts, the goods, the delivery and, less, the way back the buyer owes; what
+    -- failed comes back with the opposite sign; the money sent outside the app) by the time each line
+    -- was written: for all time, in the period, in the last 7 and 30 days. A part covered by money
+    -- that reached the buyer another way is in it: the statement is what went back.
     returns_stats AS (
         SELECT
-            COALESCE(SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction"), 0)::numeric AS returned_total,
+            COALESCE(-SUM(l.amount), 0)::numeric AS returned_total,
             COALESCE(
-                SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction") FILTER (
+                -SUM(l.amount) FILTER (
                     WHERE
-                        ri."refundedAt" >= p.from_ts
-                        AND ri."refundedAt" < p.to_ts
+                        l."createdAt" >= p.from_ts
+                        AND l."createdAt" < p.to_ts
                 ),
                 0
             )::numeric AS returned_in_period,
             COALESCE(
-                SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction") FILTER (
+                -SUM(l.amount) FILTER (
                     WHERE
-                        ri."refundedAt" >= p.last_7d_from
+                        l."createdAt" >= p.last_7d_from
                 ),
                 0
             )::numeric AS returned_last_7d,
             COALESCE(
-                SUM(ri.amount + ri."deliveryShare" - ri."shippingDeduction") FILTER (
+                -SUM(l.amount) FILTER (
                     WHERE
-                        ri."refundedAt" >= p.last_30d_from
+                        l."createdAt" >= p.last_30d_from
                 ),
                 0
             )::numeric AS returned_last_30d
         FROM
-            cartlify.return_items ri
+            cartlify.money_log l
             CROSS JOIN params p
         WHERE
-            ri.money = 'refunded'::cartlify."ReturnMoney"
+            l.purpose = 'return'::cartlify."MoneyPurpose"
+            AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
+            AND l.part <> 'covered'::cartlify."MoneyPart"
     ),
     -- The lines of the sales of the period, a row each: the items of the orders paid in it, and,
-    -- with the opposite sign, the rows of the returns whose money went back in it. The tops are
-    -- made of them, so they are the net: the sales less the returns, each in the period it
-    -- happened.
+    -- with the opposite sign, the goods the returns sent the money for in it (the rows a line of the
+    -- goods of the money journal names, a failure gives them back). The tops are made of them, so
+    -- they are the net: the sales less the returns, each in the period it happened.
     sale_lines AS (
         SELECT
             oi."productId" AS product_id,
@@ -292,18 +296,20 @@ WITH
             AND o."paidAt" < prm.to_ts
         UNION ALL
         SELECT
-            oi."productId",
-            oi."variantId",
-            - ri.amount,
-            - ri.quantity
+            (g.value ->> 'productId')::int,
+            (g.value ->> 'variantId')::int,
+            SIGN(l.amount) * (g.value ->> 'amount')::numeric,
+            (SIGN(l.amount) * (g.value ->> 'quantity')::int)::int
         FROM
-            cartlify.return_items ri
-            JOIN cartlify.order_items oi ON oi.id = ri."orderItemId"
+            cartlify.money_log l
+            CROSS JOIN LATERAL jsonb_array_elements(l.meta) AS g (value)
             CROSS JOIN params prm
         WHERE
-            ri.money = 'refunded'::cartlify."ReturnMoney"
-            AND ri."refundedAt" >= prm.from_ts
-            AND ri."refundedAt" < prm.to_ts
+            l.purpose = 'return'::cartlify."MoneyPurpose"
+            AND l.part = 'goods'::cartlify."MoneyPart"
+            AND l.event IN ('money.refund', 'money.refund_failed', 'money.outside')
+            AND l."createdAt" >= prm.from_ts
+            AND l."createdAt" < prm.to_ts
     ),
     -- Units sold: the quantity of the items of the orders paid in the period.
     items_sold_stats AS (

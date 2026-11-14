@@ -38,6 +38,8 @@ BEGIN
       -- the right of an admin to run the newsletters: the staff keep their accounts as they are, and
       -- a flag names no one
       ('users', 'canManageNewsletters'),
+      -- the right of an admin to handle the money: a flag as well
+      ('users', 'canManageMoney'),
       ('user_tokens', 'id'), ('user_tokens', 'userId'), ('user_tokens', 'type'),
       ('user_tokens', 'token'), ('user_tokens', 'expiresAt'), ('user_tokens', 'usedAt'),
       ('user_tokens', 'createdAt'), ('user_tokens', 'revokedAt'), ('user_tokens', 'sessionId'),
@@ -54,17 +56,18 @@ BEGIN
       ('orders', 'reservationExpiresAt'), ('orders', 'paymentId'), ('orders', 'paymentProvider'),
       ('orders', 'cancelledAt'), ('orders', 'paidAt'), ('orders', 'deliveredAt'),
       ('orders', 'withdrawalDays'), ('orders', 'returnShippingPaidBy'), ('orders', 'returnStatus'),
-      -- the number and the link of a parcel lead to the person it goes to, they change below
-      ('order_shipments', 'id'), ('order_shipments', 'orderId'), ('order_shipments', 'carrier'),
+      ('orders', 'holds'), ('orders', 'fraudWarnedAt'),
+      -- the number and the link of a parcel (a send of the order, a parcel of a statement) lead to
+      -- the person it goes to or comes from, they change below; what the buyer paid the carrier is
+      -- a sum, no personal data
+      ('order_shipments', 'id'), ('order_shipments', 'orderId'), ('order_shipments', 'returnId'),
+      ('order_shipments', 'direction'), ('order_shipments', 'carrier'),
       ('order_shipments', 'trackingNumber'), ('order_shipments', 'trackingUrl'),
-      ('order_shipments', 'cost'), ('order_shipments', 'expense'), ('order_shipments', 'shippedAt'),
-      ('order_shipments', 'rolledBackAt'), ('order_shipments', 'updatedAt'),
-      -- the same for a parcel the shop paid to carry goods back
-      ('return_shipments', 'id'), ('return_shipments', 'returnId'),
-      ('return_shipments', 'carrier'), ('return_shipments', 'trackingNumber'),
-      ('return_shipments', 'trackingUrl'), ('return_shipments', 'cost'),
-      ('return_shipments', 'shippedAt'), ('return_shipments', 'recordedById'),
-      ('return_shipments', 'createdAt'), ('return_shipments', 'updatedAt'),
+      ('order_shipments', 'expense'), ('order_shipments', 'shippedAt'),
+      ('order_shipments', 'rolledBackAt'), ('order_shipments', 'recordedById'),
+      ('order_shipments', 'confirmedAt'), ('order_shipments', 'confirmedById'),
+      ('order_shipments', 'buyerPaid'), ('order_shipments', 'createdAt'),
+      ('order_shipments', 'updatedAt'),
       ('order_deliveries', 'orderId'), ('order_deliveries', 'method'),
       ('order_deliveries', 'recipientFirstName'), ('order_deliveries', 'recipientLastName'),
       ('order_deliveries', 'recipientPhone'), ('order_deliveries', 'country'),
@@ -92,6 +95,20 @@ BEGIN
       ('stock_log', 'quantityChange'), ('stock_log', 'stockAfter'), ('stock_log', 'meta'),
       ('stock_log', 'deliveryId'), ('stock_log', 'writeOffId'), ('stock_log', 'orderId'),
       ('stock_log', 'returnItemId'), ('stock_log', 'ip'), ('stock_log', 'userAgent'), ('stock_log', 'createdAt'),
+      -- the money journal: the address and the browser of the request, the words of the provider
+      -- and the notes of root go below; the rest is money, ids and states
+      ('money_log', 'id'), ('money_log', 'actorId'), ('money_log', 'actorRole'),
+      ('money_log', 'event'), ('money_log', 'purpose'), ('money_log', 'part'),
+      ('money_log', 'amount'), ('money_log', 'currency'), ('money_log', 'orderId'),
+      ('money_log', 'userId'), ('money_log', 'returnId'),
+      ('money_log', 'orderShipmentId'), ('money_log', 'disputeId'), ('money_log', 'coversId'),
+      ('money_log', 'provider'), ('money_log', 'paymentId'), ('money_log', 'refundId'),
+      ('money_log', 'transferKey'), ('money_log', 'stripeTxId'), ('money_log', 'bankReference'),
+      ('money_log', 'byDashboard'), ('money_log', 'state'), ('money_log', 'stateAt'),
+      ('money_log', 'failure'), ('money_log', 'failureText'), ('money_log', 'method'),
+      ('money_log', 'note'), ('money_log', 'happenedAt'), ('money_log', 'moneyUse'),
+      ('money_log', 'meta'), ('money_log', 'ip'), ('money_log', 'userAgent'),
+      ('money_log', 'createdAt'),
       -- a statement of return keeps the name and the email of whoever made it, the words of the
       -- buyer, and the address and the browser of the request: they change below; the rows hold
       -- the goods and the money, no personal data
@@ -99,29 +116,20 @@ BEGIN
       ('returns', 'source'), ('returns', 'createdById'), ('returns', 'basis'),
       ('returns', 'reason'), ('returns', 'description'), ('returns', 'contactName'),
       ('returns', 'contactEmail'), ('returns', 'ip'), ('returns', 'userAgent'),
-      ('returns', 'proofProvidedAt'), ('returns', 'proofCarrier'),
-      ('returns', 'proofTrackingNumber'), ('returns', 'proofTrackingUrl'),
-      ('returns', 'proofConfirmedAt'),
-      ('returns', 'proofConfirmedById'),
+      ('returns', 'splitFromId'),
       -- the number of the statement in its order, and when and by which admin it was accepted: the
       -- work of the shop, no personal data
       ('returns', 'number'), ('returns', 'acceptedAt'), ('returns', 'acceptedById'),
       ('returns', 'closedAt'), ('returns', 'closedById'),
       ('returns', 'closeCode'), ('returns', 'closeNote'),
-      ('returns', 'shippingReimbursed'), ('returns', 'shippingReimbursedAt'),
-      ('returns', 'shippingReimbursedMethod'), ('returns', 'shippingReimbursedNote'),
-      ('returns', 'shippingReimbursedById'),
+      ('returns', 'refundedTotal'),
       ('returns', 'createdAt'), ('returns', 'updatedAt'),
       ('return_items', 'id'), ('return_items', 'returnId'), ('return_items', 'orderItemId'),
       ('return_items', 'quantity'), ('return_items', 'goods'),
       ('return_items', 'notAcceptedReason'), ('return_items', 'money'), ('return_items', 'amount'),
       ('return_items', 'goodsSetAt'), ('return_items', 'goodsSetById'),
-      ('return_items', 'amountNote'), ('return_items', 'deliveryShare'),
-      ('return_items', 'shippingDeduction'),
-      ('return_items', 'refundKey'), ('return_items', 'refundId'), ('return_items', 'refundedAt'),
-      ('return_items', 'refundFailure'), ('return_items', 'refundFailureText'),
-      ('return_items', 'outsideMethod'), ('return_items', 'outsideNote'),
-      ('return_items', 'outsideById'), ('return_items', 'refusedCode'),
+      ('return_items', 'amountNote'), ('return_items', 'refusedCode'), ('return_items', 'moneyLogId'),
+      ('return_items', 'backShipmentId'),
       ('return_items', 'createdAt'), ('return_items', 'updatedAt'),
       -- a review is public: the shop shows it with its author, whose name changes above
       ('reviews', 'id'), ('reviews', 'productId'), ('reviews', 'userId'), ('reviews', 'rating'),
@@ -169,6 +177,8 @@ BEGIN
       -- tell whose they are)
       ('newsletter_campaigns', '*'), ('newsletter_recipients', '*'),
       ('newsletter_form_blocklist', '*'),
+      -- the disputes of the payments: ids, states and dates
+      ('payment_disputes', '*'),
       -- the data of the shop (its name, its contacts, the languages): the shop's, not a person's
       ('shop_settings', '*')
   )
@@ -310,20 +320,12 @@ SET
   description = NULL,
   ip = NULL,
   "userAgent" = NULL,
-  "closeNote" = CASE WHEN "closeNote" IS NOT NULL THEN 'Closed by the shop' END,
-  "shippingReimbursedNote" = CASE
-    WHEN "shippingReimbursedNote" IS NOT NULL THEN 'Paid back outside the app'
-  END,
-  "proofTrackingNumber" = CASE WHEN "proofTrackingNumber" IS NOT NULL THEN 'RTRACK' || id END,
-  "proofTrackingUrl" = CASE WHEN "proofTrackingUrl" IS NOT NULL THEN 'https://example.com/track/r' || id END;
+  "closeNote" = CASE WHEN "closeNote" IS NOT NULL THEN 'Closed by the shop' END;
 
--- the notes of root and the words of the provider on a row of a statement go; the key and the id of
--- the transfer stay, like the payment id of an order
+-- the note of root on a row of a statement goes (the money of the row is in the money journal)
 UPDATE cartlify.return_items
 SET
-  "amountNote" = CASE WHEN "amountNote" IS NOT NULL THEN 'Lowered by the shop' END,
-  "outsideNote" = CASE WHEN "outsideNote" IS NOT NULL THEN 'Sent outside the app' END,
-  "refundFailureText" = NULL;
+  "amountNote" = CASE WHEN "amountNote" IS NOT NULL THEN 'Lowered by the shop' END;
 
 -- the number and the link of a parcel are made up: they lead to the person the parcel goes to
 UPDATE cartlify.order_shipments
@@ -331,10 +333,6 @@ SET
   "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'TRACK' || id END,
   "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/' || id END;
 
-UPDATE cartlify.return_shipments
-SET
-  "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'BACK' || id END,
-  "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/back' || id END;
 
 ------------------------------------------------------------
 -- 4. CHATS
@@ -399,6 +397,24 @@ WHERE a.ip IS NOT NULL
     AND jsonb_typeof(a.meta) = 'array'
     AND jsonb_array_length(a.meta) > 0
   );
+
+-- the money journal: the address and the browser of the request go, the words of the provider
+-- (failureText) go, and the note of root becomes the made-up text the retention cleanup writes; the
+-- sums, the ids and the states are the money of the shop and stay
+UPDATE cartlify.money_log
+SET
+  ip = NULL,
+  "userAgent" = NULL,
+  "failureText" = NULL,
+  note = CASE
+    WHEN note IS NULL THEN NULL
+    WHEN event = 'money.received' THEN 'Received outside the app'
+    ELSE 'Sent outside the app'
+  END
+WHERE ip IS NOT NULL
+  OR "userAgent" IS NOT NULL
+  OR "failureText" IS NOT NULL
+  OR note IS NOT NULL;
 
 -- the stock log: the address and the browser of the request go, the rest is the work of the shop
 -- (the suppliers and the invoices of its deliveries are business data)
@@ -480,12 +496,6 @@ BEGIN
         OR ip IS NOT NULL
         OR "userAgent" IS NOT NULL
         OR ("closeNote" IS NOT NULL AND "closeNote" <> 'Closed by the shop')
-        OR (
-          "shippingReimbursedNote" IS NOT NULL
-          AND "shippingReimbursedNote" <> 'Paid back outside the app'
-        )
-        OR ("proofTrackingNumber" IS NOT NULL AND "proofTrackingNumber" <> 'RTRACK' || id)
-        OR ("proofTrackingUrl" IS NOT NULL AND "proofTrackingUrl" <> 'https://example.com/track/r' || id)
         OR "contactName" <> 'Recipient Customer'
         OR "contactEmail" <> 'return+' || id || '@example.com'
     )
@@ -494,9 +504,7 @@ BEGIN
     WHERE EXISTS (
       SELECT 1
       FROM cartlify.return_items
-      WHERE ("amountNote" IS NOT NULL AND "amountNote" <> 'Lowered by the shop')
-        OR ("outsideNote" IS NOT NULL AND "outsideNote" <> 'Sent outside the app')
-        OR "refundFailureText" IS NOT NULL
+      WHERE "amountNote" IS NOT NULL AND "amountNote" <> 'Lowered by the shop'
     )
     UNION ALL
     SELECT 'order_deliveries'
@@ -517,14 +525,6 @@ BEGIN
         OR ("trackingUrl" IS NOT NULL AND "trackingUrl" <> 'https://example.com/track/' || id)
     )
     UNION ALL
-    SELECT 'return_shipments'
-    WHERE EXISTS (
-      SELECT 1
-      FROM cartlify.return_shipments
-      WHERE ("trackingNumber" IS NOT NULL AND "trackingNumber" <> 'BACK' || id)
-        OR ("trackingUrl" IS NOT NULL AND "trackingUrl" <> 'https://example.com/track/back' || id)
-    )
-    UNION ALL
     SELECT 'chat_messages'
     WHERE EXISTS (
       SELECT 1
@@ -537,6 +537,13 @@ BEGIN
       SELECT 1
       FROM cartlify.admin_audit_log
       WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL
+    )
+    UNION ALL
+    SELECT 'money_log'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.money_log
+      WHERE ip IS NOT NULL OR "userAgent" IS NOT NULL OR "failureText" IS NOT NULL
     )
     UNION ALL
     SELECT 'stock_log'
