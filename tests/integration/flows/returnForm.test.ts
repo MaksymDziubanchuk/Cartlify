@@ -161,11 +161,18 @@ describe('the link of a mail after the account is deleted', () => {
     // the admin finds it by its code, takes the goods in and gives the money back
     const [found] = (await j.get(admin, `/api/returns?q=${code}`)).json().items;
     const card = (await j.get(admin, `/api/returns/${found.id}`)).json();
-    expect(card.proof).toMatchObject({ carrier: 'DHL', trackingNumber: 'JD0146000999' });
+    expect(card.parcels).toEqual([
+      expect.objectContaining({
+        direction: 'to_shop',
+        carrier: 'DHL',
+        trackingNumber: 'JD0146000999',
+      }),
+    ]);
     const before = await stockOf(product);
     expect(
       (
         await j.post(admin, `/api/returns/${found.id}/receive`, {
+          parcel: { buyerPaid: 0 },
           results: [{ itemId: card.items[0].id, quantity: 1, goods: 'to_stock' }],
         })
       ).statusCode,

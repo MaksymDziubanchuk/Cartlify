@@ -104,6 +104,36 @@ describe('the care of an account', () => {
     expect(reset.statusCode).toBe(200);
     const session = await loggedIn(buyer.email, newPassword);
 
+    // the buyer signs in on the phone too, sees both sessions and closes the one of the phone
+    await loggedIn(buyer.email, newPassword);
+    const sessions = (await getAs(session, '/api/auth/sessions')).json().items as {
+      id: string;
+      current: boolean;
+    }[];
+    expect(sessions).toHaveLength(2);
+    const phone = sessions.find(({ current }) => !current)!;
+    const closed = await app.inject({
+      method: 'DELETE',
+      url: `/api/auth/sessions/${phone.id}`,
+      headers: withCsrf(csrf, sessionCookie(session)),
+    });
+    expect(closed.statusCode).toBe(204);
+    expect((await getAs(session, '/api/auth/sessions')).json().items).toEqual([
+      expect.objectContaining({ current: true }),
+    ]);
+
+    // and changes the password while signed in: the session goes on, the mail tells of it
+    const ownPassword = 'flow-care-own-password-2';
+    const changed = await app.inject({
+      method: 'POST',
+      url: '/api/auth/password/change',
+      headers: withCsrf(csrf, sessionCookie(session)),
+      payload: { currentPassword: newPassword, newPassword: ownPassword },
+    });
+    expect(changed.statusCode).toBe(204);
+    expect(mails.at(-1)!.to).toEqual([buyer.email]);
+    expect((await getAs(session, '/api/users/me')).statusCode).toBe(200);
+
     // the profile: a name, a phone and a picture of their own
     const renamed = await app.inject({
       method: 'PATCH',
@@ -160,7 +190,7 @@ describe('the care of an account', () => {
       method: 'DELETE',
       url: '/api/users/me',
       headers: withCsrf(csrf, sessionCookie(session)),
-      payload: { password: newPassword },
+      payload: { password: ownPassword },
     });
     expect(left.statusCode).toBe(204);
 

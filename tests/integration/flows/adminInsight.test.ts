@@ -190,6 +190,28 @@ describe('what an admin learns of the shop', () => {
     const days = byDay.json().items as { sales: { units: number } }[];
     expect(days.reduce((sum, day) => sum + day.sales.units, 0)).toBe(2);
 
+    // the journals for the analysis: the stock of the product taken together by event, with the
+    // sum of the changes; the money of its order taken together by purpose, with the sums
+    const stock = await j.get(
+      admin,
+      `/api/admin/stock-log/groups?productId=${product.id}&groupBy=event&sortBy=event&sortOrder=asc`,
+    );
+    expect(stock.statusCode).toBe(200);
+    expect(stock.json().items).toEqual([
+      expect.objectContaining({ event: 'stock.delivery', count: 1, quantityChange: 4 }),
+      expect.objectContaining({ event: 'stock.sale', count: 1, quantityChange: -2 }),
+    ]);
+    const stockPage = await j.get(admin, `/api/admin/stock-log?productId=${product.id}`);
+    expect(stockPage.json().sums).toEqual({ quantityChange: 2 });
+    const money = await j.get(
+      admin,
+      `/api/admin/money-log/groups?userId=${buyer.id}&groupBy=purpose`,
+    );
+    expect(money.statusCode).toBe(200);
+    expect(money.json().items).toEqual(
+      expect.arrayContaining([expect.objectContaining({ purpose: 'order' })]),
+    );
+
     // the journals: the new name of the product with who gave it, and the login of the admin
     expect(
       (await j.patch(admin, `/api/products/${product.id}`, { name: `Tall vase ${tag}` }))

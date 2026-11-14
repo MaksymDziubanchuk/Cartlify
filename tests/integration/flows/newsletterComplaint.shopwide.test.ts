@@ -199,3 +199,36 @@ describe('a subscriber whose address does not exist', () => {
     ]);
   });
 });
+
+describe('a buyer whose subscription a report paused', () => {
+  it('resumes it in the profile of the account, and the next campaign reaches her', async () => {
+    const buyer = await createUser({ name: 'Resuming Buyer', locale: 'en' });
+    userIds.push(buyer.id);
+    emails.push(buyer.email);
+    const api = newsletterApi(app, csrf);
+    const mine = { cookie: sessionCookie(await signInAccepting(app, csrf, buyer)) };
+    const cleared = watchSpamReportClearing();
+    expect((await api.post(SUBSCRIPTIONS, {}, mine)).statusCode).toBe(201);
+
+    const first = await desk.launch('R');
+    const [mail] = first.to(buyer.email);
+    expect((await deliverEvents(app, [reportOf(mail!, 'spamreport')])).statusCode).toBe(200);
+    expect((await api.get(`${BASE}/me`, mine)).json()).toMatchObject({
+      status: 'paused_complaint',
+    });
+
+    // the profile shows the pause; she resumes there
+    const resumed = await api.post(`${BASE}/me/resume`, undefined, mine);
+    expect(resumed.statusCode).toBe(200);
+    expect(resumed.json()).toMatchObject({ status: 'active' });
+    expect(cleared).toEqual([{ email: buyer.email, stream: 'newsletter', status: 204 }]);
+
+    const second = await desk.launch('S');
+    expect(second.to(buyer.email)).toHaveLength(1);
+    expect((await journalOf(buyer.email)).map((line) => [line.event, line.place])).toEqual([
+      ['subscribed', 'profile'],
+      ['complaint', 'webhook'],
+      ['restored', 'profile'],
+    ]);
+  });
+});

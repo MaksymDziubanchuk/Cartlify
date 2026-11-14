@@ -119,6 +119,7 @@ describe('the returns the shop starts', () => {
     expect(
       (
         await j.post(admin, `/api/returns/${returnId}/receive`, {
+          parcel: { buyerPaid: 0 },
           results: [{ itemId: made.json().items[0].id, quantity: 2, goods: 'to_stock' }],
         })
       ).statusCode,
@@ -150,6 +151,7 @@ describe('the returns the shop starts', () => {
 
     // the shop sends a label: the parcel back with its cost; the bill of the carrier puts it right
     const parcel = {
+      direction: 'to_shop',
       carrier: 'DHL',
       trackingNumber: 'JD0146000555',
       cost: 4.5,
@@ -157,17 +159,18 @@ describe('the returns the shop starts', () => {
     };
     const recorded = await j.post(admin, `/api/returns/${returnId}/shipments`, parcel);
     expect(recorded.statusCode).toBe(201);
-    const shipmentId = recorded.json().shipments[0].id as number;
+    const shipmentId = recorded.json().parcels[0].id as number;
     const billed = await j.patch(admin, `/api/returns/${returnId}/shipments/${shipmentId}`, {
       cost: 5.2,
     });
-    expect(billed.json().shipments).toEqual([
-      expect.objectContaining({ id: shipmentId, cost: 5.2 }),
+    expect(billed.json().parcels).toEqual([
+      expect.objectContaining({ id: shipmentId, direction: 'to_shop', cost: 5.2 }),
     ]);
 
     expect(
       (
         await j.post(admin, `/api/returns/${returnId}/receive`, {
+          parcel: { buyerPaid: 0 },
           results: [{ itemId: made.json().items[0].id, quantity: 1, goods: 'written_off' }],
         })
       ).statusCode,

@@ -94,6 +94,15 @@ describe('the catalog through the eyes of a guest and of a buyer', () => {
       ]);
     }
 
+    // the buyer opens the profile of the author of the review: the name, the picture, the dates
+    const [review] = (await j.get(buyer, `/api/products/${product.id}/reviews`)).json().items as {
+      user: { id: number };
+    }[];
+    const authorProfile = await j.get(buyer, `/api/users/${review!.user.id}`);
+    expect(authorProfile.statusCode).toBe(200);
+    expect(authorProfile.json()).toMatchObject({ id: author.id, name: 'Review Author' });
+    expect(authorProfile.json().email ?? null).toBeNull();
+
     // the buyer keeps the rake among the favorites for a while, then takes it out
     const variantId = (await j.get(buyer, `/api/products/${product.id}`)).json().variant
       .id as number;

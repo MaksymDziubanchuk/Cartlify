@@ -17,6 +17,7 @@ import {
   newsletterApi,
 } from '../../helpers/newsletterApi.js';
 import {
+  countOf,
   greetingOf,
   manageTokenOf,
   newsletterDesk,
@@ -78,6 +79,9 @@ describe('a guest who subscribes on the page of the shop', () => {
     const pavlo = uniqueEmail('pavlo');
     emails.push(maria, pavlo);
 
+    // the manager reads the numbers of the subscribers before them
+    const before = await desk.summary();
+
     // Maria fills in the form; the answer is the same for every address
     const api = newsletterApi(app, csrf);
     const mails = watchNewsletterMail();
@@ -101,6 +105,12 @@ describe('a guest who subscribes on the page of the shop', () => {
 
     // Pavlo does the same, in English too
     await subscribeOnPage(app, csrf, pavlo, 'en');
+
+    // the manager sees two more subscribers in force, both in English
+    const both = await desk.summary();
+    expect(both.active).toBe(before.active + 2);
+    expect(both.bySource.form).toBe(before.bySource.form + 2);
+    expect(countOf(both, 'en')).toBe(countOf(before, 'en') + 2);
 
     // the first campaign goes out, and both find it in their mailboxes in English
     const first = await desk.launch('A');
@@ -146,6 +156,24 @@ describe('a guest who subscribes on the page of the shop', () => {
     expect(manageTokenOf(secondMail!)).toBe(token);
     expect(second.to(pavlo)).toEqual([]);
 
+    // before she leaves, Maria takes the data the shop keeps of her subscription from the page
+    const data = await api.post(`${BASE}/manage/export`, { token });
+    expect(data.statusCode).toBe(200);
+    expect(data.json().subscriptions).toEqual([
+      expect.objectContaining({
+        email: maria,
+        source: 'form',
+        locale: 'es',
+        status: 'active',
+        events: [
+          expect.objectContaining({ event: 'requested', place: 'form' }),
+          expect.objectContaining({ event: 'confirmed', place: 'form' }),
+          expect.objectContaining({ event: 'locale_changed', place: 'manage_page' }),
+        ],
+      }),
+    ]);
+    expect(data.body).not.toContain(token);
+
     // Maria leaves on the page of management; reopening the page finds no subscription
     const left = await api.post(`${BASE}/manage/unsubscribe`, { token });
     expect(left.statusCode).toBe(200);
@@ -158,6 +186,9 @@ describe('a guest who subscribes on the page of the shop', () => {
     const third = await desk.launch('C');
     expect(third.to(maria)).toEqual([]);
     expect(third.to(pavlo)).toEqual([]);
+
+    // the numbers of the manager are back where they were
+    expect((await desk.summary()).active).toBe(before.active);
 
     // the manager finds both subscriptions over, each in the language it had at the end
     expect(await desk.subscribers(maria)).toEqual([
@@ -211,5 +242,44 @@ describe('a guest who subscribes on the page of the shop', () => {
         unsubscribed,
       });
     }
+  });
+});
+
+describe('a reader who follows the link of unsubscribing of a mail in the browser', () => {
+  it('is sent to the page of management, which asks and posts, and the next campaign does not reach her', async () => {
+    const olha = uniqueEmail('olha');
+    emails.push(olha);
+    await subscribeOnPage(app, csrf, olha, 'en');
+
+    const first = await desk.launch('L');
+    const [mail] = first.to(olha);
+    expect(first.to(olha)).toHaveLength(1);
+
+    // the link of the button of the mail, opened in the browser: the page of management, which
+    // changes nothing by itself (a scanner of links may open it too)
+    const header = mail!.headers['List-Unsubscribe'] ?? '';
+    const link = new URL(/^<(https?:\/\/[^>]+)>$/.exec(header)![1]!);
+    const opened = await app.inject({ method: 'GET', url: `${link.pathname}${link.search}` });
+    expect(opened.statusCode).toBe(303);
+    const page = new URL(String(opened.headers.location));
+    const unsubscribeToken = new URLSearchParams(page.hash.slice(1)).get('unsubscribe');
+    expect(unsubscribeToken).toBe(link.pathname.split('/').at(-1));
+    expect(await desk.subscribers(olha)).toEqual([expect.objectContaining({ status: 'active' })]);
+
+    // the page asks her, she says yes: it posts to the same address
+    const left = await app.inject({
+      method: 'POST',
+      url: `${link.pathname}${link.search}`,
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'List-Unsubscribe=One-Click',
+    });
+    expect(left.statusCode).toBe(200);
+    expect(left.json()).toEqual({ unsubscribed: true });
+
+    const second = await desk.launch('M');
+    expect(second.to(olha)).toEqual([]);
+    expect(await desk.subscribers(olha)).toEqual([
+      expect.objectContaining({ status: 'ended', endReason: 'unsubscribed' }),
+    ]);
   });
 });
