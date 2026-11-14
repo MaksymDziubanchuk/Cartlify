@@ -42,6 +42,7 @@ import { beginReturnRefund, failReturnRefund, refundReturn } from '../../../help
 //   L  admin, other/defect, 1           the goods are on the shelf, the transfer waits for the provider
 //   J  form without a code, withdrawal, 2   an admin checks it by hand, the goods are expected
 //   K  form with the code, withdrawal, 1    the goods are expected
+// Taking the goods in confirms the parcel they came in: E, F, G, I and L have the proof confirmed.
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -353,7 +354,7 @@ describe('a line of the list', () => {
       goods: [0, 1, 0],
       money: [1, 0, 0, 0],
       closed: false,
-      proof: [false, false],
+      proof: [false, true],
       order: ['shipped', 'open'],
     },
     // every unit of the order is back with its money: the order is cancelled
@@ -366,7 +367,7 @@ describe('a line of the list', () => {
       goods: [0, 2, 0],
       money: [0, 0, 2, 0],
       closed: true,
-      proof: [false, false],
+      proof: [false, true],
       order: ['cancelled', 'full'],
     },
     G: {
@@ -378,7 +379,7 @@ describe('a line of the list', () => {
       goods: [0, 0, 1],
       money: [0, 0, 0, 1],
       closed: true,
-      proof: [false, false],
+      proof: [false, true],
       order: ['shipped', 'declined'],
     },
     H: {
@@ -403,7 +404,7 @@ describe('a line of the list', () => {
       money: [1, 0, 0, 0],
       failed: true,
       closed: false,
-      proof: [false, false],
+      proof: [false, true],
       order: ['shipped', 'open'],
     },
     L: {
@@ -415,7 +416,7 @@ describe('a line of the list', () => {
       goods: [0, 1, 0],
       money: [0, 1, 0, 0],
       closed: false,
-      proof: [false, false],
+      proof: [false, true],
       order: ['shipped', 'open'],
     },
     J: {
@@ -477,6 +478,8 @@ describe('a line of the list', () => {
       units: fact.units,
       amount: fact.units * 10,
       refundedAmount: fact.refunded,
+      // what an open statement still has to send: its rows owed (no delivery, no way back here)
+      moneyLeft: fact.closed ? null : fact.money[0] * 10,
       goods: { expected: fact.goods[0], received: fact.goods[1], declined: fact.goods[2] },
       money: {
         notRefunded: fact.money[0],
@@ -494,6 +497,7 @@ describe('a line of the list', () => {
     // one unit is on the shelf, one is refused, one is still expected
     await setGoods(card, 1, 'to_stock');
     const refused = await post(`/api/returns/${card.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [
         {
           itemId: (await detailOf(card.id)).items.find(
@@ -943,12 +947,14 @@ describe('the periods', () => {
   });
 
   it('takes the statements with a row whose money went back in a period (refundedFrom, refundedTo)', async () => {
-    const refundedAt = async (key: Key) =>
-      Date.parse(
-        (await detailOf(ids[key])).items.find(
-          (row: { refundedAt: string | null }) => row.refundedAt,
-        ).refundedAt,
+    // the money of a row went back when the line of the money journal that sent it was written
+    const refundedAt = async (key: Key) => {
+      const card = await detailOf(ids[key]);
+      const row = card.items.find((one: { money: string }) => one.money === 'refunded');
+      return Date.parse(
+        card.money.find((move: { id: number }) => move.id === row.moneyLogId).createdAt,
       );
+    };
     const f = await refundedAt('F');
     const h = await refundedAt('H');
     const later = Math.max(f, h);
@@ -1249,6 +1255,7 @@ describe('format=csv', () => {
     'units',
     'amount',
     'refunded_amount',
+    'money_left',
     'goods_expected',
     'goods_received',
     'goods_declined',
@@ -1326,6 +1333,8 @@ describe('format=csv', () => {
         '2',
         '20.00',
         '20.00',
+        // closed: nothing left to send
+        '',
         '0',
         '2',
         '0',
@@ -1335,7 +1344,7 @@ describe('format=csv', () => {
         '0',
         'no',
         '',
-        '',
+        line.proof.confirmedAt!,
         '',
         line.closedAt!,
         '',

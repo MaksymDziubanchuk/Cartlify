@@ -4,12 +4,14 @@ import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
-import { settlePendingReturnRefunds } from '@routes/api/returns/services/settlePendingReturnRefunds.service.js';
+import { settleRefundsInTransit } from '@routes/api/payments/services/settleRefundsInTransit.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { asAdmin } from '../../../helpers/db.js';
+import { asAdmin, inCommittedTx } from '../../../helpers/db.js';
+import { newDisputeId, synced, withdrawal } from '../../../helpers/dbMoney.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import {
   closeSessions,
   createProduct,
@@ -148,14 +150,25 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
           basis: 'withdrawal',
           reason: null,
           step: 'closed',
-          proof: null,
+          parcels: [],
           items: [
             expect.objectContaining({
               quantity: 2,
               amount: 20,
-              deliveryAmount: 0,
               money: 'refunded',
               refusal: null,
+            }),
+          ],
+          // the money of the statement: one transfer of the goods, sent; no delivery of a pickup
+          refundedTotal: 20,
+          refunds: [
+            expect.objectContaining({
+              way: 'payment',
+              state: 'sent',
+              goods: 20,
+              delivery: 0,
+              deduction: 0,
+              amount: 20,
             }),
           ],
         }),
@@ -172,7 +185,8 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
     expect(notice.text).toContain(shopSettings().emailReplyTo);
     expect(own.some((mail) => mail.subject.includes('is closed'))).toBe(true);
 
-    // the log names the buyer, the money was given back in the name of the shop
+    // the log names the buyer for the statement; the money the system sent for it, in the name of
+    // the shop, is the money journal only
     const events = await asAdmin((tx) =>
       tx.adminAuditLog.findMany({
         where: { entityType: 'order', entityId: orderId },
@@ -180,12 +194,14 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
         orderBy: { id: 'asc' },
       }),
     );
-    expect(events).toEqual(
-      expect.arrayContaining([
-        { event: 'return.create', actorId: buyer.id, actorRole: 'USER' },
-        { event: 'return.refund', actorId: buyer.id, actorRole: 'USER' },
-      ]),
+    expect(events).toEqual([{ event: 'return.create', actorId: buyer.id, actorRole: 'USER' }]);
+    const money = await asAdmin((tx) =>
+      tx.moneyLog.findMany({
+        where: { orderId, event: 'money.refund' },
+        select: { purpose: true, part: true, state: true, actorId: true },
+      }),
     );
+    expect(money).toEqual([{ purpose: 'return', part: 'goods', state: 'sent', actorId: null }]);
     expect(
       (await stockLogOf({ orderId })).filter((line) => line.event === 'stock.return'),
     ).toHaveLength(1);
@@ -219,7 +235,7 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
     expect(await refundsOf(paymentId)).toEqual([]);
 
     // the worker asks again with the same key and the one refund is made
-    const settled = await settlePendingReturnRefunds(
+    const settled = await settleRefundsInTransit(
       {
         info: jest.fn<(obj: unknown, msg?: string) => void>(),
         warn: jest.fn<(obj: unknown, msg?: string) => void>(),
@@ -231,6 +247,33 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
     expect(settled).toBe(1);
     expect(await refundsOf(paymentId)).toEqual([expect.objectContaining({ amount: 1000 })]);
     expect((await read(orderId)).returnStatus).toBe('full');
+  });
+
+  // the bank has a dispute of the payment open: no transfer goes (the bank gives the money back);
+  // the statement stands, the goods are back, the refusal is in the log for the admin
+  it('keeps the statement and starts no transfer while a dispute of the payment is open', async () => {
+    const product = await newProduct();
+    const { orderId, paymentId } = await order([{ item: product, quantity: 1 }]);
+    await inCommittedTx((db) =>
+      synced(db, {
+        stripeId: newDisputeId(),
+        paymentId,
+        status: 'needs_response',
+        transactions: [withdrawal(10)],
+      }),
+    );
+
+    const res = await withdraw(orderId);
+
+    expect(res.statusCode).toBe(201);
+    expect(res.json().withdrawals[0].items[0]).toMatchObject({ money: 'not_refunded' });
+    expect(await refundsOf(paymentId)).toEqual([]);
+    expect(takeLogs({ msg: 'return refund was not started' })).toEqual([
+      expect.objectContaining({
+        code: 'RETURN_REFUND_DISPUTED',
+        returnId: res.json().withdrawals[0].id,
+      }),
+    ]);
   });
 
   it('lets one of two identical requests at once win (409 for the other) and gives the money back once', async () => {
@@ -479,7 +522,7 @@ describe('POST /api/orders/:orderId/withdrawal for a sent order', () => {
       withdrawals: [
         expect.objectContaining({
           step: 'received',
-          proof: null,
+          parcels: [],
           closedAt: null,
           items: [expect.objectContaining({ quantity: 1, money: 'not_refunded', refusal: null })],
         }),
@@ -509,25 +552,17 @@ describe('POST /api/orders/:orderId/withdrawal for a sent order', () => {
         'code',
         'id',
         'items',
-        'proof',
+        'parcels',
         'reason',
-        'shippingReimbursement',
+        'refundedTotal',
+        'refunds',
         'source',
         'statedAt',
         'step',
       ].sort(),
     );
     expect(Object.keys(statement.items[0]).sort()).toEqual(
-      [
-        'amount',
-        'deliveryAmount',
-        'money',
-        'orderItemId',
-        'quantity',
-        'refundedAt',
-        'refusal',
-        'shippingDeduction',
-      ].sort(),
+      ['amount', 'id', 'money', 'orderItemId', 'quantity', 'refundedAt', 'refusal'].sort(),
     );
     // an admin's view of the same order has no buyer path
     const admins = await app.inject({
@@ -585,29 +620,70 @@ describe('POST /api/orders/:orderId/withdrawal for a sent order', () => {
       trackingNumber: '1Z999AA10123456784',
       trackingUrl: 'https://track.example.com/1Z999AA10123456784',
     });
-    const confirm = await post(`/api/returns/${returnId}/proof/confirm`, {}, admin);
+    const confirm = await post(`/api/returns/${returnId}/proof/confirm`, { buyerPaid: 0 }, admin);
     const after = await read(orderId);
     const late = await proof(orderId, returnId);
 
     expect(first.statusCode).toBe(200);
     expect(first.json().withdrawals[0]).toMatchObject({
       step: 'proof_provided',
-      proof: {
-        carrier: 'DHL',
-        trackingNumber: 'JD0146000123',
-        trackingUrl: null,
-        confirmed: false,
-      },
+      parcels: [
+        {
+          direction: 'to_shop',
+          carrier: 'DHL',
+          trackingNumber: 'JD0146000123',
+          trackingUrl: null,
+          shippedAt: expect.any(String),
+          confirmed: false,
+          buyerPaid: null,
+        },
+      ],
     });
-    expect(second.json().withdrawals[0].proof).toMatchObject({
-      carrier: 'UPS',
-      trackingUrl: 'https://track.example.com/1Z999AA10123456784',
-    });
+    expect(second.json().withdrawals[0].parcels).toEqual([
+      expect.objectContaining({
+        carrier: 'UPS',
+        trackingUrl: 'https://track.example.com/1Z999AA10123456784',
+      }),
+    ]);
     expect(confirm.statusCode).toBe(200);
     expect(after.withdrawals[0]).toMatchObject({ step: 'proof_confirmed' });
-    expect(after.withdrawals[0].proof.confirmed).toBe(true);
+    expect(after.withdrawals[0].parcels[0].confirmed).toBe(true);
     expect(late.statusCode).toBe(409);
     expect(late.json()).toMatchObject({ errorCode: 'RETURN_PROOF_ALREADY_CONFIRMED' });
+  });
+
+  // the shop sent a label and wrote the parcel with what it cost: it is the shop's to change
+  it('leaves the parcel an admin recorded as it is (409 RETURN_PARCEL_EXISTS)', async () => {
+    const product = await newProduct();
+    const { orderId } = await order([{ item: product, quantity: 1 }], 'shipped');
+    const returnId: number = (await withdraw(orderId)).json().withdrawals[0].id;
+    const { paidAt } = await asAdmin((tx) =>
+      tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paidAt: true } }),
+    );
+    const recorded = await post(
+      `/api/returns/${returnId}/shipments`,
+      {
+        direction: 'to_shop',
+        carrier: 'GLS',
+        trackingNumber: 'SHOP-0001',
+        shippedAt: new Date(paidAt!.getTime() + 1).toISOString(),
+        cost: 4,
+      },
+      admin,
+    );
+    expect(recorded.statusCode).toBe(201);
+
+    const res = await proof(orderId, returnId);
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ errorCode: 'RETURN_PARCEL_EXISTS' });
+    expect((await read(orderId)).withdrawals[0].parcels).toEqual([
+      expect.objectContaining({
+        direction: 'to_shop',
+        carrier: 'GLS',
+        trackingNumber: 'SHOP-0001',
+      }),
+    ]);
   });
 
   it('shows the admin the proof the buyer wrote, to check before confirming it', async () => {
@@ -627,13 +703,114 @@ describe('POST /api/orders/:orderId/withdrawal for a sent order', () => {
     });
 
     expect(card.statusCode).toBe(200);
-    expect(card.json().proof).toMatchObject({
-      providedAt: expect.any(String),
+    expect(card.json().parcels).toEqual([
+      expect.objectContaining({
+        direction: 'to_shop',
+        shippedAt: expect.any(String),
+        carrier: 'DHL',
+        trackingNumber: 'JD0146000123',
+        trackingUrl: 'https://track.example.com/JD0146000123',
+        recordedBy: expect.objectContaining({ email: expect.any(String) }),
+        confirmedAt: null,
+      }),
+    ]);
+  });
+
+  it('shows the buyer what they paid the carrier, which the shop replaces from the receipt when it confirms the parcel', async () => {
+    const product = await newProduct();
+    const { orderId } = await order([{ item: product, quantity: 1 }], 'shipped');
+    const returnId: number = (await withdraw(orderId)).json().withdrawals[0].id;
+
+    const told = await proof(orderId, returnId, {
       carrier: 'DHL',
       trackingNumber: 'JD0146000123',
-      trackingUrl: 'https://track.example.com/JD0146000123',
-      confirmedAt: null,
+      buyerPaid: 7.25,
     });
+    const confirm = await post(`/api/returns/${returnId}/proof/confirm`, { buyerPaid: 6 }, admin);
+    const after = await read(orderId);
+
+    expect(told.statusCode).toBe(200);
+    expect(told.json().withdrawals[0].parcels).toEqual([
+      expect.objectContaining({ buyerPaid: 7.25, confirmed: false }),
+    ]);
+    expect(confirm.statusCode).toBe(200);
+    expect(confirm.json().parcels).toEqual([
+      expect.objectContaining({ direction: 'to_shop', buyerPaid: 6, carrier: 'DHL' }),
+    ]);
+    expect(after.withdrawals[0].parcels).toEqual([
+      expect.objectContaining({ buyerPaid: 6, confirmed: true }),
+    ]);
+  });
+
+  it('names the units the parcel carries: the rest goes into a statement of its own, whose code the buyer is mailed', async () => {
+    const product = await newProduct();
+    const { orderId } = await order([{ item: product, quantity: 3 }], 'shipped');
+    const made = (await withdraw(orderId)).json().withdrawals[0];
+    const mails = watchMail();
+
+    const res = await proof(orderId, made.id, {
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000123',
+      items: [{ itemId: made.items[0].id, quantity: 1 }],
+    });
+
+    expect(res.statusCode).toBe(200);
+    const [first, second] = res.json().withdrawals;
+    expect(first).toMatchObject({
+      id: made.id,
+      step: 'proof_provided',
+      items: [expect.objectContaining({ id: made.items[0].id, quantity: 1 })],
+    });
+    expect(second).toMatchObject({
+      code: `W${orderId}-2`,
+      parcels: [],
+      items: [expect.objectContaining({ quantity: 2 })],
+    });
+    const own = mails.filter(
+      (mail) =>
+        mail.to.includes(buyer.email) &&
+        mail.subject.includes(`A statement of its own for goods of order #${orderId}`),
+    );
+    expect(own).toHaveLength(1);
+    expect(own[0]!.subject.endsWith(`(W${orderId}-2)`)).toBe(true);
+    expect(own[0]!.text).toContain(`not in the parcel of statement ${made.code}`);
+  });
+
+  it('names only rows of the statement whose goods wait (404 RETURN_ITEM_NOT_FOUND, 409 RETURN_QUANTITY_EXCEEDED)', async () => {
+    const product = await newProduct();
+    const { orderId } = await order([{ item: product, quantity: 2 }], 'shipped');
+    const made = (await withdraw(orderId)).json().withdrawals[0];
+
+    const foreign = await proof(orderId, made.id, {
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000123',
+      items: [{ itemId: 2_000_000_000, quantity: 1 }],
+    });
+    const exceeded = await proof(orderId, made.id, {
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000123',
+      items: [{ itemId: made.items[0].id, quantity: 3 }],
+    });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(foreign.json()).toMatchObject({ errorCode: 'RETURN_ITEM_NOT_FOUND' });
+    expect(exceeded.statusCode).toBe(409);
+    expect(exceeded.json()).toMatchObject({ errorCode: 'RETURN_QUANTITY_EXCEEDED' });
+  });
+
+  it('refuses a sum paid that is not money (400 VALIDATION_ERROR)', async () => {
+    const product = await newProduct();
+    const { orderId } = await order([{ item: product, quantity: 1 }], 'shipped');
+    const returnId: number = (await withdraw(orderId)).json().withdrawals[0].id;
+
+    const res = await proof(orderId, returnId, {
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000123',
+      buyerPaid: 1.005,
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
   });
 
   it('takes the rest of a sent order in a second statement, and shows nothing left to state', async () => {

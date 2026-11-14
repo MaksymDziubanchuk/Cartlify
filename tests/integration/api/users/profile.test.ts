@@ -337,6 +337,7 @@ describe('GET /api/users/:userId for an admin', () => {
       url: `/api/returns/${settled.id}/receive`,
       headers: withCsrf(csrf, accessCookie(admin)),
       payload: {
+        parcel: { buyerPaid: 0 },
         results: [
           {
             itemId: settled.items[0]!.id,
@@ -545,6 +546,22 @@ describe('GET /api/users/:userId for an admin', () => {
 
     expect(res.statusCode).toBe(200);
     expect(loginTimes(res.json())).toEqual([logins[10]!.toISOString(), logins[40]!.toISOString()]);
+  });
+
+  // the database dates the records by its own clock, at times a moment ahead of the clock of the
+  // app: without "to" the lists take every record after "from", up to the last one written
+  it('takes a record the database dated a moment ahead of the clock of the app when no "to" comes', async () => {
+    const user = await newUser();
+    const ahead = new Date(Date.now() + 5_000);
+    await createLoginLog(user, ahead);
+    const admin = accessCookie(await newUser({ role: 'ADMIN' }));
+
+    for (const query of [{}, { from: daysAgo(5).toISOString() }]) {
+      const res = await profileOf(user.id, admin, { include: 'loginLogs', ...query });
+
+      expect(res.statusCode).toBe(200);
+      expect(loginTimes(res.json())).toEqual([ahead.toISOString()]);
+    }
   });
 
   it('takes a period of exactly 60 days', async () => {

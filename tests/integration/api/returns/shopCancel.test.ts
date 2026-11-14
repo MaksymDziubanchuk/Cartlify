@@ -120,9 +120,19 @@ describe('shop_cancel: the shop cancels a paid order', () => {
           goods: 'to_stock',
           money: 'refunded',
           amount: 30,
-          refundId: expect.stringMatching(/^re_/),
+          moneyLogId: expect.any(Number),
         }),
       ],
+      // the transfer: the goods and the delivery of the order, sent, with the id Stripe gave
+      money: expect.arrayContaining([
+        expect.objectContaining({
+          event: 'money.refund',
+          part: 'goods',
+          amount: -30,
+          state: 'sent',
+          refundId: expect.stringMatching(/^re_/),
+        }),
+      ]),
     });
     // the stock is back, with the line of the stock log in the name of the admin
     expect((await stockOf(product)).stock).toBe(before.stock + 3);
@@ -213,7 +223,7 @@ describe('shop_cancel: the shop cancels a paid order', () => {
       expect(res.json().order.status).toBe('cancelled');
       expect(res.json().items[0]).toMatchObject({
         goods: 'to_stock',
-        money: 'not_refunded',
+        money: 'failed',
         refundFailure: { code: 'shop_balance' },
       });
       expect((await stockOf(product)).stock).toBe(before.stock + 1);
@@ -326,7 +336,7 @@ describe('shop_cancel: the shop cancels a paid order', () => {
     expect(await refundsOf(done.paymentId)).toHaveLength(1);
   });
 
-  it('cancels the order of a payment Stripe does not know and shows the money as not refunded, with the failure', async () => {
+  it('cancels the order of a payment Stripe does not know and shows the money as failed, with the failure', async () => {
     const product = await createProduct({ price: 10, stock: 5 });
     products.push(product);
     // a made-up payment id: Stripe has no such payment
@@ -341,7 +351,7 @@ describe('shop_cancel: the shop cancels a paid order', () => {
     expect(res.json().order.status).toBe('cancelled');
     expect(res.json().items[0]).toMatchObject({
       goods: 'to_stock',
-      money: 'not_refunded',
+      money: 'failed',
       refundFailure: { code: 'unknown', text: expect.stringContaining('No such payment_intent') },
     });
   });
@@ -414,6 +424,7 @@ describe('refused: the buyer refused the parcel', () => {
     const rowId: number = made.json().items[0].id;
 
     const back = await post(`/api/returns/${returnId}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: rowId, quantity: 2, goods: 'to_stock' }],
     });
     const stillShipped = await statusOf(orderId);

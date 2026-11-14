@@ -22,16 +22,23 @@ import {
   addShipment,
   deliveryAnswer,
   deliveryBody,
+  holdForReview,
   orderRowOf,
   placeOrder,
   placeUnconfirmedOrder,
+  releaseReview,
+  shippingCostOf,
+  shippingLinesOf,
+  warnOfFraud,
 } from '../../../helpers/orders.js';
 
 // PATCH /api/orders/:orderId/status: an admin moves a paid order along its delivery, paid to
 // shipped to delivered, and one step back. Shipping a manual order records the send (who carries it,
-// the number, the link, what the shop pays); a pickup is shipped when it is ready to be collected.
-// Every step mails the buyer unless the account is deleted. A cancel returns money and stock, it is
-// a route of its own
+// the number, the link, what the shop pays: a line of the money journal, the one source of the
+// costs of the delivery); a pickup is shipped when it is ready to be collected. An order something
+// holds (a dispute, a refund by hand, a warning or a review of the provider) is not sent. Every step
+// mails the buyer unless the account is deleted. A cancel returns money and stock, it is a route of
+// its own
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -182,6 +189,28 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
     ]);
   });
 
+  // the money journal is the one source of what the shop pays the carrier
+  it('writes the cost of the send as a line of the money journal in the name of the admin', async () => {
+    const orderId = await paidOrder();
+
+    const res = await setStatus(admin, orderId, 'shipped', {
+      shipment: { carrier: 'DHL', cost: 7.5 },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const shipmentId = res.json().shipments[0].id as number;
+    expect(await shippingLinesOf(shipmentId)).toEqual([
+      expect.objectContaining({
+        event: 'money.shipping_cost',
+        amount: -7.5,
+        coversId: null,
+        orderId,
+        actorId: admin.id,
+        actorRole: 'ADMIN',
+      }),
+    ]);
+  });
+
   it('ships a manual order with nothing said about the send, and records an empty one for the cost', async () => {
     const orderId = await paidOrder();
 
@@ -196,9 +225,11 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
     expect(res.json().shipments).toEqual([
       expect.objectContaining({ carrier: null, trackingNumber: null, cost: null, expense: true }),
     ]);
+    expect(await shippingLinesOf(res.json().shipments[0].id)).toEqual([]);
   });
 
-  it('takes a send with the cost of zero, and with only a carrier', async () => {
+  // the journal has no line of 0: a cost of nothing and a cost not written yet are the same
+  it('takes a send with the cost of zero, which writes no line, and one with only a carrier', async () => {
     const free = await paidOrder();
     const named = await paidOrder();
 
@@ -207,7 +238,9 @@ describe('PATCH /api/orders/:orderId/status: the steps on', () => {
       shipment: { carrier: 'Local post' },
     });
 
-    expect(zero.json().shipments[0]).toMatchObject({ cost: 0, carrier: null });
+    expect(zero.statusCode).toBe(200);
+    expect(zero.json().shipments[0]).toMatchObject({ cost: null, carrier: null });
+    expect(await shippingLinesOf(zero.json().shipments[0].id)).toEqual([]);
     expect(carrier.json().shipments[0]).toMatchObject({ cost: null, carrier: 'Local post' });
   });
 
@@ -495,10 +528,14 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
     const [send] = await shipmentsOf(orderId);
     expect(send).toMatchObject({ carrier: 'DHL', trackingNumber: 'A1', expense: true });
     expect(send!.rolledBackAt).not.toBeNull();
-    expect(Number(send!.cost)).toBe(7);
+    // the line of the cost stays as it was
+    expect(await shippingCostOf(send!.id)).toBe(7);
+    expect(await shippingLinesOf(send!.id)).toHaveLength(1);
   });
 
-  // the row of the send stays, it cost the shop nothing: 0, and the cost it had is in the log
+  // the row of the send stays, it cost the shop nothing: the journal corrects the cost to 0 with a
+  // line of its own (the first line stays, a past period does not change), and the admin log keeps
+  // the cost it had
   it('moves it back making the send cost nothing, when the shipping was a mistake', async () => {
     const orderId = await shippedOrder({ carrier: 'DHL', cost: 7 });
 
@@ -507,14 +544,31 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
     expect(res.statusCode).toBe(200);
     const [send] = await shipmentsOf(orderId);
     expect(send).toMatchObject({ expense: false });
-    expect(Number(send!.cost)).toBe(0);
     expect(send!.rolledBackAt).not.toBeNull();
+    expect(await shippingCostOf(send!.id)).toBe(0);
+    const lines = await shippingLinesOf(send!.id);
+    expect(lines.map((l) => [l.event, l.amount, l.coversId])).toEqual([
+      ['money.shipping_cost', -7, null],
+      ['money.correction', 7, lines[0]!.id],
+    ]);
+    expect(lines[1]).toMatchObject({ actorId: admin.id, actorRole: 'ADMIN' });
+    expect(res.json().shipments[0]).toMatchObject({ cost: 0, expense: false });
     const [line] = await asAdmin((tx) =>
       tx.adminAuditLog.findMany({
         where: { entityType: 'order', entityId: orderId, event: 'order.ship_back' },
       }),
     );
     expect(line!.meta).toEqual(expect.arrayContaining([{ field: 'shippingCost', old: 7, new: 0 }]));
+  });
+
+  it('writes no line moving back a send whose cost was never written', async () => {
+    const orderId = await shippedOrder({ carrier: 'DHL' });
+
+    const res = await setStatus(admin, orderId, 'paid', { keepShippingCost: false });
+
+    expect(res.statusCode).toBe(200);
+    const [send] = await shipmentsOf(orderId);
+    expect(await shippingLinesOf(send!.id)).toEqual([]);
   });
 
   it('asks which of them it is for a manual order', async () => {
@@ -559,7 +613,12 @@ describe('PATCH /api/orders/:orderId/status: a step back', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().shipments.map((s: { carrier: string }) => s.carrier)).toEqual(['UPS', 'DHL']);
     expect(res.json().delivery.shipment).toMatchObject({ carrier: 'UPS' });
-    expect((await shipmentsOf(orderId)).map((s) => s.rolledBackAt === null)).toEqual([false, true]);
+    const sends = await shipmentsOf(orderId);
+    expect(sends.map((s) => s.rolledBackAt === null)).toEqual([false, true]);
+    // each send has the lines of its own cost
+    expect(await shippingCostOf(sends[0]!.id)).toBe(7);
+    expect(await shippingCostOf(sends[1]!.id)).toBe(9);
+    expect(res.json().shipments.map((s: { cost: number }) => s.cost)).toEqual([9, 7]);
   });
 
   it('moves a delivered order back to shipped, the send stays as it was', async () => {
@@ -907,6 +966,72 @@ describe('PATCH /api/orders/:orderId/status: the mails of the steps', () => {
       expectNoMailTried(mails);
     },
   );
+});
+
+// orders.holds: what keeps a paid order from its sending, put and taken away by the system and by
+// root (db/05); the admin is told why
+describe('PATCH /api/orders/:orderId/status: an order something holds', () => {
+  it.each([
+    ['a manual order', deliveryBody],
+    ['a pickup', pickupBody],
+  ])(
+    'does not send %s while the provider reviews its payment, and sends it once the review is over',
+    async (_case, delivery) => {
+      const buyer = await newUser();
+      const orderId = await paidOrder(buyer, delivery);
+      const reviewId = await holdForReview(orderId);
+      const mails = watchMail();
+
+      const held = await setStatus(
+        admin,
+        orderId,
+        'shipped',
+        delivery.method === 'pickup' ? {} : { shipment: { carrier: 'DHL', cost: 5 } },
+      );
+
+      expect(held.statusCode).toBe(409);
+      expect(held.json()).toMatchObject({
+        errorCode: 'ORDER_ON_HOLD',
+        details: { orderId, holds: ['payment_review'] },
+      });
+      expect((await orderRowOf(orderId)).status).toBe('paid');
+      expect(await shipmentsOf(orderId)).toEqual([]);
+      expect(await statusLinesOf(orderId)).toEqual([]);
+      expectNoMailTried(mails);
+
+      await releaseReview(orderId, reviewId);
+      const sent = await setStatus(admin, orderId, 'shipped');
+
+      expect(sent.statusCode).toBe(200);
+      expect(sent.json()).toMatchObject({ status: 'shipped' });
+    },
+  );
+
+  it('names each reason that holds the order once, in the order they came', async () => {
+    const orderId = await paidOrder();
+    await warnOfFraud(orderId);
+    await holdForReview(orderId);
+    await holdForReview(orderId);
+
+    const res = await setStatus(admin, orderId, 'shipped');
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({
+      errorCode: 'ORDER_ON_HOLD',
+      details: { orderId, holds: ['fraud_warning', 'payment_review'] },
+    });
+  });
+
+  // a warning of an order already sent only marks it: nothing keeps it from being delivered
+  it('delivers an order that was warned of after it was sent', async () => {
+    const orderId = await shippedOrder();
+    await warnOfFraud(orderId);
+
+    const res = await setStatus(admin, orderId, 'delivered');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ status: 'delivered' });
+  });
 });
 
 describe('PATCH /api/orders/:orderId/status: two requests at once', () => {
