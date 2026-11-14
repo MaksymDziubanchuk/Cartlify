@@ -385,8 +385,15 @@ describe('without a context', () => {
   it('shows no row outside the catalog, and of the catalog no more than a visitor sees', async () => {
     const { hidden, visitor, seen } = await inRolledBackTx(
       async (db) => {
-        // a version of the terms and a consent to it, made in this transaction only: a version
-        // committed would be in force for every other file
+        // a paid order with a statement of return, made in this transaction only: the rows of the
+        // statement are read by the owner of the order and by an admin only. The order comes
+        // before the version of the terms: its confirmation waits for the lock of the contract,
+        // and a file that publishes a contract and then the terms in one transaction
+        // (db/withdrawal) would wait for the lock of the terms this one holds (a deadlock)
+        const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
+
+        // a version of the terms and a consent to it, the same way: a version committed would be
+        // in force for every other file
         await db.as({ role: 'ROOT', userId: admin.id });
         const [terms] = await db.rows<{ id: number }>(
           `insert into cartlify.legal_documents (kind, title, content, "publishedById")
@@ -400,9 +407,6 @@ describe('without a context', () => {
           terms!.id,
         );
 
-        // a paid order with a statement of return, the same way: the rows of the statement are
-        // read by the owner of the order and by an admin only
-        const orderId = await paidOrderOf(db, owner.id, admin.id, [[product.variantId, 1]]);
         await db.as({ role: 'ADMIN', userId: admin.id });
         const [item] = await db.rows<{ id: number }>(
           'select id from cartlify.order_items where "orderId" = $1',
@@ -423,6 +427,17 @@ describe('without a context', () => {
              $1::int, 'DHL', null, null, 4.5, (now() at time zone 'UTC')::timestamp(3)
            ) as id`,
           made!.id,
+        );
+        // and a dispute of its payment at the bank, as the system follows it: an admin reads it,
+        // nobody else
+        await db.as({ role: 'ADMIN' });
+        await db.rows(
+          `select cartlify.sync_payment_dispute(
+             'stripe'::cartlify."PaymentProvider", $1, $2, 'needs_response'::cartlify."DisputeStatus",
+             'fraudulent', null, false, 0, false, (now() at time zone 'UTC')::timestamp(3), null, null
+           ) as result`,
+          `dp_context_${randomUUID()}`,
+          `pi_db_${orderId}`,
         );
         await db.as(null);
 
@@ -451,7 +466,7 @@ describe('without a context', () => {
       { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
     );
 
-    expect(Object.keys(hidden)).toHaveLength(42);
+    expect(Object.keys(hidden)).toHaveLength(43);
     expect(Object.entries(hidden).filter(([name, n]) => n > 0 && !CATALOG.includes(name))).toEqual(
       [],
     );

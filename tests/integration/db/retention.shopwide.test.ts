@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { prisma } from '@db/client.js';
 
 import { inRolledBackTx, type Actor, type DbSession } from '../../helpers/db.js';
+import { answerOf, DECIDE_USE, handRefundOf } from '../../helpers/dbMoney.js';
 import {
   cartOf,
   paidOrderOf,
@@ -20,14 +21,14 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
-import { cancelAndRefundIn, refundReturnIn } from '../../helpers/returns.js';
+import { cancelAndRefundIn, publishContractIn, refundReturnIn } from '../../helpers/returns.js';
 
 // how long the shop keeps what it needs no longer: the address and the browser of old logins, the
 // favorites and chats of guests who stopped coming, the chats of accounts deleted long ago, the
 // address and the browser of closed statements of return, their personal data, the recipient of
 // the orders of deleted accounts, and what the newsletters leave (the requests that were not
 // confirmed, the proof of the consent of an ended subscription, the mails of a campaign; their
-// cases are in newsletterRetention.test.ts). The days are in the privacy policy of the shop, one
+// cases are in newsletterRetention.shopwide.test.ts). The days are in the privacy policy of the shop, one
 // column for each kind; a function takes none. A row is kept for the shorter of the term of the version in force when
 // the data was collected and the term of the version in force now, and is cleaned a day before the
 // term ends. Each function is the work of the system; the periodic tasks of Railway run them.
@@ -37,7 +38,8 @@ import { cancelAndRefundIn, refundReturnIn } from '../../helpers/returns.js';
 // some days older than any version in the database, so only the version of the test counts for it
 // (the data collected before the first version follows the newest one). A cleanup works on every
 // row of the database, not only on the rows of the test: the counts say "at least", the rows of the
-// test are checked one by one.
+// test are checked one by one. *.shopwide: until a case rolls back, its cleanup holds the rows of
+// every other file it went over, so the file runs alone.
 
 let user: TestUser;
 let admin: TestUser;
@@ -755,7 +757,7 @@ const receive = async (
 ) => {
   await db.as(adminActor());
   await db.rows(
-    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb)`,
+    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
     returnId,
     JSON.stringify(results),
   );
@@ -801,17 +803,29 @@ type Statement = {
     description: string | null;
     ip: string | null;
     userAgent: string | null;
-    proofCarrier: string | null;
-    proofTrackingNumber: string | null;
-    proofTrackingUrl: string | null;
     closedAt: string | null;
     closeNote: string | null;
   };
-  rows: Array<
+  // the parcel the goods go back to the shop in, as the buyer told it; none when nobody told one
+  parcel:
+    | (Json & {
+        carrier: string | null;
+        trackingNumber: string | null;
+        trackingUrl: string | null;
+      })
+    | null;
+  rows: Array<Json & { amountNote: string | null }>;
+  // the lines of the money journal of the statement: its transfers, their failures, the money sent
+  // outside the app, the way back paid back, the parcels
+  lines: Array<
     Json & {
-      amountNote: string | null;
-      outsideNote: string | null;
-      refundFailureText: string | null;
+      event: string;
+      actorRole: string | null;
+      note: string | null;
+      failure: string | null;
+      failureText: string | null;
+      ip: string | null;
+      userAgent: string | null;
     }
   >;
 };
@@ -823,20 +837,43 @@ async function snapshotOf(db: DbSession, returnId: number): Promise<Statement> {
     `select to_jsonb(r) - 'updatedAt' as j from cartlify.returns as r where r.id = $1`,
     returnId,
   );
+  const [parcel] = await db.rows<{ j: NonNullable<Statement['parcel']> }>(
+    `select to_jsonb(p) - 'updatedAt' as j from cartlify.order_shipments as p
+     where p."returnId" = $1 and p.direction = 'to_shop'`,
+    returnId,
+  );
   const rows = await db.rows<{ j: Statement['rows'][number] }>(
     `select to_jsonb(i) - 'updatedAt' as j from cartlify.return_items as i
      where i."returnId" = $1 order by i.id`,
     returnId,
   );
-  return { head: head!.j, rows: rows.map((row) => row.j) };
+  const lines = await db.rows<{ j: Statement['lines'][number] }>(
+    `select to_jsonb(l) as j from cartlify.money_log as l where l."returnId" = $1 order by l.id`,
+    returnId,
+  );
+  return {
+    head: head!.j,
+    parcel: parcel?.j ?? null,
+    rows: rows.map((row) => row.j),
+    lines: lines.map((line) => line.j),
+  };
 }
+
+// a line the buyer or the system wrote in the request of the buyer, not an admin or root
+const ofRequest = (line: Statement['lines'][number]) =>
+  line.actorRole !== 'ADMIN' && line.actorRole !== 'ROOT';
 
 // A sent order of three items that the buyer took back from their account, and the whole story of
 // it: the buyer wrote the words of the request, the carrier and the number of the parcel; the admin
 // took two items in; root lowered the sum of the first with the reason, and it went back through the
-// provider; the transfer of the second failed and root sent the money outside the app; the third
-// never came and root closed it with a note. The statement is closed, every note is set
+// provider; the transfer of the second failed with the words of the provider and root sent the
+// money outside the app; root paid back the way back the buyer paid the carrier (the contract says
+// the shop pays it); the third never came and root closed it with a note. The statement is closed,
+// every note is set
 async function fullStatement(db: DbSession) {
+  // the contract in force says the shop pays the way back (the database of the tests may hold a
+  // contract of another file that says the buyer does)
+  await publishContractIn(db, root.id, 'shop');
   const orderId = await paidOrderOf(
     db,
     buyer.id,
@@ -861,10 +898,16 @@ async function fullStatement(db: DbSession) {
   );
 
   const [first, second, third] = await rowsOf(db, returnId);
-  await receive(db, returnId, [
-    { itemId: first!.id, quantity: 1, goods: 'to_stock' },
-    { itemId: second!.id, quantity: 1, goods: 'to_stock' },
-  ]);
+  // the receipt of the parcel says the buyer paid the carrier 4.50: the shop pays the way back
+  await db.as(adminActor());
+  await db.rows(
+    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 4.5}'::jsonb)`,
+    returnId,
+    JSON.stringify([
+      { itemId: first!.id, quantity: 1, goods: 'to_stock' },
+      { itemId: second!.id, quantity: 1, goods: 'to_stock' },
+    ]),
+  );
 
   // the first: lowered by root, sent back through the provider
   await db.as(rootActor());
@@ -875,19 +918,20 @@ async function fullStatement(db: DbSession) {
     JSON.stringify([{ itemId: first!.id, amount: 5, note: 'Opened and used.' }]),
   );
   await db.rows(
-    `select cartlify.finish_return_refund($1::uuid, 'succeeded', 're_test_1', null, null) as done`,
+    `select cartlify.settle_money_refund($1::text, 're_test_1', 'succeeded', null, null) as done`,
     lowered!.done.key,
   );
 
-  // the second: the transfer fails with the words of the provider, root sends the money outside
+  // the second: the transfer fails with the words of the provider, root sends the money outside,
+  // with the way back the shop owes
   const [failing] = await db.rows<{ done: { key: string } }>(
     `select cartlify.begin_return_refund($1::int, $2::int[], null::jsonb) as done`,
     returnId,
     [second!.id],
   );
   await db.rows(
-    `select cartlify.finish_return_refund(
-       $1::uuid, 'failed', null, 'card_unavailable'::cartlify."ReturnRefundFailure", 'The card is closed.'
+    `select cartlify.settle_money_refund(
+       $1::text, null, 'failed', 'card_unavailable'::cartlify."RefundFailure", 'The card is closed.'
      ) as done`,
     failing!.done.key,
   );
@@ -897,7 +941,7 @@ async function fullStatement(db: DbSession) {
   );
   await db.rows(
     `select cartlify.mark_return_refunded_outside(
-       $1::int, $2::int[], 'bank_transfer'::cartlify."ReturnOutsideMethod",
+       $1::int, $2::int[], 'bank_transfer'::cartlify."OutsideMethod",
        'Sent to the account of the buyer.', $3::timestamp
      ) as done`,
     returnId,
@@ -953,10 +997,14 @@ describe('cartlify.cleanup_return_addresses', () => {
     });
 
     expect(result.before.map((s) => [s.head.ip, s.head.userAgent])).toEqual([KEPT, KEPT]);
+    // the money of these statements was moved by root and an admin: their lines keep the address
+    expect(result.before.every((s) => s.lines.length > 0 && !s.lines.some(ofRequest))).toBe(true);
     expect(result.after).toEqual(
       result.before.map((s) => ({
         head: { ...s.head, ip: null, userAgent: null },
+        parcel: s.parcel,
         rows: s.rows,
+        lines: s.lines,
       })),
     );
   });
@@ -998,6 +1046,7 @@ describe('cartlify.cleanup_return_addresses', () => {
       return {
         audit: await lines('admin_audit_log', `"entityType" = 'order' and "entityId" = $1`),
         stock: await lines('stock_log', `"orderId" = $1 and event = 'stock.return'`),
+        money: await lines('money_log', `"orderId" = $1 and "returnId" is not null`),
       };
     };
 
@@ -1013,6 +1062,19 @@ describe('cartlify.cleanup_return_addresses', () => {
       });
       await logLine(db, orderId, returnId, { role: 'USER', id: buyer.id });
       await logLine(db, orderId, returnId, { role: 'ADMIN', id: admin.id });
+      // the money starts in the request of the buyer (the system, for the withdrawal) and fails;
+      // an admin sends it again and it goes
+      await db.as(asSystem());
+      const [first] = await db.rows<{ done: { key: string } }>(
+        `select cartlify.begin_return_refund($1::int, null::int[], null::jsonb) as done`,
+        returnId,
+      );
+      await db.rows(
+        `select cartlify.settle_money_refund(
+           $1::text, null, 'failed', 'card_unavailable'::cartlify."RefundFailure", 'Closed.'
+         ) as done`,
+        first!.done.key,
+      );
       await refundReturnIn(db, admin.id, returnId);
       const before = await journalsOf(db, orderId);
 
@@ -1028,6 +1090,12 @@ describe('cartlify.cleanup_return_addresses', () => {
         { role: 'ADMIN', ...kept },
       ],
       stock: [{ role: 'USER', ...kept }],
+      // the transfer of the system and its failure, then the transfer of the admin
+      money: [
+        { role: null, ...kept },
+        { role: null, ...kept },
+        { role: 'ADMIN', ...kept },
+      ],
     });
     expect(result.after).toEqual({
       audit: [
@@ -1035,6 +1103,11 @@ describe('cartlify.cleanup_return_addresses', () => {
         { role: 'ADMIN', ...kept },
       ],
       stock: [{ role: 'USER', ...emptied }],
+      money: [
+        { role: null, ...emptied },
+        { role: null, ...emptied },
+        { role: 'ADMIN', ...kept },
+      ],
     });
   });
 
@@ -1095,6 +1168,137 @@ describe('cartlify.cleanup_return_addresses', () => {
   });
 });
 
+// a payment the order could not take, whose refund failed, sent to the buyer another way by root
+// with a note that names the account of the buyer; the line of the money sent
+async function lateMoneySentOutside(db: DbSession, paymentId: string): Promise<number> {
+  await db.as(asSystem());
+  await db.rows(
+    `select cartlify.record_late_payment('stripe'::cartlify."PaymentProvider", $1, 0, $2::int,
+       25, 'eur', 'AMOUNT_MISMATCH') as result`,
+    paymentId,
+    buyer.id,
+  );
+  const [begun] = await db.rows<{ result: { id: number } }>(
+    `select cartlify.begin_payment_refund($1, $2, 25, 'eur') as result`,
+    paymentId,
+    `refund:${paymentId}`,
+  );
+  await db.rows(
+    `select cartlify.settle_money_refund($1, null, 'failed',
+       'card_unavailable'::cartlify."RefundFailure", 'The card is closed.') as result`,
+    `refund:${paymentId}`,
+  );
+  await db.as(rootActor());
+  const [marked] = await db.rows<{ result: { id: number } }>(
+    `select cartlify.mark_payment_refund_outside($1::int, 'bank_transfer'::cartlify."OutsideMethod",
+       'Sent to the account ES91 2100 0418 4502 0005 1332.', ${NOW}::timestamp(3)) as result`,
+    begun!.result.id,
+  );
+  return marked!.result.id;
+}
+
+// a compensation root gave the buyer of a paid order, whose refund failed, sent to the buyer another
+// way by root with a note that names the account of the buyer; the line of the money sent
+async function compensationSentOutside(db: DbSession): Promise<number> {
+  const orderId = await paidOrderOf(db, buyer.id, admin.id, [[product.variantId, 1]]);
+  const key = `compensation:${randomUUID()}`;
+  const begun = await answerOf(
+    db,
+    rootActor(),
+    `select cartlify.begin_compensation($1::int, $2, 5, 'eur') as result`,
+    orderId,
+    key,
+  );
+  await answerOf(
+    db,
+    asSystem(),
+    `select cartlify.settle_money_refund($1, null, 'failed',
+       'card_unavailable'::cartlify."RefundFailure", 'The card is closed.') as result`,
+    key,
+  );
+  const marked = await answerOf(
+    db,
+    rootActor(),
+    `select cartlify.mark_payment_refund_outside($1::int, 'bank_transfer'::cartlify."OutsideMethod",
+       'Sent to the account ES91 2100 0418 4502 0005 1332.', ${NOW}::timestamp(3)) as result`,
+    begun.id,
+  );
+  return marked.id as number;
+}
+
+// money already with the buyer for goods the shop did not accept (a refund made by hand root gave
+// the unit), given back by the buyer outside the app with a note that names their account; the line
+// of the money received
+async function overpaidReceivedBack(db: DbSession): Promise<number> {
+  const orderId = await paidOrderOf(db, buyer.id, admin.id, [[product.variantId, 1]]);
+  await db.as(adminActor());
+  await db.rows(
+    `update cartlify.orders set status = 'shipped' where id = $1 returning id`,
+    orderId,
+  );
+  const [item] = await db.rows<{ id: number }>(
+    'select id from cartlify.order_items where "orderId" = $1',
+    orderId,
+  );
+  const returnId = await answerOf(
+    db,
+    adminActor(),
+    `select cartlify.create_return(
+       $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+       'defect'::cartlify."ReturnReason", null, 'Test Buyer', 'buyer@example.com', null, null, 4,
+       'Europe/Madrid'
+     ) as result`,
+    orderId,
+    JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
+  );
+  const [row] = await db.rows<{ id: number }>(
+    'select id from cartlify.return_items where "returnId" = $1',
+    returnId,
+  );
+  await db.rows(
+    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
+    returnId,
+    JSON.stringify([
+      { itemId: row!.id, quantity: 1, goods: 'not_accepted', notAcceptedReason: 'used' },
+    ]),
+  );
+  const hand = await handRefundOf(db, `pi_db_${orderId}`, 10);
+  await answerOf(
+    db,
+    rootActor(),
+    DECIDE_USE,
+    hand.id,
+    JSON.stringify([{ orderItemId: item!.id, quantity: 1, amount: 10 }]),
+    0,
+    'For the unit.',
+  );
+  await answerOf(
+    db,
+    rootActor(),
+    `select cartlify.record_overpaid_received($1::int, 10, 'bank_transfer'::cartlify."OutsideMethod",
+       'From the account ES91 2100 0418 4502 0005 1332.', ${NOW}::timestamp(3)) as result`,
+    orderId,
+  );
+  await db.as(adminActor());
+  const [line] = await db.rows<{ id: number }>(
+    `select id from cartlify.money_log where "orderId" = $1 and event = 'money.received'`,
+    orderId,
+  );
+  return line!.id;
+}
+
+// a line of the money journal as an admin reads it
+async function moneyLineOf(db: DbSession, id: number) {
+  await db.as(adminActor());
+  const [line] = await db.rows<Record<string, unknown>>(
+    `select id, event, purpose::text as purpose, amount::text as amount, method::text as method,
+       note, "happenedAt", "coversId", "createdAt"
+     from cartlify.money_log where id = $1`,
+    id,
+  );
+  return line!;
+}
+
 describe('cartlify.cleanup_return_personal', () => {
   const anonymised = (statement: Statement, returnId: number): Statement => ({
     head: {
@@ -1102,17 +1306,31 @@ describe('cartlify.cleanup_return_personal', () => {
       contactName: 'Recipient Customer',
       contactEmail: `return+${returnId}@example.com`,
       description: null,
-      proofTrackingNumber: statement.head.proofTrackingNumber === null ? null : `R${returnId}`,
-      proofTrackingUrl: null,
       closeNote: statement.head.closeNote === null ? null : 'Cleared',
+    },
+    parcel: statement.parcel && {
+      ...statement.parcel,
+      trackingNumber: statement.parcel.trackingNumber === null ? null : `R${returnId}`,
+      trackingUrl: null,
     },
     rows: statement.rows.map((row) => ({
       ...row,
       amountNote: row.amountNote === null ? null : 'Lowered by the shop',
-      outsideNote: row.outsideNote === null ? null : 'Sent outside the app',
-      refundFailureText: null,
+    })),
+    // the lines keep the money; the notes are made up with the same meaning, the words of the
+    // provider go
+    lines: statement.lines.map((line) => ({
+      ...line,
+      note: line.note === null ? null : 'Sent outside the app',
+      failureText: null,
     })),
   });
+
+  const notesOf = (statement: Statement) =>
+    statement.lines.filter((line) => line.note !== null).map((line) => [line.event, line.note]);
+
+  const wordsOf = (statement: Statement) =>
+    statement.lines.filter((line) => line.failure !== null).map((line) => line.failureText);
 
   it('makes the personal data of a closed statement anonymous, with every note it holds', async () => {
     const result = await inRoundedTx(async (db) => {
@@ -1129,50 +1347,54 @@ describe('cartlify.cleanup_return_personal', () => {
       contactName: 'Anna Koval',
       contactEmail: 'anna@example.com',
       description: 'I changed my mind, my address is Main street 1.',
-      proofCarrier: 'DHL',
-      proofTrackingNumber: 'JD0146000123',
-      proofTrackingUrl: 'https://track.example.com/JD0146000123',
       closeNote: 'The goods never came.',
+    });
+    expect(result.before.parcel).toMatchObject({
+      carrier: 'DHL',
+      trackingNumber: 'JD0146000123',
+      trackingUrl: 'https://track.example.com/JD0146000123',
     });
     expect(result.before.rows.map((row) => row.amountNote)).toEqual([
       'Opened and used.',
       null,
       null,
     ]);
-    expect(result.before.rows.map((row) => row.outsideNote)).toEqual([
-      null,
-      'Sent to the account of the buyer.',
-      null,
+    expect(notesOf(result.before)).toEqual([
+      // the goods of the row and the way back, sent together
+      ['money.outside', 'Sent to the account of the buyer.'],
+      ['money.outside', 'Sent to the account of the buyer.'],
     ]);
+    expect(wordsOf(result.before)).toEqual(['The card is closed.']);
 
     // what is left: made-up words, the notes with the same meaning in general words
     expect(result.after.head).toMatchObject({
       contactName: 'Recipient Customer',
       contactEmail: `return+${result.returnId}@example.com`,
       description: null,
-      proofCarrier: 'DHL',
-      proofTrackingNumber: `R${result.returnId}`,
-      proofTrackingUrl: null,
       closeNote: 'Cleared',
+    });
+    expect(result.after.parcel).toMatchObject({
+      carrier: 'DHL',
+      trackingNumber: `R${result.returnId}`,
+      trackingUrl: null,
     });
     expect(result.after.rows.map((row) => row.amountNote)).toEqual([
       'Lowered by the shop',
       null,
       null,
     ]);
-    expect(result.after.rows.map((row) => row.outsideNote)).toEqual([
-      null,
-      'Sent outside the app',
-      null,
+    expect(notesOf(result.after)).toEqual([
+      ['money.outside', 'Sent outside the app'],
+      ['money.outside', 'Sent outside the app'],
     ]);
-    expect(result.after.rows.map((row) => row.refundFailureText)).toEqual([null, null, null]);
+    expect(wordsOf(result.after)).toEqual([null]);
 
     // and nothing else moved: the money, the goods, the dates, the reasons, the parcel's carrier,
     // the address and the browser
     expect(result.after).toEqual(anonymised(result.before, result.returnId));
   });
 
-  it('makes up only the notes that are there: a statement without a parcel or a note gets none', async () => {
+  it('makes up only the notes that are there: a parcel without a number and a statement without a note get none', async () => {
     const result = await inRoundedTx(async (db) => {
       await publishPolicy(db, { returnPersonal: 1 });
       const returnId = await bareStatement(db);
@@ -1184,20 +1406,26 @@ describe('cartlify.cleanup_return_personal', () => {
 
     expect(result.before.head).toMatchObject({
       description: 'The box came open, call me on +380501234567.',
-      proofTrackingNumber: null,
       closeNote: null,
+    });
+    expect(result.before.parcel).toMatchObject({
+      carrier: null,
+      trackingNumber: null,
+      trackingUrl: null,
     });
     expect(result.after.head).toMatchObject({
       contactName: 'Recipient Customer',
       contactEmail: `return+${result.returnId}@example.com`,
       description: null,
-      proofTrackingNumber: null,
-      proofTrackingUrl: null,
       closeNote: null,
     });
-    expect(result.after.rows.map((row) => [row.amountNote, row.outsideNote])).toEqual([
-      [null, null],
-    ]);
+    expect(result.after.parcel).toMatchObject({
+      carrier: null,
+      trackingNumber: null,
+      trackingUrl: null,
+    });
+    expect(result.after.rows.map((row) => row.amountNote)).toEqual([null]);
+    expect(notesOf(result.after)).toEqual([]);
     expect(result.after).toEqual(anonymised(result.before, result.returnId));
   });
 
@@ -1242,6 +1470,70 @@ describe('cartlify.cleanup_return_personal', () => {
 
     expect(result).toMatchObject({ ip: REQUEST_IP, userAgent: REQUEST_AGENT });
   });
+
+  // root sent the money of a refund of a late payment (or of one made by hand) another way: the note
+  // of its line is the same kind of note as the one of a statement, kept for the same term from the
+  // moment the line was written; the money and the rest of the line stay
+  it('makes up the note of the money of a late payment sent another way once the term has passed', async () => {
+    const result = await inRoundedTx(async (db) => {
+      await publishPolicy(db, { returnPersonal: 1 });
+      const line = await lateMoneySentOutside(db, `pi_ret_${randomUUID()}`);
+      const before = await moneyLineOf(db, line);
+
+      await cleanup(db, 'cleanup_return_personal');
+      const after = await moneyLineOf(db, line);
+      await cleanup(db, 'cleanup_return_personal');
+      return { before, after, again: await moneyLineOf(db, line) };
+    });
+
+    expect(result.before.note).toBe('Sent to the account ES91 2100 0418 4502 0005 1332.');
+    expect(result.after).toEqual({ ...result.before, note: 'Sent outside the app' });
+    expect(result.again).toEqual(result.after);
+  });
+
+  // the notes of the money outside the app tied to no statement: a compensation sent another way,
+  // and what the buyer gave back for money already with them
+  it.each([
+    ['a compensation sent another way', compensationSentOutside, 'Sent outside the app'],
+    [
+      'money the buyer gave back for goods not taken',
+      overpaidReceivedBack,
+      'Received outside the app',
+    ],
+  ])('makes up the note of %s once the term has passed', async (_case, made, madeUp) => {
+    const result = await inRoundedTx(async (db) => {
+      await publishPolicy(db, { returnPersonal: 1 });
+      const line = await made(db);
+      const before = await moneyLineOf(db, line);
+
+      await cleanup(db, 'cleanup_return_personal');
+      const after = await moneyLineOf(db, line);
+      await cleanup(db, 'cleanup_return_personal');
+      return { before, after, again: await moneyLineOf(db, line) };
+    });
+
+    expect(result.before.note).toMatch(/ES91 2100 0418 4502 0005 1332/);
+    expect(result.after).toEqual({ ...result.before, note: madeUp });
+    expect(result.again).toEqual(result.after);
+  });
+
+  it.each([
+    ['two days', 2],
+    ['a year', 365],
+  ])(
+    'keeps the note of the money of a late payment sent another way today with a term of %s',
+    async (_case, days) => {
+      const result = await inRoundedTx(async (db) => {
+        await publishPolicy(db, { returnPersonal: days });
+        const line = await lateMoneySentOutside(db, `pi_ret_${randomUUID()}`);
+
+        await cleanup(db, 'cleanup_return_personal');
+        return moneyLineOf(db, line);
+      });
+
+      expect(result.note).toBe('Sent to the account ES91 2100 0418 4502 0005 1332.');
+    },
+  );
 
   it('says how many statements it made anonymous, and none the second time', async () => {
     const result = await inRoundedTx(async (db) => {

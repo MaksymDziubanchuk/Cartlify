@@ -37,10 +37,11 @@ import { inOwnerTx, type OwnerSession } from '../../helpers/ownerDb.js';
 // ("retentionNewsletterRecipientsDays", counted from the end of the campaign). The days are in the
 // privacy policy of the shop; the functions take none. A row is kept for the shorter of the term of
 // the version in force when it was collected and the term of the version in force now, and is
-// cleaned a day before the term ends (rules of db/retention.test.ts). Each function is the work of
+// cleaned a day before the term ends (rules of db/retention.shopwide.test.ts). Each function is the work of
 // the system. The rows of a case are made by the owner of the database in a session that rolls
 // back, so the version of the policy a case publishes is seen by that case only; the guards let a
-// row end at any moment, so a subscription or a campaign can end long ago
+// row end at any moment, so a subscription or a campaign can end long ago. *.shopwide: a cleanup
+// goes over every row of the database and holds what it took until the case rolls back
 
 let fx: NewsletterFixtures;
 
@@ -126,7 +127,7 @@ async function subscriberIn(
 
 describe.each(CLEANUPS)('cartlify.%s', (fn) => {
   // the others who may not call it (a guest, a buyer, an admin, root with an account, nobody) are in
-  // retention.test.ts; here the people the newsletters add
+  // retention.shopwide.test.ts; here the people the newsletters add
   it.each([
     ['an admin with the right to run the newsletters', MANAGER],
     ['root without an account', () => ({ role: 'ROOT' }) as Actor],
@@ -818,15 +819,20 @@ describe('the terms of the newsletters in the policy', () => {
   const termOf = (field: (typeof FIELDS)[number], days: number) =>
     field === 'retentionNewsletterConsentDays' ? { consent: days } : { recipients: days };
 
+  // the versions the other shop-wide files published before this one stay in the database (a
+  // version is never taken back), and they count too
   it.each(FIELDS)('gives the shortest term of %s in any version', async (field) => {
     await inOwnerTx(async (db) => {
+      const [{ shortest }] = (await db.rows<{ shortest: number | null }>(
+        `select min("${field}") as shortest from cartlify.legal_documents where kind = 'privacy'`,
+      )) as [{ shortest: number | null }];
       await publishPolicyWith(db, fx.root.id, termOf(field, 7));
       await publishPolicyWith(db, fx.root.id, termOf(field, 5));
       await publishPolicyWith(db, fx.root.id, termOf(field, 9));
 
       const rows = await callAs(db, READER, 'select cartlify.retention_floor($1) as floor', field);
 
-      expect(rows).toEqual([{ floor: 5 }]);
+      expect(rows).toEqual([{ floor: shortest === null ? 5 : Math.min(shortest, 5) }]);
     });
   });
 

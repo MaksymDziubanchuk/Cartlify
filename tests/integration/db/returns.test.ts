@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { prisma } from '@db/client.js';
 
-import { inRolledBackTx, type DbSession } from '../../helpers/db.js';
+import { inCommittedTx, inRolledBackTx, type DbSession } from '../../helpers/db.js';
 import { cartOf, paidOrderOf, stockOf, waitingOrderOf } from '../../helpers/dbOrders.js';
 import {
   closeSessions,
@@ -12,12 +12,14 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
+import { inOwnerTx } from '../../helpers/ownerDb.js';
 
 // the statement of a withdrawal or a return and its goods, in the database: who makes one, what it
 // must hold (the order, the items and the quantities, the rule of the product, the period), how an
 // admin takes the goods in (to the stock, written off, not accepted, lost, not arrived) and what each
 // does to the stock, the batches, the stock log and the state of the order. The money is not here.
-// All in transactions that roll back
+// All in transactions that roll back; what only the owner of the database writes (the holds of an
+// order) is written as the owner, on an order the test commits
 
 let buyer: TestUser;
 let other: TestUser;
@@ -27,6 +29,8 @@ let plain: TestProduct;
 let perishable: TestProduct;
 // stock in two batches, the first sold before the second: 3 units at cost 4 and 2 units at cost 6
 let split: TestProduct;
+// the product of the order a test commits: its units never come back to the stock of plain
+let holdable: TestProduct;
 
 beforeAll(async () => {
   buyer = await createUser({ name: 'Anna Koval' });
@@ -34,6 +38,7 @@ beforeAll(async () => {
   admin = await createUser({ role: 'ADMIN' });
   root = await createUser({ role: 'ROOT' });
   plain = await createProduct({ price: 10, stock: 20 });
+  holdable = await createProduct({ price: 10, stock: 10 });
   perishable = await createProduct({ price: 7, stock: 20, withdrawal: 'perishable' });
   split = await createProduct({ price: 12, stock: 0 });
   await receiveBatch({ variantId: split.variantId }, { quantity: 3, unitCost: 4 });
@@ -73,7 +78,7 @@ type Made = { returnId: number };
 
 type Opts = {
   items: Array<{ orderItemId: number; quantity: number }>;
-  source?: 'account' | 'form_code' | 'form_manual' | 'admin';
+  source?: 'account' | 'form_code' | 'form_manual' | 'admin' | 'system';
   basis?: 'withdrawal' | 'other';
   reason?: string | null;
   description?: string | null;
@@ -124,13 +129,13 @@ type Result = {
 
 const receive = (db: DbSession, returnId: number, results: Result[]) =>
   db.attempt(
-    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb)`,
+    `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
     returnId,
     JSON.stringify(results),
   );
 
 const confirmProof = (db: DbSession, returnId: number) =>
-  db.attempt(`select 1 as done from cartlify.confirm_return_proof($1::int)`, returnId);
+  db.attempt(`select 1 as done from cartlify.confirm_return_proof($1::int, 0::numeric)`, returnId);
 
 type RowOfReturn = {
   id: number;
@@ -163,6 +168,7 @@ const headOf = async (db: DbSession, returnId: number) => {
     extendsId: number | null;
     closedAt: string | null;
     closedById: number | null;
+    // the confirmation of the parcel the goods go back to the shop in
     proofConfirmedAt: string | null;
     proofConfirmedById: number | null;
     ip: string | null;
@@ -172,11 +178,15 @@ const headOf = async (db: DbSession, returnId: number) => {
   }>(
     `select "orderId", source::text as source, basis::text as basis, reason::text as reason,
             description, "contactName", "contactEmail", "createdById", "extendsId",
-            "closedAt"::text as "closedAt", "closedById", "proofConfirmedAt"::text as "proofConfirmedAt",
-            "proofConfirmedById", ip, "userAgent",
+            "closedAt"::text as "closedAt", "closedById",
+            (select p."confirmedAt"::text from cartlify.order_shipments as p
+             where p."returnId" = r.id and p.direction = 'to_shop') as "proofConfirmedAt",
+            (select p."confirmedById" from cartlify.order_shipments as p
+             where p."returnId" = r.id and p.direction = 'to_shop') as "proofConfirmedById",
+            ip, "userAgent",
             "createdAt" <= (now() at time zone 'UTC') + interval '1 second' as "createdAtOk",
             "statedAt" <= "createdAt" as "statedAtOk"
-     from cartlify.returns where id = $1`,
+     from cartlify.returns as r where r.id = $1`,
     returnId,
   );
   return row!;
@@ -838,7 +848,7 @@ describe('the goods of a statement: receive_return_items', () => {
     },
   );
 
-  it('does not take units in as lost before the proof of the buyer is confirmed (RETURN_PROOF_REQUIRED)', async () => {
+  it('does not take units in as lost before the parcel is confirmed (RETURN_PARCEL_REQUIRED)', async () => {
     const outcome = await inRolledBackTx(async (db) => {
       const { orderId, items } = await soldOrder(db, [[plain, 1]]);
       const { returnId } = await made(db, orderId, {
@@ -846,12 +856,16 @@ describe('the goods of a statement: receive_return_items', () => {
       });
       await asAdmin(db);
       const [row] = await rowsOf(db, returnId);
-      return receive(db, returnId, [{ itemId: row!.id, quantity: 1, goods: 'lost' }]);
+      return db.attempt(
+        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb)`,
+        returnId,
+        JSON.stringify([{ itemId: row!.id, quantity: 1, goods: 'lost' }]),
+      );
     });
 
     expect(outcome).toMatchObject({
       ok: false,
-      message: expect.stringContaining('RETURN_PROOF_REQUIRED'),
+      message: expect.stringContaining('RETURN_PARCEL_REQUIRED'),
     });
   });
 
@@ -1239,6 +1253,214 @@ describe('the reasons that cancel an order', () => {
     });
   });
 
+  // the order the bank took the money of (a dispute the shop lost), or whose whole payment went back
+  // by hand in the dashboard of the provider, is cancelled by a statement the system makes: the
+  // same way as a cancel by the shop, so the stock, the money and the alerts go as for any statement
+  describe('a statement of the system', () => {
+    // the server acting by itself: the payment webhook
+    const asSystem = (db: DbSession) => db.as({ role: 'ADMIN' });
+
+    it.each([['dispute_lost'], ['stripe_refund']])(
+      'with the reason %s takes what is left of a paid order back to the stock at once, as a cancel by the shop',
+      async (reason) => {
+        const result = await inRolledBackTx(async (db) => {
+          const { orderId, items } = await soldOrder(db, [[plain, 3]]);
+          // a unit is held by a statement of an admin already: the system takes the rest
+          await made(db, orderId, { items: [{ orderItemId: items[0]!.id, quantity: 1 }] });
+          const stockBefore = await stockOf(db, admin.id, plain.variantId);
+          await asSystem(db);
+          const outcome = await createReturn(db, orderId, {
+            items: [{ orderItemId: items[0]!.id, quantity: 2 }],
+            source: 'system',
+            basis: 'other',
+            reason,
+          });
+          if (!outcome.ok) throw new Error(`create_return refused: ${outcome.message}`);
+          const returnId = outcome.rows[0]!.id;
+          await asAdmin(db);
+          return {
+            head: await headOf(db, returnId),
+            rows: await rowsOf(db, returnId),
+            stockBefore,
+            stockAfter: await stockOf(db, admin.id, plain.variantId),
+            lines: (await linesOf(db, orderId)).filter((line) => line.returnItemId !== null),
+            order: await orderOf(db, orderId),
+          };
+        });
+
+        expect(result.head).toMatchObject({ source: 'system', basis: 'other', reason });
+        // the money is a step of its own: the rows wait for it
+        expect(result.rows).toEqual([
+          expect.objectContaining({ goods: 'to_stock', money: 'not_refunded', quantity: 2 }),
+        ]);
+        expect(result.stockAfter!.stock).toBe(result.stockBefore!.stock + 2);
+        expect(result.lines.filter((line) => line.returnItemId === result.rows[0]!.id)).toEqual([
+          expect.objectContaining({ event: 'stock.return', quantityChange: 2 }),
+        ]);
+        // the unit of the statement of the admin is not back yet: the order is not cancelled until
+        // every unit of it is
+        expect(result.order).toMatchObject({ status: 'paid' });
+      },
+    );
+
+    it('cancels the order when it takes the whole of it', async () => {
+      const order = await inRolledBackTx(async (db) => {
+        const { orderId, items } = await soldOrder(db, [[plain, 2]]);
+        await asSystem(db);
+        const outcome = await createReturn(db, orderId, {
+          items: [{ orderItemId: items[0]!.id, quantity: 2 }],
+          source: 'system',
+          basis: 'other',
+          reason: 'dispute_lost',
+        });
+        if (!outcome.ok) throw new Error(`create_return refused: ${outcome.message}`);
+        await asAdmin(db);
+        return orderOf(db, orderId);
+      });
+
+      expect(order).toMatchObject({
+        status: 'cancelled',
+        cancelledAt: expect.any(String),
+        returnStatus: 'open',
+      });
+    });
+
+    it.each([
+      ['an admin', () => ({ role: 'ADMIN' as const, userId: admin.id })],
+      ['root', () => ({ role: 'ROOT' as const, userId: root.id })],
+      ['the buyer', () => ({ role: 'USER' as const, userId: buyer.id })],
+    ])('is made by the system only: %s is refused (RETURN_FORBIDDEN)', async (_who, actor) => {
+      const outcome = await inRolledBackTx(async (db) => {
+        const { orderId, items } = await soldOrder(db, [[plain, 1]]);
+        await db.as(actor());
+        return createReturn(db, orderId, {
+          items: [{ orderItemId: items[0]!.id, quantity: 1 }],
+          source: 'system',
+          basis: 'other',
+          reason: 'dispute_lost',
+        });
+      });
+
+      expect(outcome).toMatchObject({
+        ok: false,
+        message: expect.stringContaining('RETURN_FORBIDDEN'),
+      });
+    });
+
+    it.each([
+      [
+        'a basis other than other (RETURN_REASON_INVALID)',
+        'withdrawal' as const,
+        async () => undefined,
+        'RETURN_REASON_INVALID',
+      ],
+      [
+        'an order that was shipped (RETURN_ORDER_NOT_RETURNABLE)',
+        'other' as const,
+        async (db: DbSession, orderId: number) => ship(db, orderId),
+        'RETURN_ORDER_NOT_RETURNABLE',
+      ],
+    ])('refuses it as a cancel by the shop is refused: %s', async (_what, basis, prepare, code) => {
+      const outcome = await inRolledBackTx(async (db) => {
+        const { orderId, items } = await soldOrder(db, [[plain, 1]]);
+        await prepare(db, orderId);
+        await asSystem(db);
+        return createReturn(db, orderId, {
+          items: [{ orderItemId: items[0]!.id, quantity: 1 }],
+          source: 'system',
+          basis,
+          reason: 'stripe_refund',
+        });
+      });
+
+      expect(outcome).toMatchObject({ ok: false, message: expect.stringContaining(code) });
+    });
+  });
+
+  // what holds an order back from its sending (a dispute, a refund by hand, a warning or a review of
+  // the provider) has nothing left to hold once the order is cancelled: the cancel empties it. The
+  // list is written by the functions of the money (orderHolds.test.ts); here as the owner writes it,
+  // on an order the test commits (the owner is another connection)
+  describe('a cancel of an order that something holds', () => {
+    let heldOrder: { orderId: number; itemId: number };
+
+    beforeAll(async () => {
+      heldOrder = await inCommittedTx(async (db) => {
+        const { orderId, items } = await soldOrder(db, [[holdable, 2]]);
+        return { orderId, itemId: items[0]!.id };
+      });
+    });
+
+    it('empties the holds of the order it cancels', async () => {
+      const result = await inOwnerTx(async (q) => {
+        const holdsOf = async () => {
+          await q.as({ role: 'ADMIN', userId: admin.id });
+          const [row] = await q.rows<{ status: string; holds: unknown }>(
+            `select status::text as status, holds from cartlify.orders where id = $1`,
+            heldOrder.orderId,
+          );
+          return row!;
+        };
+        await q.as({ role: 'ADMIN' });
+        const held = await q.attempt(
+          `update cartlify.orders set holds = $2::jsonb where id = $1 returning id`,
+          heldOrder.orderId,
+          JSON.stringify([{ reason: 'fraud_warning', since: '2026-01-01T00:00:00Z', ref: 1 }]),
+        );
+        const before = await holdsOf();
+        await q.as({ role: 'ADMIN', userId: admin.id });
+        const cancelled = await q.attempt(
+          `select cartlify.create_return(
+             $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+             'shop_cancel'::cartlify."ReturnReason", null, 'Anna Koval', 'anna@example.com', null,
+             null, 4, 'Europe/Madrid'
+           ) as id`,
+          heldOrder.orderId,
+          JSON.stringify([{ orderItemId: heldOrder.itemId, quantity: 2 }]),
+        );
+        return { held, before, cancelled, after: await holdsOf() };
+      });
+
+      expect(result.held.ok).toBe(true);
+      expect(result.before).toEqual({
+        status: 'paid',
+        holds: [{ reason: 'fraud_warning', since: '2026-01-01T00:00:00Z', ref: 1 }],
+      });
+      expect(result.cancelled.ok).toBe(true);
+      expect(result.after).toEqual({ status: 'cancelled', holds: [] });
+    });
+
+    it('keeps the holds of an order a statement takes only a part of', async () => {
+      const result = await inOwnerTx(async (q) => {
+        await q.as({ role: 'ADMIN' });
+        const hold = [{ reason: 'dispute', since: '2026-01-01T00:00:00Z', ref: 7 }];
+        await q.rows(
+          `update cartlify.orders set holds = $2::jsonb where id = $1 returning id`,
+          heldOrder.orderId,
+          JSON.stringify(hold),
+        );
+        await q.as({ role: 'ADMIN', userId: admin.id });
+        const part = await q.attempt(
+          `select cartlify.create_return(
+             $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+             'shop_cancel'::cartlify."ReturnReason", null, 'Anna Koval', 'anna@example.com', null,
+             null, 4, 'Europe/Madrid'
+           ) as id`,
+          heldOrder.orderId,
+          JSON.stringify([{ orderItemId: heldOrder.itemId, quantity: 1 }]),
+        );
+        const [row] = await q.rows<{ status: string; holds: unknown }>(
+          `select status::text as status, holds from cartlify.orders where id = $1`,
+          heldOrder.orderId,
+        );
+        return { part, hold, order: row! };
+      });
+
+      expect(result.part.ok).toBe(true);
+      expect(result.order).toEqual({ status: 'paid', holds: result.hold });
+    });
+  });
+
   it('refused takes whatever is left of a shipped order, whatever part was named, and moves no stock', async () => {
     const result = await inRolledBackTx(async (db) => {
       const { orderId, items } = await soldOrder(db, [[plain, 3]]);
@@ -1339,8 +1561,8 @@ describe('the reasons that cancel an order', () => {
       );
       if (!started.ok) throw new Error(started.message ?? 'refused');
       const paying = await orderOf(db, orderId);
-      await db.attempt(
-        `select cartlify.finish_return_refund($1::uuid, 'succeeded', 're_1', null, null) as done`,
+      await db.rows(
+        `select cartlify.settle_money_refund($1::text, 're_1', 'succeeded', null, null) as done`,
         started.rows[0]!.done.key,
       );
       return { onItsWay, back, paying, paid: await orderOf(db, orderId) };
@@ -1469,8 +1691,8 @@ describe('the reasons that cancel an order', () => {
         returnId,
       );
       if (!started.ok) throw new Error(started.message ?? 'refused');
-      await db.attempt(
-        `select cartlify.finish_return_refund($1::uuid, 'succeeded', 're_1', null, null) as done`,
+      await db.rows(
+        `select cartlify.settle_money_refund($1::text, 're_1', 'succeeded', null, null) as done`,
         started.rows[0]!.done.key,
       );
       return orderOf(db, orderId);
@@ -1529,9 +1751,10 @@ describe('a statement of the buyer from their account', () => {
       number: string | null;
       url: string | null;
     }>(
-      `select "proofProvidedAt"::text as "providedAt", "proofCarrier" as carrier,
-              "proofTrackingNumber" as number, "proofTrackingUrl" as url
-       from cartlify.returns where id = $1`,
+      `select r.x::text as "providedAt", p.carrier, p."trackingNumber" as number, p."trackingUrl" as url
+       from (select $1::int as id) as q
+       left join cartlify.order_shipments as p on p."returnId" = q.id and p.direction = 'to_shop'
+       cross join lateral (select p."shippedAt" as x) as r`,
       returnId,
     );
     return row!;
@@ -1642,7 +1865,10 @@ describe('a statement of the buyer from their account', () => {
       const second = await provide(db, returnId, 'DHL', '77', 'https://track.example.com/77');
       const proof = await proofOf(db, returnId);
       await asAdmin(db);
-      await db.attempt(`select 1 as done from cartlify.confirm_return_proof($1::int)`, returnId);
+      await db.attempt(
+        `select 1 as done from cartlify.confirm_return_proof($1::int, 0::numeric)`,
+        returnId,
+      );
       await asBuyer(db);
       return { first, second, proof, confirmed: await provide(db, returnId) };
     });
@@ -2071,8 +2297,8 @@ describe('a statement of the public form', () => {
           ),
         };
         await db.as({ role: 'ROOT', userId: root.id });
-        const reimburse = await db.attempt(
-          `select cartlify.record_return_reimbursement($1::int, 5, 'cash', 'Paid back.', (now() at time zone 'UTC')::timestamp(3)) as done`,
+        const outside = await db.attempt(
+          `select cartlify.mark_return_refunded_outside($1::int, null::int[], 'cash', 'Paid back.', (now() at time zone 'UTC')::timestamp(3), null::numeric) as done`,
           manualId,
         );
         await asAdmin(db);
@@ -2080,7 +2306,7 @@ describe('a statement of the public form', () => {
         const after = await receive(db, manualId, [
           { itemId: row!.id, quantity: 1, goods: 'to_stock' },
         ]);
-        return { ...steps, reimburse, after };
+        return { ...steps, outside, after };
       });
 
       for (const outcome of [
@@ -2088,7 +2314,7 @@ describe('a statement of the public form', () => {
         outcomes.proof,
         outcomes.refund,
         outcomes.parcel,
-        outcomes.reimburse,
+        outcomes.outside,
       ]) {
         expect(outcome).toMatchObject({
           ok: false,

@@ -601,17 +601,15 @@ describe('order_shipments: the sends of an order', () => {
       carrier?: string | null;
       trackingNumber?: string | null;
       trackingUrl?: string | null;
-      cost?: number | null;
     } = {},
   ) =>
     db.attempt<{ id: number }>(
-      `insert into cartlify.order_shipments ("orderId", carrier, "trackingNumber", "trackingUrl", cost)
-       values ($1, $2, $3, $4, $5) returning id`,
+      `insert into cartlify.order_shipments ("orderId", carrier, "trackingNumber", "trackingUrl")
+       values ($1, $2, $3, $4) returning id`,
       orderId,
       set.carrier ?? null,
       set.trackingNumber ?? null,
       set.trackingUrl ?? null,
-      set.cost ?? null,
     );
 
   // the id of a send that has to work
@@ -626,18 +624,18 @@ describe('order_shipments: the sends of an order', () => {
     const [row] = await db.rows<{
       carrier: string | null;
       trackingNumber: string | null;
-      cost: number | null;
       expense: boolean;
       rolledBack: boolean;
     }>(
-      `select carrier, "trackingNumber", cost::float8 as cost, expense, "rolledBackAt" is not null as "rolledBack"
+      `select carrier, "trackingNumber", expense, "rolledBackAt" is not null as "rolledBack"
        from cartlify.order_shipments where id = $1`,
       id,
     );
     return row;
   };
 
-  it('lets an admin record a send of a shipped order, with or without the carrier and the cost', async () => {
+  // what a send cost the shop is a line of the money journal (shippingCost.test.ts)
+  it('lets an admin record a send of a shipped order, with or without the carrier', async () => {
     const { full, bare } = await inRolledBackTx(async (db) => {
       const orderId = await shippedOrder(db);
       await db.as({ role: 'ADMIN', userId: admin.id });
@@ -645,7 +643,6 @@ describe('order_shipments: the sends of an order', () => {
         carrier: 'DHL',
         trackingNumber: 'JD0146',
         trackingUrl: 'https://track.example.com/JD0146',
-        cost: 5.2,
       });
       const bare = await send(db, orderId, {});
       return { full, bare };
@@ -692,8 +689,8 @@ describe('order_shipments: the sends of an order', () => {
   });
 
   it('keeps a number and a link each with its carrier, a link without a number, and a link is https', async () => {
-    const { noCarrier, linkNoCarrier, noNumber, plainLink, spacedLink, negativeCost } =
-      await inRolledBackTx(async (db) => {
+    const { noCarrier, linkNoCarrier, noNumber, plainLink, spacedLink } = await inRolledBackTx(
+      async (db) => {
         const orderId = await shippedOrder(db);
         await db.as({ role: 'ADMIN', userId: admin.id });
         return {
@@ -713,33 +710,32 @@ describe('order_shipments: the sends of an order', () => {
             trackingNumber: '1',
             trackingUrl: 'https://track.example.com/a b',
           }),
-          negativeCost: await send(db, orderId, { cost: -1 }),
         };
-      });
+      },
+    );
 
     refused(noCarrier, 'order_shipments_tracking_chk');
     refused(linkNoCarrier, 'order_shipments_tracking_chk');
     expect(noNumber.ok).toBe(true);
     refused(plainLink, 'order_shipments_tracking_chk');
     refused(spacedLink, 'order_shipments_tracking_chk');
-    refused(negativeCost, 'order_shipments_cost_non_negative');
   });
 
-  it('lets an admin write the cost later and correct the carrier and the number of a send on its way', async () => {
+  it('lets an admin correct the carrier and the number of a send on its way', async () => {
     const { before, after } = await inRolledBackTx(async (db) => {
       const orderId = await shippedOrder(db);
       await db.as({ role: 'ADMIN', userId: admin.id });
       const id = await sendId(db, orderId, { carrier: 'DHL' });
       const before = await shipmentOf(db, id);
       await db.attempt(
-        `update cartlify.order_shipments set cost = 6.5, carrier = 'UPS', "trackingNumber" = 'Z1' where id = $1`,
+        `update cartlify.order_shipments set carrier = 'UPS', "trackingNumber" = 'Z1' where id = $1`,
         id,
       );
       return { before, after: await shipmentOf(db, id) };
     });
 
-    expect(before).toMatchObject({ carrier: 'DHL', cost: null, expense: true, rolledBack: false });
-    expect(after).toMatchObject({ carrier: 'UPS', trackingNumber: 'Z1', cost: 6.5 });
+    expect(before).toMatchObject({ carrier: 'DHL', expense: true, rolledBack: false });
+    expect(after).toMatchObject({ carrier: 'UPS', trackingNumber: 'Z1' });
   });
 
   it('refuses to move a send to another order or to change the day it was sent', async () => {
@@ -765,8 +761,9 @@ describe('order_shipments: the sends of an order', () => {
     refused(day, 'ORDER_SHIPMENT_UPDATE_FORBIDDEN');
   });
 
-  it('keeps a rolled back send as history: it is rolled back once, its carrier stays, its cost can still be written', async () => {
-    const { rolledBack, carrierAfter, again, costAfter, state } = await inRolledBackTx(
+  // its cost may still be corrected in the money journal (shippingCost.test.ts)
+  it('keeps a rolled back send as history: it is rolled back once, its carrier stays, what the shop owes for it can still be marked', async () => {
+    const { rolledBack, carrierAfter, again, markAfter, state } = await inRolledBackTx(
       async (db) => {
         const orderId = await shippedOrder(db);
         await db.as({ role: 'ADMIN', userId: admin.id });
@@ -786,19 +783,19 @@ describe('order_shipments: the sends of an order', () => {
           `update cartlify.order_shipments set "rolledBackAt" = null where id = $1`,
           id,
         );
-        const costAfter = await db.attempt(
-          `update cartlify.order_shipments set cost = 4, expense = false where id = $1 returning id`,
+        const markAfter = await db.attempt(
+          `update cartlify.order_shipments set expense = false where id = $1 returning id`,
           id,
         );
-        return { rolledBack, carrierAfter, again, costAfter, state: await shipmentOf(db, id) };
+        return { rolledBack, carrierAfter, again, markAfter, state: await shipmentOf(db, id) };
       },
     );
 
     expect(rolledBack).toMatchObject({ ok: true, rows: [expect.anything()] });
     refused(carrierAfter, 'ORDER_SHIPMENT_UPDATE_FORBIDDEN');
     refused(again, 'ORDER_SHIPMENT_UPDATE_FORBIDDEN');
-    expect(costAfter).toMatchObject({ ok: true, rows: [expect.anything()] });
-    expect(state).toMatchObject({ carrier: 'DHL', cost: 4, expense: false, rolledBack: true });
+    expect(markAfter).toMatchObject({ ok: true, rows: [expect.anything()] });
+    expect(state).toMatchObject({ carrier: 'DHL', expense: false, rolledBack: true });
   });
 
   it('refuses a buyer to change a send', async () => {
