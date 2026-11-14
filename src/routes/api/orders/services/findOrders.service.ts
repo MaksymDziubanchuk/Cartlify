@@ -17,6 +17,7 @@ import {
   makeMissingCostCursor,
   ordersByMissingCost,
   itemNameOf,
+  shipmentCostsOf,
 } from './helpers/index.js';
 
 import type { FindOrdersDto, GetOrdersResponseDto, OrderBuyerDto } from 'types/dto/orders.dto.js';
@@ -61,6 +62,8 @@ const whereOf = (q: ReturnType<typeof normalizeFindOrdersInput>) =>
     withoutWeight: q.withoutWeight,
     shippingCostMissing: q.shippingCostMissing,
     shippedTo: q.shippedTo,
+    holds: q.holds,
+    fraudWarnedFrom: q.fraudWarnedFrom,
     sortBy: q.sortBy,
   });
 
@@ -172,8 +175,9 @@ type CsvOrder = {
     note: string | null;
     price: unknown;
   } | null;
-  // the send on its way: the latest that was not rolled back
-  shipments: { carrier: string | null; trackingNumber: string | null; cost: unknown }[];
+  // the send on its way: the latest that was not rolled back, with what the shop pays the carrier
+  // for it (the money journal), none while it is not written
+  shipments: { carrier: string | null; trackingNumber: string | null; cost: number | null }[];
   user: { email: string; deletedAt: Date | null };
   items: {
     quantity: number;
@@ -242,10 +246,7 @@ const CSV_COLUMNS: CsvColumn<CsvOrder>[] = [
   {
     header: 'Shipping cost',
     kind: 'money',
-    value: (row) => {
-      const cost = row.shipments[0]?.cost;
-      return cost === null || cost === undefined ? null : Number(cost);
-    },
+    value: (row) => row.shipments[0]?.cost ?? null,
   },
 ];
 
@@ -312,10 +313,19 @@ export async function findOrdersCsv(
 
       // the send on its way: the latest that was not rolled back
       const sends = await tx.orderShipment.findMany({
-        where: { orderId: { in: orders.map((order) => order.id) }, rolledBackAt: null },
+        where: {
+          orderId: { in: orders.map((order) => order.id) },
+          returnId: null,
+          rolledBackAt: null,
+        },
         orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
-        select: { orderId: true, carrier: true, trackingNumber: true, cost: true },
+        select: { id: true, orderId: true, carrier: true, trackingNumber: true },
       });
+      // what the shop paid for each of them: the lines of the money journal
+      const costs = await shipmentCostsOf(
+        tx,
+        sends.map((send) => send.id),
+      );
       const buyers = await tx.user.findMany({
         where: { id: { in: [...new Set(orders.map((order) => order.userId))] } },
         select: { id: true, email: true, deletedAt: true },
@@ -326,7 +336,15 @@ export async function findOrdersCsv(
         const send = sends.find((s) => s.orderId === order.id);
         return {
           ...order,
-          shipments: send ? [send] : [],
+          shipments: send
+            ? [
+                {
+                  carrier: send.carrier,
+                  trackingNumber: send.trackingNumber,
+                  cost: costs.get(send.id) ?? null,
+                },
+              ]
+            : [],
           user: buyerOf.get(order.userId)!,
         };
       });

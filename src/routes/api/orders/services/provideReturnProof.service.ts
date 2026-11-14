@@ -4,6 +4,7 @@ import { tx, isRetryableTxError } from '@db/client.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { returnErrorOf } from '@routes/api/returns/services/helpers/returnErrors.helper.js';
+import { sendReturnSplitEmail } from '@routes/api/returns/services/helpers/returnMoneyMail.helper.js';
 import {
   ForbiddenError,
   InternalError,
@@ -17,8 +18,10 @@ import type { OrderResponseDto, ProvideReturnProofDto } from 'types/dto/orders.d
 
 // The buyer writes how they sent the goods of their statement back: the carrier and the number of
 // the parcel, and a link to follow it when there is one. The statement is then in the state "proof
-// given" for the admin, who checks it. The buyer may correct it until the admin confirms it. The
-// answer is their order
+// given" for the admin, who checks it. The buyer may correct it until the admin confirms it. When
+// the goods go back in more than one parcel the buyer names the units this one carries: the units
+// that wait and are not named go into a statement of their own, whose code the buyer is mailed once
+// it is kept. The answer is their order
 export async function provideReturnProof({
   actorId,
   actorRole,
@@ -27,11 +30,15 @@ export async function provideReturnProof({
   carrier,
   trackingNumber,
   trackingUrl,
+  buyerPaid,
+  items,
+  log,
 }: ProvideReturnProofDto): Promise<OrderResponseDto> {
   if (actorRole !== 'USER') throw new ForbiddenError('FORBIDDEN_ROLE');
 
+  let answer: { order: OrderResponseDto; splitIds: number[] };
   try {
-    return await tx(
+    answer = await tx(
       async (db) => {
         await setUserContext(db, { userId: actorId, role: actorRole });
         await db.$executeRawUnsafe(`SET LOCAL lock_timeout = '1500ms'`);
@@ -45,8 +52,17 @@ export async function provideReturnProof({
 
         await db.$executeRaw(Prisma.sql`
           select 1 as done from cartlify.provide_return_proof(
-            ${returnId}::int, ${carrier}::text, ${trackingNumber}::text, ${trackingUrl ?? null}::text
+            ${returnId}::int, ${carrier}::text, ${trackingNumber}::text, ${trackingUrl ?? null}::text,
+            ${buyerPaid ?? null}::numeric, ${items ? JSON.stringify(items) : null}::jsonb
           )
+        `);
+
+        // the statements this step split off: written at the moment of the transaction
+        const splits = await db.$queryRaw<{ id: number }[]>(Prisma.sql`
+          select r.id from cartlify.returns as r
+          where r."splitFromId" = ${returnId}::int
+            and r."createdAt" = (now() at time zone 'UTC')::timestamp(3)
+          order by r.id
         `);
 
         // the log accepts a line in the admin context only; the line names the buyer
@@ -63,6 +79,9 @@ export async function provideReturnProof({
             // the number and the link of the parcel stay on the statement, which is cleaned after
             // its term; the journal is never cleaned, so it keeps the carrier only
             { field: 'proof', old: null, new: { carrier } },
+            ...(splits.length
+              ? [{ field: 'splitIds', old: null, new: splits.map((one) => one.id) }]
+              : []),
           ],
         });
 
@@ -70,7 +89,10 @@ export async function provideReturnProof({
         const order = await readOrderResponse(db, orderId);
         if (!order) throw new InternalError({ reason: 'ORDER_NOT_FOUND_AFTER_PROOF' });
 
-        return mapOrderRowToResponse(order, await orderContextOf(db, [order]), 'buyer');
+        return {
+          order: mapOrderRowToResponse(order, await orderContextOf(db, [order]), 'buyer'),
+          splitIds: splits.map((one) => one.id),
+        };
       },
       {
         maxRetries: 3,
@@ -89,4 +111,8 @@ export async function provideReturnProof({
 
     throw new InternalError({ reason: 'ORDERS_RETURN_PROOF_UNEXPECTED' }, err);
   }
+
+  for (const splitId of answer.splitIds) await sendReturnSplitEmail(splitId, log);
+
+  return answer.order;
 }

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
+import requireMoneyManager from '@middlewares/requireMoneyManager.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
 import { requestLimits } from '../../../plugins/requestLimits.js';
@@ -101,6 +102,37 @@ export default async function ordersRouter(app: FastifyInstance) {
       schema: ordersSchema.patchShipmentSchema,
     },
     ordersController.patchShipment,
+  );
+
+  // money a carrier paid the shop for a send it lost or damaged
+  app.post(
+    '/:orderId/shipments/:shipmentId/carrier-money',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('orderId'),
+        validateId('shipmentId'),
+      ],
+      schema: ordersSchema.postCarrierMoneySchema,
+    },
+    ordersController.postCarrierMoney,
+  );
+
+  // root decides on what holds a paid order from its sending and is root's to let go
+  app.post(
+    '/:orderId/holds/:reason/decision',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('orderId'),
+      ],
+      schema: ordersSchema.postHoldDecisionSchema,
+    },
+    ordersController.postHoldDecision,
   );
 
   // where a paid order goes, corrected by an admin until it is sent

@@ -1,7 +1,8 @@
 import type { FastifyBaseLogger } from 'fastify';
 import type { DeliveryMethodName } from '@config/deliveryMethods.js';
 import type { DeliveryQuote } from '@helpers/deliveryPrice.js';
-import type { ReturnStatus } from '@prisma/client';
+import type { MoneyPart, MoneyPurpose, MoneyState, ReturnStatus } from '@prisma/client';
+import type { OrderHold } from '@helpers/orderHolds.js';
 import type { WithdrawalRight, WithdrawalRuleName } from '@helpers/withdrawal.js';
 import type {
   BuyerReturnDto,
@@ -72,6 +73,19 @@ export interface OrderShipmentAdminDto extends OrderShipmentPublicDto {
   rolledBackAt: Date | null;
 }
 
+// a movement of the money of an order as the card of an admin shows it, short: a line of the money
+// journal (what made it, what it is about, which part of the movement, the sum with its sign: above
+// 0 to the shop, below 0 from it, where a refund stands, when it was written)
+export interface OrderMoneyLineDto {
+  id: number;
+  event: string;
+  purpose: MoneyPurpose;
+  part: MoneyPart;
+  amount: number;
+  state: MoneyState | null;
+  createdAt: string;
+}
+
 // where and to whom the order goes
 export interface OrderDeliveryDto {
   method: DeliveryMethodName;
@@ -140,8 +154,17 @@ export interface OrderResponseDto {
   // they can still state
   withdrawals?: BuyerReturnDto[];
   withdrawable?: WithdrawableDto[];
+  // the buyer: the payment is checked before the order is sent (a warning or a review holds it)
+  paymentCheck?: boolean;
   // admin and root: what the order weighs (the weights of its variants times the units); not complete when a variant of it has no weight
   weight?: { grams: number; complete: boolean };
+  // admin and root: what keeps the order from its sending, the oldest first
+  holds?: OrderHold[];
+  // admin and root: when the provider warned that the payment of the order, already sent, may be
+  // fraud; left out while it did not
+  fraudWarnedAt?: Date;
+  // admin and root: the money of the order from the money journal, the oldest first
+  money?: OrderMoneyLineDto[];
 }
 
 // GET /current
@@ -222,6 +245,11 @@ export interface ReturnProofBodyDto {
   carrier: string;
   trackingNumber: string;
   trackingUrl?: string;
+  // what the buyer paid the carrier, a hint for the shop
+  buyerPaid?: number;
+  // the rows of the statement and the units the parcel carries; the rest goes into a statement of
+  // its own. None: the parcel carries them all
+  items?: Array<{ itemId: number; quantity: number }>;
 }
 
 export interface ReturnProofParamsDto {
@@ -234,6 +262,7 @@ export interface ProvideReturnProofDto extends ReturnProofBodyDto {
   actorRole: Role;
   orderId: OrderId;
   returnId: number;
+  log: FastifyBaseLogger;
 }
 
 // POST /current/confirm
@@ -322,6 +351,10 @@ export interface GetOrdersQueryDto {
   shippingCostMissing?: boolean;
   // the orders with a send sent before this time, an iso date-time
   shippedTo?: string;
+  // what holds the orders from their sending: reasons through commas, any, or none; and the orders
+  // the provider warned of after they were sent, from this time (an iso date-time)
+  holds?: string;
+  fraudWarnedFrom?: string;
 
   sortBy?: OrdersSortBy;
   sortDir?: OrdersSortDir;
@@ -354,6 +387,8 @@ export interface FindOrdersDto {
   withoutWeight?: boolean;
   shippingCostMissing?: boolean;
   shippedTo?: Date;
+  holds?: string;
+  fraudWarnedFrom?: Date;
 
   // without them the list takes the sort of its filters (normalizeFindOrdersInput)
   sortBy?: OrdersSortBy;
@@ -422,7 +457,24 @@ export interface UpdateShipmentBodyDto {
   carrier?: string | null;
   trackingNumber?: string | null;
   trackingUrl?: string | null;
+  // a line of the money journal: corrected by a new cost, never taken away (none is a cost of 0)
   cost?: number | null;
+}
+
+// POST /api/orders/:orderId/shipments/:shipmentId/carrier-money: money a carrier paid the shop
+export interface RecordCarrierMoneyBodyDto {
+  amount: number;
+  method: 'bank_transfer' | 'cash' | 'other';
+  note: string;
+  // the day the money really came, never before the send or of the future
+  at: string;
+}
+
+export interface RecordCarrierMoneyDto extends RecordCarrierMoneyBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  orderId: number;
+  shipmentId: number;
 }
 
 export interface UpdateShipmentDto {
@@ -431,6 +483,24 @@ export interface UpdateShipmentDto {
   orderId: number;
   shipmentId: number;
   changes: UpdateShipmentBodyDto;
+}
+
+// POST /:orderId/holds/:reason/decision: root decides on what holds a paid order and is root's
+export interface DecideOrderHoldParamsDto {
+  orderId: number | string;
+  reason: 'hand_refund' | 'fraud_warning';
+}
+
+export interface DecideOrderHoldBodyDto {
+  decision: 'ship' | 'cancel';
+  note: string;
+}
+
+export interface DecideOrderHoldDto extends DecideOrderHoldBodyDto {
+  actorId: UserId;
+  actorRole: Role;
+  orderId: number;
+  reason: DecideOrderHoldParamsDto['reason'];
 }
 
 // PATCH /:orderId/delivery: an admin corrects where a paid order goes and to whom

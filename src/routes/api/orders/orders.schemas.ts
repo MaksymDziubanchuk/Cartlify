@@ -464,7 +464,7 @@ const getOrdersSchema = {
     'The cart (`pending`) is not an order and is not listed, GET /api/orders/current gives it. ' +
     'A paid order shows the prices it was paid with; an unconfirmed order of the user shows current prices, the items of variants a buyer does not see are removed from it. ' +
     '`paidFrom` and `paidTo` keep the orders paid in that period, from its start and before its end, cancelled ones too (`cancelledAt` says when); `sortBy=paidAt` lists the paid orders by the time of their payment. ' +
-    '`statuses` takes a few statuses, `productId` the orders that hold a variant of a product, `variantId` the orders that hold the variant. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages.',
+    '`statuses` takes a few statuses, `productId` the orders that hold a variant of a product, `variantId` the orders that hold the variant. The desk of an admin: `userId` (the orders of a buyer) and `q` (a number of an order, or a part of the email of the buyer, the name or the phone of the recipient, the city or the postal code of the address, a tracking number), each row names its `buyer`; `format=csv` gives every order of the filters as a file for the courier, without pages. What holds the orders from their sending: `holds` (reasons through commas, `any` or `none`; `holds=none&statuses=paid` are the paid orders that wait only for the shop) and `fraudWarnedFrom` (the orders the provider warned of after they were sent); each row of an admin has its `holds`, `fraudWarnedAt` and `money` (the lines of the money journal of the order).',
 
   querystring: {
     $ref: 'ordersGetQuerySchema#',
@@ -517,7 +517,8 @@ const getOrderByIdSchema = {
   description:
     'Returns one order by id if it is visible to the authenticated user. For the owner of an order that is not confirmed (the cart or an order that lost its reservation, `unconfirmed`), item prices are brought to current variant prices before the order is returned, ' +
     'and the order loses the items of variants a buyer does not see; an order waiting for its payment keeps them (`variant.forSale: false`), its payment page names the ones taken out of sale. ' +
-    'Each item shows `variant.stock`, so the page can mark the items there is not enough of before the order is confirmed again.',
+    'Each item shows `variant.stock`, so the page can mark the items there is not enough of before the order is confirmed again. ' +
+    'An admin or root also gets the sends with their cost, the weight, the statements, what holds the order from its sending (`holds`), the warning of the provider about an order already sent (`fraudWarnedAt`) and the money of the order from the money journal (`money`, short: the event, the part, the sum, where a refund stands, when).',
 
   params: {
     $ref: 'ordersGetByIdParamsSchema#',
@@ -565,7 +566,8 @@ const patchOrderStatusSchema = {
   description:
     'Takes an order one step: a paid order becomes shipped, a shipped one delivered, and one step back: a delivered order shipped, a shipped one paid. A step over (paid straight to delivered) is not one. ' +
     'Shipping a manual order records the send (`shipment`: the carrier, the tracking number, the link, what the shop pays the carrier, each only if known; a number and a link each need the carrier, a link may come without a number); a pickup is shipped when it is ready to be collected, delivered when it is collected, and has no send. ' +
-    'The step back of a manual order takes the send back (it stays as history) and needs `keepShippingCost`: true keeps its cost as owed to the carrier, false makes it 0 (a mistake; the cost it had stays in the admin log). ' +
+    'What the shop pays the carrier is a line of the money journal, written in the same transaction (a cost of 0 writes none). An order something holds (`holds`: a dispute of its payment, a refund made by hand root has not decided on, a warning or a review of the provider) is not sent (`ORDER_ON_HOLD`). ' +
+    'The step back of a manual order takes the send back (it stays as history) and needs `keepShippingCost`: true keeps its cost as owed to the carrier, false makes it 0 (a mistake: a line of the money journal corrects the cost it had to nothing, the admin log keeps it). ' +
     'Every step is written to the admin log with what it did. The buyer is mailed after each step, unless the account is deleted: a shipped order (a pickup: ready for pickup), a delivered one (a pickup: collected), and a short notice for a step back that says nothing of the reason, the admin explains it in the chat; a mail that fails is only logged and never undoes the status. ' +
     'This operation is restricted to privileged users. A cancel is a statement of return: POST /api/returns with the reason `shop_cancel` for a paid order not sent (or a pickup not collected), `refused` for a parcel the buyer refused.',
 
@@ -611,7 +613,7 @@ const patchOrderStatusSchema = {
     409: {
       description:
         '`ORDER_STATUS_TRANSITION_INVALID`: the order is there, its status does not allow the step, `details: { status, requested }` ' +
-        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `ORDER_HAS_OPEN_REFUSAL`: the buyer refused the parcel and the statement of it is open, the order does not become delivered while the parcel is on its way back. `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
+        '(shipped from paid, or back from delivered; delivered from shipped; paid back from shipped). `ORDER_ON_HOLD`: something holds the paid order from its sending, `details: { orderId, holds }` with the reasons (dispute, hand_refund, fraud_warning, payment_review), each once; the order stays paid. `ORDER_HAS_OPEN_REFUSAL`: the buyer refused the parcel and the statement of it is open, the order does not become delivered while the parcel is on its way back. `ORDER_STATUS_CHANGED`: another request changed the order meanwhile, reload it. `RESOURCE_BUSY`: try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -631,7 +633,7 @@ const postOrdersStatusSchema = {
     'when it goes back to paid, the way `PATCH /api/orders/{orderId}/status` takes them. Each ' +
     'order goes on its own, in a transaction of its own: the admin log and the mail of each. A mail ' +
     'cannot be taken back, so an order that cannot take the step does not stop the others: each ' +
-    'order gets its answer. An order named twice is answered twice: the first takes the step, the second answers that the order has taken it already (`ORDER_STATUS_TRANSITION_INVALID`). Admin and root only.',
+    'order gets its answer. An order named twice is answered twice: the first takes the step, the second answers that the order has taken it already (`ORDER_STATUS_TRANSITION_INVALID`). An order something holds from its sending answers `ORDER_ON_HOLD` with `details.holds` (the reasons) and the others take the step. Admin and root only.',
 
   body: {
     $ref: 'ordersBulkStatusBodySchema#',
@@ -881,15 +883,28 @@ const withdrawnOrderExample = {
       reason: null,
       step: 'closed',
       closedAt: '2026-01-02T09:00:05.000Z',
-      proof: null,
-      shippingReimbursement: null,
+      parcels: [],
+      refundedTotal: 104.97,
+      refunds: [
+        {
+          way: 'payment',
+          method: null,
+          state: 'sent',
+          goods: 99.98,
+          delivery: 4.99,
+          deduction: 0,
+          wayBack: 0,
+          amount: 104.97,
+          at: '2026-01-02T09:00:05.000Z',
+          bankReference: null,
+        },
+      ],
       items: [
         {
+          id: 31,
           orderItemId: 1,
           quantity: 2,
           amount: 99.98,
-          deliveryAmount: 4.99,
-          shippingDeduction: 0,
           money: 'refunded',
           refundedAt: '2026-01-02T09:00:05.000Z',
           refusal: null,
@@ -993,7 +1008,11 @@ const postReturnProofSchema = {
     'The buyer writes the carrier and the number of the parcel they sent the goods back with (and ' +
     'a link to follow it) for a statement of their own that still waits for its goods. The ' +
     'statement is then in the step `proof_provided` and the shop checks it; the buyer may correct ' +
-    'what they wrote until the shop confirms it (`proof_confirmed`). A statement for a paid order ' +
+    'what they wrote until the shop confirms it (`proof_confirmed`). The buyer may tell what they ' +
+    'paid the carrier (`buyerPaid`), a hint the shop checks against the receipt. When the goods go ' +
+    'back in more than one parcel, the buyer names the rows and the units this parcel carries ' +
+    '(`items`): the units that wait and are not named go into a statement of their own, with the ' +
+    'next code, mailed to the buyer, for a parcel of their own. A statement for a paid order ' +
     'that was not sent has no goods to send. The answer is the order with its `withdrawals`.',
 
   params: { $ref: 'ordersReturnProofParamsSchema#', examples: [returnProofParamsExample] },
@@ -1008,7 +1027,7 @@ const postReturnProofSchema = {
     400: {
       description:
         'Invalid ids or body (VALIDATION_ERROR); a carrier or a number that is empty, or a link ' +
-        'that is not https (RETURN_PROOF_INVALID).',
+        'that is not https (RETURN_PROOF_INVALID); a sum paid that is not money (RETURN_PARCEL_SUM_INVALID).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -1020,7 +1039,9 @@ const postReturnProofSchema = {
       $ref: 'errorResponseSchema#',
     },
     404: {
-      description: 'No statement of an own order with this id (RETURN_NOT_FOUND).',
+      description:
+        'No statement of an own order with this id (RETURN_NOT_FOUND); a row of `items` is not one ' +
+        'of it (RETURN_ITEM_NOT_FOUND).',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -1031,7 +1052,10 @@ const postReturnProofSchema = {
       description:
         'The statement is closed (RETURN_ALREADY_CLOSED); no row of it waits for goods ' +
         '(RETURN_NOTHING_WAITING); the shop confirmed the proof already ' +
-        '(RETURN_PROOF_ALREADY_CONFIRMED). `RESOURCE_BUSY`: try again.',
+        '(RETURN_PROOF_ALREADY_CONFIRMED); the shop recorded the parcel itself, which is the ' +
+        "shop's to change (RETURN_PARCEL_EXISTS); a row of `items` whose goods do not wait " +
+        '(RETURN_ITEM_NOT_EXPECTED) or holds fewer units (RETURN_QUANTITY_EXCEEDED). `RESOURCE_BUSY`: ' +
+        'try again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
@@ -1049,6 +1073,7 @@ const patchShipmentSchema = {
     'An admin or root writes what the shop pays the carrier when the invoice comes and corrects the carrier, the number and the link of a send. ' +
     'The details change only on the send on its way of a shipped order (`SHIPMENT_NOT_EDITABLE` otherwise) and the buyer is mailed all of them, never the cost. ' +
     'The cost is written while the shop owes the carrier for the send, whatever became of the order (`SHIPMENT_COST_NOT_OWED` when it does not: a step back with the cost cleared, a cancel that said the carrier was not paid), and it is not mailed. ' +
+    'It is a line of the money journal in the same transaction: the first cost above 0, then each other cost a new line of the difference that names the first one (a past period of the reports does not change); a cost written is corrected, never cleared, and 0 while none is written writes nothing. ' +
     'A request that changes nothing writes no line to the admin log and sends no mail. The answer is the order with its sends.',
 
   params: { $ref: 'ordersShipmentParamsSchema#' },
@@ -1158,6 +1183,135 @@ const patchOrderDeliverySchema = {
   },
 } satisfies FastifySchema;
 
+// Schema for the decision of root on what holds a paid order
+const postCarrierMoneySchema = {
+  operationId: 'recordCarrierMoney',
+  summary: 'Record money a carrier paid for a send',
+  description:
+    'A root (or an admin root allowed to handle the money, `canManageMoney`) records money a carrier ' +
+    'paid the shop outside the app for a send of the order it lost or damaged, on the day it really ' +
+    'came. The money journal gets one line `money.received` of the purpose `shipping` that names ' +
+    'the send: money of the shop, not a cost of the send and counted by no statement; the journal of ' +
+    'the admins gets `order.carrier_money`. No mail. The answer is the order.',
+
+  params: { $ref: 'ordersShipmentParamsSchema#' },
+  body: {
+    $ref: 'ordersCarrierMoneyBodySchema#',
+    examples: [
+      {
+        amount: 25,
+        method: 'bank_transfer',
+        note: 'The carrier lost the parcel and paid its value.',
+        at: '2026-11-12T10:00:00.000Z',
+      },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The money was recorded: the order.',
+      $ref: 'ordersOrderResponseSchema#',
+      examples: [shippedOrderExample],
+    },
+    400: {
+      description:
+        '`VALIDATION_ERROR`: a wrong field. `MONEY_RECEIVED_INVALID`: a sum that is not above 0 to ' +
+        'the cent. `MONEY_RECEIVED_NOTE_REQUIRED`: no way or a note of spaces only. ' +
+        '`MONEY_RECEIVED_AT_INVALID`: a day of the future or before the send.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        '`INSUFFICIENT_ROLE`: only an admin or root; `MONEY_MANAGER_REQUIRED`: only root and an ' +
+        'admin root allowed to handle the money; `MONEY_RECEIVED_FORBIDDEN`: the database refused ' +
+        'the actor the same way.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description: '`MONEY_RECEIVED_NOT_FOUND`: the order has no send with this id.',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description: '`RESOURCE_BUSY`: try again.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
+const postHoldDecisionSchema = {
+  operationId: 'decideOrderHold',
+  summary: 'Decide on what holds a paid order',
+  description:
+    'Root (or an admin root allowed to handle the money, `canManageMoney`) ' +
+    'decides on what holds a paid order from its sending and is root to let go: `hand_refund` ' +
+    '(part of the payment went back by hand in the dashboard of the provider) or `fraud_warning` ' +
+    '(the network of the card warned the payment may be a fraud). The holds of that reason go, the ' +
+    'others stay (a dispute and a review of the provider are let go by the system). `ship`: the ' +
+    'order may be sent, a refund made by hand is a compensation. `cancel`: what is left of the ' +
+    'order is cancelled by a statement of the shop (`shop_cancel`, the goods back to the stock at ' +
+    'once), the refunds made by hand are tied to it as money the buyer has back, and the rest goes ' +
+    'back through the provider with the usual mails of a cancel by the shop (a transfer that cannot ' +
+    'start is logged and the rows wait for an admin, as a cancel by the shop does). The journal of ' +
+    'the admins gets `order.hold_decide` with the lines of the money journal decided and the note ' +
+    '(not mailed), and `return.create` for the statement. The answer is the order as an admin sees it.',
+
+  params: {
+    $ref: 'ordersHoldDecisionParamsSchema#',
+    examples: [{ orderId: '1', reason: 'hand_refund' }],
+  },
+  body: {
+    $ref: 'ordersHoldDecisionBodySchema#',
+    examples: [
+      { decision: 'ship', note: 'The buyer was paid back for a scratch, the rest goes.' },
+      { decision: 'cancel', note: 'The buyer asked to cancel.' },
+    ],
+  },
+
+  response: {
+    200: {
+      description: 'The decision is kept; the order as it is now.',
+      $ref: 'ordersOrderResponseSchema#',
+      examples: [{ ...waitingOrderExample, status: 'paid', reservationExpiresAt: undefined }],
+    },
+    400: {
+      description:
+        '`VALIDATION_ERROR`: a wrong id, a reason that is not root to decide on (`dispute`, ' +
+        '`payment_review`), a decision that is not `ship` or `cancel`, a note missing or longer ' +
+        'than 500. `ORDER_HOLD_NOTE_REQUIRED`: a note of spaces only.',
+      $ref: 'errorResponseSchema#',
+    },
+    401: {
+      description: 'Authentication is required.',
+      $ref: 'errorResponseSchema#',
+    },
+    403: {
+      description:
+        '`INSUFFICIENT_ROLE`: only an admin or root reaches the route; `MONEY_MANAGER_REQUIRED`: only root and an admin root allowed to handle the money decide.',
+      $ref: 'errorResponseSchema#',
+    },
+    404: {
+      description:
+        '`ORDER_HOLD_NOT_FOUND`: no order with this id, or the reason does not hold it (decided ' +
+        'already, or never put).',
+      $ref: 'errorResponseSchema#',
+    },
+    409: {
+      description:
+        'A cancel the statement refuses: `RETURN_ORDER_NOT_RETURNABLE` (the order is not a paid ' +
+        'order with its goods on the shelf). `RESOURCE_BUSY`: try again.',
+      $ref: 'errorResponseSchema#',
+    },
+    500: {
+      description: 'Unexpected server error while deciding.',
+      $ref: 'errorResponseSchema#',
+    },
+  },
+} satisfies FastifySchema;
+
 // Group order routes under the orders Swagger tag
 const taggedOrdersSchema = withOpenApiTag(
   {
@@ -1171,6 +1325,7 @@ const taggedOrdersSchema = withOpenApiTag(
     patchOrderStatusSchema,
     postOrdersStatusSchema,
     patchShipmentSchema,
+    postCarrierMoneySchema,
     patchOrderDeliverySchema,
     postOrderItemsSchema,
     patchOrderItemsSchema,
@@ -1178,6 +1333,7 @@ const taggedOrdersSchema = withOpenApiTag(
     postCancelPaymentSchema,
     postWithdrawalSchema,
     postReturnProofSchema,
+    postHoldDecisionSchema,
   },
   'orders',
 );

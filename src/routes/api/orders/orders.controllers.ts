@@ -28,6 +28,9 @@ import type {
   WithdrawBodyDto,
   ReturnProofBodyDto,
   ReturnProofParamsDto,
+  DecideOrderHoldBodyDto,
+  DecideOrderHoldParamsDto,
+  RecordCarrierMoneyBodyDto,
 } from 'types/dto/orders.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { ordersServices } from './orders.services.js';
@@ -140,6 +143,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
     withoutWeight,
     shippingCostMissing,
     shippedTo,
+    holds,
+    fraudWarnedFrom,
     sortBy,
     sortDir,
   } = req.query;
@@ -177,6 +182,8 @@ const getOrders: ControllerRouter<{}, {}, GetOrdersQueryDto, GetOrdersResponseDt
       withoutWeight,
       shippingCostMissing,
       shippedTo: shippedTo ? new Date(shippedTo) : undefined,
+      holds,
+      fraudWarnedFrom: fraudWarnedFrom ? new Date(fraudWarnedFrom) : undefined,
     },
   );
 
@@ -243,6 +250,24 @@ const putOrderStatus: ControllerRouter<
 };
 
 // what the shop pays the carrier and the details of a send
+const postCarrierMoney: ControllerRouter<
+  UpdateShipmentParamsDto,
+  RecordCarrierMoneyBodyDto,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const result = await ordersServices.recordCarrierMoney({
+    ...req.body,
+    actorId,
+    actorRole,
+    orderId: Number(req.params.orderId),
+    shipmentId: Number(req.params.shipmentId),
+  });
+  return reply.code(200).send(result);
+};
+
 const patchShipment: ControllerRouter<
   UpdateShipmentParamsDto,
   UpdateShipmentBodyDto,
@@ -258,6 +283,29 @@ const patchShipment: ControllerRouter<
       orderId: Number(req.params.orderId),
       shipmentId: Number(req.params.shipmentId),
       changes: req.body,
+    },
+    req.log,
+  );
+  return reply.code(200).send(result);
+};
+
+// root decides on what holds a paid order
+const postHoldDecision: ControllerRouter<
+  DecideOrderHoldParamsDto,
+  DecideOrderHoldBodyDto,
+  {},
+  OrderResponseDto
+> = async (req, reply) => {
+  const { id: actorId, role: actorRole } = req.user as UserEntity;
+
+  const result = await ordersServices.decideOrderHold(
+    {
+      actorId,
+      actorRole,
+      orderId: Number(req.params.orderId),
+      reason: req.params.reason,
+      decision: req.body.decision,
+      note: req.body.note,
     },
     req.log,
   );
@@ -377,6 +425,7 @@ const postReturnProof: ControllerRouter<
     actorRole,
     orderId: Number(req.params.orderId),
     returnId: Number(req.params.returnId),
+    log: req.log,
   });
   return reply.code(200).send(result);
 };
@@ -393,7 +442,9 @@ export const ordersController = {
   putOrderStatus,
   postOrdersStatus,
   patchShipment,
+  postCarrierMoney,
   patchOrderDelivery,
+  postHoldDecision,
 
   postOrderItems,
   patchOrderItems,

@@ -52,7 +52,7 @@ function loadOrder(orderId: number) {
 
     // the send on its way: the latest that was not rolled back
     const send = await tx.orderShipment.findFirst({
-      where: { orderId, rolledBackAt: null },
+      where: { orderId, returnId: null, rolledBackAt: null },
       orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
       select: { carrier: true, trackingNumber: true, trackingUrl: true },
     });

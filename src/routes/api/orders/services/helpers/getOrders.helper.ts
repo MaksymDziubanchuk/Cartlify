@@ -7,6 +7,7 @@ import {
   encodeCursor,
 } from '@helpers/codeCursor.js';
 import { assertLimit } from '@helpers/assertLimit.js';
+import type { OrderHoldReason } from '@helpers/orderHolds.js';
 import { RETURN_STATUSES } from '@helpers/returns.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
@@ -40,6 +41,8 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
       'withoutWeight',
       'shippingCostMissing',
       'shippedTo',
+      'holds',
+      'fraudWarnedFrom',
     ] as const) {
       if (dto[filter] !== undefined) throw new ForbiddenError('FILTER_FORBIDDEN', { filter });
     }
@@ -60,6 +63,15 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     : undefined;
 
   const q = typeof dto.q === 'string' && dto.q.trim() ? dto.q.trim() : undefined;
+
+  // what holds the orders: any reason, none, or the reasons through commas (the schema of the route
+  // lets only these through), each once
+  const holds: OrdersHoldsFilter | undefined =
+    dto.holds === undefined
+      ? undefined
+      : dto.holds === 'any' || dto.holds === 'none'
+        ? dto.holds
+        : [...new Set(dto.holds.split(',').map((reason) => reason.trim() as OrderHoldReason))];
 
   // newest first by default, whatever the status; the orders whose send has no cost written go by
   // the send that waits longest, the oldest first, unless the admin sorts otherwise
@@ -127,10 +139,15 @@ export function normalizeFindOrdersInput(dto: FindOrdersDto) {
     withoutWeight: dto.withoutWeight,
     shippingCostMissing: dto.shippingCostMissing,
     shippedTo: dto.shippedTo,
+    holds,
+    fraudWarnedFrom: dto.fraudWarnedFrom,
     sortBy,
     sortDir,
   };
 }
+
+// the filter of what holds the orders from their sending: anything, nothing, or any of the reasons
+export type OrdersHoldsFilter = 'any' | 'none' | OrderHoldReason[];
 
 // the text an admin looks for: a whole number is the number of an order, or a postal code or a
 // tracking number written in digits; any other text a part of the email of the buyer, the name or
@@ -187,6 +204,8 @@ export function buildOrdersWhere(args: {
   withoutWeight?: boolean | undefined;
   shippingCostMissing?: boolean | undefined;
   shippedTo?: Date | undefined;
+  holds?: OrdersHoldsFilter | undefined;
+  fraudWarnedFrom?: Date | undefined;
   sortBy: OrdersSortBy;
 }) {
   const where: any = {};
@@ -227,7 +246,7 @@ export function buildOrdersWhere(args: {
       contains: args.carrier.replace(/[\\%_]/g, '\\$&'),
       mode: 'insensitive' as const,
     };
-    and.push({ shipments: { some: { rolledBackAt: null, carrier: part } } });
+    and.push({ shipments: { some: { returnId: null, rolledBackAt: null, carrier: part } } });
   }
   // the send without a number is the one on its way; with shippedTo it is that very send that was
   // sent before the time (the clock of the alert of the shipments without a number)
@@ -236,6 +255,7 @@ export function buildOrdersWhere(args: {
       status: 'shipped',
       shipments: {
         some: {
+          returnId: null,
           rolledBackAt: null,
           trackingNumber: null,
           ...(args.shippedTo ? { shippedAt: { lt: args.shippedTo } } : {}),
@@ -246,18 +266,36 @@ export function buildOrdersWhere(args: {
   if (args.withoutWeight) {
     and.push({ items: { some: { variant: { weightGrams: null } } } });
   }
-  // a send whose cost the shop has not written, one it owes something for, and one sent before a
-  // time: the parts are about the same send
+  // a send whose cost the shop has not written (no line of the money journal of what the shop pays
+  // the carrier names it), one it owes something for, and one sent before a time: the parts are
+  // about the same send
   if (args.shippingCostMissing || args.shippedTo) {
     and.push({
       shipments: {
         some: {
-          ...(args.shippingCostMissing ? { expense: true, cost: null } : {}),
+          returnId: null,
+          ...(args.shippingCostMissing
+            ? {
+                expense: true,
+                moneyLogs: { none: { purpose: 'shipping', event: { not: 'money.received' } } },
+              }
+            : {}),
           ...(args.shippedTo ? { shippedAt: { lt: args.shippedTo } } : {}),
         },
       },
     });
   }
+  // what holds the order from its sending, a list of { reason, since, ref }: an order held for a
+  // reason has an element with it, an order nothing holds has an empty list
+  if (args.holds === 'any') and.push({ NOT: { holds: { equals: [] } } });
+  else if (args.holds === 'none') and.push({ holds: { equals: [] } });
+  else if (args.holds) {
+    and.push({
+      OR: args.holds.map((reason) => ({ holds: { array_contains: [{ reason }] } })),
+    });
+  }
+  // the provider warned that the payment of the order, already sent, may be fraud
+  if (args.fraudWarnedFrom) and.push({ fraudWarnedAt: { gte: args.fraudWarnedFrom } });
   if (args.sortBy === 'deliveryMethod' || args.sortBy === 'deliveryPrice') {
     and.push({ delivery: { isNot: null } });
   }
@@ -298,7 +336,13 @@ export async function ordersByMissingCost(
   const rows = await db.$queryRaw<{ id: number; since: Date }[]>`
     select s."orderId" as id, min(s."shippedAt") as since
     from cartlify.order_shipments as s
-    where s.expense and s.cost is null and s."orderId" = any(${found.map((row) => row.id)}::int[])
+    where s."returnId" is null and s.expense
+      and not exists (
+        select 1 from cartlify.money_log as l
+        where l."orderShipmentId" = s.id and l.purpose = 'shipping'::cartlify."MoneyPurpose"
+          and l.event <> 'money.received'
+      )
+      and s."orderId" = any(${found.map((row) => row.id)}::int[])
     group by s."orderId"`;
   const since = new Map(rows.map((row) => [row.id, row.since]));
 
