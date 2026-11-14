@@ -27,7 +27,8 @@ Cartlify is a portfolio project: a REST API with the parts a real shop needs, fr
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | 🛍️ **Catalog**             | products with variants (a size, a colour, a memory), a directory of characteristics, filters of the catalog, search, reviews, favorites |
 | 📦 **Stock**               | batches with expiry dates, deliveries, write-offs, reservation for orders, a log of every change                                        |
-| 💳 **Orders and payments** | cart, delivery, consents to the terms, Stripe payment pages and webhook, refunds, mails                                                 |
+| 💳 **Orders and payments** | cart, delivery, consents to the terms, a card with Google Pay and Apple Pay, PayPal and Bizum on the page of Stripe, mails              |
+| 💶 **Money**               | a journal of every movement of money, refunds followed to the end, disputes at the bank followed by the app itself                      |
 | ↩️ **Returns**             | the withdrawal within the EU term by the account or a public form, the goods taken back, the money back through the provider            |
 | 🔐 **Accounts**            | JWT in HttpOnly cookies with refresh, OAuth (Google, GitHub, LinkedIn), roles, sessions, a captcha on the public forms, data export     |
 | 📣 **Newsletters**         | a consent of its own with a double opt-in for guests, one unsubscribe, campaigns in several languages, a mail stream of its own         |
@@ -39,6 +40,7 @@ Cartlify is a portfolio project: a REST API with the parts a real shop needs, fr
 
 - **Rules in the database.** Roles, row level security, functions and triggers live in SQL scripts; the API connects as a role that cannot step over them, and every request runs as its own actor.
 - **Thin layers.** Each module goes routes → controllers → services, with JSON schemas and DTO types next to it.
+- **Money that follows itself.** Every movement of money is a line of one journal, only added to, written by the database in the same transaction as the change it belongs to; the reports, the alerts and the cards read it. A dispute at the bank is followed from its first event to its end: the parcel is held, a draft of the evidence is put at Stripe, and when the bank decides the app sends the money that waited, or cancels the order and sends the rest ([disputes](docs/disputes.md)).
 - **Tests on the real stack.** Unit and integration tests run against a disposable PostgreSQL and Redis in Docker on every push; the structure of the built database is compared with a committed snapshot.
 - **An API held to its docs.** Every answer of the integration tests is checked against the OpenAPI document, and a test checks that the document describes every route, code and example.
 
@@ -68,6 +70,8 @@ Every command: [commands](docs/commands.md).
 | -------------------------------------- | ------------------------------------------------------------------------- |
 | [Features](docs/features.md)           | what the API does, module by module                                       |
 | [Variants](docs/variants.md)           | products, variants, characteristics, stock, lists and filters             |
+| [Payments](docs/payments.md)           | the ways to pay, the money journal, refunds, holds, the webhook           |
+| [Disputes](docs/disputes.md)           | disputes at the bank followed by the app, the Stripe dashboard            |
 | [Newsletters](docs/newsletters.md)     | subscription, the pages behind the mail links, campaigns, sending, setup  |
 | [API](docs/api.md)                     | the REST modules, Swagger / OpenAPI, the realtime chat                    |
 | [Architecture](docs/architecture.md)   | goals, stack, structure of the repository, the database, production notes |
