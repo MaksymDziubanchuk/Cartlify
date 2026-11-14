@@ -7,15 +7,25 @@ import { setShopSettingsForTest } from '@config/shopSettings.js';
 import {
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
+  paymentPageReadingOf,
+  readStripePaidPage,
 } from '@routes/api/payments/providers/stripe/stripeCheckout.helper.js';
+import {
+  getStripeDispute,
+  putStripeDisputeEvidence,
+} from '@routes/api/payments/providers/stripe/stripeDispute.helper.js';
 import {
   findStripeRefund,
   getStripeRefund,
+  listStripeRefunds,
   refundStripePayment,
 } from '@routes/api/payments/providers/stripe/stripeRefund.helper.js';
 
 import {
+  closeDispute,
   closeOpenSessions,
+  disputeOf,
+  disputesOf,
   expireSession,
   lineItemsOf,
   openBankPaymentPage,
@@ -24,6 +34,7 @@ import {
   payCheckoutSession,
   PENDING_REFUND_CARD,
   readSession,
+  refundAtStripe,
   refundsOf,
   refundBecomes,
   REFUND_FAIL_CARD,
@@ -33,6 +44,7 @@ import {
   stripeWait,
   stripeWithKey,
   tryCardOnPage,
+  untilStripe,
 } from '../../../helpers/stripe.js';
 
 // the answers of Stripe the app and the tests rely on: the states of a page and of a payment, the
@@ -146,7 +158,8 @@ describe('a payment page the app opens', () => {
       status: 'open',
       payment_status: 'unpaid',
       payment_intent: null,
-      url: expect.stringMatching(/^https:\/\/checkout\.stripe\.com\/c\/pay\/cs_test_/),
+      // the letter before /pay is Stripe's own (c, g): the app hands the address on as it is
+      url: expect.stringMatching(/^https:\/\/checkout\.stripe\.com\/[a-z]\/pay\/cs_test_/),
       mode: 'payment',
       amount_subtotal: 3430,
       amount_total: 3430,
@@ -158,7 +171,9 @@ describe('a payment page the app opens', () => {
       success_url: page.params.success_url,
       cancel_url: page.params.cancel_url,
       expires_at: page.params.expires_at,
-      allowed_payment_method_types: ['card'],
+      // a card (its wallets with it), PayPal and Bizum, all switched on in the dashboard
+      allowed_payment_method_types: ['card', 'paypal', 'bizum'],
+      payment_method_types: ['card', 'paypal', 'bizum'],
       livemode: false,
     };
     expect(session).toMatchObject(expected);
@@ -222,6 +237,7 @@ describe('a payment page the app opens', () => {
     expect(refusal).toEqual(refused({ statusCode: 400, message }));
   });
 
+  // none of a card, PayPal and Bizum takes it, Stripe names the first
   it('is refused for a total below 0.50 EUR', async () => {
     const { params } = appPage({ items: [{ name: 'Pin', unitPrice: 0.49, quantity: 1 }] });
 
@@ -433,6 +449,32 @@ describe('paying a page with a test card', () => {
     });
   });
 
+  // the timer reads a page it found paid the way the webhook reads the event of the page
+  it('is read paid at Stripe the way its checkout.session.completed is read', async () => {
+    const page = appPage();
+    const session = await openAppPage(page);
+    expect(await readStripePaidPage(session.id)).toEqual({
+      state: 'unpaid',
+      pageId: session.id,
+      orderId: page.orderId,
+    });
+
+    const paymentId = await payCheckoutSession(session.id);
+
+    const read = await readStripePaidPage(session.id);
+    const event = await stripeEvent('checkout.session.completed', session.id);
+    expect(read).toEqual({
+      state: 'paid',
+      pageId: session.id,
+      orderId: page.orderId,
+      userId: 12,
+      paymentId,
+      amount: '34.30',
+      currency: 'eur',
+    });
+    expect(paymentPageReadingOf(event.data.object as Stripe.Checkout.Session)).toEqual(read);
+  });
+
   it('is refused for a page paid already, and a paid page is not closed', async () => {
     const session = await openAppPage();
     await payCheckoutSession(session.id);
@@ -493,7 +535,11 @@ describe('a refund of the app', () => {
     const first = await refundOf(paymentId, '20.00', `refund:${paymentId}`);
     const again = await refundOf(paymentId, '20.00', `refund:${paymentId}`);
 
-    expect(first).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'succeeded' });
+    expect(first).toEqual({
+      refundId: expect.stringMatching(/^re_/),
+      status: 'succeeded',
+      bankReference: null,
+    });
     expect(again.refundId).toBe(first.refundId);
     expect(await refundsOf(paymentId)).toEqual([
       expect.objectContaining({
@@ -530,15 +576,30 @@ describe('a refund of the app', () => {
     const next = await refundOf(paymentId, '7.00', `refund:${randomText(20)}`);
     const tooMuch = await refundOf(paymentId, '9.00', `refund:${randomText(20)}`);
 
-    expect(part).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'succeeded' });
+    expect(part).toEqual({
+      refundId: expect.stringMatching(/^re_/),
+      status: 'succeeded',
+      bankReference: null,
+    });
     expect(sameKey.refundId).toBe(part.refundId);
     expect(next.refundId).not.toBe(part.refundId);
-    // 8.00 are left: Stripe refuses 9.00 with its words, nothing is refunded
+    // 8.00 are left: Stripe refuses 9.00 with its words and the parameter amount, no code (the
+    // sandbox, 11.11.2026), nothing is refunded
+    expect(
+      await refusalOf(stripe.refunds.create({ payment_intent: paymentId, amount: 900 })),
+    ).toEqual(
+      refused({
+        statusCode: 400,
+        param: 'amount',
+        message: 'Refund amount (€9.00) is greater than unrefunded amount on charge (€8.00)',
+      }),
+    );
     expect(tooMuch).toEqual({
       refundId: null,
       status: 'failed',
-      failure: 'unknown',
+      failure: 'already_refunded',
       failureText: expect.stringMatching(/is greater than unrefunded amount on charge/),
+      bankReference: null,
     });
     expect((await refundsOf(paymentId)).map((refund) => refund.amount).sort()).toEqual([500, 700]);
   });
@@ -555,7 +616,8 @@ describe('a refund of the app', () => {
       key: `refund:${randomText(20)}`,
     });
 
-    expect(found).toEqual(made);
+    // the number of the bank comes a moment after the refund was made
+    expect(found).toEqual({ ...made, bankReference: found!.bankReference });
     expect(none).toBeNull();
   });
 
@@ -565,7 +627,9 @@ describe('a refund of the app', () => {
 
     const read = await getStripeRefund(made.refundId!);
 
-    expect(read).toEqual(made);
+    // the number of the bank may come between the two reads: the sandbox gives it within seconds
+    expect(read).toEqual({ ...made, bankReference: read.bankReference });
+    expect(read.bankReference === null || /^\d+$/.test(read.bankReference)).toBe(true);
     expect(await stripe.refunds.retrieve(made.refundId!)).toMatchObject({
       id: made.refundId,
       object: 'refund',
@@ -581,7 +645,11 @@ describe('a refund of the app', () => {
     const paymentId = await payByCard(1200, PENDING_REFUND_CARD);
     const made = await refundOf(paymentId, '12.00', `refund:${paymentId}`);
 
-    expect(made).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'pending' });
+    expect(made).toEqual({
+      refundId: expect.stringMatching(/^re_/),
+      status: 'pending',
+      bankReference: null,
+    });
     expect(await getStripeRefund(made.refundId!)).toEqual(made);
   });
 
@@ -610,7 +678,11 @@ describe('a refund of the app', () => {
     async () => {
       const paymentId = await payByCard(1100, REFUND_FAIL_CARD);
       const made = await refundOf(paymentId, '11.00', `refund:${paymentId}`);
-      expect(made).toEqual({ refundId: expect.stringMatching(/^re_/), status: 'succeeded' });
+      expect(made).toEqual({
+        refundId: expect.stringMatching(/^re_/),
+        status: 'succeeded',
+        bankReference: null,
+      });
 
       await refundBecomes(made.refundId!, { status: 'failed', reason: 'expired_or_canceled_card' });
 
@@ -665,6 +737,271 @@ describe('a refund of the app', () => {
         code: 'resource_missing',
         param: 'payment_intent',
         message: `No such payment_intent: '${id}'`,
+      }),
+    );
+  });
+});
+
+describe('the refunds of a payment', () => {
+  const refundOf = (paymentId: string, amount: string, key: string) =>
+    refundStripePayment({ orderId: 2_000_000_001, paymentIntentId: paymentId, amount, key });
+
+  it('are listed the newest first, a page at a time, the ones made by hand without a key', async () => {
+    const paymentId = await payByCard(3000);
+    const key = `refund:${randomText(20)}`;
+    const ours = await refundOf(paymentId, '5.00', key);
+    const byHand = await refundAtStripe(paymentId, {
+      amount: 700,
+      reason: 'requested_by_customer',
+    });
+    const last = await refundOf(paymentId, '3.00', `refund:${randomText(20)}`);
+
+    const first = await stripe.refunds.list({ payment_intent: paymentId, limit: 2 });
+    const rest = await stripe.refunds.list({
+      payment_intent: paymentId,
+      limit: 2,
+      starting_after: first.data[1]!.id,
+    });
+
+    expect(first).toMatchObject({ object: 'list', url: '/v1/refunds', has_more: true });
+    expect(first.data.map((refund) => refund.id)).toEqual([last.refundId, byHand.id]);
+    expect(rest).toMatchObject({ has_more: false });
+    expect(rest.data.map((refund) => refund.id)).toEqual([ours.refundId]);
+    expect(byHand).toMatchObject({
+      object: 'refund',
+      amount: 700,
+      status: 'succeeded',
+      reason: 'requested_by_customer',
+      metadata: {},
+    });
+    expect(await listStripeRefunds(paymentId)).toEqual([
+      expect.objectContaining({
+        refundId: ours.refundId,
+        amount: '5.00',
+        transferKey: key,
+        reason: null,
+      }),
+      expect.objectContaining({
+        refundId: byHand.id,
+        status: 'succeeded',
+        amount: '7.00',
+        transferKey: null,
+        reason: 'requested_by_customer',
+        createdAt: new Date(byHand.created * 1000),
+      }),
+      expect.objectContaining({ refundId: last.refundId, amount: '3.00' }),
+    ]);
+  });
+
+  // the webhook hears of a refund made in the dashboard by this event, and of nothing else
+  it('record refund.created for a refund made by hand, without a key', async () => {
+    const paymentId = await payByCard(1000);
+
+    const byHand = await refundAtStripe(paymentId, { reason: 'duplicate' });
+
+    const event = await stripeEvent('refund.created', byHand.id);
+    expect(event.data.object).toMatchObject({
+      id: byHand.id,
+      object: 'refund',
+      amount: 1000,
+      status: 'succeeded',
+      payment_intent: paymentId,
+      reason: 'duplicate',
+      metadata: {},
+    });
+  });
+
+  // the number of the bank of the card (ARN) comes days after the money is sent
+  it('of a card has the details of its destination, without the number of the bank yet', async () => {
+    const paymentId = await payByCard(1000);
+    const made = await refundOf(paymentId, '10.00', `refund:${paymentId}`);
+
+    const refund = await stripe.refunds.retrieve(made.refundId!);
+
+    expect(refund.destination_details).toEqual({
+      card: {
+        reference_status: 'pending',
+        reference_type: 'acquirer_reference_number',
+        type: 'refund',
+      },
+      type: 'card',
+    });
+  });
+});
+
+describe('a dispute of a payment', () => {
+  // the sandbox opens the dispute of the card a moment after the payment
+  const disputeOfCard = async (amount: number) => {
+    const paymentId = await payByCard(amount, DISPUTED_CARD);
+    const dispute = await untilStripe(
+      'the dispute of the payment',
+      async () => (await disputesOf(paymentId))[0] ?? null,
+    );
+    return { paymentId, dispute };
+  };
+
+  it('is a fraudulent chargeback of the card of a dispute, which takes the sum and a fee at once', async () => {
+    const { paymentId, dispute } = await disputeOfCard(1000);
+
+    expect(dispute).toMatchObject({
+      id: expect.stringMatching(/^du_[A-Za-z0-9]{24}$/),
+      object: 'dispute',
+      amount: 1000,
+      currency: 'eur',
+      charge: expect.stringMatching(/^ch_/),
+      payment_intent: paymentId,
+      reason: 'fraudulent',
+      status: 'needs_response',
+      is_charge_refundable: false,
+      livemode: false,
+      evidence_details: {
+        due_by: expect.any(Number),
+        has_evidence: false,
+        past_due: false,
+        submission_count: 0,
+      },
+    });
+    expect(dispute.balance_transactions).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^txn_/),
+        object: 'balance_transaction',
+        amount: -1000,
+        currency: 'eur',
+        fee: expect.any(Number),
+        reporting_category: 'dispute',
+        type: 'adjustment',
+      }),
+    ]);
+    const [withdrawn] = dispute.balance_transactions;
+    expect(withdrawn!.fee).toBeGreaterThan(0);
+    expect(withdrawn!.net).toBe(withdrawn!.amount - withdrawn!.fee);
+    expect((await stripeEvent('charge.dispute.created', dispute.id)).data.object).toMatchObject({
+      id: dispute.id,
+      status: 'needs_response',
+    });
+    expect(
+      (await stripeEvent('charge.dispute.funds_withdrawn', dispute.id)).data.object,
+    ).toMatchObject({ id: dispute.id, balance_transactions: [{ id: withdrawn!.id }] });
+    expect(await getStripeDispute(dispute.id)).toMatchObject({
+      id: dispute.id,
+      paymentId,
+      status: 'needs_response',
+      reason: 'fraudulent',
+      amount: '10.00',
+      currency: 'eur',
+      hasEvidence: false,
+      submissionCount: 0,
+      isChargeRefundable: false,
+      openedAt: new Date(dispute.created * 1000),
+      transactions: [
+        expect.objectContaining({
+          id: withdrawn!.id,
+          amount: '-10.00',
+          fee: expect.stringMatching(/^\d+\.\d{2}$/),
+        }),
+      ],
+    });
+  });
+
+  // a draft staged is evidence on the dispute, a submission is not: only a person submits
+  it('takes a draft of the evidence without submitting it, with charge.dispute.updated', async () => {
+    const { dispute } = await disputeOfCard(1000);
+
+    const answer = await putStripeDisputeEvidence(dispute.id, {
+      productDescription: 'Order #1: Desk lamp x 1',
+      shippingCarrier: 'Nova Poshta',
+      shippingTrackingNumber: '20450000000000',
+    });
+
+    expect(answer).toEqual({ status: 'put' });
+    const after = await disputeOf(dispute.id);
+    expect(after).toMatchObject({
+      status: 'needs_response',
+      evidence: {
+        product_description: 'Order #1: Desk lamp x 1',
+        shipping_carrier: 'Nova Poshta',
+        shipping_tracking_number: '20450000000000',
+        uncategorized_text: null,
+      },
+      evidence_details: { has_evidence: true, submission_count: 0 },
+    });
+    expect((await stripeEvent('charge.dispute.updated', dispute.id)).data.object).toMatchObject({
+      id: dispute.id,
+      evidence_details: { has_evidence: true, submission_count: 0 },
+    });
+  });
+
+  // the sandbox decides by the test evidence about 20 s after it is submitted
+  it(
+    'is won by the winning evidence: the sum comes back, and the payment can be refunded again',
+    async () => {
+      const { paymentId, dispute } = await disputeOfCard(1000);
+
+      await closeDispute(paymentId, 'won');
+
+      const won = await disputeOf(dispute.id);
+      expect(won).toMatchObject({
+        status: 'won',
+        evidence_details: { submission_count: 1 },
+      });
+      expect(won.balance_transactions).toEqual([
+        expect.objectContaining({ amount: -1000, reporting_category: 'dispute' }),
+        expect.objectContaining({ amount: 1000, reporting_category: 'dispute_reversal' }),
+      ]);
+      expect((await stripeEvent('charge.dispute.closed', dispute.id)).data.object).toMatchObject({
+        id: dispute.id,
+        status: 'won',
+      });
+      expect(
+        (await stripeEvent('charge.dispute.funds_reinstated', dispute.id)).data.object,
+      ).toMatchObject({ id: dispute.id, status: 'won' });
+      expect(
+        await refundStripePayment({
+          orderId: 2_000_000_001,
+          paymentIntentId: paymentId,
+          amount: '10.00',
+          key: `refund:${paymentId}`,
+        }),
+      ).toMatchObject({ status: 'succeeded' });
+    },
+    stripeWait,
+  );
+
+  it(
+    'is lost by the losing evidence: the sum stays with the buyer, the payment stays charged back',
+    async () => {
+      const { paymentId, dispute } = await disputeOfCard(1000);
+
+      await closeDispute(paymentId, 'lost');
+
+      const lost = await disputeOf(dispute.id);
+      expect(lost).toMatchObject({ status: 'lost', is_charge_refundable: false });
+      expect(lost.balance_transactions).toHaveLength(1);
+      expect((await stripeEvent('charge.dispute.closed', dispute.id)).data.object).toMatchObject({
+        id: dispute.id,
+        status: 'lost',
+      });
+      expect(
+        await refundStripePayment({
+          orderId: 2_000_000_001,
+          paymentIntentId: paymentId,
+          amount: '10.00',
+          key: `refund:${paymentId}`,
+        }),
+      ).toMatchObject({ status: 'failed', failure: 'disputed' });
+    },
+    stripeWait,
+  );
+
+  it('is not found by an id Stripe does not know', async () => {
+    const id = `du_${randomText(24)}`;
+
+    expect(await refusalOf(stripe.disputes.retrieve(id))).toEqual(
+      refused({
+        statusCode: 404,
+        code: 'resource_missing',
+        param: 'dispute',
+        message: `No such dispute: '${id}'`,
       }),
     );
   });

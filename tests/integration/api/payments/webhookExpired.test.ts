@@ -13,6 +13,7 @@ import {
   stockOf,
   type TestProduct,
 } from '../../../helpers/factories.js';
+import { takeLogs } from '../../../helpers/logs.js';
 import { loseReservation, placeOrder } from '../../../helpers/orders.js';
 import {
   deleteOrderAsOwner,
@@ -180,6 +181,9 @@ describe('POST /api/payments/stripe/webhook: checkout.session.expired', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ received: true, skipped: 'ORDER_NOT_FOUND' });
+    expect(takeLogs({ msg: 'stripe event was skipped', skipped: 'ORDER_NOT_FOUND' })).toEqual([
+      expect.objectContaining({ eventId: event.id, orderId }),
+    ]);
   });
 });
 
