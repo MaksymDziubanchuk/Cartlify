@@ -564,8 +564,10 @@ describe('GET /api/admin/stock-log', () => {
   describe('the sorts', () => {
     // root reads the values as they are, so the order of the values can be checked; an admin gets
     // the same lines in the same order, with the data of root hidden (see "who reads it")
-    it('sorts by every simple column both ways, and the cursor walks the lines in the same order', async () => {
-      for (const sortBy of SORTS) {
+    // one test a column: every column walks its pages both ways for root and for an admin
+    it.each(SORTS)(
+      'sorts by %s both ways, and the cursor walks the lines in the same order',
+      async (sortBy) => {
         for (const sortOrder of ['asc', 'desc'] as const) {
           const query = `${mine()}&sortBy=${sortBy}&sortOrder=${sortOrder}`;
 
@@ -579,8 +581,8 @@ describe('GET /api/admin/stock-log', () => {
           expect(walked.map((item) => item.id)).toEqual(whole.items.map((item) => item.id));
           expect(walkedByAdmin.map((item) => item.id)).toEqual(whole.items.map((item) => item.id));
         }
-      }
-    });
+      },
+    );
 
     it('puts the lines without a value last whichever way the column goes', async () => {
       for (const sortOrder of ['asc', 'desc'] as const) {
@@ -871,5 +873,209 @@ describe('what reads the stock log', () => {
         value: 0,
       });
     expect(written).toEqual({ units: 2, value: 5 });
+  });
+});
+
+// one filter for every other column, the sum of the changes of the filters, the groups (the
+// journals for the analysis)
+describe('GET /api/admin/stock-log by every column', () => {
+  const idsOf = (lines: Line[]) => lines.map((line) => line.id as number).sort((a, b) => a - b);
+  const storyLines = async () => (await all(mine(), root)).items;
+  const keptBy = async (filter: string, actor: TestUser = root) =>
+    idsOf((await all(`${mine()}&${filter}`, actor)).items);
+
+  it.each<[string, (line: Line) => boolean]>([
+    ['quantityFrom=1', (line) => line.quantityChange >= 1],
+    ['quantityTo=-1', (line) => line.quantityChange <= -1],
+    ['quantityFrom=2&quantityTo=4', (line) => line.quantityChange >= 2 && line.quantityChange <= 4],
+    ['stockAfterFrom=4', (line) => line.stockAfter >= 4],
+    ['stockAfterTo=3', (line) => line.stockAfter <= 3],
+    ['actorRole=ROOT', (line) => line.actorRole === 'ROOT'],
+    ['actorRole=ADMIN', (line) => line.actorRole === 'ADMIN'],
+    [
+      'userAgent=ROOT%20BROWSER',
+      (line) =>
+        String(line.userAgent ?? '')
+          .toLowerCase()
+          .includes('root browser'),
+    ],
+  ])('keeps the lines of %s and every one of them', async (filter, keeps) => {
+    const expected = idsOf((await storyLines()).filter(keeps));
+
+    expect(expected.length).toBeGreaterThan(0);
+    expect(await keptBy(filter)).toEqual(expected);
+  });
+
+  it('keeps the lines of who did it, of a statement and of its rows, of a category', async () => {
+    const lines = await storyLines();
+    const back = lines.filter((line) => line.returnItemId !== null);
+    const [{ categoryId }] = await asAdmin((tx) =>
+      tx.product.findMany({ where: { id: story.a1.id }, select: { categoryId: true } }),
+    );
+    const returnId = (
+      await asAdmin((tx) =>
+        tx.orderReturnItem.findUniqueOrThrow({
+          where: { id: back[0]!.returnItemId },
+          select: { returnId: true },
+        }),
+      )
+    ).returnId;
+
+    expect(await keptBy(`actorId=${root.id}`)).toEqual(
+      idsOf(lines.filter((line) => line.actorId === root.id)),
+    );
+    expect(await keptBy(`returnItemId=${back[0]!.returnItemId}`)).toEqual(
+      idsOf(back.filter((line) => line.returnItemId === back[0]!.returnItemId)),
+    );
+    expect(await keptBy(`returnId=${returnId}`)).toEqual(idsOf(back));
+    expect(await keptBy(`categoryId=${categoryId}`)).toEqual(idsOf(lines));
+  });
+
+  // an admin sees the lines of root in the lists and the sorts, but cannot pick them out by who did
+  // them
+  it('lets an admin pick none of the lines of root by who did them', async () => {
+    const ofRoot = idsOf((await storyLines()).filter((line) => line.actorId === root.id));
+    expect(ofRoot.length).toBeGreaterThan(0);
+
+    expect(await keptBy(`actorId=${root.id}`, admin)).toEqual([]);
+    expect(await keptBy('actorRole=ROOT', admin)).toEqual([]);
+    expect(await keptBy(`actorId=${root.id}`)).toEqual(ofRoot);
+  });
+
+  it('never finds the lines of root by its browser for an admin', async () => {
+    expect(await keptBy('userAgent=root%20browser', admin)).toEqual([]);
+    expect((await keptBy('userAgent=root%20browser', root)).length).toBeGreaterThan(0);
+  });
+
+  it('gives the sum of the changes of every line of the filters, whatever the page', async () => {
+    const lines = (await all(mine())).items;
+    const page = (await pageOf(`${mine()}&limit=1`)) as Page & { sums: unknown };
+
+    expect(page.items).toHaveLength(1);
+    expect(page.sums).toEqual({
+      quantityChange: lines.reduce((sum, line) => sum + (line.quantityChange as number), 0),
+    });
+  });
+
+  it.each([
+    'quantityFrom=abc',
+    'stockAfterTo=100000000',
+    'actorRole=GUEST',
+    'actorId=0',
+    'returnId=0',
+    'categoryId=x',
+    'ip=',
+  ])('refuses the query %s', async (query) => {
+    const res = await read(query);
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+  });
+});
+
+describe('GET /api/admin/stock-log/groups', () => {
+  type Group = Record<string, any> & { count: number; quantityChange: number };
+  type Groups = { items: Group[]; total: number; limit: number; offset: number };
+  const groups = (query: string, actor: TestUser = admin) =>
+    app.inject({
+      method: 'GET',
+      url: `/api/admin/stock-log/groups?${query}`,
+      headers: { cookie: accessCookie(actor) },
+    });
+  const groupsOf = async (query: string, actor: TestUser = admin) => {
+    const res = await groups(query, actor);
+    expect(res.statusCode).toBe(200);
+    return res.json() as Groups;
+  };
+
+  it('takes the lines of the filters together by the variant and the event, with their count and the sum of the changes', async () => {
+    const lines = (await all(mine())).items;
+    const expected = new Map<
+      string,
+      { variantId: number; event: string; count: number; sum: number }
+    >();
+    for (const line of lines) {
+      const key = `${line.variantId}|${line.event}`;
+      const group = expected.get(key) ?? {
+        variantId: line.variantId as number,
+        event: line.event as string,
+        count: 0,
+        sum: 0,
+      };
+      group.count += 1;
+      group.sum += line.quantityChange as number;
+      expected.set(key, group);
+    }
+
+    const out = await groupsOf(
+      `${mine()}&groupBy=variantId,event&sortBy=quantityChange&sortOrder=asc&limit=100`,
+    );
+
+    expect(out.total).toBe(expected.size);
+    expect(out.items.map((group) => group.quantityChange)).toEqual(
+      [...out.items.map((group) => group.quantityChange)].sort((a, b) => a - b),
+    );
+    expect(
+      out.items
+        .map((group) => ({
+          variantId: group.variantId,
+          event: group.event,
+          count: group.count,
+          sum: group.quantityChange,
+        }))
+        .sort((a, b) => `${a.variantId}|${a.event}`.localeCompare(`${b.variantId}|${b.event}`)),
+    ).toEqual(
+      [...expected.values()].sort((a, b) =>
+        `${a.variantId}|${a.event}`.localeCompare(`${b.variantId}|${b.event}`),
+      ),
+    );
+  });
+
+  it('keeps root one group of the hidden id for an admin, and itself for root', async () => {
+    const forAdmin = await groupsOf(`${mine()}&groupBy=actorId`);
+    const forRoot = await groupsOf(`${mine()}&groupBy=actorId`, root);
+
+    expect(forAdmin.items.map((group) => group.actorId)).toContain(0);
+    expect(forAdmin.items.map((group) => group.actorId)).not.toContain(root.id);
+    expect(forRoot.items.map((group) => group.actorId)).toContain(root.id);
+  });
+
+  it('gives every group as a csv file', async () => {
+    const res = await groups(`${mine()}&groupBy=day&format=csv`);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/csv');
+    expect(res.body.split('\r\n')[0]).toBe('﻿day,count,quantityChange');
+  });
+
+  it.each(['', 'groupBy=amount', 'groupBy=event,day,week,month', 'groupBy=event&sortBy=amount'])(
+    'refuses the query %s',
+    async (query) => {
+      const res = await groups(query);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    },
+  );
+
+  // the sorts of the groups are their own: the count and a key of time are no sorts of the journal
+  it('sorts the groups by their count and by a key they group by', async () => {
+    const byCount = await groupsOf(`${mine()}&groupBy=event&sortBy=count&sortOrder=asc`);
+    const byDay = await groupsOf(`${mine()}&groupBy=day,event&sortBy=day&sortOrder=asc`);
+
+    const counts = byCount.items.map((group) => group.count);
+    expect(counts.length).toBeGreaterThan(1);
+    expect(counts).toEqual([...counts].sort((a, b) => a - b));
+    const days = byDay.items.map((group) => group.day as string);
+    expect(days).toEqual([...days].sort());
+  });
+
+  it('refuses a sort by a key it does not group by, and a customer', async () => {
+    const sort = await groups('groupBy=event&sortBy=day');
+    const customer = await groups('groupBy=event', buyer);
+
+    expect(sort.statusCode).toBe(400);
+    expect(sort.json()).toMatchObject({ errorCode: 'LOG_SORT_INVALID' });
+    expect(customer.statusCode).toBe(403);
   });
 });

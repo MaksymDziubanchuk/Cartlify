@@ -155,6 +155,23 @@ describe('GET /api/admin/consent-log', () => {
     expect(ofContracts.total).toBe(2);
   });
 
+  // the address and the browser of the request (the journals for the analysis, 13.11.2026)
+  it('keeps the consents given from an address and with a browser', async () => {
+    const { user } = await customerWithOrder();
+    const every = await pageOf(`userId=${user.id}`);
+
+    const fromAddress = await pageOf(`userId=${user.id}&ip=127.0.0.1`);
+    const withBrowser = await pageOf(`userId=${user.id}&userAgent=CONSENT%20BROWSER`);
+    const elsewhere = await pageOf(`userId=${user.id}&ip=203.0.113.250`);
+
+    expect(fromAddress.total).toBe(every.items.filter((item) => item.ip === '127.0.0.1').length);
+    expect(withBrowser.total).toBe(
+      every.items.filter((item) => item.userAgent === 'Consent browser').length,
+    );
+    expect(withBrowser.total).toBeGreaterThan(0);
+    expect(elsewhere.total).toBe(0);
+  });
+
   it('keeps the consents of the events asked for, and sorts them', async () => {
     const { user } = await customerWithOrder();
 

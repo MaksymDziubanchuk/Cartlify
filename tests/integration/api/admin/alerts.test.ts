@@ -96,9 +96,14 @@ const ADMIN_KINDS = [
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
-  'refunded_payments',
-  'refunded_payments_not_sent',
-  'failed_refunds',
+  'late_refunds',
+  'late_refunds_in_transit',
+  'late_refunds_failed',
+  'return_refunds_in_transit',
+  'return_refunds_failed',
+  'dispute_refunds_in_transit',
+  'disputes_to_answer',
+  'disputes_lost',
   'returns_manual_check',
   'returns_proof_waiting',
   'returns_goods_not_sent',
@@ -221,12 +226,31 @@ const paidOrder = async () =>
 const shippedOrder = async () =>
   placeOrder(app, csrf, await newUser(), await createProduct({ price: 10, stock: 5 }), 'shipped');
 
-// a line of the admin log, the way the late payment refund writes one (field refund) or another
+// the kinds of root alone, after the kinds of the newsletters: the refunds made by hand root decides
+// on, the warnings and the reviews of the provider, the actions of the admins
+const ROOT_KINDS = [
+  'hand_refunds_in_transit',
+  'hand_refunds_failed',
+  'compensation_refunds_in_transit',
+  'compensation_refunds_failed',
+  'dispute_refunds_failed',
+  'bank_money_to_decide',
+  'returns_money_short',
+  'returns_money_overpaid',
+  'hand_refunds_to_explain',
+  'hand_refunds_to_decide',
+  'fraud_warnings',
+  'fraud_warnings_shipped',
+  'payment_reviews',
+  'admin_actions',
+];
+
+// a line of the admin log of an order, with a change of the field
 async function logLine(
   actor: TestUser,
   orderId: number,
   field: string,
-  event = 'order.refund_late',
+  event = 'order.shipment_tracking_change',
 ): Promise<number> {
   return testTx(async (tx) => {
     await setUserContext(tx, { userId: actor.id, role: actor.role });
@@ -255,7 +279,7 @@ describe('GET /api/admin/alerts', () => {
       threshold: null,
       list: {
         path: '/api/orders',
-        query: { statuses: 'paid', sortBy: 'paidAt', sortDir: 'asc' },
+        query: { statuses: 'paid', holds: 'none', sortBy: 'paidAt', sortDir: 'asc' },
       },
     });
     expect(alerts.find((alert) => alert.kind === 'low_stock')).toMatchObject({
@@ -290,7 +314,7 @@ describe('GET /api/admin/alerts', () => {
     });
   });
 
-  it('gives root the actions of the admins too', async () => {
+  it('gives root the kinds of root too, the actions of the admins last', async () => {
     const { alerts } = await alertsOf(root);
 
     // the kinds of the newsletters sit between them (alertsNewsletters.test.ts)
@@ -303,7 +327,7 @@ describe('GET /api/admin/alerts', () => {
       'newsletter_starting_soon',
       'newsletter_cancelled_by_limit',
       'newsletter_sending_halted',
-      'admin_actions',
+      ...ROOT_KINDS,
     ]);
     expect(alerts.find((alert) => alert.kind === 'admin_actions')).toMatchObject({
       threshold: 24,
@@ -325,6 +349,18 @@ describe('GET /api/admin/alerts', () => {
       ADMIN_KINDS.filter((kind) => kind !== 'low_stock'),
     );
     expect(on.total).toBe(on.alerts.reduce((sum, alert) => sum + alert.count, 0));
+  });
+
+  // a page that shows one alert counts it alone; a kind of root is not an admin's, and a kind that is
+  // none is refused
+  it('with kinds counts only the kinds named of the zone of the actor', async () => {
+    const some = await alertsOf(admin, '?kinds=low_stock,out_of_stock,admin_actions');
+    const none = await get(admin, '/api/admin/alerts?kinds=low_stock,no_such_kind');
+
+    expect(some.alerts.map((alert) => alert.kind)).toEqual(['out_of_stock', 'low_stock']);
+    expect(some.total).toBe(some.alerts.reduce((sum, alert) => sum + alert.count, 0));
+    expect(none.statusCode).toBe(400);
+    expect(none.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
   });
 
   // the reservation worker does not run in the tests: nothing says it stopped
@@ -363,6 +399,31 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     ).toEqual([]);
     await expectCounted(someone, 'paid_orders_waiting', paid);
     await expectNotCounted(someone, 'paid_orders_waiting', shipped);
+  });
+
+  // an order held from its sending waits for the bank or for root, not for the shop to send it:
+  // the provider reviews its payment here (review.opened holds it the way the webhook does)
+  it('paid orders to ship leave out an order something holds, until the hold goes', async () => {
+    const someone = await newUser({ role: 'ADMIN' });
+    const held = await paidOrder();
+    const review = `prv_alerts_${held}`;
+    await asAdmin(
+      (tx) => tx.$queryRaw`select cartlify.hold_payment_review(${`pi_test_${held}`}, ${review})`,
+    );
+
+    expect(
+      theOrderIn(await listOf(someone, 'paid_orders_waiting', { q: held, limit: 100 }), held),
+    ).toEqual([]);
+    await expectNotCounted(someone, 'paid_orders_waiting', held);
+
+    await asAdmin(
+      (tx) => tx.$queryRaw`select cartlify.release_payment_review(${`pi_test_${held}`}, ${review})`,
+    );
+
+    expect(
+      theOrderIn(await listOf(someone, 'paid_orders_waiting', { q: held, limit: 100 }), held),
+    ).toEqual([held]);
+    await expectCounted(someone, 'paid_orders_waiting', held);
   });
 
   it('shipped orders not delivered for the days of the threshold', async () => {
@@ -827,28 +888,6 @@ describe('the cases of each kind: the alert counts what its list shows', () => {
     await expectNotCounted(someone, 'chats_waiting', bot.id);
   });
 
-  it('late payments given back within the days of the threshold', async () => {
-    const someone = await newUser({ role: 'ADMIN' });
-    const orderId = await paidOrder();
-    const refund = await logLine(someone, orderId, 'refund');
-    const other = await logLine(someone, orderId, 'note');
-    // the money of a statement of return goes back with a field of the same name: it is no late
-    // payment
-    const statement = await logLine(someone, orderId, 'refund', 'return.refund');
-
-    expect(idsIn(await listOf(someone, 'refunded_payments', { entityId: orderId }))).toEqual([
-      refund,
-    ]);
-    await expectCounted(someone, 'refunded_payments', refund);
-    await expectNotCounted(someone, 'refunded_payments', other);
-    await expectNotCounted(someone, 'refunded_payments', statement);
-
-    runClock(8 * DAY);
-
-    expect(idsIn(await listOf(someone, 'refunded_payments', { entityId: orderId }))).toEqual([]);
-    await expectNotCounted(someone, 'refunded_payments', refund);
-  });
-
   it('the actions of the admins for root within the hours of the threshold', async () => {
     const someRoot = await newUser({ role: 'ROOT' });
     const someAdmin = await newUser({ role: 'ADMIN' });
@@ -897,8 +936,8 @@ describe('the subscriptions to the alerts', () => {
       },
       low_stock: { value: 5, default: 5, min: 1, max: 100_000, unit: 'units', custom: false },
       expiring_batches: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
-      refunded_payments: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
-      refunded_payments_not_sent: {
+      late_refunds: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
+      late_refunds_in_transit: {
         value: 3,
         default: 3,
         min: 1,
@@ -906,6 +945,7 @@ describe('the subscriptions to the alerts', () => {
         unit: 'days',
         custom: false,
       },
+      disputes_lost: { value: 7, default: 7, min: 1, max: 365, unit: 'days', custom: false },
       worker_stalled: {
         value: 180,
         default: 180,

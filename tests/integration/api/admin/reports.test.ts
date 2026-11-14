@@ -17,18 +17,26 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { orderRowOf, placeOrder } from '../../../helpers/orders.js';
-import { cancelAndRefund, refundReturn, stockLinesOf } from '../../../helpers/returns.js';
+import {
+  cancelAndRefund,
+  failReturnRefund,
+  refundReturn,
+  stockLinesOf,
+} from '../../../helpers/returns.js';
 import { markVariantDeleted } from '../../../helpers/variants.js';
 
 // GET /api/admin/reports/accounting: what the shop sold in a period and what it cost, the returns
-// that took money back, what came in and what was written off, and the stock. A sale counts from
-// the time it was paid, its cost from the batches it took, cancelled later or not; a return counts
-// from the time its money went back, and the sales less the returns are the net: an event is in
-// the period it happened in and a return never changes the period its order was paid in. The stock
-// is read from the stock log (opening, received, left, closing). The money is the money of the
-// variants: a report of a product is the sum of its
-// variants, one of some variants (variantIds) is theirs only. Other test files make orders and
-// batches at the same time, so each test reads only its own products (productIds) or variants
+// that took money back, what came in and what was written off, and the stock. The money is read
+// from the money journal by the time of its lines: a sale counts from the time it was paid (the
+// lines of the payment), its cost from the batches it took, cancelled later or not; a return counts
+// from the time its transfer was written (the lines of the goods of the transfers and of the money
+// sent outside the app), a failure of the transfer gives it back in the period the failure came,
+// and the sales less the returns are the net: an event is in the period it happened in and a
+// return never changes the period its order was paid in. The stock is read from the stock log
+// (opening, received, left, closing). The money is the money of the variants: a report of a
+// product is the sum of its variants, one of some variants (variantIds) is theirs only. Other test
+// files make orders and batches at the same time, so each test reads only its own products
+// (productIds) or variants
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -102,8 +110,10 @@ afterAll(async () => {
 });
 
 describe('GET /api/admin/reports/accounting', () => {
-  // the delivery is of all orders and of no product: months long before the tests have none of it
-  it('gives the delivery of the whole shop, and none to a report of some products', async () => {
+  // the delivery and the money of the payments past the statements (the disputes, the refunds by
+  // hand, the late payments) are of all orders and of no product: months long before the tests have
+  // none of it
+  it('gives the delivery and the payments of the whole shop, and none to a report of some products', async () => {
     const startedAt = Date.now();
     const product = await newProduct(10);
     const past = {
@@ -124,9 +134,26 @@ describe('GET /api/admin/reports/accounting', () => {
       returnShipping: { sends: 0, cost: 0, withoutCost: 0, deducted: 0, reimbursed: 0 },
       result: 0,
     });
+    expect(whole.json().payments).toEqual({
+      disputes: { withdrawn: 0, reinstated: 0, used: 0, undecided: 0, result: 0 },
+      handRefunds: {
+        refunded: 0,
+        compensations: 0,
+        coverage: 0,
+        undecided: 0,
+        used: 0,
+        result: 0,
+      },
+      latePayments: { received: 0, refunded: 0, result: 0 },
+      compensations: { given: 0, result: 0 },
+      received: { buyers: 0, carriers: 0, result: 0 },
+    });
+    expect(whole.json().summary.expenses).toMatchObject({ otherRefunds: 0 });
     for (const res of [some, variants, category, ofProducts]) {
       expect(res.statusCode).toBe(200);
       expect(res.json().delivery).toBeNull();
+      expect(res.json().payments).toBeNull();
+      expect(res.json().summary.expenses.otherRefunds).toBeNull();
     }
   });
 
@@ -149,7 +176,7 @@ describe('GET /api/admin/reports/accounting', () => {
       // a report of some products: no delivery, the totals are of the items
       summary: {
         income: { items: 40, delivery: null, total: 40 },
-        expenses: { costOfGoods: 9, writeOffs: 0, shipping: null, total: 9 },
+        expenses: { costOfGoods: 9, writeOffs: 0, shipping: null, otherRefunds: null, total: 9 },
         margin: { items: 31, delivery: null, total: 31 },
       },
       // what is left: 4 of the batch at 3 (8 came in at 3 and 2 at 5, 4 went out)
@@ -198,11 +225,11 @@ describe('GET /api/admin/reports/accounting', () => {
       });
     const beforeCancel = await ofPayment();
 
-    const { refundedAt } = await cancelAndRefund(admin.id, orderId);
+    const { bookedAt } = await cancelAndRefund(admin.id, orderId);
     const afterCancel = await ofPayment();
     const ofReturn = await report({
-      from: new Date(refundedAt.getTime()).toISOString(),
-      to: new Date(refundedAt.getTime() + 60_000).toISOString(),
+      from: new Date(bookedAt.getTime()).toISOString(),
+      to: new Date(bookedAt.getTime() + 60_000).toISOString(),
       productIds: String(product.id),
     });
     const whole = await reportOf([product], startedAt);
@@ -213,7 +240,7 @@ describe('GET /api/admin/reports/accounting', () => {
     });
     // the period of the payment is the same after the cancel: nothing of it changed
     expect(afterCancel.json()).toEqual(beforeCancel.json());
-    expect(paidAt!.getTime()).toBeLessThan(refundedAt.getTime());
+    expect(paidAt!.getTime()).toBeLessThan(bookedAt.getTime());
 
     // the period of the return has the return and no sale
     expect(ofReturn.json()).toMatchObject({
@@ -278,6 +305,7 @@ describe('GET /api/admin/reports/accounting', () => {
       })
     ).json();
     await send(`/api/returns/${made.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: made.items[0].id, quantity: 1, goods: 'to_stock' }],
     });
     await refundReturn(admin.id, made.id);
@@ -323,7 +351,7 @@ describe('GET /api/admin/reports/accounting', () => {
 
     expect(res.json().summary).toEqual({
       income: { items: 20, delivery: null, total: 20 },
-      expenses: { costOfGoods: 8, writeOffs: 4, shipping: null, total: 12 },
+      expenses: { costOfGoods: 8, writeOffs: 4, shipping: null, otherRefunds: null, total: 12 },
       margin: { items: 12, delivery: null, total: 8 },
     });
   });
@@ -408,7 +436,7 @@ describe('GET /api/admin/reports/accounting', () => {
       net: { units: 0, revenue: 0, cost: 0, margin: 0, marginPercent: null },
       summary: {
         income: { items: 0, delivery: null, total: 0 },
-        expenses: { costOfGoods: 0, writeOffs: 0, shipping: null, total: 0 },
+        expenses: { costOfGoods: 0, writeOffs: 0, shipping: null, otherRefunds: null, total: 0 },
         margin: { items: 0, delivery: null, total: 0 },
       },
       purchases: {
@@ -428,8 +456,9 @@ describe('GET /api/admin/reports/accounting', () => {
         },
       },
       stock: NO_STOCK,
-      // the delivery is of no product
+      // the delivery and the payments past the statements are of no product
       delivery: null,
+      payments: null,
     });
   });
 
@@ -693,6 +722,7 @@ describe('GET /api/admin/reports/accounting: the periods of the stock, the goods
 
   const receive = (returnId: number, rowId: number, quantity: number) =>
     post(`/api/returns/${returnId}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: rowId, quantity, goods: 'to_stock' }],
     });
 
@@ -767,8 +797,10 @@ describe('GET /api/admin/reports/accounting: the periods of the stock, the goods
     const start = new Date(startedAt - 60_000);
 
     // the money goes back first, once the admin vouches for the proof of the parcel
-    expect((await post(`/api/returns/${returnId}/proof/confirm`)).statusCode).toBe(200);
-    const { refundedAt } = await refundReturn(admin.id, returnId);
+    expect(
+      (await post(`/api/returns/${returnId}/proof/confirm`, { buyerPaid: 0 })).statusCode,
+    ).toBe(200);
+    const { bookedAt: refundedAt } = await refundReturn(admin.id, returnId);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect((await receive(returnId, rowId, 2)).statusCode).toBe(200);
     const goodsAt = (await stockLinesOf(product.variantId)).find(
@@ -803,6 +835,105 @@ describe('GET /api/admin/reports/accounting: the periods of the stock, the goods
     expect(whole.json()).toMatchObject({
       returns: { units: 2, revenue: 20, cost: 8 },
       net: { units: 1, revenue: 10, cost: 4, margin: 6 },
+    });
+  });
+
+  // the money of the row went back before its goods, and the goods came in two parcels: the row is
+  // parted when the first one comes, and the cost of every unit that came back is booked
+  it('books the cost of every unit of a row refunded before its goods came in parts', async () => {
+    const startedAt = Date.now();
+    const product = await newProduct(10);
+    await receiveBatch(product.id, { quantity: 5, unitCost: 4 });
+    const { returnId, rowId } = await shippedWithStatement(product, 3, 2);
+    const start = new Date(startedAt - 60_000);
+
+    expect(
+      (await post(`/api/returns/${returnId}/proof/confirm`, { buyerPaid: 0 })).statusCode,
+    ).toBe(200);
+    const { bookedAt } = await refundReturn(admin.id, returnId);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await receive(returnId, rowId, 1)).statusCode).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const firstAt = new Date();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await receive(returnId, rowId, 1)).statusCode).toBe(200);
+    const end = new Date(Date.now() + 60_000);
+
+    const money = await ofProduct(product, bookedAt, firstAt);
+    const later = await ofProduct(product, firstAt, end);
+    const whole = await ofProduct(product, start, end);
+
+    // the money of both units and the cost of the first one that came in
+    expect(money.json().returns).toMatchObject({ units: 2, revenue: 20, cost: 4 });
+    // the second unit came in later: its cost, no money
+    expect(later.json().returns).toMatchObject({ units: 0, revenue: 0, cost: 4 });
+    expect(whole.json()).toMatchObject({
+      returns: { units: 2, revenue: 20, cost: 8 },
+      net: { units: 1, revenue: 10, cost: 4, margin: 6 },
+      stock: { closing: { units: 4, value: 16 } },
+    });
+  });
+
+  // a failure of a transfer gives its money and the cost of its units back in the period the
+  // failure came: the period of the transfer stays as it was, and money sent outside the app later
+  // is a return of its own period
+  it('gives a failed transfer back in the period of the failure, and counts the money sent outside the app in its own', async () => {
+    const startedAt = Date.now();
+    const product = await newProduct(10);
+    await receiveBatch(product.id, { quantity: 5, unitCost: 4 });
+    const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
+    // the goods of a cancel are back on the shelf at once, before the transfer
+    const returnId = await cancelPaidOrder(admin.id, orderId);
+    const { bookedAt, failedAt } = await failReturnRefund(admin.id, returnId, 'card_unavailable');
+    const start = new Date(startedAt - 60_000);
+    const ofTransfer = () => ofProduct(product, bookedAt, failedAt);
+    const beforeOutside = await ofTransfer();
+
+    const root = await newUser({ role: 'ROOT' });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const outsideFrom = new Date();
+    const sent = await app.inject({
+      method: 'POST',
+      url: `/api/returns/${returnId}/refund/outside`,
+      headers: withCsrf(csrf, accessCookie(root)),
+      payload: {
+        method: 'bank_transfer',
+        note: 'Sent to the account.',
+        at: bookedAt.toISOString(),
+      },
+    });
+    expect(sent.statusCode).toBe(200);
+    const end = new Date(Date.now() + 60_000);
+
+    const ofFailure = await ofProduct(product, failedAt, outsideFrom);
+    const ofOutside = await ofProduct(product, outsideFrom, end);
+    const whole = await ofProduct(product, start, end);
+
+    expect(bookedAt.getTime()).toBeLessThan(failedAt.getTime());
+    expect(beforeOutside.json().returns).toMatchObject({
+      orders: 1,
+      units: 2,
+      revenue: 20,
+      cost: 8,
+      byKind: { shop_cancel: { units: 2, revenue: 20, cost: 8 } },
+    });
+    // the period of the transfer is the same after the money went another way
+    expect((await ofTransfer()).json()).toEqual(beforeOutside.json());
+    expect(ofFailure.json()).toMatchObject({
+      returns: {
+        orders: 0,
+        units: -2,
+        revenue: -20,
+        cost: -8,
+        byKind: { shop_cancel: { units: -2, revenue: -20, cost: -8 } },
+      },
+      net: { units: 2, revenue: 20, cost: 8, margin: 12 },
+    });
+    expect(ofOutside.json().returns).toMatchObject({ orders: 1, units: 2, revenue: 20, cost: 8 });
+    expect(whole.json()).toMatchObject({
+      sales: { units: 2, revenue: 20, cost: 8 },
+      returns: { orders: 1, units: 2, revenue: 20, cost: 8 },
+      net: { units: 0, revenue: 0, cost: 0, margin: 0 },
     });
   });
 });

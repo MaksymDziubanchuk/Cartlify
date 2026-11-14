@@ -110,7 +110,13 @@ describe('GET /api/admin/stats', () => {
       // the whole shop: the delivery and the sends are numbers
       money: {
         income: { items: count, delivery: count, total: count },
-        expenses: { costOfGoods: count, writeOffs: count, shipping: count, total: count },
+        expenses: {
+          costOfGoods: count,
+          writeOffs: count,
+          shipping: count,
+          otherRefunds: count,
+          total: count,
+        },
         margin: { items: count, delivery: count, total: count },
       },
       createdAt: expect.any(String),
@@ -159,7 +165,7 @@ describe('GET /api/admin/stats', () => {
       reviews: { newInPeriod: 0 },
       money: {
         income: { items: 0, delivery: 0, total: 0 },
-        expenses: { costOfGoods: 0, writeOffs: 0, shipping: 0, total: 0 },
+        expenses: { costOfGoods: 0, writeOffs: 0, shipping: 0, otherRefunds: 0, total: 0 },
         margin: { items: 0, delivery: 0, total: 0 },
       },
     });

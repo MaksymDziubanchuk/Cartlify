@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
+import { setUserContext } from '@db/dbContext.service.js';
+
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { asAdmin } from '../../../helpers/db.js';
 import {
   closeSessions,
   createCategory,
@@ -31,6 +34,7 @@ import { markVariantDeleted } from '../../../helpers/variants.js';
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
+let root: TestUser;
 const userIds: number[] = [];
 
 const newUser = async (opts: Parameters<typeof createUser>[0] = {}) => {
@@ -57,6 +61,7 @@ beforeAll(async () => {
   app = await startApp();
   csrf = await getCsrf(app);
   admin = await newUser({ role: 'ADMIN' });
+  root = await newUser({ role: 'ROOT' });
   startedAt = Date.now();
 });
 
@@ -313,6 +318,48 @@ describe('GET /api/admin/reports/accounting/variants', () => {
       net: { units: 1, revenue: 10, cost: 3, margin: 7, marginPercent: 70 },
       stock: { closing: { units: 5, value: 11 } },
     });
+  });
+
+  // money given back by hand in the dashboard of the provider for one unit (the event writes it, root
+  // says what it was for): the return of the item in the period of the decision, money without units;
+  // the whole order comes back later, its transfer takes those 10
+  // first, and the report counts the money once
+  it('counts money already with the buyer as the return of its item when decided, and a later return of it never twice', async () => {
+    const category = await createCategory();
+    const product = await createProduct({ stock: 0, price: 10, categoryId: category.id });
+    await receiveBatch({ variantId: product.variantId }, { quantity: 2, unitCost: 2 });
+    const buyer = await newUser();
+    const orderId = await placeOrder(app, csrf, buyer, product, 'paid', 2);
+    await asAdmin(async (tx) => {
+      const order = await tx.order.findUniqueOrThrow({
+        where: { id: orderId },
+        select: { paymentId: true, items: { select: { id: true } } },
+      });
+      const [hand] = await tx.$queryRaw<{ result: { id: number } }[]>`
+        select cartlify.record_hand_refund(
+          'stripe'::cartlify."PaymentProvider", ${order.paymentId}, ${`re_hand_${orderId}`}, 10,
+          'succeeded', 'eur'
+        ) as result
+      `;
+      await setUserContext(tx, { userId: root.id, role: 'ROOT' });
+      await tx.$queryRaw`
+        select cartlify.decide_money_use(
+          ${hand!.result.id}::int,
+          ${JSON.stringify([{ orderItemId: order.items[0]!.id, quantity: 1, amount: 10 }])}::jsonb,
+          0,
+          'For one of the units.'
+        ) as result
+      `;
+    });
+    const query = { ...period(), categoryId: String(category.id) };
+
+    const decided = (await get('variants', query)).json().items as VariantRow[];
+    await cancelAndRefund(admin.id, orderId);
+    const back = (await get('variants', query)).json().items as VariantRow[];
+
+    expect(decided[0]!.returns).toMatchObject({ units: 0, revenue: 10 });
+    expect(back[0]!.returns).toMatchObject({ units: 2, revenue: 20, cost: 4 });
+    expect(back[0]!.net).toMatchObject({ units: 0, revenue: 0 });
   });
 
   it('keeps to the own products of the category without its branch', async () => {

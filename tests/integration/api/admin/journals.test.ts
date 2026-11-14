@@ -101,6 +101,8 @@ type Journal = {
   seed: () => Promise<{ narrow: string; events: string[] }>;
   // the csv header for the columns asked for
   header: (columns: string[]) => string;
+  // the filters of the other columns, each with the lines of the seed it keeps
+  filters: [string, (line: Record<string, unknown>) => boolean][];
 };
 
 type AuditSeed = {
@@ -194,6 +196,16 @@ const AUDIT: Journal = {
     }
     return { narrow: `actorId=${owner.id}`, events: AUDIT_LINES.map((line) => line.event) };
   },
+  filters: [
+    ['ip=203.0.113.9', (line) => line.ip === '203.0.113.9'],
+    [
+      'userAgent=BROWSER%200',
+      (line) =>
+        String(line.userAgent ?? '')
+          .toLowerCase()
+          .includes('browser 0'),
+    ],
+  ],
   header: (columns) =>
     columns
       .flatMap((column) => (column === 'actor' ? ['actorName', 'actorEmail'] : [column]))
@@ -268,6 +280,17 @@ const PRICE: Journal = {
       events: PRICE_LINES.map((line) => line.event),
     };
   },
+  filters: [
+    ['oldPriceTo=9', (line) => Number(line.oldPrice) <= 9],
+    [
+      'newPriceFrom=8.1&newPriceTo=9',
+      (line) => Number(line.newPrice) >= 8.1 && Number(line.newPrice) <= 9,
+    ],
+    [
+      `endsFrom=${new Date(Date.now() + DAY).toISOString()}`,
+      (line) => line.endsAt !== null && new Date(String(line.endsAt)).getTime() > Date.now() + DAY,
+    ],
+  ],
   header: (columns) =>
     columns
       .flatMap((column) => {
@@ -321,6 +344,16 @@ const LOGIN: Journal = {
     }
     return { narrow: `userId=${person.id}`, events: LOGIN_LINES.map((line) => line.event) };
   },
+  filters: [
+    ['ip=198.51.100.7', (line) => line.ipAddress === '198.51.100.7'],
+    [
+      'userAgent=AGENT%20A',
+      (line) =>
+        String(line.userAgent ?? '')
+          .toLowerCase()
+          .includes('agent a'),
+    ],
+  ],
   header: (columns) =>
     columns
       .flatMap((column) => (column === 'user' ? ['userName', 'userDeleted'] : [column]))
@@ -356,6 +389,19 @@ describe.each([AUDIT, PRICE, LOGIN])('$name', (journal) => {
     for (const item of page.items)
       expect(Object.keys(item).sort()).toEqual([...journal.columns].sort());
     expectSorted(page.items, 'createdAt', 'desc');
+  });
+
+  // one filter for every other column (the journals for the analysis, 13.11.2026)
+  it('keeps the lines of the filters of the other columns, every one of them', async () => {
+    const { narrow } = await journal.seed();
+    const every = (await all(journal.path, narrow)).items;
+
+    for (const [filter, keeps] of journal.filters) {
+      const kept = (await all(journal.path, `${narrow}&${filter}`)).items;
+      const expected = every.filter(keeps).map((line) => line.id);
+      expect(expected.length).toBeGreaterThan(0);
+      expect(kept.map((line) => line.id).sort()).toEqual(expected.sort());
+    }
   });
 
   it('sorts by every simple column both ways, and the cursor walks the lines in the same order', async () => {
@@ -569,7 +615,9 @@ describe('what the journals say of root', () => {
     },
   );
 
-  it('finds the lines of root by its account for an admin as for root, who root is hidden', async () => {
+  // an admin sees the lines of root in the lists, who root is hidden, but cannot pick them out by
+  // the account or the role; root can
+  it('lets root pick its lines by its account and its role, an admin none of them, the lines still listed', async () => {
     const productId = (await createProduct({ price: 10 })).id;
     await auditLine(root, {
       entityType: 'product',
@@ -578,14 +626,18 @@ describe('what the journals say of root', () => {
       event: 'product.update',
       ip: null,
     });
-    const query = `actorId=${root.id}&entityType=product&entityId=${productId}`;
+    const ofProduct = `entityType=product&entityId=${productId}`;
 
-    const forAdmin = await all('audit-log', query);
-    const forRoot = await all('audit-log', query, root);
+    const listed = await all('audit-log', ofProduct);
+    const byAccount = await all('audit-log', `actorId=${root.id}&${ofProduct}`);
+    const byRole = await all('audit-log', `actorRole=ROOT&${ofProduct}`);
+    const forRoot = await all('audit-log', `actorId=${root.id}&${ofProduct}`, root);
 
-    expect(forAdmin.total).toBe(1);
+    expect(listed.total).toBe(1);
+    expect(listed.items[0]).toMatchObject({ actorId: 0, actor: hiddenAccount, ip: null });
+    expect(byAccount.total).toBe(0);
+    expect(byRole.total).toBe(0);
     expect(forRoot.total).toBe(1);
-    expect(forAdmin.items[0]).toMatchObject({ actorId: 0, actor: hiddenAccount, ip: null });
   });
 
   it('hides the id and the values of the changes of a line about the account of root from an admin', async () => {
@@ -623,7 +675,7 @@ describe('what the journals say of root', () => {
     expect(byFieldForRoot.total).toBe(1);
   });
 
-  it('hides who root is in the log of prices from an admin, and finds its lines by the account', async () => {
+  it('hides who root is in the log of prices from an admin, who picks none of its lines by the account', async () => {
     const product = await createProduct({ price: 10 });
     await priceLine(root, product.variantId, PRICE_LINES[0]!);
     const query = `productId=${product.id}`;
@@ -631,10 +683,12 @@ describe('what the journals say of root', () => {
     const seenByAdmin = (await all('price-log', query)).items[0]!;
     const seenByRoot = (await all('price-log', query, root)).items[0]!;
     const byAccount = await all('price-log', `${query}&actorId=${root.id}`);
+    const byAccountForRoot = await all('price-log', `${query}&actorId=${root.id}`, root);
 
     expect(seenByAdmin).toMatchObject({ actorId: 0, actor: hiddenAccount, event: 'price.set' });
     expect(seenByRoot).toMatchObject({ actorId: root.id, actor: { id: root.id } });
-    expect(byAccount.total).toBe(1);
+    expect(byAccount.total).toBe(0);
+    expect(byAccountForRoot.total).toBe(1);
   });
 
   it('hides who root is in the history of the price of a product from an admin, the role stays', async () => {
@@ -655,7 +709,10 @@ describe('what the journals say of root', () => {
     expect(seenByRoot.actor).toMatchObject({ id: root.id, role: 'ROOT' });
   });
 
-  it('hides who root is in the log of logins from an admin, and finds its logins as root does', async () => {
+  // the logins of root stay in the list of an admin, who root is hidden, but an admin picks none of
+  // them by the account, the email or the role
+  it('hides who root is in the log of logins from an admin, who picks none of its logins', async () => {
+    const from = new Date(Date.now() - 1_000).toISOString();
     const fresh = await newUser({ role: 'ROOT' });
     const res = await logIn(app, csrf, { email: fresh.email, password: fresh.password });
     expect(res.statusCode).toBe(200);
@@ -663,9 +720,15 @@ describe('what the journals say of root', () => {
     const seenByRoot = (await all('login-log', `userId=${fresh.id}`, root)).items[0]!;
     const byAccount = await all('login-log', `userId=${fresh.id}`);
     const byEmail = await all('login-log', `email=${encodeURIComponent(fresh.email)}`);
+    const byRole = await all('login-log', `roles=ROOT&from=${encodeURIComponent(from)}`);
+    const listed = (
+      await all('login-log', `events=login.password&from=${encodeURIComponent(from)}`)
+    ).items.filter((item) => item.role === 'ROOT');
 
-    expect(byAccount.total).toBe(1);
-    expect(byEmail.total).toBe(1);
+    expect(byAccount.total).toBe(0);
+    expect(byEmail.total).toBe(0);
+    expect(byRole.total).toBe(0);
+    expect(listed.length).toBeGreaterThan(0);
     expect(seenByRoot).toMatchObject({
       userId: fresh.id,
       email: fresh.email,
@@ -674,16 +737,17 @@ describe('what the journals say of root', () => {
       user: { id: fresh.id, role: 'ROOT' },
     });
     expect(seenByRoot.ipAddress).not.toBeNull();
-    const seenByAdmin = byAccount.items[0]!;
-    expect(seenByAdmin).toMatchObject({
-      userId: 0,
-      email: 'hidden',
-      role: 'ROOT',
-      event: 'login.password',
-      user: { ...hiddenAccount, deleted: false },
-      ipAddress: 'hidden',
-    });
-    expect([null, 'hidden']).toContain(seenByAdmin.userAgent);
+    for (const seenByAdmin of listed) {
+      expect(seenByAdmin).toMatchObject({
+        userId: 0,
+        email: 'hidden',
+        role: 'ROOT',
+        event: 'login.password',
+        user: { ...hiddenAccount, deleted: false },
+        ipAddress: 'hidden',
+      });
+      expect([null, 'hidden']).toContain(seenByAdmin.userAgent);
+    }
   });
 });
 
@@ -771,6 +835,7 @@ describe('GET /api/admin/log-events', () => {
       'auditLog',
       'consentLog',
       'loginLog',
+      'moneyLog',
       'priceLog',
       'stockLog',
     ]);
@@ -797,8 +862,27 @@ describe('GET /api/admin/log-events', () => {
       ]),
     );
     expect(body.stockLog).not.toContain('legacy.unknown');
+    // the money log too: every movement of money, a payment, a refund and its failure, the money
+    // outside the app, the costs of the shipping, what a dispute took and gave back, a correction,
+    // the money the shop got back outside the app
+    expect(body.moneyLog).toEqual([
+      'money.payment',
+      'money.late_payment',
+      'money.refund',
+      'money.refund_failed',
+      'money.outside',
+      'money.return_parcel_cost',
+      'money.shipping_cost',
+      'money.dispute_withdrawn',
+      'money.dispute_reinstated',
+      'money.correction',
+      'money.received',
+      'money.share_moved',
+    ]);
     for (const [journal, events] of Object.entries(body)) {
-      if (journal !== 'stockLog') expect(events).toContain('legacy.unknown');
+      if (journal !== 'stockLog' && journal !== 'moneyLog') {
+        expect(events).toContain('legacy.unknown');
+      }
     }
   });
 

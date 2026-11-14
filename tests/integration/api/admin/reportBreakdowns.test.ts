@@ -903,8 +903,8 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     });
   });
 
-  // months long before the tests: no order was paid, cancelled or sent in them
-  it('gives the delivery of the whole shop to each step, none to a report of some products', async () => {
+  // months long before the tests: no order was paid, cancelled or sent in them, no money moved
+  it('gives the delivery and the payments of the whole shop to each step, none to a report of some products', async () => {
     const query = {
       from: '2025-09-30T22:00:00.000Z',
       to: '2025-11-30T23:00:00.000Z',
@@ -929,6 +929,44 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
       null,
       null,
     ]);
+    const none = {
+      disputes: { withdrawn: 0, reinstated: 0, used: 0, undecided: 0, result: 0 },
+      handRefunds: {
+        refunded: 0,
+        compensations: 0,
+        coverage: 0,
+        undecided: 0,
+        used: 0,
+        result: 0,
+      },
+      latePayments: { received: 0, refunded: 0, result: 0 },
+      compensations: { given: 0, result: 0 },
+      received: { buyers: 0, carriers: 0, result: 0 },
+    };
+    expect(whole.json().items.map((item: { payments: unknown }) => item.payments)).toEqual([
+      none,
+      none,
+    ]);
+    expect(some.json().items.map((item: { payments: unknown }) => item.payments)).toEqual([
+      null,
+      null,
+    ]);
+    expect(
+      whole
+        .json()
+        .items.map(
+          (item: { summary: { expenses: { otherRefunds: unknown } } }) =>
+            item.summary.expenses.otherRefunds,
+        ),
+    ).toEqual([0, 0]);
+    expect(
+      some
+        .json()
+        .items.map(
+          (item: { summary: { expenses: { otherRefunds: unknown } } }) =>
+            item.summary.expenses.otherRefunds,
+        ),
+    ).toEqual([null, null]);
   });
 
   it('cuts the first and the last step to the period', async () => {
@@ -993,7 +1031,8 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     await receiveBatch(product.id, { quantity: 5, unitCost: 4 });
     const orderId = await placeOrder(app, csrf, await newUser(), product, 'paid', 2);
     const { paidAt } = await orderRowOf(orderId);
-    const { refundedAt } = await cancelAndRefund(admin.id, orderId);
+    // the time the database wrote the transfer: the moment the return is counted at
+    const { bookedAt: refundedAt } = await cancelAndRefund(admin.id, orderId);
     // the time of the database after the payment and the refund: the moment each is counted at
     expect(paidAt!.getTime()).toBeLessThan(refundedAt.getTime());
     const stepAt = async (at: Date) => {
@@ -1081,19 +1120,41 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
     expect(labels.at(-1)).toBe(lastLabel);
   });
 
-  // the steps are counted before they are made: a typo in the year asks for millions of days
+  // the steps are counted before they are made: a typo in the year asks for millions of days. The
+  // refusal takes no longer than a refusal of a period that ends before it starts (no step either),
+  // measured next to it: the other files that run at the same time slow both alike. The fastest of
+  // three tries of each: a moment the machine is busy slows one try, millions of days slow them all
   it('refuses a period of thousands of years at once, without making its steps', async () => {
-    const started = Date.now();
-
-    const res = await get('timeline', {
+    const timed = async (query: Record<string, string>) => {
+      const started = Date.now();
+      const res = await get('timeline', query);
+      return { res, ms: Date.now() - started };
+    };
+    const backwardsQuery = {
+      from: '2026-02-01T00:00:00.000Z',
+      to: '2026-01-01T00:00:00.000Z',
+      step: 'day',
+    };
+    const longQuery = {
       from: '0001-01-01T00:00:00.000Z',
       to: '9999-12-31T00:00:00.000Z',
       step: 'day',
-    });
+    };
 
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ errorCode: 'REPORT_PERIOD_TOO_LONG' });
-    expect(Date.now() - started).toBeLessThan(3_000);
+    const backwards = [];
+    const long = [];
+    for (let i = 0; i < 3; i += 1) {
+      backwards.push(await timed(backwardsQuery));
+      long.push(await timed(longQuery));
+    }
+
+    for (const one of backwards) expect(one.res.statusCode).toBe(400);
+    for (const one of long) {
+      expect(one.res.statusCode).toBe(400);
+      expect(one.res.json()).toMatchObject({ errorCode: 'REPORT_PERIOD_TOO_LONG' });
+    }
+    const fastest = (tries: { ms: number }[]) => Math.min(...tries.map(({ ms }) => ms));
+    expect(fastest(long)).toBeLessThan(fastest(backwards) + 1_500);
   });
 
   it('sorts the steps by their money when asked', async () => {
@@ -1162,19 +1223,26 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
       lines[1]!.startsWith('2025-10,2025-09-30T22:00:00.000Z,2025-10-31T23:00:00.000Z,0,0.00,'),
     ).toBe(true);
     expect(lines).toHaveLength(3);
-    // the columns of the delivery, empty for a report of a category, then the ones of the summary
+    // the columns of the delivery and of the payments, empty for a report of a category, then the
+    // ones of the summary
     expect(
       lines[0]!.endsWith(
         ',purchased_value,delivery_income,delivery_refunded,shipping_sends,shipping_cost,' +
           'shipping_sends_without_cost,return_shipping_sends,return_shipping_cost,' +
           'return_shipping_sends_without_cost,return_shipping_deducted,return_shipping_reimbursed,' +
-          'delivery_result,income_items,income_delivery,income_total,' +
-          'expense_cost_of_goods,expense_write_offs,expense_shipping,expense_total,margin_items,' +
-          'margin_delivery,margin_total',
+          'delivery_result,dispute_withdrawn,dispute_reinstated,dispute_used,dispute_undecided,' +
+          'dispute_result,hand_refunded,hand_compensations,hand_coverage,hand_undecided,hand_used,' +
+          'hand_result,late_received,late_refunded,late_result,compensations_given,received_buyers,' +
+          'received_carriers,income_items,income_delivery,income_total,' +
+          'expense_cost_of_goods,expense_write_offs,expense_shipping,expense_other_refunds,' +
+          'expense_total,margin_items,margin_delivery,margin_total',
       ),
     ).toBe(true);
-    // the eleven of the delivery empty, the summary without its delivery and its sends
-    expect(lines[1]!.endsWith(',0.00,,,,,,,,,,,,0.00,,0.00,0.00,0.00,,0.00,0.00,,0.00')).toBe(true);
+    // the eleven of the delivery and the seventeen of the payments empty, the summary without its
+    // delivery, its sends and the other refunds
+    expect(
+      lines[1]!.endsWith(',0.00' + ','.repeat(29) + '0.00,,0.00,0.00,0.00,,,0.00,0.00,,0.00'),
+    ).toBe(true);
   });
 
   it('gives the delivery in the csv of the whole shop', async () => {
@@ -1189,9 +1257,10 @@ describe('GET /api/admin/reports/accounting/timeline', () => {
       .replace(/^\uFEFF/, '')
       .trimEnd()
       .split('\r\n');
+    // the delivery, the payments and the summary of a month long before the tests: all zeros
     expect(
       lines[1]!.endsWith(
-        ',0.00,0.00,0,0.00,0,0,0.00,0,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00,0.00',
+        ',0.00,0.00,0,0.00,0,0,0.00,0,0.00,0.00,0.00' + ',0.00'.repeat(17) + ',0.00'.repeat(11),
       ),
     ).toBe(true);
   });
@@ -1230,7 +1299,7 @@ describe('GET /api/admin/reports/accounting', () => {
     expect(whole.json().net).toEqual(TREE.net);
     expect(whole.json().summary).toEqual({
       income: { items: 70, delivery: null, total: 70 },
-      expenses: { costOfGoods: 16, writeOffs: 2, shipping: null, total: 18 },
+      expenses: { costOfGoods: 16, writeOffs: 2, shipping: null, otherRefunds: null, total: 18 },
       margin: { items: 54, delivery: null, total: 52 },
     });
     expect(whole.json().stock).toEqual(TREE.stock);

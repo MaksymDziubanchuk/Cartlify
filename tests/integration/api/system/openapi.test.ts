@@ -629,7 +629,8 @@ describe('the payments routes', () => {
       '/api/payments/stripe/checkout/sessions/{sessionId}',
       ['200', '400', '401', '403', '404', '409', '429', '500', '503'],
     ],
-    ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '409', '500']],
+    // 503: Stripe out of reach while the event is read (a dispute, a refund made in the dashboard)
+    ['post', '/api/payments/stripe/webhook', ['200', '400', '401', '409', '500', '503']],
     // the Event Webhook of SendGrid: 413 and 415 for a body it does not take, 401 for a signature
     // that fails, 503 for a server without its key
     [

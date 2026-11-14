@@ -80,8 +80,9 @@ describe('POST /api/auth/register', () => {
       isVerified: false,
       name: 'Ann',
       avatarIsDefault: true,
-      // a new account is a user, and a user runs no newsletters
+      // a new account is a user, and a user runs no newsletters and handles no money
       canManageNewsletters: false,
+      canManageMoney: false,
     });
     expect(drawnAvatarOf(res.json().avatarUrls)).toMatchObject({ letter: 'A' });
     expect(JSON.stringify(res.json())).not.toMatch(/password/i);
