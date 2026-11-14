@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 
+import { canManageMoneyOf } from '@helpers/moneyManager.js';
 import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { avatarOf } from '@utils/avatar.util.js';
@@ -19,6 +20,7 @@ export const adminItemSelect = {
   locale: true,
   phone: true,
   canManageNewsletters: true,
+  canManageMoney: true,
   deletedAt: true,
 } satisfies Prisma.UserSelect;
 
@@ -40,6 +42,7 @@ export function adminItemOf(u: AdminRow): AdminItemDto {
     ...(u.name ? { name: u.name } : {}),
     ...avatarOf({ ...u, deleted: u.deletedAt !== null }),
     canManageNewsletters: canManageNewslettersOf(u),
+    canManageMoney: canManageMoneyOf(u),
     ...(u.locale ? { locale: u.locale } : {}),
     ...(u.phone ? { phone: u.phone } : {}),
     deletedAt: u.deletedAt,

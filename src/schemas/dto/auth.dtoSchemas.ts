@@ -1,5 +1,6 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
 import { captchaTokenField } from '@schemas/captchaField.js';
+import { canManageMoneyField } from '@schemas/moneyManagerField.js';
 import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
 import { legalDocumentIdsSchema } from '@schemas/dto/legal.dtoSchemas.js';
 import { PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
@@ -56,6 +57,7 @@ const authLoginResponseSchema = {
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
     canManageNewsletters: canManageNewslettersField,
+    canManageMoney: canManageMoneyField,
     locale: { type: 'string' },
     phone: { type: 'string' },
   },
@@ -69,6 +71,7 @@ const authLoginResponseSchema = {
     'avatarUrls',
     'avatarIsDefault',
     'canManageNewsletters',
+    'canManageMoney',
   ],
 } as const;
 
@@ -193,6 +196,7 @@ const authRegisterResponseSchema = {
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
     canManageNewsletters: canManageNewslettersField,
+    canManageMoney: canManageMoneyField,
     locale: { type: 'string' },
   },
   required: [
@@ -205,6 +209,7 @@ const authRegisterResponseSchema = {
     'avatarUrls',
     'avatarIsDefault',
     'canManageNewsletters',
+    'canManageMoney',
   ],
 } as const;
 

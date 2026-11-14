@@ -9,6 +9,7 @@ import {
   UnauthorizedError,
 } from '@utils/errors.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageMoneyOf } from '@helpers/moneyManager.js';
 import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { verifyPass } from '@helpers/safePass.js';
 
@@ -120,6 +121,7 @@ export async function login({
           locale: true,
           phone: true,
           canManageNewsletters: true,
+          canManageMoney: true,
           deletedAt: true,
         },
       });
@@ -146,6 +148,7 @@ export async function login({
         ...(user.name ? { name: user.name } : {}),
         ...avatarOf(user),
         canManageNewsletters: canManageNewslettersOf(user),
+        canManageMoney: canManageMoneyOf(user),
         ...(user.locale ? { locale: user.locale } : {}),
         ...(user.phone ? { phone: user.phone } : {}),
       };

@@ -14,6 +14,7 @@ import {
 } from '@utils/errors.js';
 import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
+import { canManageMoneyOf } from '@helpers/moneyManager.js';
 import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
@@ -82,6 +83,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
           locale: true,
           phone: true,
           canManageNewsletters: true,
+          canManageMoney: true,
           deletedAt: true,
         },
       });
@@ -161,6 +163,7 @@ async function findMe({ userId }: FindMeByIdDto): Promise<UserResponseDto> {
         ...avatarOf(user),
         // read from the row now, the access token holds no right: root's change shows at once
         canManageNewsletters: canManageNewslettersOf(user),
+        canManageMoney: canManageMoneyOf(user),
         ...(user.locale ? { locale: user.locale } : {}),
         ...(user.phone ? { phone: user.phone } : {}),
         reviews,
@@ -217,6 +220,7 @@ const profileSelect = {
   locale: true,
   phone: true,
   canManageNewsletters: true,
+  canManageMoney: true,
   deletedAt: true,
 } satisfies Prisma.UserSelect;
 
@@ -409,6 +413,7 @@ async function updateMe({
           ...(user.name ? { name: user.name } : {}),
           ...avatarOf(user),
           canManageNewsletters: canManageNewslettersOf(user),
+          canManageMoney: canManageMoneyOf(user),
           ...(user.locale ? { locale: user.locale } : {}),
           ...(user.phone ? { phone: user.phone } : {}),
           reviews,
@@ -557,7 +562,12 @@ async function findById({
           list: { path: '/api/returns' as const, query: { userId: String(id) } },
         },
         period,
-        ...(await loadProfileLists(tx, id, lists, period)),
+        // the answer names the end of the period, now unless it came; the lists end there only
+        // when it came
+        ...(await loadProfileLists(tx, id, lists, {
+          from: period.from,
+          to: to ? period.to : null,
+        })),
       };
     });
   } catch (err) {

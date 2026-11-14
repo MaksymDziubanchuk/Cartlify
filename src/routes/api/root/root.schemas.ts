@@ -20,6 +20,7 @@ const rootAdminExample = {
   },
   avatarIsDefault: false,
   canManageNewsletters: false,
+  canManageMoney: false,
   locale: 'en',
   phone: '+10000000000',
 };
@@ -46,6 +47,7 @@ const rootAdminsUpdateParamsExample = {
 
 const rootAdminsUpdateBodyExample = {
   canManageNewsletters: true,
+  canManageMoney: true,
 };
 
 const rootAdminsDeleteParamsExample = {
@@ -144,7 +146,7 @@ const postRootAdminSchema = {
 // Schema for giving an admin the right to run the newsletters or taking it away
 const patchRootAdminSchema = {
   operationId: 'updateRootAdmin',
-  summary: 'Give or take the right to run the newsletters',
+  summary: 'Give or take the rights of an admin: the newsletters, the money',
   description:
     'Gives an admin the right to run the newsletters (subscribers, the list of blocked ' +
     'addresses, newsletters) with `canManageNewsletters: true`, or takes it away with `false`. ' +
@@ -152,8 +154,13 @@ const patchRootAdminSchema = {
     'session that is open: the server reads the right from the database at every request, and ' +
     'the admin sees it as `canManageNewsletters` in GET /api/users/me. The right goes away when ' +
     'the person stops being an admin and does not come back when root makes them an admin again. ' +
+    'The right to handle the money the way root does (money sent outside the app, rows of a ' +
+    'statement closed without money, the decisions on refunds made by hand and on the money of a ' +
+    'bank, the holds root lets go) is given and taken the same way with `canManageMoney`, and ' +
+    'the admin sees it as `canManageMoney`; the body names one right or both. ' +
     'The same value again changes nothing and writes no line to the admin log; a real change ' +
-    'writes one (`newsletter.manager_granted` or `newsletter.manager_revoked`). Answers with ' +
+    'writes one for each right (`newsletter.manager_granted` or `newsletter.manager_revoked`, ' +
+    '`payment.manager_granted` or `payment.manager_revoked`). Answers with ' +
     'the admin as the list of admins shows one. This operation is restricted to root users.',
 
   params: {
@@ -171,11 +178,14 @@ const patchRootAdminSchema = {
       description:
         'The right is as asked (it changed, or it was so already); the admin is returned.',
       $ref: 'rootAdminsItemSchema#',
-      examples: [{ ...rootAdminExample, canManageNewsletters: true, deletedAt: null }],
+      examples: [
+        { ...rootAdminExample, canManageNewsletters: true, canManageMoney: true, deletedAt: null },
+      ],
     },
 
     400: {
-      description: 'Invalid request: the body names no `canManageNewsletters` boolean.',
+      description:
+        'Invalid request: the body names neither `canManageNewsletters` nor `canManageMoney`, or one of them is not a boolean.',
       $ref: 'errorResponseSchema#',
     },
     401: {

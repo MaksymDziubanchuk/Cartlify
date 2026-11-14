@@ -1,4 +1,5 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
+import { canManageMoneyField } from '@schemas/moneyManagerField.js';
 import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
 import { idPathParam } from '@schemas/idPathParam.js';
 
@@ -49,6 +50,15 @@ const rootAdminsItemSchema = {
         'gives and takes it with PATCH /api/root/admins/{adminId}; it goes away when the person ' +
         'stops being an admin and does not come back when root makes them an admin again.',
     },
+    canManageMoney: {
+      ...canManageMoneyField,
+      description:
+        'May the admin handle the money the way root does: true when root gave the right and ' +
+        'the account is not deleted, false otherwise (a deleted admin has no right, whatever ' +
+        'was kept). Root gives and takes it with PATCH /api/root/admins/{adminId}; it goes away ' +
+        'when the person stops being an admin and does not come back when root makes them an ' +
+        'admin again.',
+    },
     locale: { type: 'string' },
     phone: { type: 'string' },
     deletedAt: {
@@ -67,6 +77,7 @@ const rootAdminsItemSchema = {
     'avatarUrls',
     'avatarIsDefault',
     'canManageNewsletters',
+    'canManageMoney',
     'deletedAt',
   ],
 } as const;
@@ -127,8 +138,19 @@ const rootAdminsUpdateBodySchema = {
         'session that is open. The same value again changes nothing and writes nothing to the ' +
         'admin log.',
     },
+    canManageMoney: {
+      enum: [true, false],
+      description:
+        'A JSON boolean, nothing else is taken (1, "true" and null are refused). true gives the ' +
+        'admin the right to handle the money the way root does (money sent outside the app, rows ' +
+        'of a statement closed without money, the decisions on refunds made by hand and on the ' +
+        'money of a bank, the holds root lets go), false takes it away. It works at once, also ' +
+        'in a session that is open. The same value again changes nothing and writes nothing to ' +
+        'the admin log.',
+    },
   },
-  required: ['canManageNewsletters'],
+  // at least one of the two rights
+  minProperties: 1,
 } as const;
 
 const rootAdminsDeleteParamsSchema = {

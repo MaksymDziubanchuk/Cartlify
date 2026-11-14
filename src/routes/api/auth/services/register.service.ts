@@ -5,6 +5,7 @@ import { makeVerifyToken } from '@helpers/makeTokens.js';
 import { hashToken } from '@helpers/tokenHash.js';
 import { hashPass } from '@helpers/safePass.js';
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageMoneyOf } from '@helpers/moneyManager.js';
 import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 import { enabledLocaleOf, mailLocaleOf } from '@helpers/locale.js';
 
@@ -170,6 +171,7 @@ export async function register({
           locale: true,
           phone: true,
           canManageNewsletters: true,
+          canManageMoney: true,
           deletedAt: true,
         },
       });
@@ -186,6 +188,7 @@ export async function register({
         ...(u.name ? { name: u.name } : {}),
         ...avatarOf(u),
         canManageNewsletters: canManageNewslettersOf(u),
+        canManageMoney: canManageMoneyOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };

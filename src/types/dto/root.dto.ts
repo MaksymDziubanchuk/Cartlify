@@ -43,16 +43,19 @@ export interface UpdateAdminParamsDto {
   adminId: IdParam;
 }
 
-// what root changes in an admin: the right to run the newsletters
+// what root changes in an admin: the right to run the newsletters, the right to handle the money
+// (one or both)
 export interface UpdateAdminBodyDto {
-  canManageNewsletters: boolean;
+  canManageNewsletters?: boolean;
+  canManageMoney?: boolean;
 }
 
 export interface UpdateAdminDto {
   actorId: UserId;
   actorRole: Role;
   adminId: UserId;
-  canManageNewsletters: boolean;
+  canManageNewsletters?: boolean;
+  canManageMoney?: boolean;
 }
 
 export type UpdateAdminResponseDto = AdminItemDto;
