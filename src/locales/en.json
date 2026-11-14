@@ -166,6 +166,39 @@
     "heading": "Money sent",
     "body": "We sent you {{amount}} for your order #{{orderId}}."
   },
+  "orderCompensationSent": {
+    "subject": "{{appName}} — We sent you a compensation for order #{{orderId}}",
+    "preview": "We sent you {{amount}} as a compensation for order #{{orderId}}.",
+    "heading": "Compensation sent",
+    "body": "We sent you {{amount}} as a compensation for your order #{{orderId}}."
+  },
+  "orderCancelledRefunded": {
+    "subject": "{{appName}} — Order #{{orderId}} is cancelled and your money is sent back",
+    "preview": "Order #{{orderId}} is cancelled, {{amount}} is on its way back to you.",
+    "heading": "Your order is cancelled",
+    "body": "We cancelled order #{{orderId}} before sending it.",
+    "sentLine": "We sent your payment of {{amount}} back to the way you paid.",
+    "bankNote": "Your bank shows the money within a few days. If anything happens to this refund, we will write to you.",
+    "newOrder": "If you still want the items, you can place a new order."
+  },
+  "orderCancelledByBank": {
+    "subject": "{{appName}} — Order #{{orderId}} is cancelled after the decision of your bank",
+    "preview": "Order #{{orderId}} is cancelled after the decision of your bank.",
+    "heading": "Your order is cancelled",
+    "body": "Your bank decided the dispute about your payment for order #{{orderId}} for you and gave you back {{amount}}.",
+    "cancelLine": "We cancelled the order, which had not been sent yet.",
+    "sentLine": "We sent you the rest of your payment, {{amount}}, to the way you paid.",
+    "bankNote": "Your bank shows the money within a few days. If anything happens to this refund, we will write to you.",
+    "newOrder": "If you still want the items, you can place a new order."
+  },
+  "orderPaymentCheck": {
+    "subject": "{{appName}} — We are checking the payment for order #{{orderId}}",
+    "preview": "We received your payment for order #{{orderId}} and check it once more.",
+    "heading": "We are checking your payment",
+    "body": "We received your payment for order #{{orderId}}.",
+    "checkLine": "Before we send the order, we check the payment once more.",
+    "nextLine": "We will write to you as soon as we send the order or give the money back."
+  },
   "paymentRefundReasons": {
     "OUT_OF_STOCK": "the reservation of the order was over and some items of it were no longer in stock",
     "ALREADY_PAID_OTHER_PAYMENT": "the order was paid with another payment already",
@@ -198,6 +231,11 @@
     "heading": "Return closed",
     "body": "The return for your order #{{orderId}} is closed.",
     "moneyBack": "We sent you {{amount}}.",
+    "bankLine": "Your bank decided the dispute about your payment for order #{{orderId}} for you and gave you back {{amount}}.",
+    "restLine": "We sent you the rest, {{amount}}.",
+    "cardLine": "It goes back the way you paid. Your bank shows it within a few days.",
+    "outsideLine": "We sent you {{amount}} by {{way}} on {{date}}.",
+    "outsideNoDate": "We sent you {{amount}} by {{way}}.",
     "noMoney": "No money is returned for this statement.",
     "withheldLine": "We kept {{amount}} of the price for the value the goods lost: {{names}}.",
     "returnedToYouHeader": "Returned to you",
@@ -234,7 +272,16 @@
     "sentWithDate": "We sent it by {{way}} on {{date}}.",
     "sentNoDate": "We sent it by {{way}}.",
     "deliveryLine": "The delivery is included: {{amount}}.",
-    "deductionLine": "The cost of sending the goods back, {{amount}}, is taken off: the contract says you pay it."
+    "wayBackLine": "It includes {{amount}} for sending the goods back to us.",
+    "deductionLine": "The cost of sending the goods back, {{amount}}, is taken off: the contract says you pay it.",
+    "coveredSubject": "{{appName}} — The money for order #{{orderId}} is already with you",
+    "coveredPreview": "You already have the money for order #{{orderId}}.",
+    "coveredLeadTxt": "You already have {{amount}} back for your {{appName}} order #{{orderId}}.",
+    "coveredHeading": "The money is already with you",
+    "coveredBody": "You already have {{amount}} back for your order #{{orderId}}.",
+    "bankLine": "Your bank gave you {{amount}} of it when it decided the dispute.",
+    "earlierLine": "We sent you {{amount}} of it earlier.",
+    "alreadyLine": "With the {{covered}} you already had for them, that is {{amount}} for these goods."
   },
   "returnReimbursed": {
     "subject": "{{appName}} — We paid back the cost of sending order #{{orderId}} back",
@@ -242,7 +289,26 @@
     "leadTxt": "We paid you back {{amount}}, the cost of sending the goods of your {{appName}} order #{{orderId}} back to us.",
     "heading": "We paid back the cost of sending the goods back",
     "body": "We paid you back {{amount}}, the cost of sending the goods of your order #{{orderId}} back to us.",
-    "sentOn": "We sent it by {{way}} on {{date}}."
+    "sentOn": "We sent it by {{way}} on {{date}}.",
+    "sentToPayment": "We sent it to the card or account you paid with on {{date}}."
+  },
+  "returnSentBack": {
+    "subject": "{{appName}} — We sent goods of order #{{orderId}} back to you",
+    "preview": "The goods we did not take back are on their way to you.",
+    "leadTxt": "We did not take back these goods of your {{appName}} order #{{orderId}}, so we sent them back to you:",
+    "heading": "We sent the goods back to you",
+    "body": "We did not take back these goods of your order #{{orderId}}, so we sent them back to you:",
+    "parcel": "The parcel goes with {{carrier}}, number {{number}}.",
+    "parcelCarrier": "The parcel goes with {{carrier}}.",
+    "follow": "Follow the parcel"
+  },
+  "returnSplit": {
+    "subject": "{{appName}} — A statement of its own for goods of order #{{orderId}}",
+    "preview": "Goods not in your parcel have a statement of their own.",
+    "leadTxt": "These goods of your {{appName}} order #{{orderId}} are not in the parcel of statement {{fromCode}}, so they have a statement of their own:",
+    "heading": "Goods with a statement of their own",
+    "body": "These goods of your order #{{orderId}} are not in the parcel of statement {{fromCode}}, so they have a statement of their own:",
+    "next": "Send them back in a parcel of their own and tell us its carrier and number for this statement on the page of the order."
   },
   "returnRefundFailed": {
     "subject": "{{appName}} — We could not return the money for order #{{orderId}}",

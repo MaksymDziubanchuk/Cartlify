@@ -166,6 +166,39 @@
     "heading": "Dinero enviado",
     "body": "Te enviamos {{amount}} de tu pedido #{{orderId}}."
   },
+  "orderCompensationSent": {
+    "subject": "{{appName}} — Te enviamos una compensación del pedido #{{orderId}}",
+    "preview": "Te enviamos {{amount}} como compensación del pedido #{{orderId}}.",
+    "heading": "Compensación enviada",
+    "body": "Te enviamos {{amount}} como compensación de tu pedido #{{orderId}}."
+  },
+  "orderCancelledRefunded": {
+    "subject": "{{appName}} — El pedido #{{orderId}} está cancelado y tu dinero va de vuelta",
+    "preview": "El pedido #{{orderId}} está cancelado, {{amount}} vuelve a ti.",
+    "heading": "Tu pedido está cancelado",
+    "body": "Cancelamos el pedido #{{orderId}} antes de enviarlo.",
+    "sentLine": "Te enviamos de vuelta tu pago de {{amount}} al medio con el que pagaste.",
+    "bankNote": "Tu banco mostrará el dinero en unos días. Si pasa algo con este reembolso, te escribiremos.",
+    "newOrder": "Si aún quieres los artículos, puedes hacer un nuevo pedido."
+  },
+  "orderCancelledByBank": {
+    "subject": "{{appName}} — El pedido #{{orderId}} está cancelado tras la decisión de tu banco",
+    "preview": "El pedido #{{orderId}} está cancelado tras la decisión de tu banco.",
+    "heading": "Tu pedido está cancelado",
+    "body": "Tu banco resolvió a tu favor la disputa sobre el pago del pedido #{{orderId}} y te devolvió {{amount}}.",
+    "cancelLine": "Cancelamos el pedido, que aún no se había enviado.",
+    "sentLine": "Te enviamos el resto de tu pago, {{amount}}, al medio con el que pagaste.",
+    "bankNote": "Tu banco mostrará el dinero en unos días. Si pasa algo con este reembolso, te escribiremos.",
+    "newOrder": "Si aún quieres los artículos, puedes hacer un nuevo pedido."
+  },
+  "orderPaymentCheck": {
+    "subject": "{{appName}} — Estamos comprobando el pago del pedido #{{orderId}}",
+    "preview": "Recibimos tu pago del pedido #{{orderId}} y lo comprobamos una vez más.",
+    "heading": "Estamos comprobando tu pago",
+    "body": "Recibimos tu pago del pedido #{{orderId}}.",
+    "checkLine": "Antes de enviar el pedido, comprobamos el pago una vez más.",
+    "nextLine": "Te escribiremos en cuanto enviemos el pedido o te devolvamos el dinero."
+  },
   "paymentRefundReasons": {
     "OUT_OF_STOCK": "la reserva del pedido terminó y algunos artículos ya no estaban en stock",
     "ALREADY_PAID_OTHER_PAYMENT": "el pedido ya estaba pagado con otro pago",
@@ -198,6 +231,11 @@
     "heading": "Devolución cerrada",
     "body": "La devolución de tu pedido #{{orderId}} está cerrada.",
     "moneyBack": "Te enviamos {{amount}}.",
+    "bankLine": "Tu banco resolvió a tu favor la disputa sobre el pago del pedido #{{orderId}} y te devolvió {{amount}}.",
+    "restLine": "Te enviamos el resto, {{amount}}.",
+    "cardLine": "Se devuelve por el mismo medio con el que pagaste. Tu banco mostrará el reembolso en unos días.",
+    "outsideLine": "Te enviamos {{amount}} {{way}} el {{date}}.",
+    "outsideNoDate": "Te enviamos {{amount}} {{way}}.",
     "noMoney": "No se devuelve dinero por esta declaración.",
     "withheldLine": "Retuvimos {{amount}} del precio por la pérdida de valor del producto: {{names}}.",
     "returnedToYouHeader": "Devuelto a ti",
@@ -234,7 +272,16 @@
     "sentWithDate": "Lo enviamos {{way}} el {{date}}.",
     "sentNoDate": "Lo enviamos {{way}}.",
     "deliveryLine": "El envío está incluido: {{amount}}.",
-    "deductionLine": "El coste de devolver el producto, {{amount}}, se descuenta: el contrato dice que lo pagas tú."
+    "wayBackLine": "Incluye {{amount}} por devolvernos los productos.",
+    "deductionLine": "El coste de devolver el producto, {{amount}}, se descuenta: el contrato dice que lo pagas tú.",
+    "coveredSubject": "{{appName}} — El dinero del pedido #{{orderId}} ya lo tienes",
+    "coveredPreview": "Ya tienes el dinero del pedido #{{orderId}}.",
+    "coveredLeadTxt": "Ya tienes de vuelta {{amount}} de tu pedido de {{appName}} #{{orderId}}.",
+    "coveredHeading": "El dinero ya lo tienes",
+    "coveredBody": "Ya tienes de vuelta {{amount}} de tu pedido #{{orderId}}.",
+    "bankLine": "Tu banco te dio {{amount}} cuando resolvió la disputa.",
+    "earlierLine": "Te enviamos {{amount}} antes.",
+    "alreadyLine": "Con los {{covered}} que ya tenías por ellos, son {{amount}} por estos productos."
   },
   "returnReimbursed": {
     "subject": "{{appName}} — Te reembolsamos el coste de devolver el pedido #{{orderId}}",
@@ -242,7 +289,26 @@
     "leadTxt": "Te reembolsamos {{amount}}, el coste de devolvernos el producto de tu pedido de {{appName}} #{{orderId}}.",
     "heading": "Te reembolsamos el coste de devolver el producto",
     "body": "Te reembolsamos {{amount}}, el coste de devolvernos el producto de tu pedido #{{orderId}}.",
-    "sentOn": "Lo enviamos {{way}} el {{date}}."
+    "sentOn": "Lo enviamos {{way}} el {{date}}.",
+    "sentToPayment": "Lo enviamos a la tarjeta o cuenta con la que pagaste el {{date}}."
+  },
+  "returnSentBack": {
+    "subject": "{{appName}} — Te devolvimos productos del pedido #{{orderId}}",
+    "preview": "Los productos que no aceptamos van de camino a ti.",
+    "leadTxt": "No aceptamos la devolución de estos productos de tu pedido de {{appName}} #{{orderId}}, así que te los enviamos de vuelta:",
+    "heading": "Te enviamos los productos de vuelta",
+    "body": "No aceptamos la devolución de estos productos de tu pedido #{{orderId}}, así que te los enviamos de vuelta:",
+    "parcel": "El paquete va con {{carrier}}, número {{number}}.",
+    "parcelCarrier": "El paquete va con {{carrier}}.",
+    "follow": "Sigue el paquete"
+  },
+  "returnSplit": {
+    "subject": "{{appName}} — Una declaración propia para productos del pedido #{{orderId}}",
+    "preview": "Los productos que no van en tu paquete tienen una declaración propia.",
+    "leadTxt": "Estos productos de tu pedido de {{appName}} #{{orderId}} no están en el paquete de la declaración {{fromCode}}, así que tienen una declaración propia:",
+    "heading": "Productos con una declaración propia",
+    "body": "Estos productos de tu pedido #{{orderId}} no están en el paquete de la declaración {{fromCode}}, así que tienen una declaración propia:",
+    "next": "Devuélvelos en un paquete propio e indícanos su transportista y su número para esta declaración en la página del pedido."
   },
   "returnRefundFailed": {
     "subject": "{{appName}} — No pudimos devolver el dinero del pedido #{{orderId}}",
