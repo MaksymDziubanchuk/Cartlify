@@ -1,0 +1,10 @@
+{{greeting}}
+
+{{#paragraphs}}{{text}}
+{{/paragraphs}}
+{{seeOrderTxt}}
+{{orderUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}
