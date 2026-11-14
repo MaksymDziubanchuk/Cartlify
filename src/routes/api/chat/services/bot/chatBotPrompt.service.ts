@@ -1,5 +1,5 @@
 import { shopSettings } from '@config/shopSettings.js';
-import type { AiMessageDto } from '@services/ai/ai.types.js';
+import type { AiMessageDto } from '@providers/ai/index.js';
 import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
 import type { ReturnStatus } from '@prisma/client';
 import type { BuyerReturnDto, BuyerReturnStep } from 'types/dto/returns.dto.js';
@@ -107,7 +107,7 @@ export interface BuildChatBotPromptDto {
   orders: ChatBotOrderContextItemDto[];
   // the shop currency, the one checkout charges in, e.g. "eur"
   currency: string;
-  // how the payment providers the customer may pay with are named, e.g. ["Stripe"]
+  // how the payment providers the customer may pay with are named (their labels)
   paymentProviders: string[];
   // the ways the shop delivers an order, as the list of the delivery methods gives them
   delivery: DeliveryMethodInfoDto[];
@@ -568,7 +568,7 @@ const buildCurrentUserMessage = ({
   };
 };
 
-// builds final prompt payload for aiClient.service.ts
+// builds final prompt payload for the provider of the models (src/providers/ai)
 export const buildChatBotPrompt = (dto: BuildChatBotPromptDto): BuildChatBotPromptResultDto => {
   const currency = dto.currency.trim().toUpperCase();
   const productContextMessage = buildProductContextMessage(dto.productContext, currency);

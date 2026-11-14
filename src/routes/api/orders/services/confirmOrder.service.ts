@@ -11,7 +11,7 @@ import {
 import { deliveryPriceOf } from '@helpers/deliveryPrice.js';
 import { currentPrice } from '@helpers/productSale.js';
 import { assertRedisReady } from '@redis/client.js';
-import { lowestMinimumTotal, shopCurrency } from '@routes/api/payments/providers/index.js';
+import { lowestMinimumTotal, shopCurrency } from '@providers/payments/index.js';
 import {
   BadRequestError,
   ConflictError,

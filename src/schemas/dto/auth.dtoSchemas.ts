@@ -75,51 +75,9 @@ const authLoginResponseSchema = {
   ],
 } as const;
 
-const authGoogleCallbackQuerySchema = {
-  $id: 'authGoogleCallbackQuerySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    code: { type: 'string', description: 'The code the provider gives after the login.' },
-    state: {
-      type: 'string',
-      description: 'The state the app sent; the provider returns it unchanged.',
-    },
-
-    error: { type: 'string', description: 'What the provider says when the login was refused.' },
-    error_description: {
-      type: 'string',
-      description: 'The words of the provider about the error.',
-    },
-  },
-  // a provider sends either the code with the state, or an error when the login was refused
-  anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
-} as const;
-
-const authGithubCallbackQuerySchema = {
-  $id: 'authGithubCallbackQuerySchema',
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    code: { type: 'string', description: 'The code the provider gives after the login.' },
-    state: {
-      type: 'string',
-      description: 'The state the app sent; the provider returns it unchanged.',
-    },
-
-    error: { type: 'string', description: 'What the provider says when the login was refused.' },
-    error_description: {
-      type: 'string',
-      description: 'The words of the provider about the error.',
-    },
-    error_uri: { type: 'string', description: 'A page of the provider about the error.' },
-  },
-  // a provider sends either the code with the state, or an error when the login was refused
-  anyOf: [{ required: ['code', 'state'] }, { required: ['error'] }],
-} as const;
-
-const authLinkedInCallbackQuerySchema = {
-  $id: 'authLinkedInCallbackQuerySchema',
+// the query a provider of accounts sends the browser back with, the same for every provider
+const authOAuthCallbackQuerySchema = {
+  $id: 'authOAuthCallbackQuerySchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -367,9 +325,7 @@ const authCsrfTokenResponseSchema = {
 export const authDtoSchemas = [
   authLoginBodySchema,
   authLoginResponseSchema,
-  authGoogleCallbackQuerySchema,
-  authGithubCallbackQuerySchema,
-  authLinkedInCallbackQuerySchema,
+  authOAuthCallbackQuerySchema,
   authRegisterBodySchema,
   authRegisterResponseSchema,
   authResendVerifyBodySchema,

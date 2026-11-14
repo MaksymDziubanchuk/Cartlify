@@ -1,12 +1,11 @@
 import type { FastifyBaseLogger } from 'fastify';
 
 import {
-  deleteImage,
+  fileStorage,
   isOwnFile,
   makePublicId,
-  moveImage,
   type UploadImageResult,
-} from '@utils/cloudinary.util.js';
+} from '@providers/files/index.js';
 
 import type { Prisma } from '@prisma/client';
 import type { ProductId } from 'types/ids.js';
@@ -21,10 +20,10 @@ import type { UploadedProductImage } from 'types/dto/products.dto.js';
 // has go after the commit.
 
 // The time the transaction of a product or a gallery may take. It moves the files of its uploads at
-// Cloudinary one after the other before it ends (moveStagedImages), so the time it needs grows with
+// the file storage one after the other before it ends (moveStagedImages), so the time it needs grows with
 // the files: the base (the rows, the wait for the row of the product) is what the transaction was
 // given whatever its files, each file adds the time of a move (a few hundred milliseconds when
-// Cloudinary answers; a move it does not answer is cut off after 8 s and the transaction goes back)
+// the file storage answers; a move it does not answer is cut off after 8 s and the transaction goes back)
 export const IMAGES_TX_BASE_MS = 20_000;
 export const IMAGES_TX_PER_FILE_MS = 2_000;
 
@@ -106,7 +105,7 @@ export async function moveStagedImages(args: {
   for (const image of staged) {
     const file =
       moved.get(image.upload.publicId) ??
-      (await moveImage(image.upload.publicId, image.publicId, { invalidate: false }));
+      (await fileStorage.moveImage(image.upload.publicId, image.publicId, { invalidate: false }));
     moved.set(image.upload.publicId, file);
 
     await tx.productImage.update({ where: { id: image.id }, data: { url: file.urlBase } });
@@ -125,7 +124,7 @@ export async function discardMovedImages(
       .filter((publicId) => isOwnFile(publicId))
       .map(async (publicId) => {
         try {
-          await deleteImage(publicId);
+          await fileStorage.deleteImage(publicId);
         } catch (err) {
           log.warn({ err, publicId }, 'moved product image was not removed');
         }
@@ -145,7 +144,7 @@ export async function deleteStaleImages(
       .filter((publicId): publicId is string => isOwnFile(publicId))
       .map(async (publicId) => {
         try {
-          await deleteImage(publicId);
+          await fileStorage.deleteImage(publicId);
         } catch (err) {
           log.warn({ err, productId, publicId }, 'old product image was not removed');
         }

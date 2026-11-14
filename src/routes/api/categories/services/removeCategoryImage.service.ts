@@ -3,7 +3,7 @@ import type { FastifyBaseLogger } from 'fastify';
 import { prisma } from '@db/client.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { setUserContext } from '@db/dbContext.service.js';
-import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
+import { fileStorage, isOwnFile } from '@providers/files/index.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
 
 import { categoryResponseOf } from './helpers/categories.helper.js';
@@ -63,7 +63,7 @@ export async function removeCategoryImage(dto: {
 
     if (isOwnFile(oldPublicId)) {
       try {
-        await deleteImage(oldPublicId);
+        await fileStorage.deleteImage(oldPublicId);
       } catch (err) {
         log.warn({ err, publicId: oldPublicId }, 'picture of a category was not deleted');
       }

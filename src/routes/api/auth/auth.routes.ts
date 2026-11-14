@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
 import requireCaptcha from '@middlewares/requireCaptcha.js';
 import requireRole from '@middlewares/requireRole.js';
+import { identityProviders } from '@providers/identity/index.js';
 import { requestLimits } from '../../../plugins/requestLimits.js';
 import { authSchema } from './auth.schemas.js';
 import { authController } from './auth.controllers.js';
@@ -11,7 +12,7 @@ export default async function authRouter(app: FastifyInstance) {
     '/register',
     {
       // the limit of the address before the captcha, the limit of the email after it: a request the
-      // guards and the limit of the address refuse costs no call to Cloudflare, and a captcha that
+      // guards and the limit of the address refuse costs no call to the captcha, and a captcha that
       // fails takes no place of the email. The place is given back when the registration does not end
       // in 201, so only the registrations that succeed count
       preHandler: [
@@ -27,57 +28,22 @@ export default async function authRouter(app: FastifyInstance) {
     authController.postRegister,
   );
 
-  app.get(
-    '/oauth/google',
-    {
-      preHandler: [authGuard],
-      schema: authSchema.setGoogleStartSchema,
-    },
-    authController.getGoogleStart,
-  );
+  // the login with an account at each provider (src/providers/identity): the start sends the browser
+  // of a guest to the provider, the callback is where the provider sends it back
+  for (const provider of identityProviders) {
+    app.get(
+      `/oauth/${provider.name}`,
+      { preHandler: [authGuard], schema: authSchema.oauthStartSchemaOf(provider) },
+      authController.oauthStartOf(provider),
+    );
 
-  app.get(
-    '/google/callback',
-    {
-      preHandler: [authGuard],
-      schema: authSchema.setGoogleCallbackSchema,
-    },
-    authController.getGoogleCallback,
-  );
+    app.get(
+      `/${provider.name}/callback`,
+      { preHandler: [authGuard], schema: authSchema.oauthCallbackSchemaOf(provider) },
+      authController.oauthCallbackOf(provider),
+    );
+  }
 
-  app.get(
-    '/oauth/github',
-    {
-      preHandler: [authGuard],
-      schema: authSchema.setGithubStartSchema,
-    },
-    authController.getGithubStart,
-  );
-
-  app.get(
-    '/github/callback',
-    {
-      preHandler: [authGuard],
-      schema: authSchema.setGithubCallbackSchema,
-    },
-    authController.getGithubCallback,
-  );
-  app.get(
-    '/oauth/linkedin',
-    {
-      preHandler: [authGuard],
-      schema: authSchema.setLinkedInStartSchema,
-    },
-    authController.getLinkedInStart,
-  );
-  app.get(
-    '/linkedin/callback',
-    {
-      preHandler: [authGuard],
-      schema: authSchema.setLinkedInCallbackSchema,
-    },
-    authController.getLinkedInCallback,
-  );
   app.post(
     '/login',
     {

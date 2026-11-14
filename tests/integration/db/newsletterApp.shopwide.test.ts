@@ -156,7 +156,7 @@ const markSent = (db: DbSession, recipient: number) =>
 
 describe('cartlify.newsletter_apply_event, run by the role of the app for the system', () => {
   const EXPECTED = {
-    bounce: {
+    bounced: {
       mail: 'bounced',
       totals: { undeliveredCount: 1, complaintCount: 0 },
       subscription: 'stopped_bounce',
@@ -168,7 +168,7 @@ describe('cartlify.newsletter_apply_event, run by the role of the app for the sy
       subscription: 'active',
       line: null,
     },
-    spamreport: {
+    complained: {
       mail: 'complained',
       totals: { undeliveredCount: 0, complaintCount: 1 },
       subscription: 'paused_complaint',
@@ -217,7 +217,7 @@ describe('cartlify.newsletter_apply_event, run by the role of the app for the sy
   it('takes an event of a mail whose sending has not been written down yet', async () => {
     const result = await inRolledBackTx(async (db) => {
       await moveCampaignTo(db, MANAGER(), fx.campaign, 'sending');
-      const outcome = await attemptAs(db, SYSTEM, SQL.applyEvent, fx.recipient, 'bounce');
+      const outcome = await attemptAs(db, SYSTEM, SQL.applyEvent, fx.recipient, 'bounced');
       return { outcome, after: await stateOf(db, fx.recipient, fx.campaign, fx.formSub) };
     });
 
@@ -229,7 +229,7 @@ describe('cartlify.newsletter_apply_event, run by the role of the app for the sy
     const result = await inRolledBackTx(async (db) => {
       await moveCampaignTo(db, MANAGER(), fx.campaign, 'finished');
       await markSent(db, fx.recipient);
-      const outcome = await attemptAs(db, SYSTEM, SQL.applyEvent, fx.recipient, 'spamreport');
+      const outcome = await attemptAs(db, SYSTEM, SQL.applyEvent, fx.recipient, 'complained');
       return { outcome, after: await stateOf(db, fx.recipient, fx.campaign, fx.formSub) };
     });
 

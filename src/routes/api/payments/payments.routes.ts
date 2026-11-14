@@ -9,7 +9,7 @@ import { requestLimits } from '../../../plugins/requestLimits.js';
 
 import { paymentsController } from './payments.controllers.js';
 import { paymentsSchema } from './payments.schemas.js';
-import { stripeRouter } from './providers/stripe/index.js';
+import { paymentProviders } from '@providers/payments/index.js';
 
 export default async function paymentsRouter(app: FastifyInstance) {
   // the payment page of an order, with the provider the buyer picked
@@ -92,5 +92,7 @@ export default async function paymentsRouter(app: FastifyInstance) {
   );
 
   // each provider keeps its own routes (its events, its return page) under its name
-  app.register(stripeRouter, { prefix: '/stripe' });
+  for (const provider of paymentProviders) {
+    app.register(provider.routes(), { prefix: `/${provider.name}` });
+  }
 }

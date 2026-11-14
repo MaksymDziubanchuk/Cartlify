@@ -2,7 +2,7 @@ import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { ConflictError, InternalError, NotFoundError, isAppError } from '@utils/errors.js';
-import { deleteDocument as deleteDocumentFile, isOwnFile } from '@utils/cloudinary.util.js';
+import { fileStorage, isOwnFile } from '@providers/files/index.js';
 import { assertAdminActor } from '@helpers/roleGuard.js';
 
 import { isForeignKeyViolation, productsNaming } from './helpers/documents.helper.js';
@@ -66,7 +66,7 @@ export async function deleteDocument({
   // copy of prod, whose rows can name the files of prod
   if (isOwnFile(publicId)) {
     try {
-      await deleteDocumentFile(publicId);
+      await fileStorage.deleteDocument(publicId);
     } catch (err) {
       log.warn({ err, publicId }, 'file of a deleted document was not deleted');
     }

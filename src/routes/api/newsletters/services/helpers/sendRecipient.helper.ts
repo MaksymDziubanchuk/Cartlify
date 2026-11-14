@@ -4,7 +4,7 @@ import { manageTokenOf, unsubscribeTokenOf } from '@helpers/newsletterTokens.js'
 import { sendNewsletterEmail } from '@services/email/sendNewsletterEmail.js';
 import { CampaignLocaleMissingError } from '@services/email/templates/newsletters/campaign.template.js';
 
-import { customArgsOf } from './mailEvents.helper.js';
+import { mailTagsOf } from './mailEvents.helper.js';
 import { newsletterMailFor } from './newsletterMail.helper.js';
 import { sendFailureOf, type SendFailure } from './sendFailure.helper.js';
 import {
@@ -28,11 +28,11 @@ import {
 export type SendingLogger = Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>;
 
 // How the mail ended:
-// - sent: SendGrid took it;
-// - held: SendGrid did not take it (it will not, or it was busy), and it is not known yet whether the
+// - sent: the mail provider took it;
+// - held: the mail provider did not take it (it will not, or it was busy), and it is not known yet whether the
 //   fault is of this mail or of the whole stream: the mail waits for the answer (see `DeliveryContext.held`)
 //   and is rejected, left to be tried again, kept or given back, when it comes;
-// - rejected: SendGrid refused a mail that was tried before, and the campaign had a mail taken since that
+// - rejected: the mail provider refused a mail that was tried before, and the campaign had a mail taken since that
 //   try: the fault is the mail's, so it is rejected at once and is no part of the run of refusals;
 // - skipped: left out (the person unsubscribed, the mail has nothing in it);
 // - released: not tried, the campaign is not sending any more; given back;
@@ -42,7 +42,7 @@ export type DeliveryResult = 'sent' | 'held' | 'rejected' | 'skipped' | 'release
 // Why a pass stops before it is done: the whole stream has a problem, and trying the next mails would
 // meet the same one
 export type HaltWhy =
-  // SendGrid refuses the key or the account (401, 403)
+  // the mail provider refuses the key or the account of the stream
   | 'access_refused'
   // a setting of the stream is missing, or the mail cannot be made: the same for every reader
   | 'stream_broken'
@@ -50,7 +50,7 @@ export type HaltWhy =
   | 'campaign_data_missing'
   // many mails in a row were refused, none taken: something is wrong with all of them
   | 'every_mail_refused'
-  // many tries in a row found SendGrid busy or silent
+  // many tries in a row found the mail provider busy or silent
   | 'provider_unavailable'
   // the database failed on a step of a mail
   | 'database_failed';
@@ -65,12 +65,12 @@ export class PassHalt extends Error {
   }
 }
 
-// how many mails in a row may be refused (or find SendGrid busy) before the pass takes it for a
+// how many mails in a row may be refused (or find the mail provider busy) before the pass takes it for a
 // problem of the whole stream and stops
 export const FAILURE_STREAK_LIMIT = 10;
 
-// A mail SendGrid did not take, kept until it is known whether the fault is of the mail or of the whole
-// stream. `reject`: SendGrid will not take it (a 4xx, or its last try) and it is rejected, once the
+// A mail the mail provider did not take, kept until it is known whether the fault is of the mail or of the whole
+// stream. `reject`: the mail provider will not take it (a 4xx, or its last try) and it is rejected, once the
 // streak it is in ends without stopping the pass; otherwise it was busy and stays in the queue under
 // its lease, to be tried later
 export type HeldMail = { recipientId: number; campaignId: number; reject: boolean };
@@ -86,13 +86,13 @@ export type DeliveryContext = {
   clock: () => Date;
   // the text and the data of the products of a campaign, fixed at its start, read once for the pass
   material: (campaignId: number) => Promise<CampaignMaterial>;
-  // The mails in a row that were refused, and in a row that found SendGrid busy, since the last mail
-  // SendGrid took: the two streaks. A mail is judged when its streak ends. A mail taken ends both:
+  // The mails in a row that were refused, and in a row that found the mail provider busy, since the last mail
+  // the mail provider took: the two streaks. A mail is judged when its streak ends. A mail taken ends both:
   // those before it were refused one by one, so the fault was theirs (a refused one is rejected, a
   // busy one is left to its lease). A streak of FAILURE_STREAK_LIMIT stops the pass: the fault may be
   // the stream's and not the mails', so none is rejected (releaseHeld): a mail that was refused keeps
   // the try it used and waits out its lease, behind the mails with fewer tries; a mail that found
-  // SendGrid busy goes back to the queue with its try not counted, free at once. At the end of a pass
+  // the mail provider busy goes back to the queue with its try not counted, free at once. At the end of a pass
   // that was not stopped the streaks are judged the same way as when a mail is taken. A mail that was
   // tried before and is refused again after a mail of its campaign was taken since is rejected at once
   // and is in neither streak (deliverRecipient)
@@ -101,10 +101,10 @@ export type DeliveryContext = {
   tally: HeldTally;
   // set once the streaks say the stream has a problem: the mail that set it is held with the rest of
   // its streak, and every mail that has not started yet stops with it and goes back to the queue; the
-  // held mails are settled by releaseHeld. A mail that was already with SendGrid when it was set may
+  // held mails are settled by releaseHeld. A mail that was already with the mail provider when it was set may
   // still be taken, but it judges nobody: a halted stream rejects nothing
   halted: PassHalt | null;
-  // the mails SendGrid has taken in this pass (by the id of the row), from the moment it took them. The
+  // the mails the mail provider has taken in this pass (by the id of the row), from the moment it took them. The
   // pass never gives such a row back to the queue, whatever fails afterwards: a row given back is free
   // at once and the next pass would send the mail a second time. If writing it down fails, it stays
   // under its lease (see giveBack in the job)
@@ -131,7 +131,7 @@ const noteFailure = (ctx: DeliveryContext, failure: SendFailure) => {
   ctx.failures.set(key, (ctx.failures.get(key) ?? 0) + 1);
 };
 
-// holds a mail that SendGrid did not take in the streak of its kind; too many in a row halt the pass
+// holds a mail that the mail provider did not take in the streak of its kind; too many in a row halt the pass
 const holdMail = (
   ctx: DeliveryContext,
   streak: 'refused' | 'unavailable',
@@ -152,7 +152,7 @@ const holdMail = (
 };
 
 // Judges the mails held: the streaks are over and did not stop the pass (a mail was taken, or the pass
-// ends). A mail SendGrid refused is rejected, one that found it busy stays as it is, under its lease.
+// ends). A mail the mail provider refused is rejected, one that found it busy stays as it is, under its lease.
 // Counts them in the summary. A mail that cannot be written down stays held and the error goes on. Once
 // the pass is halted nothing is judged (the halt settles the mails, releaseHeld): the mails left are
 // kept held
@@ -194,10 +194,10 @@ export function dropHeld(ctx: DeliveryContext, recipientIds: number[]): void {
 }
 
 // Settles every mail held when the pass stops: the stream may have a problem, and nobody knows whether
-// the mails that showed it were refused (or found SendGrid busy) because of it or because of themselves.
+// the mails that showed it were refused (or found the mail provider busy) because of it or because of themselves.
 // None is rejected. A mail that was refused keeps the try it used and stays under its lease (nothing is
 // written: the lease is the claim's), so it comes back after the lease, behind the mails with fewer
-// tries: counted as deferred. A mail that found SendGrid busy is given back as it was before the pass
+// tries: counted as deferred. A mail that found the mail provider busy is given back as it was before the pass
 // took it: its try is not counted, and it is free to be taken at once (releaseRecipients). Returns how
 // many went back
 export async function releaseHeld(ctx: DeliveryContext): Promise<number> {
@@ -279,13 +279,13 @@ export async function deliverRecipient(
       text: mail.text,
       html: mail.html,
       headers: mail.headers,
-      customArgs: customArgsOf(row.campaignId, row.recipientId),
+      tags: mailTagsOf(row.campaignId, row.recipientId),
     });
   } catch (err) {
     const failure = sendFailureOf(err);
 
     if (failure.kind === 'halt') {
-      const accessRefused = failure.status === 401 || failure.status === 403;
+      const accessRefused = failure.account;
       throw new PassHalt(accessRefused ? 'access_refused' : 'stream_broken', {
         status: failure.status,
         reason: failure.reason,
@@ -307,7 +307,7 @@ export async function deliverRecipient(
       return 'rejected';
     }
 
-    // SendGrid will not take this one, or this was its last try: it is rejected unless the streak it
+    // the mail provider will not take this one, or this was its last try: it is rejected unless the streak it
     // is in turns out to be a fault of the stream. Busy or silent otherwise: it stays leased, the
     // next claim after the lease takes it again
     const reject = failure.kind === 'refused' || row.lastAttempt;

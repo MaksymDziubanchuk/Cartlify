@@ -76,7 +76,7 @@ const UNSET = Object.fromEntries(
     'OPENAI_TIMEOUT_MS',
     'OPENAI_MAX_OUTPUT_TOKENS',
     'REDIS_ORDER_TIMEOUT_WORKER_MS',
-    'STRIPE_CURRENCY',
+    'SHOP_CURRENCY',
     'WEB_ORIGIN',
     'SENDGRID_API_KEY',
     ...Object.keys(SHOP_DEFAULTS),
@@ -121,7 +121,7 @@ describe('env', () => {
       OPENAI_TIMEOUT_MS: 12000,
       OPENAI_MAX_OUTPUT_TOKENS: 450,
       REDIS_ORDER_TIMEOUT_WORKER_MS: 3000,
-      STRIPE_CURRENCY: 'eur',
+      SHOP_CURRENCY: 'eur',
       WEB_ORIGIN: '',
       SENDGRID_API_KEY: '',
       ...SHOP_DEFAULTS,
@@ -144,7 +144,7 @@ describe('env', () => {
         RATE_LIMIT_MAX: '300',
         SHOP_TIME_ZONE: ' Europe/Kyiv ',
         REDIS_ORDER_TIMEOUT_WORKER_MS: '5000',
-        STRIPE_CURRENCY: 'usd',
+        SHOP_CURRENCY: 'usd',
         WEB_ORIGIN: 'https://shop.example.com',
       }),
     ).toMatchObject({
@@ -161,7 +161,7 @@ describe('env', () => {
       RATE_LIMIT_MAX: 300,
       SHOP_TIME_ZONE: 'Europe/Kyiv',
       REDIS_ORDER_TIMEOUT_WORKER_MS: 5000,
-      STRIPE_CURRENCY: 'usd',
+      SHOP_CURRENCY: 'usd',
       WEB_ORIGIN: 'https://shop.example.com',
     });
   });
@@ -215,16 +215,16 @@ describe('env', () => {
   // stripe and the prices of the catalog count money in cents; a currency of the shop without
   // cents (jpy) or with three digits (kwd) would be charged a hundred times off
   it('reads the currency of the shop in lower case', async () => {
-    expect((await loadEnv({ STRIPE_CURRENCY: ' EUR ' })).STRIPE_CURRENCY).toBe('eur');
+    expect((await loadEnv({ SHOP_CURRENCY: ' EUR ' })).SHOP_CURRENCY).toBe('eur');
   });
 
   it.each(['jpy', 'KRW', 'kwd', 'bhd', 'euro', 'e1'])(
-    'stops the start when STRIPE_CURRENCY is %p, not a currency with cents',
+    'stops the start when SHOP_CURRENCY is %p, not a currency with cents',
     async (value) => {
-      const err = await rejectedBy(() => loadEnv({ STRIPE_CURRENCY: value }));
+      const err = await rejectedBy(() => loadEnv({ SHOP_CURRENCY: value }));
 
       expect((err as Error).message).toBe(
-        'Invalid env variable: STRIPE_CURRENCY must be a three letter code of a currency with cents',
+        'Invalid env variable: SHOP_CURRENCY must be a three letter code of a currency with cents',
       );
     },
   );

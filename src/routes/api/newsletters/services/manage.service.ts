@@ -1,9 +1,9 @@
 import type { FastifyBaseLogger } from 'fastify';
 
 import { tx } from '@db/client.js';
+import { mailProvider } from '@providers/mail/index.js';
 import { setGuestNullContext } from '@db/dbContext.service.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
-import { clearSpamReport } from '@services/email/clearSpamReport.js';
 import { BadRequestError, InternalError } from '@utils/errors.js';
 import type {
   ManageActionDto,
@@ -111,7 +111,7 @@ export async function resumeManaged(
     }),
   );
 
-  if (resumed) await clearSpamReport(state.email, log);
+  if (resumed) await mailProvider.clearComplaint(state.email, log);
 
   return state;
 }

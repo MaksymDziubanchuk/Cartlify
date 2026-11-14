@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import appStripe from '@config/stripe.js';
+import appStripe from '@providers/payments/stripe/stripeClient.js';
 import { settleRefundsInTransit } from '@routes/api/payments/services/settleRefundsInTransit.service.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
@@ -128,8 +128,8 @@ async function ended(disputeId: string, end: Parameters<typeof endDispute>[1]) {
   if (end === 'won') await tell('charge.dispute.funds_reinstated', disputeId);
 }
 
-const rowOf = (stripeId: string) =>
-  asAdmin((tx) => tx.paymentDispute.findUnique({ where: { stripeId } }));
+const rowOf = (providerDisputeId: string) =>
+  asAdmin((tx) => tx.paymentDispute.findUnique({ where: { providerDisputeId } }));
 
 const orderOf = (orderId: number) =>
   asAdmin((tx) =>
@@ -157,7 +157,7 @@ const disputeLinesOf = (paymentId: string) =>
           amount: true,
           returnId: true,
           moneyUse: true,
-          stripeTxId: true,
+          balanceTxId: true,
         },
       })
     ).map((line) => ({ ...line, amount: line.amount.toFixed(2) })),
@@ -662,7 +662,7 @@ describe('a dispute of a payment that is none of the shop', () => {
   });
 });
 
-type ListItem = Record<string, unknown> & { id: number; stripeId: string };
+type ListItem = Record<string, unknown> & { id: number; providerDisputeId: string };
 
 const listOf = async (query: string, actor: TestUser = admin) => {
   const res = await get(`/api/payments/disputes?${query}`, actor);
@@ -700,7 +700,7 @@ describeMock('GET /api/payments/disputes', () => {
         {
           id: row.id,
           provider: 'stripe',
-          stripeId: disputeId,
+          providerDisputeId: disputeId,
           paymentId: order.paymentId,
           orderId: order.orderId,
           userId: order.buyer.id,
@@ -740,19 +740,19 @@ describeMock('GET /api/payments/disputes', () => {
         await db.as({ role: 'ADMIN' });
         await db.rows(
           `update cartlify.payment_disputes set "submissionCount" = 1, status = 'under_review',
-             "evidenceDueBy" = now() + interval '2 days' where "stripeId" = $1`,
+             "evidenceDueBy" = now() + interval '2 days' where "providerDisputeId" = $1`,
           answered,
         );
         await db.rows(
           `update cartlify.payment_disputes set "evidenceDueBy" = now() + interval '5 days'
-           where "stripeId" = $1`,
+           where "providerDisputeId" = $1`,
           open,
         );
       },
       { commit: true },
     );
     const q = `orderId=${order.orderId}`;
-    const ids = (page: { items: ListItem[] }) => page.items.map((item) => item.stripeId);
+    const ids = (page: { items: ListItem[] }) => page.items.map((item) => item.providerDisputeId);
 
     expect(ids(await listOf(q))).toEqual([answered, open, won]);
     expect(ids(await listOf(`${q}&open=true`))).toEqual([answered, open]);
@@ -809,7 +809,7 @@ describeMock('GET /api/payments/disputes/:disputeId', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({
       id: row.id,
-      stripeId: disputeId,
+      providerDisputeId: disputeId,
       status: 'lost',
       open: false,
       withdrawn: 20,
@@ -819,7 +819,7 @@ describeMock('GET /api/payments/disputes/:disputeId', () => {
           event: 'money.dispute_withdrawn',
           amount: -20,
           currency: 'eur',
-          stripeTxId: expect.stringMatching(/^txn_/),
+          balanceTxId: expect.stringMatching(/^txn_/),
           moneyUse: 'goods',
           createdAt: expect.any(String),
         },

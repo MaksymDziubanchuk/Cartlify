@@ -2170,7 +2170,7 @@ describe('a dispute of the payment open at the bank', () => {
     const ended = ENDED.includes(status);
     const outcome = await q.attempt(
       `insert into cartlify.payment_disputes
-         (provider, "stripeId", "paymentId", "orderId", "userId", status, "isChargeRefundable",
+         (provider, "providerDisputeId", "paymentId", "orderId", "userId", status, "isChargeRefundable",
           "openedAt", "closedAt")
        values ('stripe', $1, $2, $3::int, $4::int, $5::cartlify."DisputeStatus", $6::boolean,
                now() at time zone 'UTC', case when $7::boolean then now() at time zone 'UTC' end)

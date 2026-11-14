@@ -1,6 +1,6 @@
 import { putShopSettingBodySchemas } from '@schemas/dto/shopSettings.dtoSchemas.js';
 import { BadRequestError } from '@utils/errors.js';
-import { discardUploads } from '@utils/cloudinary.util.js';
+import { discardUploads } from '@providers/files/index.js';
 
 import type { FastifyRequest } from 'fastify';
 import type { WritableShopSettingKey } from '@config/shopSettings.js';
@@ -144,7 +144,7 @@ const postLogo: ControllerRouter<{}, {}, {}, ShopSettingsValuesDto> = async (req
     const result = await setShopLogo({ actorId, upload, log: req.log });
     return reply.code(200).send(result);
   } catch (err) {
-    // the picture that waits on Cloudinary goes with the refused request
+    // the picture that waits in the file storage goes with the refused request
     if (upload) await discardUploads([upload], req.log);
     throw err;
   }

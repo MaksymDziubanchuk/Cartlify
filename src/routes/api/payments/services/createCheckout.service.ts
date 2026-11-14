@@ -21,11 +21,11 @@ import {
 
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
 
-import { getPaymentProvider } from '../providers/index.js';
-import { PaymentPageChangedError } from '../providers/types.js';
+import { getPaymentProvider, shopCurrency } from '@providers/payments/index.js';
+import { PaymentPageChangedError } from '@providers/payments/types.js';
 
 import type { UnavailableOrderItem } from '@routes/api/orders/services/helpers/confirmOrder.helper.js';
-import type { PaymentPageOrder, PaymentProviderName } from '../providers/types.js';
+import type { PaymentPageOrder, PaymentProviderName } from '@providers/payments/types.js';
 import type {
   CreateCheckoutSessionDto,
   CheckoutSessionResponseDto,
@@ -210,7 +210,7 @@ export async function createCheckoutSession({
       if (totalRaw < paymentProvider.minimumTotal) {
         throw new BadRequestError('ORDER_TOTAL_BELOW_MINIMUM', {
           minimum: paymentProvider.minimumTotal,
-          currency: paymentProvider.currency,
+          currency: shopCurrency(),
         });
       }
 

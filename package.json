@@ -73,6 +73,7 @@
     "@fastify/fast-json-stringify-compiler": "^5.1.1",
     "@inquirer/prompts": "^8.7.4",
     "@jest/globals": "^30.5.2",
+    "@jest/reporters": "^30.5.2",
     "@jest/test-sequencer": "^30.5.2",
     "@types/bcrypt": "^6.0.0",
     "@types/jsonwebtoken": "^9.0.10",

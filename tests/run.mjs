@@ -19,12 +19,15 @@ import { fileURLToPath } from 'node:url';
 import { styleText } from 'node:util';
 
 import { cloudinaryQuota } from './setup/cloudinaryQuota.mjs';
+import { guessOf, modeOf, readPace, recordRun, runKeyOf, writePace } from './setup/runPace.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cacheDir = path.join(rootDir, 'node_modules', '.cache', 'cartlify-tests');
 const selectionFile = path.join(cacheDir, 'selection.json');
 const resultFile = path.join(cacheDir, 'last-run.json');
 const cloudinaryUseFile = path.join(cacheDir, 'cloudinary-use.json');
+// how long the files and the runs took the last time (tests/setup/runPace.mjs)
+const paceFile = path.join(cacheDir, 'pace.json');
 
 // flags the launcher handles itself, they never reach jest
 const LAUNCHER_FLAGS = ['--failed', '--keep-db'];
@@ -393,7 +396,36 @@ async function cloudinaryUseOf(selected, before, { failedOnly, jestFlags }) {
   return `Cloudinary admin api: the run took ${calls} calls, ${left}`;
 }
 
-function runJest(selected, services, { failedOnly, jestFlags, workers }) {
+// The test files the run takes: the ones jest is handed by path (--runTestsByPath), or every file
+// of the parts picked. filtered: another option of jest goes with them (a name of a test, a
+// pattern), so the files do not run whole and the run tells nothing of their time
+function filesOf(selected, jestFlags) {
+  const slashes = (file) => String(file).split(path.sep).join('/');
+  const at = jestFlags.indexOf('--runTestsByPath');
+
+  if (at !== -1) {
+    const rest = jestFlags.slice(at + 1);
+    const end = rest.findIndex((arg) => arg.startsWith('-'));
+    const paths = end === -1 ? rest : rest.slice(0, end);
+    return {
+      files: paths.map((file) => slashes(path.relative(rootDir, path.resolve(rootDir, file)))),
+      byHand: true,
+      filtered: jestFlags.length > paths.length + 1,
+    };
+  }
+
+  const files = selected.flatMap((part) =>
+    existsSync(path.join(rootDir, part.dir))
+      ? readdirSync(path.join(rootDir, part.dir), { recursive: true })
+          .filter((file) => String(file).endsWith('.test.ts'))
+          .map((file) => `${part.dir}/${slashes(file)}`)
+      : [],
+  );
+
+  return { files, byHand: false, filtered: jestFlags.length > 0 };
+}
+
+function runJest(selected, services, { failedOnly, jestFlags, workers }, guess) {
   const needsDb = selected.some((part) => part.integration);
 
   rmSync(resultFile, { force: true });
@@ -434,7 +466,14 @@ function runJest(selected, services, { failedOnly, jestFlags, workers }) {
   const result = spawnSync(process.execPath, args, {
     cwd: rootDir,
     stdio: 'inherit',
-    env: { ...process.env, TEST_REAL_SERVICES: real.join(',') },
+    env: {
+      ...process.env,
+      TEST_REAL_SERVICES: real.join(','),
+      // the guess of the launcher, for the "estimated" of jest (tests/setup/sequencer.mjs)
+      ...(guess
+        ? { TEST_GUESS_MS: String(guess.ms), TEST_GUESS_WORKERS: String(guess.workers) }
+        : {}),
+    },
   });
 
   return result.status ?? 1;
@@ -523,15 +562,56 @@ const realCloudinary = needsDb && services.some((service) => service.name === 'c
 
 const quotaBefore = realCloudinary ? await checkCloudinaryQuota(selected) : null;
 
+// how long the tests take, for the "estimated" of jest: by the record of the runs before, the mocks
+// and each set of real services apart
+const pace = readPace(paceFile);
+const mode = modeOf(
+  needsDb ? services.filter((service) => service.real).map((service) => service.name) : [],
+);
+// unit files alone take the workers jest gives them: every core but one
+const jestWorkers = needsDb ? options.workers : Math.max(1, availableParallelism() - 1);
+const picked = filesOf(selected, options.jestFlags);
+const whole = !options.failedOnly && !picked.filtered;
+const runKey =
+  whole && !picked.byHand
+    ? runKeyOf(
+        selected.map((part) => part.name),
+        jestWorkers,
+      )
+    : undefined;
+const guessed = guessOf(pace, { mode, files: picked.files, workers: jestWorkers, runKey });
+
 if (needsDb) buildTestDatabase();
 
-const status = runJest(selected, services, options);
+const startedAt = Date.now();
+
+const status = runJest(
+  selected,
+  services,
+  options,
+  guessed ? { ms: guessed.ms, workers: jestWorkers } : null,
+);
+
+const testsMs = Date.now() - startedAt;
+const results = readResults();
+
+writePace(paceFile, {
+  ...recordRun(pace, {
+    mode,
+    results,
+    rootDir,
+    workers: jestWorkers,
+    wallMs: testsMs,
+    whole,
+    runKey,
+  }),
+});
 
 const cloudinaryUse = quotaBefore ? await cloudinaryUseOf(selected, quotaBefore, options) : null;
 
 if (needsDb && !options.keepDb) removeTestDatabase();
 
-printSummary(selected, services, parts, readResults(), { ...options, cloudinaryUse });
+printSummary(selected, services, parts, results, { ...options, cloudinaryUse });
 
 if (needsDb && options.keepDb) {
   console.log('The test database is still running, remove it with: npm run db:test:down\n');

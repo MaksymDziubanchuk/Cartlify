@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { AuthProvider, Prisma } from '@prisma/client';
 
 import { assertLimit } from '@helpers/assertLimit.js';
 import { cursorDate, decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
@@ -11,7 +11,7 @@ import type { FindUsersDto, UsersListSortBy, UsersListSortOrder } from 'types/dt
 
 export const USERS_LIST_DEFAULT_LIMIT = 20;
 export const USERS_LIST_ROLES = ['USER', 'ADMIN', 'ROOT'] as const;
-export const USERS_LIST_PROVIDERS = ['LOCAL', 'GOOGLE', 'GITHUB', 'LINKEDIN'] as const;
+export const USERS_LIST_PROVIDERS = Object.values(AuthProvider);
 export const USERS_LIST_SORT_FIELDS = ['createdAt', 'lastLoginAt'] as const;
 export const USERS_LIST_SORT_ORDERS = ['desc', 'asc'] as const;
 
@@ -35,7 +35,7 @@ export type UsersListRow = {
   email: string;
   name: string | null;
   role: 'USER' | 'ADMIN' | 'ROOT';
-  authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
+  authProvider: AuthProvider;
   isVerified: boolean;
   locale: string | null;
   avatarUrl: string | null;

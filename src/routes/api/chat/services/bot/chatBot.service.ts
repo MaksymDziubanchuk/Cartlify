@@ -26,7 +26,7 @@ import {
   withdrawalEndsOf,
   withdrawalOpenOf,
 } from '@routes/api/orders/services/helpers/withdrawal.helper.js';
-import { paymentProviders, shopCurrency } from '@routes/api/payments/providers/index.js';
+import { paymentProviders, shopCurrency } from '@providers/payments/index.js';
 import { askAiForBotReply, askAiForBotText, type ChatBotLogger } from './chatBotAi.service.js';
 import {
   BadRequestError,
@@ -843,7 +843,7 @@ const askModelForReply = (
   userMessage: string,
   log: ChatBotLogger,
 ) => {
-  // builds the prompt of the shop outside the low-level OpenAI wrapper
+  // builds the prompt of the shop outside the low-level AI provider
   const prompt = buildChatBotPrompt({
     actorRole,
     emailConfirmed: context.emailConfirmed,

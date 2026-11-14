@@ -10,7 +10,7 @@ import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
-import { paymentProviders } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { buildOrderCancelledByBankTemplate } from '@services/email/templates/orders/orderCancelledByBank.template.js';
 import { buildOrderCancelledRefundedTemplate } from '@services/email/templates/orders/orderCancelledRefunded.template.js';
 import {
@@ -43,9 +43,6 @@ import type { ReturnMailLogger } from './sendReturnByShopEmail.helper.js';
 
 // frontend page of an order (WEB_PAGE_ORDER)
 const orderPage = (orderId: number) => webPageUrl(env.WEB_PAGE_ORDER, { id: orderId });
-
-// every provider charges in the same currency (providers/index.ts checks it)
-const currency = () => paymentProviders[0]!.currency;
 
 // cents without float math
 const cents = (value: number) => Math.round(value * 100);
@@ -290,7 +287,7 @@ const common = (statement: Statement) => ({
   code: returnCodeOf(statement.basis, statement.orderId, statement.number),
   timeZone: env.SHOP_TIME_ZONE,
   orderUrl: orderPage(statement.orderId),
-  currency: currency(),
+  currency: shopCurrency(),
   supportEmail: shopSettings().emailReplyTo,
   appName: shopSettings().shopName,
   locale: mailLocaleOf(statement.locale),
@@ -381,7 +378,7 @@ function systemMoneyOf(statement: Statement) {
 }
 
 // The mail of a statement the system made to cancel an order that was not sent, once its rows are
-// refunded: all of the payment went back by hand in the dashboard of the provider (stripe_refund:
+// refunded: all of the payment went back by hand in the dashboard of the provider (provider_refund:
 // the order is cancelled and the money is sent), or the bank decided a dispute of it for the buyer
 // (dispute_lost: what the bank gave back, and what the shop sent of the rest). It takes the place of
 // the mails of a statement of the shop: the buyer never asked for a return
@@ -391,7 +388,7 @@ async function sendSystemCancel(statement: Statement, itemIds: number[]) {
 
   const money = systemMoneyOf(statement);
 
-  if (statement.reason === 'stripe_refund') {
+  if (statement.reason === 'provider_refund') {
     await send(
       statement,
       buildOrderCancelledRefundedTemplate({

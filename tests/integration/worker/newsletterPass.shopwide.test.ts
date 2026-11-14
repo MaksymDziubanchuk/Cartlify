@@ -252,7 +252,7 @@ const activeAudience = () =>
 
 // the mails of a campaign in a watcher; to one address
 const ofCampaign = (mails: SentMail[], campaign: number) =>
-  mails.filter((mail) => mail.customArgs.campaignId === String(campaign));
+  mails.filter((mail) => mail.tags.campaignId === String(campaign));
 const toAddress = (mails: SentMail[], email: string) =>
   mails.filter((mail) => mail.to[0] === email);
 
@@ -405,14 +405,14 @@ describe('a campaign from scheduled to finished', () => {
     // what comes back with the events of SendGrid: the ids as text and the environment the mail was
     // sent from, nothing that names the reader
     const row = (await rowOf(id, es))!;
-    expect(mail.customArgs).toEqual({
+    expect(mail.tags).toEqual({
       campaignId: String(id),
       recipientId: String(row.id),
       environment: 'test',
     });
-    expect(JSON.stringify(mail.customArgs)).not.toContain(es.email);
-    expect(JSON.stringify(mail.customArgs)).not.toContain(es.manageToken);
-    expect(JSON.stringify(mail.customArgs)).not.toContain(es.unsubscribeToken);
+    expect(JSON.stringify(mail.tags)).not.toContain(es.email);
+    expect(JSON.stringify(mail.tags)).not.toContain(es.manageToken);
+    expect(JSON.stringify(mail.tags)).not.toContain(es.unsubscribeToken);
 
     // the rows: sent, with the id SendGrid gave and the time of the pass
     expect(row).toMatchObject({
@@ -473,7 +473,7 @@ describe('a campaign from scheduled to finished', () => {
     await pass(now, [id]);
 
     const mail = gotBy(sent, id, who)[0]!;
-    expect(mail.customArgs.recipientId).toBe(String((await rowOf(id, who))!.id));
+    expect(mail.tags.recipientId).toBe(String((await rowOf(id, who))!.id));
   });
 });
 
@@ -2312,7 +2312,7 @@ describe('while a campaign is being sent', () => {
         event: 'bounce',
         type: 'bounce',
         sg_message_id: `${mail.messageId}.filter0001.1.0`,
-        ...mail.customArgs,
+        ...mail.tags,
         ...over,
       };
     };
@@ -2349,7 +2349,7 @@ describe('while a campaign is being sent', () => {
       if (mail.to[0] !== who.email) return undefined;
       await asAdmin(
         (tx) =>
-          tx.$queryRaw`select cartlify.newsletter_apply_event(${Number(mail.customArgs.recipientId)}::int, 'bounce') as result`,
+          tx.$queryRaw`select cartlify.newsletter_apply_event(${Number(mail.tags.recipientId)}::int, 'bounced') as result`,
       );
       return undefined;
     });

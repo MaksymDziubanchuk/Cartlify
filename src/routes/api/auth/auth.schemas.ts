@@ -3,6 +3,10 @@ import type { FastifySchema } from 'fastify';
 import env from '@config/env.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import type { IdentityProvider } from '@providers/identity/index.js';
+
+// the name of a provider as the operation ids take it, the first letter in capitals
+const capitalized = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 const authRegisterResponseExample = {
   id: 1,
@@ -45,7 +49,7 @@ const authLoginResponseExample = {
   phone: '+10000000000',
 };
 
-// what the Turnstile widget gives the page once the visitor has solved it
+// what the widget of the captcha gives the page once the visitor has solved it
 const captchaTokenExample = 'XXXX.DUMMY.TOKEN.XXXX';
 
 const registerBodyExample = {
@@ -110,7 +114,7 @@ const MAIL_LIMIT_TEXT =
 // the three routes that send a mail or open an account for anybody ask for the captcha
 // (src/middlewares/requireCaptcha.ts); the refusals are named for each of them by the swagger plugin
 const CAPTCHA_TEXT =
-  ' The body carries `captchaToken`, the answer of the Cloudflare Turnstile widget the visitor solved: ' +
+  ' The body carries `captchaToken`, the answer of the widget of the captcha the visitor solved: ' +
   'it is checked after the body is validated and before anything is done, so a refused one creates ' +
   'nothing and sends no mail.';
 
@@ -291,241 +295,90 @@ const oauthStartConsent =
   'the versions that came in force since its last consent, as a login with a password does; ' +
   'an admin or root is asked nothing.';
 
-// Schema for Google OAuth start
-const setGoogleStartSchema = {
-  operationId: 'startGoogleOAuth',
-  summary: 'Start Google OAuth',
-  description: 'Redirects the user to the Google OAuth authorization page.' + oauthStartConsent,
+// the start of a login with an account at a provider (src/providers/identity), one route for each
+const oauthStartSchemaOf = (provider: IdentityProvider) =>
+  ({
+    operationId: `start${capitalized(provider.name)}OAuth`,
+    summary: `Start ${provider.label} OAuth`,
+    tags: ['auth'],
+    description:
+      `Redirects the user to the ${provider.label} OAuth authorization page.` + oauthStartConsent,
 
-  querystring: oauthStartQuerystring,
+    querystring: oauthStartQuerystring,
 
-  response: {
-    302: {
-      description: 'Redirect to Google OAuth authorization page.',
-      type: 'null',
+    response: {
+      302: {
+        description: `Redirect to the ${provider.label} OAuth authorization page.`,
+        type: 'null',
+      },
+
+      401: {
+        description: `The ${provider.label} OAuth start request is not authorized.`,
+        $ref: 'errorResponseSchema#',
+      },
+      409: {
+        description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
+        $ref: 'errorResponseSchema#',
+      },
+      429: {
+        description: `Too many ${provider.label} OAuth start requests.`,
+        $ref: 'errorResponseSchema#',
+      },
+      500: {
+        description: `Unexpected server error while starting ${provider.label} OAuth.`,
+        $ref: 'errorResponseSchema#',
+      },
     },
+  }) satisfies FastifySchema;
 
-    401: {
-      description: 'Google OAuth start request is not authorized.',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
-      $ref: 'errorResponseSchema#',
-    },
-    429: {
-      description: 'Too many Google OAuth start requests.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description: 'Unexpected server error while starting Google OAuth.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
+// the callback of a login with an account at a provider, where the provider sends the browser back
+const oauthCallbackSchemaOf = (provider: IdentityProvider) =>
+  ({
+    operationId: `handle${capitalized(provider.name)}OAuthCallback`,
+    summary: `Handle ${provider.label} OAuth callback`,
+    tags: ['auth'],
+    description:
+      `Handles the ${provider.label} OAuth callback and sends the browser back to the frontend page ` +
+      'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
+      'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
+      `OAUTH_CALLBACK_ERROR (${provider.label} reported another error), ALREADY_AUTHENTICATED, ` +
+      'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
+      'name the versions of the terms and of the contract in force the account has to accept, all of ' +
+      'them for a new account: nobody is logged in and no account is made, the page shows the ' +
+      'versions in force and starts the login again with them), ' +
+      'OAUTH_EMAIL_NOT_VERIFIED, OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
+      'the callback has to reach the browser whose guestId cookie is in the state), other OAUTH_* codes ' +
+      'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
+      'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
 
-// Schema for Google OAuth callback
-const setGoogleCallbackSchema = {
-  operationId: 'handleGoogleOAuthCallback',
-  summary: 'Handle Google OAuth callback',
-  description:
-    'Handles the Google OAuth callback and sends the browser back to the frontend page ' +
-    'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
-    'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
-    'OAUTH_CALLBACK_ERROR (Google reported another error), ALREADY_AUTHENTICATED, ' +
-    'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
-    'name the versions of the terms and of the contract in force the account has to accept, all of ' +
-    'them for a new account: nobody is logged in and no account is made, the page shows the ' +
-    'versions in force and starts the login again with them), ' +
-    'GOOGLE_EMAIL_NOT_VERIFIED, GOOGLE_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
-    'the callback has to reach the browser whose guestId cookie is in the state), other GOOGLE_OAUTH_* codes ' +
-    'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
-    'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
-
-  querystring: {
-    $ref: 'authGoogleCallbackQuerySchema#',
-    examples: [oauthCallbackQueryExample],
-  },
-
-  response: {
-    302: {
-      description:
-        'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
-      type: 'null',
+    querystring: {
+      $ref: 'authOAuthCallbackQuerySchema#',
+      examples: [oauthCallbackQueryExample],
     },
 
-    400: {
-      description:
-        'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
-      $ref: 'errorResponseSchema#',
-    },
-    429: {
-      description: 'Too many Google OAuth callback requests.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description:
-        'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
+    response: {
+      302: {
+        description:
+          'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
+        type: 'null',
+      },
 
-// Schema for GitHub OAuth start
-const setGithubStartSchema = {
-  operationId: 'startGithubOAuth',
-  summary: 'Start GitHub OAuth',
-  description: 'Redirects the user to the GitHub OAuth authorization page.' + oauthStartConsent,
-
-  querystring: oauthStartQuerystring,
-
-  response: {
-    302: {
-      description: 'Redirect to GitHub OAuth authorization page.',
-      type: 'null',
+      400: {
+        description:
+          'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
+        $ref: 'errorResponseSchema#',
+      },
+      429: {
+        description: `Too many ${provider.label} OAuth callback requests.`,
+        $ref: 'errorResponseSchema#',
+      },
+      500: {
+        description:
+          'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
+        $ref: 'errorResponseSchema#',
+      },
     },
-
-    401: {
-      description: 'GitHub OAuth start request is not authorized.',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
-      $ref: 'errorResponseSchema#',
-    },
-    429: {
-      description: 'Too many GitHub OAuth start requests.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description: 'Unexpected server error while starting GitHub OAuth.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-// Schema for GitHub OAuth callback
-const setGithubCallbackSchema = {
-  operationId: 'handleGithubOAuthCallback',
-  summary: 'Handle GitHub OAuth callback',
-  description:
-    'Handles the GitHub OAuth callback and sends the browser back to the frontend page ' +
-    'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
-    'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
-    'OAUTH_CALLBACK_ERROR (GitHub reported another error), ALREADY_AUTHENTICATED, ' +
-    'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
-    'name the versions of the terms and of the contract in force the account has to accept, all of ' +
-    'them for a new account: nobody is logged in and no account is made, the page shows the ' +
-    'versions in force and starts the login again with them), ' +
-    'GITHUB_EMAIL_NOT_VERIFIED, GITHUB_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
-    'the callback has to reach the browser whose guestId cookie is in the state), other GITHUB_OAUTH_* codes ' +
-    'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
-    'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
-
-  querystring: {
-    $ref: 'authGithubCallbackQuerySchema#',
-    examples: [oauthCallbackQueryExample],
-  },
-
-  response: {
-    302: {
-      description:
-        'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
-      type: 'null',
-    },
-
-    400: {
-      description:
-        'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
-      $ref: 'errorResponseSchema#',
-    },
-    429: {
-      description: 'Too many GitHub OAuth callback requests.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description:
-        'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-// Schema for LinkedIn OAuth start
-const setLinkedInStartSchema = {
-  operationId: 'startLinkedInOAuth',
-  summary: 'Start LinkedIn OAuth',
-  description: 'Redirects the user to the LinkedIn OAuth authorization page.' + oauthStartConsent,
-
-  querystring: oauthStartQuerystring,
-
-  response: {
-    302: {
-      description: 'Redirect to LinkedIn OAuth authorization page.',
-      type: 'null',
-    },
-
-    401: {
-      description: 'LinkedIn OAuth start request is not authorized.',
-      $ref: 'errorResponseSchema#',
-    },
-    409: {
-      description: '`ALREADY_AUTHENTICATED`: the browser is signed in already; log out first.',
-      $ref: 'errorResponseSchema#',
-    },
-    429: {
-      description: 'Too many LinkedIn OAuth start requests.',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description: 'Unexpected server error while starting LinkedIn OAuth.',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
-
-// Schema for LinkedIn OAuth callback
-const setLinkedInCallbackSchema = {
-  operationId: 'handleLinkedInOAuthCallback',
-  summary: 'Handle LinkedIn OAuth callback',
-  description:
-    'Handles the LinkedIn OAuth callback and sends the browser back to the frontend page ' +
-    'WEB_ORIGIN/auth/callback. On success it creates or finds the user and sets the authentication cookies. ' +
-    'On failure the redirect carries ?error=<errorCode>: OAUTH_ACCESS_DENIED (the user declined), ' +
-    'OAUTH_CALLBACK_ERROR (LinkedIn reported another error), ALREADY_AUTHENTICATED, ' +
-    'LEGAL_ACCEPTANCE_REQUIRED, LEGAL_VERSION_OUTDATED, LEGAL_DOCUMENT_NOT_FOUND (the start did not ' +
-    'name the versions of the terms and of the contract in force the account has to accept, all of ' +
-    'them for a new account: nobody is logged in and no account is made, the page shows the ' +
-    'versions in force and starts the login again with them), ' +
-    'LINKEDIN_EMAIL_NOT_VERIFIED, LINKEDIN_OAUTH_STATE_GUEST_MISMATCH (the login was started in another browser: ' +
-    'the callback has to reach the browser whose guestId cookie is in the state), other LINKEDIN_OAUTH_* codes ' +
-    'for a broken or expired state or a failed token exchange, OAUTH_PROVIDER_UNAVAILABLE when the provider ' +
-    'is out of reach or gives no answer in 5 seconds (try again), OAUTH_LOGIN_FAILED for a server failure.',
-
-  querystring: {
-    $ref: 'authLinkedInCallbackQuerySchema#',
-    examples: [oauthCallbackQueryExample],
-  },
-
-  response: {
-    302: {
-      description:
-        'Redirect to the frontend page WEB_ORIGIN/auth/callback, with ?error=<errorCode> on failure.',
-      type: 'null',
-    },
-
-    400: {
-      description:
-        'The callback query is neither a code with a state nor a provider error (VALIDATION_ERROR).',
-      $ref: 'errorResponseSchema#',
-    },
-    500: {
-      description:
-        'The server has no frontend address to send the browser to (WEB_ORIGIN is not set).',
-      $ref: 'errorResponseSchema#',
-    },
-  },
-} satisfies FastifySchema;
+  }) satisfies FastifySchema;
 
 // Schema for resending verification email
 const setVerifyResendSchema = {
@@ -860,7 +713,7 @@ const setPasswordChangeSchema = {
     },
     409: {
       description:
-        'The account signs in through Google, GitHub or LinkedIn and has no password here (PASSWORD_NOT_SET).',
+        'The account signs in through a provider of accounts and has no password here (PASSWORD_NOT_SET).',
       $ref: 'errorResponseSchema#',
     },
     429: {
@@ -905,26 +758,24 @@ const setCsrfTokenSchema = {
 } satisfies FastifySchema;
 
 // Group auth routes under the auth Swagger tag
-export const authSchema = withOpenApiTag(
-  {
-    setLoginSchema,
-    setGoogleStartSchema,
-    setGoogleCallbackSchema,
-    setGithubStartSchema,
-    setGithubCallbackSchema,
-    setLinkedInStartSchema,
-    setLinkedInCallbackSchema,
-    setRegisterSchema,
-    setVerifyResendSchema,
-    authVerifyEmailSchema,
-    setPasswordForgotSchema,
-    setPasswordResetSchema,
-    setLogoutSchema,
-    setRefreshSchema,
-    getSessionsSchema,
-    deleteSessionSchema,
-    setPasswordChangeSchema,
-    setCsrfTokenSchema,
-  },
-  'auth',
-);
+export const authSchema = {
+  ...withOpenApiTag(
+    {
+      setLoginSchema,
+      setRegisterSchema,
+      setVerifyResendSchema,
+      authVerifyEmailSchema,
+      setPasswordForgotSchema,
+      setPasswordResetSchema,
+      setLogoutSchema,
+      setRefreshSchema,
+      getSessionsSchema,
+      deleteSessionSchema,
+      setPasswordChangeSchema,
+      setCsrfTokenSchema,
+    },
+    'auth',
+  ),
+  oauthStartSchemaOf,
+  oauthCallbackSchemaOf,
+};

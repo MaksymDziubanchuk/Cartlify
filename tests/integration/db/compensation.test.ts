@@ -188,7 +188,7 @@ describe('begin_compensation', () => {
     const out = await inRolledBackTx(async (db) => {
       const { orderId, paymentId } = await soldOrder(db);
       const snapshot = {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'needs_response' as const,
         transactions: [withdrawal(25)],
@@ -297,7 +297,7 @@ describe('the failure of a refund of the payment sent another way', () => {
       const failing = await compensated(db, orderId, 10, 'compensation:bank');
       await settledOf(db, 'compensation:bank', 're_comp_bank', 'failed');
       const snapshot = {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'needs_response' as const,
         transactions: [withdrawal(25)],

@@ -1,21 +1,27 @@
-import { isEmailProviderFailure } from '@services/email/sendGrid.js';
+import {
+  MAIL_PROVIDER_UNREACHABLE,
+  isMailProviderFailure,
+  mailRefusalOf,
+} from '@providers/mail/index.js';
 import { AppError } from '@utils/errors.js';
 
 // What a failed send of a newsletter mail means for the pass that sent it:
-// - retry: SendGrid is busy or unreachable (429, 5xx, no answer in time): the mail stays in the queue
-//   and is tried again at a later claim, until its tries are used up;
-// - refused: SendGrid will never take this mail (a 4xx that is not about the key or the account): the
-//   recipient is rejected, unless the run of refusals it is in turns out to be the stream's fault
+// - retry: the mail provider is busy or unreachable (no answer in time): the mail stays in the
+//   queue and is tried again at a later claim, until its tries are used up;
+// - refused: the provider will never take this mail (the fault is the mail's): the recipient is
+//   rejected, unless the run of refusals it is in turns out to be the stream's fault
 //   (sendRecipient.helper.ts);
-// - halt: a problem of the whole stream (the key or the account is refused, 401 and 403; a setting of
-//   the stream is missing; the mail cannot be made): sending more would fail the same way for everyone,
-//   so the pass stops and leaves the mails in the queue.
+// - halt: a problem of the whole stream (the key or the account is refused: account; a setting of
+//   the stream is missing; the mail cannot be made): sending more would fail the same way for
+//   everyone, so the pass stops and leaves the mails in the queue.
 export type SendFailure = {
   kind: 'retry' | 'refused' | 'halt';
-  // the status SendGrid answered with, if it did
+  // the provider refused the key or the account of the stream
+  account: boolean;
+  // the status the provider answered with, if it did
   status: number | null;
-  // the reason code of our own error (SENDGRID_SEND_FAILED, SENDGRID_REQUEST_FAILED, ...), for the log;
-  // never the answer of SendGrid, which may name the address
+  // the reason code of our own error (MAIL_PROVIDER_REFUSED, MAIL_PROVIDER_UNREACHABLE, ...), for
+  // the log; never the answer of the provider, which may name the address
   reason: string;
 };
 
@@ -36,18 +42,20 @@ const reasonOf = (err: unknown): string => {
 export function sendFailureOf(err: unknown): SendFailure {
   const reason = reasonOf(err);
 
-  // not an answer or a silence of SendGrid: our own configuration or a bug, the same for every mail
-  if (!isEmailProviderFailure(err)) return { kind: 'halt', status: null, reason };
+  // not an answer or a silence of the provider: our own configuration or a bug, the same for every
+  // mail
+  if (!isMailProviderFailure(err)) return { kind: 'halt', account: false, status: null, reason };
 
   // no answer in time, or none at all
-  if (reason === 'SENDGRID_REQUEST_FAILED') return { kind: 'retry', status: null, reason };
-
-  const status = statusOf(err);
-  if (status === 401 || status === 403) return { kind: 'halt', status, reason };
-  if (status !== null && status >= 400 && status < 500 && status !== 429) {
-    return { kind: 'refused', status, reason };
+  if (reason === MAIL_PROVIDER_UNREACHABLE) {
+    return { kind: 'retry', account: false, status: null, reason };
   }
 
-  // 429, 5xx, and anything SendGrid says that is not a status we know
-  return { kind: 'retry', status, reason };
+  const status = statusOf(err);
+  const refusal = mailRefusalOf(err);
+  if (refusal === 'account') return { kind: 'halt', account: true, status, reason };
+  if (refusal === 'refused') return { kind: 'refused', account: false, status, reason };
+
+  // busy, and anything the provider says that is not a refusal we know
+  return { kind: 'retry', account: false, status, reason };
 }

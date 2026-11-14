@@ -16,6 +16,7 @@ import {
 } from '@config/shopSettings.js';
 import { decodeCursor, encodeCursor } from '@helpers/codeCursor.js';
 import { isPickupHours } from '@helpers/pickupHours.js';
+import { paymentPageBounds } from '@providers/payments/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import type {
@@ -33,7 +34,7 @@ import type { UserId } from 'types/ids.js';
 // the history of the rows (cartlify.shop_settings, docs/shop-settings.md). GET /api/shop-settings
 // is public, the other routes are cross-registered into admin.routes.ts and root.routes.ts
 
-// logoPublicId is internal, it names the file on Cloudinary to replace or remove
+// logoPublicId is internal, it names the file in the file storage to replace or remove
 // (setShopLogo.service.ts), no answer sends it out
 export const valuesDtoOf = ({ logoPublicId: _logoPublicId, ...values }: ShopSettingsValues) =>
   values satisfies ShopSettingsValuesDto;
@@ -49,10 +50,6 @@ export function getShopSettingsValues(): ShopSettingsValuesDto {
 export function getShopSettingsMissingFields(): string[] {
   return missingShopSettingsFields();
 }
-
-// the longest a reservation and the payment page after it may last together: Stripe never keeps
-// a page longer than a day
-const MAX_RESERVATION_AND_PAGE_MINUTES = 1440;
 
 // the rules between settings, and the lists the app keeps, checked on the values a write would
 // leave (the ones given over the current ones): the database checks the shape of each value by
@@ -76,10 +73,11 @@ function checkSettings(values: ShopSettingsValues): void {
     throw new BadRequestError('PICKUP_HOURS_INVALID');
   }
 
-  if (values.reservationMinutes + values.stripePageMinutes > MAX_RESERVATION_AND_PAGE_MINUTES) {
-    throw new BadRequestError('RESERVATION_MINUTES_TOO_LONG', {
-      max: MAX_RESERVATION_AND_PAGE_MINUTES,
-    });
+  // the reservation and the payment page after it together, as long as every payment provider
+  // keeps a page at most
+  const { mostWithReservation } = paymentPageBounds();
+  if (values.reservationMinutes + values.paymentPageMinutes > mostWithReservation) {
+    throw new BadRequestError('RESERVATION_MINUTES_TOO_LONG', { max: mostWithReservation });
   }
 
   // a buyer with no language of their own gets the shop's, it must be one the shop answers in

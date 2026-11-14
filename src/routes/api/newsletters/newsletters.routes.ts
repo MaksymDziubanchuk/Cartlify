@@ -13,7 +13,7 @@ import { newslettersAdminSchema } from './newsletters.admin.schemas.js';
 import { newslettersCampaignsRouteSchema } from './newsletters.campaigns.schemas.js';
 import { newslettersController } from './newsletters.controllers.js';
 import { newslettersSchema } from './newsletters.schemas.js';
-import sendGridWebhookRouter from './newsletters.webhook.routes.js';
+import mailWebhookRouter from './newsletters.webhook.routes.js';
 
 // Two requests have a body that may be left out altogether: a mail client posts the form of RFC 8058
 // and some post nothing, and a signed-in user subscribes their own address with every field optional.
@@ -138,9 +138,9 @@ export default async function newslettersRouter(app: FastifyInstance) {
     newslettersController.getOneClickPage,
   );
 
-  // the Event Webhook of SendGrid: the bounces, drops and complaints of the mails (a plugin of its own,
-  // for the raw body its signature needs)
-  app.register(sendGridWebhookRouter);
+  // the webhook of the mail provider: the bounces, drops and complaints of the mails (a plugin of its
+  // own, for the raw body its signature needs)
+  app.register(mailWebhookRouter);
 
   // the profile of a signed-in user, any role
   app.get(
@@ -318,7 +318,7 @@ export default async function newslettersRouter(app: FastifyInstance) {
     newslettersController.postTestCampaign,
   );
 
-  // the texts of a campaign in other languages, as drafts: the model of openai writes them, nothing is
+  // the texts of a campaign in other languages, as drafts: the model of the AI provider writes them, nothing is
   // saved. The limit of the requests of a user comes after the guards, so only a manager counts
   app.post(
     '/translate',

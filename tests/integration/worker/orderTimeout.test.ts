@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { getRedis } from '@redis/client.js';
-import { stripeProvider } from '@routes/api/payments/providers/stripe/stripe.provider.js';
+import { stripeProvider } from '@providers/payments/stripe/stripe.provider.js';
 import { ServiceUnavailableError } from '@utils/errors.js';
 import { redisKeys } from '@redis/keys.js';
 import {

@@ -64,8 +64,8 @@ export const openApiTags = [
       name: 'newsletters',
       description:
         'Subscription to the newsletters: the public form, the links of the mails (confirm, ' +
-        'manage, one-click unsubscribe), the profile of a signed-in user and the Event Webhook ' +
-        'SendGrid reports the bounces and complaints of the mails to',
+        'manage, one-click unsubscribe), the profile of a signed-in user and the webhook the mail ' +
+        'provider reports the bounces and complaints of the mails to',
     },
 ] as const;
 

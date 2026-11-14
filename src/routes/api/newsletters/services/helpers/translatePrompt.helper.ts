@@ -1,7 +1,7 @@
-import type { AiGenerateTextRequestDto, AiJsonSchemaDto } from '@services/ai/ai.types.js';
+import type { AiGenerateTextRequestDto, AiJsonSchemaDto } from '@providers/ai/index.js';
 import type { NewsletterTranslateItemDto } from 'types/dto/newsletters.dto.js';
 
-// What the model of openai is asked when the texts of a campaign are translated: the rules are the
+// What the model of the AI provider is asked when the texts of a campaign are translated: the rules are the
 // instructions, the texts of the admin are the data of one message, as the json of the review check
 // and of the chat bot are. A text is never a part of the rules, whatever it says. One request is for
 // one language; the answer is the json of the schema below

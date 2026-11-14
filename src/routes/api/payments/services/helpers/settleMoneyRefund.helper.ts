@@ -8,7 +8,7 @@ import {
   sendReturnReimbursedEmail,
 } from '@routes/api/returns/services/helpers/returnMoneyMail.helper.js';
 
-import { paymentProviders } from '../../providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { readLatePayment } from './latePayments.helper.js';
 import {
   sendCompensationSentEmail,
@@ -17,7 +17,7 @@ import {
   type PaymentRefundMailLogger,
 } from './paymentRefundMails.helper.js';
 
-import type { RefundAnswer, RefundFailure } from '../../providers/types.js';
+import type { RefundAnswer, RefundFailure } from '@providers/payments/types.js';
 import type { UserId } from 'types/ids.js';
 import type { Role } from 'types/user.js';
 
@@ -134,7 +134,7 @@ async function mailSettled(
           orderId: settled.orderId,
           userId: settled.userId,
           amount: settled.amount,
-          currency: paymentProviders[0]!.currency,
+          currency: shopCurrency(),
         },
         log,
       );

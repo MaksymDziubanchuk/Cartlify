@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 import { buildAvatarRemovedTemplate } from '@services/email/templates/users/avatarRemoved.template.js';
-import { deleteImage, isOwnFile } from '@utils/cloudinary.util.js';
+import { fileStorage, isOwnFile } from '@providers/files/index.js';
 
 // the avatar of an account taken away: by its owner through PATCH /api/users/me, or by a moderator
 // through DELETE /api/users/:userId/avatar. A removal by a moderator is a line of the journal of the
@@ -43,7 +43,7 @@ export async function deleteAvatarFile(publicId: string | null, log: AvatarLogge
   if (!isOwnFile(publicId)) return;
 
   try {
-    await deleteImage(publicId);
+    await fileStorage.deleteImage(publicId);
   } catch (err) {
     log.warn({ err, publicId }, 'avatar file was not deleted');
   }

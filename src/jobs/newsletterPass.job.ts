@@ -38,7 +38,7 @@ import {
 // Only one pass runs at a time (a lock in redis); a pass that finds the lock held ends at once.
 //
 // What a pass leaves for the next one is in the database: a mail that waits stays queued (what did not
-// fit in the day, what SendGrid did not take yet), a campaign with such mails stays sending. A pass
+// fit in the day, what the mail provider did not take yet), a campaign with such mails stays sending. A pass
 // can be run again at any time; a mail is leased to the pass that took it (the claim of the database),
 // so no mail is sent by two at once.
 
@@ -46,13 +46,13 @@ import {
 export const PASS_DEADLINE_MS = 4 * 60 * 1000;
 
 // how long the lock of a pass is held at most: the deadline, and the portion that is on its way when
-// it comes (50 mails, 5 at a time, each up to the 7 seconds SendGrid is given), with room to spare. A
+// it comes (50 mails, 5 at a time, each up to the 7 seconds the mail provider is given), with room to spare. A
 // pass that dies leaves the lock until then
 const LOCK_MARGIN_MS = 3 * 60 * 1000;
 
 const BATCH_SIZE = 50;
 const CONCURRENCY = 5;
-// a pause between two portions, so a long pass does not hammer SendGrid or the database
+// a pause between two portions, so a long pass does not hammer the mail provider or the database
 const PAUSE_MS = 200;
 
 export type NewsletterPassOptions = {
@@ -82,11 +82,11 @@ export type NewsletterPassSummary = {
   cancelled: number;
   claimed: number;
   // how the mails taken ended (a mail the database put away before taking it is in none of these):
-  // - rejected: SendGrid will not take them, or their tries are used up;
-  // - retried: SendGrid was busy, they wait out their lease to be tried again;
-  // - released: given back to the queue untried (or tried and found SendGrid busy) with the try not
+  // - rejected: the mail provider will not take them, or their tries are used up;
+  // - retried: the mail provider was busy, they wait out their lease to be tried again;
+  // - released: given back to the queue untried (or tried and found the mail provider busy) with the try not
   //   counted, free at once: the campaign was stopped, or the pass stopped on a problem of the stream;
-  // - deferred: refused by SendGrid in a run that stopped the pass; they keep the try they used and wait
+  // - deferred: refused by the mail provider in a run that stopped the pass; they keep the try they used and wait
   //   out their lease, behind the mails with fewer tries
   sent: number;
   rejected: number;
@@ -213,8 +213,8 @@ async function sendPortion(
 
 // The pass stops on a problem of the stream. The mails not tried lose the try their lease counted: a
 // stopped pass must not wear them out. The mails held, the ones whose failures showed the problem, are
-// settled by releaseHeld: none is rejected for it; a mail that found SendGrid busy goes back like the
-// ones not tried, a mail that was refused keeps its try and waits out its lease. A mail SendGrid has
+// settled by releaseHeld: none is rejected for it; a mail that found the mail provider busy goes back like the
+// ones not tried, a mail that was refused keeps its try and waits out its lease. A mail the mail provider has
 // taken is not given back, whatever failed after it took it: it stays as it is, and if its row could
 // not be written down it is free when its lease runs out
 async function giveBack(
@@ -352,7 +352,7 @@ async function markHalted(opts: NewsletterPassOptions, halt: PassHalt, at: Date)
 // Takes the stop away once the stream has proved sound: a pass that took a mail, or that found no mail
 // of a sending campaign left in the queue at all (queued or leased). A pass that proved nothing leaves
 // it as it is: the limit of the day was spent, its time was up at once, or the claim came back empty only
-// because the mails that wait are leased to a try that is not over (SendGrid was busy again). A pass
+// because the mails that wait are leased to a try that is not over (the mail provider was busy again). A pass
 // that stopped on a problem has just written the stop
 async function clearHalted(opts: NewsletterPassOptions, summary: NewsletterPassSummary) {
   if (summary.reason === 'halted') return;

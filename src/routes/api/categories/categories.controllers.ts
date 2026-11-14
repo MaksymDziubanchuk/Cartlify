@@ -21,7 +21,7 @@ import type {
 } from 'types/dto/categories.dto.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { BadRequestError } from '@utils/errors.js';
-import { discardUploads } from '@utils/cloudinary.util.js';
+import { discardUploads } from '@providers/files/index.js';
 import { categoriesServices } from './categories.services.js';
 import { beginCategoryImageUpload } from './services/setCategoryImage.service.js';
 
@@ -150,7 +150,7 @@ const putCategoryImage: ControllerRouter<
     });
     return reply.code(200).send(result);
   } catch (err) {
-    // the picture that waits on Cloudinary goes with the refused request
+    // the picture that waits in the file storage goes with the refused request
     if (upload) await discardUploads([upload], req.log);
     throw err;
   }

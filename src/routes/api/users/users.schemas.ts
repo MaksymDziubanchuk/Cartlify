@@ -125,12 +125,8 @@ const usersListQueryExample = {
   limit: '20',
 };
 
-// the letter an account without a picture gets, the way Cloudinary draws it at the url
-const drawnAvatarUrl = (size: number) =>
-  'https://res.cloudinary.com/demo/image/upload/' +
-  `c_scale,w_${size},h_${size}/e_colorize:100,co_rgb:EF6C00` +
-  `/l_text:Roboto_${size / 2}_bold:B,co_white/fl_layer_apply,g_center` +
-  '/f_auto,q_auto/v1/prod/common/avatar-base.png';
+// the letter an account without a picture gets, drawn by the file storage
+const drawnAvatarUrl = (size: number) => `https://example.com/avatars/letter-B-EF6C00-${size}.png`;
 
 const usersListResponseExample = {
   items: [
@@ -369,7 +365,7 @@ const patchMeSchema = {
         '(LOCALE_INVALID), a wrong phone (PHONE_INVALID), two avatar files (AVATAR_MULTIPLE), an empty avatar ' +
         '(AVATAR_STREAM_ERROR), a text field avatar that is not empty (AVATAR_NOT_A_FILE: only an ' +
         'empty one removes the avatar), a file that is not a jpeg, png or webp image by its content, ' +
-        'whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image Cloudinary cannot ' +
+        'whatever type the form names (IMAGE_TYPE_NOT_ALLOWED), or an image the file storage cannot ' +
         'read (IMAGE_INVALID).',
       $ref: 'errorResponseSchema#',
     },
@@ -499,7 +495,7 @@ const deleteUserAvatarSchema = {
     'Admin or root only: takes the avatar of another account away, for a picture that breaks ' +
     'the rules. An admin takes it from a user account, root from any account; the own avatar goes ' +
     'through PATCH /api/users/me with an empty avatar. The profile shows the drawn letter again, ' +
-    'the file of this environment goes from Cloudinary after the change, the removal goes to the ' +
+    'the file of this environment goes from the file storage after the change, the removal goes to the ' +
     'journal of the admins, and the person gets a mail with the number of the removal and the ' +
     'limit the rules allow. `avatarRemovals` counts the removals by a moderator of the account, ' +
     'this one included; past `avatarRemovalsLimit` the page tells the admin to take the account ' +
@@ -603,7 +599,7 @@ const deleteMeSchema = {
   summary: 'Delete current user',
   description:
     'Deletes the account of the signed-in user, only a user (an admin is demoted by root first). ' +
-    'A local account sends its password. An account of Google, GitHub or LinkedIn has none: ' +
+    'A local account sends its password. An account of a provider of accounts has none: ' +
     'its last login must be at most 10 minutes old, otherwise RECENT_LOGIN_REQUIRED (403) asks ' +
     'the page to log out, send the person through the provider again and repeat the request. ' +
     'With an order waiting for payment, paid or shipped, a delivered one the person may still ' +

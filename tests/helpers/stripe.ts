@@ -2,7 +2,7 @@ import Stripe from 'stripe';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, jest } from '@jest/globals';
 
-import appStripe from '@config/stripe.js';
+import appStripe from '@providers/payments/stripe/stripeClient.js';
 
 import { STRIPE_PLACEHOLDER_KEY } from '../setup/isolateEnv.js';
 import { uniqueTag } from './factories.js';

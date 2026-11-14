@@ -228,9 +228,16 @@ describe('PUT /api/root/shop-settings', () => {
     ],
     [
       'a reservation and a page longer than a day',
-      { reservationMinutes: 1411, stripePageMinutes: 30 },
+      { reservationMinutes: 1411, paymentPageMinutes: 30 },
       'RESERVATION_MINUTES_TOO_LONG',
       { max: 1440 },
+    ],
+    // the least a payment provider keeps its page open (30 minutes at Stripe)
+    [
+      'a payment page shorter than a provider keeps one',
+      { paymentPageMinutes: 29 },
+      'VALIDATION_ERROR',
+      null,
     ],
     [
       'a language of the shop that is not turned on',
@@ -379,10 +386,10 @@ describe('PUT /api/root/shop-settings/:key', () => {
   // the rules between settings run on the values with this one changed: a reservation that,
   // with the page minutes the shop has, lasts over a day
   it('refuses a value that breaks a rule together with the settings the shop has', async () => {
-    const { stripePageMinutes } = await currentValues();
+    const { paymentPageMinutes } = await currentValues();
     const total = await rowCount();
 
-    const res = await putOne(root, 'reservationMinutes', { value: 1441 - stripePageMinutes });
+    const res = await putOne(root, 'reservationMinutes', { value: 1441 - paymentPageMinutes });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({

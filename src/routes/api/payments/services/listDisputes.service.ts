@@ -35,7 +35,7 @@ const DUE = Prisma.sql`coalesce(d."evidenceDueBy", '9999-12-31 00:00:00'::timest
 type DisputeRow = {
   id: number;
   provider: string;
-  stripeId: string;
+  providerDisputeId: string;
   paymentId: string;
   orderId: number | null;
   userId: number | null;
@@ -57,7 +57,7 @@ type DisputeRow = {
 };
 
 const ROWS = Prisma.sql`
-  select d.id, d.provider::text as provider, d."stripeId", d."paymentId", d."orderId", d."userId",
+  select d.id, d.provider::text as provider, d."providerDisputeId", d."paymentId", d."orderId", d."userId",
     not exists (
       select 1 from cartlify.orders as o where o.id = d."orderId" and o."paymentId" = d."paymentId"
     ) as late,
@@ -77,7 +77,7 @@ const ROWS = Prisma.sql`
 const itemOf = (row: DisputeRow): DisputeItemDto => ({
   id: row.id,
   provider: row.provider,
-  stripeId: row.stripeId,
+  providerDisputeId: row.providerDisputeId,
   paymentId: row.paymentId,
   orderId: row.orderId,
   userId: row.userId,
@@ -210,7 +210,7 @@ export async function getDispute({
         event: true,
         amount: true,
         currency: true,
-        stripeTxId: true,
+        balanceTxId: true,
         moneyUse: true,
         createdAt: true,
       },

@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 
-import type { PaymentProviderName } from '../../providers/types.js';
+import type { PaymentProviderName } from '@providers/payments/types.js';
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
 
 // The payments an order could not take, as the money journal keeps them (db/05, money_log): the line

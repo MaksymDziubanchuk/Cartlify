@@ -1,17 +1,24 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { readSendGridEvents } from '@providers/mail/sendgrid/sendGridEvents.js';
 import {
-  customArgsOf,
+  mailTagsOf,
   readMailEvents,
 } from '@routes/api/newsletters/services/helpers/mailEvents.helper.js';
 
 import { importWithEnv } from '../../../../../../helpers/freshImport.js';
 
-// The two ends of what comes back with the events of SendGrid. A mail of the newsletters carries
-// custom arguments (the campaign, the recipient, the environment); SendGrid puts them on the same level
-// as its own fields in each event it reports. Both Event Webhooks of the account hear every event of
-// the account, the mails of the orders and the mails of the other environments too, so an event counts
-// only when it is of the three kinds the app keeps and carries the three arguments of this environment
+// The two ends of what comes back with the events of the mail provider, here SendGrid. A mail of the
+// newsletters carries tags (the campaign, the recipient, the environment); SendGrid puts them on the
+// same level as its own fields in each event it reports. Both webhooks of the account hear every
+// event of the account, the mails of the orders and the mails of the other environments too, so an
+// event counts only when it is of the three kinds the app keeps and carries the three tags of this
+// environment
+
+// a batch of SendGrid as the app reads it: SendGrid's words made ours, then the tags of this
+// environment
+const read = (items: unknown[], environment?: string) =>
+  readMailEvents(readSendGridEvents(items)!, environment);
 
 const ENV = 'test';
 const marked = (over: Record<string, unknown> = {}) => ({
@@ -28,16 +35,16 @@ const event = (kind: unknown, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-describe('customArgsOf', () => {
+describe('mailTagsOf', () => {
   it('names the campaign, the recipient and the environment, as text', () => {
-    expect(customArgsOf(5, 9)).toEqual({ campaignId: '5', recipientId: '9', environment: 'test' });
+    expect(mailTagsOf(5, 9)).toEqual({ campaignId: '5', recipientId: '9', environment: 'test' });
   });
 
   it('carries nothing that names a person', () => {
-    const text = JSON.stringify(customArgsOf(5, 9));
+    const text = JSON.stringify(mailTagsOf(5, 9));
 
     expect(text).not.toMatch(/@/);
-    expect(Object.keys(customArgsOf(5, 9)).sort()).toEqual([
+    expect(Object.keys(mailTagsOf(5, 9)).sort()).toEqual([
       'campaignId',
       'environment',
       'recipientId',
@@ -49,29 +56,29 @@ describe('customArgsOf', () => {
     ['development', 'dev'],
     ['test', 'test'],
   ])(
-    'puts the environment of %s as %s (the folder of the files of Cloudinary)',
+    'puts the environment of %s as %s (ENVIRONMENT_NAME, as the folders of the files)',
     async (nodeEnv, mark) => {
       const fresh = await importWithEnv<
         typeof import('@routes/api/newsletters/services/helpers/mailEvents.helper.js')
       >('@routes/api/newsletters/services/helpers/mailEvents.helper.js', { NODE_ENV: nodeEnv });
 
-      expect(fresh.customArgsOf(1, 2).environment).toBe(mark);
+      expect(fresh.mailTagsOf(1, 2).environment).toBe(mark);
     },
   );
 
   it('is what the reader of the events takes back', () => {
-    const args = customArgsOf(12, 345);
+    const args = mailTagsOf(12, 345);
 
-    expect(readMailEvents([{ event: 'bounce', ...args }], ENV).toApply).toEqual([
-      { recipientId: 345, event: 'bounce' },
+    expect(read([{ event: 'bounce', ...args }], ENV).toApply).toEqual([
+      { recipientId: 345, event: 'bounced', dropReason: null },
     ]);
   });
 });
 
-describe('readMailEvents', () => {
+describe('the events of a batch', () => {
   describe('the kinds of events', () => {
-    it('keeps a bounce, a drop and a spam report, each with the recipient', () => {
-      const read = readMailEvents(
+    it('tells a bounce, a drop and a spam report in our words, each with the recipient', () => {
+      const got = read(
         [
           event('bounce', { recipientId: '1' }),
           event('dropped', { recipientId: '2' }),
@@ -80,11 +87,11 @@ describe('readMailEvents', () => {
         ENV,
       );
 
-      expect(read).toEqual({
+      expect(got).toEqual({
         toApply: [
-          { recipientId: 1, event: 'bounce' },
-          { recipientId: 2, event: 'dropped' },
-          { recipientId: 3, event: 'spamreport' },
+          { recipientId: 1, event: 'bounced', dropReason: null },
+          { recipientId: 2, event: 'dropped', dropReason: null },
+          { recipientId: 3, event: 'complained', dropReason: null },
         ],
         ignored: 0,
         skipped: 0,
@@ -92,12 +99,12 @@ describe('readMailEvents', () => {
     });
 
     it('keeps the order SendGrid sent the events in', () => {
-      const read = readMailEvents(
+      const got = read(
         [event('dropped', { recipientId: '7' }), event('bounce', { recipientId: '7' })],
         ENV,
       );
 
-      expect(read.toApply.map((item) => item.event)).toEqual(['dropped', 'bounce']);
+      expect(got.toApply.map((item) => item.event)).toEqual(['dropped', 'bounced']);
     });
 
     it.each([
@@ -111,38 +118,38 @@ describe('readMailEvents', () => {
       'group_resubscribe',
       'something_new',
     ])('leaves out %s', (kind) => {
-      expect(readMailEvents([event(kind)], ENV)).toEqual({ toApply: [], ignored: 1, skipped: 0 });
+      expect(read([event(kind)], ENV)).toEqual({ toApply: [], ignored: 1, skipped: 0 });
     });
 
     // the names are the ones SendGrid writes; a different spelling is another thing
     it.each(['BOUNCE', 'Bounce', ' bounce', 'bounce ', 'bounced', 'spam_report', 'drop'])(
       'does not take %j for a kind of the three',
       (kind) => {
-        expect(readMailEvents([event(kind)], ENV).toApply).toEqual([]);
+        expect(read([event(kind)], ENV).toApply).toEqual([]);
       },
     );
 
     it.each([[undefined], [null], [5], [true], [['bounce']], [{ name: 'bounce' }]])(
       'leaves out an event whose kind is %j',
       (kind) => {
-        const read = readMailEvents([event(kind)], ENV);
+        const got = read([event(kind)], ENV);
 
-        expect(read.toApply).toEqual([]);
-        expect(read.ignored + read.skipped).toBe(1);
+        expect(got.toApply).toEqual([]);
+        expect(got.ignored + got.skipped).toBe(1);
       },
     );
   });
 
   describe('a bounce', () => {
     it('is a bounce of the address when SendGrid calls it a bounce', () => {
-      expect(readMailEvents([event('bounce', { type: 'bounce' })], ENV).toApply).toEqual([
-        { recipientId: 9, event: 'bounce' },
+      expect(read([event('bounce', { type: 'bounce' })], ENV).toApply).toEqual([
+        { recipientId: 9, event: 'bounced', dropReason: null },
       ]);
     });
 
     it('is a bounce when the event does not say its type', () => {
-      expect(readMailEvents([event('bounce')], ENV).toApply).toEqual([
-        { recipientId: 9, event: 'bounce' },
+      expect(read([event('bounce')], ENV).toApply).toEqual([
+        { recipientId: 9, event: 'bounced', dropReason: null },
       ]);
     });
 
@@ -150,52 +157,50 @@ describe('readMailEvents', () => {
     // sender, the content): the address may be fine, so the subscription must not end; the mail did
     // not arrive, which is what the drop reports
     it('is a drop of the mail, not an end of the subscription, when SendGrid calls it a block', () => {
-      expect(readMailEvents([event('bounce', { type: 'blocked' })], ENV).toApply).toEqual([
-        { recipientId: 9, event: 'dropped' },
+      expect(read([event('bounce', { type: 'blocked' })], ENV).toApply).toEqual([
+        { recipientId: 9, event: 'dropped', dropReason: null },
       ]);
     });
 
     it.each([['BLOCKED'], ['Blocked'], [''], [null], [5]])(
       'is a bounce of the address for a type %j that is not "blocked"',
       (type) => {
-        expect(readMailEvents([event('bounce', { type })], ENV).toApply).toEqual([
-          { recipientId: 9, event: 'bounce' },
+        expect(read([event('bounce', { type })], ENV).toApply).toEqual([
+          { recipientId: 9, event: 'bounced', dropReason: null },
         ]);
       },
     );
 
     it('does not make a block of any other event', () => {
-      expect(readMailEvents([event('dropped', { type: 'blocked' })], ENV).toApply).toEqual([
-        { recipientId: 9, event: 'dropped' },
+      expect(read([event('dropped', { type: 'blocked' })], ENV).toApply).toEqual([
+        { recipientId: 9, event: 'dropped', dropReason: null },
       ]);
-      expect(readMailEvents([event('spamreport', { type: 'blocked' })], ENV).toApply).toEqual([
-        { recipientId: 9, event: 'spamreport' },
+      expect(read([event('spamreport', { type: 'blocked' })], ENV).toApply).toEqual([
+        { recipientId: 9, event: 'complained', dropReason: null },
       ]);
     });
   });
 
   // SendGrid says why it dropped a mail in the field "reason" ("Bounced Address", "Spam Reporting
-  // Address", "Invalid", "Unsubscribed Address", ...); the database decides what a reason means. Only
-  // the drop carries it: the reason of a bounce is the text of the receiving server
+  // Address", "Invalid", "Unsubscribed Address", ...); two of the reasons are the address known from
+  // before, the rest is none of the shop's. Only the drop carries it: the reason of a bounce is the
+  // text of the receiving server
   describe('the reason of a drop', () => {
-    it('is kept as text, with the drop', () => {
-      expect(
-        readMailEvents([event('dropped', { reason: 'Bounced Address' })], ENV).toApply,
-      ).toStrictEqual([{ recipientId: 9, event: 'dropped', reason: 'Bounced Address' }]);
-    });
-
-    it('is cut of the spaces around it and to 200 characters', () => {
-      const long = 'x'.repeat(5000);
-
-      expect(
-        readMailEvents([event('dropped', { reason: '  Spam Reporting Address \n' })], ENV).toApply,
-      ).toStrictEqual([{ recipientId: 9, event: 'dropped', reason: 'Spam Reporting Address' }]);
-      expect(
-        readMailEvents([event('dropped', { reason: long })], ENV).toApply[0]!.reason,
-      ).toHaveLength(200);
+    it.each([
+      ['Bounced Address', 'address_bounced'],
+      ['Spam Reporting Address', 'address_complained'],
+      ['  spam reporting address \n', 'address_complained'],
+      ['BOUNCED ADDRESS', 'address_bounced'],
+    ])('tells %j as %s, with the drop', (reason, dropReason) => {
+      expect(read([event('dropped', { reason })], ENV).toApply).toStrictEqual([
+        { recipientId: 9, event: 'dropped', dropReason },
+      ]);
     });
 
     it.each([
+      ['Invalid'],
+      ['Unsubscribed Address'],
+      ['Bounced Addresses'],
       [undefined],
       [null],
       [5],
@@ -204,15 +209,15 @@ describe('readMailEvents', () => {
       [{ text: 'x' }],
       ['  '],
       [''],
-    ])('is left out when it is %j, the drop is kept', (reason) => {
-      expect(readMailEvents([event('dropped', { reason })], ENV).toApply).toStrictEqual([
-        { recipientId: 9, event: 'dropped' },
+    ])('gives no reason for %j, the drop is kept', (reason) => {
+      expect(read([event('dropped', { reason })], ENV).toApply).toStrictEqual([
+        { recipientId: 9, event: 'dropped', dropReason: null },
       ]);
     });
 
-    it('is left out of the drop that has no reason field', () => {
-      expect(readMailEvents([event('dropped')], ENV).toApply).toStrictEqual([
-        { recipientId: 9, event: 'dropped' },
+    it('gives no reason to the drop that has no reason field', () => {
+      expect(read([event('dropped')], ENV).toApply).toStrictEqual([
+        { recipientId: 9, event: 'dropped', dropReason: null },
       ]);
     });
 
@@ -220,7 +225,7 @@ describe('readMailEvents', () => {
       const reason = 'Bounced Address';
 
       expect(
-        readMailEvents(
+        read(
           [
             event('bounce', { reason, recipientId: '1' }),
             event('bounce', { reason, type: 'blocked', recipientId: '2' }),
@@ -229,9 +234,9 @@ describe('readMailEvents', () => {
           ENV,
         ).toApply,
       ).toStrictEqual([
-        { recipientId: 1, event: 'bounce' },
-        { recipientId: 2, event: 'dropped' },
-        { recipientId: 3, event: 'spamreport' },
+        { recipientId: 1, event: 'bounced', dropReason: null },
+        { recipientId: 2, event: 'dropped', dropReason: null },
+        { recipientId: 3, event: 'complained', dropReason: null },
       ]);
     });
   });
@@ -263,7 +268,7 @@ describe('readMailEvents', () => {
       ['an environment that is not text', { environment: ['test'] }],
       ['an empty environment', { environment: '' }],
     ])('skips an event with %s', (_name, over) => {
-      expect(readMailEvents([event('bounce', over)], ENV)).toEqual({
+      expect(read([event('bounce', over)], ENV)).toEqual({
         toApply: [],
         ignored: 0,
         skipped: 1,
@@ -271,9 +276,9 @@ describe('readMailEvents', () => {
     });
 
     it('takes the biggest id a column holds', () => {
-      expect(readMailEvents([event('bounce', { recipientId: '2147483647' })], ENV).toApply).toEqual(
-        [{ recipientId: 2147483647, event: 'bounce' }],
-      );
+      expect(read([event('bounce', { recipientId: '2147483647' })], ENV).toApply).toEqual([
+        { recipientId: 2147483647, event: 'bounced', dropReason: null },
+      ]);
     });
 
     it('skips a mail of the orders, which carries none of the marks', () => {
@@ -284,19 +289,17 @@ describe('readMailEvents', () => {
         category: ['order'],
       };
 
-      expect(readMailEvents([orderMail], ENV)).toEqual({ toApply: [], ignored: 0, skipped: 1 });
+      expect(read([orderMail], ENV)).toEqual({ toApply: [], ignored: 0, skipped: 1 });
     });
 
     it('skips the mail of another environment, the same ids or not', () => {
-      expect(readMailEvents([event('spamreport', { environment: 'dev' })], 'prod').skipped).toBe(1);
-      expect(readMailEvents([event('spamreport', { environment: 'prod' })], 'prod').skipped).toBe(
-        0,
-      );
+      expect(read([event('spamreport', { environment: 'dev' })], 'prod').skipped).toBe(1);
+      expect(read([event('spamreport', { environment: 'prod' })], 'prod').skipped).toBe(0);
     });
 
     it('does not read the marks of an event it does not keep', () => {
       // a delivered mail of another environment is no concern of this one: it is left out, not skipped
-      expect(readMailEvents([event('delivered', { environment: 'prod' })], ENV)).toEqual({
+      expect(read([event('delivered', { environment: 'prod' })], ENV)).toEqual({
         toApply: [],
         ignored: 1,
         skipped: 0,
@@ -308,12 +311,16 @@ describe('readMailEvents', () => {
     it.each([[null], [5], ['text'], [true], [[]], [['bounce']], [[[]]], [undefined]])(
       'skips the item %j',
       (item) => {
-        expect(readMailEvents([item], ENV)).toEqual({ toApply: [], ignored: 0, skipped: 1 });
+        expect(read([item], ENV)).toEqual({ toApply: [], ignored: 0, skipped: 1 });
       },
     );
 
+    it.each([[null], [{}], ['text'], [5]])('is no batch when the body is %j', (body) => {
+      expect(readSendGridEvents(body)).toBeNull();
+    });
+
     it('reads an empty list as nothing', () => {
-      expect(readMailEvents([], ENV)).toEqual({ toApply: [], ignored: 0, skipped: 0 });
+      expect(read([], ENV)).toEqual({ toApply: [], ignored: 0, skipped: 0 });
     });
 
     it('counts every item once, as kept, left out or skipped', () => {
@@ -327,17 +334,17 @@ describe('readMailEvents', () => {
         { event: 'spamreport' },
       ];
 
-      const read = readMailEvents(items, ENV);
+      const got = read(items, ENV);
 
-      expect(read.toApply).toHaveLength(2);
-      expect(read.ignored).toBe(2);
-      expect(read.skipped).toBe(3);
-      expect(read.toApply.length + read.ignored + read.skipped).toBe(items.length);
+      expect(got.toApply).toHaveLength(2);
+      expect(got.ignored).toBe(2);
+      expect(got.skipped).toBe(3);
+      expect(got.toApply.length + got.ignored + got.skipped).toBe(items.length);
     });
   });
 
   it('uses the environment of the app when none is given', () => {
-    expect(readMailEvents([event('bounce')]).toApply).toHaveLength(1);
-    expect(readMailEvents([event('bounce', { environment: 'prod' })]).toApply).toHaveLength(0);
+    expect(read([event('bounce')]).toApply).toHaveLength(1);
+    expect(read([event('bounce', { environment: 'prod' })]).toApply).toHaveLength(0);
   });
 });

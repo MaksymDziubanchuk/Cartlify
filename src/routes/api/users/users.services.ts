@@ -20,13 +20,12 @@ import { assertEmail } from '@helpers/validateEmail.js';
 import { PROFILE_TEXT_MAX_LENGTH, isPhone, textLength } from '@helpers/profileText.js';
 import { verifyPass } from '@helpers/safePass.js';
 import {
+  fileStorage,
   makePublicId,
   makeUploadPublicId,
-  moveImage,
   requireImageStream,
-  uploadImage,
   UploadImageResult,
-} from '@utils/cloudinary.util.js';
+} from '@providers/files/index.js';
 import { avatarOf, nameGivesLetter } from '@utils/avatar.util.js';
 
 import type {
@@ -190,7 +189,7 @@ async function beginAvatarUpload(args: {
     throw new BadRequestError('AVATAR_EMPTY');
   }
 
-  // an empty file and one that is not a jpeg, png or webp by its bytes never reach cloudinary
+  // an empty file and one that is not a jpeg, png or webp by its bytes never reach the file storage
   const safeStream = await requireImageStream(args.avatar.file, {
     mimetype: args.avatar.mimetype,
     emptyCode: 'AVATAR_STREAM_ERROR',
@@ -198,7 +197,7 @@ async function beginAvatarUpload(args: {
 
   // the avatar waits under an id of its own: updateMe moves it to the avatar of the account once
   // the profile is written, a refused request deletes it (the controller)
-  return uploadImage({
+  return fileStorage.uploadImage({
     publicId: makeUploadPublicId(),
     file: safeStream,
     mimetype: args.avatar.mimetype,
@@ -338,7 +337,7 @@ async function updateMe({
         // file of the account; a refused request never touched it. The avatar keeps one path,
         // the copies cached of the old file are dropped
         if (avatarUploaded && avatarPublicId) {
-          const placed = await moveImage(avatarUploaded.publicId, avatarPublicId, {
+          const placed = await fileStorage.moveImage(avatarUploaded.publicId, avatarPublicId, {
             invalidate: true,
           });
           user = await tx.user.update({
@@ -418,7 +417,7 @@ async function updateMe({
           ...(user.phone ? { phone: user.phone } : {}),
           reviews,
         };
-        // the move at cloudinary runs inside the transaction
+        // the move in the file storage runs inside the transaction
       },
       { timeout: 20_000 },
     );

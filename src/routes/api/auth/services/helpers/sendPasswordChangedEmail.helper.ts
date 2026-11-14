@@ -13,9 +13,7 @@ export type SendPasswordChangedEmailArgs = {
 };
 
 // tells the owner the password changed: a person who did not change it learns of it and resets it
-export async function sendPasswordChangedEmail(
-  args: SendPasswordChangedEmailArgs,
-): Promise<{ status: number }> {
+export async function sendPasswordChangedEmail(args: SendPasswordChangedEmailArgs): Promise<void> {
   const { subject, text, html } = buildPasswordChangedTemplate({
     loginUrl: webPageUrl(env.WEB_PAGE_LOGIN),
     changedAt: args.changedAt,
@@ -25,7 +23,7 @@ export async function sendPasswordChangedEmail(
     ...(args.locale ? { locale: args.locale } : {}),
   });
 
-  return sendEmail({
+  await sendEmail({
     to: args.to,
     subject,
     text,

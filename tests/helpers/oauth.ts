@@ -10,7 +10,7 @@ import { jsonResponse, stubFetch, type FetchCall } from './fetchStub.js';
 // the oauth providers answer our server here, our own login code runs for real: the made-up apps
 // of tests/setup/integration.setup.ts, the provider answers, and for Google and LinkedIn a key
 // that signs the id_token and is published as the provider's key list, so the signature check
-// in oidcIdTokenVerify.ts works the way it does against the real providers
+// in src/providers/identity/oidc.ts works the way it does against the real providers
 
 export type Provider = 'google' | 'github' | 'linkedin';
 

@@ -21,7 +21,7 @@ import {
 const LIST_LIMIT_DEFAULT = 50;
 
 // the form of a document: one PDF file in `file`, the title and the kind as text fields. The file is
-// read into Cloudinary while the form is parsed, whatever the order of the parts; a request that is
+// read into the file storage while the form is parsed, whatever the order of the parts; a request that is
 // refused deletes it. The routes of the documents take files up to DOCUMENT_MAX_BYTES, the limit of
 // the other forms is lower
 const postDocument: ControllerRouter<{}, {}, {}, DocumentDto> = async (req, reply) => {
@@ -71,7 +71,7 @@ const postDocument: ControllerRouter<{}, {}, {}, DocumentDto> = async (req, repl
     });
     return reply.code(201).send(result);
   } catch (err) {
-    // the file that waits on Cloudinary goes with the refused request
+    // the file that waits in the file storage goes with the refused request
     if (upload) await discardDocumentUploads([upload], req.log);
     throw err;
   }

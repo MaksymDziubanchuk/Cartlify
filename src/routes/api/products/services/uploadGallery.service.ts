@@ -2,7 +2,7 @@ import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
 import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
 import { inAdminTx } from '@routes/api/attributes/services/helpers/directory.helper.js';
 import { BadRequestError } from '@utils/errors.js';
-import type { UploadImageResult } from '@utils/cloudinary.util.js';
+import type { UploadImageResult } from '@providers/files/index.js';
 
 import {
   assertProductThere,
@@ -99,7 +99,7 @@ export async function uploadGallery(dto: UploadGalleryDto): Promise<UploadGaller
         return { images: await readGallery(tx, productId) };
       },
       undefined,
-      // the moves at cloudinary run inside the transaction: it is given time for each file
+      // the moves in the file storage run inside the transaction: it is given time for each file
       { timeout: imagesTxTimeout(dto.images.length) },
     );
   } catch (err) {

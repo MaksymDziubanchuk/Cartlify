@@ -368,7 +368,7 @@ describe('the shape of a line', () => {
         purpose: 'dispute',
         amount: 5,
         disputeId: 1,
-        stripeTxId: 'txn_x',
+        balanceTxId: 'txn_x',
       },
     ],
     [
@@ -425,9 +425,9 @@ describe('the shape of a line', () => {
 describe('the disputes of the payments', () => {
   const insertDispute = (q: OwnerSession, fields: Record<string, unknown> = {}) =>
     q.attempt(
-      `insert into cartlify.payment_disputes (provider, "stripeId", "paymentId", status, "openedAt", "closedAt")
+      `insert into cartlify.payment_disputes (provider, "providerDisputeId", "paymentId", status, "openedAt", "closedAt")
        values ('stripe', $1, $2, $3::cartlify."DisputeStatus", now(), $4) returning id`,
-      fields.stripeId ?? `dp_${randomUUID()}`,
+      fields.providerDisputeId ?? `dp_${randomUUID()}`,
       fields.paymentId ?? 'pi_dispute',
       fields.status ?? 'needs_response',
       fields.closedAt ?? null,
@@ -440,12 +440,12 @@ describe('the disputes of the payments', () => {
       await q.as({ role: 'USER', userId: buyer.id });
       const byBuyer = await insertDispute(q);
       await q.as({ role: 'ADMIN' });
-      const bySystem = await insertDispute(q, { stripeId: 'dp_read' });
+      const bySystem = await insertDispute(q, { providerDisputeId: 'dp_read' });
 
       const countAs = async (role: string, userId: number | null) => {
         await q.as({ role, userId } as Actor);
         const [row] = await q.rows<{ n: number }>(
-          `select count(*)::int as n from cartlify.payment_disputes where "stripeId" = 'dp_read'`,
+          `select count(*)::int as n from cartlify.payment_disputes where "providerDisputeId" = 'dp_read'`,
         );
         return row!.n;
       };
@@ -469,7 +469,7 @@ describe('the disputes of the payments', () => {
 
   it('is changed by the system in what describes it, never in what identifies it, and never removed', async () => {
     const outcomes = await withOwner(async (q) => {
-      const created = await insertDispute(q, { stripeId: 'dp_change' });
+      const created = await insertDispute(q, { providerDisputeId: 'dp_change' });
       if (!created.ok) throw new Error(`the dispute was refused: ${created.message}`);
       const id = Number(created.rows[0]!.id);
       const update = (set: string) =>
@@ -480,7 +480,7 @@ describe('the disputes of the payments', () => {
           `status = 'under_review', "hasEvidence" = true, "submissionCount" = 1, "syncedAt" = now()`,
         ),
         ended: await update(`status = 'won', "closedAt" = now()`),
-        stripeId: await update(`"stripeId" = 'dp_other'`),
+        providerDisputeId: await update(`"providerDisputeId" = 'dp_other'`),
         paymentId: await update(`"paymentId" = 'pi_other'`),
         openedAt: await update(`"openedAt" = now() - interval '1 day'`),
         removed: await q.attempt(
@@ -491,7 +491,7 @@ describe('the disputes of the payments', () => {
 
     expect(outcomes.status.ok).toBe(true);
     expect(outcomes.ended.ok).toBe(true);
-    for (const refused of [outcomes.stripeId, outcomes.paymentId, outcomes.openedAt]) {
+    for (const refused of [outcomes.providerDisputeId, outcomes.paymentId, outcomes.openedAt]) {
       expect(refused).toMatchObject({
         ok: false,
         code: '42501',
@@ -504,8 +504,8 @@ describe('the disputes of the payments', () => {
   it('is closed with its time, and the same dispute is one row', async () => {
     const outcomes = await withOwner(async (q) => ({
       endedWithoutTime: await insertDispute(q, { status: 'lost' }),
-      once: await insertDispute(q, { stripeId: 'dp_once' }),
-      twice: await insertDispute(q, { stripeId: 'dp_once' }),
+      once: await insertDispute(q, { providerDisputeId: 'dp_once' }),
+      twice: await insertDispute(q, { providerDisputeId: 'dp_once' }),
     }));
 
     expect(outcomes.endedWithoutTime).toMatchObject({ ok: false, code: '23514' });

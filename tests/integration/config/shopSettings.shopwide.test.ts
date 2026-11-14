@@ -78,7 +78,7 @@ describe('loadShopSettings()', () => {
     const values = shopSettings();
 
     expect(values.reservationMinutes).toBeGreaterThan(0);
-    expect(values.stripePageMinutes).toBeGreaterThanOrEqual(30);
+    expect(values.paymentPageMinutes).toBeGreaterThanOrEqual(30);
     expect(values.shopLocale).toMatch(/^[a-z]{2}$/);
     expect(values.enabledLocales).toContain(values.shopLocale);
     expect(Array.isArray(values.deliveryCountries)).toBe(true);

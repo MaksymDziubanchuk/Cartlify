@@ -43,7 +43,7 @@ import {
 
 import type { CreateProductDto, CreateProductResponseDto } from 'types/dto/products.dto.js';
 import type { AuditChange } from '@db/adminAudit.helper.js';
-import type { UploadImageResult } from '@utils/cloudinary.util.js';
+import type { UploadImageResult } from '@providers/files/index.js';
 
 // POST /api/products: a product with its variants and its gallery from one form. The files are the
 // gallery of the product (the place of a file is its number in the form); every variant shows some
@@ -239,7 +239,7 @@ export async function createProduct({
         await moveStagedImages({ tx, staged, moved });
 
         return product;
-        // the moves at cloudinary run inside the transaction: it is given time for each file
+        // the moves in the file storage run inside the transaction: it is given time for each file
       },
       { timeout: imagesTxTimeout(images.length) },
     );

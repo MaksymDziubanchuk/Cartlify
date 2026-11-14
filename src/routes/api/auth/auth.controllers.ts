@@ -6,22 +6,12 @@ import type {
   LoginBodyDto,
   LoginDto,
   LoginResponseDto,
-  GoogleStartDto,
-  GoogleStartResponseDto,
+  OAuthCallbackDto,
+  OAuthCallbackQueryDto,
+  OAuthCallbackSuccessQueryDto,
+  OAuthStartDto,
   OAuthStartQueryDto,
-  GoogleCallbackQueryDto,
-  GoogleCallbackDto,
-  GoogleCallbackSuccessQueryDto,
-  GithubStartDto,
-  GithubStartResponseDto,
-  GithubCallbackQueryDto,
-  GithubCallbackDto,
-  GithubCallbackSuccessQueryDto,
-  LinkedInStartDto,
-  LinkedInStartResponseDto,
-  LinkedInCallbackQueryDto,
-  LinkedInCallbackSuccessQueryDto,
-  LinkedInCallbackDto,
+  OAuthStartResponseDto,
   RegisterBodyDto,
   RegisterResponseDto,
   RegisterDto,
@@ -41,6 +31,8 @@ import type {
   RefreshDto,
   CsrfTokenResponseDto,
 } from 'types/dto/auth.dto.js';
+
+import type { IdentityProvider } from '@providers/identity/index.js';
 
 import { authServices } from './auth.services.js';
 import { documentIdsOfQuery } from './services/helpers/oauthConsent.helper.js';
@@ -156,36 +148,36 @@ const postVerifyResend: ControllerRouter<{}, ResendVerifyBodyDto, {}, MessageRes
   return reply.code(200).send(result);
 };
 
-const getGoogleStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GoogleStartResponseDto> = async (
-  req,
-  reply,
-) => {
-  const { id, role } = req.user as User;
+// the start of a login with a provider: the browser of a guest goes to the provider
+const oauthStartOf =
+  (
+    provider: IdentityProvider,
+  ): ControllerRouter<{}, {}, OAuthStartQueryDto, OAuthStartResponseDto> =>
+  async (req, reply) => {
+    const { id, role } = req.user as User;
 
-  // allow oauth start for guest
-  if (role !== 'GUEST') {
-    throw new AlreadyAuthenticatedError();
-  }
+    // allow oauth start for guest
+    if (role !== 'GUEST') {
+      throw new AlreadyAuthenticatedError();
+    }
 
-  const ip = req.ip;
-  const userAgent = req.headers['user-agent'];
+    const ip = req.ip;
+    const userAgent = req.headers['user-agent'];
 
-  // build google start dto
-  // the versions of the terms and of the contract the page sent: a new account takes them
-  const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
-  const args = pickDefined<GoogleStartDto>(
-    { guestId: id, role },
-    { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
-  );
+    // the versions of the terms and of the contract the page sent: a new account takes them
+    const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
+    const args = pickDefined<OAuthStartDto>(
+      { guestId: id, role },
+      { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
+    );
 
-  const { url } = await authServices.googleStart(args);
-  // redirect to google oauth
-  reply.code(302).redirect(url);
-  return;
-};
+    const { url } = await authServices.oauthStart(provider, args);
+    reply.code(302).redirect(url);
+    return;
+  };
 
-// the codes a provider sends when the user declines: google and github use the standard one,
-// linkedin its own for a cancelled login and for refused access
+// the codes a provider sends when the user declines: the standard one, and the ones some
+// providers have for a cancelled login and for refused access
 const OAUTH_DECLINED_ERRORS = new Set([
   'access_denied',
   'user_cancelled_login',
@@ -240,129 +232,26 @@ async function finishOAuthLogin(
     .redirect(webPageUrl(env.WEB_PAGE_OAUTH_CALLBACK, error ? { query: { error } } : {}));
 }
 
-const getGoogleCallback: ControllerRouter<{}, {}, GoogleCallbackQueryDto, void> = async (
-  req,
-  reply,
-) => {
-  const ip = req.ip;
-  const userAgent = req.headers['user-agent'];
+// the provider sends the browser back with the code of the login
+const oauthCallbackOf =
+  (provider: IdentityProvider): ControllerRouter<{}, {}, OAuthCallbackQueryDto, void> =>
+  async (req, reply) => {
+    const ip = req.ip;
+    const userAgent = req.headers['user-agent'];
 
-  await finishOAuthLogin(req, reply, async () => {
-    const { code, state } = req.query as GoogleCallbackSuccessQueryDto;
-    // the guest of this browser, it has to be the one who started the login
-    const { id: guestId, role } = req.user as User;
+    await finishOAuthLogin(req, reply, async () => {
+      const { code, state } = req.query as OAuthCallbackSuccessQueryDto;
+      // the guest of this browser, it has to be the one who started the login
+      const { id: guestId, role } = req.user as User;
 
-    // build google callback dto
-    const args = pickDefined<GoogleCallbackDto>(
-      { code, state, guestId, role, log: req.log },
-      { ip, userAgent },
-    );
+      const args = pickDefined<OAuthCallbackDto>(
+        { code, state, guestId, role, log: req.log },
+        { ip, userAgent },
+      );
 
-    return authServices.googleCallback(args);
-  });
-};
-
-const getGithubStart: ControllerRouter<{}, {}, OAuthStartQueryDto, GithubStartResponseDto> = async (
-  req,
-  reply,
-) => {
-  const { id, role } = req.user as User;
-
-  // allow oauth start for guest
-  if (role !== 'GUEST') {
-    throw new AlreadyAuthenticatedError();
-  }
-
-  const ip = req.ip;
-  const userAgent = req.headers['user-agent'];
-
-  // build github start dto
-  // the versions of the terms and of the contract the page sent: a new account takes them
-  const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
-  const args = pickDefined<GithubStartDto>(
-    { guestId: id, role },
-    { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
-  );
-
-  const { url } = await authServices.githubStart(args);
-  // redirect to github oauth
-  reply.code(302).redirect(url);
-  return;
-};
-
-const getGithubCallback: ControllerRouter<{}, {}, GithubCallbackQueryDto, void> = async (
-  req,
-  reply,
-) => {
-  const ip = req.ip;
-  const userAgent = req.headers['user-agent'];
-
-  await finishOAuthLogin(req, reply, async () => {
-    const { code, state } = req.query as GithubCallbackSuccessQueryDto;
-    // the guest of this browser, it has to be the one who started the login
-    const { id: guestId, role } = req.user as User;
-
-    // build github callback dto
-    const args = pickDefined<GithubCallbackDto>(
-      { code, state, guestId, role, log: req.log },
-      { ip, userAgent },
-    );
-
-    return authServices.githubCallback(args);
-  });
-};
-
-const getLinkedInStart: ControllerRouter<
-  {},
-  {},
-  OAuthStartQueryDto,
-  LinkedInStartResponseDto
-> = async (req, reply) => {
-  const { id, role } = req.user as User;
-
-  // allow oauth start for guest
-  if (role !== 'GUEST') {
-    throw new AlreadyAuthenticatedError();
-  }
-
-  const ip = req.ip;
-  const userAgent = req.headers['user-agent'];
-
-  // build linkedin start dto
-  // the versions of the terms and of the contract the page sent: a new account takes them
-  const acceptedDocumentIds = documentIdsOfQuery(req.query.acceptedDocumentIds);
-  const args = pickDefined<LinkedInStartDto>(
-    { guestId: id, role },
-    { ip, userAgent, acceptedDocumentIds, newsletter: req.query.newsletter },
-  );
-
-  const { url } = await authServices.linkedInStart(args);
-  // redirect to linkedin oauth
-  reply.code(302).redirect(url);
-  return;
-};
-
-const getLinkedInCallback: ControllerRouter<{}, {}, LinkedInCallbackQueryDto, void> = async (
-  req,
-  reply,
-) => {
-  const ip = req.ip;
-  const userAgent = req.headers['user-agent'];
-
-  await finishOAuthLogin(req, reply, async () => {
-    const { code, state } = req.query as LinkedInCallbackSuccessQueryDto;
-    // the guest of this browser, it has to be the one who started the login
-    const { id: guestId, role } = req.user as User;
-
-    // build linkedin callback dto
-    const args = pickDefined<LinkedInCallbackDto>(
-      { code, state, guestId, role, log: req.log },
-      { ip, userAgent },
-    );
-
-    return authServices.linkedInCallback(args);
-  });
-};
+      return authServices.oauthCallback(provider, args);
+    });
+  };
 
 const postVerifyEmail: ControllerRouter<{}, VerifyEmailBodyDto, {}, MessageResponseDto> = async (
   req,
@@ -524,12 +413,8 @@ const getCsrfToken: ControllerRouter<{}, {}, {}, CsrfTokenResponseDto> = async (
 export const authController = {
   postLogin,
   postRegister,
-  getGoogleStart,
-  getGoogleCallback,
-  getGithubStart,
-  getGithubCallback,
-  getLinkedInStart,
-  getLinkedInCallback,
+  oauthStartOf,
+  oauthCallbackOf,
   postVerifyResend,
   postVerifyEmail,
   postPasswordForgot,

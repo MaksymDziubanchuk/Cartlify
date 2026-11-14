@@ -256,7 +256,7 @@ describe('POST /api/orders/:orderId/withdrawal for a paid order that was not sen
     const { orderId, paymentId } = await order([{ item: product, quantity: 1 }]);
     await inCommittedTx((db) =>
       synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'needs_response',
         transactions: [withdrawal(10)],

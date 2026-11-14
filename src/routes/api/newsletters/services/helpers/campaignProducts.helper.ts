@@ -1,4 +1,4 @@
-import env from '@config/env.js';
+import { shopCurrency } from '@providers/payments/index.js';
 import { prisma } from '@db/client.js';
 import { findAll } from '@routes/api/products/services/getAllProducts.service.js';
 import { categoryImageUrlsOf } from '@routes/api/categories/services/helpers/categories.helper.js';
@@ -80,7 +80,7 @@ export async function resolveCampaignProducts(
       }
     }
 
-    return { takenAt: now.toISOString(), currency: env.STRIPE_CURRENCY.toUpperCase(), blocks };
+    return { takenAt: now.toISOString(), currency: shopCurrency().toUpperCase(), blocks };
   } catch (err) {
     if (isAppError(err)) throw err;
 

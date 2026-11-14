@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import jwt from 'jsonwebtoken';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import cloudinary from '@config/cloudinary.js';
+import cloudinary from '@providers/files/cloudinary/cloudinaryClient.js';
 import env from '@config/env.js';
 import { DELETED_AVATAR_COLOR } from '@utils/avatar.util.js';
 

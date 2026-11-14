@@ -4,17 +4,22 @@ import env from '@config/env.js';
 import { openApiSecurity } from '@config/openapi.js';
 import { withOpenApiSecurityFor } from '@helpers/withOpenApiSecurity.js';
 import { withOpenApiTag } from '@helpers/withOpenApiTag.js';
+import { paymentProviders } from '@providers/payments/index.js';
+
+// the examples name the first provider of the server, with its page and its ids
+const exampleProvider = paymentProviders[0]!;
+const exampleIds = exampleProvider.examples;
 
 const checkoutSessionBodyExample = {
   orderId: 1,
-  provider: 'stripe',
+  provider: exampleProvider.name,
 };
 
 const checkoutSessionResponseExample = {
   checkoutSession: {
-    provider: 'stripe',
-    sessionId: 'cs_test_123456789',
-    url: 'https://checkout.stripe.com/c/pay/cs_test_123456789',
+    provider: exampleProvider.name,
+    sessionId: exampleIds.pageId,
+    url: exampleIds.pageUrl,
     mode: 'payment',
     status: 'open',
     paymentStatus: 'unpaid',
@@ -27,7 +32,7 @@ const postCheckoutSessionSchema = {
   operationId: 'createCheckoutSession',
   summary: 'Create checkout session',
   description:
-    'Opens the payment page of a confirmed user order at the payment provider the buyer picked (`provider`, there is no default one). A repeated request for the same order, reservation and provider returns the same page; a page of another provider opened for the order before is closed first. `expiresAt` is the time after which the checkout can no longer be paid. A Stripe page returns the buyer to `WEB_ORIGIN` + `WEB_PAGE_CHECKOUT_SUCCESS` (`/checkout/success` unless set) `?session_id=<id>` or `WEB_PAGE_CHECKOUT_CANCEL` (`/checkout/cancel`) `?orderId=<id>`.',
+    'Opens the payment page of a confirmed user order at the payment provider the buyer picked (`provider`, there is no default one). A repeated request for the same order, reservation and provider returns the same page; a page of another provider opened for the order before is closed first. `expiresAt` is the time after which the checkout can no longer be paid. The page of a provider returns the buyer to `WEB_ORIGIN` + `WEB_PAGE_CHECKOUT_SUCCESS` (`/checkout/success` unless set) `?session_id=<id>` or `WEB_PAGE_CHECKOUT_CANCEL` (`/checkout/cancel`) `?orderId=<id>`.',
 
   body: {
     $ref: 'paymentsCreateCheckoutSessionBodySchema#',
@@ -94,13 +99,13 @@ const refundItemExample = {
   userId: 7,
   returnId: null,
   returnCode: null,
-  provider: 'stripe',
-  paymentId: 'pi_3QxYzAbCdEfGhIjK',
-  refundId: 're_3QxYzAbCdEfGhIjK',
+  provider: exampleProvider.name,
+  paymentId: exampleIds.paymentId,
+  refundId: exampleIds.refundId,
   amount: 51,
   currency: 'eur',
   failure: 'card_unavailable',
-  failureText: 'expired_or_canceled_card',
+  failureText: exampleIds.refundFailureText,
   bankReference: null,
   byDashboard: false,
   createdAt: '2026-11-10T09:00:00.000Z',
@@ -372,9 +377,9 @@ const postMoneyDecisionSchema = {
 
 const disputeItemExample = {
   id: 7,
-  provider: 'stripe',
-  stripeId: 'du_1QxYzAbCdEfGhIjKlMnOpQrS',
-  paymentId: 'pi_3QxYzAbCdEfGhIjK',
+  provider: exampleProvider.name,
+  providerDisputeId: exampleIds.disputeId,
+  paymentId: exampleIds.paymentId,
   orderId: 42,
   userId: 7,
   late: false,
@@ -451,7 +456,7 @@ const getDisputeSchema = {
               event: 'money.dispute_withdrawn',
               amount: -25,
               currency: 'eur',
-              stripeTxId: 'txn_1QxYzAbCdEfGhIjKlMnOpQr',
+              balanceTxId: exampleIds.balanceTxId,
               moneyUse: null,
               createdAt: '2026-11-11T09:00:01.000Z',
             },

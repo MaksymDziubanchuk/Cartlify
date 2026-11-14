@@ -12,7 +12,7 @@ import {
   ServiceUnavailableError,
   isAppError,
 } from '@utils/errors.js';
-import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import {
   cancelOrderReservationExpiry,
   deleteOrderPaymentPageLink,

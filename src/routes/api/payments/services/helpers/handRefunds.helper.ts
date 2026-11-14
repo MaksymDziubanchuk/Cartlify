@@ -9,7 +9,7 @@ import {
   finishReturnTransfer,
 } from '@routes/api/returns/services/refundReturn.service.js';
 
-import { getPaymentProvider } from '../../providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import { readLatePayment } from './latePayments.helper.js';
 import { sendWhatIsLeft } from './orderPaymentRefund.helper.js';
 import {
@@ -19,7 +19,11 @@ import {
 import { mailLateRefundSent, settleMoneyRefund } from './settleMoneyRefund.helper.js';
 import { cancelBySystem } from './systemCancel.helper.js';
 
-import type { PaymentProviderName, RefundAnswer, RefundFailure } from '../../providers/types.js';
+import type {
+  PaymentProviderName,
+  RefundAnswer,
+  RefundFailure,
+} from '@providers/payments/types.js';
 import type { StartedRefund } from '@routes/api/returns/services/helpers/returnRefund.helper.js';
 
 // The refunds made by hand in the dashboard of the provider. The provider tells of one with the
@@ -29,7 +33,7 @@ import type { StartedRefund } from '@routes/api/returns/services/helpers/returnR
 //     it (the buyer is told when the money is sent); else it is a line of its own and the app sends
 //     what is left of the payment itself;
 // B - an order not sent without a statement, all of its payment back by hand: the system cancels
-//     the order by a statement of its own (stripe_refund) and shares every such refund among the
+//     the order by a statement of its own (provider_refund) and shares every such refund among the
 //     items and the delivery (share_money_line), which pays the rows of the statement at once with
 //     nothing asked of the provider; the buyer is mailed that the order is cancelled and the money
 //     sent;
@@ -287,7 +291,7 @@ async function cancelIfAllBack(
       const back = refunds.reduce((sum, one) => sum + cents(one.amount), 0);
       if (!order || refunds.length === 0 || back < cents(order.total)) return null;
 
-      const returnId = await cancelBySystem(db, orderId, 'stripe_refund');
+      const returnId = await cancelBySystem(db, orderId, 'provider_refund');
       if (returnId === null) return null;
 
       for (const one of refunds) {

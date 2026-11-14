@@ -562,7 +562,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       expect(takeLogs({ msg: 'request failed' })).toHaveLength(1);
       expect(
         takeLogs({
-          msg: 'newsletter events were not stored, the request fails for SendGrid to deliver them again',
+          msg: 'newsletter events were not stored, the request fails for the mail provider to deliver them again',
         }),
       ).toEqual([expect.objectContaining({ failed: 1, total: 3 })]);
       expect(await statusOf(first)).toBe('sent');
@@ -590,7 +590,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       const res = await deliverEvents(app, batchOf(mail), { signWith: signerOfAnotherKey() });
 
       expect(res.statusCode).toBe(401);
-      expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
       await expectUntouched(mail);
     });
 
@@ -603,7 +603,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       const res = await deliverEvents(app, null, { body: changed, signedBody: signed });
 
       expect(res.statusCode).toBe(401);
-      expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
       await expectUntouched(other);
     });
 
@@ -616,7 +616,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       });
 
       expect(res.statusCode).toBe(401);
-      expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
       await expectUntouched(mail);
     });
 
@@ -631,7 +631,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       const res = await deliverEvents(app, batchOf(mail), { signature });
 
       expect(res.statusCode).toBe(401);
-      expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
       await expectUntouched(mail);
     });
 
@@ -652,7 +652,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
         const res = await deliverEvents(app, batchOf(mail), { timestamp });
 
         expect(res.statusCode).toBe(401);
-        expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+        expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
       }
       await expectUntouched(mail);
     });
@@ -677,7 +677,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
         const res = await deliverEvents(app, batchOf(mail), { timestamp: nowSeconds(-26 * HOUR) });
 
         expect(res.statusCode).toBe(401);
-        expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+        expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
         await expectUntouched(mail);
       });
 
@@ -696,7 +696,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
         const res = await deliverEvents(app, batchOf(mail), { timestamp: nowSeconds(HOUR) });
 
         expect(res.statusCode).toBe(401);
-        expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+        expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
         await expectUntouched(mail);
       });
     });
@@ -726,14 +726,14 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
         ['signature', SIGNATURE_HEADER],
         ['timestamp', TIMESTAMP_HEADER],
       ])(
-        'answers SENDGRID_SIGNATURE_REQUIRED for a %s header of only spaces',
+        'answers MAIL_WEBHOOK_SIGNATURE_REQUIRED for a %s header of only spaces',
         async (_name, header) => {
           const mail = await mailTo();
 
           const res = await deliverEvents(app, batchOf(mail), { headers: { [header]: '   ' } });
 
           expect(res.statusCode).toBe(400);
-          expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_REQUIRED' });
+          expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_REQUIRED' });
           await expectUntouched(mail);
         },
       );
@@ -765,7 +765,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       });
 
       expect(res.statusCode).toBe(401);
-      expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_SIGNATURE_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_SIGNATURE_INVALID' });
     });
   });
 
@@ -791,8 +791,8 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
         const res = await deliverEvents(app, [bounce(mail)]);
 
         expect(res.statusCode).toBe(503);
-        expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_WEBHOOK_KEY_UNAVAILABLE' });
-        expect(takeLogs({ errorCode: 'SENDGRID_WEBHOOK_KEY_UNAVAILABLE' })).toHaveLength(1);
+        expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_KEY_UNAVAILABLE' });
+        expect(takeLogs({ errorCode: 'MAIL_WEBHOOK_KEY_UNAVAILABLE' })).toHaveLength(1);
         env.SENDGRID_NEWSLETTER_WEBHOOK_KEY = key;
         await expectUntouched(mail);
       },
@@ -804,14 +804,14 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       const res = await deliverEvents(app, [], { signature: 'AAAA' });
 
       expect(res.statusCode).toBe(503);
-      expect(takeLogs({ errorCode: 'SENDGRID_WEBHOOK_KEY_UNAVAILABLE' })).toHaveLength(1);
+      expect(takeLogs({ errorCode: 'MAIL_WEBHOOK_KEY_UNAVAILABLE' })).toHaveLength(1);
     });
 
     it('reads the key at every request, so a key put in place works at once', async () => {
       const mail = await mailTo();
       env.SENDGRID_NEWSLETTER_WEBHOOK_KEY = '';
       expect((await deliverEvents(app, [bounce(mail)])).statusCode).toBe(503);
-      takeLogs({ errorCode: 'SENDGRID_WEBHOOK_KEY_UNAVAILABLE' });
+      takeLogs({ errorCode: 'MAIL_WEBHOOK_KEY_UNAVAILABLE' });
 
       env.SENDGRID_NEWSLETTER_WEBHOOK_KEY = key;
 
@@ -846,7 +846,7 @@ describe('POST /api/newsletters/sendgrid/webhook', () => {
       const res = await deliverEvents(app, null, { body });
 
       expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ errorCode: 'SENDGRID_EVENTS_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'MAIL_WEBHOOK_EVENTS_INVALID' });
     });
 
     it('takes the content type with a charset', async () => {

@@ -7,11 +7,11 @@ import { shopSettings } from '@config/shopSettings.js';
 // return" holds): a paid order that was not sent, whose money went back to the buyer another way,
 // is cancelled by a statement of the system (create_return, db/05: source system, basis other,
 // whatever is left of the order, the goods back to the stock at once, the order cancelled once all
-// of it is back). stripe_refund: all of the payment went back by hand in the dashboard of the
+// of it is back). provider_refund: all of the payment went back by hand in the dashboard of the
 // provider; dispute_lost: the bank decided a dispute of the payment for the buyer. The money the
 // statement owes is then tied to it and its transfer uses that money first
 
-export type SystemCancelReason = 'stripe_refund' | 'dispute_lost';
+export type SystemCancelReason = 'provider_refund' | 'dispute_lost';
 
 // whether units of the order are in no statement yet (a row whose money was refused gives its units
 // back), the units a new statement takes
@@ -55,7 +55,7 @@ export async function cancelBySystem(
   `);
   if (!order || order.status !== 'paid') return null;
 
-  if (reason === 'stripe_refund') {
+  if (reason === 'provider_refund') {
     const open = await db.orderReturn.count({ where: { orderId, closedAt: null } });
     if (open > 0) return null;
   } else if (!(await unitsLeftOf(db, orderId))) {

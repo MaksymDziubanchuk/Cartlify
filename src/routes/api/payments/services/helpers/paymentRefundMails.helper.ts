@@ -10,7 +10,7 @@ import { buildOrderPaymentRefundFailedTemplate } from '@services/email/templates
 import { buildOrderPaymentRefundOutsideTemplate } from '@services/email/templates/orders/orderPaymentRefundOutside.template.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
 
-import type { RefundFailure } from '../../providers/types.js';
+import type { RefundFailure } from '@providers/payments/types.js';
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
 
 // The mails of the refund of a payment the order could not take, to the buyer: the money is sent,

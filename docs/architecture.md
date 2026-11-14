@@ -13,6 +13,7 @@ Cartlify was built to demonstrate backend engineering decisions that are relevan
 - real-time support chat with guest/user/admin flows
 - AI-assisted product and support conversations with fallback behavior
 - shop data root changes without a deploy (a table with versions, not environment variables) and mails, the chat bot and the payment page that answer in the customer's own language, through a shared dictionary (i18next)
+- every outside service (payments, mail, files, AI, captcha, login with an account elsewhere) behind an interface of its kind, so a provider is replaced or joined by another without touching the rest of the app ([providers](providers.md))
 - documented REST API surface through Swagger/OpenAPI
 - API design that can later support SSR, GraphQL, and additional real-time features
 
@@ -57,6 +58,13 @@ Cartlify/
 │   ├── jobs/                   # commands run on a schedule, not by a request: the pass of the newsletters (npm run newsletter:run)
 │   ├── middlewares/            # auth, RBAC, logging, error handling, id validation
 │   ├── plugins/                # Fastify plugins, including Swagger/OpenAPI registration
+│   ├── providers/              # the outside services, a folder for each kind and in it one for each provider (see providers.md)
+│   │   ├── payments/           # stripe/
+│   │   ├── mail/               # sendgrid/
+│   │   ├── files/              # cloudinary/
+│   │   ├── ai/                 # openai/
+│   │   ├── captcha/            # turnstile/
+│   │   └── identity/           # google/, github/, linkedin/
 │   ├── redis/                  # Redis client and keys
 │   ├── routes/api/
 │   │   ├── auth/
@@ -75,7 +83,7 @@ Cartlify/
 │   │   ├── reviews/
 │   │   ├── admin/
 │   │   ├── root/
-│   │   ├── newsletters/        # the subscription, the pages behind the mail links, campaigns, subscribers, the blocklist, the SendGrid webhook
+│   │   ├── newsletters/        # the subscription, the pages behind the mail links, campaigns, subscribers, the blocklist, the webhook of the mail provider
 │   │   ├── shopSettings/       # the data of the shop root changes without a deploy (public, admin and root routes)
 │   │   ├── system/             # health, readiness, project info
 │   │   ├── chat/
@@ -84,11 +92,11 @@ Cartlify/
 │   ├── services/               # cross-module services
 │   │   └── email/templates/    # mails as .html and .txt files with {{marks}}: auth/, newsletters/, orders/, returns/, users/
 │   ├── types/                  # DTOs and shared TypeScript types
-│   ├── utils/                  # JWT, OAuth, Cloudinary, app errors
+│   ├── utils/                  # JWT, the avatar of an account, app errors
 │   └── workers/                # background workers
 ├── tests/
 │   ├── unit/                   # no database or network, mirrors src/ paths
-│   ├── integration/            # api/<module>, db, flows, worker against the Docker test stack; every answer is held against the Swagger document
+│   ├── integration/            # api/<module>, db, flows, worker, providers (the contract of each kind) against the Docker test stack; every answer is held against the Swagger document
 │   ├── helpers/                # app startup for app.inject, test environment guard
 │   ├── fixtures/               # static files used by tests
 │   ├── setup/                  # per-project jest setup, keeps the local .env out of tests

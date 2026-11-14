@@ -14,7 +14,7 @@ import {
   NotFoundError,
 } from '@utils/errors.js';
 
-import { getPaymentProvider, paymentProviders } from '../providers/index.js';
+import { getPaymentProvider, shopCurrency } from '@providers/payments/index.js';
 import {
   MONEY_REFUNDS,
   moneyRefundById,
@@ -23,7 +23,7 @@ import {
 import { settleMoneyRefund } from './helpers/settleMoneyRefund.helper.js';
 import { refundItemOf } from './listPaymentRefunds.service.js';
 
-import type { PaymentProviderName } from '../providers/types.js';
+import type { PaymentProviderName } from '@providers/payments/types.js';
 import type { GiveCompensationDto, PaymentRefundItemDto } from 'types/dto/payments.dto.js';
 
 // Root, or an admin root allowed to handle the money, gives the buyer of an order a compensation by
@@ -102,7 +102,7 @@ export async function giveCompensation({
           ${orderId}::int,
           ${key}::text,
           ${amount}::numeric,
-          ${paymentProviders[0]!.currency}::text
+          ${shopCurrency()}::text
         ) as begun
       `);
       const one = row!.begun;

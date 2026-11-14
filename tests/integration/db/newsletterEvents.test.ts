@@ -30,7 +30,7 @@ import {
 } from '../../helpers/newsletterFns.js';
 import { inOwnerTx, type OwnerSession } from '../../helpers/ownerDb.js';
 
-// what SendGrid tells about a mail of a campaign, as the database takes it
+// what the mail provider tells about a mail of a campaign, as the database takes it
 // (cartlify.newsletter_apply_event): a bounce stops the subscription, a spam report pauses it, a
 // drop only counts. Only the system reports. The mail of a campaign is a recipient row; a campaign
 // that was started cannot be left in the database (only a draft is deleted), so every case makes
@@ -53,16 +53,16 @@ afterAll(async () => {
 
 const MANAGER = (): Actor => ({ role: 'ADMIN', userId: fx.manager.id });
 
-type EventName = 'bounce' | 'dropped' | 'spamreport';
+type EventName = 'bounced' | 'dropped' | 'complained';
 
 // what each event does to the mail and which total of the campaign it counts in
 const EVENTS: Record<
   EventName,
   { recipient: RecipientState; total: 'undeliveredCount' | 'complaintCount' }
 > = {
-  bounce: { recipient: 'bounced', total: 'undeliveredCount' },
+  bounced: { recipient: 'bounced', total: 'undeliveredCount' },
   dropped: { recipient: 'dropped', total: 'undeliveredCount' },
-  spamreport: { recipient: 'complained', total: 'complaintCount' },
+  complained: { recipient: 'complained', total: 'complaintCount' },
 };
 const EVENT_NAMES = Object.keys(EVENTS) as EventName[];
 
@@ -152,24 +152,24 @@ const SUBSCRIPTION_AFTER: Record<
   Record<EventName, { status: SubscriptionStatus; line: 'bounced' | 'complaint' | null }>
 > = {
   active: {
-    bounce: { status: 'stopped_bounce', line: 'bounced' },
+    bounced: { status: 'stopped_bounce', line: 'bounced' },
     dropped: { status: 'active', line: null },
-    spamreport: { status: 'paused_complaint', line: 'complaint' },
+    complained: { status: 'paused_complaint', line: 'complaint' },
   },
   paused_complaint: {
-    bounce: { status: 'stopped_bounce', line: 'bounced' },
+    bounced: { status: 'stopped_bounce', line: 'bounced' },
     dropped: { status: 'paused_complaint', line: null },
-    spamreport: { status: 'paused_complaint', line: null },
+    complained: { status: 'paused_complaint', line: null },
   },
   stopped_bounce: {
-    bounce: { status: 'stopped_bounce', line: null },
+    bounced: { status: 'stopped_bounce', line: null },
     dropped: { status: 'stopped_bounce', line: null },
-    spamreport: { status: 'stopped_bounce', line: null },
+    complained: { status: 'stopped_bounce', line: null },
   },
   ended: {
-    bounce: { status: 'ended', line: null },
+    bounced: { status: 'ended', line: null },
     dropped: { status: 'ended', line: null },
-    spamreport: { status: 'ended', line: null },
+    complained: { status: 'ended', line: null },
   },
 };
 
@@ -238,7 +238,7 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
     await inOwnerTx(async (db) => {
       const scene = await sceneIn(db, { source: 'account' });
 
-      expect(await apply(db, SYSTEM, scene.recipient, 'bounce')).toEqual({
+      expect(await apply(db, SYSTEM, scene.recipient, 'bounced')).toEqual({
         ok: true,
         rows: [{ result: 'applied' }],
       });
@@ -258,7 +258,7 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
       await inOwnerTx(async (db) => {
         const scene = await sceneIn(db, { campaign });
 
-        await apply(db, SYSTEM, scene.recipient, 'spamreport');
+        await apply(db, SYSTEM, scene.recipient, 'complained');
 
         expect((await stateOf(db, scene)).totals).toEqual({ ...NO_TOTALS, complaintCount: 1 });
       });
@@ -266,7 +266,7 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
   );
 
   it.each(EVENT_NAMES)(
-    'counts a repeated %s once: SendGrid may send an event again',
+    'counts a repeated %s once: the mail provider may send an event again',
     async (event) => {
       await inOwnerTx(async (db) => {
         const scene = await sceneIn(db);
@@ -322,8 +322,8 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
     },
   );
 
-  // a mail SendGrid refused has no outcome to report: an event for it belongs to some other mail,
-  // e.g. of another environment on the same account of SendGrid
+  // a mail the mail provider refused has no outcome to report: an event for it belongs to some other mail,
+  // e.g. of another environment on the same account of the mail provider
   it.each(EVENT_NAMES)('knows no mail that was rejected: %s changes nothing', async (event) => {
     await inOwnerTx(async (db) => {
       const scene = await sceneIn(db, { recipient: 'rejected' });
@@ -337,7 +337,7 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
     });
   });
 
-  // SendGrid tells of a mail only after it accepted the mail, and it can tell before the sending
+  // the mail provider tells of a mail only after it accepted the mail, and it can tell before the sending
   // has written down that it did (a bounce comes within a second): an event for a mail that still
   // waits is the event of a mail that left, and it is not lost
   describe('for a mail the sending has not written down as sent yet', () => {
@@ -397,9 +397,9 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
       await inOwnerTx(async (db) => {
         const scene = await sceneIn(db, { recipient: 'queued' });
 
-        await apply(db, SYSTEM, scene.recipient, 'bounce');
+        await apply(db, SYSTEM, scene.recipient, 'bounced');
         const afterFirst = await stateOf(db, scene);
-        await apply(db, SYSTEM, scene.recipient, 'spamreport');
+        await apply(db, SYSTEM, scene.recipient, 'complained');
 
         expect(await stateOf(db, scene)).toEqual(afterFirst);
       });
@@ -413,7 +413,7 @@ describe('cartlify.newsletter_apply_event, the system reports an event', () => {
       const earlier = await recipientIn(db, otherCampaign, scene.subscription, 'sent');
       const neighbour = await sceneIn(db);
 
-      await apply(db, SYSTEM, scene.recipient, 'bounce');
+      await apply(db, SYSTEM, scene.recipient, 'bounced');
 
       const status = (id: number) =>
         callAs<{ status: string }>(
@@ -502,7 +502,7 @@ describe('cartlify.newsletter_apply_event, for anybody but the system', () => {
           'NEWSLETTER_FORBIDDEN',
         );
       }
-      expect(codeOf(await apply(db, actor(), 2147483647, 'bounce'))).toBe('NEWSLETTER_FORBIDDEN');
+      expect(codeOf(await apply(db, actor(), 2147483647, 'bounced'))).toBe('NEWSLETTER_FORBIDDEN');
       expect(await stateOf(db, scene)).toEqual(before);
     });
   });
@@ -515,16 +515,16 @@ describe('cartlify.newsletter_apply_event, for anybody but the system', () => {
         SYSTEM,
         SQL.applyEvent,
         2147483647,
-        'bounce',
+        'bounced',
       );
       const wrongEvent = await attemptAs(db, SYSTEM, SQL.applyEvent, 2147483647, 'open');
-      const guest = await attemptAs(db, GUEST(), SQL.applyEvent, 2147483647, 'bounce');
+      const guest = await attemptAs(db, GUEST(), SQL.applyEvent, 2147483647, 'bounced');
       const root = await attemptAs(
         db,
         { role: 'ROOT', userId: fx.root.id },
         SQL.applyEvent,
         2147483647,
-        'bounce',
+        'bounced',
       );
       return { system, wrongEvent: codeOf(wrongEvent), guest: codeOf(guest), root: codeOf(root) };
     });
@@ -538,10 +538,10 @@ describe('cartlify.newsletter_apply_event, for anybody but the system', () => {
   });
 });
 
-// SendGrid drops a mail it will not deliver and says why. Two reasons are the news of a bounce and
-// of a complaint that SendGrid knew of already (its own lists): the mail is dropped and counts as
-// undelivered, and the subscription is dealt with as the real event would deal with it
-// (cartlify.newsletter_apply_event, the third argument)
+// The mail provider drops a mail it will not deliver and says why. Two reasons are the news of a
+// bounce and of a complaint the provider knew of already (its own lists), told in our words: the mail
+// is dropped and counts as undelivered, and the subscription is dealt with as the real event would
+// deal with it (cartlify.newsletter_apply_event, the third argument)
 describe('the reason of a dropped mail', () => {
   const applyWithReason = (
     db: OwnerSession,
@@ -551,8 +551,8 @@ describe('the reason of a dropped mail', () => {
     reason: string | null,
   ) => attemptAs<{ result: string }>(db, actor, SQL.applyEventWithReason, recipient, event, reason);
 
-  const BOUNCED = 'Bounced Address';
-  const SPAM = 'Spam Reporting Address';
+  const BOUNCED = 'address_bounced';
+  const SPAM = 'address_complained';
 
   it.each([
     ['active', 'stopped_bounce'],
@@ -635,18 +635,12 @@ describe('the reason of a dropped mail', () => {
     },
   );
 
-  it.each([
-    ['another reason', 'Invalid'],
-    ['the reason of an unsubscribed address', 'Unsubscribed Address'],
-    ['a reason in other words', 'Bounced Addresses'],
-    ['an empty reason', ''],
-    ['no reason', null],
-  ])('only counts a dropped mail when the reason is %s', async (_what, reason) => {
+  it('only counts a dropped mail that has no reason', async () => {
     await inOwnerTx(async (db) => {
       const scene = await sceneIn(db);
       const before = await stateOf(db, scene);
 
-      expect(await applyWithReason(db, SYSTEM, scene.recipient, 'dropped', reason)).toEqual({
+      expect(await applyWithReason(db, SYSTEM, scene.recipient, 'dropped', null)).toEqual({
         ok: true,
         rows: [{ result: 'applied' }],
       });
@@ -660,37 +654,48 @@ describe('the reason of a dropped mail', () => {
     });
   });
 
-  it('takes the reason however SendGrid cases it', async () => {
+  // the provider tells its reasons in the words of the shop; any other word is a mistake of the server
+  it.each([
+    ['the words of the provider', 'Bounced Address'],
+    ['another reason', 'Invalid'],
+    ['a reason in capitals', 'ADDRESS_BOUNCED'],
+    ['an empty reason', ''],
+  ])('refuses a drop whose reason is %s', async (_what, reason) => {
     await inOwnerTx(async (db) => {
-      const bounced = await sceneIn(db);
-      const spam = await sceneIn(db);
+      const scene = await sceneIn(db);
+      const before = await stateOf(db, scene);
 
-      await applyWithReason(db, SYSTEM, bounced.recipient, 'dropped', ' bounced address ');
-      await applyWithReason(db, SYSTEM, spam.recipient, 'dropped', 'SPAM REPORTING ADDRESS');
-
-      expect((await stateOf(db, bounced)).subscription.status).toBe('stopped_bounce');
-      expect((await stateOf(db, spam)).subscription.status).toBe('paused_complaint');
+      expect(codeOf(await applyWithReason(db, SYSTEM, scene.recipient, 'dropped', reason))).toBe(
+        'NEWSLETTER_EVENT_INVALID',
+      );
+      expect(await stateOf(db, scene)).toEqual(before);
     });
   });
 
-  it.each(['bounce', 'spamreport'] as const)(
-    'ignores a reason on the event %s: the event decides',
-    async (event) => {
-      await inOwnerTx(async (db) => {
-        const withReason = await sceneIn(db);
-        const without = await sceneIn(db);
+  // the reason of the other kind, which a drop would act on, and words that are no reason at all
+  it.each([
+    ['bounced', SPAM],
+    ['complained', BOUNCED],
+    ['bounced', 'Invalid'],
+    ['complained', ''],
+  ] as const)('ignores on the event %s the reason %j: the event decides', async (event, reason) => {
+    await inOwnerTx(async (db) => {
+      const withReason = await sceneIn(db);
+      const without = await sceneIn(db);
 
-        await applyWithReason(db, SYSTEM, withReason.recipient, event, 'Invalid');
-        await apply(db, SYSTEM, without.recipient, event);
-
-        const a = await stateOf(db, withReason);
-        const b = await stateOf(db, without);
-        expect(a.recipient).toBe(b.recipient);
-        expect(a.totals).toEqual(b.totals);
-        expect(a.subscription.status).toBe(b.subscription.status);
+      expect(await applyWithReason(db, SYSTEM, withReason.recipient, event, reason)).toEqual({
+        ok: true,
+        rows: [{ result: 'applied' }],
       });
-    },
-  );
+      await apply(db, SYSTEM, without.recipient, event);
+
+      const a = await stateOf(db, withReason);
+      const b = await stateOf(db, without);
+      expect(a.recipient).toBe(b.recipient);
+      expect(a.totals).toEqual(b.totals);
+      expect(a.subscription.status).toBe(b.subscription.status);
+    });
+  });
 
   it('counts the first outcome of a mail only: a repeated drop with a reason changes nothing', async () => {
     await inOwnerTx(async (db) => {
@@ -705,7 +710,7 @@ describe('the reason of a dropped mail', () => {
           rows: [{ result: 'applied' }],
         });
       }
-      expect(await applyWithReason(db, SYSTEM, scene.recipient, 'bounce', null)).toEqual({
+      expect(await applyWithReason(db, SYSTEM, scene.recipient, 'bounced', null)).toEqual({
         ok: true,
         rows: [{ result: 'applied' }],
       });
@@ -743,7 +748,7 @@ describe('the reason of a dropped mail', () => {
     });
   });
 
-  it('refuses an event that SendGrid does not send, with or without a reason', async () => {
+  it('refuses an event that is none of the three, with or without a reason', async () => {
     await inOwnerTx(async (db) => {
       const scene = await sceneIn(db);
 

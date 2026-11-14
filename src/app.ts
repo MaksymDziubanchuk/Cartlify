@@ -29,6 +29,7 @@ import { usersDtoSchemas } from '@schemas/dto/users.dtoSchemas.js';
 import { rootAdminsDtoSchemas } from '@schemas/dto/root.dtoSchemas.js';
 import { chatsDtoSchemas } from '@schemas/dto/chat.dtoSchemas.js';
 import { paymentDtoSchemas } from '@schemas/dto/payment.dtoSchema.js';
+import { paymentProviderSchemas } from '@providers/payments/index.js';
 import { systemDtoSchemas } from '@schemas/dto/system.dtoSchemas.js';
 import { legalDtoSchemas } from '@schemas/dto/legal.dtoSchemas.js';
 import { deliveryDtoSchemas } from '@schemas/dto/delivery.dtoSchemas.js';
@@ -82,7 +83,7 @@ if (env.LOG_REQUEST_ADDRESSES) {
 
 // a NUL sign is no text postgres keeps: a json body that holds one in a text failed with 500 at
 // the database. It is refused before any route with 400 TEXT_NUL_FORBIDDEN; the rest is the
-// default parser of fastify, with its protection of prototypes (the stripe webhook keeps its own)
+// default parser of fastify, with its protection of prototypes (the webhooks of the providers keep their own)
 const defaultJsonParser = app.getDefaultJsonParser('error', 'error');
 app.removeContentTypeParser('application/json');
 app.addContentTypeParser('application/json', { parseAs: 'string' }, (req, body, done) => {
@@ -157,6 +158,7 @@ for (const schema of [
   ...rootAdminsDtoSchemas,
   ...chatsDtoSchemas,
   ...paymentDtoSchemas,
+  ...paymentProviderSchemas,
   ...legalDtoSchemas,
   ...deliveryDtoSchemas,
   ...shopSettingsDtoSchemas,

@@ -5,7 +5,7 @@ import { setUserContext } from '@db/dbContext.service.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
 import { shopHomeUrl } from '@helpers/newsletterLinks.js';
 import { normalizeEmail } from '@helpers/newsletterTokens.js';
-import { isEmailProviderFailure } from '@services/email/sendGrid.js';
+import { isMailProviderFailure } from '@providers/mail/index.js';
 import { sendNewsletterEmail } from '@services/email/sendNewsletterEmail.js';
 import { renderCampaignMail } from '@services/email/templates/newsletters/campaign.template.js';
 import { AppError, BadRequestError, ForbiddenError } from '@utils/errors.js';
@@ -134,7 +134,7 @@ export async function sendCampaignTest(
   } catch (err) {
     // only a failure of the provider is a bad gateway; our own error stays a server error. The cause
     // holds what the provider answered, and the address is personal data, so it is not kept
-    if (!isEmailProviderFailure(err)) throw err;
+    if (!isMailProviderFailure(err)) throw err;
 
     throw new AppError({
       statusCode: 502,

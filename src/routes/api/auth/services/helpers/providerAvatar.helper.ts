@@ -1,13 +1,13 @@
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
-import { detectImageType, makePublicId, uploadImage } from '@utils/cloudinary.util.js';
+import { fileStorage, detectImageType, makePublicId } from '@providers/files/index.js';
 import { isAppError } from '@utils/errors.js';
 
 import type { Role } from '@prisma/client';
 import type { LoginResponseDto } from 'types/dto/auth.dto.js';
 
-import type { OAuthProvider } from './oauthUserUpsert.helper.js';
+import type { IdentityProvider } from '@providers/identity/index.js';
 
 // what an oauth login gives its service: the session, and whether it made the account
 export type OAuthLoginOutcome = {
@@ -21,10 +21,10 @@ export type OAuthLoginOutcome = {
 
 export type OAuthAvatarRole = 'USER' | 'ADMIN' | 'ROOT';
 
-// the picture of the account at Google, GitHub or LinkedIn becomes the avatar of a new account:
+// the picture of the account at its provider becomes the avatar of a new account:
 // only the login that creates the account takes it (a later login and a login that links an
 // account we have take nothing, so an avatar the person removed never comes back). The server
-// downloads the picture itself and keeps it at Cloudinary under the path of the avatar, with the
+// downloads the picture itself and keeps it in the file storage under the path of the avatar, with the
 // checks of an uploaded avatar: the type by its first bytes, the size limit. It waits for it at
 // most PROVIDER_AVATAR_WAIT_MS; whatever goes wrong, the login goes on with the drawn letter and
 // the reason goes to the log, without the address of the picture
@@ -34,42 +34,12 @@ export const PROVIDER_AVATAR_WAIT_MS = 4000;
 // the size the server asks for, the biggest avatar it gives
 const AVATAR_SIZE = 256;
 
-// the hosts the providers keep the pictures on; any other address is never opened, the address
-// comes from the provider but the server does not follow it anywhere
-const PICTURE_HOSTS: Record<OAuthProvider, (host: string) => boolean> = {
-  GOOGLE: (host) => host.endsWith('.googleusercontent.com'),
-  GITHUB: (host) => host === 'avatars.githubusercontent.com',
-  LINKEDIN: (host) => host === 'media.licdn.com',
-};
-
 export type ProviderAvatarLogger = { warn: (obj: unknown, msg?: string) => void };
 
 class PictureRefused extends Error {
   constructor(readonly reason: string) {
     super(reason);
   }
-}
-
-// the address to download: https on a host of the provider, at the size of the biggest avatar
-// (Google takes the size at the end of the path, =s96-c by default; GitHub in the query)
-export function providerPictureUrl(provider: OAuthProvider, raw: string): URL | null {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return null;
-  }
-
-  const host = url.hostname.toLowerCase();
-  if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
-  if (!PICTURE_HOSTS[provider](host)) return null;
-
-  if (provider === 'GOOGLE') {
-    url.pathname = url.pathname.replace(/=s\d+(-c)?$/, `=s${AVATAR_SIZE}-c`);
-  }
-  if (provider === 'GITHUB') url.searchParams.set('s', String(AVATAR_SIZE));
-
-  return url;
 }
 
 // the body of the answer, stopped as soon as it is over the limit
@@ -103,17 +73,18 @@ async function readPicture(res: Response): Promise<Buffer> {
 export async function copyProviderAvatar(args: {
   userId: number;
   role: 'USER' | 'ADMIN' | 'ROOT';
-  provider: OAuthProvider;
+  provider: IdentityProvider;
   pictureUrl: string;
   log: ProviderAvatarLogger;
 }): Promise<string | null> {
   const { userId, provider, log } = args;
   const refused = (reason: string) => {
-    log.warn({ userId, provider, reason }, 'provider avatar was not copied');
+    log.warn({ userId, provider: provider.name, reason }, 'provider avatar was not copied');
     return null;
   };
 
-  const url = providerPictureUrl(provider, args.pictureUrl);
+  // https on a host of the provider at the size of the biggest avatar, or never opened
+  const url = provider.pictureUrl(args.pictureUrl, AVATAR_SIZE);
   if (!url) return refused('host_not_allowed');
 
   const deadline = Date.now() + PROVIDER_AVATAR_WAIT_MS;
@@ -128,11 +99,11 @@ export async function copyProviderAvatar(args: {
     const mimetype = detectImageType(data);
     if (!mimetype) throw new PictureRefused('not_an_image');
 
-    const uploaded = await uploadImage({
+    const uploaded = await fileStorage.uploadImage({
       file: data,
       mimetype,
       publicId: makePublicId({ kind: 'avatar', userId }),
-      tags: ['avatar', `user:${userId}`, `provider:${provider.toLowerCase()}`],
+      tags: ['avatar', `user:${userId}`, `provider:${provider.name}`],
       timeout: Math.max(deadline - Date.now(), 1),
     });
 

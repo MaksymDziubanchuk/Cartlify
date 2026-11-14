@@ -1,7 +1,7 @@
 import type { ProductWithdrawalRow } from '@db/productWithdrawal.helper.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { withdrawalOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
-import { buildImageUrls } from '@utils/cloudinary.util.js';
+import { fileStorage } from '@providers/files/index.js';
 
 import type {
   ProductCardDto,
@@ -137,7 +137,7 @@ export function mapGallery(
   return images.map((image) => ({
     id: image.id,
     position: image.position,
-    ...buildImageUrls(image.url, 'product'),
+    ...fileStorage.imageUrls(image.url, 'product'),
     variantIds: variantIdsOf.get(image.id) ?? [],
   }));
 }

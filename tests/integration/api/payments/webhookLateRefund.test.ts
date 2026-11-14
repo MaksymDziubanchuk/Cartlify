@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import { stripeProvider } from '@routes/api/payments/providers/stripe/stripe.provider.js';
+import { stripeProvider } from '@providers/payments/stripe/stripe.provider.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, type Csrf } from '../../../helpers/csrf.js';

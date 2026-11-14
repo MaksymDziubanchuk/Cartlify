@@ -2,9 +2,9 @@ import type { FastifyBaseLogger } from 'fastify';
 import type { Prisma } from '@prisma/client';
 
 import { tx } from '@db/client.js';
+import { mailProvider } from '@providers/mail/index.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
-import { clearSpamReport } from '@services/email/clearSpamReport.js';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@utils/errors.js';
 import type {
   NewsletterProfileResponseDto,
@@ -128,7 +128,7 @@ export async function resumeProfile(
     }),
   );
 
-  if (resumed) await clearSpamReport(email, log);
+  if (resumed) await mailProvider.clearComplaint(email, log);
 
   return subscription;
 }

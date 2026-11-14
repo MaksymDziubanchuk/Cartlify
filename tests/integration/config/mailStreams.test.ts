@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/glob
 
 import env from '@config/env.js';
 import { sendEmail } from '@routes/api/auth/services/helpers/sendEmail.helper.js';
-import { clearSpamReport } from '@services/email/clearSpamReport.js';
+import { clearSpamReport } from '@providers/mail/sendgrid/sendGridSpamReports.js';
 import { sendNewsletterEmail } from '@services/email/sendNewsletterEmail.js';
 
 import { startApp, stopApp } from '../../helpers/app.js';
@@ -110,7 +110,7 @@ describe('the sender of the newsletters', () => {
         'List-Unsubscribe': '<https://api.example.com/api/newsletters/unsubscribe/abc>',
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
       },
-      customArgs: { campaignId: '7', recipientId: '42' },
+      tags: { campaignId: '7', recipientId: '42' },
     });
 
     expect(news[0]).toMatchObject({
@@ -118,7 +118,7 @@ describe('the sender of the newsletters', () => {
         'List-Unsubscribe': '<https://api.example.com/api/newsletters/unsubscribe/abc>',
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
       },
-      customArgs: { campaignId: '7', recipientId: '42' },
+      tags: { campaignId: '7', recipientId: '42' },
     });
   });
 
@@ -202,13 +202,15 @@ describe('the mock of SendGrid', () => {
   it('refuses the mails of one stream or of both, as asked, until the test ends', async () => {
     refuseMail('newsletter');
     await expect(sendNewsletterEmail(newsletter)).rejects.toMatchObject({
-      details: { reason: 'SENDGRID_SEND_FAILED' },
+      details: { reason: 'MAIL_PROVIDER_REFUSED' },
     });
     await expect(sendEmail(order)).resolves.toBeDefined();
   });
 
   it('no longer refuses in the next test, and refuses both streams when asked for none', async () => {
-    await expect(sendNewsletterEmail(newsletter)).resolves.toMatchObject({ status: 202 });
+    await expect(sendNewsletterEmail(newsletter)).resolves.toEqual({
+      messageId: expect.any(String),
+    });
 
     refuseMail();
     await expect(sendNewsletterEmail(newsletter)).rejects.toBeDefined();

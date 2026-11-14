@@ -5,7 +5,7 @@ import { setAdminContext } from '@db/dbContext.service.js';
 import { failureOf } from '@helpers/failureOf.js';
 import { sendReturnMoneyEmail } from '@routes/api/returns/services/helpers/returnMoneyMail.helper.js';
 
-import { getPaymentProvider } from '../providers/index.js';
+import { getPaymentProvider } from '@providers/payments/index.js';
 import { disputeEvidenceOf, disputeFactsOf } from './helpers/disputeEvidence.helper.js';
 import { readLatePayment } from './helpers/latePayments.helper.js';
 import { sendWhatIsLeft } from './helpers/orderPaymentRefund.helper.js';
@@ -17,7 +17,7 @@ import {
 } from './helpers/statementsByThemselves.helper.js';
 import { cancelBySystem } from './helpers/systemCancel.helper.js';
 
-import type { PaymentDispute, PaymentProviderName } from '../providers/types.js';
+import type { PaymentDispute, PaymentProviderName } from '@providers/payments/types.js';
 import type { PaymentRefundMailLogger } from './helpers/paymentRefundMails.helper.js';
 
 // The disputes of a payment at the bank, an inquiry of the bank included.
@@ -276,8 +276,8 @@ export async function followDisputes(
 
   const due = await tx(async (db) => {
     await setAdminContext(db);
-    return db.$queryRaw<{ provider: PaymentProviderName; stripeId: string }[]>(Prisma.sql`
-      select d.provider::text as provider, d."stripeId" as "stripeId"
+    return db.$queryRaw<{ provider: PaymentProviderName; providerDisputeId: string }[]>(Prisma.sql`
+      select d.provider::text as provider, d."providerDisputeId" as "providerDisputeId"
       from cartlify.payment_disputes as d
       left join cartlify.orders as o on o.id = d."orderId" and o."paymentId" = d."paymentId"
       where (${opts.paymentId ?? null}::text is null or d."paymentId" = ${opts.paymentId ?? null}::text)
@@ -312,10 +312,13 @@ export async function followDisputes(
   let followed = 0;
   for (const one of due) {
     try {
-      await followDispute(one.provider, one.stripeId, log);
+      await followDispute(one.provider, one.providerDisputeId, log);
       followed += 1;
     } catch (err) {
-      log.warn({ ...failureOf(err), disputeId: one.stripeId }, 'a dispute was not followed');
+      log.warn(
+        { ...failureOf(err), disputeId: one.providerDisputeId },
+        'a dispute was not followed',
+      );
     }
   }
 

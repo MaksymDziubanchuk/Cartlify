@@ -677,7 +677,7 @@ const postTranslateSchema = {
   operationId: 'translateNewsletterTexts',
   summary: 'Translate the texts of a newsletter campaign into other languages',
   description:
-    'Gives a draft of each text in each language asked, written by a language model (OpenAI). ' +
+    'Gives a draft of each text in each language asked, written by a language model (the AI provider). ' +
     'Nothing is saved, in the campaign or anywhere: the person edits the drafts and saves in the ' +
     'campaign (PATCH) the languages they keep. The texts are the ones of the form, each with a `key` ' +
     'the caller makes up, which its drafts come back under, and a `kind`: a `line` (a subject, the line ' +
@@ -729,7 +729,7 @@ const postTranslateSchema = {
     },
     502: {
       description:
-        '`NEWSLETTER_TRANSLATE_FAILED`: the model could not be asked for any of the languages (OpenAI ' +
+        '`NEWSLETTER_TRANSLATE_FAILED`: the model could not be asked for any of the languages (the AI provider ' +
         'is not set up here, did not answer in time, refused, or gave no answer that can be used). ' +
         'Nothing of the provider is in the answer. Ask again in a moment.',
       $ref: 'errorResponseSchema#',

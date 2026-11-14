@@ -805,7 +805,7 @@ export interface AdminMoneyLogQueryDto extends AdminLogQueryDto {
   provider?: string;
   refundId?: string;
   transferKey?: string;
-  stripeTxId?: string;
+  balanceTxId?: string;
   // a part of the reference of the bank
   bankReference?: string;
   byDashboard?: boolean;
@@ -850,7 +850,7 @@ export interface AdminMoneyLogItemDto {
   refundId: string | null;
   // our key of the request to the provider
   transferKey: string | null;
-  stripeTxId: string | null;
+  balanceTxId: string | null;
   bankReference: string | null;
   byDashboard: boolean;
   // where a refund stands and since when

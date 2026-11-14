@@ -66,6 +66,12 @@ export default {
   // each alone (tests/setup/integration.shopState.ts)
   testSequencer: '<rootDir>/tests/setup/sequencer.mjs',
 
+  // the reporters of jest as they are, with the time of a run told in minutes and seconds
+  reporters: [
+    '<rootDir>/tests/setup/reporterProgress.mjs',
+    '<rootDir>/tests/setup/reporterSummary.mjs',
+  ],
+
   projects: [
     {
       ...shared,

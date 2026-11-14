@@ -235,7 +235,7 @@ describe('GET /api/auth/google/callback', () => {
 
     const { res } = await loginWith(claims);
 
-    expectRefused(res, 'GOOGLE_EMAIL_NOT_VERIFIED');
+    expectRefused(res, 'OAUTH_EMAIL_NOT_VERIFIED');
     expect(await userByEmail(claims.email)).toBeNull();
   });
 
@@ -294,7 +294,7 @@ describe('GET /api/auth/google/callback', () => {
       cookieHeader({ guestId: otherBrowser }),
     );
 
-    expectRefused(res, 'GOOGLE_OAUTH_STATE_GUEST_MISMATCH');
+    expectRefused(res, 'OAUTH_STATE_GUEST_MISMATCH');
     expect(calls).toHaveLength(0);
   });
 
@@ -326,7 +326,7 @@ describe('GET /api/auth/google/callback', () => {
       cookieHeader({ guestId }),
     );
 
-    expectRefused(res, 'GOOGLE_OAUTH_STATE_EXPIRED');
+    expectRefused(res, 'OAUTH_STATE_EXPIRED');
   });
 
   it('sends the browser back when the user declined at google', async () => {
@@ -366,6 +366,6 @@ describe('GET /api/auth/google/callback', () => {
       cookieHeader({ guestId }),
     );
 
-    expectRefused(res, 'GOOGLE_OAUTH_TOKEN_EXCHANGE_FAILED');
+    expectRefused(res, 'OAUTH_TOKEN_EXCHANGE_FAILED');
   });
 });

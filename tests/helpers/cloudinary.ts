@@ -3,7 +3,7 @@ import { createServer, type AddressInfo, type Socket } from 'node:net';
 import path from 'node:path';
 import { crc32, deflateSync } from 'node:zlib';
 
-import cloudinary from '@config/cloudinary.js';
+import cloudinary from '@providers/files/cloudinary/cloudinaryClient.js';
 
 import { CLOUDINARY_PLACEHOLDERS } from '../setup/isolateEnv.js';
 import { installCloudinaryMock } from './cloudinaryMock.js';

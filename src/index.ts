@@ -4,7 +4,8 @@ import { loadShopSettings, shopSettings } from '@config/shopSettings.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
 import { startMoneyRefundWorker, stopMoneyRefundWorker } from './workers/moneyRefund.worker.js';
-import { ensureAvatarBase } from '@utils/avatar.util.js';
+import { aiProvider } from '@providers/ai/index.js';
+import { fileStorage } from '@providers/files/index.js';
 import { startupWarnings } from '@config/startupWarnings.js';
 import { createShutdown } from '@helpers/shutdown.js';
 
@@ -26,7 +27,7 @@ async function bootstrap() {
 
   // settings that switch a feature off; production does not start without some of them
   for (const warning of startupWarnings({
-    OPENAI_API_KEY: env.OPENAI_API_KEY,
+    ai: { label: aiProvider.label, configured: aiProvider.isConfigured() },
     reviewCheckEnabled: shopSettings().reviewCheckEnabled,
   })) {
     app.log.warn(warning);
@@ -57,9 +58,9 @@ async function bootstrap() {
   startMoneyRefundWorker(app.log);
   app.log.info('money refund worker started');
 
-  // the plain picture the drawn avatars go on; the start does not wait for cloudinary, a failure
-  // goes to the log and the next start tries again
-  void ensureAvatarBase(app.log);
+  // what the file storage draws the avatars of letters with; the start does not wait for it, a
+  // failure goes to the log and the next start tries again
+  void fileStorage.prepareLetterAvatars(app.log);
 
   // start http server
   await app.listen({ port: env.PORT, host: env.HOST });

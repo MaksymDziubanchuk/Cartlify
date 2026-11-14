@@ -9,17 +9,17 @@ import {
   buildCheckoutSessionPayload,
   paymentPageReadingOf,
   readStripePaidPage,
-} from '@routes/api/payments/providers/stripe/stripeCheckout.helper.js';
+} from '@providers/payments/stripe/stripeCheckout.helper.js';
 import {
   getStripeDispute,
   putStripeDisputeEvidence,
-} from '@routes/api/payments/providers/stripe/stripeDispute.helper.js';
+} from '@providers/payments/stripe/stripeDispute.helper.js';
 import {
   findStripeRefund,
   getStripeRefund,
   listStripeRefunds,
   refundStripePayment,
-} from '@routes/api/payments/providers/stripe/stripeRefund.helper.js';
+} from '@providers/payments/stripe/stripeRefund.helper.js';
 
 import {
   closeDispute,

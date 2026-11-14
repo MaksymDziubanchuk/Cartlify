@@ -15,7 +15,7 @@ import { TooManyRequestsError } from '@utils/errors.js';
 // the plan of the mail provider and stop the mails of orders), the form of the newsletters (it mails
 // anybody, so it counts like those), the pages behind the links of their mails and the unsubscribe
 // button of the mails, the payment page, a review, the translation of the texts of a campaign (both
-// ask the model of openai), the test mail of a campaign.
+// ask the model of the AI provider), the test mail of a campaign.
 // The forms that have a captcha count the requests of an address before it and the requests of an
 // email after it: a request that fails the captcha must not use up the one mail a person may ask for
 // in 3 minutes, or a script without a captcha could keep the mails of a person from them. The email of
@@ -155,14 +155,14 @@ export const REQUEST_LIMITS = {
     },
     windowMs: 60 * MINUTE,
   },
-  // a comment of a review asks the model of openai; a refused one writes nothing and comes again
+  // a comment of a review asks the model of the AI provider; a refused one writes nothing and comes again
   reviewPerUser: {
     get max() {
       return env.LIMIT_REVIEW_PER_USER;
     },
     windowMs: 60 * MINUTE,
   },
-  // the translation of the texts of a campaign asks the model of openai once for each language, with
+  // the translation of the texts of a campaign asks the model of the AI provider once for each language, with
   // texts of thousands of characters: a request costs more than a review does
   newsletterTranslatePerUser: {
     get max() {

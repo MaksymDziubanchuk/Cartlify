@@ -1,13 +1,12 @@
 import type { FastifyBaseLogger } from 'fastify';
 
-import { isAiServiceError } from '@services/ai/ai.errors.js';
-import { aiClientService } from '@services/ai/aiClient.service.js';
+import { aiProvider, isAiServiceError } from '@providers/ai/index.js';
 
 import type {
     AiErrorCode,
     AiGenerateTextRequestDto,
     AiJsonSchemaDto,
-} from '@services/ai/ai.types.js';
+} from '@providers/ai/index.js';
 import type { ChatBotEscalationReason } from './chatBotEscalation.service.js';
 
 export type ChatBotLogger = Pick<FastifyBaseLogger, 'warn' | 'error'>;
@@ -95,7 +94,7 @@ const askAi = async <T>(
         const willRetry = attempt < MAX_ATTEMPTS;
 
         try {
-            const result = await aiClientService.generateText(request);
+            const result = await aiProvider.generateText(request);
             const parsed = parse(result.text);
 
             if (parsed !== null) return parsed;

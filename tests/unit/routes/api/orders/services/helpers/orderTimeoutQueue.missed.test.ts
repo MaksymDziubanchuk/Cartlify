@@ -15,7 +15,7 @@ jest.unstable_mockModule('@db/client.js', () => ({
 }));
 jest.unstable_mockModule('@db/dbContext.service.js', () => ({ setAdminContext }));
 jest.unstable_mockModule('@redis/client.js', () => ({ getRedis: jest.fn() }));
-jest.unstable_mockModule('@routes/api/payments/providers/index.js', () => ({
+jest.unstable_mockModule('@providers/payments/index.js', () => ({
   getPaymentProvider: jest.fn(),
 }));
 // the step of a paid page the timer shares with the payment webhook: none of this sweep

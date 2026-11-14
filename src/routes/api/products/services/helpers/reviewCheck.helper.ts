@@ -1,18 +1,16 @@
-import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { failureOf } from '@helpers/failureOf.js';
-import { isAiServiceError } from '@services/ai/ai.errors.js';
-import type { AiGenerateTextRequestDto, AiJsonSchemaDto } from '@services/ai/ai.types.js';
-import { aiClientService } from '@services/ai/aiClient.service.js';
+import { aiProvider, isAiServiceError } from '@providers/ai/index.js';
+import type { AiGenerateTextRequestDto, AiJsonSchemaDto } from '@providers/ai/index.js';
 
 // The comment of a review is checked before it is written, by two checks at once:
 // - the model, by the rules of the shop below: it reads the meaning in any language, a word masked
 //   or spelled with other letters too, and whether the text is about the product at all;
-// - the moderation of openai, which refuses the dangerous kinds alone and only from a high score:
+// - the moderation of the AI provider, which refuses the dangerous kinds alone and only from a high score:
 //   the comment cannot talk it round the way it could try with the model.
 // An opinion, however negative, is never a reason. A comment either check refuses is not written,
 // the answer names the reasons. A check that fails says nothing against the comment: a review
-// never waits for an outage of openai. Without the key of openai, or with reviewCheckEnabled
+// never waits for an outage of the provider. Without the key of the provider, or with reviewCheckEnabled
 // false (root, PUT /api/root/shop-settings), nobody is asked (the start of the server warns
 // about the key; reviewCheckEnabled can change afterwards, root sees it directly)
 
@@ -190,12 +188,12 @@ function logFailure(log: ReviewCheckLogger, check: 'model' | 'moderation', err: 
 
 async function askModel(subject: ReviewCheckSubject, log: ReviewCheckLogger) {
   try {
-    const { text } = await aiClientService.generateText(buildReviewCheckRequest(subject));
+    const { text } = await aiProvider.generateText(buildReviewCheckRequest(subject));
     const reasons = reasonsOfModelText(text);
     if (reasons) return reasons;
 
     log.warn(
-      { check: 'model', provider: 'openai', code: 'REVIEW_CHECK_ANSWER_INVALID' },
+      { check: 'model', provider: aiProvider.name, code: 'REVIEW_CHECK_ANSWER_INVALID' },
       'review comment check failed',
     );
   } catch (err) {
@@ -207,7 +205,7 @@ async function askModel(subject: ReviewCheckSubject, log: ReviewCheckLogger) {
 
 async function askModeration(comment: string, log: ReviewCheckLogger) {
   try {
-    const { scores } = await aiClientService.moderateText({
+    const { scores } = await aiProvider.moderateText({
       text: comment,
       options: { timeoutMs: REVIEW_CHECK_TIMEOUT_MS },
     });
@@ -223,7 +221,7 @@ export async function checkReviewComment(
   subject: ReviewCheckSubject,
   log: ReviewCheckLogger,
 ): Promise<ReviewCheckReason[]> {
-  if (!shopSettings().reviewCheckEnabled || !env.OPENAI_API_KEY.trim()) return [];
+  if (!shopSettings().reviewCheckEnabled || !aiProvider.isConfigured()) return [];
 
   const [byModel, byModeration] = await Promise.all([
     askModel(subject, log),

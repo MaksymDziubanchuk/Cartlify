@@ -5421,8 +5421,8 @@ BEGIN
       v_valid := v_type = 'null' OR v_text <> '';
     WHEN 'reservationMinutes' THEN
       v_valid := v_whole AND v_number > 0;
-    WHEN 'stripePageMinutes' THEN
-      v_valid := v_whole AND v_number >= 30;
+    WHEN 'paymentPageMinutes' THEN
+      v_valid := v_whole AND v_number > 0;
     WHEN 'reviewCheckEnabled' THEN
       v_valid := v_type = 'boolean';
     WHEN 'avatarRemovalsLimit', 'reviewRemovalsLimit' THEN
@@ -5691,7 +5691,7 @@ $$;
 -- order (RETURN_REASON_INVALID for the other basis, RETURN_ORDER_NOT_RETURNABLE for the other status),
 -- whatever the right of withdrawal of its items, with the moment of the admin (RETURN_STATED_AT_INVALID
 -- without it or before the send). The system makes a statement of its own (source system, basis
--- other, only the reasons dispute_lost and stripe_refund, which nobody else gives:
+-- other, only the reasons dispute_lost and provider_refund, which nobody else gives:
 -- RETURN_REASON_INVALID) for a paid order not sent whose money went back to the buyer another way:
 -- it takes whatever is left of the order and brings the goods back at once, as shop_cancel. A statement of the buyer for a paid order that was not sent brings
 -- the goods back at once too, and cancels the order when it is all of it. A pickup that is ready and
@@ -5755,7 +5755,7 @@ BEGIN
   END IF;
 
   -- the reasons of the system are its own, and it gives no other
-  IF (p_source = 'system') <> COALESCE(p_reason IN ('dispute_lost', 'stripe_refund'), false) THEN
+  IF (p_source = 'system') <> COALESCE(p_reason IN ('dispute_lost', 'provider_refund'), false) THEN
     RAISE EXCEPTION 'RETURN_REASON_INVALID';
   END IF;
 
@@ -5831,10 +5831,10 @@ BEGIN
 
   -- the reasons that cancel an order. shop_cancel: the shop cancels a paid order that was not sent
   -- (outside the withdrawal); its goods are on the shelf, so they come back to the stock at once
-  -- and, when it is the whole order, the order is cancelled; dispute_lost and stripe_refund are the
+  -- and, when it is the whole order, the order is cancelled; dispute_lost and provider_refund are the
   -- same for the system. refused: the buyer refused a parcel that was sent (a withdrawal). refused
   -- and the reasons of the system take whatever is left of the order, a part named is widened
-  IF p_reason IN ('shop_cancel', 'dispute_lost', 'stripe_refund') THEN
+  IF p_reason IN ('shop_cancel', 'dispute_lost', 'provider_refund') THEN
     IF p_basis <> 'other' THEN
       RAISE EXCEPTION 'RETURN_REASON_INVALID';
     END IF;
@@ -5850,7 +5850,7 @@ BEGIN
     END IF;
   END IF;
 
-  IF p_reason IN ('refused', 'dispute_lost', 'stripe_refund') THEN
+  IF p_reason IN ('refused', 'dispute_lost', 'provider_refund') THEN
     SELECT COALESCE(
       jsonb_agg(jsonb_build_object('orderItemId', oi.id, 'quantity', oi.quantity - t.taken) ORDER BY oi.id),
       '[]'::jsonb
@@ -5991,7 +5991,7 @@ BEGIN
   -- code of the order) from a paid order that was not sent or a pickup not collected: the goods are
   -- on the shelf, they come back at once. A form has no actor, so the buyer of the order stands for
   -- the author of the results
-  IF p_reason IN ('shop_cancel', 'dispute_lost', 'stripe_refund')
+  IF p_reason IN ('shop_cancel', 'dispute_lost', 'provider_refund')
      OR (p_source IN ('account', 'form_code') AND v_on_shelf) THEN
     PERFORM cartlify.apply_return_results (
       v_return_id,
@@ -7140,7 +7140,7 @@ EXECUTE FUNCTION cartlify.order_batch_allocations_update_columns ();
 ------------------------------------------------------------
 
 -- Writes a line of the money journal and returns its id. p_line is an object of the columns of the
--- line (event, purpose, part, amount, currency, orderId, userId, returnId, orderShipmentId, disputeId, coversId, provider, paymentId, refundId, transferKey, stripeTxId,
+-- line (event, purpose, part, amount, currency, orderId, userId, returnId, orderShipmentId, disputeId, coversId, provider, paymentId, refundId, transferKey, balanceTxId,
 -- bankReference, byDashboard, state, failure, failureText, method, note, happenedAt, moneyUse, meta):
 -- the function sets the rest, as log_stock_change does: the actor and the role are the ones of the
 -- context (the system, the admin context without a user id, has none), the address and the browser
@@ -7940,7 +7940,7 @@ $$;
 -- needs_response, under_review, then the ends), or it is the same step with fewer submissions, or
 -- the dispute kept has ended and the snapshot names another status (an end is final).
 -- Every balance transaction of the dispute is a line of the money journal, once for its id
--- (stripeTxId), from any snapshot, stale or not: below 0 money.dispute_withdrawn, above 0
+-- (balanceTxId), from any snapshot, stale or not: below 0 money.dispute_withdrawn, above 0
 -- money.dispute_reinstated, nothing for 0; the amount without the fee of the provider (the fee is
 -- not money of the order), with the dispute, the order, the buyer and the payment, no actor.
 -- An open dispute of the payment of an order that waits to be sent (paid) holds the order (the hold
@@ -7959,9 +7959,28 @@ $$;
 -- took less what it gave back (text, two decimals); shared, every line of what the bank took is
 -- decided; covered, the rows of open statements this call paid at once with the shares
 -- ([{ returnId, itemIds }], write_money_use), for the mails of the app.
+-- The version of this function before its parameter of the id of the dispute was named for no
+-- provider (p_stripe_id): a parameter cannot be renamed in place, so that version goes once, and its
+-- right to be called comes back with db/01. Temporary: gone once dev and prod have the new name.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM pg_proc AS p
+    JOIN pg_namespace AS n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'cartlify' AND p.proname = 'sync_payment_dispute'
+      AND 'p_stripe_id' = ANY (p.proargnames)
+  ) THEN
+    DROP FUNCTION cartlify.sync_payment_dispute (
+      cartlify."PaymentProvider", text, text, cartlify."DisputeStatus", text, timestamp, boolean,
+      integer, boolean, timestamp, timestamp, jsonb
+    );
+  END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION cartlify.sync_payment_dispute (
   p_provider cartlify."PaymentProvider",
-  p_stripe_id text,
+  p_provider_dispute_id text,
   p_payment_id text,
   p_status cartlify."DisputeStatus",
   p_reason text,
@@ -8013,7 +8032,7 @@ BEGIN
     RAISE EXCEPTION 'MONEY_FORBIDDEN';
   END IF;
 
-  IF p_provider IS NULL OR COALESCE(btrim(p_stripe_id), '') = '' OR COALESCE(btrim(p_payment_id), '') = ''
+  IF p_provider IS NULL OR COALESCE(btrim(p_provider_dispute_id), '') = '' OR COALESCE(btrim(p_payment_id), '') = ''
      OR p_status IS NULL OR p_opened_at IS NULL OR v_count < 0 OR char_length(p_reason) > 60
      OR jsonb_typeof(v_txs) <> 'array' THEN
     RAISE EXCEPTION 'DISPUTE_INVALID';
@@ -8069,17 +8088,17 @@ BEGIN
          END AS step
   INTO v_kept
   FROM cartlify.payment_disputes AS d
-  WHERE d."stripeId" = p_stripe_id
+  WHERE d."providerDisputeId" = p_provider_dispute_id
   FOR UPDATE;
 
   IF NOT FOUND THEN
     INSERT INTO cartlify.payment_disputes (
-      provider, "stripeId", "paymentId", "orderId", "userId", reason, status, "evidenceDueBy",
+      provider, "providerDisputeId", "paymentId", "orderId", "userId", reason, status, "evidenceDueBy",
       "hasEvidence", "submissionCount", "isChargeRefundable", "openedAt", "closedAt", "syncedAt",
       "createdAt", "updatedAt"
     )
     VALUES (
-      p_provider, p_stripe_id, p_payment_id, v_order_id, v_user_id, p_reason, p_status, p_due_by,
+      p_provider, p_provider_dispute_id, p_payment_id, v_order_id, v_user_id, p_reason, p_status, p_due_by,
       COALESCE(p_has_evidence, false), v_count, COALESCE(p_is_refundable, false), p_opened_at,
       CASE WHEN v_ended THEN COALESCE(p_closed_at, v_now) END, v_now, v_now, v_now
     )
@@ -8119,7 +8138,7 @@ BEGIN
     v_amount := (v_tx ->> 'amount')::numeric;
 
     CONTINUE WHEN v_amount = 0 OR EXISTS (
-      SELECT 1 FROM cartlify.money_log AS l WHERE l."stripeTxId" = v_tx ->> 'id'
+      SELECT 1 FROM cartlify.money_log AS l WHERE l."balanceTxId" = v_tx ->> 'id'
     );
 
     v_line_ids := v_line_ids || cartlify.log_money_change (
@@ -8134,7 +8153,7 @@ BEGIN
         'disputeId', v_id,
         'provider', p_provider,
         'paymentId', p_payment_id,
-        'stripeTxId', v_tx ->> 'id'
+        'balanceTxId', v_tx ->> 'id'
       )
     );
   END LOOP;
@@ -9109,7 +9128,7 @@ AFTER UPDATE OF status ON cartlify.orders FOR EACH ROW
 WHEN (OLD.status = 'shipped' AND NEW.status = 'paid')
 EXECUTE FUNCTION cartlify.orders_hold_again ();
 
--- The system (a payment refunded whole by hand cancels its order, stripe_refund) or root or an admin
+-- The system (a payment refunded whole by hand cancels its order, provider_refund) or root or an admin
 -- root allowed to handle the money shares a line by the sums of the items and the delivery
 -- (share_money_line_in); MONEY_DECISION_FORBIDDEN for anyone else. The answer of write_money_use, or
 -- null for a line decided already.
@@ -14000,7 +14019,7 @@ $$;
 ------------------------------------------------------------
 -- NEWSLETTERS: THE WEBHOOK, THE PEOPLE WHO RUN THEM, ROOT
 ------------------------------------------------------------
--- What SendGrid tells (newsletter_apply_event: the system), what the people who run the newsletters
+-- What the mail provider tells (newsletter_apply_event: the system), what the people who run the newsletters
 -- do to the subscribers and to the blocklist (newsletter_admin_erase_address, newsletter_block_add:
 -- a manager, i.e. root or an admin root allowed), and what only root does (newsletter_set_manager,
 -- newsletter_locale_counts, newsletter_reset_locale). Each is a function that runs as the owner and
@@ -14040,31 +14059,31 @@ BEGIN
 END;
 $$;
 
--- An event of SendGrid about a mail of a campaign, by the id of the row of the mail (the server
--- puts it into the mail, custom_args). Only the system reports (NEWSLETTER_FORBIDDEN). The event is
--- one of bounce (the address does not exist), dropped (SendGrid did not deliver) and spamreport
+-- An event of the mail provider about a mail of a campaign, by the id of the row of the mail (the
+-- server puts it into the mail, its tags). Only the system reports (NEWSLETTER_FORBIDDEN). The event
+-- is one of bounced (the address does not exist), dropped (the mail did not arrive) and complained
 -- (the person marked the mail as spam); any other is NEWSLETTER_EVENT_INVALID, whoever the mail is.
--- Returns applied, or unknown for a mail this database has no row for, or one that SendGrid refused
+-- Returns applied, or unknown for a mail this database has no row for, or one the provider refused
 -- (it has no outcome: the event is of some other mail, e.g. of another environment on the same
--- account of SendGrid) - never an error. A mail that waits (queued) counts as sent: SendGrid tells
+-- account of the provider) - never an error. A mail that waits (queued) counts as sent: the provider tells
 -- of a mail only after it took it, and it can tell before the sending has written down that it
 -- did (a bounce comes within a second), so the event is not lost; the row then gets the time the
 -- event came as the time it was sent, which the check of the table wants of a mail with an
 -- outcome (the sending that comes late writes only a row that still waits). What an event does:
---   bounce: the mail is bounced, the subscription stops (stopped_bounce, the reason bounced, a line
+--   bounced: the mail is bounced, the subscription stops (stopped_bounce, the reason bounced, a line
 --     bounced from the webhook) if it is in force or paused, the campaign counts it as undelivered;
 --   dropped: the mail is dropped and counted as undelivered; the subscription stays - unless
---     SendGrid says why (p_reason, the text of its report) and the reason is that the address is one it
---     knows as bounced ("Bounced Address") or as one that reports spam ("Spam Reporting Address", in
---     any case): then the subscription is dealt with as the event of that reason would deal with it
---     (the bounce below, the report below), and the campaign still counts the mail as undelivered, not
---     as a complaint; any other reason, or none, leaves the subscription;
---   spamreport: the mail is complained about and counted as a complaint, a subscription in force is
+--     the provider says it dropped the mail because it knows the address (p_reason) as one that
+--     bounced (address_bounced) or as one that complained (address_complained): then the subscription
+--     is dealt with as the event of that reason would deal with it (bounced or complained below), and
+--     the campaign still counts the mail as undelivered, not as a complaint; no reason leaves the
+--     subscription, any other reason of a drop is NEWSLETTER_EVENT_INVALID;
+--   complained: the mail is complained about and counted as a complaint, a subscription in force is
 --     paused (paused_complaint, a line complaint); one that is paused already, ended or stopped is
 --     left as it is.
 -- The reason is read for the event dropped only; on the others it is ignored.
 -- The first outcome of a mail is its outcome: an event for a mail that is bounced, dropped or
--- complained about already, the same again (SendGrid sends an event twice when a batch fails) or
+-- complained about already, the same again (the provider sends an event twice when a batch fails) or
 -- another one, changes nothing and still answers applied, so nothing is counted twice. A
 -- subscription that ended or stopped meanwhile is not touched (no line, no error), the mail and the
 -- campaign are still told. The lines name the campaign whose mail caused them. Locks: the
@@ -14082,7 +14101,6 @@ DECLARE
   v_sub_id    integer;
   v_sub       cartlify.newsletter_subscriptions%ROWTYPE;
   v_recipient cartlify.newsletter_recipients%ROWTYPE;
-  v_reason    text := lower(btrim(p_reason));
   -- what the event does to the subscription: the event itself, or the event its reason stands for
   v_effect    text;
 BEGIN
@@ -14090,13 +14108,15 @@ BEGIN
     RAISE EXCEPTION 'NEWSLETTER_FORBIDDEN';
   END IF;
 
-  IF p_event IS NULL OR p_event NOT IN ('bounce', 'dropped', 'spamreport') THEN
+  -- the reason of a drop is one of ours or none; on the other events it is not read
+  IF p_event IS NULL OR p_event NOT IN ('bounced', 'dropped', 'complained')
+     OR (p_event = 'dropped' AND p_reason NOT IN ('address_bounced', 'address_complained')) THEN
     RAISE EXCEPTION 'NEWSLETTER_EVENT_INVALID';
   END IF;
 
   v_effect := CASE
-    WHEN p_event = 'dropped' AND v_reason = 'bounced address' THEN 'bounce'
-    WHEN p_event = 'dropped' AND v_reason = 'spam reporting address' THEN 'spamreport'
+    WHEN p_event = 'dropped' AND p_reason = 'address_bounced' THEN 'bounced'
+    WHEN p_event = 'dropped' AND p_reason = 'address_complained' THEN 'complained'
     ELSE p_event
   END;
 
@@ -14129,7 +14149,7 @@ BEGIN
   UPDATE cartlify.newsletter_recipients AS r
   SET
     status = (
-      CASE p_event WHEN 'bounce' THEN 'bounced' WHEN 'dropped' THEN 'dropped' ELSE 'complained' END
+      p_event
     )::cartlify."NewsletterRecipientStatus",
     "sentAt" = coalesce(r."sentAt", v_now),
     "updatedAt" = v_now
@@ -14137,12 +14157,12 @@ BEGIN
 
   UPDATE cartlify.newsletter_campaigns AS c
   SET
-    "undeliveredCount" = c."undeliveredCount" + CASE WHEN p_event = 'spamreport' THEN 0 ELSE 1 END,
-    "complaintCount" = c."complaintCount" + CASE WHEN p_event = 'spamreport' THEN 1 ELSE 0 END,
+    "undeliveredCount" = c."undeliveredCount" + CASE WHEN p_event = 'complained' THEN 0 ELSE 1 END,
+    "complaintCount" = c."complaintCount" + CASE WHEN p_event = 'complained' THEN 1 ELSE 0 END,
     "updatedAt" = v_now
   WHERE c.id = v_recipient."campaignId";
 
-  IF v_effect = 'bounce' AND v_sub.status IN ('active', 'paused_complaint') THEN
+  IF v_effect = 'bounced' AND v_sub.status IN ('active', 'paused_complaint') THEN
     UPDATE cartlify.newsletter_subscriptions AS s
     SET
       status = 'stopped_bounce',
@@ -14156,7 +14176,7 @@ BEGIN
     PERFORM cartlify.newsletter_log_event (
       v_sub.id, 'bounced', 'webhook', NULL, NULL, v_sub.locale, v_recipient."campaignId"
     );
-  ELSIF v_effect = 'spamreport' AND v_sub.status = 'active' THEN
+  ELSIF v_effect = 'complained' AND v_sub.status = 'active' THEN
     UPDATE cartlify.newsletter_subscriptions AS s
     SET
       status = 'paused_complaint',

@@ -13,7 +13,7 @@ import { runNewsletterPass } from './newsletterPass.job.js';
 // it is run by hand. It starts nothing else of the server: no http, no workers. The exit code is 0
 // when the pass ran (also when it found another one running, or had nothing to do), 1 when it could
 // not do its work: redis or the database are out of reach, or the stream has a problem the pass
-// stopped on (SendGrid refuses the key, a setting is missing: the log says which), so a schedule
+// stopped on (the mail provider refuses the key, a setting is missing: the log says which), so a schedule
 // that shows the exit codes shows the run that needs a look.
 
 // how long to wait for redis, which holds the lock of the pass

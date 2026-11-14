@@ -1,6 +1,6 @@
 import { shopSettings } from '@config/shopSettings.js';
 import { deliveryPriceOf } from '@helpers/deliveryPrice.js';
-import { shopCurrency } from '@routes/api/payments/providers/index.js';
+import { shopCurrency } from '@providers/payments/index.js';
 
 import type { GetDeliveryMethodsResponseDto } from 'types/dto/delivery.dto.js';
 

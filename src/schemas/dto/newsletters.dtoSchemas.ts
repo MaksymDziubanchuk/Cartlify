@@ -47,7 +47,7 @@ const newslettersSubscribeBodySchema = {
     captchaToken: {
       ...captchaTokenField,
       description:
-        'The answer of the Cloudflare Turnstile widget. Required for a guest and for a signed-in ' +
+        'The answer of the widget of the captcha. Required for a guest and for a signed-in ' +
         'user who asks about another address; a signed-in user who subscribes their own address ' +
         'sends none. ' +
         captchaTokenField.description,
@@ -384,8 +384,8 @@ const newslettersExportResponseSchema = {
   required: ['subscriptions'],
 } as const;
 
-const newslettersSendGridWebhookResponseSchema = {
-  $id: 'newslettersSendGridWebhookResponseSchema',
+const newslettersMailWebhookResponseSchema = {
+  $id: 'newslettersMailWebhookResponseSchema',
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -394,7 +394,7 @@ const newslettersSendGridWebhookResponseSchema = {
       type: 'integer',
       minimum: 0,
       description:
-        'How many events were applied to a mail of the campaigns of this environment (a bounce, a block, a drop or a spam report); an event that came before counts again, applying it twice changes nothing.',
+        'How many events were applied to a mail of the campaigns of this environment (a bounce, a drop or a complaint); an event that came before counts again, applying it twice changes nothing.',
     },
     skipped: {
       type: 'integer',
@@ -422,5 +422,5 @@ export const newslettersDtoSchemas = [
   newslettersManageStateResponseSchema,
   newslettersUnsubscribedResponseSchema,
   newslettersExportResponseSchema,
-  newslettersSendGridWebhookResponseSchema,
+  newslettersMailWebhookResponseSchema,
 ];

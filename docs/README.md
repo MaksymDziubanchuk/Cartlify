@@ -13,6 +13,7 @@
 | [Newsletters](newsletters.md)           | subscription, the pages behind the mail links, campaigns, sending, setup             |
 | [API](api.md)                           | the REST modules, Swagger / OpenAPI, the realtime chat                               |
 | [Architecture](architecture.md)         | goals, stack, structure of the repository, the database, production notes            |
+| [Providers](providers.md)               | the outside services behind an interface of their kind, and how to add a provider    |
 | [Configuration](configuration.md)       | every environment variable                                                           |
 | [Local setup](setup.md)                 | the database, Redis and the app on your machine                                      |
 | [Commands](commands.md)                 | build, start, migrations, tests, demo data, a copy of prod for dev                   |

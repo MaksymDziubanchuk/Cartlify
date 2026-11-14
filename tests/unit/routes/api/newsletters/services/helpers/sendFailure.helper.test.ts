@@ -3,57 +3,60 @@ import { describe, expect, it } from '@jest/globals';
 import { sendFailureOf } from '@routes/api/newsletters/services/helpers/sendFailure.helper.js';
 import { BadRequestError, InternalError } from '@utils/errors.js';
 
+import type { MailRefusal } from '@providers/mail/index.js';
+
 // what a failed send of a newsletter mail means for the pass: tried again at a later claim (retry),
 // never to be accepted (refused), or a problem of the whole stream that stops the pass (halt)
 
-// the error postToSendGrid throws when SendGrid answers with a status
-const refusedWith = (status: number) =>
-  new InternalError({ reason: 'SENDGRID_SEND_FAILED' }, { status, body: { errors: [] } });
+// the error a mail provider throws when it refuses a mail, with whose fault it is and its status
+const refusedWith = (failure: MailRefusal, status = 400) =>
+  new InternalError({ reason: 'MAIL_PROVIDER_REFUSED', failure }, { status, body: { errors: [] } });
 
 describe('sendFailureOf', () => {
   it.each([
-    [400, 'refused'],
-    [404, 'refused'],
-    [413, 'refused'],
-    [422, 'refused'],
-    [499, 'refused'],
-    [401, 'halt'],
-    [403, 'halt'],
-    [429, 'retry'],
-    [500, 'retry'],
-    [502, 'retry'],
-    [503, 'retry'],
-    [599, 'retry'],
-  ] as const)('puts the status %s in the class %s', (status, kind) => {
-    expect(sendFailureOf(refusedWith(status))).toEqual({
-      kind,
-      status,
-      reason: 'SENDGRID_SEND_FAILED',
-    });
-  });
+    ['refused', 400, 'refused', false],
+    ['account', 401, 'halt', true],
+    ['busy', 429, 'retry', false],
+    ['busy', 503, 'retry', false],
+  ] as const)(
+    'puts a refusal that is the fault of %s (status %s) in the class %s',
+    (failure, status, kind, account) => {
+      expect(sendFailureOf(refusedWith(failure, status))).toEqual({
+        kind,
+        account,
+        status,
+        reason: 'MAIL_PROVIDER_REFUSED',
+      });
+    },
+  );
 
-  it('retries a mail SendGrid did not answer in time, or at all', () => {
-    const silence = new InternalError({ reason: 'SENDGRID_REQUEST_FAILED' }, new Error('aborted'));
+  it('retries a mail the provider did not answer in time, or at all', () => {
+    const silence = new InternalError(
+      { reason: 'MAIL_PROVIDER_UNREACHABLE' },
+      new Error('aborted'),
+    );
 
     expect(sendFailureOf(silence)).toEqual({
       kind: 'retry',
+      account: false,
       status: null,
-      reason: 'SENDGRID_REQUEST_FAILED',
+      reason: 'MAIL_PROVIDER_UNREACHABLE',
     });
   });
 
-  it('retries an answer of SendGrid that is not a status it knows, or has none', () => {
-    expect(sendFailureOf(refusedWith(302)).kind).toBe('retry');
+  it('retries a refusal that does not say whose fault it is, or has no status', () => {
     expect(
-      sendFailureOf(new InternalError({ reason: 'SENDGRID_SEND_FAILED' }, 'no status')).kind,
+      sendFailureOf(new InternalError({ reason: 'MAIL_PROVIDER_REFUSED' }, 'no status')),
+    ).toMatchObject({ kind: 'retry', status: null });
+    expect(
+      sendFailureOf(new InternalError({ reason: 'MAIL_PROVIDER_REFUSED', failure: 'other' })).kind,
     ).toBe('retry');
-    expect(sendFailureOf(new InternalError({ reason: 'SENDGRID_SEND_FAILED' })).kind).toBe('retry');
   });
 
   it.each([
     [
-      'the key of the stream is missing',
-      new InternalError({ reason: 'SENDGRID_NEWSLETTER_API_KEY_REQUIRED' }),
+      'the stream has no key of the provider',
+      new InternalError({ reason: 'MAIL_PROVIDER_NOT_CONFIGURED', stream: 'newsletter' }),
     ],
     [
       'the sender of the stream is missing',
@@ -66,13 +69,13 @@ describe('sendFailureOf', () => {
     ['something that is not an error', 'text'],
     ['nothing', undefined],
   ])('halts the pass when %s', (_what, err) => {
-    expect(sendFailureOf(err).kind).toBe('halt');
+    expect(sendFailureOf(err)).toMatchObject({ kind: 'halt', account: false });
   });
 
-  it('never carries the answer of SendGrid, which may name the address', () => {
+  it('never carries the answer of the provider, which may name the address', () => {
     const failure = sendFailureOf(
       new InternalError(
-        { reason: 'SENDGRID_SEND_FAILED' },
+        { reason: 'MAIL_PROVIDER_REFUSED', failure: 'refused' },
         { status: 400, body: { errors: [{ message: 'bad address nobody@example.com' }] } },
       ),
     );

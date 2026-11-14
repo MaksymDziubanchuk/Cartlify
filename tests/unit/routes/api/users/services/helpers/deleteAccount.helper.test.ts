@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 
-import type { PaymentPageCloseResult } from '@routes/api/payments/providers/types.js';
+import type { PaymentPageCloseResult } from '@providers/payments/types.js';
 
 // closing the payment page of an order the deletion cancelled: redis keeps the link from the order
 // to its page, the provider that opened the page closes it and tells what happened to the money.
@@ -22,7 +22,7 @@ jest.unstable_mockModule('@routes/api/orders/services/helpers/orderTimeoutQueue.
   getOrderPaymentPageLink,
   deleteOrderPaymentPageLink,
 }));
-jest.unstable_mockModule('@routes/api/payments/providers/index.js', () => ({
+jest.unstable_mockModule('@providers/payments/index.js', () => ({
   getPaymentProvider,
   // the mail of the deletion names the money of the shop
   shopCurrency: () => 'eur',

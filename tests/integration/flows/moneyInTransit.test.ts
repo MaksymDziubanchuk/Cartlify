@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
-import appStripe from '@config/stripe.js';
+import appStripe from '@providers/payments/stripe/stripeClient.js';
 import { settleRefundsInTransit } from '@routes/api/payments/services/settleRefundsInTransit.service.js';
 
 import { accessCookie } from '../../helpers/actors.js';

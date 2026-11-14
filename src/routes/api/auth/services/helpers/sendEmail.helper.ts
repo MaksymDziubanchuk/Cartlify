@@ -1,8 +1,8 @@
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
-import { InternalError } from '@utils/errors.js';
-import { postToSendGrid } from '@services/email/sendGrid.js';
 import { escapeHtml } from '@helpers/escapeHtml.js';
+import { mailProvider } from '@providers/mail/index.js';
+import { InternalError } from '@utils/errors.js';
 
 export type SendEmailInput = {
   to: string;
@@ -15,16 +15,14 @@ export type SendEmailInput = {
     content: string; // base64
     type: string; // e.g. "text/plain"
     filename: string;
-    disposition?: 'attachment';
   }>;
 };
 
-// transactional email main flow
-// build provider payload
-// map provider errors to app
-export async function sendEmail(input: SendEmailInput): Promise<{ status: number }> {
+// A mail of the stream of the orders and the accounts: its own key at the mail provider and its
+// sender (EMAIL_FROM), the answers go to the address root set (emailReplyTo). Errors are the ones of
+// the provider (src/providers/mail/types.ts)
+export async function sendEmail(input: SendEmailInput): Promise<{ messageId?: string }> {
   // require email config
-  if (!env.SENDGRID_API_KEY) throw new InternalError({ reason: 'SENDGRID_API_KEY_REQUIRED' });
   if (!env.EMAIL_FROM) throw new InternalError({ reason: 'EMAIL_FROM_REQUIRED' });
   const settings = shopSettings();
   if (!settings.emailReplyTo) throw new InternalError({ reason: 'EMAIL_REPLY_TO_REQUIRED' });
@@ -39,25 +37,15 @@ export async function sendEmail(input: SendEmailInput): Promise<{ status: number
   if (!subject) throw new InternalError({ reason: 'EMAIL_SUBJECT_REQUIRED' });
   if (!text) throw new InternalError({ reason: 'EMAIL_TEXT_REQUIRED' });
 
-  const html = input.html?.trim() || `<p>${escapeHtml(text)}</p>`;
+  const name = settings.emailFromName || settings.shopName;
 
-  // prepare provider payload
-  const payload = {
-    personalizations: [{ to: [{ email: to }] }],
-    from: { email: env.EMAIL_FROM, name: settings.emailFromName || settings.shopName },
-    reply_to: { email: settings.emailReplyTo, name: settings.emailFromName || settings.shopName },
+  return mailProvider.send('orders', {
+    to,
+    from: { email: env.EMAIL_FROM, name },
+    replyTo: { email: settings.emailReplyTo, name },
     subject,
-    content: [
-      { type: 'text/plain', value: text },
-      { type: 'text/html', value: html },
-    ],
-    tracking_settings: {
-      click_tracking: { enable: false, enable_text: false },
-      open_tracking: { enable: false },
-    },
-    attachments: input.attachments?.length ? input.attachments : undefined,
-  };
-
-  // send via provider api, errors mapped by the shared core
-  return postToSendGrid(env.SENDGRID_API_KEY, payload);
+    text,
+    html: input.html?.trim() || `<p>${escapeHtml(text)}</p>`,
+    ...(input.attachments?.length ? { attachments: input.attachments } : {}),
+  });
 }

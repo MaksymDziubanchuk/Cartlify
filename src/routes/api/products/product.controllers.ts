@@ -64,7 +64,7 @@ import type {
 import type { MessageResponseDto } from 'types/common.js';
 import { productServices } from './product.services.js';
 import pickDefined from '@helpers/parameterNormalize.js';
-import { discardUploads } from '@utils/cloudinary.util.js';
+import { discardUploads } from '@providers/files/index.js';
 import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
 import { BadRequestError } from '@utils/errors.js';
 import { partyFromFormFields } from '@helpers/party.js';

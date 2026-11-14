@@ -27,7 +27,7 @@ import type {
 import { MAX_PRODUCT_IMAGES } from '@config/limits.js';
 import pickDefined from '@helpers/parameterNormalize.js';
 import { BadRequestError } from '@utils/errors.js';
-import { discardUploads } from '@utils/cloudinary.util.js';
+import { discardUploads } from '@providers/files/index.js';
 
 import { productServices } from './product.services.js';
 import { beginProductImageUpload } from './services/uploadProductImages.service.js';

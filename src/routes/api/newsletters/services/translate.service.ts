@@ -1,15 +1,13 @@
 import type { FastifyBaseLogger } from 'fastify';
 
-import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
 import { enabledLocaleOf } from '@helpers/locale.js';
 import { mapWithLimit } from '@helpers/mapWithLimit.js';
 import { newsletterAllowedDomains } from '@helpers/newsletterDomains.js';
 import { NEWSLETTER_TRANSLATE_TOTAL_MAX } from '@schemas/dto/newslettersCampaign.dtoSchemas.js';
-import { isAiServiceError } from '@services/ai/ai.errors.js';
-import { aiClientService } from '@services/ai/aiClient.service.js';
+import { aiProvider, isAiServiceError } from '@providers/ai/index.js';
 import { AppError, BadRequestError } from '@utils/errors.js';
-import type { AiErrorCode } from '@services/ai/ai.types.js';
+import type { AiErrorCode } from '@providers/ai/index.js';
 import type {
   NewsletterTranslateBodyDto,
   NewsletterTranslateItemDto,
@@ -25,7 +23,7 @@ import {
 import { buildTranslateRequest } from './helpers/translatePrompt.helper.js';
 
 // The translation of the texts of a campaign into other languages, for the people who write it. The
-// model of openai gives a draft of each text in each language; the server keeps none of them and logs
+// model of the AI provider gives a draft of each text in each language; the server keeps none of them and logs
 // no text, the person edits the drafts and saves in the campaign the ones they keep. Nothing the model
 // says is trusted: each draft is judged (helpers/translateAnswer.helper.ts) and one that fails is left
 // out with its warning. One request to the model is for one language, a few at a time
@@ -99,8 +97,8 @@ function checkTotal(items: NewsletterTranslateItemDto[]): void {
   }
 }
 
-// a bad gateway with nothing of openai in it; the reason (a code of ours) and the status are for the
-// log, never for the answer, and the cause is none: a message of openai quotes a part of the key
+// a bad gateway with nothing of the provider in it; the reason (a code of ours) and the status are for the
+// log, never for the answer, and the cause is none: a message of the provider quotes a part of the key
 function translateFailed(failure: Failure): AppError {
   return new AppError({
     statusCode: 502,
@@ -124,7 +122,7 @@ function warningOf(
 }
 
 // Asks the model for one language. An answer that is broken (no text, or not the json of the schema)
-// is asked for once more, any other failure (the time, the limit of openai, a refusal, an answer cut
+// is asked for once more, any other failure (the time, the limit of the provider, a refusal, an answer cut
 // short) is not. Every failed attempt is a line of the log with the code, never a text. Gives the
 // answer, or the failure of the last attempt; an error of our own is thrown
 async function translateInto(
@@ -141,7 +139,7 @@ async function translateInto(
     const willRetry = attempt < MAX_ATTEMPTS;
 
     try {
-      const result = await aiClientService.generateText(request);
+      const result = await aiProvider.generateText(request);
       const answer = parseModelAnswer(result.text, keys);
       if (answer) return { locale, answer };
 
@@ -176,7 +174,7 @@ async function translateInto(
 
 // The drafts of the texts in the languages asked. The refusals come in this order: the languages
 // (400 `LOCALE_INVALID`), a key used twice (400 `VALIDATION_ERROR`), too much text (400
-// `NEWSLETTER_TRANSLATE_TOO_MUCH_TEXT`), then the model: with no key of openai, or when the request
+// `NEWSLETTER_TRANSLATE_TOO_MUCH_TEXT`), then the model: with no key of the provider, or when the request
 // failed for every language, 502 `NEWSLETTER_TRANSLATE_FAILED`. When it failed for some languages
 // only, the others come with their drafts and the ones that failed with a warning for each text
 export async function translateNewsletterTexts(
@@ -187,8 +185,9 @@ export async function translateNewsletterTexts(
   checkKeys(dto.items);
   checkTotal(dto.items);
 
-  if (!env.OPENAI_API_KEY.trim())
+  if (!aiProvider.isConfigured()) {
     throw translateFailed({ code: 'AI_NOT_CONFIGURED', status: null });
+  }
 
   const outcomes = await mapWithLimit(dto.to, TRANSLATE_CONCURRENCY, (locale) =>
     translateInto(from, locale, dto.items, log),

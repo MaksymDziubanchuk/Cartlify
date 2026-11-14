@@ -19,7 +19,7 @@ import type {
   RemoveUserAvatarResponseDto,
 } from 'types/dto/users.dto.js';
 import type { MessageResponseDto } from 'types/common.js';
-import { discardUploads, type UploadImageResult } from '@utils/cloudinary.util.js';
+import { discardUploads, type UploadImageResult } from '@providers/files/index.js';
 import { BadRequestError } from '@utils/errors.js';
 
 import pickDefined from '@helpers/parameterNormalize.js';
@@ -123,7 +123,7 @@ const patchMe: ControllerRouter<{}, UpdateMeBodyDto, {}, UserResponseDto> = asyn
               throw new BadRequestError('AVATAR_MULTIPLE');
             }
 
-            // delegate cloudinary upload to a dedicated service
+            // delegate the upload of the file to a dedicated service
             // this call must start consuming the stream immediately
             avatarUpload = usersServices.beginAvatarUpload({
               userId: id as UserId,

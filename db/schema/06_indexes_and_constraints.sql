@@ -42,7 +42,7 @@ END $$;
 ----------------------------------------
 -- CATEGORIES: the picture
 ----------------------------------------
--- A category has a picture with its id on Cloudinary, or none of the two.
+-- A category has a picture with its id at the file storage, or none of the two.
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -1336,7 +1336,7 @@ BEGIN
     ADD CONSTRAINT returns_source_chk
     CHECK (
       (source IN ('admin', 'system')) = (reason IS NOT NULL)
-      AND (source = 'system') = (reason IS NOT NULL AND reason IN ('dispute_lost', 'stripe_refund'))
+      AND (source = 'system') = (reason IS NOT NULL AND reason IN ('dispute_lost', 'provider_refund'))
       AND (source IN ('admin', 'system') OR basis = 'withdrawal')
       AND (source IN ('admin', 'account')) = ("createdById" IS NOT NULL)
     );
@@ -1668,10 +1668,10 @@ BEGIN
             amount < 0 AND purpose = 'shipping' AND part = 'whole' AND "orderShipmentId" IS NOT NULL
           WHEN 'money.dispute_withdrawn' THEN
             amount < 0 AND purpose = 'dispute' AND part = 'whole'
-            AND "disputeId" IS NOT NULL AND "stripeTxId" IS NOT NULL
+            AND "disputeId" IS NOT NULL AND "balanceTxId" IS NOT NULL
           WHEN 'money.dispute_reinstated' THEN
             amount > 0 AND purpose = 'dispute' AND part = 'whole'
-            AND "disputeId" IS NOT NULL AND "stripeTxId" IS NOT NULL
+            AND "disputeId" IS NOT NULL AND "balanceTxId" IS NOT NULL
           WHEN 'money.correction' THEN
             "coversId" IS NOT NULL
           WHEN 'money.received' THEN

@@ -160,7 +160,7 @@ describe('a lost dispute of an order sent that took all of the payment', () => {
     const out = await inRolledBackTx(async (db) => {
       const { paymentId, lampItem, bookItem } = await sentOrder(db);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(40)],
@@ -185,7 +185,7 @@ describe('a lost dispute of an order sent that took all of the payment', () => {
       const { orderId, paymentId, bookItem } = await sentOrder(db);
       const returnId = await statementIn(db, orderId, [bookItem]);
       const answer = await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(40)],
@@ -204,14 +204,14 @@ describe('a lost dispute of an order sent that took all of the payment', () => {
       const after = await sentOrder(db);
       await handRefundOf(db, after.paymentId, 5);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId: after.paymentId,
         status: 'lost',
         transactions: [withdrawal(35)],
       });
       const part = await sentOrder(db);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId: part.paymentId,
         status: 'lost',
         transactions: [withdrawal(30)],
@@ -230,7 +230,7 @@ describe('a lost dispute of an order sent that took all of the payment', () => {
     const out = await inRolledBackTx(async (db) => {
       const { paymentId } = await sentOrder(db, null);
       await synced(db, {
-        stripeId: newDisputeId(),
+        providerDisputeId: newDisputeId(),
         paymentId,
         status: 'lost',
         transactions: [withdrawal(40)],
