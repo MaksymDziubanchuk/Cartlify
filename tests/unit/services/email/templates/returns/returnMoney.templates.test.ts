@@ -153,6 +153,65 @@ describe('buildReturnRefundedTemplate and the way back', () => {
   });
 });
 
+// money the buyer already had paid part or all of the rows: what the bank gave for a dispute, or a
+// refund made earlier by hand (the decision on it gave it to these goods)
+describe('buildReturnRefundedTemplate and money already with the buyer', () => {
+  const lamp = {
+    orderId: 42,
+    orderUrl,
+    items: [{ name: 'Desk lamp', quantity: 2 }],
+    amount: '20',
+    currency: 'eur',
+    supportEmail,
+  };
+
+  it('says the money is already with the buyer when the bank gave all of it, with no way it goes and no later mail', () => {
+    const { subject, text, html } = buildReturnRefundedTemplate({ ...lamp, bankAmount: '20' });
+
+    expect(subject).toBe('Cartlify — The money for order #42 is already with you');
+    expect(text).toContain('You already have €20.00 back for your Cartlify order #42.');
+    expect(text).toContain('Your bank gave you €20.00 of it when it decided the dispute.');
+    expect(text).not.toContain('We sent you');
+    expect(text).not.toContain('It goes back the way you paid.');
+    expect(text).not.toContain('If anything happens to this refund');
+    expect(html).toContain('The money is already with you');
+  });
+
+  it('tells each source when the bank and a refund made earlier paid it together, and the later mail for the refund', () => {
+    const { text } = buildReturnRefundedTemplate({
+      ...lamp,
+      bankAmount: '15',
+      earlierAmount: '5',
+    });
+
+    expect(text).toContain('You already have €20.00 back');
+    expect(text).toContain('Your bank gave you €15.00 of it when it decided the dispute.');
+    expect(text).toContain('We sent you €5.00 of it earlier.');
+    expect(text).toContain('If anything happens to this refund, we will write to you.');
+  });
+
+  it('tells what was sent now and what the goods have in all when the money already there paid part of it', () => {
+    const { subject, text } = buildReturnRefundedTemplate({ ...lamp, earlierAmount: '10' });
+
+    expect(subject).toBe('Cartlify — Money sent for order #42');
+    expect(text).toContain('We sent you €10.00 for your Cartlify order #42.');
+    expect(text).toContain('It goes back the way you paid.');
+    expect(text).toContain(
+      'With the €10.00 you already had for them, that is €20.00 for these goods.',
+    );
+  });
+
+  it('writes the money already there in the language given', () => {
+    const uk = buildReturnRefundedTemplate({ ...lamp, bankAmount: '20', locale: 'uk' });
+    const es = buildReturnRefundedTemplate({ ...lamp, earlierAmount: '10', locale: 'es' });
+
+    expect(uk.subject).toContain('уже у вас');
+    expect(uk.text).toContain('Ваш банк повернув вам');
+    expect(es.text).toContain('Te enviamos 10,00');
+    expect(es.text).toContain('que ya tenías');
+  });
+});
+
 // the code of the statement the buyer sees in every mail of it, the same the admins see
 describe('the code of the statement in the mails', () => {
   const builds: Array<
@@ -179,7 +238,7 @@ describe('the code of the statement in the mails', () => {
           orderUrl,
           refunded: [{ name: 'Desk lamp', quantity: 1 }],
           declined: [],
-          refundedAmount: 10,
+          money: { bank: 0, card: 10, outside: [] },
           currency: 'eur',
           supportEmail,
           ...(code ? { code } : {}),
@@ -242,7 +301,7 @@ describe('the money kept for the value the goods lost', () => {
       orderUrl,
       refunded: [{ name: 'Desk lamp', quantity: 1 }],
       declined: [],
-      refundedAmount: 7,
+      money: { bank: 0, card: 7, outside: [] },
       currency: 'eur',
       supportEmail,
       withheldAmount: 3,
@@ -369,7 +428,7 @@ describe('buildReturnClosedTemplate', () => {
     orderUrl,
     refunded: [{ name: 'Desk lamp', quantity: 1 }],
     declined: [{ name: 'Notebook', quantity: 2, why: 'the package was opened' }],
-    refundedAmount: '10',
+    money: { bank: 0, card: 10, outside: [] },
     currency: 'eur',
     supportEmail,
   };
@@ -378,17 +437,116 @@ describe('buildReturnClosedTemplate', () => {
     const { subject, text, html } = buildReturnClosedTemplate(base);
 
     expect(subject).toBe('Cartlify — Return of order #42 is closed');
-    expect(text).toContain('We sent you €10.00.');
+    expect(text).toContain(
+      'We sent you €10.00. It goes back the way you paid. Your bank shows it within a few days.',
+    );
+    expect(html).toContain('It goes back the way you paid.');
     expect(text).toContain('Returned to you:\n- Desk lamp x 1');
     expect(text).toContain('Not returned:\n- Notebook x 2 (the package was opened)');
     expect(html).toContain('the package was opened');
   });
 
   it('says no money is returned when nothing went back, and leaves the list of the returned out', () => {
-    const { text } = buildReturnClosedTemplate({ ...base, refunded: [], refundedAmount: 0 });
+    const { text } = buildReturnClosedTemplate({
+      ...base,
+      refunded: [],
+      money: { bank: 0, card: 0, outside: [] },
+    });
 
     expect(text).toContain('No money is returned for this statement.');
+    expect(text).not.toContain('It goes back the way you paid.');
     expect(text).not.toContain('Returned to you:');
+  });
+
+  // where the money came from, each told as the buyer finds it
+  it('tells money sent another way by its way and its day, and no card', () => {
+    const { text, html } = buildReturnClosedTemplate({
+      ...base,
+      money: {
+        bank: 0,
+        card: 0,
+        outside: [
+          { amount: 6, method: 'bank_transfer', sentOn: new Date('2026-11-12T09:30:00Z') },
+          { amount: 4, method: 'cash', sentOn: null },
+        ],
+      },
+      timeZone: 'Europe/Madrid',
+    });
+
+    expect(text).toContain(
+      'We sent you €6.00 by a bank transfer on 12 November 2026. We sent you €4.00 by cash.',
+    );
+    expect(html).toContain('We sent you €6.00 by a bank transfer on 12 November 2026.');
+    expect(text).not.toContain('It goes back the way you paid.');
+  });
+
+  it('tells the day of money sent another way in the time zone of the shop', () => {
+    const { text } = buildReturnClosedTemplate({
+      ...base,
+      money: {
+        bank: 0,
+        card: 0,
+        outside: [{ amount: 10, method: 'other', sentOn: new Date('2026-11-12T23:30:00Z') }],
+      },
+      timeZone: 'Europe/Madrid',
+    });
+
+    expect(text).toContain('We sent you €10.00 by another way on 13 November 2026.');
+  });
+
+  it('tells what the bank gave back for a dispute, and the rest the shop sent to the card', () => {
+    const { text, html } = buildReturnClosedTemplate({
+      ...base,
+      money: { bank: 15, card: 5, outside: [] },
+    });
+
+    expect(text).toContain(
+      'Your bank decided the dispute about your payment for order #42 for you and gave you back ' +
+        '€15.00. We sent you the rest, €5.00. It goes back the way you paid. Your bank shows it ' +
+        'within a few days.',
+    );
+    expect(html).toContain('gave you back €15.00.');
+    expect(text).not.toContain('We sent you €');
+  });
+
+  it('tells only the bank when the bank gave all of it', () => {
+    const { text } = buildReturnClosedTemplate({
+      ...base,
+      money: { bank: 20, card: 0, outside: [] },
+    });
+
+    expect(text).toContain(
+      'Your bank decided the dispute about your payment for order #42 for you and gave you back €20.00.',
+    );
+    expect(text).not.toContain('We sent you');
+    expect(text).not.toContain('It goes back the way you paid.');
+  });
+
+  it('tells the money of each source in the language of the buyer', () => {
+    const money = {
+      bank: 15,
+      card: 3,
+      outside: [{ amount: 2, method: 'cash', sentOn: new Date('2026-11-12T09:30:00Z') }],
+    };
+    const uk = buildReturnClosedTemplate({
+      ...base,
+      money,
+      locale: 'uk',
+      timeZone: 'Europe/Madrid',
+    });
+    const es = buildReturnClosedTemplate({
+      ...base,
+      money,
+      locale: 'es',
+      timeZone: 'Europe/Madrid',
+    });
+
+    expect(uk.text).toContain('Ваш банк вирішив спір щодо оплати замовлення #42 на вашу користь');
+    expect(uk.text).toContain('Решту, 3,00');
+    expect(uk.text).toContain('готівкою 12 листопада 2026');
+    expect(es.text).toContain('Tu banco resolvió a tu favor la disputa');
+    expect(es.text).toContain('el resto, 3,00');
+    expect(es.text).toContain('en efectivo el 12 de noviembre de 2026');
   });
 
   it('leaves the list of the declined out when every unit went back', () => {

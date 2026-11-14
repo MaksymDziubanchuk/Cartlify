@@ -99,7 +99,7 @@ const answerView = (rows: unknown[]) =>
 // the money of a period with nothing in it, counted the way the report counts it
 const NO_MONEY = {
   income: { items: 0, delivery: null, total: 0 },
-  expenses: { costOfGoods: 0, writeOffs: 0, shipping: null, total: 0 },
+  expenses: { costOfGoods: 0, writeOffs: 0, shipping: null, otherRefunds: null, total: 0 },
   margin: { items: 0, delivery: null, total: 0 },
 };
 

@@ -162,12 +162,13 @@ describe('summaryOf', () => {
         itemsCost: dec('60.00'),
         writeOffs: 4,
         delivery: columns(),
+        payments: null,
       }),
     ).toEqual({
       // the delivery less what went back with the returns: 45 - 5
       income: { items: 100, delivery: 40, total: 140 },
       // the sends to the buyers and the parcels back are the one expense of the carriers: 36.5 + 4.5
-      expenses: { costOfGoods: 60, writeOffs: 4, shipping: 41, total: 105 },
+      expenses: { costOfGoods: 60, writeOffs: 4, shipping: 41, otherRefunds: null, total: 105 },
       margin: { items: 40, delivery: -1, total: 35 },
     });
   });
@@ -178,21 +179,40 @@ describe('summaryOf', () => {
       itemsCost: dec('60.00'),
       writeOffs: 4,
       delivery: columns({ return_ship_deducted: dec('6.00'), return_ship_reimbursed: dec('2.50') }),
+      payments: null,
     });
 
     // 45 - 5 + 6
     expect(out.income).toEqual({ items: 100, delivery: 46, total: 146 });
     // 36.5 + 4.5 + 2.5
-    expect(out.expenses).toEqual({ costOfGoods: 60, writeOffs: 4, shipping: 43.5, total: 107.5 });
+    expect(out.expenses).toEqual({
+      costOfGoods: 60,
+      writeOffs: 4,
+      shipping: 43.5,
+      otherRefunds: null,
+      total: 107.5,
+    });
     expect(out.margin).toEqual({ items: 40, delivery: 2.5, total: 38.5 });
   });
 
   it('gives none for the delivery and the sends of a report of some products', () => {
     expect(
-      summaryOf({ itemsRevenue: '10.10', itemsCost: '3.05', writeOffs: '1.01', delivery: null }),
+      summaryOf({
+        itemsRevenue: '10.10',
+        itemsCost: '3.05',
+        writeOffs: '1.01',
+        delivery: null,
+        payments: null,
+      }),
     ).toEqual({
       income: { items: 10.1, delivery: null, total: 10.1 },
-      expenses: { costOfGoods: 3.05, writeOffs: 1.01, shipping: null, total: 4.06 },
+      expenses: {
+        costOfGoods: 3.05,
+        writeOffs: 1.01,
+        shipping: null,
+        otherRefunds: null,
+        total: 4.06,
+      },
       margin: { items: 7.05, delivery: null, total: 6.04 },
     });
   });
@@ -208,6 +228,7 @@ describe('summaryOf', () => {
         ship_cost: dec('0.10'),
         return_ship_cost: dec('0'),
       }),
+      payments: null,
     });
 
     expect(out.income.total).toBe(0.3);
