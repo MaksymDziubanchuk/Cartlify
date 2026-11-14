@@ -4,12 +4,16 @@ import { AUDIT_EVENTS } from '@config/journalEvents.js';
 import { HIDDEN_ID, hiddenAccount, hiddenChanges, hiddenText } from '@helpers/rootHidden.js';
 
 import {
+  type ColumnFilter,
+  columnFiltersSql,
+  filterValuesOf,
+  type JournalArgs,
   journalArgsOf,
   journalCsv,
-  listJournal,
-  type JournalArgs,
   type JournalDef,
   type JournalQuery,
+  listJournal,
+  rootNotPickedSql,
 } from './helpers/journal.helper.js';
 
 import type {
@@ -29,6 +33,8 @@ import type { Role } from 'types/user.js';
 // the account of root the id of it and the values of the changes (the fields are named)
 
 export type AuditLogArgs = JournalArgs & {
+  // the values of the filters of the other columns, by their names
+  filterValues: Record<string, unknown>;
   filterActorId?: number | undefined;
   filterActorRole?: Role | undefined;
   entityType?: string | undefined;
@@ -75,6 +81,8 @@ type AuditItem = Partial<AdminAuditLogItemDto> & Record<string, unknown>;
 
 const AUDIT_DEF: JournalDef<AuditRow, AuditItem> = {
   fileName: 'admin-log',
+  // a line whose account is root's: an admin does not see its address and browser
+  rootLine: Prisma.sql`(l."actorRole" = 'ROOT'::cartlify."Role" OR a.role = 'ROOT'::cartlify."Role")`,
   from: Prisma.sql`cartlify.admin_audit_log AS l
     JOIN cartlify.users AS a ON a.id = l."actorId"
     LEFT JOIN cartlify.users AS t ON l."entityType" = 'user'::cartlify."AdminAuditEntityType" AND t.id = l."entityId"`,
@@ -178,8 +186,15 @@ export function auditLogArgsOf(
     entityId: query.entityId,
     actions: query.actions ? [...new Set(query.actions.split(','))] : undefined,
     field: query.field,
+    filterValues: filterValuesOf(AUDIT_FILTERS, query as Record<string, unknown>),
   };
 }
+
+// the filters of the other columns, each by the name of its parameter
+export const AUDIT_FILTERS: Record<string, ColumnFilter> = {
+  ip: { kind: 'text', sql: Prisma.sql`l.ip`, rootHidden: true },
+  userAgent: { kind: 'contains', sql: Prisma.sql`l."userAgent"`, rootHidden: true },
+};
 
 function filtersOf(args: AuditLogArgs): Prisma.Sql[] {
   const parts: Prisma.Sql[] = [];
@@ -199,6 +214,15 @@ function filtersOf(args: AuditLogArgs): Prisma.Sql[] {
     parts.push(Prisma.sql`l.meta @> ${JSON.stringify([{ field: args.field }])}::jsonb`);
   }
 
+  parts.push(...columnFiltersSql(AUDIT_DEF, AUDIT_FILTERS, args.filterValues, args.actorRole));
+  // a filter of a person picks none of the lines of root for an admin (journal.helper.ts)
+  parts.push(
+    ...rootNotPickedSql(
+      args.actorRole,
+      args.filterActorId !== undefined || args.filterActorRole !== undefined,
+      AUDIT_DEF.rootLine!,
+    ),
+  );
   return parts;
 }
 

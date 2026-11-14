@@ -4,12 +4,16 @@ import { CONSENT_EVENTS } from '@config/journalEvents.js';
 import { HIDDEN_ID, hiddenAccount, hiddenText } from '@helpers/rootHidden.js';
 
 import {
+  type ColumnFilter,
+  columnFiltersSql,
+  filterValuesOf,
+  type JournalArgs,
   journalArgsOf,
   journalCsv,
-  listJournal,
-  type JournalArgs,
   type JournalDef,
   type JournalQuery,
+  listJournal,
+  rootNotPickedSql,
 } from './helpers/journal.helper.js';
 
 import type {
@@ -27,6 +31,8 @@ import type { Role } from 'types/user.js';
 // rule as the others: what it knows of root is hidden from an admin
 
 export type ConsentLogArgs = JournalArgs & {
+  // the values of the filters of the other columns, by their names
+  filterValues: Record<string, unknown>;
   userId?: number | undefined;
   documentId?: number | undefined;
   orderId?: number | undefined;
@@ -68,6 +74,8 @@ type ConsentItem = Partial<AdminConsentLogItemDto> & Record<string, unknown>;
 
 const CONSENT_DEF: JournalDef<ConsentRow, ConsentItem> = {
   fileName: 'consent-log',
+  // a line whose account is root's: an admin does not see its address and browser
+  rootLine: Prisma.sql`u.role = 'ROOT'::cartlify."Role"`,
   from: Prisma.sql`cartlify.legal_acceptances AS l
     JOIN cartlify.users AS u ON u.id = l."userId"
     JOIN cartlify.legal_documents AS d ON d.id = l."documentId"`,
@@ -165,8 +173,15 @@ export function consentLogArgsOf(
     documentId: query.documentId,
     orderId: query.orderId,
     kind: query.kind,
+    filterValues: filterValuesOf(CONSENT_FILTERS, query as Record<string, unknown>),
   };
 }
+
+// the filters of the other columns, each by the name of its parameter
+export const CONSENT_FILTERS: Record<string, ColumnFilter> = {
+  ip: { kind: 'text', sql: Prisma.sql`l.ip`, rootHidden: true },
+  userAgent: { kind: 'contains', sql: Prisma.sql`l."userAgent"`, rootHidden: true },
+};
 
 function filtersOf(args: ConsentLogArgs): Prisma.Sql[] {
   const parts: Prisma.Sql[] = [];
@@ -176,6 +191,9 @@ function filtersOf(args: ConsentLogArgs): Prisma.Sql[] {
   if (args.kind !== undefined)
     parts.push(Prisma.sql`d.kind = ${args.kind}::cartlify."LegalDocumentKind"`);
 
+  parts.push(...columnFiltersSql(CONSENT_DEF, CONSENT_FILTERS, args.filterValues, args.actorRole));
+  // a filter of a person picks none of the lines of root for an admin (journal.helper.ts)
+  parts.push(...rootNotPickedSql(args.actorRole, args.userId !== undefined, CONSENT_DEF.rootLine!));
   return parts;
 }
 

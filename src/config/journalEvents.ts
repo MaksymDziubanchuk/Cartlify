@@ -90,35 +90,57 @@ export const AUDIT_EVENTS = [
   'order.pickup_ready_back_bulk',
   'order.pickup_collected_back',
   'order.pickup_collected_back_bulk',
-  // a payment the order could not take and the shop gives back: the refund is made, its money is
-  // sent (the buyer is mailed), the refund fails (the buyer is mailed), root sends the money another
-  // way after it failed (the buyer is mailed)
-  'order.refund_late',
-  'order.refund_late_sent',
-  'order.refund_late_failed',
-  'order.refund_late_outside',
+  // root sent the money of a refund that failed (of a payment the order could not take, or made by
+  // hand in the dashboard of the provider) another way; the line names the lines of the money
+  // journal (the work of the system on the money is in the money journal only)
+  'payment.refund_outside',
+  // root gave an admin the right to handle the money the way root does, or took it away (the line is
+  // about the account of the admin)
+  'payment.manager_granted',
+  'payment.manager_revoked',
+  // root said what money given back by hand in the dashboard of the provider, or taken by a bank for
+  // a lost dispute, was for: the items and the delivery of the order, the rest a compensation or a
+  // loss (with the reason and the rows of statements it paid at once); the line names the line of
+  // the money journal
+  'payment.money_decision',
+  // root gave the buyer a compensation by the button of the app, with the reason; the line names the
+  // line of the money journal
+  'payment.compensation',
+  // root recorded money the buyer gave back outside the app for rows of a statement, or money a
+  // carrier paid the shop for a send; the line names the line of the money journal
+  'return.money_received',
+  'order.carrier_money',
+  // money already with the buyer gave the goods of an order more than its statements took: root
+  // recorded what the buyer gave back of it, gave it up (with the reason), or kept goods not
+  // accepted that were still in the shop (with the reason and the rows paid at once)
+  'return.overpaid_received',
+  'return.overpaid_lost',
+  'return.goods_kept',
+  // root decided on what holds a paid order from its sending and is root's to let go (a refund made
+  // by hand of part of it, an early warning of fraud): send it, or cancel it (the statement of the
+  // cancel with it), with the reason
+  'order.hold_decide',
   // a statement of withdrawal or of return: made, its goods taken in, the proof of the buyer
-  // confirmed, its money returned or failed to return, money sent outside the app, rows closed
-  // without a refund
+  // confirmed, a transfer of its money started by an admin or root (with the lines of the money
+  // journal), money sent outside the app, rows closed without a refund
   'return.create',
   'return.receive',
   'return.proof_confirm',
   'return.accept',
   // the buyer wrote how they sent the goods back
   'return.proof_provide',
+  // units of a statement went into a new statement of their own, sent in a parcel of their own
+  'return.split',
   'return.refund',
-  'return.refund_failed',
   'return.refund_outside',
   // root lowered what rows of a statement give back, with the reason
   'return.amount_lower',
-  // root paid the buyer back the cost of the way back, outside the app
-  'return.shipping_reimburse',
-  // a dispute of the payment at the bank ended (root, or the webhook of the provider)
-  'return.dispute_settle',
   'return.close',
-  // the shop paid to carry the goods back: a parcel recorded, its cost written
+  // a parcel of a statement recorded (back to the shop, or goods not accepted sent back to the
+  // buyer), its cost written
   'return.shipment_record',
   'return.shipment_cost',
+  'return.buyer_paid',
   // a change of a send (the details mailed to the buyer, or the cost the shop pays the carrier), of
   // the delivery data
   'order.shipment_tracking_change',
@@ -197,6 +219,36 @@ export const STOCK_LOG_EVENTS = [
   // the units that came back with a statement and went out of the stock at once (written off or
   // lost), the line after the one of their return
   'stock.return_write_off',
+] as const;
+
+// the money journal (db/05, money_log): what moved the money. A line is written by a function of the
+// database in the same transaction that changed the state next to it; the sum is signed, above 0
+// comes to the shop and below 0 goes from it
+export const MONEY_LOG_EVENTS = [
+  // the payment of an order, in two lines of one payment (the goods, the delivery); a payment the
+  // order could not take and the shop sends back
+  'money.payment',
+  'money.late_payment',
+  // a refund asked of the provider (in transit, then sent) of a statement, a late payment or made by
+  // hand in the dashboard of the provider; its failure is a new line with the opposite sum
+  'money.refund',
+  'money.refund_failed',
+  // money sent to the buyer outside the app, and the way back root paid the buyer outside the app
+  'money.outside',
+  // what the shop paid a carrier: the parcel back of a statement, the send of an order
+  'money.return_parcel_cost',
+  'money.shipping_cost',
+  // what the bank took for a dispute and gave back
+  'money.dispute_withdrawn',
+  'money.dispute_reinstated',
+  // the correction of a sum a person wrote: a new line with the difference
+  'money.correction',
+  // money the shop got back outside the app: from the buyer for rows of a statement or of what is
+  // overpaid, from a carrier for a send of an order
+  'money.received',
+  // root gave up what a share of money already with the buyer had left: a compensation, a loss (it
+  // moves no money, the sum is in the meta)
+  'money.share_moved',
 ] as const;
 
 export type AuditEvent = (typeof AUDIT_EVENTS)[number];

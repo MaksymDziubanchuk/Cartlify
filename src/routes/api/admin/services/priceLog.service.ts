@@ -4,12 +4,16 @@ import { PRICE_LOG_EVENTS } from '@config/journalEvents.js';
 import { HIDDEN_ID, hiddenAccount } from '@helpers/rootHidden.js';
 
 import {
+  type ColumnFilter,
+  columnFiltersSql,
+  filterValuesOf,
+  type JournalArgs,
   journalArgsOf,
   journalCsv,
-  listJournal,
-  type JournalArgs,
   type JournalDef,
   type JournalQuery,
+  listJournal,
+  rootNotPickedSql,
 } from './helpers/journal.helper.js';
 
 import type {
@@ -27,6 +31,8 @@ import type { Role } from 'types/user.js';
 // lose the account (the role stays)
 
 export type PriceLogArgs = JournalArgs & {
+  // the values of the filters of the other columns, by their names
+  filterValues: Record<string, unknown>;
   productId?: number | undefined;
   variantId?: number | undefined;
   filterActorId?: number | undefined;
@@ -197,8 +203,19 @@ export function priceLogArgsOf(
     variantId: query.variantId,
     filterActorId: query.actorId,
     mode: query.mode,
+    filterValues: filterValuesOf(PRICE_FILTERS, query as Record<string, unknown>),
   };
 }
+
+// the filters of the other columns, each by the name of its parameter
+export const PRICE_FILTERS: Record<string, ColumnFilter> = {
+  oldPriceFrom: { kind: 'atLeast', sql: Prisma.sql`l."oldPrice"` },
+  oldPriceTo: { kind: 'atMost', sql: Prisma.sql`l."oldPrice"` },
+  newPriceFrom: { kind: 'atLeast', sql: Prisma.sql`l."newPrice"` },
+  newPriceTo: { kind: 'atMost', sql: Prisma.sql`l."newPrice"` },
+  endsFrom: { kind: 'from', sql: Prisma.sql`l."endsAt"` },
+  endsTo: { kind: 'to', sql: Prisma.sql`l."endsAt"` },
+};
 
 function filtersOf(args: PriceLogArgs): Prisma.Sql[] {
   const parts: Prisma.Sql[] = [];
@@ -208,6 +225,15 @@ function filtersOf(args: PriceLogArgs): Prisma.Sql[] {
   if (args.mode !== undefined)
     parts.push(Prisma.sql`l.mode = ${args.mode}::cartlify."PriceChangeMode"`);
 
+  parts.push(...columnFiltersSql(PRICE_DEF, PRICE_FILTERS, args.filterValues, args.actorRole));
+  // a filter of a person picks none of the lines of root for an admin (journal.helper.ts)
+  parts.push(
+    ...rootNotPickedSql(
+      args.actorRole,
+      args.filterActorId !== undefined,
+      Prisma.sql`a.role = 'ROOT'::cartlify."Role"`,
+    ),
+  );
   return parts;
 }
 
