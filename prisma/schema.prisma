@@ -74,6 +74,12 @@ model User {
   // (db/05, db/06)
   canManageNewsletters Boolean @default(false)
 
+  // an ADMIN that root allowed to handle the money of the shop the way root does: money sent outside
+  // the app, rows closed without money, the decisions on refunds made by hand and on the money of a
+  // bank, the holds root lets go (root always may). Only root changes it, in a function of the
+  // database, and it goes off by itself when the account stops being an ADMIN (db/05, db/06)
+  canManageMoney Boolean @default(false)
+
   userTokens              UserToken[]
   loginLogs               LoginLog[]
   reviews                 Review[]
@@ -83,6 +89,11 @@ model User {
   productPriceChangeLogs  ProductPriceChangeLog[]
   adminAuditLogs          AdminAuditLog[]
   stockLogs               StockLog[]
+  // the lines of the money journal this account wrote, and the lines of its own money, and the
+  // disputes of its payments
+  moneyLogsDone           MoneyLog[]                    @relation("MoneyLogActor")
+  moneyLogsOwn            MoneyLog[]                    @relation("MoneyLogBuyer")
+  paymentDisputes         PaymentDispute[]              @relation("PaymentDisputeBuyer")
   alertSettings           AdminAlertSetting[]
   // the versions of the terms and of the contract this account published (only root does)
   legalDocumentsPublished LegalDocument[]               @relation("LegalDocumentPublisher")
@@ -92,13 +103,11 @@ model User {
   shopSettingsSet         ShopSetting[]
   // the statements of withdrawal this account made or confirmed the proof of
   returnsCreated          OrderReturn[]                 @relation("ReturnCreator")
-  returnsProofConfirmed   OrderReturn[]                 @relation("ReturnProofConfirmer")
   returnsAccepted         OrderReturn[]                 @relation("ReturnAcceptor")
   returnsClosed           OrderReturn[]                 @relation("ReturnCloser")
-  returnsReimbursed       OrderReturn[]                 @relation("ReturnShippingReimburser")
   returnItemsSet          OrderReturnItem[]             @relation("ReturnItemGoodsSetter")
-  returnItemsOutside      OrderReturnItem[]             @relation("ReturnItemOutsideSetter")
-  returnShipmentsRecorded ReturnShipment[]              @relation("ReturnShipmentRecorder")
+  shipmentsRecorded       OrderShipment[]               @relation("ShipmentRecorder")
+  shipmentsConfirmed      OrderShipment[]               @relation("ShipmentConfirmer")
   chatThreads             ChatThread[]
   chatMessages            ChatMessage[]
   // the newsletter subscriptions of this account, the subscriptions of the form that ended with this
@@ -872,6 +881,15 @@ model Order {
   // where the order stands as to its statements of withdrawal and return; only the database sets
   // it (refresh_return_state, db/05)
   returnStatus         ReturnStatus         @default(none)
+  // the reasons that block the sending of the order, a list of { reason, since, ref }: dispute (an
+  // open dispute of its payment or an inquiry of the bank), hand_refund (a refund made by hand in
+  // the dashboard of the provider that root has not decided on), fraud_warning (the provider warned
+  // the payment may be fraud), payment_review (the provider reviews the payment). The order is not
+  // sent (paid to shipped) while the list is not empty (db/05); only the database functions that
+  // follow the provider and the decision of root change it
+  holds                Json                 @default("[]")
+  // the provider warned the payment of an order already sent may be fraud: only for the alert
+  fraudWarnedAt        DateTime?
 
   createdAt DateTime @default(now())
   // a trigger sets it on every change, also a change made by a database function (db/05)
@@ -890,6 +908,9 @@ model Order {
   legalAcceptances LegalAcceptance[]
   // the statements of withdrawal and of return of the order
   returns          OrderReturn[]
+  // the money of the order and the disputes of its payment
+  moneyLogs        MoneyLog[]
+  disputes         PaymentDispute[]
 
   @@index([userId, createdAt])
   @@index([userId, updatedAt])
@@ -943,14 +964,40 @@ model OrderDelivery {
 }
 
 // One send of an order by the manual method: the carrier the shop used outside the app, the number
-// and the link to follow it by, and what the shop pays the carrier. A pickup has none. An order
-// can have several sends: when an admin takes the status back from shipped the row stays as
-// history, marked with rolledBackAt, and the next shipping adds a new row.
+// and the link to follow it by; what the shop pays the carrier is in the money journal (the cost and
+// its corrections, db/05 record_order_shipment_cost). A pickup has none. An order can have several
+// sends: when an admin takes the status back from shipped the row stays as history, marked with
+// rolledBackAt, and the next shipping adds a new row.
+// A parcel of an order: a send of the order to the buyer (the step to shipped), or a parcel of a
+// statement of return: the goods on their way back to the shop (the one the buyer sent and told of,
+// or the one the shop sent for them) or the goods the shop did not accept sent back to the buyer.
+// What the shop paid the carrier for a parcel is in the money journal (db/05).
 model OrderShipment {
   id Int @id @default(autoincrement())
 
   orderId Int
   order   Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // the statement of a parcel of a return; empty for a send of the order
+  returnId Int?
+  return   OrderReturn? @relation(fields: [returnId], references: [id], onDelete: Restrict)
+
+  // to the buyer (a send of the order, the goods not accepted sent back) or to the shop (the goods
+  // of a statement on their way back, one parcel a statement, db/06)
+  direction ShipmentDirection @default(to_buyer)
+
+  // who wrote the parcel: an admin, or the buyer of an account; empty for the buyer of the public
+  // form and for a send of the order of an older time
+  recordedById Int?
+  recordedBy   User? @relation("ShipmentRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
+
+  // a parcel to the shop: when an admin checked it and who (the money may then go before the goods
+  // arrive), and what the buyer paid the carrier for it, as the buyer told it and the admin set it
+  // from the receipt when confirming (db/05)
+  confirmedAt   DateTime?
+  confirmedById Int?
+  confirmedBy   User?     @relation("ShipmentConfirmer", fields: [confirmedById], references: [id], onDelete: Restrict)
+  buyerPaid     Decimal?  @db.Decimal(10, 2)
 
   // written by the admin; a number needs a carrier and a link needs a number, the link is https
   // (db/06)
@@ -958,20 +1005,25 @@ model OrderShipment {
   trackingNumber String? @db.VarChar(100)
   trackingUrl    String? @db.VarChar(500)
 
-  // what the shop pays the carrier, empty until the admin writes it
-  cost    Decimal? @db.Decimal(10, 2)
   // false when the shop owes the carrier nothing for this send: it was taken back and the admin did
-  // not keep its cost, or the order was cancelled and the carrier was not paid. The reports count
-  // the cost only while this is true
-  expense Boolean  @default(true)
+  // not keep its cost, or the order was cancelled and the carrier was not paid; its cost in the
+  // money journal is then corrected to nothing and not written again
+  expense Boolean @default(true)
 
-  // when the order was sent
+  // when the parcel was sent (a parcel refused at the door: the moment of the refusal)
   shippedAt    DateTime  @default(now())
-  // when the status went back from shipped
+  // when the status went back from shipped (a send of the order only)
   rolledBackAt DateTime?
+  createdAt    DateTime  @default(now())
   updatedAt    DateTime  @default(now()) @updatedAt
 
+  // what the shop paid for the parcel, in the money journal
+  moneyLogs MoneyLog[]
+  // the rows of a statement a parcel to the buyer carried back
+  itemsSentBack OrderReturnItem[] @relation("ReturnItemSentBack")
+
   @@index([orderId, shippedAt])
+  @@index([returnId])
   @@index([shippedAt])
   @@map("order_shipments")
 }
@@ -1058,6 +1110,9 @@ enum ReturnSource {
   form_code
   form_manual
   admin
+  // the system made it for the buyer: the order was cancelled after a dispute the shop lost or a
+  // refund made by hand in the dashboard of the provider (the reason says which)
+  system
 }
 
 // What the statement stands on: withdrawal is the right the law gives within the period (checked
@@ -1079,12 +1134,23 @@ enum ReturnReason {
   shop_cancel
   refused
   other
+  // system: the bank decided a dispute against the shop, or the money of the whole payment of an
+  // order not sent was sent back by hand in the dashboard of the provider
+  dispute_lost
+  stripe_refund
 }
 
 // What became of the goods of a row of a statement. expected: not decided yet; to_stock: back on the
 // shelf, in the batches they were sold from; written_off: came back and went out of the stock at
 // once; not_accepted: arrived and the shop does not take them (the reason says why); lost: gone on
 // the way, with the proof of the buyer; not_arrived: never came.
+// where a parcel goes: to the buyer (a send of the order, the goods not accepted sent back) or to
+// the shop (the goods of a statement on their way back)
+enum ShipmentDirection {
+  to_buyer
+  to_shop
+}
+
 enum ReturnGoods {
   expected
   to_stock
@@ -1101,6 +1167,9 @@ enum ReturnMoney {
   pending
   refunded
   refused
+  // the last transfer of the money failed (the money journal says why); it waits for another try or
+  // for the money sent outside the app
+  failed
 }
 
 // Why the shop did not accept the goods of a row.
@@ -1110,17 +1179,6 @@ enum ReturnNotAcceptedReason {
   used
   damaged
   other
-}
-
-// Why a transfer of money back failed, in our words: card_unavailable (the card is closed, expired
-// or lost: a retry is useless), shop_balance (the balance of the shop at the provider is short:
-// top it up and retry), disputed (the buyer opened a dispute at the bank: the bank settles it, the
-// money is not sent again), unknown (retry once, then outside the app).
-enum ReturnRefundFailure {
-  card_unavailable
-  shop_balance
-  disputed
-  unknown
 }
 
 // Why root closed rows of a statement without a refund. Informational: a code does not decide
@@ -1133,15 +1191,6 @@ enum ReturnCloseCode {
   // the buyer stated the same units from the account or with the code: a form without the code
   // gives them up
   stated_again
-}
-
-// How money was sent back outside the app, after a transfer failed; chargeback: the bank gave it
-// back to the buyer, who disputed the payment and won.
-enum ReturnOutsideMethod {
-  bank_transfer
-  cash
-  other
-  chargeback
 }
 
 // The state of an order as to its statements, one value for the whole order. none: no statement;
@@ -1205,16 +1254,11 @@ model OrderReturn {
   ip        String?
   userAgent String?
 
-  // the proof the buyer sent the goods back: given by the buyer, confirmed by an admin (who may
-  // confirm it without a number, from a letter)
-  proofProvidedAt     DateTime?
-  // what the buyer wrote with it: the carrier and the number of the parcel, and a link to follow it
-  proofCarrier        String?   @db.VarChar(100)
-  proofTrackingNumber String?   @db.VarChar(100)
-  proofTrackingUrl    String?   @db.VarChar(500)
-  proofConfirmedAt    DateTime?
-  proofConfirmedById  Int?
-  proofConfirmedBy    User?     @relation("ReturnProofConfirmer", fields: [proofConfirmedById], references: [id], onDelete: Restrict)
+  // the statement this one was split from: the buyer sent the units of the first in parcels of
+  // their own, the units not in the parcel of the first went into this one (db/05, split_return)
+  splitFromId Int?
+  splitFrom   OrderReturn?  @relation("ReturnSplit", fields: [splitFromId], references: [id], onDelete: Restrict)
+  splitInto   OrderReturn[] @relation("ReturnSplit")
 
   // a statement of the form without the code: when an admin accepted it as the buyer's and who
   // (db/05, accept_return); until then its goods and its money wait
@@ -1231,26 +1275,26 @@ model OrderReturn {
   closeCode ReturnCloseCode?
   closeNote String?          @db.VarChar(500)
 
-  // the shop pays the way back and the buyer paid the carrier: root gave it back outside the app,
-  // once, with the day it went, the way and a note (db/05, record_return_reimbursement); the note
-  // goes with the personal data of the statement
-  shippingReimbursed       Decimal?             @db.Decimal(10, 2)
-  shippingReimbursedAt     DateTime?
-  shippingReimbursedMethod ReturnOutsideMethod?
-  shippingReimbursedNote   String?              @db.VarChar(500)
-  shippingReimbursedById   Int?
-  shippingReimbursedBy     User?                @relation("ReturnShippingReimburser", fields: [shippingReimbursedById], references: [id], onDelete: Restrict)
+  // how much of the money went back to the buyer by this statement in all: what the transfers sent
+  // less what failed, the money sent outside the app, what the compensation of the way back paid,
+  // what the refunds by hand and the bank covered. The database counts it from the money journal
+  // at every line of the statement (db/05); it is never written by the app
+  refundedTotal Decimal @default(0) @db.Decimal(10, 2)
 
   createdAt DateTime @default(now())
   // a trigger sets it on every change (db/05)
   updatedAt DateTime @default(now()) @updatedAt
 
   items     OrderReturnItem[]
-  // the parcels the shop paid to carry the goods back (db/05, record_return_shipment)
-  shipments ReturnShipment[]
+  // the parcels of the statement: the goods back to the shop, the goods not accepted back to the
+  // buyer (db/05)
+  parcels OrderShipment[]
+  // the lines of the money journal of the statement
+  moneyLogs MoneyLog[]
 
   @@unique([orderId, number])
   @@index([extendsId])
+  @@index([splitFromId])
   @@index([createdAt, id])
   @@index([closedAt])
   @@map("returns")
@@ -1280,33 +1324,18 @@ model OrderReturnItem {
   amount            Decimal                  @db.Decimal(10, 2)
   amountNote        String?                  @db.VarChar(500)
 
-  // the part of the delivery that goes back with this row: the last row that makes the order
-  // whole carries all of it, the others 0
-  deliveryShare     Decimal @default(0) @db.Decimal(10, 2)
-  // the cost of the way back the buyer owes (the contract says the buyer pays, the shop paid the
-  // carrier), taken off the transfer of this row: at most the parcels of the statement cost
-  shippingDeduction Decimal @default(0) @db.Decimal(10, 2)
-
-  // the transfer: the key of our side (one for all the rows one transfer covers, set before the
-  // provider is asked and taken off when it fails), the id the provider gave it and the time the
-  // money went back; the time is the day it happened, also for money sent outside the app
-  refundKey  String?   @db.Uuid
-  refundId   String?
-  refundedAt DateTime?
-
-  // the last transfer that failed: what the provider said in our code and in its words; it stays
-  // until the transfer is tried again or the row is settled
-  refundFailure     ReturnRefundFailure?
-  refundFailureText String?              @db.VarChar(500)
-
-  // money sent back outside the app by root: how, the note and who
-  outsideMethod ReturnOutsideMethod?
-  outsideNote   String?              @db.VarChar(500)
-  outsideById   Int?
-  outsideBy     User?                @relation("ReturnItemOutsideSetter", fields: [outsideById], references: [id], onDelete: Restrict)
-
   // why root closed the row without a refund
   refusedCode ReturnCloseCode?
+
+  // the line of the money journal that put the money of the row where it is: the goods of its
+  // transfer (pending, refunded), the line of the failure (failed), the money sent outside the app
+  // (refunded)
+  moneyLogId Int?
+  moneyLog   MoneyLog? @relation("ReturnItemMoney", fields: [moneyLogId], references: [id], onDelete: Restrict)
+
+  // the parcel that carried the units of a row not accepted back to the buyer (db/05)
+  backShipmentId Int?
+  backShipment   OrderShipment? @relation("ReturnItemSentBack", fields: [backShipmentId], references: [id], onDelete: Restrict)
 
   // who set the result of the goods and when
   goodsSetAt   DateTime?
@@ -1319,43 +1348,254 @@ model OrderReturnItem {
   // the lines of the stock log of the units that came back with the row
   stockLogs StockLog[]
 
-  @@index([refundKey])
   @@index([returnId])
   @@index([orderItemId])
+  @@index([moneyLogId])
+  @@index([backShipmentId])
   @@map("return_items")
 }
 
-// A parcel the shop paid to carry goods back from a buyer for a statement: a label the shop bought,
-// or the carrier of the buyer that the shop paid back outside the app. It is an expense of the
-// period it was sent in (shippedAt, written by the admin, never of the future), the cost may be
-// written later. Only the database functions write it (record_return_shipment,
-// set_return_shipment_cost, db/05); an admin reads it, a buyer does not.
-model ReturnShipment {
+
+// -----------------------------------------------------------------------------
+// The money
+// -----------------------------------------------------------------------------
+
+// What a line of the money journal is about: order (the payment of an order), return (the money of
+// a statement of return, the buyer gets it back), late_payment (a payment the order could not take
+// and its refund), hand (a refund made by hand in the dashboard of the provider), dispute (what
+// the bank takes and gives back), shipping (what the shop pays a carrier for the send of an order
+// and the parcel back of a statement, and what a carrier pays the shop for a parcel), compensation
+// (money root gives the buyer by the button of the app, through the provider).
+enum MoneyPurpose {
+  order
+  return
+  late_payment
+  hand
+  dispute
+  shipping
+  compensation
+}
+
+// The part of a movement a line is: a payment or a transfer is written in parts. goods and
+// delivery are the two parts of what the buyer pays and of what goes back; deduction is what the
+// shop keeps of a transfer for the way back the buyer owes (above 0); way_back is what the shop
+// gives the buyer back for the way back it pays, the sum of the receipt (below 0); covered is the
+// part of a transfer that money already sent the buyer another way covers (above 0, the provider
+// is asked for the rest); whole is a movement that has no parts.
+enum MoneyPart {
+  goods
+  delivery
+  deduction
+  way_back
+  covered
+  whole
+}
+
+// Where a refund stands: in_transit (asked of the provider, not told sent yet) or sent. Only a
+// line of a refund has it, and it goes from in_transit to sent once.
+enum MoneyState {
+  in_transit
+  sent
+}
+
+// What root, or the system, decided a refund made by hand in the dashboard was: coverage (it counts
+// for the money owed to the buyer by the order or the statement) or compensation (the shop gave
+// the money for what the app does not follow, such as a gesture).
+enum MoneyUse {
+  goods
+  compensation
+  loss
+}
+
+// Why a refund failed, in our words: card_unavailable (the card is closed, expired or lost: a
+// retry is useless), shop_balance (the balance of the shop at the provider is short: top it up and
+// retry), disputed (the buyer opened a dispute at the bank: the bank settles it, the money is not
+// sent again), already_refunded (the provider says the money of the payment went back already),
+// unknown (retry once, then outside the app).
+enum RefundFailure {
+  card_unavailable
+  shop_balance
+  disputed
+  already_refunded
+  unknown
+}
+
+// How money was sent back outside the app, after a transfer failed, or paid for the way back.
+enum OutsideMethod {
+  bank_transfer
+  cash
+  other
+}
+
+// Where a dispute of a payment at the bank stands, in the words of the provider: the warning
+// states are an inquiry of the bank that takes no money, needs_response and under_review are a
+// dispute (the money is taken), won and lost end it, prevented is a dispute the provider settled
+// before it began.
+enum DisputeStatus {
+  warning_needs_response
+  warning_under_review
+  warning_closed
+  needs_response
+  under_review
+  won
+  lost
+  prevented
+}
+
+// The journal of the money: a line for every movement of money of an order, a statement of
+// return or a dispute, with the sum signed (above 0 comes to the shop, below 0 goes from it) and
+// the event that made it. Only added, as the stock log: nobody edits or deletes a line. The few
+// things a line may still take (the id of a refund, the state sent, the number the bank gives,
+// the decision on a refund by hand, the statement a refund by hand or a bank covers) are written
+// once, from empty, and the guard of db/05 (money_log_append_only) refuses any other change.
+// Admin and root read, a buyer reads their own. The lines are written by the functions of the
+// database that move the money (db/05, by log_money_change) in the same transaction, never by the
+// app: a payment, a late payment, a refund and its end, money sent outside the app, a refund made by
+// hand in the dashboard, what a dispute takes and gives back, what the shop pays a carrier. The
+// state next to a description (the status of an order, the money of a row of a statement) is read
+// often and stays there; the movement itself is only here.
+model MoneyLog {
   id Int @id @default(autoincrement())
 
-  returnId Int
-  return   OrderReturn @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  // who did it; empty for the work of the system (the webhook, the worker). The role is empty
+  // together with the account (db/06)
+  actorId   Int?
+  actor     User? @relation("MoneyLogActor", fields: [actorId], references: [id], onDelete: Restrict)
+  actorRole Role?
 
-  // written by the admin; a number needs a carrier and a link needs a number, the link is https
-  // (db/06)
-  carrier        String? @db.VarChar(100)
-  trackingNumber String? @db.VarChar(100)
-  trackingUrl    String? @db.VarChar(500)
+  // what made the line: money.payment, money.late_payment, money.refund, money.refund_failed,
+  // money.outside, money.return_shipping_paid, money.return_parcel_cost, money.shipping_cost,
+  // money.dispute_withdrawn, money.dispute_reinstated, money.correction (the list is
+  // src/config/journalEvents.ts)
+  event   String       @db.VarChar(60)
+  purpose MoneyPurpose
+  part    MoneyPart
 
-  // what the shop paid, empty until the admin writes it
-  cost      Decimal? @db.Decimal(10, 2)
-  // when the parcel was sent back, or the parcel refused: the moment of the refusal
-  shippedAt DateTime
+  // the sum, above 0 to the shop and below 0 from it, never 0, in the currency of the payment
+  amount   Decimal @db.Decimal(10, 2)
+  currency String? @db.VarChar(3)
 
-  recordedById Int
-  recordedBy   User @relation("ReturnShipmentRecorder", fields: [recordedById], references: [id], onDelete: Restrict)
+  // what the line is about; the order is empty only when its row is gone (a late payment of an order
+  // its owner deleted: the number is then in the meta)
+  orderId          Int?
+  order            Order?          @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  // the buyer the money is of
+  userId           Int?
+  user             User?           @relation("MoneyLogBuyer", fields: [userId], references: [id], onDelete: Restrict)
+  returnId         Int?
+  return           OrderReturn?    @relation(fields: [returnId], references: [id], onDelete: Restrict)
+  orderShipmentId  Int?
+  orderShipment    OrderShipment?  @relation(fields: [orderShipmentId], references: [id], onDelete: Restrict)
+  disputeId        Int?
+  dispute          PaymentDispute? @relation(fields: [disputeId], references: [id], onDelete: Restrict)
+  // the line this one reverses (a failed refund), corrects (a correction) or uses (a covered part)
+  coversId         Int?
+  covers           MoneyLog?       @relation("MoneyLogCovers", fields: [coversId], references: [id], onDelete: Restrict)
+  coveredBy        MoneyLog[]      @relation("MoneyLogCovers")
+
+  // the provider: who took the money, the id of the payment there, the refund the provider made
+  // (written once, from empty), our key of the request (the key of the idempotency of the
+  // provider, kept in the refund as its metadata), the transaction of the balance of a dispute and
+  // the number the bank gives to follow a refund
+  provider      PaymentProvider?
+  paymentId     String?
+  refundId      String?
+  transferKey   String?          @db.VarChar(100)
+  stripeTxId    String?          @unique
+  bankReference String?          @db.VarChar(100)
+  // the refund was made by hand in the dashboard of the provider, not by this server
+  byDashboard   Boolean          @default(false)
+
+  // where a refund stands (a line of event money.refund only) and since when
+  state   MoneyState?
+  stateAt DateTime?
+
+  // why a refund failed (a line of event money.refund_failed only), and the words of the provider
+  failure     RefundFailure?
+  failureText String?        @db.VarChar(500)
+
+  // money sent outside the app: how, the note (personal, it goes with the terms of keeping) and the
+  // day it really happened, written by the person
+  method     OutsideMethod?
+  note       String?        @db.VarChar(500)
+  happenedAt DateTime?
+
+  // what root, or the system, decided a refund by hand was (written once)
+  moneyUse MoneyUse?
+
+  // what the line is made of, a list of objects: for the goods of a transfer of a statement the
+  // rows it paid, [{ returnItemId, variantId, amount }], so the reports share the money by product
+  // and the past does not change when a row changes later
+  meta Json?
+
+  // the address and the browser of the request; empty for work done without a request
+  ip        String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  // the rows of a statement whose money this line is (the goods of a transfer, a line of the money
+  // sent outside the app, or the line of the failure)
+  returnItems OrderReturnItem[] @relation("ReturnItemMoney")
+
+  @@index([orderId, createdAt])
+  @@index([returnId])
+  @@index([disputeId])
+  @@index([paymentId])
+  @@index([event, createdAt])
+  @@index([createdAt, id])
+  @@index([userId, createdAt])
+  @@map("money_log")
+}
+
+// A dispute of a payment at the bank (or a warning of an inquiry that takes no money): its
+// description and where it stands now, the way a statement of return describes a refund. It has no
+// sum: the money a dispute takes and gives back is in the money journal, by the id of the dispute.
+// Only the database function that follows the provider writes it (db/05, sync_payment_dispute); an
+// admin reads it. A payment may have several (PayPal opens another when the buyer changes the
+// claim); an order is blocked from sending while one is open (orders.holds).
+model PaymentDispute {
+  id Int @id @default(autoincrement())
+
+  provider PaymentProvider
+  // the id of the dispute at the provider
+  stripeId String          @unique
+
+  paymentId String
+  // the order the payment is of; empty for a payment the order could not take, which has its own
+  // line in the journal (money.late_payment)
+  orderId   Int?
+  order     Order? @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  userId    Int?
+  user      User?  @relation("PaymentDisputeBuyer", fields: [userId], references: [id], onDelete: Restrict)
+
+  // the reason of the bank in the words of the provider (fraudulent, product_not_received, ...)
+  reason             String?       @db.VarChar(60)
+  status             DisputeStatus
+  // when the answer is due, whether evidence was submitted and how many times, whether the
+  // payment can still be refunded to settle the dispute
+  evidenceDueBy      DateTime?
+  hasEvidence        Boolean       @default(false)
+  submissionCount    Int           @default(0)
+  isChargeRefundable Boolean       @default(false)
+
+  openedAt  DateTime
+  closedAt  DateTime?
+  // when the app put its draft of the evidence at the provider
+  draftedAt DateTime?
+  // the last time the state was read from the provider
+  syncedAt  DateTime  @default(now())
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  @@index([returnId])
-  @@index([shippedAt])
-  @@map("return_shipments")
+  // what the dispute took and gave back
+  moneyLogs MoneyLog[]
+
+  @@index([paymentId])
+  @@index([orderId])
+  @@index([status, evidenceDueBy])
+  @@map("payment_disputes")
 }
 
 // -----------------------------------------------------------------------------
@@ -1415,6 +1655,8 @@ enum AdminAuditAction {
   REVIEW_DELETE
   // root gave an admin the right to run the newsletters, or took it away
   NEWSLETTER_MANAGER_CHANGE
+  // root gave an admin the right to handle the money, or took it away
+  MONEY_MANAGER_CHANGE
   // a newsletter made, changed, copied, planned, cancelled, stopped, deleted, or a test mail of it
   NEWSLETTER_CAMPAIGN_CHANGE
   // a subscriber of the newsletters deleted by an admin with the data of the subscription
