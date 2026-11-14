@@ -1,4 +1,5 @@
 import { avatarIsDefaultField, avatarUrlsField } from '@schemas/avatarFields.js';
+import { canManageMoneyField } from '@schemas/moneyManagerField.js';
 import { canManageNewslettersField } from '@schemas/newsletterManagerField.js';
 import { MAX_UPLOAD_SIZE_BYTES } from '@config/limits.js';
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
@@ -53,7 +54,9 @@ const usersGetByIdQuerySchema = {
     to: {
       type: 'string',
       format: 'date-time',
-      description: 'For an admin or root: the end of the period of the lists, now unless given.',
+      description:
+        'For an admin or root: the end of the period of the lists. Without it the answer names now ' +
+        'and the lists take every record after from, up to the last one written.',
     },
   },
 } as const;
@@ -252,6 +255,7 @@ const usersUserResponseSchema = {
     avatarUrls: avatarUrlsField,
     avatarIsDefault: avatarIsDefaultField,
     canManageNewsletters: canManageNewslettersField,
+    canManageMoney: canManageMoneyField,
     locale: { type: 'string' },
     phone: { type: 'string' },
 
@@ -270,6 +274,7 @@ const usersUserResponseSchema = {
     'avatarUrls',
     'avatarIsDefault',
     'canManageNewsletters',
+    'canManageMoney',
   ],
 } as const;
 
@@ -700,6 +705,60 @@ const exportNewsletterSubscriptionSchema = {
   ],
 } as const;
 
+// one movement of the money of the person in the export: the fields agreed by name, no more (the
+// schema drops any other field from the answer)
+const exportMoneyLineSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: {
+      type: ['integer', 'null'],
+      description: 'The order the money is of; null when the order is gone.',
+    },
+    event: {
+      type: 'string',
+      description:
+        'What moved the money: money.payment, money.late_payment, money.refund (a compensation of ' +
+        'the shop among them), money.refund_failed, money.outside, money.received (money the person ' +
+        'gave the shop back outside the app), money.dispute_withdrawn, money.dispute_reinstated.',
+    },
+    part: {
+      type: 'string',
+      description:
+        'The part of the movement: goods, delivery, deduction (kept for the way back), way_back ' +
+        '(the cost of sending the goods back, given back), covered (money the person already had ' +
+        'back another way), whole.',
+    },
+    amount: {
+      type: 'string',
+      description: 'The sum: above 0 to the shop, below 0 to the person.',
+    },
+    currency: {
+      type: ['string', 'null'],
+      description: 'The currency; null is the currency of the shop.',
+    },
+    createdAt: { type: 'string', description: 'When it was written, in UTC.' },
+    state: {
+      type: ['string', 'null'],
+      description: 'Where a refund stands: in_transit or sent; null for anything else.',
+    },
+    bankReference: {
+      type: ['string', 'null'],
+      description: 'The number the bank gives to follow a refund.',
+    },
+  },
+  required: [
+    'orderId',
+    'event',
+    'part',
+    'amount',
+    'currency',
+    'createdAt',
+    'state',
+    'bankReference',
+  ],
+} as const;
+
 const usersExportResponseSchema = {
   $id: 'usersExportResponseSchema',
   type: 'object',
@@ -713,7 +772,7 @@ const usersExportResponseSchema = {
         'id, email, name, locale, phone, avatarUrl, role, authProvider, isVerified, createdAt, updatedAt.',
     },
     orders: exportRows(
-      'The orders with their status, total, dates, items (productId, variantId, name, quantity, prices: the name and the prices the order was confirmed with), the delivery (method, recipient, address, note, price), the sends (carrier, tracking number and link, dates) and the returns: the statements of withdrawal or return made on the order (id, extendsId, statedAt, source, basis, reason, description, contact name and email, ip and userAgent of a statement the person made while not emptied (none for one an admin made; for a form without a code only when the shop took it for the buyer: money went back for it or its email is the one of the account, never when root closed it as not of the buyer; the description of a statement an admin made is a note of the shop and is not given), proof: the parcel the person told of, closedAt, shippingReimbursement: what the shop paid back for sending the goods back outside the app (amount, at, method), items: productId, variantId, name, quantity, money, amount, deliveryShare, shippingDeduction (the cost of the way back taken off), refundedAt, refusal: why the money was refused (the reason the goods were not accepted, the code root closed the row with, or not_arrived), outside: the way and the note of money sent outside the app). What became of the goods, what the shop paid to carry them back, the ids of the provider, the admins who acted and the notes of root on a lowered amount are not given.',
+      'The orders with their status, total, dates, items (productId, variantId, name, quantity, prices: the name and the prices the order was confirmed with), the delivery (method, recipient, address, note, price), the sends (carrier, tracking number and link, dates) and the returns: the statements of withdrawal or return made on the order (id, extendsId, statedAt, source, basis, reason, description, contact name and email, ip and userAgent of a statement the person made while not emptied (none for one an admin made; for a form without a code only when the shop took it for the buyer: money went back for it or its email is the one of the account, never when root closed it as not of the buyer; the description of a statement an admin made is a note of the shop and is not given), proof: the parcel the person told of, closedAt, items: productId, variantId, name, quantity, money, amount, deliveryShare, shippingDeduction (the cost of the way back taken off), refundedAt, refusal: why the money was refused (the reason the goods were not accepted, the code root closed the row with, or not_arrived), outside: the way and the note of money sent outside the app). The money of a statement comes from the money journal; the way back given back is a line of it (part way_back). What became of the goods, what the shop paid to carry them back, the ids of the provider, the admins who acted and the notes of root on a lowered amount are not given.',
     ),
     favorites: exportRows(
       'The favorite variants: productId, variantId, name (of the variant), createdAt.',
@@ -744,6 +803,16 @@ const usersExportResponseSchema = {
         'part of it.',
       items: exportNewsletterSubscriptionSchema,
     },
+    money: {
+      type: 'array',
+      description:
+        'Every movement of the money of the person, the oldest first (the money journal): the ' +
+        'payments of the orders, the refunds and their failures, money sent outside the app, the ' +
+        'way back paid back, what the bank took and gave back for a dispute. What a send or a ' +
+        'parcel back cost the shop, the keys of the requests, the ids of the provider, the notes ' +
+        'and who did it are not given.',
+      items: exportMoneyLineSchema,
+    },
   },
   required: [
     'exportedAt',
@@ -757,6 +826,7 @@ const usersExportResponseSchema = {
     'sessions',
     'legalAcceptances',
     'newsletterSubscriptions',
+    'money',
   ],
 } as const;
 

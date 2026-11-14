@@ -19,6 +19,7 @@ export interface OAuthUserRow {
   locale: string | null;
   phone: string | null;
   canManageNewsletters: boolean;
+  canManageMoney: boolean;
   deletedAt: Date | null;
   authProvider: 'LOCAL' | 'GOOGLE' | 'GITHUB' | 'LINKEDIN';
   providerSub: string | null;
@@ -66,6 +67,7 @@ export async function upsertOAuthUserByEmail(
       locale,
       phone,
       "canManageNewsletters",
+      "canManageMoney",
       "deletedAt",
       "authProvider",
       "providerSub"
@@ -114,6 +116,7 @@ export async function upsertOAuthUserByEmail(
         locale,
         phone,
         "canManageNewsletters",
+        "canManageMoney",
         "deletedAt",
         "authProvider",
         "providerSub"
@@ -138,6 +141,7 @@ export async function upsertOAuthUserByEmail(
         locale,
         phone,
         "canManageNewsletters",
+        "canManageMoney",
         "deletedAt",
         "authProvider",
         "providerSub"
@@ -189,6 +193,7 @@ export async function upsertOAuthUserByEmail(
           locale,
           phone,
           "canManageNewsletters",
+          "canManageMoney",
           "deletedAt",
           "authProvider",
           "providerSub"
@@ -240,6 +245,7 @@ export async function upsertOAuthUserByEmail(
       locale,
       phone,
       "canManageNewsletters",
+      "canManageMoney",
       "deletedAt",
       "authProvider",
       "providerSub"

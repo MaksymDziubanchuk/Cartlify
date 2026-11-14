@@ -80,6 +80,7 @@ async function takeBackAndRefund(
   units: number,
 ) {
   const received = await post(`/api/returns/${card.id}/receive`, {
+    parcel: { buyerPaid: 0 },
     results: [{ itemId: card.items[0]!.id, quantity: units, goods: 'to_stock' }],
   });
   if (received.statusCode !== 200) throw new Error(`the goods answered ${received.statusCode}`);
@@ -126,6 +127,7 @@ beforeAll(async () => {
   placed = await sentOrder(1);
   const card = await state(placed, 1);
   const refused = await post(`/api/returns/${card.id}/receive`, {
+    parcel: { buyerPaid: 0 },
     results: [
       { itemId: card.items[0]!.id, quantity: 1, goods: 'not_accepted', notAcceptedReason: 'used' },
     ],

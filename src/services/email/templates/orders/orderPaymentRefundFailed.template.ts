@@ -1,9 +1,10 @@
 import { t } from '@config/i18n.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 import { sellerLineOf } from '@services/email/seller.js';
 
-import type { ReturnRefundFailure } from '@prisma/client';
+import type { RefundFailure } from '@prisma/client';
 
 export type OrderPaymentRefundFailedTemplateArgs = {
   orderId: number;
@@ -15,7 +16,7 @@ export type OrderPaymentRefundFailedTemplateArgs = {
   currency: string;
   // why it did not go back, in our words: only a card that can no longer take money is told as
   // such, the other reasons (the balance of the shop, a dispute at the bank, the unknown) in general words
-  failure: ReturnRefundFailure;
+  failure: RefundFailure;
   // the money had been sent and the bank of the card sent it back: the buyer was told it was sent
   sentBack?: boolean;
   // where the buyer writes: the address the shop answers from
@@ -34,7 +35,7 @@ export function buildOrderPaymentRefundFailedTemplate(args: OrderPaymentRefundFa
   text: string;
   html: string;
 } {
-  const appName = args.appName?.trim() || 'Cartlify';
+  const appName = args.appName?.trim() || shopSettings().shopName;
   const orderUrl = args.orderUrl?.trim() || '';
   const locale = args.locale || 'en';
 

@@ -65,11 +65,11 @@ const patchAdmin: ControllerRouter<
 
   const { adminId: pid } = req.params;
   const adminId = Number(pid);
-  const { canManageNewsletters } = req.body;
+  const { canManageNewsletters, canManageMoney } = req.body;
 
   const args = pickDefined<UpdateAdminDto>(
-    { actorId, actorRole, adminId, canManageNewsletters },
-    {},
+    { actorId, actorRole, adminId },
+    { canManageNewsletters, canManageMoney },
   );
 
   const result = await rootServices.updateAdmin(args);

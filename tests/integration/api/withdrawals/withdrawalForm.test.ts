@@ -110,9 +110,10 @@ const delivered = (orderId: number) =>
       tx.$executeRaw`update cartlify.orders set status = 'delivered' where id = ${orderId}::int`,
   );
 
+// the statements of an order with the parcel the goods go back to the shop in, as the buyer told it
 const statementsOf = (orderId: number) =>
-  asAdmin((tx) =>
-    tx.orderReturn.findMany({
+  asAdmin(async (tx) => {
+    const rows = await tx.orderReturn.findMany({
       where: { orderId },
       orderBy: { id: 'asc' },
       select: {
@@ -121,13 +122,20 @@ const statementsOf = (orderId: number) =>
         basis: true,
         contactName: true,
         contactEmail: true,
-        proofCarrier: true,
-        proofTrackingNumber: true,
-        proofTrackingUrl: true,
         closedAt: true,
+        parcels: {
+          where: { direction: 'to_shop' },
+          select: { carrier: true, trackingNumber: true, trackingUrl: true },
+        },
       },
-    }),
-  );
+    });
+    return rows.map(({ parcels, ...row }) => ({
+      ...row,
+      proofCarrier: parcels[0]?.carrier ?? null,
+      proofTrackingNumber: parcels[0]?.trackingNumber ?? null,
+      proofTrackingUrl: parcels[0]?.trackingUrl ?? null,
+    }));
+  });
 
 const statusOf = async (orderId: number) =>
   (await asAdmin((tx) => tx.order.findUniqueOrThrow({ where: { id: orderId } }))).status;
@@ -256,19 +264,22 @@ describe('POST /api/withdrawals with the code of the order', () => {
     expect(notice.text).not.toContain('See your order');
     expect(own.some((mail) => mail.subject.includes('is closed'))).toBe(true);
 
-    // the log names the buyer of the order: nobody was signed in
+    // the log names the buyer of the order for the statement: nobody was signed in; the money the
+    // system sent for it is in the money journal only
     const events = await asAdmin((tx) =>
       tx.adminAuditLog.findMany({
         where: { entityType: 'order', entityId: orderId },
         select: { event: true, actorId: true, actorRole: true },
       }),
     );
-    expect(events).toEqual(
-      expect.arrayContaining([
-        { event: 'return.create', actorId: buyer.id, actorRole: 'USER' },
-        { event: 'return.refund', actorId: buyer.id, actorRole: 'USER' },
-      ]),
+    expect(events).toEqual([{ event: 'return.create', actorId: buyer.id, actorRole: 'USER' }]);
+    const money = await asAdmin((tx) =>
+      tx.moneyLog.findMany({
+        where: { orderId, event: 'money.refund' },
+        select: { purpose: true, part: true, state: true, actorId: true },
+      }),
     );
+    expect(money).toEqual([{ purpose: 'return', part: 'goods', state: 'sent', actorId: null }]);
   });
 
   it('keeps the statement and leaves the money pending when Stripe cannot be reached, the goods are back and the order is cancelled', async () => {
@@ -959,6 +970,22 @@ describe('POST /api/withdrawals/proof', () => {
       proofCarrier: 'UPS',
       proofTrackingNumber: 'X1',
     });
+  });
+
+  it('keeps what the buyer paid the carrier on the parcel, a hint for the shop', async () => {
+    const { orderId, returnId } = await sentStatement();
+
+    const res = await proof(parcel(orderId, returnId, { buyerPaid: 7.25 }));
+
+    expect(res.statusCode).toBe(200);
+    const shipment = await asAdmin((tx) =>
+      tx.orderShipment.findFirstOrThrow({
+        where: { returnId, direction: 'to_shop' },
+        select: { buyerPaid: true, confirmedAt: true },
+      }),
+    );
+    expect(Number(shipment.buyerPaid)).toBe(7.25);
+    expect(shipment.confirmedAt).toBeNull();
   });
 
   it('gives one answer for a wrong code, a statement there is not or of another order, one made by hand and one that waits for nothing', async () => {

@@ -3,6 +3,7 @@ import { redisKeys } from '@redis/keys.js';
 import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { getPaymentProvider } from '@routes/api/payments/providers/index.js';
+import { settlePaidPage } from '@routes/api/payments/services/helpers/settlePaidPage.helper.js';
 import {
   formatPaymentPageLink,
   parsePaymentPageLink,
@@ -362,9 +363,11 @@ export async function getOrderPaymentPageClosedAt(orderId: OrderId): Promise<Dat
 }
 
 // the reservation is over: the page closes, so no payment comes for it any more. An order
-// confirmed without a page opened has nothing to close. A page the provider did not close because
-// the money is taken or on its way keeps its link, the payment event takes it away; one it could
-// not close (out of reach) is tried again
+// confirmed without a page opened has nothing to close. A page whose money is taken is settled now
+// the way its payment event settles it (settlePaidPage, with the data of the page read from the
+// provider): the money was taken while the event did not come, and the event that comes late finds
+// it done. A page whose payment is still on its way keeps its link, its payment event decides; one
+// the provider could not close or read (out of reach) is tried again
 async function closePageOfExpiredReservation(orderId: OrderId, log: WorkerLogger): Promise<void> {
   const page = await getOrderPaymentPageLink(orderId);
   if (!page) return;
@@ -376,10 +379,26 @@ async function closePageOfExpiredReservation(orderId: OrderId, log: WorkerLogger
     return;
   }
 
-  if (closed.state === 'paid' || closed.state === 'in_progress') {
+  if (closed.state === 'paid') {
+    const read = await getPaymentProvider(page.provider).readPaidPage(page.pageId);
+
+    if (read.state === 'paid') {
+      await settlePaidPage(page.provider, read, log);
+      return;
+    }
+
+    // the provider said the money is taken and then gave no money: asked again later
+    throw new InternalError({
+      reason: 'PAYMENT_PAGE_PAID_NOT_READ',
+      provider: page.provider,
+      state: read.state,
+    });
+  }
+
+  if (closed.state === 'in_progress') {
     log.info(
       { orderId, provider: page.provider, state: closed.state },
-      'payment page of a reservation that is over is paid or paying, its payment event decides',
+      'payment page of a reservation that is over is paying, its payment event decides',
     );
     return;
   }

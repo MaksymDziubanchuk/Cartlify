@@ -141,7 +141,7 @@ describe('POST /api/orders/:orderId/cancel-payment', () => {
   // to no page the server could close: the cancel goes on and asks no provider
   it.each([
     ['the old form without a provider', 'cs_test_old_link'],
-    ['a provider this server has not', 'liqpay:dev-1-1700000000000'],
+    ['a provider this server has not', 'paypal:dev-1-1700000000000'],
   ])('cancels past a page link of %s and asks no provider', async (_case, link) => {
     const user = await newUser();
     const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');

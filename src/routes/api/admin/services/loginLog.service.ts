@@ -4,12 +4,16 @@ import { LOGIN_EVENTS } from '@config/journalEvents.js';
 import { HIDDEN_ID, hiddenAccount, hiddenText } from '@helpers/rootHidden.js';
 
 import {
+  type ColumnFilter,
+  columnFiltersSql,
+  filterValuesOf,
+  type JournalArgs,
   journalArgsOf,
   journalCsv,
-  listJournal,
-  type JournalArgs,
   type JournalDef,
   type JournalQuery,
+  listJournal,
+  rootNotPickedSql,
 } from './helpers/journal.helper.js';
 
 import type {
@@ -27,6 +31,8 @@ import type { Role } from 'types/user.js';
 // and the browser are hidden (the role stays)
 
 export type LoginLogArgs = JournalArgs & {
+  // the values of the filters of the other columns, by their names
+  filterValues: Record<string, unknown>;
   userId?: number | undefined;
   roles?: Role[] | undefined;
   // a part of the email of the login, whatever the case
@@ -64,6 +70,8 @@ type LoginItem = Partial<AdminLoginLogItemDto> & Record<string, unknown>;
 
 const LOGIN_DEF: JournalDef<LoginRow, LoginItem> = {
   fileName: 'login-log',
+  // a line whose account is root's: an admin does not see its address and browser
+  rootLine: Prisma.sql`(l.role = 'ROOT'::cartlify."Role" OR u.role = 'ROOT'::cartlify."Role")`,
   from: Prisma.sql`cartlify.login_logs AS l JOIN cartlify.users AS u ON u.id = l."userId"`,
   select: Prisma.sql`
     l.id, l."createdAt", l."userId", l.email, l.role::text AS role, l."ipAddress", l."userAgent",
@@ -146,11 +154,18 @@ export function loginLogArgsOf(
     userId: query.userId,
     roles: query.roles ? ([...new Set(query.roles.split(','))] as Role[]) : undefined,
     email: query.email?.trim() || undefined,
+    filterValues: filterValuesOf(LOGIN_FILTERS, query as Record<string, unknown>),
   };
 }
 
 // the text of a pattern is looked for as the text it is
 const likePattern = (text: string) => `%${text.replace(/[\\%_]/g, '\\$&')}%`;
+
+// the filters of the other columns, each by the name of its parameter
+export const LOGIN_FILTERS: Record<string, ColumnFilter> = {
+  ip: { kind: 'text', sql: Prisma.sql`l."ipAddress"`, rootHidden: true },
+  userAgent: { kind: 'contains', sql: Prisma.sql`l."userAgent"`, rootHidden: true },
+};
 
 function filtersOf(args: LoginLogArgs): Prisma.Sql[] {
   const parts: Prisma.Sql[] = [];
@@ -158,6 +173,15 @@ function filtersOf(args: LoginLogArgs): Prisma.Sql[] {
   if (args.roles) parts.push(Prisma.sql`l.role = ANY(${args.roles}::cartlify."Role"[])`);
   if (args.email !== undefined) parts.push(Prisma.sql`l.email ILIKE ${likePattern(args.email)}`);
 
+  parts.push(...columnFiltersSql(LOGIN_DEF, LOGIN_FILTERS, args.filterValues, args.actorRole));
+  // a filter of a person picks none of the lines of root for an admin (journal.helper.ts)
+  parts.push(
+    ...rootNotPickedSql(
+      args.actorRole,
+      args.userId !== undefined || args.roles !== undefined || args.email !== undefined,
+      LOGIN_DEF.rootLine!,
+    ),
+  );
   return parts;
 }
 

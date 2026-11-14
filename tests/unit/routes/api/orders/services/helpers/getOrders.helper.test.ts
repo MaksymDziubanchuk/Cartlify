@@ -572,6 +572,8 @@ describe('the delivery filters of the desk', () => {
     ['withoutWeight', true],
     ['shippingCostMissing', true],
     ['shippedTo', new Date('2026-03-01T00:00:00.000Z')],
+    ['holds', 'any'],
+    ['fraudWarnedFrom', new Date('2026-03-01T00:00:00.000Z')],
   ] as const)('refuses %s to a buyer', (filter, value) => {
     expect(thrownBy(() => normalizeFindOrdersInput(dto({ [filter]: value })))).toMatchObject({
       statusCode: 403,
@@ -643,12 +645,15 @@ describe('the delivery filters of the desk', () => {
     });
   });
 
-  // the cost and the time are about one send: a send that lacks its cost and was sent before a time
+  // the cost and the time are about one send: a send that lacks its cost (no line of the money
+  // journal of what the shop pays the carrier) and was sent before a time
   it('keeps the orders with a send the shop owes something for and wrote no cost of, sent before a time', () => {
     const before = new Date('2026-03-01T00:00:00.000Z');
 
     expect(buildOrdersWhere({ ...adminBase, shippingCostMissing: true })).toMatchObject({
-      AND: [{ shipments: { some: { expense: true, cost: null } } }],
+      AND: [
+        { shipments: { some: { expense: true, moneyLogs: { none: { purpose: 'shipping' } } } } },
+      ],
     });
     expect(buildOrdersWhere({ ...adminBase, shippedTo: before })).toMatchObject({
       AND: [{ shipments: { some: { shippedAt: { lt: before } } } }],
@@ -656,7 +661,77 @@ describe('the delivery filters of the desk', () => {
     expect(
       buildOrdersWhere({ ...adminBase, shippingCostMissing: true, shippedTo: before }),
     ).toMatchObject({
-      AND: [{ shipments: { some: { expense: true, cost: null, shippedAt: { lt: before } } } }],
+      AND: [
+        {
+          shipments: {
+            some: {
+              expense: true,
+              moneyLogs: { none: { purpose: 'shipping' } },
+              shippedAt: { lt: before },
+            },
+          },
+        },
+      ],
     });
+  });
+});
+
+// what holds the orders back from their sending (orders.holds, a list of { reason, since, ref }) and
+// the warning of the provider about an order already sent (orders.fraudWarnedAt)
+describe('the filters of what holds an order', () => {
+  const adminBase = { actorId: 1, actorRole: 'ADMIN', sortBy: 'createdAt' } as const;
+
+  it('takes the reasons through commas, each once, and any or none alone', () => {
+    const of = (holds: string) => normalizeFindOrdersInput(dto({ actorRole: 'ROOT', holds })).holds;
+
+    expect(of('dispute,payment_review,dispute')).toEqual(['dispute', 'payment_review']);
+    expect(of('any')).toBe('any');
+    expect(of('none')).toBe('none');
+    expect(normalizeFindOrdersInput(dto({ actorRole: 'ADMIN' })).holds).toBeUndefined();
+  });
+
+  it('keeps the time of the warning from which the orders are listed', () => {
+    const from = new Date('2026-03-01T00:00:00.000Z');
+
+    expect(
+      normalizeFindOrdersInput(dto({ actorRole: 'ADMIN', fraudWarnedFrom: from })),
+    ).toMatchObject({ fraudWarnedFrom: from });
+  });
+
+  it('keeps the orders a reason holds, any of a few reasons', () => {
+    expect(buildOrdersWhere({ ...adminBase, holds: ['fraud_warning'] })).toMatchObject({
+      AND: [{ OR: [{ holds: { array_contains: [{ reason: 'fraud_warning' }] } }] }],
+    });
+    expect(buildOrdersWhere({ ...adminBase, holds: ['dispute', 'hand_refund'] })).toMatchObject({
+      AND: [
+        {
+          OR: [
+            { holds: { array_contains: [{ reason: 'dispute' }] } },
+            { holds: { array_contains: [{ reason: 'hand_refund' }] } },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('keeps the orders anything holds, or the ones nothing holds', () => {
+    expect(buildOrdersWhere({ ...adminBase, holds: 'any' })).toMatchObject({
+      AND: [{ NOT: { holds: { equals: [] } } }],
+    });
+    expect(buildOrdersWhere({ ...adminBase, holds: 'none' })).toMatchObject({
+      AND: [{ holds: { equals: [] } }],
+    });
+  });
+
+  it('keeps the orders the provider warned of from the time', () => {
+    const from = new Date('2026-03-01T00:00:00.000Z');
+
+    expect(buildOrdersWhere({ ...adminBase, fraudWarnedFrom: from })).toMatchObject({
+      AND: [{ fraudWarnedAt: { gte: from } }],
+    });
+  });
+
+  it('adds nothing without the filters', () => {
+    expect(buildOrdersWhere({ ...adminBase })).not.toHaveProperty('AND');
   });
 });

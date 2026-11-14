@@ -19,6 +19,7 @@
     "migrate:deploy": "prisma migrate deploy",
     "db:test:up": "node db/tools/test_db_build.mjs up",
     "db:test:down": "node db/tools/test_db_build.mjs down",
+    "db:apply": "node db/tools/apply_db.mjs",
     "db:snapshot:save": "node db/tools/structure_snapshot.mjs save",
     "db:snapshot:check": "node db/tools/structure_snapshot.mjs check",
     "db:snapshot:check:db": "node db/tools/structure_snapshot.mjs check db",

@@ -7,12 +7,21 @@ import { asAdmin, testTx, type DbSession } from './db.js';
 // their data. The cancel of a paid order is a statement of the admin with the reason shop_cancel
 // for the whole order (helpers/cancel.ts): the units are back in their batches at once. The money
 // goes in the three steps of a refund (db/05), the answer of the provider played by the test:
-// begin_return_refund puts the rows under a key, finish_return_refund with `succeeded` settles them
-// and stamps the time of the database, the time the money went back
+// begin_return_refund writes the transfer into the money journal under a key, settle_money_refund
+// with `succeeded` tells its lines sent with the time of the database, the time the money went back.
+// The reports count a movement of money from the time its line was written (bookedAt), the buyer is
+// told the time it was sent (refundedAt)
 
 type Begun = { key: string; amount: string; itemIds: number[] };
 
-export type RefundedReturn = { returnId: number; refundedAt: Date; amount: number };
+export type RefundedReturn = {
+  returnId: number;
+  // the time the line of the goods of the transfer was written: the reports count it from then
+  bookedAt: Date;
+  // the time it was told sent
+  refundedAt: Date;
+  amount: number;
+};
 
 // the rows of a statement whose money is not back yet, refunded as one transfer
 export async function refundReturn(adminId: number, returnId: number): Promise<RefundedReturn> {
@@ -27,30 +36,42 @@ export async function refundReturn(adminId: number, returnId: number): Promise<R
   await testTx(async (tx) => {
     await setUserContext(tx, { userId: adminId, role: 'ADMIN' });
     await tx.$queryRaw`
-      select cartlify.finish_return_refund(
-        ${begun.key}::uuid, 'succeeded', ${`re_test_${begun.key}`}::text, null, null
+      select cartlify.settle_money_refund(
+        ${begun.key}::text, ${`re_test_${begun.key}`}::text, 'succeeded', null, null
       ) as done
     `;
   });
 
-  const row = await testTx(async (tx) => {
+  // the time the goods line of the transfer was told sent
+  const line = await testTx(async (tx) => {
     await setUserContext(tx, { userId: adminId, role: 'ADMIN' });
-    return tx.orderReturnItem.findFirstOrThrow({
-      where: { returnId, refundKey: begun.key },
-      select: { refundedAt: true },
+    return tx.moneyLog.findFirstOrThrow({
+      where: { transferKey: begun.key, event: 'money.refund', part: 'goods' },
+      select: { stateAt: true, createdAt: true },
     });
   });
 
-  return { returnId, refundedAt: row.refundedAt!, amount: Number(begun.amount) };
+  return {
+    returnId,
+    bookedAt: line.createdAt,
+    refundedAt: line.stateAt!,
+    amount: Number(begun.amount),
+  };
 }
 
 // the transfer of the rows of a statement fails: the rows are put on their way and the provider
-// says it failed, so they are back to not refunded with the reason (a later refund may go through)
+// says it failed, so they owe their money again with the reason in the journal (a later refund may
+// go through). The times the lines of the goods of the transfer and of its failure were written
 export async function failReturnRefund(
   adminId: number,
   returnId: number,
-  failure: 'card_unavailable' | 'shop_balance' | 'disputed' | 'unknown' = 'shop_balance',
-): Promise<void> {
+  failure:
+    | 'card_unavailable'
+    | 'shop_balance'
+    | 'disputed'
+    | 'already_refunded'
+    | 'unknown' = 'shop_balance',
+): Promise<{ bookedAt: Date; failedAt: Date }> {
   const begun = await testTx(async (tx) => {
     await setUserContext(tx, { userId: adminId, role: 'ADMIN' });
     const [row] = await tx.$queryRaw<{ done: Begun }[]>`
@@ -62,11 +83,25 @@ export async function failReturnRefund(
   await testTx(async (tx) => {
     await setUserContext(tx, { userId: adminId, role: 'ADMIN' });
     await tx.$queryRaw`
-      select cartlify.finish_return_refund(
-        ${begun.key}::uuid, 'failed', null, ${failure}::cartlify."ReturnRefundFailure", 'test'
+      select cartlify.settle_money_refund(
+        ${begun.key}::text, null, 'failed', ${failure}::cartlify."RefundFailure", 'test'
       ) as done
     `;
   });
+
+  const lines = await testTx(async (tx) => {
+    await setUserContext(tx, { userId: adminId, role: 'ADMIN' });
+    return tx.moneyLog.findMany({
+      where: { transferKey: begun.key, part: 'goods' },
+      orderBy: { id: 'asc' },
+      select: { event: true, createdAt: true },
+    });
+  });
+
+  return {
+    bookedAt: lines.find((line) => line.event === 'money.refund')!.createdAt,
+    failedAt: lines.find((line) => line.event === 'money.refund_failed')!.createdAt,
+  };
 }
 
 // the rows of a statement are put on their way and the provider has not said anything yet: the
@@ -98,7 +133,7 @@ export async function refundReturnIn(db: DbSession, adminId: number, returnId: n
   );
   const key = row!.done.key;
   await db.rows(
-    `select cartlify.finish_return_refund($1::uuid, 'succeeded', $2::text, null, null) as done`,
+    `select cartlify.settle_money_refund($1::text, $2::text, 'succeeded', null, null) as done`,
     key,
     `re_test_${key}`,
   );

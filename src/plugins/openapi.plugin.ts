@@ -5,6 +5,7 @@ import fp from 'fastify-plugin';
 
 import authGuard, { authGuardWithoutRefresh } from '@middlewares/auth.js';
 import requireCaptcha from '@middlewares/requireCaptcha.js';
+import requireMoneyManager from '@middlewares/requireMoneyManager.js';
 import requireNewsletterManager from '@middlewares/requireNewsletterManager.js';
 import { isRateLimitFree } from '@helpers/rateLimitFree.js';
 
@@ -196,6 +197,15 @@ const sharedRefusals = (
             status: '403',
             code: 'NEWSLETTER_MANAGER_REQUIRED',
             text: 'the account may not run the newsletters: only root and an admin whom root allowed may (the profile tells it in `canManageNewsletters`); the right is checked in the database at every request, so one root took away stops at once.',
+        });
+    }
+    // the routes of the money root alone had: root, or an admin whom root allowed to handle the money,
+    // read from the database at every request (a right root took away stops at once)
+    if (hooks.includes(requireMoneyManager)) {
+        refusals.push({
+            status: '403',
+            code: 'MONEY_MANAGER_REQUIRED',
+            text: 'the account may not handle the money this way: only root and an admin whom root allowed may (the profile tells it in `canManageMoney`); the right is checked in the database at every request, so one root took away stops at once.',
         });
     }
     // the captcha of a form (Cloudflare Turnstile): the same two refusals on every route that has it

@@ -2,9 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { accessCookie } from '../../helpers/actors.js';
+import { alertsOf } from '../../helpers/alerts.js';
 import { startApp, stopApp } from '../../helpers/app.js';
+import { imageField, pngImage } from '../../helpers/cloudinary.js';
 import { getCsrf, withCsrf, type Csrf } from '../../helpers/csrf.js';
 import { closeSessions, createUser, type TestUser } from '../../helpers/factories.js';
+import { multipartBody } from '../../helpers/multipart.js';
 
 // root changes one public setting of the shop on the admin pages; an admin who opens the data of
 // the shop sees it, and so does a guest who was never signed in, on the page everybody reads, and
@@ -87,5 +90,59 @@ describe('root changes the name of the shop', () => {
 
     // leaves the name as it found it, as every *.shopwide.test.ts here does
     expect((await setName(before)).statusCode).toBe(200);
+  });
+});
+
+// root learns from the alert of the data the shop is missing what to fill, and fills it; a guest of
+// the storefront sees the logo once it is on (the mails carry it by the same link: logoCallers.test.ts).
+// The shop of the tests has no logo: the file leaves it without one, as it found it
+describe('root fills the data of the shop the alert names', () => {
+  it('finds the logo among the missing data, puts it on for the storefront, and takes it off again', async () => {
+    const alerts = alertsOf({ app: () => app, csrf: () => csrf });
+    const missing = async () => {
+      const alert = await alerts.alertOf(root, 'shop_settings_incomplete');
+      const res = await app.inject({
+        method: 'GET',
+        url: alert.list!.path,
+        headers: { cookie: accessCookie(root) },
+      });
+      expect(res.statusCode).toBe(200);
+      return { count: alert.count, fields: res.json().fields as string[] };
+    };
+    // what a guest of the storefront reads of the shop
+    const publicLogo = async () =>
+      (await app.inject({ method: 'GET', url: '/api/shop-settings' })).json().logoUrl as
+        string | null;
+
+    const before = await missing();
+    expect(before.count).toBe(before.fields.length);
+    expect(before.fields).toContain('logoUrl');
+
+    // root puts the logo of the shop on
+    const { payload, headers } = multipartBody([
+      imageField('image', pngImage(40, 30), { filename: 'logo.png' }),
+    ]);
+    const put = await app.inject({
+      method: 'POST',
+      url: '/api/root/shop-settings/logo',
+      headers: { ...withCsrf(csrf, accessCookie(root)), ...headers },
+      payload,
+    });
+    expect(put.statusCode).toBe(200);
+    const logoUrl = put.json().logoUrl as string;
+    const filled = await missing();
+    expect(filled.fields).not.toContain('logoUrl');
+    expect(filled.count).toBe(before.count - 1);
+    expect(await publicLogo()).toBe(logoUrl);
+
+    // root takes it off: it is among the missing data again, the mails go without it
+    const off = await app.inject({
+      method: 'DELETE',
+      url: '/api/root/shop-settings/logo',
+      headers: withCsrf(csrf, accessCookie(root)),
+    });
+    expect(off.statusCode).toBe(200);
+    expect((await missing()).fields).toContain('logoUrl');
+    expect(await publicLogo()).toBeNull();
   });
 });

@@ -11,7 +11,13 @@ import {
   ResourceBusyError,
   isAppError,
 } from '@utils/errors.js';
-import { mapOrderRowToResponse, orderContextOf, readOrderResponse } from './helpers/index.js';
+import {
+  mapOrderRowToResponse,
+  orderContextOf,
+  readOrderResponse,
+  recordShipmentCost,
+  shipmentCostsOf,
+} from './helpers/index.js';
 import { sendOrderNoticeEmail } from './helpers/sendOrderNoticeEmail.helper.js';
 import type { OrderStatusMailLogger } from './helpers/sendOrderStatusEmail.helper.js';
 
@@ -36,9 +42,10 @@ function nextText(
 // an admin writes what the shop pays the carrier when the invoice comes, and corrects the carrier,
 // the number and the link of a send on its way. The details are changed only on the send of a
 // shipped order that was not taken back, and the buyer is mailed all of them; the cost is written
-// while the shop owes the carrier for the send, whatever became of the order, and is never mailed.
-// Every change goes to the admin log with the old and the new value; a request that changes
-// nothing writes no line and sends no mail
+// while the shop owes the carrier for the send, whatever became of the order, and is never mailed:
+// it is a line of the money journal, a correction a new line with the difference (a past period of
+// the reports does not change), in the same transaction. Every change goes to the admin log with
+// the old and the new value; a request that changes nothing writes no line and sends no mail
 export async function updateShipment(
   { actorId, actorRole, orderId, shipmentId, changes }: UpdateShipmentDto,
   log: OrderStatusMailLogger,
@@ -70,13 +77,12 @@ export async function updateShipment(
             carrier: string | null;
             trackingNumber: string | null;
             trackingUrl: string | null;
-            cost: Prisma.Decimal | null;
             expense: boolean;
             rolledBackAt: Date | null;
           }[]
-        >`select id, carrier, "trackingNumber", "trackingUrl", cost, expense, "rolledBackAt"
+        >`select id, carrier, "trackingNumber", "trackingUrl", expense, "rolledBackAt"
           from cartlify.order_shipments
-          where id = ${shipmentId}::int and "orderId" = ${orderId}::int
+          where id = ${shipmentId}::int and "orderId" = ${orderId}::int and "returnId" is null
           for update`;
         if (!send) throw new NotFoundError('SHIPMENT_NOT_FOUND', { orderId, shipmentId });
 
@@ -88,12 +94,6 @@ export async function updateShipment(
         );
         const trackingUrl =
           changes.trackingUrl === undefined ? send.trackingUrl : changes.trackingUrl;
-        const cost =
-          changes.cost === undefined
-            ? send.cost === null
-              ? null
-              : Number(send.cost)
-            : changes.cost;
 
         // the send holds together: a number and a link each name their carrier
         if ((trackingNumber || trackingUrl) && !carrier) {
@@ -114,8 +114,12 @@ export async function updateShipment(
         }
         const details = tracking.length > 0;
 
-        const oldCost = send.cost === null ? null : Number(send.cost);
-        const costChanged = !same(cost, oldCost);
+        // what the send cost the shop so far, the sum of its lines (none while none is written): a
+        // new cost changes it, the same cost or 0 while none is written does not (the journal has no
+        // line of 0). A line is never taken away: none is a cost of 0
+        const oldCost = (await shipmentCostsOf(db, [send.id])).get(send.id) ?? null;
+        const cost = changes.cost === null ? 0 : changes.cost;
+        const costChanged = cost !== undefined && (oldCost === null ? cost > 0 : cost !== oldCost);
 
         if (!details && !costChanged) return false;
 
@@ -133,10 +137,13 @@ export async function updateShipment(
           throw new ConflictError('SHIPMENT_COST_NOT_OWED', { orderId, shipmentId });
         }
 
-        await db.orderShipment.update({
-          where: { id: shipmentId },
-          data: { carrier, trackingNumber, trackingUrl, cost },
-        });
+        if (details) {
+          await db.orderShipment.update({
+            where: { id: shipmentId },
+            data: { carrier, trackingNumber, trackingUrl },
+          });
+        }
+        if (cost !== undefined && costChanged) await recordShipmentCost(db, shipmentId, cost);
 
         const sendLine = { field: 'shipment', old: shipmentId, new: shipmentId };
         if (details) {

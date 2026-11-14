@@ -243,6 +243,8 @@ BEGIN
     'cartlify.is_owner_or_admin(integer)',
     -- the policies of the newsletter tables ask it: root, or an admin root allowed to run them
     'cartlify.newsletter_manager()',
+    -- the guard of the money routes asks it: root, or an admin root allowed to handle the money
+    'cartlify.money_manager()',
     -- product search
     'cartlify.immutable_unaccent(text)',
     -- accounts and login: they run as the owner, each checks the role of the actor first
@@ -279,6 +281,8 @@ BEGIN
     'cartlify.newsletter_admin_erase_address(integer)',
     'cartlify.newsletter_block_add(text, text)',
     'cartlify.newsletter_set_manager(integer, boolean)',
+    -- root gives an admin the right to handle the money or takes it away
+    'cartlify.money_set_manager(integer, boolean)',
     'cartlify.newsletter_locale_counts()',
     'cartlify.newsletter_reset_locale(text)',
     -- the sending of the newsletters (the system): a campaign started, a portion of the mails taken,
@@ -291,7 +295,42 @@ BEGIN
     'cartlify.confirm_order(integer, interval, numeric, numeric, numeric)',
     'cartlify.unconfirm_order(integer)',
     'cartlify.cancel_order_payment(integer)',
-    'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric)',
+    'cartlify.pay_order(integer, cartlify."PaymentProvider", text, numeric, text)',
+    -- the cancel of the system locks the payment before the order, as every change of its money
+    'cartlify.lock_money_payment(text)',
+    -- the money journal: a payment the order could not take, the refunds of a payment and what the
+    -- provider made by hand; each one checks the actor itself
+    'cartlify.record_late_payment(cartlify."PaymentProvider", text, integer, integer, numeric, text, text)',
+    'cartlify.begin_payment_refund(text, text, numeric, text)',
+    'cartlify.settle_money_refund(text, text, text, cartlify."RefundFailure", text, boolean)',
+    'cartlify.record_hand_refund(cartlify."PaymentProvider", text, text, numeric, text, text)',
+    'cartlify.record_refund_bank_reference(text, text)',
+    'cartlify.mark_payment_refund_outside(integer, cartlify."OutsideMethod", text, timestamp without time zone)',
+    -- the compensation root gives, and the money the shop got back outside the app: each one checks
+    -- the actor itself
+    'cartlify.begin_compensation(integer, text, numeric, text)',
+    'cartlify.record_money_received(integer, jsonb, cartlify."OutsideMethod", text, timestamp without time zone)',
+    'cartlify.record_carrier_money(integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone)',
+    -- what a statement still owes and what money already with the buyer gave too much, for the card
+    -- and the alerts: admin and root, checked by each one
+    'cartlify.return_money_left(integer)',
+    'cartlify.order_money_overpaid(integer)',
+    -- what is overpaid: the money the buyer gave back, the rest given up, the goods kept; each one
+    -- checks the actor itself
+    'cartlify.record_overpaid_received(integer, numeric, cartlify."OutsideMethod", text, timestamp without time zone)',
+    'cartlify.lose_overpaid(integer)',
+    'cartlify.keep_return_goods(integer, jsonb)',
+    -- the disputes, the holds of an order and what root decides on them, the cost of a send to a
+    -- buyer: each one checks the actor itself (add_order_hold and remove_order_hold stay closed)
+    'cartlify.sync_payment_dispute(cartlify."PaymentProvider", text, text, cartlify."DisputeStatus", text, timestamp without time zone, boolean, integer, boolean, timestamp without time zone, timestamp without time zone, jsonb)',
+    'cartlify.mark_dispute_drafted(integer)',
+    'cartlify.hold_payment_review(text, text)',
+    'cartlify.release_payment_review(text, text)',
+    'cartlify.hold_fraud_warning(text, text)',
+    'cartlify.decide_order_hold(integer, text, text, text)',
+    'cartlify.decide_money_use(integer, jsonb, numeric, text)',
+    'cartlify.share_money_line(integer)',
+    'cartlify.record_order_shipment_cost(integer, numeric)',
     'cartlify.expire_order_reservation(integer)',
     -- logins of a deleted account: root or the system
     'cartlify.anonymize_login_logs(integer)',
@@ -325,19 +364,19 @@ BEGIN
     'cartlify.product_withdrawals(integer[])',
     -- the statements of withdrawal and of return: they check the actor themselves
     'cartlify.create_return(integer, jsonb, cartlify."ReturnSource", cartlify."ReturnBasis", cartlify."ReturnReason", text, text, text, timestamp without time zone, integer, integer, text)',
-    'cartlify.receive_return_items(integer, jsonb)',
-    'cartlify.confirm_return_proof(integer)',
+    'cartlify.receive_return_items(integer, jsonb, jsonb)',
+    'cartlify.confirm_return_proof(integer, numeric, numeric)',
     'cartlify.accept_return(integer)',
-    'cartlify.provide_return_proof(integer, text, text, text)',
+    'cartlify.provide_return_proof(integer, text, text, text, numeric, jsonb)',
+    'cartlify.split_return(integer, jsonb)',
     'cartlify.record_return_shipment(integer, text, text, text, numeric, timestamp without time zone)',
+    'cartlify.send_return_goods_back(integer, jsonb, text, text, text, numeric, timestamp without time zone)',
     'cartlify.set_return_shipment_cost(integer, numeric)',
+    'cartlify.set_return_parcel_buyer_paid(integer, numeric)',
     -- the money of the statements: they check the actor themselves
     'cartlify.begin_return_refund(integer, integer[], jsonb, numeric)',
-    'cartlify.finish_return_refund(uuid, text, text, cartlify."ReturnRefundFailure", text)',
-    'cartlify.mark_return_refunded_outside(integer, integer[], cartlify."ReturnOutsideMethod", text, timestamp without time zone)',
+    'cartlify.mark_return_refunded_outside(integer, integer[], cartlify."OutsideMethod", text, timestamp without time zone, numeric)',
     'cartlify.close_return_without_refund(integer, integer[], cartlify."ReturnCloseCode", text)',
-    'cartlify.record_return_reimbursement(integer, numeric, cartlify."ReturnOutsideMethod", text, timestamp without time zone)',
-    'cartlify.settle_return_dispute(integer, boolean, text, timestamp without time zone)',
     'cartlify.variant_expired_units(integer)',
     'cartlify.units_sold_in_period(timestamp without time zone, timestamp without time zone)',
     'cartlify.log_admin_action(integer, cartlify."Role", cartlify."AdminAuditEntityType", integer, cartlify."AdminAuditAction", text, jsonb)',

@@ -27,6 +27,7 @@ export async function provideFormProof({
   carrier,
   trackingNumber,
   trackingUrl,
+  buyerPaid,
 }: WithdrawalProofBodyDto): Promise<WithdrawalReceivedResponseDto> {
   if (!isWithdrawalCode(orderId, code)) throw rejected();
 
@@ -44,7 +45,8 @@ export async function provideFormProof({
 
         await db.$executeRaw(Prisma.sql`
           select 1 as done from cartlify.provide_return_proof(
-            ${returnId}::int, ${carrier}::text, ${trackingNumber}::text, ${trackingUrl ?? null}::text
+            ${returnId}::int, ${carrier}::text, ${trackingNumber}::text, ${trackingUrl ?? null}::text,
+            ${buyerPaid ?? null}::numeric
           )
         `);
 

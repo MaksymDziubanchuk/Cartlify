@@ -1,0 +1,16 @@
+{{greeting}}
+
+{{#code}}{{statementLine}}.
+{{/code}}{{leadTxt}}
+
+{{#items}}- {{name}} x {{quantity}}
+{{/items}}{{#parcelLine}}
+{{parcelLine}}
+{{/parcelLine}}{{#trackingUrl}}{{followLine}}: {{trackingUrl}}
+{{/trackingUrl}}
+{{seeOrderTxt}}
+{{orderUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

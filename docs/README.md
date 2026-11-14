@@ -1,18 +1,19 @@
 # Cartlify documentation
 
-| Document                                | What it covers                                                            |
-| --------------------------------------- | ------------------------------------------------------------------------- |
-| [Features](features.md)                 | what the API does, module by module                                       |
-| [Variants](variants.md)                 | products, variants, characteristics, stock, lists and filters             |
-| [Returns](returns.md)                   | withdrawal and returns, the money back, personal data and its terms       |
-| [Payments](payments.md)                 | a payment the order cannot take: its refund, mails, alerts, root's route  |
-| [Return scenarios](return-scenarios.md) | each case of a withdrawal or a return, step by step, with the routes      |
-| [Shop settings](shop-settings.md)       | the data of the shop root changes without a deploy, a row a setting       |
-| [Languages](languages.md)               | how the server picks a language, mails, the chat bot and payment pages    |
-| [Newsletters](newsletters.md)           | subscription, the pages behind the mail links, campaigns, sending, setup  |
-| [API](api.md)                           | the REST modules, Swagger / OpenAPI, the realtime chat                    |
-| [Architecture](architecture.md)         | goals, stack, structure of the repository, the database, production notes |
-| [Configuration](configuration.md)       | every environment variable                                                |
-| [Local setup](setup.md)                 | the database, Redis and the app on your machine                           |
-| [Commands](commands.md)                 | build, start, migrations, tests, demo data, a copy of prod for dev        |
-| [Status](status.md)                     | where the project stands                                                  |
+| Document                                | What it covers                                                                       |
+| --------------------------------------- | ------------------------------------------------------------------------------------ |
+| [Features](features.md)                 | what the API does, module by module                                                  |
+| [Variants](variants.md)                 | products, variants, characteristics, stock, lists and filters                        |
+| [Returns](returns.md)                   | withdrawal and returns, the money back, personal data and its terms                  |
+| [Payments](payments.md)                 | the ways to pay, the money journal, refunds, refunds by hand, holds, the webhook     |
+| [Disputes](disputes.md)                 | disputes at the bank followed by the app, a text for the terms, the Stripe dashboard |
+| [Return scenarios](return-scenarios.md) | each case of a withdrawal or a return, step by step, with the routes                 |
+| [Shop settings](shop-settings.md)       | the data of the shop root changes without a deploy, a row a setting                  |
+| [Languages](languages.md)               | how the server picks a language, mails, the chat bot and payment pages               |
+| [Newsletters](newsletters.md)           | subscription, the pages behind the mail links, campaigns, sending, setup             |
+| [API](api.md)                           | the REST modules, Swagger / OpenAPI, the realtime chat                               |
+| [Architecture](architecture.md)         | goals, stack, structure of the repository, the database, production notes            |
+| [Configuration](configuration.md)       | every environment variable                                                           |
+| [Local setup](setup.md)                 | the database, Redis and the app on your machine                                      |
+| [Commands](commands.md)                 | build, start, migrations, tests, demo data, a copy of prod for dev                   |
+| [Status](status.md)                     | where the project stands                                                             |

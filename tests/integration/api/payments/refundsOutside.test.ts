@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { accessCookie } from '../../../helpers/actors.js';
 import { asAdmin } from '../../../helpers/db.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { giveMoneyRight } from '../../../helpers/moneyManager.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
 import {
   closeSessions,
@@ -16,10 +17,10 @@ import {
 import {
   deliverOk,
   failedLateRefund,
+  lateRefundFailedAtStripe,
   latePayment,
-  lateEventsOf,
-  lateLinesOf,
-  lockLateRefund,
+  lockMoneyPayment,
+  moneyOfPayment,
   refundEvent,
   refundOf,
 } from '../../../helpers/lateRefund.js';
@@ -29,22 +30,28 @@ import { openPaymentPage, payPage } from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
   deliver,
+  disputeEvent,
+  endDispute,
+  openDispute,
   queueRefundOutcome,
   realStripe,
 } from '../../../helpers/stripe.js';
 import { whileLocked } from '../../../helpers/variants.js';
 
-// POST /api/payments/refunds/:refundId/outside: root records that the money of a payment the order
-// could not take, whose refund failed, went to the buyer another way. Only a refund that failed
-// and is not marked yet; the refund is named by its id at Stripe, so an order with two late
-// payments is not ambiguous. The line order.refund_late_outside is written once, the buyer is
-// mailed once. The refund of a payment that failed is made through the mock (a refund that is
-// still pending runs on the mock only)
+// POST /api/payments/refunds/:refundId/outside: root records that the money of a refund that failed,
+// of a payment the order could not take, went to the buyer another way. The refund is named by its
+// id in the list of the refunds (its first line in the money journal), so an order with two late
+// payments is not ambiguous. Only a refund that failed and is not marked yet: the money journal gets
+// one line money.outside that names it, the journal of the admins one line payment.refund_outside
+// with both lines, the buyer is mailed once. The refund that failed is made through the mock (a
+// refund that is still pending runs on the mock only)
 
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
 let root: TestUser;
+// an admin root allowed to handle the money the way root does
+let manager: TestUser;
 let someone: TestUser;
 const userIds: number[] = [];
 const products: TestProduct[] = [];
@@ -57,8 +64,10 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await createUser({ role: 'ADMIN' });
   root = await createUser({ role: 'ROOT' });
+  manager = await createUser({ role: 'ADMIN' });
   someone = await createUser();
-  userIds.push(admin.id, root.id, someone.id);
+  userIds.push(admin.id, root.id, someone.id, manager.id);
+  await giveMoneyRight(root.id, manager.id);
 });
 
 afterAll(async () => {
@@ -71,7 +80,11 @@ afterAll(async () => {
   }
 });
 
-const mark = (refundId: string, payload: Record<string, unknown>, actor: TestUser | null = root) =>
+const mark = (
+  refundId: number | string,
+  payload: Record<string, unknown>,
+  actor: TestUser | null = root,
+) =>
   app.inject({
     method: 'POST',
     url: `/api/payments/refunds/${refundId}/outside`,
@@ -98,74 +111,142 @@ const mailsTo = (mails: SentMail[], email: string, part = '') =>
 
 const OUTSIDE_SUBJECT = 'We sent you money for order #';
 
-describe('who may record it', () => {
-  it('lets root only: a visitor, a buyer and an admin are refused', async () => {
-    const failed = await failedLateRefund(deps());
+// the first line of the refund of a late payment: the id of the refund in the list
+const refundLineOf = async (paymentId: string) =>
+  (await moneyOfPayment(paymentId)).find((line) => line.event === 'money.refund')!;
 
-    for (const actor of [null, someone, admin, failed.user]) {
-      const res = await mark(failed.refundId, await body(), actor);
+// the money of a payment sent outside the app
+const outsideOf = async (paymentId: string) =>
+  (await moneyOfPayment(paymentId)).filter((line) => line.event === 'money.outside');
+
+// the bank opens a chargeback of the payment (the money leaves the shop) and Stripe tells of it
+async function disputed(paymentId: string): Promise<string> {
+  const disputeId = openDispute(paymentId);
+  for (const type of ['charge.dispute.created', 'charge.dispute.funds_withdrawn']) {
+    expect((await deliver(app, await disputeEvent(type, disputeId))).statusCode).toBe(200);
+  }
+  return disputeId;
+}
+
+// the bank ends it and Stripe tells of it: won puts the money back with the shop
+async function ended(disputeId: string, end: 'won' | 'lost') {
+  endDispute(disputeId, end);
+  const types = [
+    'charge.dispute.closed',
+    ...(end === 'won' ? ['charge.dispute.funds_reinstated'] : []),
+  ];
+  for (const type of types) {
+    expect((await deliver(app, await disputeEvent(type, disputeId))).statusCode).toBe(200);
+  }
+}
+
+// the lines root wrote of the refunds of an order
+const rootLinesOf = (orderId: number) =>
+  asAdmin((tx) =>
+    tx.adminAuditLog.findMany({
+      where: { entityType: 'order', entityId: orderId, event: 'payment.refund_outside' },
+      orderBy: { id: 'asc' },
+    }),
+  );
+
+describe('who may record it', () => {
+  it('lets root and an admin root allowed: a visitor, a buyer and an admin without the right are refused', async () => {
+    const failed = await failedLateRefund(deps());
+    const line = await refundLineOf(failed.paymentId);
+
+    for (const actor of [null, someone, failed.user]) {
+      const res = await mark(line.id, await body(), actor);
       expect(res.statusCode).toBe(403);
       expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
     }
+    const byAdmin = await mark(line.id, await body(), admin);
+    expect(byAdmin.statusCode).toBe(403);
+    expect(byAdmin.json()).toMatchObject({ errorCode: 'MONEY_MANAGER_REQUIRED' });
+    expect(await outsideOf(failed.paymentId)).toEqual([]);
 
-    expect(await lateEventsOf(failed.orderId)).not.toContain('order.refund_late_outside');
+    const byManager = await mark(line.id, await body(), manager);
+    expect(byManager.statusCode).toBe(200);
+    expect(byManager.json()).toMatchObject({ id: line.id, state: 'outside' });
+    expect(await outsideOf(failed.paymentId)).toHaveLength(1);
   });
 });
 
 describe('what it records', () => {
-  it('writes the line once, mails the buyer and answers the refund as marked', async () => {
+  it('writes the money once in both journals, mails the buyer and answers the refund as outside', async () => {
     const failed = await failedLateRefund(deps());
+    const line = await refundLineOf(failed.paymentId);
     const mails = watchMail();
     const note = 'Sent to the account the buyer wrote by mail.';
     const at = (await dbNow()).toISOString();
 
-    const res = await mark(failed.refundId, await body({ method: 'bank_transfer', note, at }));
+    const res = await mark(line.id, await body({ method: 'bank_transfer', note, at }));
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      refundId: failed.refundId,
+      id: line.id,
+      purpose: 'late_payment',
+      state: 'outside',
+      need: null,
       orderId: failed.orderId,
       userId: failed.user.id,
+      returnId: null,
+      returnCode: null,
       provider: 'stripe',
       paymentId: failed.paymentId,
+      refundId: failed.refundId,
       amount: 51,
       currency: 'eur',
-      state: 'outside',
       failure: 'card_unavailable',
       failureText: 'expired_or_canceled_card',
+      bankReference: null,
+      byDashboard: false,
+      createdAt: expect.any(String),
+      at: expect.any(String),
+      // the payment went back another way: nothing of it is left at the provider
+      paymentLeft: 0,
+      // a late payment has no statement
+      returnLeft: null,
       outside: { method: 'bank_transfer', note, at, by: root.id },
     });
-    expect(await lateEventsOf(failed.orderId)).toEqual([
-      'order.refund_late',
-      'order.refund_late_sent',
-      'order.refund_late_failed',
-      'order.refund_late_outside',
-    ]);
-    const line = (await lateLinesOf(failed.orderId)).at(-1)!;
-    expect(line).toMatchObject({
+    const [outside] = await outsideOf(failed.paymentId);
+    expect(await outsideOf(failed.paymentId)).toHaveLength(1);
+    expect(outside).toMatchObject({
+      purpose: 'late_payment',
+      part: 'whole',
+      amount: '-51.00',
+      coversId: line.id,
       actorId: root.id,
-      actorRole: 'ROOT',
-      entityType: 'order',
-      entityId: failed.orderId,
-      action: 'OTHER',
-      meta: [
-        {
-          field: 'refund',
-          old: null,
-          new: {
-            initiator: 'root',
-            provider: 'stripe',
-            paymentId: failed.paymentId,
-            refundId: failed.refundId,
-            amount: '51.00',
-            currency: 'eur',
-            method: 'bank_transfer',
-            at,
-          },
-        },
-        { field: 'note', old: null, new: note },
-      ],
+      method: 'bank_transfer',
+      note,
+      happenedAt: new Date(at),
     });
+    expect(await rootLinesOf(failed.orderId)).toEqual([
+      expect.objectContaining({
+        actorId: root.id,
+        actorRole: 'ROOT',
+        entityType: 'order',
+        entityId: failed.orderId,
+        action: 'OTHER',
+        meta: [
+          { field: 'moneyLogIds', old: null, new: [line.id, outside!.id] },
+          {
+            field: 'refund',
+            old: null,
+            new: {
+              purpose: 'late_payment',
+              provider: 'stripe',
+              paymentId: failed.paymentId,
+              refundId: failed.refundId,
+              amount: '51.00',
+              currency: 'eur',
+              method: 'bank_transfer',
+              at,
+            },
+          },
+          { field: 'note', old: null, new: note },
+        ],
+      }),
+    ]);
     const told = mailsTo(mails, failed.user.email);
     expect(told.map((mail) => mail.subject)).toEqual([
       `Cartlify — ${OUTSIDE_SUBJECT}${failed.orderId}`,
@@ -183,7 +264,8 @@ describe('what it records', () => {
     const failed = await failedLateRefund(deps());
     const mails = watchMail();
 
-    expect((await mark(failed.refundId, await body({ method }))).statusCode).toBe(200);
+    const line = await refundLineOf(failed.paymentId);
+    expect((await mark(line.id, await body({ method }))).statusCode).toBe(200);
 
     expect(mailsTo(mails, failed.user.email)[0]!.text).toContain(words);
   });
@@ -192,50 +274,37 @@ describe('what it records', () => {
     const failed = await failedLateRefund(deps(), { locale: 'es' });
     const mails = watchMail();
 
-    expect((await mark(failed.refundId, await body())).statusCode).toBe(200);
+    const line = await refundLineOf(failed.paymentId);
+    expect((await mark(line.id, await body())).statusCode).toBe(200);
 
     expect(mailsTo(mails, failed.user.email)[0]!.subject).toContain(
       `Te enviamos dinero del pedido #${failed.orderId}`,
     );
   });
-
-  it('takes the refund out of the list of the failed ones', async () => {
-    const failed = await failedLateRefund(deps());
-    const list = () =>
-      app.inject({
-        method: 'GET',
-        url: `/api/payments/refunds?state=failed&orderId=${failed.orderId}`,
-        headers: { cookie: accessCookie(admin) },
-      });
-    expect((await list()).json().items.map((row: { id: string }) => row.id)).toEqual([
-      failed.refundId,
-    ]);
-
-    await mark(failed.refundId, await body());
-
-    expect((await list()).json()).toMatchObject({ items: [], total: 0 });
-  });
 });
 
 describe('what it refuses', () => {
-  it('answers 404 for a refund the app did not make', async () => {
-    const res = await mark('re_made_by_hand_at_stripe', await body());
+  it('answers 404 for a line that is no refund of a late payment', async () => {
+    const failed = await failedLateRefund(deps());
+    const [late] = await moneyOfPayment(failed.paymentId);
 
-    expect(res.statusCode).toBe(404);
-    expect(res.json()).toMatchObject({ errorCode: 'LATE_REFUND_NOT_FOUND' });
+    for (const id of [late!.id, 2147483647]) {
+      const res = await mark(id, await body());
+      expect(res.statusCode).toBe(404);
+      expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_NOT_FOUND' });
+    }
   });
 
   it('answers 409 for a refund whose money was sent', async () => {
     const late = await latePayment(deps());
     await deliver(app, late.event);
-    const refund = await refundOf(late.paymentId);
     const mails = watchMail();
 
-    const res = await mark(refund.id, await body());
+    const res = await mark((await refundLineOf(late.paymentId)).id, await body());
 
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ errorCode: 'LATE_REFUND_NOT_FAILED' });
-    expect(await lateEventsOf(late.orderId)).not.toContain('order.refund_late_outside');
+    expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_NOT_FAILED' });
+    expect(await outsideOf(late.paymentId)).toEqual([]);
     expect(mailsTo(mails, late.user.email)).toEqual([]);
   });
 
@@ -243,47 +312,82 @@ describe('what it refuses', () => {
     const late = await latePayment(deps());
     queueRefundOutcome({ status: 'pending' });
     await deliver(app, late.event);
-    const refund = await refundOf(late.paymentId);
 
-    const res = await mark(refund.id, await body());
+    const res = await mark((await refundLineOf(late.paymentId)).id, await body());
 
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ errorCode: 'LATE_REFUND_NOT_FAILED' });
+    expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_NOT_FAILED' });
   });
 
   it('answers 409 for a refund root has recorded already, and writes nothing again', async () => {
     const failed = await failedLateRefund(deps());
-    expect((await mark(failed.refundId, await body())).statusCode).toBe(200);
+    const line = await refundLineOf(failed.paymentId);
+    expect((await mark(line.id, await body())).statusCode).toBe(200);
     const mails = watchMail();
 
-    const again = await mark(failed.refundId, await body({ method: 'cash' }));
+    const again = await mark(line.id, await body({ method: 'cash' }));
 
     expect(again.statusCode).toBe(409);
-    expect(again.json()).toMatchObject({ errorCode: 'LATE_REFUND_ALREADY_MARKED' });
-    expect(
-      (await lateEventsOf(failed.orderId)).filter((event) => event === 'order.refund_late_outside'),
-    ).toHaveLength(1);
+    expect(again.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_ALREADY_MARKED' });
+    expect(await outsideOf(failed.paymentId)).toHaveLength(1);
+    expect(await rootLinesOf(failed.orderId)).toHaveLength(1);
     expect(mailsTo(mails, failed.user.email)).toEqual([]);
   });
 
+  // what the bank decides may give the buyer the money: root does not send it another way meanwhile
+  // (the transfer of a statement is refused the same way, RETURN_REFUND_DISPUTED)
+  mockOnly('answers 409 while a dispute of the payment is open at the bank', async () => {
+    const failed = await failedLateRefund(deps());
+    const line = await refundLineOf(failed.paymentId);
+    await disputed(failed.paymentId);
+    const mails = watchMail();
+
+    const res = await mark(line.id, await body());
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_DISPUTED' });
+    expect(await outsideOf(failed.paymentId)).toEqual([]);
+    expect(await rootLinesOf(failed.orderId)).toEqual([]);
+    expect(mailsTo(mails, failed.user.email)).toEqual([]);
+  });
+
+  // lost: the bank gave the buyer the money of the payment; won: the money came back to the shop and
+  // the app sent the payment back again. Either way the buyer has it, a mark would pay it twice
+  mockOnly(
+    'answers 409 once the money of the payment went back to the buyer after the dispute',
+    async () => {
+      for (const end of ['lost', 'won'] as const) {
+        const failed = await lateRefundFailedAtStripe(deps());
+        const line = await refundLineOf(failed.paymentId);
+        await ended(await disputed(failed.paymentId), end);
+
+        const res = await mark(line.id, await body());
+
+        expect(res.statusCode).toBe(409);
+        expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_NOT_FAILED' });
+        expect(await outsideOf(failed.paymentId)).toEqual([]);
+      }
+    },
+  );
+
   it('records it once when two roots send the same mark at the same time', async () => {
     const failed = await failedLateRefund(deps());
+    const line = await refundLineOf(failed.paymentId);
     const mails = watchMail();
     const payload = await body();
 
     const answers = await whileLocked(
-      (tx) => lockLateRefund(tx, failed.paymentId),
-      () => Promise.all([mark(failed.refundId, payload), mark(failed.refundId, payload)]),
+      (tx) => lockMoneyPayment(tx, failed.paymentId),
+      () => Promise.all([mark(line.id, payload), mark(line.id, payload)]),
       { waiters: 2 },
     );
 
     expect(answers.map((res) => res.statusCode).sort()).toEqual([200, 409]);
     expect(answers.find((res) => res.statusCode === 409)!.json()).toMatchObject({
-      errorCode: 'LATE_REFUND_ALREADY_MARKED',
+      errorCode: 'PAYMENT_REFUND_ALREADY_MARKED',
     });
-    expect(
-      (await lateEventsOf(failed.orderId)).filter((event) => event === 'order.refund_late_outside'),
-    ).toHaveLength(1);
+    expect(await outsideOf(failed.paymentId)).toHaveLength(1);
+    expect(await rootLinesOf(failed.orderId)).toHaveLength(1);
     expect(mailsTo(mails, failed.user.email, OUTSIDE_SUBJECT)).toHaveLength(1);
   });
 
@@ -297,39 +401,53 @@ describe('what it refuses', () => {
     ['a day that is none', { at: 'yesterday' }],
   ])('refuses %s', async (_name, change) => {
     const failed = await failedLateRefund(deps());
+    const line = await refundLineOf(failed.paymentId);
 
-    const res = await mark(failed.refundId, { ...(await body()), ...change });
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
-    expect(await lateEventsOf(failed.orderId)).not.toContain('order.refund_late_outside');
-  });
-
-  it('refuses a refund id that is no id at the provider', async () => {
-    const res = await mark('re%20x', await body());
+    const res = await mark(line.id, { ...(await body()), ...change });
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    expect(await outsideOf(failed.paymentId)).toEqual([]);
   });
 
-  it('refuses a day of the future and a day before the refund was made', async () => {
+  it('refuses a note of spaces only', async () => {
     const failed = await failedLateRefund(deps());
-    const [made] = await lateLinesOf(failed.orderId);
+    const line = await refundLineOf(failed.paymentId);
+
+    const res = await mark(line.id, await body({ note: '   ' }));
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_OUTSIDE_NOTE_REQUIRED' });
+  });
+
+  it.each(['re_3QxYz', '0', '2147483648'])('refuses a refund id %p that is none', async (id) => {
+    const res = await mark(id, await body());
+
+    expect(res.statusCode).toBe(400);
+    expect(['VALIDATION_ERROR', 'INVALID_ID_PARAM']).toContain(res.json().errorCode);
+  });
+
+  it('refuses a day of the future and a day before the refund was asked', async () => {
+    const failed = await failedLateRefund(deps());
+    const line = await refundLineOf(failed.paymentId);
+    const [asked] = await asAdmin((tx) =>
+      tx.moneyLog.findMany({ where: { id: line.id }, select: { createdAt: true } }),
+    );
 
     const future = await mark(
-      failed.refundId,
+      line.id,
       await body({ at: new Date((await dbNow()).getTime() + 3_600_000).toISOString() }),
     );
     const before = await mark(
-      failed.refundId,
-      await body({ at: new Date(made!.createdAt.getTime() - 60_000).toISOString() }),
+      line.id,
+      await body({ at: new Date(asked!.createdAt.getTime() - 60_000).toISOString() }),
     );
 
     for (const res of [future, before]) {
       expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ errorCode: 'LATE_REFUND_OUTSIDE_AT_INVALID' });
+      expect(res.json()).toMatchObject({ errorCode: 'PAYMENT_REFUND_OUTSIDE_AT_INVALID' });
     }
-    expect(await lateEventsOf(failed.orderId)).not.toContain('order.refund_late_outside');
+    expect(await outsideOf(failed.paymentId)).toEqual([]);
   });
 });
 
@@ -359,7 +477,7 @@ describe('an order with two late payments', () => {
     const third = await openPaymentPage(app, csrf, user, orderId);
     await deliverOk(app, (await payPage(third)).event);
 
-    const refunds: string[] = [];
+    const refunds: number[] = [];
     for (const page of [first, second]) {
       const late = await payPage(page);
       await deliverOk(app, late.event);
@@ -373,7 +491,7 @@ describe('an order with two late payments', () => {
           reason: 'expired_or_canceled_card',
         }),
       );
-      refunds.push(refund.id);
+      refunds.push((await refundLineOf(late.paymentId)).id);
     }
     const waiting = async () =>
       (
@@ -384,18 +502,16 @@ describe('an order with two late payments', () => {
         })
       )
         .json()
-        .items.map((row: { id: string }) => row.id)
-        .sort();
-    expect(await waiting()).toEqual([...refunds].sort());
+        .items.map((row: { id: number }) => row.id)
+        .sort((a: number, b: number) => a - b);
+    expect(await waiting()).toEqual([...refunds].sort((a, b) => a - b));
     const mails = watchMail();
 
     expect((await mark(refunds[1]!, await body())).statusCode).toBe(200);
 
     expect(await waiting()).toEqual([refunds[0]]);
     expect(mailsTo(mails, user.email, OUTSIDE_SUBJECT)).toHaveLength(1);
-    expect(
-      (await lateLinesOf(orderId)).filter((line) => line.event === 'order.refund_late_outside'),
-    ).toHaveLength(1);
+    expect(await rootLinesOf(orderId)).toHaveLength(1);
     // the other can be recorded on its own
     expect((await mark(refunds[0]!, await body())).statusCode).toBe(200);
     expect(await waiting()).toEqual([]);

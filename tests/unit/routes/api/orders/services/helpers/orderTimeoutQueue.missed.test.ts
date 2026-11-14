@@ -18,6 +18,10 @@ jest.unstable_mockModule('@redis/client.js', () => ({ getRedis: jest.fn() }));
 jest.unstable_mockModule('@routes/api/payments/providers/index.js', () => ({
   getPaymentProvider: jest.fn(),
 }));
+// the step of a paid page the timer shares with the payment webhook: none of this sweep
+jest.unstable_mockModule('@routes/api/payments/services/helpers/settlePaidPage.helper.js', () => ({
+  settlePaidPage: jest.fn(),
+}));
 
 const { processMissedOrderReservationExpiries } =
   await import('@routes/api/orders/services/helpers/orderTimeoutQueue.helper.js');

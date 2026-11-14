@@ -66,6 +66,8 @@ export interface WithdrawalProofBodyDto {
   carrier: string;
   trackingNumber: string;
   trackingUrl?: string;
+  // what the buyer paid the carrier, a hint for the shop
+  buyerPaid?: number;
 }
 
 export interface WithdrawalReceivedResponseDto {

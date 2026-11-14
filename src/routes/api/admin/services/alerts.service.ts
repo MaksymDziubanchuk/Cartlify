@@ -4,6 +4,7 @@ import { isAvailableLocale } from '@config/locales.js';
 import { missingShopSettingsFields, shopSettings } from '@config/shopSettings.js';
 import { prisma } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
+import { askMoneyManager, isMoneyManager } from '@db/moneyManager.helper.js';
 import { askNewsletterManager, isNewsletterManager } from '@db/newsletterManager.helper.js';
 import { shopToday } from '@helpers/shopDay.js';
 import { NotFoundError } from '@utils/errors.js';
@@ -19,7 +20,12 @@ import {
 } from '../../newsletters/services/helpers/campaignShares.helper.js';
 import { readSendingHalt } from '../../newsletters/services/helpers/sendingHalt.helper.js';
 import { andOf, returnConditions } from '../../returns/services/helpers/returnFilters.helper.js';
-import { waitingRefunds } from '../../payments/services/helpers/waitingRefunds.helper.js';
+import {
+  MONEY_REFUNDS,
+  moneyRefundConditions,
+  type MoneyRefundFilters,
+} from '../../payments/services/helpers/moneyRefunds.helper.js';
+import { disputeConditions } from '../../payments/services/listDisputes.service.js';
 import { utcTime } from './helpers/accountingSql.helper.js';
 import {
   dismissalFieldOf,
@@ -32,13 +38,18 @@ import {
 } from './helpers/alertDismissals.helper.js';
 import {
   alertKindsOf,
+  type AlertRights,
   alertListOf,
   alertWindowOf,
   assertThreshold,
+  HELD_ORDER_ALERTS,
+  REFUND_ALERT_PURPOSES,
   thresholdOf,
   workerStalled,
   type AlertWindow,
 } from './helpers/alertKinds.helper.js';
+
+import type { OrderHoldReason } from '@helpers/orderHolds.js';
 
 import type {
   AdminAlertDismissalDto,
@@ -143,11 +154,48 @@ const returnCases = (filters: Parameters<typeof returnConditions>[0]): Cases => 
   where: andOf(returnConditions(filters, 't', Date.now())),
 });
 
+// the cases of a kind about the refunds of the money journal: the refunds of the filters of their list
+// (a case is a refund: t.id is its first line). Every kind reads all the refunds, so they are counted
+// in one pass over them
+const REFUNDS = Prisma.sql`from ${MONEY_REFUNDS} as t`;
+const refundCases = (filters: MoneyRefundFilters): Cases => ({
+  from: REFUNDS,
+  where: moneyRefundConditions(filters),
+});
+
+// the refunds of a kind asked before the time and not told sent, and its failures that wait for the
+// shop
+const refundsInTransit = (kind: keyof typeof REFUND_ALERT_PURPOSES) => (window: AlertWindow) =>
+  refundCases({
+    purpose: REFUND_ALERT_PURPOSES[kind],
+    state: 'in_transit',
+    to: window.before ?? new Date(0),
+  });
+const refundsFailed = (kind: keyof typeof REFUND_ALERT_PURPOSES) => () =>
+  refundCases({ purpose: REFUND_ALERT_PURPOSES[kind], state: 'failed' });
+
+// the cases of a kind about the disputes: the disputes of the filters of their list (a case is a
+// dispute: t.id is its id)
+const disputeCases = (filters: Parameters<typeof disputeConditions>[0]): Cases => ({
+  from: Prisma.sql`from cartlify.payment_disputes as t`,
+  where: disputeConditions(filters, 't'),
+});
+
+// the paid orders something of the reason holds from their sending, the filters holds and statuses
+// of the list of orders (an element of the list holds with the reason)
+const holdOf = (reason: OrderHoldReason) =>
+  Prisma.sql`t.holds @> ${JSON.stringify([{ reason }])}::jsonb`;
+const heldOrders = (kind: keyof typeof HELD_ORDER_ALERTS) => (): Cases => ({
+  from: ORDERS,
+  where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus" and ${holdOf(HELD_ORDER_ALERTS[kind])}`,
+});
+
 const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
-  // paid, to be shipped
+  // paid, to be shipped: nothing holds it (a dispute, a refund made by hand, a check of the payment
+  // waits for the bank or for root; the filter holds=none of the list of orders)
   paid_orders_waiting: () => ({
     from: ORDERS,
-    where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus"`,
+    where: Prisma.sql`t.status = 'paid'::cartlify."OrderStatus" and t.holds = '[]'::jsonb`,
   }),
   // sent by hand long ago and not delivered yet
   shipped_orders_waiting: (window) => ({
@@ -163,12 +211,19 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
       and t."updatedAt" < ${utcTime(window.before ?? new Date(0))}
       and ${deliveryMethodIs('pickup')}`,
   }),
-  // orders with a send the shop owes something for, sent long ago, whose cost is not written
+  // orders with a send the shop owes something for, sent long ago, whose cost is not written: no
+  // line of the money journal of what the shop pays the carrier names the send (the filters
+  // shippingCostMissing and shippedTo of the list of orders)
   shipped_without_cost: (window) => ({
     from: ORDERS,
     where: Prisma.sql`exists (
       select 1 from cartlify.order_shipments s
-      where s."orderId" = t.id and s.expense and s.cost is null
+      where s."orderId" = t.id and s."returnId" is null and s.expense
+        and not exists (
+          select 1 from cartlify.money_log l
+          where l."orderShipmentId" = s.id and l.purpose = 'shipping'::cartlify."MoneyPurpose"
+            and l.event <> 'money.received'
+        )
         and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
     )`,
   }),
@@ -179,22 +234,38 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     where: Prisma.sql`t.status = 'shipped'::cartlify."OrderStatus"
       and exists (
         select 1 from cartlify.order_shipments s
-        where s."orderId" = t.id and s."rolledBackAt" is null and s."trackingNumber" is null
+        where s."orderId" = t.id and s."returnId" is null and s."rolledBackAt" is null
+          and s."trackingNumber" is null
           and s."shippedAt" < ${utcTime(window.before ?? new Date(0))}
       )`,
   }),
-  // refunds that failed: the open statements with a transfer that failed and the refunds of late
-  // payments that failed and root has not marked sent another way, the rows of the list of the
-  // refunds that wait (a case is a statement or a refund: t.id is the id of either)
-  failed_refunds: () => ({
-    from: Prisma.sql`from (${waitingRefunds('failed', Date.now())}) as t`,
-    where: Prisma.sql`true`,
-  }),
-  // the refunds of late payments made before the time whose money was not told sent or failed
-  refunded_payments_not_sent: (window) => ({
-    from: Prisma.sql`from (${waitingRefunds('unsent', Date.now())}) as t`,
-    where: Prisma.sql`t."at" < ${utcTime(window.before ?? new Date(0))}`,
-  }),
+  // the refunds of the late payments the shop gave back, that came to their state since the time:
+  // the buyer may ask
+  late_refunds: (window) =>
+    refundCases({ purpose: 'late_payment', from: window.since ?? new Date(0) }),
+  // each kind of refund apart: asked before the time and not told sent or failed, and failed while
+  // the shop has to act on it (a failure the bank settles waits for the dispute, moneyRefunds.helper.ts)
+  late_refunds_in_transit: refundsInTransit('late_refunds_in_transit'),
+  late_refunds_failed: refundsFailed('late_refunds_failed'),
+  return_refunds_in_transit: refundsInTransit('return_refunds_in_transit'),
+  return_refunds_failed: refundsFailed('return_refunds_failed'),
+  hand_refunds_in_transit: refundsInTransit('hand_refunds_in_transit'),
+  hand_refunds_failed: refundsFailed('hand_refunds_failed'),
+  compensation_refunds_in_transit: refundsInTransit('compensation_refunds_in_transit'),
+  compensation_refunds_failed: refundsFailed('compensation_refunds_failed'),
+  dispute_refunds_in_transit: refundsInTransit('dispute_refunds_in_transit'),
+  dispute_refunds_failed: refundsFailed('dispute_refunds_failed'),
+  // the disputes and inquiries of the bank open with no evidence submitted, and the ones lost since
+  // the time
+  disputes_to_answer: () => disputeCases({ toAnswer: true }),
+  disputes_lost: (window) =>
+    disputeCases({ statuses: ['lost'], closedFrom: window.since ?? new Date(0) }),
+  // root: what a bank took for a dispute lost waits for the decision of what it was for
+  bank_money_to_decide: () => disputeCases({ statuses: ['lost'], moneyUndecided: true }),
+  // root: the statements whose money does not fit in what is left of the payment, and the ones of an
+  // order whose money already with the buyer gave more than its statements took
+  returns_money_short: () => returnCases({ state: 'open', moneyShort: true }),
+  returns_money_overpaid: () => returnCases({ state: 'closed', moneyOverpaid: true }),
   // statements of return: the same conditions as the filters of the list of the statements
   returns_manual_check: () =>
     returnCases({ state: 'open', source: 'form_manual', accepted: false }),
@@ -206,7 +277,8 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     }),
   returns_goods_not_sent: (window) =>
     returnCases({ state: 'open', goods: 'waiting_no_proof', olderThanDays: window.days ?? 0 }),
-  returns_money_late: (window) => returnCases({ state: 'open', moneyDueForDays: window.days ?? 0 }),
+  returns_money_late: (window) =>
+    returnCases({ state: 'open', moneyDueForDays: window.days ?? 0, moneyHeld: false }),
   returns_goods_late: (window) =>
     returnCases({ state: 'open', paidAheadForDays: window.days ?? 0 }),
   // variants of the catalog with no free units
@@ -254,15 +326,6 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
     where: Prisma.sql`t.type = 'admin'::cartlify."ChatType" and t.status = 'open'::cartlify."ChatStatus"
       and t."adminUnreadSince" is not null`,
   }),
-  // the lines of the late payments the shop gave back: the buyer may ask
-  refunded_payments: (window) => ({
-    from: LOG,
-    where: Prisma.sql`t.action = 'OTHER'::cartlify."AdminAuditAction"
-      and t."entityType" = 'order'::cartlify."AdminAuditEntityType"
-      and t.event = 'order.refund_late'
-      and t.meta @> '[{"field": "refund"}]'::jsonb
-      and t."createdAt" >= ${utcTime(window.since ?? new Date(0))}`,
-  }),
   // the newsletters: campaigns whose mails did not arrive, were not taken or were complained of
   newsletter_undelivered: sharedCases('undelivered'),
   newsletter_rejected: sharedCases('rejected'),
@@ -286,6 +349,20 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
       and t."cancelReason" = 'limit'::cartlify."NewsletterCancelReason"
       and t."cancelledAt" >= ${utcTime(window.since ?? new Date(0))}`,
   }),
+  // root: the refunds made by hand that wait for root to say what they were for
+  hand_refunds_to_explain: () =>
+    refundCases({ purpose: 'hand', state: 'unassigned', need: 'explain' }),
+  // root: the paid orders held for what root decides on (part of the order came back by hand, an
+  // early warning of fraud), or by an open review of the provider
+  hand_refunds_to_decide: heldOrders('hand_refunds_to_decide'),
+  fraud_warnings: heldOrders('fraud_warnings'),
+  payment_reviews: heldOrders('payment_reviews'),
+  // root: the orders sent that the provider warned of since the time (the filter fraudWarnedFrom of
+  // the list of orders)
+  fraud_warnings_shipped: (window) => ({
+    from: ORDERS,
+    where: Prisma.sql`t."fraudWarnedAt" >= ${utcTime(window.since ?? new Date(0))}`,
+  }),
   // root: the lines the admins wrote
   admin_actions: (window) => ({
     from: LOG,
@@ -294,23 +371,65 @@ const CASES: Record<CaseKind, (window: AlertWindow) => Cases> = {
   }),
 };
 
-// the cases of a kind that wait, without the ones put aside (aside: their ids), how many of those
-// still wait, and which
-async function countedCases(db: Db, kind: CaseKind, window: AlertWindow, aside: string[]) {
-  const { from, where } = CASES[kind](window);
-  const [row] = await db.$queryRaw<{ count: bigint; dismissed: bigint; found: string[] | null }[]>`
-    select count(*) filter (where not (t.id::text = any(${aside}::text[]))) as count,
-      count(*) filter (where t.id::text = any(${aside}::text[])) as dismissed,
-      array_agg(t.id::text) filter (where t.id::text = any(${aside}::text[])) as found
-    ${from}
-    where ${where}
-  `;
+type Counted = { count: number; dismissed: number; found: string[] };
+type CaseScope = { kind: CaseKind; window: AlertWindow; aside: string[] };
 
-  return {
-    count: Number(row?.count ?? 0),
-    dismissed: Number(row?.dismissed ?? 0),
-    found: row?.found ?? [],
-  };
+// the rows several kinds count in one pass: the refunds of the money journal, each made from its
+// lines, counted with conditions on their columns only (measured, 12.11.2026: one pass is the
+// fastest for them; the variants, the batches and the campaigns are faster a query a kind, the
+// database narrows their rows by the conditions of the query)
+const SHARED_ROWS: ReadonlySet<Prisma.Sql> = new Set([REFUNDS]);
+
+// the cases of the kinds that wait, without the ones put aside (aside: their ids), how many of those
+// still wait, and which; one query after the other. The kinds of the shared rows are counted in one
+// pass over them, a column of each kind: the rows are made once. Any other kind keeps a query of its
+// own: the database narrows its rows, and joins the other tables its conditions ask (exists), only
+// for a condition of the query itself, not for a filter of a count
+async function countedCasesOf(db: Db, scopes: CaseScope[]): Promise<Map<CaseKind, Counted>> {
+  const groups = new Map<
+    string,
+    { from: Prisma.Sql; kinds: (CaseScope & { where: Prisma.Sql })[] }
+  >();
+  for (const scope of scopes) {
+    const { from, where } = CASES[scope.kind](scope.window);
+    const key = SHARED_ROWS.has(from) ? from.sql : scope.kind;
+    const group = groups.get(key) ?? { from, kinds: [] };
+    group.kinds.push({ ...scope, where });
+    groups.set(key, group);
+  }
+
+  const counted = new Map<CaseKind, Counted>();
+  for (const { from, kinds } of groups.values()) {
+    const one = kinds.length === 1 ? kinds[0]!.where : null;
+    const columns = kinds.map(({ where, aside }, at) => {
+      const isAside = Prisma.sql`t.id::text = any(${aside}::text[])`;
+      const of = one ? Prisma.sql`true` : Prisma.sql`(${where})`;
+      return Prisma.sql`count(*) filter (where ${of} and not ${isAside}) as ${Prisma.raw(`"count${at}"`)},
+        count(*) filter (where ${of} and ${isAside}) as ${Prisma.raw(`"dismissed${at}"`)},
+        array_agg(t.id::text) filter (where ${of} and ${isAside}) as ${Prisma.raw(`"found${at}"`)}`;
+    });
+    const [row] = await db.$queryRaw<Record<string, bigint | string[] | null>[]>(
+      Prisma.sql`select ${Prisma.join(columns, ', ')} ${from} where ${one ?? Prisma.sql`true`}`,
+    );
+    kinds.forEach(({ kind }, at) => {
+      counted.set(kind, {
+        count: Number(row?.[`count${at}`] ?? 0),
+        dismissed: Number(row?.[`dismissed${at}`] ?? 0),
+        found: (row?.[`found${at}`] as string[] | null) ?? [],
+      });
+    });
+  }
+  return counted;
+}
+
+// the same for one kind
+async function countedCases(
+  db: Db,
+  kind: CaseKind,
+  window: AlertWindow,
+  aside: string[],
+): Promise<Counted> {
+  return (await countedCasesOf(db, [{ kind, window, aside }])).get(kind)!;
 }
 
 type Setting = { subscribed: boolean; threshold: number | null };
@@ -346,28 +465,37 @@ const marksOver = (dismissals: Dismissal[], kept: Set<string>) =>
     .map((dismissal) => dismissalFieldOf(dismissal.kind, dismissal.id))
     .filter((field) => !kept.has(field));
 
-// may the actor run the newsletters, and so see their kinds? Root always; an admin while root allows
-// it (asked now, in the transaction that has the actor's context); nobody else. The routes of the
-// alerts are for admins and root, so the other roles are no more than a guard
-async function managesNewsletters(db: Db, actor: Actor): Promise<boolean> {
-  if (actor.actorRole === 'ROOT') return true;
-  if (actor.actorRole !== 'ADMIN') return false;
+// may the actor run the newsletters, and handle the money, and so see the kinds of each? Root always;
+// an admin while root allows it (asked now, in the transaction that has the actor's context, one
+// question after the other); nobody else. The routes of the alerts are for admins and root, so the
+// other roles are no more than a guard
+async function rightsOf(db: Db, actor: Actor): Promise<AlertRights> {
+  if (actor.actorRole === 'ROOT') return { newsletters: true, money: true };
+  if (actor.actorRole !== 'ADMIN') return { newsletters: false, money: false };
 
-  return askNewsletterManager(db);
+  const newsletters = await askNewsletterManager(db);
+  const money = await askMoneyManager(db);
+
+  return { newsletters, money };
 }
 
 // the same for a call that has no transaction of its own
-async function managesNewslettersNow(actor: Actor): Promise<boolean> {
-  if (actor.actorRole === 'ROOT') return true;
-  if (actor.actorRole !== 'ADMIN') return false;
+async function rightsNow(actor: Actor): Promise<AlertRights> {
+  if (actor.actorRole === 'ROOT') return { newsletters: true, money: true };
+  if (actor.actorRole !== 'ADMIN') return { newsletters: false, money: false };
 
-  return isNewsletterManager({ userId: Number(actor.actorId), role: actor.actorRole });
+  const who = { userId: Number(actor.actorId), role: actor.actorRole };
+  const newsletters = await isNewsletterManager(who);
+  const money = await isMoneyManager(who);
+
+  return { newsletters, money };
 }
 
-// the alerts of the actor: every kind of their zone, or only the ones they follow (subscribed)
+// the alerts of the actor: every kind of their zone, or only the ones they follow (subscribed), or
+// only the kinds named (a kind not counted keeps its marks aside, as one not followed)
 export async function getAdminAlerts(
   actor: Actor,
-  opts: { subscribed?: boolean | undefined } = {},
+  opts: { subscribed?: boolean | undefined; kinds?: string[] | undefined } = {},
 ): Promise<GetAdminAlertsResponseDto> {
   const now = Date.now();
   const userId = Number(actor.actorId);
@@ -379,20 +507,29 @@ export async function getAdminAlerts(
     async (db) => {
       await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
       const settings = await settingsOf(db, userId);
-      const kinds = alertKindsOf(actor.actorRole, await managesNewsletters(db, actor));
+      const kinds = alertKindsOf(actor.actorRole, await rightsOf(db, actor));
+
+      // the kinds told, each with its setting, threshold and window, and the cases of all of them
+      const told = kinds
+        .map((kind) => ({ kind, setting: settings.get(kind) ?? DEFAULT_SETTING }))
+        .filter(({ setting }) => !opts.subscribed || setting.subscribed)
+        .filter(({ kind }) => !opts.kinds || opts.kinds.includes(kind))
+        .map(({ kind, setting }) => ({ kind, setting, ...scopeOf(kind, setting, now) }));
+      const counted = await countedCasesOf(
+        db,
+        told.flatMap(({ kind, window }) =>
+          isCaseKind(kind) ? [{ kind, window, aside: asideOf(dismissals, kind) }] : [],
+        ),
+      );
 
       const alerts: AdminAlertDto[] = [];
       // the marks still aside, and the kinds counted: a mark of a kind not counted stays
       const kept = new Set<string>();
       const countedKinds = new Set<string>();
-      for (const kind of kinds) {
-        const setting = settings.get(kind) ?? DEFAULT_SETTING;
-        if (opts.subscribed && !setting.subscribed) continue;
-        const { threshold, window } = scopeOf(kind, setting, now);
-
+      for (const { kind, setting, threshold, window } of told) {
         let tally: { count: number; dismissed: number };
         if (isCaseKind(kind)) {
-          const cases = await countedCases(db, kind, window, asideOf(dismissals, kind));
+          const cases = counted.get(kind)!;
           for (const id of cases.found) kept.add(dismissalFieldOf(kind, id));
           countedKinds.add(kind);
           tally = { count: cases.count, dismissed: cases.dismissed };
@@ -440,7 +577,7 @@ export async function getAdminAlerts(
 }
 
 const assertKind = async (kind: string, actor: Actor): Promise<AdminAlertKind> => {
-  const kinds: string[] = alertKindsOf(actor.actorRole, await managesNewslettersNow(actor));
+  const kinds: string[] = alertKindsOf(actor.actorRole, await rightsNow(actor));
   if (!kinds.includes(kind)) throw new NotFoundError('ALERT_KIND_NOT_FOUND', { kind });
   return kind as AdminAlertKind;
 };
@@ -465,7 +602,7 @@ export async function getAlertSubscriptions(
     await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
     return {
       settings: await settingsOf(db, Number(actor.actorId)),
-      kinds: alertKindsOf(actor.actorRole, await managesNewsletters(db, actor)),
+      kinds: alertKindsOf(actor.actorRole, await rightsOf(db, actor)),
     };
   });
 
@@ -544,14 +681,17 @@ export async function getAlertDismissals(
     async (db) => {
       await setUserContext(db, { userId: actor.actorId, role: actor.actorRole });
       const settings = await settingsOf(db, userId);
-      const kinds = alertKindsOf(actor.actorRole, await managesNewsletters(db, actor));
+      const kinds = alertKindsOf(actor.actorRole, await rightsOf(db, actor));
+
+      const scopes = kinds.flatMap((kind) => {
+        const aside = asideOf(dismissals, kind);
+        if (!isCaseKind(kind) || !aside.length) return [];
+        const { window } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
+        return [{ kind, window, aside }];
+      });
 
       const kept = new Set<string>();
-      for (const kind of kinds) {
-        const aside = asideOf(dismissals, kind);
-        if (!isCaseKind(kind) || !aside.length) continue;
-        const { window } = scopeOf(kind, settings.get(kind) ?? DEFAULT_SETTING, now);
-        const { found } = await countedCases(db, kind, window, aside);
+      for (const [kind, { found }] of await countedCasesOf(db, scopes)) {
         for (const id of found) kept.add(dismissalFieldOf(kind, id));
       }
       return kept;

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import authGuard from '@middlewares/auth.js';
+import requireMoneyManager from '@middlewares/requireMoneyManager.js';
 import requireRole from '@middlewares/requireRole.js';
 import validateId from '@middlewares/validateId.js';
 import { returnsSchema } from './returns.schemas.js';
@@ -52,31 +53,80 @@ export default async function returnsRouter(app: FastifyInstance) {
   app.post(
     '/:returnId/refund/outside',
     {
-      preHandler: [authGuard, requireRole(['ROOT']), validateId('returnId')],
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('returnId'),
+      ],
       schema: returnsSchema.postRefundOutsideSchema,
     },
     returnsController.postRefundOutside,
   );
+  // money the buyer gave the shop back outside the app for rows of the statement
   app.post(
-    '/:returnId/reimbursement',
+    '/:returnId/money-received',
     {
-      preHandler: [authGuard, requireRole(['ROOT']), validateId('returnId')],
-      schema: returnsSchema.postReimbursementSchema,
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('returnId'),
+      ],
+      schema: returnsSchema.postMoneyReceivedSchema,
     },
-    returnsController.postReimbursement,
+    returnsController.postMoneyReceived,
+  );
+  // money already with the buyer for goods no statement of the order owes any more: the buyer gave
+  // it back, the shop gives it up, or the shop keeps the goods it did not accept
+  app.post(
+    '/:returnId/overpaid/received',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('returnId'),
+      ],
+      schema: returnsSchema.postOverpaidReceivedSchema,
+    },
+    returnsController.postOverpaidReceived,
   );
   app.post(
-    '/:returnId/dispute',
+    '/:returnId/overpaid/lost',
     {
-      preHandler: [authGuard, requireRole(['ROOT']), validateId('returnId')],
-      schema: returnsSchema.postDisputeSchema,
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('returnId'),
+      ],
+      schema: returnsSchema.postOverpaidLostSchema,
     },
-    returnsController.postDispute,
+    returnsController.postOverpaidLost,
+  );
+  app.post(
+    '/:returnId/keep',
+    {
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('returnId'),
+      ],
+      schema: returnsSchema.postKeepSchema,
+    },
+    returnsController.postKeep,
   );
   app.post(
     '/:returnId/close',
     {
-      preHandler: [authGuard, requireRole(['ROOT']), validateId('returnId')],
+      preHandler: [
+        authGuard,
+        requireRole(['ADMIN', 'ROOT']),
+        requireMoneyManager,
+        validateId('returnId'),
+      ],
       schema: returnsSchema.postCloseSchema,
     },
     returnsController.postClose,
@@ -117,5 +167,13 @@ export default async function returnsRouter(app: FastifyInstance) {
       schema: returnsSchema.postAcceptSchema,
     },
     returnsController.postAccept,
+  );
+  app.post(
+    '/:returnId/split',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT']), validateId('returnId')],
+      schema: returnsSchema.postSplitSchema,
+    },
+    returnsController.postSplit,
   );
 }

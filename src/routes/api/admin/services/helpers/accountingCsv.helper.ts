@@ -4,6 +4,7 @@ import type {
   AdminDeliveryMoneyDto,
   AdminMoneyBreakdownDto,
   AdminMoneySummaryDto,
+  AdminPaymentsMoneyDto,
 } from 'types/dto/admin.dto.js';
 
 // the money columns of a csv of the reports, the same names in every file
@@ -123,8 +124,40 @@ export function deliveryCsvColumns<T>(
   ];
 }
 
-// the columns of the income, the expenses and the margins; the delivery and the sends are empty
-// for a report of some products
+// the columns of the money the payments moved past the statements (the disputes, the refunds by
+// hand, the late payments): empty for a report of some products
+export function paymentsCsvColumns<T>(
+  paymentsOf: (row: T) => AdminPaymentsMoneyDto | null,
+): CsvColumn<T>[] {
+  const disputes = (row: T) => paymentsOf(row)?.disputes;
+  const hand = (row: T) => paymentsOf(row)?.handRefunds;
+  const late = (row: T) => paymentsOf(row)?.latePayments;
+  const given = (row: T) => paymentsOf(row)?.compensations;
+  const back = (row: T) => paymentsOf(row)?.received;
+
+  return [
+    { header: 'dispute_withdrawn', kind: 'money', value: (row) => disputes(row)?.withdrawn },
+    { header: 'dispute_reinstated', kind: 'money', value: (row) => disputes(row)?.reinstated },
+    { header: 'dispute_used', kind: 'money', value: (row) => disputes(row)?.used },
+    { header: 'dispute_undecided', kind: 'money', value: (row) => disputes(row)?.undecided },
+    { header: 'dispute_result', kind: 'money', value: (row) => disputes(row)?.result },
+    { header: 'hand_refunded', kind: 'money', value: (row) => hand(row)?.refunded },
+    { header: 'hand_compensations', kind: 'money', value: (row) => hand(row)?.compensations },
+    { header: 'hand_coverage', kind: 'money', value: (row) => hand(row)?.coverage },
+    { header: 'hand_undecided', kind: 'money', value: (row) => hand(row)?.undecided },
+    { header: 'hand_used', kind: 'money', value: (row) => hand(row)?.used },
+    { header: 'hand_result', kind: 'money', value: (row) => hand(row)?.result },
+    { header: 'late_received', kind: 'money', value: (row) => late(row)?.received },
+    { header: 'late_refunded', kind: 'money', value: (row) => late(row)?.refunded },
+    { header: 'late_result', kind: 'money', value: (row) => late(row)?.result },
+    { header: 'compensations_given', kind: 'money', value: (row) => given(row)?.given },
+    { header: 'received_buyers', kind: 'money', value: (row) => back(row)?.buyers },
+    { header: 'received_carriers', kind: 'money', value: (row) => back(row)?.carriers },
+  ];
+}
+
+// the columns of the income, the expenses and the margins; the delivery, the sends and the other
+// refunds are empty for a report of some products
 export function summaryCsvColumns<T>(summaryOf: (row: T) => AdminMoneySummaryDto): CsvColumn<T>[] {
   return [
     { header: 'income_items', kind: 'money', value: (row) => summaryOf(row).income.items },
@@ -141,6 +174,11 @@ export function summaryCsvColumns<T>(summaryOf: (row: T) => AdminMoneySummaryDto
       value: (row) => summaryOf(row).expenses.writeOffs,
     },
     { header: 'expense_shipping', kind: 'money', value: (row) => summaryOf(row).expenses.shipping },
+    {
+      header: 'expense_other_refunds',
+      kind: 'money',
+      value: (row) => summaryOf(row).expenses.otherRefunds,
+    },
     { header: 'expense_total', kind: 'money', value: (row) => summaryOf(row).expenses.total },
     { header: 'margin_items', kind: 'money', value: (row) => summaryOf(row).margin.items },
     { header: 'margin_delivery', kind: 'money', value: (row) => summaryOf(row).margin.delivery },

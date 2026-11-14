@@ -6,8 +6,9 @@ import { shopSettings } from '@config/shopSettings.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
+import { giveMoneyRight } from '../../../helpers/moneyManager.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
-import { asAdmin } from '../../../helpers/db.js';
+import { asAdmin, inCommittedTx } from '../../../helpers/db.js';
 import {
   closeSessions,
   createProduct,
@@ -26,28 +27,38 @@ import {
   PENDING_REFUND_CARD,
   queueRefundOutcome,
   refundBecomes,
-  closeDispute,
   stripeWait,
   realStripe,
   refundsOf,
   stripeEvent,
   withStripeOutOfReach,
 } from '../../../helpers/stripe.js';
-import { failReturnRefund } from '../../../helpers/returns.js';
+import {
+  handRefundOf,
+  newDisputeId,
+  reinstatement,
+  synced,
+  withdrawal,
+  type Snapshot,
+} from '../../../helpers/dbMoney.js';
 import { whileLocked } from '../../../helpers/variants.js';
 
 // the money of the statements through the routes: POST /api/returns/:returnId/refund gives the money
-// of the rows back in three steps (the rows are put on their way, Stripe is asked, the rows are
-// settled by the answer), a transfer Stripe has not decided on or did not answer stays pending and
-// the end comes by its event or by the worker, a refusal leaves the card the reason; a root records
-// money sent outside the app and closes rows without a refund. The buyer is mailed, every step goes
-// to the admin log. Stripe is the mock (the sandbox gives a card refund that succeeds); the tests of
-// a refund that is pending or fails run on the mock only
+// of the rows back in three steps (the transfer is written into the money journal in parts, in
+// transit, under a key; Stripe is asked; its answer settles the lines and the rows), a transfer
+// Stripe has not decided on or did not answer stays in transit and the end comes by its event or by
+// the worker, a refusal leaves the card the reason; a root records money sent outside the app and
+// closes rows without a refund. The card shows the movements of the money (`money`) and what went
+// back in all (`refundedTotal`). The buyer is mailed, every step of a person goes to the admin log
+// with the lines of the money journal. Stripe is the mock (the sandbox gives a card refund that
+// succeeds); the tests of a refund that is pending or fails run on the mock only
 
 let app: FastifyInstance;
 let csrf: Csrf;
 let admin: TestUser;
 let root: TestUser;
+// an admin root allowed to handle the money the way root does
+let manager: TestUser;
 let buyer: TestUser;
 const userIds: number[] = [];
 const products: TestProduct[] = [];
@@ -57,8 +68,10 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   admin = await createUser({ role: 'ADMIN' });
   root = await createUser({ role: 'ROOT' });
+  manager = await createUser({ role: 'ADMIN' });
   buyer = await createUser({ name: 'Anna Koval' });
-  userIds.push(admin.id, root.id, buyer.id);
+  userIds.push(admin.id, root.id, buyer.id, manager.id);
+  await giveMoneyRight(root.id, manager.id);
 });
 
 afterAll(async () => {
@@ -98,12 +111,32 @@ async function paidByCard(units: number, card?: string, owner: TestUser = buyer)
   return { orderId, paymentId, itemId: items[0]!.id };
 }
 
+type Move = {
+  id: number;
+  event: string;
+  purpose: string;
+  part: string;
+  amount: number;
+  state: string | null;
+  refundId: string | null;
+  failure: string | null;
+  method: string | null;
+  note: string | null;
+  happenedAt: string | null;
+  coversId: number | null;
+  by: { id: number } | null;
+};
+
 type Card = {
   id: number;
   closeCode: string | null;
   closeNote: string | null;
   closedAt: string | null;
+  refundedTotal: number;
+  disputeOpen: boolean;
+  handRefundPending: boolean;
   order: { returnStatus: string };
+  money: Move[];
   items: Array<{
     id: number;
     quantity: number;
@@ -111,13 +144,15 @@ type Card = {
     money: string;
     amount: number;
     amountNote: string | null;
-    refundId: string | null;
-    refundedAt: string | null;
+    moneyLogId: number | null;
     refundFailure: { code: string; text: string | null } | null;
-    outside: { method: string; note: string; by: { id: number } | null } | null;
     refusedCode: string | null;
   }>;
 };
+
+// the line of the money journal the money of a row stands on, as the card shows it
+const lineOfRow = (card: Card, index = 0) =>
+  card.money.find((move) => move.id === card.items[index]!.moneyLogId);
 
 // a statement of an admin for the units of the item; its card
 async function statementOf(orderId: number, itemId: number, quantity: number): Promise<Card> {
@@ -135,6 +170,7 @@ async function statementOf(orderId: number, itemId: number, quantity: number): P
 async function comeBack(orderId: number, itemId: number, quantity: number): Promise<Card> {
   const made = await statementOf(orderId, itemId, quantity);
   const res = await post(`/api/returns/${made.id}/receive`, {
+    parcel: { buyerPaid: 0 },
     results: [{ itemId: made.items[0]!.id, quantity, goods: 'to_stock' }],
   });
   if (res.statusCode !== 200) throw new Error(`the goods answered ${res.statusCode}`);
@@ -177,20 +213,31 @@ describe('POST /api/returns/:returnId/refund', () => {
     expect(done.items).toEqual([
       expect.objectContaining({
         money: 'refunded',
-        refundId: expect.stringMatching(/^re_/),
-        refundedAt: expect.any(String),
+        moneyLogId: expect.any(Number),
         refundFailure: null,
-        outside: null,
       }),
     ]);
+    // the transfer is one line of the goods, sent, with the id Stripe gave
+    const goods = lineOfRow(done)!;
+    expect(done.money).toEqual([goods]);
+    expect(goods).toMatchObject({
+      event: 'money.refund',
+      purpose: 'return',
+      part: 'goods',
+      amount: -20,
+      state: 'sent',
+      refundId: expect.stringMatching(/^re_/),
+      by: { id: admin.id },
+    });
     // 2 of the 3 units, 20.00: the statement is over, part of the order went back
+    expect(done.refundedTotal).toBe(20);
     expect(done.closedAt).not.toBeNull();
     expect(done.order.returnStatus).toBe('partial');
 
     const refunds = await refundsOf(paymentId);
     expect(refunds).toEqual([
       expect.objectContaining({
-        id: done.items[0]!.refundId,
+        id: goods.refundId,
         amount: 2000,
         status: 'succeeded',
         metadata: expect.objectContaining({
@@ -201,23 +248,22 @@ describe('POST /api/returns/:returnId/refund', () => {
       }),
     ]);
 
+    // the admin started it: the line names the lines of the money journal it wrote
     expect(await logOf(orderId, 'return.refund')).toEqual([
-      expect.objectContaining({
+      {
         actorId: admin.id,
+        actorRole: 'ADMIN',
         action: 'OTHER',
-        meta: expect.arrayContaining([
+        meta: [
           { field: 'returnId', old: null, new: card.id },
+          { field: 'moneyLogIds', old: null, new: [goods.id] },
           {
             field: 'refund',
             old: null,
-            new: expect.objectContaining({
-              initiator: 'admin',
-              amount: '20.00',
-              refundId: done.items[0]!.refundId,
-            }),
+            new: { amount: '20.00', itemIds: [done.items[0]!.id] },
           },
-        ]),
-      }),
+        ],
+      },
     ]);
 
     const own = mailTo(mails, `Return of order #${orderId} is closed`);
@@ -255,14 +301,17 @@ describe('POST /api/returns/:returnId/refund', () => {
 
   it('mails that the money is back, not that the statement is closed, while a row still waits', async () => {
     const { orderId, itemId } = await paidByCard(2);
-    // one unit back, one still expected: the statement stays open
+    // one unit back, one still expected: the statement stays open; the admin sends the money of
+    // the unit that came
     const made = await statementOf(orderId, itemId, 2);
-    await post(`/api/returns/${made.id}/receive`, {
+    const taken = await post(`/api/returns/${made.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: made.items[0]!.id, quantity: 1, goods: 'to_stock' }],
     });
+    const came = taken.json().items.find((row: { goods: string }) => row.goods === 'to_stock');
     const mails = watchMail();
 
-    const res = await refund(made.id);
+    const res = await refund(made.id, { itemIds: [came.id] });
 
     expect(res.statusCode).toBe(200);
     expect(res.json().closedAt).toBeNull();
@@ -277,7 +326,7 @@ describe('POST /api/returns/:returnId/refund', () => {
     const made = await statementOf(orderId, itemId, 1);
 
     const before = await refund(made.id);
-    await post(`/api/returns/${made.id}/proof/confirm`);
+    await post(`/api/returns/${made.id}/proof/confirm`, { buyerPaid: 0 });
     const after = await refund(made.id);
 
     expect(before.statusCode).toBe(400);
@@ -294,10 +343,11 @@ describe('POST /api/returns/:returnId/refund', () => {
   it('takes goods paid ahead that never arrive, and the money stays refunded', async () => {
     const { orderId, itemId } = await paidByCard(1);
     const made = await statementOf(orderId, itemId, 1);
-    await post(`/api/returns/${made.id}/proof/confirm`);
+    await post(`/api/returns/${made.id}/proof/confirm`, { buyerPaid: 0 });
     const paid = await refund(made.id);
 
     const res = await post(`/api/returns/${made.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: paid.json().items[0].id, quantity: 1, goods: 'not_arrived' }],
     });
 
@@ -312,6 +362,7 @@ describe('POST /api/returns/:returnId/refund', () => {
     const { orderId, itemId, paymentId } = await paidByCard(3);
     const made = await statementOf(orderId, itemId, 3);
     await post(`/api/returns/${made.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [
         { itemId: made.items[0]!.id, quantity: 1, goods: 'to_stock' },
         { itemId: made.items[0]!.id, quantity: 2, goods: 'written_off' },
@@ -336,6 +387,22 @@ describe('POST /api/returns/:returnId/refund', () => {
         .items.map((row: { money: string }) => row.money)
         .sort(),
     ).toEqual(['not_refunded', 'refunded']);
+  });
+
+  it('lets an admin root allowed to handle the money lower what a row refunds too', async () => {
+    const { orderId, itemId, paymentId } = await paidByCard(2);
+    const card = await comeBack(orderId, itemId, 2);
+    const reduction = [{ itemId: card.items[0]!.id, amount: 15, note: 'Opened and used.' }];
+
+    const res = await refund(card.id, { reductions: reduction }, manager);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0]).toMatchObject({ amount: 15, money: 'refunded' });
+    expect((await refundsOf(paymentId)).map((one) => one.amount)).toEqual([1500]);
+    expect((await logOf(orderId, 'return.amount_lower'))[0]).toMatchObject({
+      actorId: manager.id,
+      actorRole: 'ADMIN',
+    });
   });
 
   it('lets only a root lower what a row refunds, and Stripe gets the lowered sum', async () => {
@@ -431,6 +498,7 @@ describe('POST /api/returns/:returnId/refund', () => {
 
     const other = await statementOf(orderId, itemId, 1);
     await post(`/api/returns/${other.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [
         {
           itemId: other.items[0]!.id,
@@ -525,19 +593,23 @@ describe('a refund that does not go through at once', () => {
     const res = await refund(card.id);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().items[0]).toMatchObject({
-      money: 'pending',
+    expect(res.json().items[0]).toMatchObject({ money: 'pending' });
+    expect(lineOfRow(res.json())).toMatchObject({
+      state: 'in_transit',
       refundId: expect.stringMatching(/^re_/),
     });
+    // the money left the shop when Stripe took the refund: on its way, it counts
+    expect(res.json().refundedTotal).toBe(10);
     expect(mailTo(mails, 'is closed')).toHaveLength(0);
     expect(mailTo(mails, 'Money sent')).toHaveLength(0);
   });
 
   // the bank of a card that is gone sends the money back after the refund went (the sandbox: the
   // card of a refund that fails, about 130 s later): the rows wait for their money again, the buyer
-  // is told, the admin finds the statement among the failed transfers
+  // is told, the admin finds the statement among the failed transfers; the journal keeps the
+  // transfer sent and the failure as new lines with the sum back
   it(
-    'takes the money back to not refunded when the bank of a card that is gone sends it back',
+    'takes the money back to failed when the bank of a card that is gone sends it back',
     async () => {
       const { orderId, paymentId, itemId } = await paidByCard(1, REFUND_FAIL_CARD);
       const card = await comeBack(orderId, itemId, 1);
@@ -545,7 +617,7 @@ describe('a refund that does not go through at once', () => {
       const went = await refund(card.id);
       expect(went.json().items[0]).toMatchObject({ money: 'refunded' });
       expect(went.json().closedAt).not.toBeNull();
-      const refundId = went.json().items[0].refundId as string;
+      const refundId = lineOfRow(went.json())!.refundId!;
 
       await refundBecomes(refundId, { status: 'failed', reason: 'expired_or_canceled_card' });
       const event = await stripeEvent('refund.failed', refundId);
@@ -556,26 +628,24 @@ describe('a refund that does not go through at once', () => {
       expect(after.closedAt).toBeNull();
       expect(after.items).toEqual([
         expect.objectContaining({
-          money: 'not_refunded',
-          refundedAt: null,
+          money: 'failed',
           refundFailure: expect.objectContaining({ code: 'card_unavailable' }),
         }),
       ]);
+      expect(
+        (after.money as Move[]).map((move) => [move.event, move.part, move.amount, move.state]),
+      ).toEqual([
+        ['money.refund', 'goods', -10, 'sent'],
+        ['money.refund_failed', 'goods', 10, null],
+      ]);
+      expect(after.refundedTotal).toBe(0);
       const failedList = (await get(`/api/returns?money=failed&q=${after.code}`)).json().items;
       expect(failedList).toHaveLength(1);
       const told = mailTo(mails, 'We could not return the money');
       expect(told).toHaveLength(1);
       expect(told[0]!.text).toContain('sent back to us by the bank of the card');
-      expect(await logOf(orderId, 'return.refund_failed')).toEqual([
-        expect.objectContaining({
-          meta: expect.arrayContaining([
-            expect.objectContaining({
-              field: 'refund',
-              new: expect.objectContaining({ refundId, sentBack: true }),
-            }),
-          ]),
-        }),
-      ]);
+      // the work of the system is in the money journal only
+      expect(await logOf(orderId, 'return.refund_failed')).toEqual([]);
       expect((await refundsOf(paymentId)).map((one) => one.status)).toEqual(['failed']);
     },
     stripeWait,
@@ -589,11 +659,11 @@ describe('a refund that does not go through at once', () => {
       const { orderId, paymentId, itemId } = await paidByCard(1, PENDING_REFUND_CARD);
       const card = await comeBack(orderId, itemId, 1);
       const mails = watchMail();
-      const row = (await refund(card.id)).json().items[0];
+      const row = lineOfRow((await refund(card.id)).json())!;
 
       // Stripe decides: the event it records is the one the webhook gets
-      await refundBecomes(row.refundId, { status: 'succeeded' });
-      const event = await stripeEvent('refund.updated', row.refundId);
+      await refundBecomes(row.refundId!, { status: 'succeeded' });
+      const event = await stripeEvent('refund.updated', row.refundId!);
       const first = await deliver(app, event);
       const second = await deliver(app, event);
 
@@ -623,27 +693,18 @@ describe('a refund that does not go through at once', () => {
 
       expect(failed.statusCode).toBe(200);
       expect(failed.json().items[0]).toMatchObject({
-        money: 'not_refunded',
-        refundId: null,
+        money: 'failed',
         refundFailure: { code: 'card_unavailable', text: 'expired_or_canceled_card' },
+      });
+      expect(lineOfRow(failed.json())).toMatchObject({
+        event: 'money.refund_failed',
+        amount: 20,
+        failure: 'card_unavailable',
+        by: { id: admin.id },
       });
       expect(failed.json().closedAt).toBeNull();
       expect(failed.json().order.returnStatus).toBe('open');
-      expect(await logOf(orderId, 'return.refund_failed')).toEqual([
-        expect.objectContaining({
-          actorId: admin.id,
-          meta: expect.arrayContaining([
-            {
-              field: 'refund',
-              old: null,
-              new: expect.objectContaining({
-                failure: 'card_unavailable',
-                failureText: 'expired_or_canceled_card',
-              }),
-            },
-          ]),
-        }),
-      ]);
+      expect(failed.json().refundedTotal).toBe(0);
       const note = mailTo(mails, `We could not return the money for order #${orderId}`);
       expect(note).toHaveLength(1);
       expect(note[0]!.text).toContain('We will contact you about another way');
@@ -680,7 +741,8 @@ describe('a refund that does not go through at once', () => {
     const res = await withStripeOutOfReach(() => refund(card.id));
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().items[0]).toMatchObject({ money: 'pending', refundId: null });
+    expect(res.json().items[0]).toMatchObject({ money: 'pending' });
+    expect(lineOfRow(res.json())).toMatchObject({ state: 'in_transit', refundId: null });
     expect(await refundsOf(paymentId)).toEqual([]);
   });
 });
@@ -707,17 +769,26 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
 
       expect(res.statusCode).toBe(200);
       const done: Card = res.json();
-      expect(done.items[0]).toMatchObject({
-        money: 'refunded',
+      expect(done.items[0]).toMatchObject({ money: 'refunded', refundFailure: null });
+      const sent = lineOfRow(done)!;
+      expect(sent).toMatchObject({
+        event: 'money.outside',
+        purpose: 'return',
+        part: 'goods',
+        amount: -10,
         refundId: null,
-        refundedAt: day,
-        refundFailure: null,
-        outside: {
-          method: 'bank_transfer',
-          note: 'Sent to the account the buyer wrote by mail.',
-          by: { id: root.id },
-        },
+        method: 'bank_transfer',
+        note: 'Sent to the account the buyer wrote by mail.',
+        happenedAt: day,
+        by: { id: root.id },
       });
+      // the transfer, its failure, the money sent another way: the buyer got 10 in all
+      expect(done.money.map((move) => move.event)).toEqual([
+        'money.refund',
+        'money.refund_failed',
+        'money.outside',
+      ]);
+      expect(done.refundedTotal).toBe(10);
       expect(done.closedAt).not.toBeNull();
       expect(done.order.returnStatus).toBe('full');
       // Stripe took no second refund
@@ -728,6 +799,7 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
           action: 'OTHER',
           // the note is a field of its own, not inside the refund: the dev copy blanks it by name
           meta: expect.arrayContaining([
+            { field: 'moneyLogIds', old: null, new: [sent.id] },
             { field: 'note', old: null, new: 'Sent to the account the buyer wrote by mail.' },
             {
               field: 'refund',
@@ -737,49 +809,15 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
           ]),
         }),
       ]);
+      // the mail of the end tells how and on which day root sent it, not the way of the card
       const own = mailTo(mails, `Return of order #${orderId} is closed`);
       expect(own).toHaveLength(1);
-      expect(own[0]!.text).toContain('We sent you €10.00.');
+      expect(own[0]!.text).toMatch(/We sent you €10\.00 by a bank transfer on \d{1,2} \w+ \d{4}\./);
+      expect(own[0]!.text).not.toContain('It goes back the way you paid.');
     },
   );
 
-  it('never records a transfer the buyer disputed at the bank (409)', async () => {
-    const { orderId, itemId } = await paidByCard(1, DISPUTED_CARD);
-    const card = await comeBack(orderId, itemId, 1);
-    const failed = await refund(card.id);
-    const { paidAt } = await asAdmin((tx) =>
-      tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paidAt: true } }),
-    );
-
-    const res = await outside(card.id, {
-      itemIds: [failed.json().items[0].id],
-      method: 'cash',
-      note: 'In the shop.',
-      at: paidAt!.toISOString(),
-    });
-
-    expect(failed.json().items[0]).toMatchObject({ refundFailure: { code: 'disputed' } });
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ errorCode: 'RETURN_REFUND_DISPUTED' });
-  });
-
-  it('never sends again a transfer the buyer disputed at the bank (409)', async () => {
-    const { orderId, itemId, paymentId } = await paidByCard(1, DISPUTED_CARD);
-    const card = await comeBack(orderId, itemId, 1);
-    const failed = await refund(card.id);
-    const before = (await refundsOf(paymentId)).length;
-
-    const named = await refund(card.id, { itemIds: [failed.json().items[0].id] });
-    const byDefault = await refund(card.id);
-
-    expect(named.statusCode).toBe(409);
-    expect(named.json()).toMatchObject({ errorCode: 'RETURN_REFUND_DISPUTED' });
-    expect(byDefault.statusCode).toBe(400);
-    expect(byDefault.json()).toMatchObject({ errorCode: 'RETURN_ITEMS_REQUIRED' });
-    expect(await refundsOf(paymentId)).toHaveLength(before);
-  });
-
-  it('is refused for a row that was never tried (409), a day of the future (400) and an empty note (400)', async () => {
+  it('refuses a day of the future (400) and an empty note (400), and records a row never tried too', async () => {
     const { orderId, itemId } = await paidByCard(1);
     const card = await comeBack(orderId, itemId, 1);
     const { paidAt } = await asAdmin((tx) =>
@@ -788,29 +826,44 @@ describe('POST /api/returns/:returnId/refund/outside', () => {
     const day = paidAt!.toISOString();
     const rowId = card.items[0]!.id;
 
-    const untried = await outside(card.id, {
-      itemIds: [rowId],
-      method: 'cash',
-      note: 'x',
-      at: day,
-    });
     const future = await outside(card.id, {
       method: 'cash',
       note: 'x',
       at: new Date(Date.now() + 86_400_000).toISOString(),
     });
     const blank = await outside(card.id, { method: 'cash', note: '', at: day });
+    // the money of a row no transfer tried: a transfer the payment could not hold goes this way
+    const untried = await outside(card.id, {
+      itemIds: [rowId],
+      method: 'cash',
+      note: 'x',
+      at: day,
+    });
 
-    expect(untried.statusCode).toBe(409);
-    expect(untried.json()).toMatchObject({ errorCode: 'RETURN_ITEM_NOT_FAILED' });
     expect(future.statusCode).toBe(400);
     expect(blank.statusCode).toBe(400);
+    expect(untried.statusCode).toBe(200);
+    expect(untried.json().items[0]).toMatchObject({ money: 'refunded' });
+  });
+
+  it('is recorded by an admin root allowed to handle the money too', async () => {
+    const { orderId, itemId } = await paidByCard(1);
+    const card = await comeBack(orderId, itemId, 1);
+
+    const res = await outside(
+      card.id,
+      { method: 'cash', note: 'Paid at the counter.', at: new Date().toISOString() },
+      manager,
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().items[0]).toMatchObject({ money: 'refunded' });
   });
 
   it.each([
-    ['an admin', () => admin],
+    ['an admin without the right of the money', () => admin],
     ['a buyer', buyerActor],
-  ])('is for a root only: %s is refused (403)', async (_who, actor) => {
+  ])('is for root and an admin root allowed only: %s is refused (403)', async (_who, actor) => {
     const { orderId, itemId } = await paidByCard(1);
     const card = await comeBack(orderId, itemId, 1);
 
@@ -838,161 +891,142 @@ describe('the cost of the way back', () => {
     expect(res.json()).toMatchObject({ errorCode: 'RETURN_DEDUCTION_NOT_ALLOWED' });
     expect(await refundsOf(paymentId)).toEqual([]);
   });
-
-  // the day the money went: the moment of the statement, which the clock of the database gave
-  const reimburse = (card: Card, actor: TestUser = root, body: Record<string, unknown> = {}) =>
-    post(
-      `/api/returns/${card.id}/reimbursement`,
-      {
-        amount: 6.5,
-        method: 'bank_transfer',
-        note: 'The receipt of the carrier came by mail.',
-        at: (card as Card & { statedAt: string }).statedAt,
-        ...body,
-      },
-      actor,
-    );
-
-  it('records the cost of the way back root paid back outside the app, in the card, the log and a mail', async () => {
-    const { orderId, itemId } = await paidByCard(1);
-    const card = await statementOf(orderId, itemId, 1);
-    const mails = watchMail();
-
-    const res = await reimburse(card);
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json().shippingReimbursement).toEqual({
-      amount: 6.5,
-      at: expect.any(String),
-      method: 'bank_transfer',
-      note: 'The receipt of the carrier came by mail.',
-      by: expect.objectContaining({ id: root.id }),
-    });
-    expect(await logOf(orderId, 'return.shipping_reimburse')).toEqual([
-      expect.objectContaining({
-        actorId: root.id,
-        actorRole: 'ROOT',
-        meta: expect.arrayContaining([
-          { field: 'note', old: null, new: 'The receipt of the carrier came by mail.' },
-        ]),
-      }),
-    ]);
-    const own = mailTo(mails, `We paid back the cost of sending order #${orderId} back`);
-    expect(own).toHaveLength(1);
-    expect(own[0]!.text).toContain('We paid you back €6.50');
-    expect(own[0]!.text).toContain('by a bank transfer');
-    expect(own[0]!.text).not.toContain('came by mail');
-  });
-
-  it('is root only (403), once (409 RETURN_REIMBURSEMENT_EXISTS), with a sum above 0 (400)', async () => {
-    const { orderId, itemId } = await paidByCard(1);
-    const card = await statementOf(orderId, itemId, 1);
-
-    const byAdmin = await reimburse(card, admin);
-    const nothing = await reimburse(card, root, { amount: 0 });
-    const first = await reimburse(card);
-    const again = await reimburse(card);
-
-    expect(byAdmin.statusCode).toBe(403);
-    expect(nothing.statusCode).toBe(400);
-    expect(first.statusCode).toBe(200);
-    expect(again.statusCode).toBe(409);
-    expect(again.json()).toMatchObject({ errorCode: 'RETURN_REIMBURSEMENT_EXISTS' });
-  });
 });
 
-// the end of a dispute of the payment at the bank, for root: lost refunds the disputed rows by
-// chargeback on the day given (no mail, the bank told the buyer), won takes the mark off so the
-// money is sent again the usual way. The database tests check the rules
-describe('POST /api/returns/:returnId/dispute', () => {
-  const dispute = (returnId: number, body: Record<string, unknown>, actor: TestUser = root) =>
-    post(`/api/returns/${returnId}/dispute`, body, actor);
+// while the bank or root has the last word on the money of the payment, no transfer goes: a dispute
+// of the payment open at the bank (the bank gives the money back, the shop would pay twice), unless
+// Stripe says the payment can still be refunded; a refund made by hand in the dashboard root has not
+// said what it was (it may be this money). The card says so. The dispute and the refund made by hand
+// are written by the database functions the webhook calls (their own tests: db/disputes,
+// db/handRefunds); here only what the routes of the statement do with them
+describe('while the bank or root has the last word on the money', () => {
+  // the bank opens a dispute and takes the money (one transaction of the balance, which every
+  // later look at the dispute shows again)
+  const openDispute = (paymentId: string, opening: Partial<Snapshot> = {}) =>
+    inCommittedTx(async (db) => {
+      const stripeId = newDisputeId();
+      const taken = withdrawal(10);
+      await synced(db, {
+        stripeId,
+        paymentId,
+        status: 'needs_response',
+        transactions: [taken],
+        ...opening,
+      });
+      return { stripeId, taken };
+    });
 
-  // a statement whose units came back and whose transfer the bank disputed
-  async function disputedCard() {
-    const { orderId, itemId } = await paidByCard(1);
+  it('refuses a transfer while a dispute of the payment is open, and lets it go when the shop wins', async () => {
+    const { orderId, itemId, paymentId } = await paidByCard(1);
     const card = await comeBack(orderId, itemId, 1);
-    await failReturnRefund(admin.id, card.id, 'disputed');
+    const { stripeId, taken } = await openDispute(paymentId);
+
+    const refused = await refund(card.id);
+    const seen: Card = (await get(`/api/returns/${card.id}`)).json();
+
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ errorCode: 'RETURN_REFUND_DISPUTED' });
+    expect(seen).toMatchObject({ disputeOpen: true, handRefundPending: false });
+    expect(await refundsOf(paymentId)).toEqual([]);
+
+    // the bank decides for the shop and gives the money back to it
+    await inCommittedTx((db) =>
+      synced(db, {
+        stripeId,
+        paymentId,
+        status: 'won',
+        transactions: [taken, reinstatement(10)],
+      }),
+    );
+    const sent = await refund(card.id);
+
+    expect(sent.statusCode).toBe(200);
+    expect(sent.json()).toMatchObject({ disputeOpen: false, refundedTotal: 10 });
+    expect(sent.json().items[0]).toMatchObject({ money: 'refunded' });
+  });
+
+  it('lets a transfer go while the provider says the disputed payment can still be refunded', async () => {
+    const { orderId, itemId, paymentId } = await paidByCard(1);
+    const card = await comeBack(orderId, itemId, 1);
+    await openDispute(paymentId, {
+      status: 'warning_needs_response',
+      refundable: true,
+      transactions: [],
+    });
+
+    const res = await refund(card.id);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ disputeOpen: true });
+    expect(res.json().items[0]).toMatchObject({ money: 'refunded' });
+  });
+
+  mockOnly(
+    'refuses money sent outside the app while a dispute of the payment is open',
+    async () => {
+      const { orderId, itemId, paymentId } = await paidByCard(1);
+      const card = await comeBack(orderId, itemId, 1);
+      queueRefundOutcome({ status: 'failed', reason: 'lost_or_stolen_card' });
+      await refund(card.id);
+      await openDispute(paymentId);
+      const { paidAt } = await asAdmin((tx) =>
+        tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paidAt: true } }),
+      );
+
+      const res = await outside(card.id, {
+        method: 'cash',
+        note: 'In the shop.',
+        at: paidAt!.toISOString(),
+      });
+
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ errorCode: 'RETURN_REFUND_DISPUTED' });
+    },
+  );
+
+  it('refuses a transfer and money sent outside while a refund made by hand waits for root', async () => {
+    const { orderId, itemId, paymentId } = await paidByCard(2);
+    const card = await comeBack(orderId, itemId, 1);
+    await inCommittedTx((db) => handRefundOf(db, paymentId, 5));
     const { paidAt } = await asAdmin((tx) =>
       tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paidAt: true } }),
     );
-    return { orderId, card, paidAt: paidAt! };
-  }
 
-  it('records a lost dispute: the rows are refunded by chargeback on the day given, logged, no mail', async () => {
-    const { orderId, card, paidAt } = await disputedCard();
-    const mails = watchMail();
+    const refused = await refund(card.id);
+    const seen: Card = (await get(`/api/returns/${card.id}`)).json();
 
-    const res = await dispute(card.id, {
-      outcome: 'lost',
-      note: 'The bank gave the buyer the money.',
-      at: paidAt.toISOString(),
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.json().items[0]).toMatchObject({
-      money: 'refunded',
-      refundedAt: paidAt.toISOString(),
-      refundFailure: null,
-      outside: {
-        method: 'chargeback',
-        note: 'The bank gave the buyer the money.',
-        by: { id: root.id },
-      },
-    });
-    expect(await logOf(orderId, 'return.dispute_settle')).toEqual([
-      expect.objectContaining({ actorId: root.id, actorRole: 'ROOT' }),
-    ]);
-    expect(mails.filter((mail) => mail.to.includes(buyer.email))).toEqual([]);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.json()).toMatchObject({ errorCode: 'RETURN_HAND_REFUND_PENDING' });
+    expect(seen).toMatchObject({ disputeOpen: false, handRefundPending: true });
+    // nothing was asked of Stripe (the refund made by hand is written in the database only here)
+    expect(await refundsOf(paymentId)).toEqual([]);
+    expect(
+      (
+        await outside(card.id, {
+          itemIds: [card.items[0]!.id],
+          method: 'cash',
+          note: 'In the shop.',
+          at: paidAt!.toISOString(),
+        })
+      ).json(),
+    ).toMatchObject({ errorCode: 'RETURN_HAND_REFUND_PENDING' });
   });
 
-  // a dispute the buyer opened at the bank, which the shop wins there (the sandbox: a payment of
-  // the card of a dispute and the test evidence of a win, about 20 s); the money goes again then
-  it(
-    'takes the mark off a won dispute, and the money goes again',
-    async () => {
-      const { orderId, itemId, paymentId } = await paidByCard(1, DISPUTED_CARD);
-      const card = await comeBack(orderId, itemId, 1);
-      const failed = await refund(card.id);
-      expect(failed.json().items[0]).toMatchObject({ refundFailure: { code: 'disputed' } });
-      await closeDispute(paymentId, 'won');
+  // Stripe refuses a refund of a payment the buyer disputed at the bank (the card of a dispute): the
+  // rows wait with the reason, the dispute settles it; the buyer is not told the shop cannot send it
+  it('leaves the rows failed with the dispute as the reason, and mails nothing', async () => {
+    const { orderId, itemId } = await paidByCard(1, DISPUTED_CARD);
+    const card = await comeBack(orderId, itemId, 1);
+    const mails = watchMail();
 
-      const res = await dispute(card.id, {
-        outcome: 'won',
-        note: 'The bank kept it with the shop.',
-      });
-      const again = await refund(card.id);
+    const failed = await refund(card.id);
 
-      expect(res.statusCode).toBe(200);
-      expect(res.json().items[0]).toMatchObject({ money: 'not_refunded', refundFailure: null });
-      expect(again.statusCode).toBe(200);
-      expect(again.json().items[0]).toMatchObject({ money: 'refunded' });
-      expect((await refundsOf(paymentId)).map((one) => one.status)).toEqual(['succeeded']);
-    },
-    stripeWait,
-  );
-
-  it('is root only (403), for a statement with a dispute (409), with the day of a lost one (400); chargeback is not a way by hand (400)', async () => {
-    const { card } = await disputedCard();
-    const { orderId, itemId } = await paidByCard(1);
-    const calm = await comeBack(orderId, itemId, 1);
-
-    const byAdmin = await dispute(card.id, { outcome: 'lost', note: 'Lost.' }, admin);
-    const nothing = await dispute(calm.id, { outcome: 'won', note: 'Won.' });
-    const noDay = await dispute(card.id, { outcome: 'lost', note: 'Lost.' });
-    const byHand = await outside(card.id, {
-      itemIds: [card.items[0]!.id],
-      method: 'chargeback',
-      note: 'By hand.',
-      at: new Date().toISOString(),
+    expect(failed.statusCode).toBe(200);
+    expect(failed.json().items[0]).toMatchObject({
+      money: 'failed',
+      refundFailure: { code: 'disputed' },
     });
-
-    expect(byAdmin.statusCode).toBe(403);
-    expect(nothing.statusCode).toBe(409);
-    expect(nothing.json()).toMatchObject({ errorCode: 'RETURN_NOT_DISPUTED' });
-    expect(noDay.statusCode).toBe(400);
-    expect(noDay.json()).toMatchObject({ errorCode: 'RETURN_OUTSIDE_AT_INVALID' });
-    expect(byHand.statusCode).toBe(400);
+    expect(mails.filter((mail) => mail.to.includes(buyer.email))).toEqual([]);
   });
 });
 
@@ -1062,7 +1096,21 @@ describe('POST /api/returns/:returnId/close', () => {
     expect(back.json()).toMatchObject({ errorCode: 'RETURN_ITEM_NOT_CLOSABLE' });
     expect(blank.statusCode).toBe(400);
     expect(byAdmin.statusCode).toBe(403);
+    expect(byAdmin.json()).toMatchObject({ errorCode: 'MONEY_MANAGER_REQUIRED' });
     expect(byBuyer.statusCode).toBe(403);
+  });
+
+  it('is done by an admin root allowed to handle the money too', async () => {
+    const { orderId, itemId } = await paidByCard(1);
+    const card = await statementOf(orderId, itemId, 1);
+
+    const res = await closeRows(
+      card.id,
+      { code: 'goods_not_returned', note: 'Never sent.' },
+      manager,
+    );
+
+    expect(res.statusCode).toBe(200);
   });
 });
 
@@ -1073,6 +1121,7 @@ describe('the goods taken in close the statement', () => {
     const mails = watchMail();
 
     const res = await post(`/api/returns/${made.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [
         {
           itemId: made.items[0]!.id,
@@ -1091,25 +1140,34 @@ describe('the goods taken in close the statement', () => {
 });
 
 describe('the refund events of Stripe for a transfer whose request has not settled it', () => {
-  // the request reached Stripe but the answer did not come back: the rows wait without an id, and the
-  // event carries the key of the transfer in the metadata of the refund
+  // the request reached Stripe but the answer did not come back: the lines wait in transit without
+  // an id, and the event carries the key of the transfer in the metadata of the refund
   async function pendingWithoutId() {
     const { orderId, itemId } = await paidByCard(1);
     const card = await comeBack(orderId, itemId, 1);
     await withStripeOutOfReach(() => refund(card.id));
-    const [row] = await asAdmin((tx) =>
-      tx.orderReturnItem.findMany({ where: { returnId: card.id }, select: { refundKey: true } }),
-    );
-    return { card, orderId, transfer: `refund:${row!.refundKey}` };
-  }
-
-  const rowsOf = (returnId: number) =>
-    asAdmin((tx) =>
-      tx.orderReturnItem.findMany({
-        where: { returnId },
-        select: { money: true, refundId: true, refundFailure: true },
+    const line = await asAdmin((tx) =>
+      tx.moneyLog.findFirstOrThrow({
+        where: { returnId: card.id, event: 'money.refund', part: 'goods' },
+        select: { transferKey: true },
       }),
     );
+    return { card, orderId, transfer: line.transferKey! };
+  }
+
+  // the money of the rows and the line it stands on
+  const rowsOf = async (returnId: number) => {
+    const card: Card = (await get(`/api/returns/${returnId}`)).json();
+    return card.items.map((row, index) => {
+      const line = lineOfRow(card, index);
+      return {
+        money: row.money,
+        event: line?.event ?? null,
+        refundId: line?.refundId ?? null,
+        failure: line?.failure ?? null,
+      };
+    });
+  };
 
   it('settles the rows by the key in the metadata of a refund that succeeded, and keeps its id', async () => {
     const { card, transfer } = await pendingWithoutId();
@@ -1126,7 +1184,7 @@ describe('the refund events of Stripe for a transfer whose request has not settl
 
     expect(res.statusCode).toBe(200);
     expect(await rowsOf(card.id)).toEqual([
-      { money: 'refunded', refundId: 're_test_early', refundFailure: null },
+      { money: 'refunded', event: 'money.refund', refundId: 're_test_early', failure: null },
     ]);
   });
 
@@ -1146,35 +1204,12 @@ describe('the refund events of Stripe for a transfer whose request has not settl
 
     expect(res.statusCode).toBe(200);
     expect(await rowsOf(card.id)).toEqual([
-      { money: 'not_refunded', refundId: null, refundFailure: 'shop_balance' },
+      {
+        money: 'failed',
+        event: 'money.refund_failed',
+        refundId: 're_test_failed',
+        failure: 'shop_balance',
+      },
     ]);
-  });
-});
-
-describe('the refund events of Stripe that are not transfers of a statement', () => {
-  it('acknowledges the refund of a payment given back late and one made by hand at Stripe, and changes nothing', async () => {
-    const late = craftEvent('refund.updated', {
-      object: 'refund',
-      id: 're_test_late',
-      status: 'succeeded',
-      metadata: { transfer: 'refund:pi_test_1' },
-    });
-    const byHand = craftEvent('refund.failed', {
-      object: 'refund',
-      id: 're_test_hand',
-      status: 'failed',
-      failure_reason: 'unknown',
-      metadata: {},
-    });
-
-    expect((await deliver(app, late)).statusCode).toBe(200);
-    expect((await deliver(app, byHand)).statusCode).toBe(200);
-  });
-
-  it('refuses an event whose object is not a refund (400)', async () => {
-    const res = await deliver(app, craftEvent('refund.updated', { object: 'charge', id: 'ch_1' }));
-
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ errorCode: 'STRIPE_EVENT_OBJECT_INVALID' });
   });
 });

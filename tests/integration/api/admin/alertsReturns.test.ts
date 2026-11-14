@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 
+import { setUserContext } from '@db/dbContext.service.js';
 import { withdrawalCodeOf } from '@helpers/withdrawalCode.js';
 
 import { accessCookie } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { testTx } from '../../../helpers/db.js';
 import {
   closeSessions,
   createProduct,
@@ -20,10 +22,12 @@ import { returnFlows } from '../../../helpers/returnFlows.js';
 import { beginReturnRefund, failReturnRefund, refundReturn } from '../../../helpers/returns.js';
 
 // The alerts about the statements of withdrawal and of return, and about the orders shipped without
-// a tracking number (GET /api/admin/alerts): shipped_without_tracking, failed_refunds,
-// returns_manual_check, returns_proof_waiting, returns_goods_not_sent, returns_money_late and
-// returns_goods_late. The count of an alert is the total of the list it names, and a case is put
-// aside by its id (the id of the statement, or of the order).
+// a tracking number (GET /api/admin/alerts): shipped_without_tracking, return_refunds_in_transit,
+// return_refunds_failed, returns_manual_check, returns_proof_waiting, returns_goods_not_sent,
+// returns_money_late and returns_goods_late. The count of an alert is the total of the list it
+// names, and a case is put aside by its id (the id of the statement, of the order, or of the
+// transfer: its first line in the money journal). What a dispute of the payment and a refund made
+// by hand do to the money of a statement is in alertsDisputes.test.ts and alertsHandRefunds.test.ts
 //
 // The alerts of the shop are shared by every file that runs at the same time, so a test looks at
 // its own cases: the list of a kind narrowed to the buyer of the test, and the cases the admin can
@@ -181,6 +185,26 @@ async function expectCountIsTotalOfList(actor: TestUser, kind: string) {
 }
 
 // the cases a kind counts for the buyer, found in the list it names (narrowed to the buyer) and by
+// the alert itself (put aside), and the ids that are no case, without the count of the whole shop:
+// a test checks that once a kind, each read of the alerts counts every kind of the actor
+async function expectListed(
+  actor: TestUser,
+  kind: string,
+  buyer: TestUser,
+  counted: number[],
+  notCounted: number[],
+) {
+  const page = await listOf(actor, kind, { userId: buyer.id, limit: 100 });
+
+  expect(page.items.map((row) => Number(row.id)).sort(byNumber)).toEqual(
+    [...counted].sort(byNumber),
+  );
+  expect(page.total).toBe(counted.length);
+  for (const id of counted) await expectCounted(actor, kind, id);
+  for (const id of notCounted) await expectNotCounted(actor, kind, id);
+}
+
+// the cases a kind counts for the buyer, found in the list it names (narrowed to the buyer) and by
 // the alert itself (put aside), and the ids that are no case
 async function expectCases(
   actor: TestUser,
@@ -243,7 +267,6 @@ const closeWithoutRefund = async (returnId: number) => {
 // ---- the kinds in the answers of the alerts ----
 
 const NEW_KINDS = [
-  'failed_refunds',
   'returns_manual_check',
   'returns_proof_waiting',
   'returns_goods_not_sent',
@@ -269,16 +292,18 @@ const DAYS_PARAMETER = {
 } as const;
 
 describe('the new kinds in GET /api/admin/alerts', () => {
-  it('puts the kinds of the statements after the late payments and the kind of the tracking after the cost of the send', async () => {
+  it('puts the kinds of the statements after the money and the kind of the tracking after the cost of the send', async () => {
     const { alerts, total } = await alertsOf(await newAdmin());
     const kinds = alerts.map((alert) => alert.kind);
 
     expect(kinds.indexOf('shipped_without_tracking')).toBe(
       kinds.indexOf('shipped_without_cost') + 1,
     );
-    expect(kinds.slice(kinds.indexOf('refunded_payments'))).toEqual([
-      'refunded_payments',
-      'refunded_payments_not_sent',
+    expect(kinds.indexOf('return_refunds_failed')).toBe(
+      kinds.indexOf('return_refunds_in_transit') + 1,
+    );
+    expect(kinds.slice(kinds.indexOf('disputes_lost'))).toEqual([
+      'disputes_lost',
       ...NEW_KINDS,
       'worker_stalled',
       'shop_settings_incomplete',
@@ -298,9 +323,14 @@ describe('the new kinds in GET /api/admin/alerts', () => {
       list: { path: '/api/orders', query: { shippedWithoutNumber: 'true' } },
     });
     expect(of('shipped_without_tracking').list!.query.shippedTo).toEqual(expect.any(String));
-    expect(of('failed_refunds')).toMatchObject({
+    expect(of('return_refunds_in_transit')).toMatchObject({
+      threshold: 3,
+      list: { path: '/api/payments/refunds', query: { purpose: 'return', state: 'in_transit' } },
+    });
+    expect(of('return_refunds_in_transit').list!.query.to).toEqual(expect.any(String));
+    expect(of('return_refunds_failed')).toMatchObject({
       threshold: null,
-      list: { path: '/api/payments/refunds', query: { state: 'failed' } },
+      list: { path: '/api/payments/refunds', query: { purpose: 'return', state: 'failed' } },
     });
     expect(of('returns_manual_check')).toMatchObject({
       threshold: null,
@@ -322,7 +352,10 @@ describe('the new kinds in GET /api/admin/alerts', () => {
     });
     expect(of('returns_money_late')).toMatchObject({
       threshold: 10,
-      list: { path: '/api/returns', query: { state: 'open', moneyDueForDays: '10' } },
+      list: {
+        path: '/api/returns',
+        query: { state: 'open', moneyDueForDays: '10', moneyHeld: 'false' },
+      },
     });
     expect(of('returns_goods_late')).toMatchObject({
       threshold: 14,
@@ -334,7 +367,14 @@ describe('the new kinds in GET /api/admin/alerts', () => {
     const { alerts } = await alertsOf(root);
     const kinds = alerts.map((alert) => alert.kind);
 
-    for (const kind of ['shipped_without_tracking', ...NEW_KINDS]) expect(kinds).toContain(kind);
+    for (const kind of [
+      'shipped_without_tracking',
+      'return_refunds_in_transit',
+      'return_refunds_failed',
+      ...NEW_KINDS,
+    ]) {
+      expect(kinds).toContain(kind);
+    }
     expect(kinds.at(-1)).toBe('admin_actions');
   });
 });
@@ -359,7 +399,7 @@ describe('the subscriptions to the new kinds', () => {
     },
   );
 
-  it.each(['failed_refunds', 'returns_manual_check'])(
+  it.each(['return_refunds_failed', 'returns_manual_check'])(
     'has %s on, with no threshold: every case waits',
     async (kind) => {
       expect(await itemOf(await newAdmin(), kind)).toEqual({
@@ -423,7 +463,7 @@ describe('the subscriptions to the new kinds', () => {
     }
   });
 
-  it.each(['failed_refunds', 'returns_manual_check'])(
+  it.each(['return_refunds_failed', 'returns_manual_check'])(
     'answers ALERT_THRESHOLD_NOT_FOUND to a threshold for %s',
     async (kind) => {
       const res = await setThreshold(await newAdmin(), kind, 3);
@@ -479,10 +519,10 @@ describe('shipped_without_tracking', () => {
     await expectCases(someone, kind, buyer, [], [numberless.orderId, numbered.orderId]);
 
     runClock(DEFAULT_DAYS.shipped_without_tracking * DAY - HOUR);
-    await expectCases(someone, kind, buyer, [], [numberless.orderId, numbered.orderId]);
+    await expectListed(someone, kind, buyer, [], [numberless.orderId, numbered.orderId]);
 
     runClock(DEFAULT_DAYS.shipped_without_tracking * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [numberless.orderId], [numbered.orderId]);
+    await expectListed(someone, kind, buyer, [numberless.orderId], [numbered.orderId]);
   });
 
   it('stops counting an order when its number is written', async () => {
@@ -500,7 +540,7 @@ describe('shipped_without_tracking', () => {
     );
     expect(written.statusCode).toBe(200);
 
-    await expectCases(someone, 'shipped_without_tracking', buyer, [], [order.orderId]);
+    await expectListed(someone, 'shipped_without_tracking', buyer, [], [order.orderId]);
   });
 
   it('counts only an order that is shipped now, with the send that is on its way', async () => {
@@ -553,43 +593,105 @@ describe('shipped_without_tracking', () => {
     await expectCases(someone, kind, buyer, [], [order.orderId]);
 
     runClock(5 * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [order.orderId], []);
+    await expectListed(someone, kind, buyer, [order.orderId], []);
     expect((await alertOf(someone, kind)).threshold).toBe(5);
   });
 });
 
-describe('failed_refunds', () => {
-  const kind = 'failed_refunds';
+// ---- the transfers of the statements ----
 
-  it('counts the open statements with a row whose last transfer failed, until the money goes back', async () => {
+// the transfers of the money of the statements of the buyer, the oldest asked first (the list of the
+// refunds of the money journal): a transfer is named by its first line, the id of its case
+async function transfersOf(buyer: TestUser) {
+  const res = await get(admin, `/api/payments/refunds?purpose=return&userId=${buyer.id}&limit=100`);
+  expect(res.statusCode).toBe(200);
+  return (res.json().items as Array<{ id: number; returnId: number; state: string }>).sort(
+    (a, b) => a.id - b.id,
+  );
+}
+
+// the transfer of a statement, the first asked unless another is named
+const transferOf = async (buyer: TestUser, returnId: number, nth = 0) => {
+  const found = (await transfersOf(buyer)).filter((one) => one.returnId === returnId)[nth];
+  if (!found) throw new Error(`the statement ${returnId} has no transfer ${nth}`);
+  return found.id;
+};
+
+// the provider tells the transfer of a statement that is on its way sent or failed
+async function settleTransfer(returnId: number, status: 'succeeded' | 'failed') {
+  await testTx(async (tx) => {
+    await setUserContext(tx, { userId: admin.id, role: 'ADMIN' });
+    const { transferKey } = await tx.moneyLog.findFirstOrThrow({
+      where: { returnId, event: 'money.refund', transferKey: { not: null } },
+      orderBy: { id: 'desc' },
+      select: { transferKey: true },
+    });
+    const failed = status === 'failed';
+    await tx.$queryRaw`
+      select cartlify.settle_money_refund(
+        ${transferKey}::text, ${`re_test_${transferKey}`}::text, ${status},
+        ${failed ? 'card_unavailable' : null}::cartlify."RefundFailure", ${failed ? 'test' : null}
+      ) as done
+    `;
+  });
+}
+
+describe('return_refunds_failed', () => {
+  const kind = 'return_refunds_failed';
+
+  // a transfer the bank refused for a dispute the app does not follow (no dispute of the payment is
+  // open in the app) waits for the shop as any failure: a dispute the app follows holds it
+  // (alertsDisputes.test.ts)
+  it('counts a failed transfer whose rows still owe its money, until the money goes back', async () => {
     const someone = await newAdmin();
     const buyer = await newBuyer();
-    const waiting = await received(buyer);
     const failed = await received(buyer);
     await failReturnRefund(admin.id, failed.id);
     const disputed = await received(buyer);
     await failReturnRefund(admin.id, disputed.id, 'disputed');
-    const retried = await received(buyer);
-    await failReturnRefund(admin.id, retried.id, 'card_unavailable');
-    await refundReturn(admin.id, retried.id);
-    const expected = await stated(buyer);
-    const pending = await received(buyer);
-    await beginReturnRefund(admin.id, pending.id);
+    const failedTransfer = await transferOf(buyer, failed.id);
+    const disputedTransfer = await transferOf(buyer, disputed.id);
 
-    // a row that waits for its first try, one that went back at the second, one whose goods have
-    // not come and one whose transfer waits for the provider are no case
-    await expectCases(
-      someone,
-      kind,
-      buyer,
-      [failed.id, disputed.id],
-      [waiting.id, retried.id, expected.id, pending.id],
-    );
+    await expectCases(someone, kind, buyer, [failedTransfer, disputedTransfer], []);
+    expect(
+      (await listOf(someone, kind, { userId: buyer.id })).items.sort(
+        (a, b) => Number(a.id) - Number(b.id),
+      ),
+    ).toEqual([
+      expect.objectContaining({ id: failedTransfer, returnId: failed.id, purpose: 'return' }),
+      expect.objectContaining({ id: disputedTransfer, returnId: disputed.id, purpose: 'return' }),
+    ]);
 
     // the second try goes through
     await refundReturn(admin.id, failed.id);
 
-    await expectCases(someone, kind, buyer, [disputed.id], [failed.id]);
+    await expectListed(someone, kind, buyer, [disputedTransfer], [failedTransfer]);
+  });
+
+  // a row that waits for its first try has no transfer; one whose rows went at the second try, the
+  // second try itself and one the provider has not answered yet wait for nothing of the shop
+  it('counts no transfer of rows that wait for the first try, went at the second, or wait for the provider', async () => {
+    const someone = await newAdmin();
+    const buyer = await newBuyer();
+    const waiting = await received(buyer);
+    const retried = await received(buyer);
+    await failReturnRefund(admin.id, retried.id, 'card_unavailable');
+    await refundReturn(admin.id, retried.id);
+    const pending = await received(buyer);
+    await beginReturnRefund(admin.id, pending.id);
+
+    expect((await transfersOf(buyer)).map((one) => one.returnId)).not.toContain(waiting.id);
+    await expectListed(
+      someone,
+      kind,
+      buyer,
+      [],
+      [
+        await transferOf(buyer, retried.id),
+        await transferOf(buyer, retried.id, 1),
+        await transferOf(buyer, pending.id),
+      ],
+    );
   });
 
   it('counts at once, whatever the days, for the admin who reads', async () => {
@@ -597,11 +699,12 @@ describe('failed_refunds', () => {
     const buyer = await newBuyer();
     const failed = await received(buyer);
     await failReturnRefund(admin.id, failed.id);
+    const transfer = await transferOf(buyer, failed.id);
 
-    await expectCases(someone, kind, buyer, [failed.id], []);
+    await expectCases(someone, kind, buyer, [transfer], []);
 
     runClock(400 * DAY);
-    await expectCases(someone, kind, buyer, [failed.id], []);
+    await expectListed(someone, kind, buyer, [transfer], []);
   });
 
   it('leaves the count of the admin who put the case aside, for that admin only, and takes the mark off when the case is over', async () => {
@@ -610,22 +713,94 @@ describe('failed_refunds', () => {
     const buyer = await newBuyer();
     const failed = await received(buyer);
     await failReturnRefund(admin.id, failed.id);
+    const transfer = await transferOf(buyer, failed.id);
 
-    const res = await dismiss(someone, kind, failed.id);
+    const res = await dismiss(someone, kind, transfer);
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ kind, id: String(failed.id), dismissed: true });
+    expect(res.json()).toEqual({ kind, id: String(transfer), dismissed: true });
     expect((await alertOf(someone, kind)).dismissed).toBe(1);
     expect((await alertOf(other, kind)).dismissed).toBe(0);
     const aside = await get(someone, '/api/admin/alerts/dismissals');
     expect(aside.json().items).toEqual([
-      { kind, id: String(failed.id), dismissedAt: expect.any(String) },
+      { kind, id: String(transfer), dismissedAt: expect.any(String) },
     ]);
 
     await refundReturn(admin.id, failed.id);
 
     expect((await alertOf(someone, kind)).dismissed).toBe(0);
     expect((await get(someone, '/api/admin/alerts/dismissals')).json().items).toEqual([]);
+  });
+});
+
+describe('return_refunds_in_transit', () => {
+  const kind = 'return_refunds_in_transit';
+
+  it('has a threshold of 3 days from 1 to 365 until the admin sets one', async () => {
+    const res = await get(await newAdmin(), '/api/admin/alerts/subscriptions');
+
+    expect((res.json().items as Array<{ kind: string }>).find((one) => one.kind === kind)).toEqual({
+      kind,
+      subscribed: true,
+      threshold: { value: 3, default: 3, min: 1, max: 365, unit: 'days', custom: false },
+    });
+  });
+
+  it('counts a transfer the provider has not told sent, asked more than the days ago', async () => {
+    const someone = await newAdmin();
+    const buyer = await newBuyer();
+    const pending = await received(buyer);
+    await beginReturnRefund(admin.id, pending.id);
+    const transfer = await transferOf(buyer, pending.id);
+    // a transfer told sent at once is none, however old
+    const sent = await received(buyer);
+    await refundReturn(admin.id, sent.id);
+    const done = await transferOf(buyer, sent.id);
+
+    await expectCases(someone, kind, buyer, [], [transfer, done]);
+
+    runClock(3 * DAY - HOUR);
+    await expectListed(someone, kind, buyer, [], [transfer, done]);
+
+    runClock(3 * DAY + HOUR);
+    await expectListed(someone, kind, buyer, [transfer], [done]);
+  });
+
+  it('counts with the threshold the admin sets, and names its days in the list', async () => {
+    const someone = await newAdmin();
+    const buyer = await newBuyer();
+    const pending = await received(buyer);
+    await beginReturnRefund(admin.id, pending.id);
+    const transfer = await transferOf(buyer, pending.id);
+    expect((await setThreshold(someone, kind, 5)).statusCode).toBe(200);
+
+    runClock(5 * DAY - HOUR);
+    await expectCases(someone, kind, buyer, [], [transfer]);
+    expect(
+      Math.abs(Date.now() - Date.parse((await alertOf(someone, kind)).list!.query.to!) - 5 * DAY),
+    ).toBeLessThan(HOUR);
+
+    runClock(5 * DAY + HOUR);
+    await expectListed(someone, kind, buyer, [transfer], []);
+  });
+
+  it('stops counting a transfer once it is told sent, and hands one that failed to the failed ones', async () => {
+    const someone = await newAdmin();
+    const buyer = await newBuyer();
+    const toSend = await received(buyer);
+    await beginReturnRefund(admin.id, toSend.id);
+    const toFail = await received(buyer);
+    await beginReturnRefund(admin.id, toFail.id);
+    const sent = await transferOf(buyer, toSend.id);
+    const failed = await transferOf(buyer, toFail.id);
+    runClock(3 * DAY + HOUR);
+    await expectCases(someone, kind, buyer, [sent, failed], []);
+
+    await settleTransfer(toSend.id, 'succeeded');
+    await settleTransfer(toFail.id, 'failed');
+
+    await expectListed(someone, kind, buyer, [], [sent, failed]);
+    await expectCases(someone, 'return_refunds_failed', buyer, [failed], [sent]);
   });
 });
 
@@ -655,7 +830,7 @@ describe('returns_manual_check', () => {
 
     await setGoods(await cardOf(byHand), 1, 'to_stock');
     await refundReturn(admin.id, byHand);
-    await expectCases(someone, kind, buyer, [secondByHand], [byHand]);
+    await expectListed(someone, kind, buyer, [secondByHand], [byHand]);
   });
 
   // a step of the goods or of the money waits for the acceptance (RETURN_NOT_ACCEPTED), so the
@@ -668,7 +843,7 @@ describe('returns_manual_check', () => {
 
     await flows.acceptStatement(byHand);
 
-    await expectCases(someone, kind, buyer, [], [byHand]);
+    await expectListed(someone, kind, buyer, [], [byHand]);
   });
 
   it('counts at once, whatever the days', async () => {
@@ -689,7 +864,7 @@ describe('returns_manual_check', () => {
 
     await closeWithoutRefund(byHand);
 
-    await expectCases(someone, kind, buyer, [], [byHand]);
+    await expectListed(someone, kind, buyer, [], [byHand]);
   });
 });
 
@@ -712,15 +887,15 @@ describe('returns_proof_waiting', () => {
     await expectCases(someone, kind, buyer, [], [told, ...rest]);
 
     runClock(days * DAY - HOUR);
-    await expectCases(someone, kind, buyer, [], [told, ...rest]);
+    await expectListed(someone, kind, buyer, [], [told, ...rest]);
 
     runClock(days * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [told], rest);
+    await expectListed(someone, kind, buyer, [told], rest);
 
     // the shop confirms it: nothing waits for the shop any more
     await confirmProof(told);
 
-    await expectCases(someone, kind, buyer, [], [told, ...rest]);
+    await expectListed(someone, kind, buyer, [], [told, ...rest]);
   });
 
   it('counts with the threshold the admin sets', async () => {
@@ -733,10 +908,10 @@ describe('returns_proof_waiting', () => {
     await expectCases(someone, kind, buyer, [], [told]);
 
     runClock(5 * DAY - HOUR);
-    await expectCases(someone, kind, buyer, [], [told]);
+    await expectListed(someone, kind, buyer, [], [told]);
 
     runClock(5 * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [told], []);
+    await expectListed(someone, kind, buyer, [told], []);
     expect((await alertOf(someone, kind)).list!.query.proofOlderThanDays).toBe('5');
   });
 
@@ -785,15 +960,15 @@ describe('returns_goods_not_sent', () => {
     await expectCases(someone, kind, buyer, [], [silent, byForm, ...rest]);
 
     runClock(days * DAY - HOUR);
-    await expectCases(someone, kind, buyer, [], [silent, byForm, ...rest]);
+    await expectListed(someone, kind, buyer, [], [silent, byForm, ...rest]);
 
     runClock(days * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [silent, byForm], rest);
+    await expectListed(someone, kind, buyer, [silent, byForm], rest);
 
     // the root closes one: it is no case any more
     await closeWithoutRefund(silent);
 
-    await expectCases(someone, kind, buyer, [byForm], [silent, ...rest]);
+    await expectListed(someone, kind, buyer, [byForm], [silent, ...rest]);
   });
 
   it('counts with the threshold the admin sets', async () => {
@@ -806,7 +981,7 @@ describe('returns_goods_not_sent', () => {
     await expectCases(someone, kind, buyer, [], [silent]);
 
     runClock(3 * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [silent], []);
+    await expectListed(someone, kind, buyer, [silent], []);
     expect((await alertOf(someone, kind)).list!.query.olderThanDays).toBe('3');
   });
 
@@ -820,7 +995,7 @@ describe('returns_goods_not_sent', () => {
 
     await flows.tellOfParcel(buyer, placed.orderId, id);
 
-    await expectCases(someone, kind, buyer, [], [id]);
+    await expectListed(someone, kind, buyer, [], [id]);
   });
 });
 
@@ -861,26 +1036,29 @@ describe('returns_money_late', () => {
   it('counts the open statements whose money is due and not back, stated more than the days ago', async () => {
     const someone = await newAdmin();
     const buyer = await newBuyer();
-    const { due, notDue, goodsIn } = await scenario(buyer);
+    const { due, notDue } = await scenario(buyer);
 
     await expectCases(someone, kind, buyer, [], [...due, ...notDue]);
 
     runClock(days * DAY - HOUR);
-    await expectCases(someone, kind, buyer, [], [...due, ...notDue]);
+    await expectListed(someone, kind, buyer, [], [...due, ...notDue]);
 
     runClock(days * DAY + HOUR);
-    await expectCases(someone, kind, buyer, due, notDue);
+    await expectListed(someone, kind, buyer, due, notDue);
+  });
 
-    // the money of one goes back: it is no case any more
+  it('stops counting a statement once its money goes back', async () => {
+    const someone = await newAdmin();
+    const buyer = await newBuyer();
+    const goodsIn = (await received(buyer)).id;
+    const failed = await received(buyer);
+    await failReturnRefund(admin.id, failed.id);
+    runClock(days * DAY + HOUR);
+    await expectListed(someone, kind, buyer, [goodsIn, failed.id], []);
+
     await refundReturn(admin.id, goodsIn);
 
-    await expectCases(
-      someone,
-      kind,
-      buyer,
-      due.filter((id) => id !== goodsIn),
-      [goodsIn, ...notDue],
-    );
+    await expectListed(someone, kind, buyer, [failed.id], [goodsIn]);
   });
 
   it('counts with the threshold the admin sets', async () => {
@@ -893,7 +1071,7 @@ describe('returns_money_late', () => {
     await expectCases(someone, kind, buyer, [], [...due, ...notDue]);
 
     runClock(4 * DAY + HOUR);
-    await expectCases(someone, kind, buyer, due, notDue);
+    await expectListed(someone, kind, buyer, due, notDue);
     expect((await alertOf(someone, kind)).list!.query.moneyDueForDays).toBe('4');
   });
 });
@@ -929,15 +1107,15 @@ describe('returns_goods_late', () => {
     await expectCases(someone, kind, buyer, [], [ahead.id, ...rest]);
 
     runClock(days * DAY - HOUR);
-    await expectCases(someone, kind, buyer, [], [ahead.id, ...rest]);
+    await expectListed(someone, kind, buyer, [], [ahead.id, ...rest]);
 
     runClock(days * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [ahead.id], rest);
+    await expectListed(someone, kind, buyer, [ahead.id], rest);
 
     // the goods come in: no case any more
     await setGoods(await cardOf(ahead.id), 1, 'to_stock');
 
-    await expectCases(someone, kind, buyer, [], [ahead.id, ...rest]);
+    await expectListed(someone, kind, buyer, [], [ahead.id, ...rest]);
   });
 
   it('counts with the threshold the admin sets', async () => {
@@ -950,7 +1128,7 @@ describe('returns_goods_late', () => {
     await expectCases(someone, kind, buyer, [], [ahead.id]);
 
     runClock(3 * DAY + HOUR);
-    await expectCases(someone, kind, buyer, [ahead.id], []);
+    await expectListed(someone, kind, buyer, [ahead.id], []);
     expect((await alertOf(someone, kind)).list!.query.paidAheadForDays).toBe('3');
   });
 });
@@ -982,7 +1160,6 @@ describe('a case of a kind of the statements put aside', () => {
     const byHand = await fromForm(buyer, false);
 
     // a statement of the form is a case of the manual check and of no other kind
-    await expectNotCounted(someone, 'failed_refunds', byHand);
     await expectNotCounted(someone, 'returns_money_late', byHand);
     await expectNotCounted(someone, 'returns_manual_check', 2_000_000_000);
   });

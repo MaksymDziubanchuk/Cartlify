@@ -13,14 +13,20 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { addShipment } from '../../../helpers/orders.js';
+import { inOwnerTx } from '../../../helpers/ownerDb.js';
 import { returnFlows } from '../../../helpers/returnFlows.js';
-import { refundReturn } from '../../../helpers/returns.js';
+import { failReturnRefund, refundReturn } from '../../../helpers/returns.js';
 
 // the statements of withdrawal and of return in the export of a person's data, and the same export
 // of another person for root: GET /api/users/me/export gives each order its statements with their
 // rows (what is the person's own: their words, their data, their money, the parcel they sent),
 // GET /api/users/:userId/export gives root the same set, also for a deleted account, and leaves a
-// line in the admin log
+// line in the admin log. The money of a statement is read from the money journal (the same facts as
+// before it: the share of the delivery of a row, the deduction for the way back, when it went back,
+// the way root sent it outside the app, the way back root paid back), and every movement of the
+// money of the person is given apart, without the keys, the ids of the provider, the notes and the
+// actors
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -144,7 +150,6 @@ describe('the statements of return in GET /api/users/me/export', () => {
       'items',
       'proof',
       'reason',
-      'shippingReimbursement',
       'source',
       'statedAt',
       'userAgent',
@@ -249,6 +254,160 @@ describe('the statements of return in GET /api/users/me/export', () => {
       source: 'form_code',
       contact: { name: 'Anna Koval', email: `form-${buyer.id}@example.com` },
     });
+  });
+});
+
+const postAs = (actor: TestUser, url: string, payload: Record<string, unknown>) =>
+  app.inject({ method: 'POST', url, headers: withCsrf(csrf, accessCookie(actor)), payload });
+
+describe('the money of the statements in the export, from the money journal', () => {
+  it('gives the row that made the order whole its share of the delivery, and the money root sent outside the app after the transfer failed', async () => {
+    const { buyer, orderId, returnId } = await buyerWithStatement();
+    const card = await flows.cardOf(returnId);
+    await flows.setGoods(card, 3, 'to_stock');
+    const { bookedAt } = await failReturnRefund(admin.id, returnId, 'card_unavailable');
+    const sent = await postAs(root, `/api/returns/${returnId}/refund/outside`, {
+      method: 'cash',
+      note: 'Paid at the desk.',
+      at: bookedAt.toISOString(),
+    });
+    expect(sent.statusCode).toBe(200);
+
+    const data = (await exportOf(accessCookie(buyer))).json();
+    const order = data.orders.find((one: { id: number }) => one.id === orderId);
+    const [statement] = returnsOf(data, orderId);
+
+    // the withdrawal of the whole order gives the delivery back with it
+    expect(statement!.items).toEqual([
+      expect.objectContaining({
+        money: 'refunded',
+        amount: '30',
+        deliveryShare: String(Number(order.delivery.price)),
+        shippingDeduction: '0',
+        refundedAt: bookedAt.toISOString(),
+        outside: { method: 'cash', note: 'Paid at the desk.' },
+      }),
+    ]);
+  });
+
+  it('gives the way back the shop paid back outside the app among the money of the person', async () => {
+    const { buyer, returnId } = await buyerWithStatement();
+    const card = (await flows.cardOf(returnId)) as unknown as {
+      statedAt: string;
+      items: Array<{ id: number }>;
+    };
+    // the receipt of the parcel: the buyer paid the carrier 3.50, the shop pays the way back
+    const taken = await postAs(admin, `/api/returns/${returnId}/receive`, {
+      results: [{ itemId: card.items[0]!.id, quantity: 3, goods: 'to_stock' }],
+      parcel: { buyerPaid: 3.5 },
+    });
+    expect(taken.statusCode).toBe(200);
+    const paid = await postAs(root, `/api/returns/${returnId}/refund/outside`, {
+      method: 'bank_transfer',
+      note: 'The receipt of the carrier came by mail.',
+      at: card.statedAt,
+    });
+    expect(paid.statusCode).toBe(200);
+
+    const data = (await exportOf(accessCookie(buyer))).json();
+
+    expect(data.money).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: 'money.outside', part: 'way_back', amount: '-3.5' }),
+      ]),
+    );
+  });
+});
+
+describe('the movements of the money of the person in the export', () => {
+  it('gives every movement of the money of the person: what it was, its part, the sum, the time, the state and the number of the bank', async () => {
+    const { buyer, orderId, returnId } = await buyerWithStatement();
+    const card = await flows.cardOf(returnId);
+    await flows.setGoods(card, 3, 'to_stock');
+    const refunded = await refundReturn(admin.id, returnId);
+    // the bank of the card gives the number to follow the refund by
+    await inOwnerTx(
+      async (db) => {
+        // the work of the system, as the webhook of the provider writes it
+        await db.as({ role: 'ADMIN' });
+        const written = await db.rows(
+          `update cartlify.money_log set "bankReference" = 'ARN-74930' where "returnId" = $1
+             and event = 'money.refund' and part = 'goods' returning id`,
+          returnId,
+        );
+        expect(written).toHaveLength(1);
+      },
+      { commit: true },
+    );
+
+    const data = (await exportOf(accessCookie(buyer))).json();
+    const money = data.money as Array<Record<string, unknown>>;
+
+    expect(money).toEqual(
+      expect.arrayContaining([
+        {
+          orderId,
+          event: 'money.payment',
+          part: 'goods',
+          amount: '30',
+          currency: null,
+          createdAt: expect.any(String),
+          state: null,
+          bankReference: null,
+        },
+        {
+          orderId,
+          event: 'money.refund',
+          part: 'goods',
+          amount: '-30',
+          currency: null,
+          createdAt: refunded.bookedAt.toISOString(),
+          state: 'sent',
+          bankReference: 'ARN-74930',
+        },
+      ]),
+    );
+    // the oldest first, every movement of the orders of the person
+    expect(money.map((line) => line.event)[0]).toBe('money.payment');
+    expect(money.every((line) => line.orderId === orderId)).toBe(true);
+    for (const line of money) {
+      expect(Object.keys(line).sort()).toEqual([
+        'amount',
+        'bankReference',
+        'createdAt',
+        'currency',
+        'event',
+        'orderId',
+        'part',
+        'state',
+      ]);
+    }
+    // the keys of the requests, the ids of the provider, the meta and who did it stay out
+    expect(JSON.stringify(money)).not.toMatch(/refund:|re_test_|pi_test_|returnItemId/);
+    expect(JSON.stringify(money)).not.toContain(admin.email);
+  });
+
+  // what a send cost the shop is no money of the person
+  it('leaves out what the sends cost the shop, and gives no one the money of another person', async () => {
+    const { buyer, orderId } = await buyerWithStatement();
+    const other = await buyerWithStatement();
+    await addShipment(orderId, { carrier: 'DHL', cost: 7.35 });
+    const res = await exportOf(accessCookie(buyer));
+
+    const money = res.json().money as Array<Record<string, unknown>>;
+    expect(money.length).toBeGreaterThan(0);
+    expect(money.some((line) => String(line.event).includes('shipping_cost'))).toBe(false);
+    expect(money.some((line) => line.orderId === other.orderId)).toBe(false);
+  });
+
+  it('gives root the same movements of the person', async () => {
+    const { buyer } = await buyerWithStatement();
+
+    const own = (await exportOf(accessCookie(buyer))).json().money;
+    const byRoot = (await exportOfUser(buyer.id, accessCookie(root))).json().money;
+
+    expect(byRoot).toEqual(own);
+    expect(own.length).toBeGreaterThan(0);
   });
 });
 

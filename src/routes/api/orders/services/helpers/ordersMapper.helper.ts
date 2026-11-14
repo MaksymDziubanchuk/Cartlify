@@ -5,26 +5,36 @@ import { expiredUnitsOf } from '@db/expiredStock.helper.js';
 import { variantNamesOf, type VariantNameInfo } from '@db/variantNames.helper.js';
 
 import { deliveryPriceOf, deliveryQuotesOf } from '@helpers/deliveryPrice.js';
+import { holdsOf, type OrderHoldReason } from '@helpers/orderHolds.js';
 import { returnCodeOf } from '@helpers/returns.js';
 import { decimalToNumber } from '@helpers/safeNormalizer.js';
 import { readProductWithdrawals } from '@db/productWithdrawal.helper.js';
 import { withdrawalOf, withdrawalRightOf, type WithdrawalRuleName } from '@helpers/withdrawal.js';
 import { withdrawalEndsOf, withdrawalOpenOf } from './withdrawal.helper.js';
 import { unitsHeldOf } from './withdrawalItems.helper.js';
+import { shipmentCostsOf } from './shipment.helper.js';
 import {
   isVariantVisible,
   variantRowSelect,
   variantShortOf,
 } from '@routes/api/products/services/helpers/variant.helper.js';
+import {
+  movementOf,
+  readReturnMoneyLines,
+  sumsOf,
+  type ReturnMoneyLine,
+} from '@routes/api/returns/services/helpers/returnMoneyLines.helper.js';
 
 import type {
   OrderDeliveryDto,
   OrderItemDto,
+  OrderMoneyLineDto,
   OrderResponseDto,
   OrderShipmentAdminDto,
 } from 'types/dto/orders.dto.js';
 import type {
   BuyerReturnDto,
+  BuyerReturnRefundDto,
   ReturnItemUnitsDto,
   ReturnSummaryDto,
   WithdrawableDto,
@@ -46,6 +56,10 @@ export const orderResponseSelect = {
   withdrawalDays: true,
   // where the order stands as to its statements of withdrawal and return
   returnStatus: true,
+  // what keeps the order from its sending, and the warning of the provider about an order already
+  // sent, for the view of an admin
+  holds: true,
+  fraudWarnedAt: true,
   createdAt: true,
   updatedAt: true,
   items: {
@@ -98,15 +112,16 @@ export const orderShipmentSelect = {
   carrier: true,
   trackingNumber: true,
   trackingUrl: true,
-  cost: true,
   expense: true,
   shippedAt: true,
   rolledBackAt: true,
 } satisfies Prisma.OrderShipmentSelect;
 
+// a send with what the shop paid the carrier for it: the sum of its lines in the money journal
+// (the first cost and its corrections), null while none was written
 export type OrderShipmentRow = Prisma.OrderShipmentGetPayload<{
   select: typeof orderShipmentSelect;
-}>;
+}> & { cost: number | null };
 
 type OrderRowWithoutShipments = Prisma.OrderGetPayload<{ select: typeof orderResponseSelect }>;
 
@@ -116,8 +131,8 @@ export type OrderResponseRow = OrderRowWithoutShipments & {
   shipments: OrderShipmentRow[];
 };
 
-// the delivery and the sends of the rows, the latest send of an order first: one query for each,
-// one after the other, for all the rows
+// the delivery and the sends of the rows, the latest send of an order first, each send with what it
+// cost the shop (from the money journal): one query for each, one after the other, for all the rows
 export async function withDeliveryAndSends<T extends { id: number }>(
   db: Prisma.TransactionClient,
   rows: T[],
@@ -132,17 +147,26 @@ export async function withDeliveryAndSends<T extends { id: number }>(
   });
 
   const sends = await db.orderShipment.findMany({
-    where: { orderId: { in: orderIds } },
+    where: { orderId: { in: orderIds }, returnId: null },
     orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
     select: { ...orderShipmentSelect, orderId: true },
   });
+
+  // what the shop paid for each send: its lines money.shipping_cost and money.correction
+  const costOf = await shipmentCostsOf(
+    db,
+    sends.map((send) => send.id),
+  );
 
   const deliveryOf = new Map<number, OrderDeliveryRow>();
   for (const { orderId, ...delivery } of deliveries) deliveryOf.set(orderId, delivery);
 
   const sendsOf = new Map<number, OrderShipmentRow[]>();
   for (const { orderId, ...send } of sends) {
-    sendsOf.set(orderId, [...(sendsOf.get(orderId) ?? []), send]);
+    sendsOf.set(orderId, [
+      ...(sendsOf.get(orderId) ?? []),
+      { ...send, cost: costOf.get(send.id) ?? null },
+    ]);
   }
 
   return rows.map((row) => ({
@@ -185,6 +209,9 @@ export type OrderContext = {
   withdrawals: Map<number, BuyerReturnDto[]>;
   // the units of each order the buyer can still state
   withdrawable: Map<number, WithdrawableDto[]>;
+  // the money of each order the money journal holds, short, the oldest first, for the view of an
+  // admin
+  money: Map<number, OrderMoneyLineDto[]>;
 };
 
 export async function orderContextOf(
@@ -252,9 +279,14 @@ export async function orderContextOf(
         reason: true,
         extendsId: true,
         closedAt: true,
+        refundedTotal: true,
       },
     });
-    for (const { orderId, number, statedAt, closedAt, ...rest } of found) {
+    for (const { orderId, number, statedAt, closedAt, refundedTotal, ...rest } of found) {
+      // the money the statements gave back, counted by the database from the money journal
+      const order = returnUnits.get(orderId) ?? { items: new Map(), refundedCents: 0 };
+      order.refundedCents += centsOf(refundedTotal);
+      returnUnits.set(orderId, order);
       returns.set(orderId, [
         ...(returns.get(orderId) ?? []),
         {
@@ -277,9 +309,6 @@ export async function orderContextOf(
         quantity: true,
         goods: true,
         money: true,
-        amount: true,
-        deliveryShare: true,
-        shippingDeduction: true,
       },
     });
     for (const line of lines) {
@@ -296,11 +325,8 @@ export async function orderContextOf(
         withShop: 0,
         toShip: 0,
       };
-      if (line.money === 'refunded') {
-        item.refunded += line.quantity;
-        order.refundedCents +=
-          centsOf(line.amount) + centsOf(line.deliveryShare) - centsOf(line.shippingDeduction);
-      } else if (line.money === 'refused') item.refused += line.quantity;
+      if (line.money === 'refunded') item.refunded += line.quantity;
+      else if (line.money === 'refused') item.refused += line.quantity;
       else item.waiting += line.quantity;
       if (line.goods === 'to_stock' || line.goods === 'written_off' || line.goods === 'lost') {
         item.withShop += line.quantity;
@@ -316,6 +342,8 @@ export async function orderContextOf(
       ? await buyerReturnsOf(db, rows, withdrawalEnds)
       : { withdrawals: new Map(), withdrawable: new Map() };
 
+  const money = view === 'admin' ? await orderMoneyOf(db, rows) : new Map();
+
   return {
     expired,
     names,
@@ -326,7 +354,117 @@ export async function orderContextOf(
     returnUnits,
     withdrawals,
     withdrawable,
+    money,
   };
+}
+
+// the money of the orders, a line of the money journal at a time, the oldest first: every movement
+// that names the order (its payment, the refunds, the money of its statements, a late payment, the
+// money of a dispute, what the shop paid the carriers), short; the whole lines are the money journal
+// of the admins (GET /api/admin/money-log?orderId=)
+async function orderMoneyOf(
+  db: Prisma.TransactionClient,
+  rows: { id: number }[],
+): Promise<Map<number, OrderMoneyLineDto[]>> {
+  const money = new Map<number, OrderMoneyLineDto[]>();
+  if (rows.length === 0) return money;
+
+  const lines = await db.moneyLog.findMany({
+    where: { orderId: { in: rows.map((row) => row.id) } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: {
+      id: true,
+      orderId: true,
+      event: true,
+      purpose: true,
+      part: true,
+      amount: true,
+      state: true,
+      createdAt: true,
+    },
+  });
+  for (const { orderId, amount, createdAt, ...line } of lines) {
+    money.set(orderId!, [
+      ...(money.get(orderId!) ?? []),
+      { ...line, amount: decimalToNumber(amount), createdAt: createdAt.toISOString() },
+    ]);
+  }
+
+  return money;
+}
+
+// when the money of a line went: a refund when it was told sent (asked, when it is still on its
+// way), money sent outside the app on the day it really went
+function sentAtOf(line: ReturnMoneyLine | null): string | null {
+  if (!line) return null;
+  if (line.event === 'money.outside') return (line.happenedAt ?? line.createdAt).toISOString();
+  return (line.state === 'sent' ? (line.stateAt ?? line.createdAt) : line.createdAt).toISOString();
+}
+
+// the money a statement sent back, a movement at a time as the buyer sees it: a transfer to the
+// way they paid (each a key, in its parts) and money root sent outside the app; what went back,
+// what was kept for the way back, and where it stands. A transfer that money already sent covered
+// (a refund made by hand in the dashboard of the provider tied to the statement) did not reach the
+// buyer when that money failed later; root sends it another way then, on the refund itself
+// (money.outside of the refund made by hand, tied to the statement)
+function buyerRefundsOf(lines: ReturnMoneyLine[]): BuyerReturnRefundDto[] {
+  const failureOf = (lineId: number | null) =>
+    lines.find((one) => one.event === 'money.refund_failed' && one.coversId === lineId);
+
+  return lines
+    .filter(
+      (line) =>
+        (line.purpose === 'return' &&
+          (line.event === 'money.refund' || line.event === 'money.outside') &&
+          (line.part === 'goods' ||
+            // the way back the shop paid alone, outside the app
+            (line.part === 'way_back' &&
+              !movementOf(lines, line).some((one) => one.part === 'goods')))) ||
+        (line.event === 'money.outside' && line.purpose !== 'return'),
+    )
+    .map((goods) => {
+      if (goods.purpose !== 'return') {
+        // money root sent another way in place of a refund made by hand that failed: all of it
+        // gives back what the refund gave
+        const sent = -goods.amount;
+        return {
+          way: 'outside',
+          method: goods.method,
+          state: 'sent',
+          goods: sent,
+          delivery: 0,
+          deduction: 0,
+          wayBack: 0,
+          amount: sent,
+          at: sentAtOf(goods)!,
+          bankReference: null,
+        };
+      }
+
+      const movement = movementOf(lines, goods);
+      const sums = sumsOf(movement);
+      const failure =
+        failureOf(goods.id) ??
+        movement
+          .filter((one) => one.part === 'covered')
+          .map((one) => failureOf(one.coversId))
+          .find((one) => one !== undefined);
+      const outside = goods.event === 'money.outside';
+      const state = failure ? 'failed' : outside ? 'sent' : (goods.state ?? 'in_transit');
+
+      return {
+        way: outside ? 'outside' : 'payment',
+        method: goods.method,
+        state,
+        goods: sums.goods,
+        delivery: sums.delivery,
+        deduction: sums.deduction,
+        wayBack: sums.wayBack,
+        amount: sums.total,
+        at: failure ? failure.createdAt.toISOString() : sentAtOf(goods)!,
+        bankReference: outside ? null : goods.bankReference,
+      };
+    });
 }
 
 // the statements of the orders as their buyer sees them, and the units each order still lets them
@@ -364,41 +502,59 @@ export async function buyerReturnsOf(
         basis: true,
         reason: true,
         closedAt: true,
-        proofProvidedAt: true,
-        proofConfirmedAt: true,
-        proofCarrier: true,
-        proofTrackingNumber: true,
-        proofTrackingUrl: true,
-        shippingReimbursed: true,
-        shippingReimbursedAt: true,
-        shippingReimbursedMethod: true,
+        refundedTotal: true,
+      },
+    });
+    // the parcels of the statements: the one the goods went back to the shop in, the ones the shop
+    // sent the goods it did not accept back in
+    const parcels = await db.orderShipment.findMany({
+      where: { returnId: { in: statements.map((statement) => statement.id) } },
+      orderBy: { id: 'asc' },
+      select: {
+        returnId: true,
+        direction: true,
+        carrier: true,
+        trackingNumber: true,
+        trackingUrl: true,
+        shippedAt: true,
+        confirmedAt: true,
+        buyerPaid: true,
       },
     });
     const lines = await db.orderReturnItem.findMany({
       where: { returnId: { in: statements.map((statement) => statement.id) } },
       orderBy: { id: 'asc' },
       select: {
+        id: true,
         returnId: true,
         orderItemId: true,
         quantity: true,
         amount: true,
-        deliveryShare: true,
-        shippingDeduction: true,
         money: true,
-        refundedAt: true,
+        moneyLogId: true,
         goods: true,
         notAcceptedReason: true,
       },
     });
+    // what the money of the statements did: the lines of the money journal of the buyer
+    const moneyLines = await readReturnMoneyLines(
+      db,
+      statements.map((statement) => statement.id),
+    );
 
     for (const statement of statements) {
+      const own = parcels.filter((parcel) => parcel.returnId === statement.id);
+      const back = own.find((parcel) => parcel.direction === 'to_shop');
       const step: BuyerReturnDto['step'] = statement.closedAt
         ? 'closed'
-        : statement.proofConfirmedAt
+        : back?.confirmedAt
           ? 'proof_confirmed'
-          : statement.proofProvidedAt
+          : back
             ? 'proof_provided'
             : 'received';
+
+      const money = moneyLines.get(statement.id) ?? [];
+      const lineOf = (id: number | null) => money.find((one) => one.id === id) ?? null;
 
       const dto: BuyerReturnDto = {
         id: statement.id,
@@ -409,36 +565,26 @@ export async function buyerReturnsOf(
         reason: statement.reason,
         step,
         closedAt: statement.closedAt?.toISOString() ?? null,
-        proof:
-          statement.proofProvidedAt && statement.proofCarrier && statement.proofTrackingNumber
-            ? {
-                carrier: statement.proofCarrier,
-                trackingNumber: statement.proofTrackingNumber,
-                trackingUrl: statement.proofTrackingUrl,
-                providedAt: statement.proofProvidedAt.toISOString(),
-                confirmed: statement.proofConfirmedAt !== null,
-              }
-            : null,
-        shippingReimbursement:
-          statement.shippingReimbursed !== null &&
-          statement.shippingReimbursedAt !== null &&
-          statement.shippingReimbursedMethod !== null
-            ? {
-                amount: decimalToNumber(statement.shippingReimbursed),
-                at: statement.shippingReimbursedAt.toISOString(),
-                method: statement.shippingReimbursedMethod,
-              }
-            : null,
+        parcels: own.map((parcel) => ({
+          direction: parcel.direction,
+          carrier: parcel.carrier,
+          trackingNumber: parcel.trackingNumber,
+          trackingUrl: parcel.trackingUrl,
+          shippedAt: parcel.shippedAt.toISOString(),
+          confirmed: parcel.confirmedAt !== null,
+          buyerPaid: parcel.buyerPaid === null ? null : decimalToNumber(parcel.buyerPaid),
+        })),
+        refundedTotal: decimalToNumber(statement.refundedTotal),
+        refunds: buyerRefundsOf(money),
         items: lines
           .filter((line) => line.returnId === statement.id)
           .map((line) => ({
+            id: line.id,
             orderItemId: line.orderItemId,
             quantity: line.quantity,
             amount: decimalToNumber(line.amount),
-            deliveryAmount: decimalToNumber(line.deliveryShare),
-            shippingDeduction: decimalToNumber(line.shippingDeduction),
             money: line.money,
-            refundedAt: line.refundedAt?.toISOString() ?? null,
+            refundedAt: line.money === 'refunded' ? sentAtOf(lineOf(line.moneyLogId)) : null,
             refusal:
               line.money !== 'refused'
                 ? null
@@ -541,7 +687,7 @@ const mapShipments = (row: OrderResponseRow): OrderShipmentAdminDto[] =>
     carrier: s.carrier,
     trackingNumber: s.trackingNumber,
     trackingUrl: s.trackingUrl,
-    cost: s.cost === null ? null : decimalToNumber(s.cost),
+    cost: s.cost,
     expense: s.expense,
     shippedAt: s.shippedAt,
     rolledBackAt: s.rolledBackAt,
@@ -649,6 +795,10 @@ function returnUnitsOf(row: OrderResponseRow, context: OrderContext) {
   };
 }
 
+// the holds the buyer is told of as a check of the payment: an early warning of fraud of the network
+// of the card, a review of the payment provider
+const PAYMENT_CHECKS: ReadonlySet<OrderHoldReason> = new Set(['fraud_warning', 'payment_review']);
+
 // the admin and the root see the sends of an order with what the shop pays for them and what it
 // weighs; the buyer does not
 export type OrderView = 'buyer' | 'admin';
@@ -698,10 +848,17 @@ export function mapOrderRowToResponse(
           weight: weightOf(row),
           returns: context.returns.get(row.id) ?? [],
           ...returnUnitsOf(row, context),
+          // what keeps the order from its sending, the warning of the provider about an order
+          // already sent (left out while there is none), and the money of the order
+          holds: holdsOf(row.holds),
+          ...(row.fraudWarnedAt ? { fraudWarnedAt: row.fraudWarnedAt } : {}),
+          money: context.money.get(row.id) ?? [],
         }
       : {
           withdrawals: context.withdrawals.get(row.id) ?? [],
           withdrawable: context.withdrawable.get(row.id) ?? [],
+          // the payment is checked: never which check (a warning of fraud can be wrong)
+          paymentCheck: holdsOf(row.holds).some((hold) => PAYMENT_CHECKS.has(hold.reason)),
         }),
   };
 }

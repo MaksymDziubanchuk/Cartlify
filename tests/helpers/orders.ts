@@ -1,9 +1,20 @@
+import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
+
+import { setAdminContext, setUserContext } from '@db/dbContext.service.js';
 
 import { accessCookie } from './actors.js';
 import { withCsrf, type Csrf } from './csrf.js';
 import { asAdmin } from './db.js';
-import { variantOf, type TestProduct, type TestUser, type VariantRef } from './factories.js';
+import {
+  createUser,
+  variantOf,
+  type TestProduct,
+  type TestUser,
+  type VariantRef,
+} from './factories.js';
+
+import type { UserId } from 'types/ids.js';
 
 export type OrderStage = 'cart' | 'waiting' | 'paid' | 'shipped';
 
@@ -172,9 +183,16 @@ export async function placeUnconfirmedOrder(
   return orderId;
 }
 
+// the admin in whose name the helpers write what the shop pays a carrier when the test names none:
+// the money journal keeps the actor of every line, and the system may not write a cost
+let costAdmin: Promise<TestUser> | null = null;
+const costAdminOf = () => (costAdmin ??= createUser({ role: 'ADMIN' }));
+
 // a send of the order the way an admin records it, written straight into the database: the order is
-// shipped already or the test moves it
-export const addShipment = (
+// shipped already or the test moves it. Its cost is a line of the money journal, written by the
+// function the routes call (record_order_shipment_cost) in the name of an admin (by, or one of the
+// helper); a cost of 0 writes no line
+export const addShipment = async (
   orderId: number,
   fields: {
     carrier?: string | null;
@@ -184,9 +202,13 @@ export const addShipment = (
     expense?: boolean;
     // the status went back from shipped: the send stays as history
     rolledBack?: boolean;
+    // the admin who writes the cost
+    by?: number;
   } = {},
-) =>
-  asAdmin(async (tx) => {
+) => {
+  const by = fields.cost ? (fields.by ?? (await costAdminOf()).id) : null;
+
+  return asAdmin(async (tx) => {
     // the policy takes a send of a shipped order on its way, the flags come after it
     const send = await tx.orderShipment.create({
       data: {
@@ -194,9 +216,13 @@ export const addShipment = (
         carrier: fields.carrier ?? null,
         trackingNumber: fields.trackingNumber ?? null,
         trackingUrl: fields.trackingUrl ?? null,
-        cost: fields.cost ?? null,
       },
     });
+    if (by !== null) {
+      await setUserContext(tx, { userId: by as UserId, role: 'ADMIN' });
+      await tx.$queryRaw`select cartlify.record_order_shipment_cost(${send.id}::int, ${fields.cost}::numeric) as result`;
+      await setAdminContext(tx);
+    }
     if (fields.expense === false || fields.rolledBack) {
       return tx.orderShipment.update({
         where: { id: send.id },
@@ -208,6 +234,75 @@ export const addShipment = (
     }
     return send;
   });
+};
 
 export const orderRowOf = (orderId: number) =>
   asAdmin((tx) => tx.order.findUniqueOrThrow({ where: { id: orderId }, include: { items: true } }));
+
+// the lines of the money journal of what the shop pays the carrier for a send, the oldest first:
+// the first cost, then each correction with the difference
+export const shippingLinesOf = (shipmentId: number) =>
+  asAdmin(async (tx) =>
+    (
+      await tx.moneyLog.findMany({
+        where: { orderShipmentId: shipmentId, purpose: 'shipping' },
+        orderBy: { id: 'asc' },
+        select: {
+          id: true,
+          event: true,
+          amount: true,
+          coversId: true,
+          orderId: true,
+          actorId: true,
+          actorRole: true,
+        },
+      })
+    ).map((line) => ({ ...line, amount: Number(line.amount) })),
+  );
+
+// what the shop pays the carrier for a send: the sum of its lines, none while none is written
+export async function shippingCostOf(shipmentId: number): Promise<number | null> {
+  const lines = await shippingLinesOf(shipmentId);
+  if (lines.length === 0) return null;
+
+  return -lines.reduce((sum, line) => sum + Math.round(line.amount * 100), 0) / 100 || 0;
+}
+
+// the payment of an order, as the provider names it (the webhook writes it with the payment)
+const paymentIdOf = async (orderId: number) => {
+  const { paymentId } = await asAdmin((tx) =>
+    tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { paymentId: true } }),
+  );
+  if (!paymentId) throw new Error(`the order ${orderId} has no payment`);
+  return paymentId;
+};
+
+// what the system does when the provider reviews the payment of a paid order: it holds the order
+// from its sending (db/05 hold_payment_review) until the review is over (release_payment_review);
+// the id of the review
+export async function holdForReview(orderId: number, reviewId = `prv_${randomUUID()}`) {
+  const paymentId = await paymentIdOf(orderId);
+  await asAdmin(
+    (tx) => tx.$queryRaw`select cartlify.hold_payment_review(${paymentId}, ${reviewId}) as result`,
+  );
+  return reviewId;
+}
+
+export async function releaseReview(orderId: number, reviewId: string) {
+  const paymentId = await paymentIdOf(orderId);
+  await asAdmin(
+    (tx) =>
+      tx.$queryRaw`select cartlify.release_payment_review(${paymentId}, ${reviewId}) as result`,
+  );
+}
+
+// what the system does when the provider warns that the payment of an order may be fraud: a paid
+// order is held from its sending, a sent one only marked (fraudWarnedAt, db/05 hold_fraud_warning);
+// the id of the warning
+export async function warnOfFraud(orderId: number, warningId = `issfr_${randomUUID()}`) {
+  const paymentId = await paymentIdOf(orderId);
+  await asAdmin(
+    (tx) => tx.$queryRaw`select cartlify.hold_fraud_warning(${paymentId}, ${warningId}) as result`,
+  );
+  return warningId;
+}

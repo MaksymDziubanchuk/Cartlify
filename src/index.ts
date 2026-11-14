@@ -3,7 +3,7 @@ import env from '@config/env.js';
 import { loadShopSettings, shopSettings } from '@config/shopSettings.js';
 import { connectRedis, closeRedis } from '@redis/client.js';
 import { startOrderTimeoutWorker, stopOrderTimeoutWorker } from './workers/orderTimeout.worker.js';
-import { startReturnRefundWorker, stopReturnRefundWorker } from './workers/returnRefund.worker.js';
+import { startMoneyRefundWorker, stopMoneyRefundWorker } from './workers/moneyRefund.worker.js';
 import { ensureAvatarBase } from '@utils/avatar.util.js';
 import { startupWarnings } from '@config/startupWarnings.js';
 import { createShutdown } from '@helpers/shutdown.js';
@@ -54,8 +54,8 @@ async function bootstrap() {
   app.log.info('order timeout worker started');
 
   // the transfers of money back that stayed pending are asked about, with the database only
-  startReturnRefundWorker(app.log);
-  app.log.info('return refund worker started');
+  startMoneyRefundWorker(app.log);
+  app.log.info('money refund worker started');
 
   // the plain picture the drawn avatars go on; the start does not wait for cloudinary, a failure
   // goes to the log and the next start tries again
@@ -79,7 +79,7 @@ const shutdown = createShutdown({
   steps: [
     // stop background jobs first so they do not start new work during shutdown
     () => stopOrderTimeoutWorker(),
-    () => stopReturnRefundWorker(),
+    () => stopMoneyRefundWorker(),
     // stop accepting requests and wait for active ones to finish
     async () => {
       await app.close();

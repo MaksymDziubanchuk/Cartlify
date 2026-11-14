@@ -18,6 +18,7 @@ import {
   type TestProduct,
 } from '../../../helpers/factories.js';
 import { drawnAvatarOf } from '../../../helpers/avatar.js';
+import { giveMoneyRight, takeMoneyRight } from '../../../helpers/moneyManager.js';
 import { giveNewsletterRight } from '../../../helpers/newsletterManager.js';
 import { takeLogs } from '../../../helpers/logs.js';
 
@@ -85,6 +86,7 @@ describe('GET /api/users/me', () => {
       avatarUrls: expect.any(Object),
       avatarIsDefault: true,
       canManageNewsletters: false,
+      canManageMoney: false,
       reviews: [],
     });
   });
@@ -272,6 +274,43 @@ describe('the right to run the newsletters in GET /api/users/me', () => {
 
     expect(answers.map((res) => res.statusCode)).toEqual([200, 200, 200]);
     expect(answers.map((res) => res.json().canManageNewsletters)).toEqual([true, false, true]);
+  });
+});
+
+// the right to handle the money the way root does, next to the role, read from the database at every
+// request as the right of the newsletters
+describe('the right to handle the money in GET /api/users/me', () => {
+  const rightOf = async (cookie: string) => {
+    const res = await getMe(app, cookie);
+    expect(res.statusCode).toBe(200);
+    return res.json().canManageMoney as unknown;
+  };
+
+  it('is false for a user and for an admin root did not allow', async () => {
+    expect(await rightOf(accessCookie(await newUser()))).toBe(false);
+    expect(await rightOf(accessCookie(await newUser({ role: 'ADMIN' })))).toBe(false);
+  });
+
+  it('is true for an admin root allowed and for root, and follows root at once', async () => {
+    const root = await newUser({ role: 'ROOT' });
+    const admin = await newUser({ role: 'ADMIN' });
+
+    expect(await rightOf(accessCookie(root))).toBe(true);
+    await giveMoneyRight(root.id, admin.id);
+    expect(await rightOf(accessCookie(admin))).toBe(true);
+    await takeMoneyRight(root.id, admin.id);
+    expect(await rightOf(accessCookie(admin))).toBe(false);
+  });
+
+  it('is in the answer of the change of the profile too, with the same value', async () => {
+    const root = await newUser({ role: 'ROOT' });
+    const admin = await newUser({ role: 'ADMIN' });
+    await giveMoneyRight(root.id, admin.id);
+
+    const res = await patch(accessCookie(admin), { name: 'Same name' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().canManageMoney).toBe(true);
   });
 });
 

@@ -1,0 +1,15 @@
+{{greeting}}
+
+{{statementLine}}.
+{{leadTxt}}
+
+{{#items}}- {{name}} x {{quantity}}
+{{/items}}
+{{nextLine}}
+
+{{seeOrderTxt}}
+{{orderUrl}}
+
+{{questionsIntro}}{{#supportEmail}} {{orTo}} {{supportEmail}}{{/supportEmail}}.{{#seller}}
+
+{{seller}}{{/seller}}

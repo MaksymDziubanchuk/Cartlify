@@ -150,6 +150,7 @@ describe('the period and the life of a statement', () => {
     expect(
       (
         await j.post(admin, `/api/returns/${found.id}/receive`, {
+          parcel: { buyerPaid: 0 },
           results: [{ itemId: card.items[0].id, quantity: 1, goods: 'to_stock' }],
         })
       ).statusCode,

@@ -178,10 +178,10 @@ describe('buildChatBotPrompt', () => {
   });
 
   it('names every payment provider as a choice of the customer', () => {
-    const { instructions } = build({ paymentProviders: ['Stripe', 'LiqPay'] });
+    const { instructions } = build({ paymentProviders: ['Stripe', 'Adyen'] });
 
     expect(instructions).toContain(
-      'on a payment page of Stripe or LiqPay, the one the customer picks after confirming the order.',
+      'on a payment page of Stripe or Adyen, the one the customer picks after confirming the order.',
     );
   });
 

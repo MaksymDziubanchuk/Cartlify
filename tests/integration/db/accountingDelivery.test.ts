@@ -24,12 +24,15 @@ import {
   type TestUser,
 } from '../../helpers/factories.js';
 
-// the delivery in the reports of the accounting: what the orders paid in a period paid for it (by
-// paidAt, cancelled later or not), told apart what went back with the returns (the delivery share of
-// the rows whose money went back, by the time it went back), what the sends cost the shop (by
-// shippedAt). The reports run these queries as they are; here they run in one snapshot (repeatable
-// read) before and after a step of the test, so the other files that make orders at the same time
-// do not matter: the difference is the step alone
+// the delivery in the reports of the accounting, read from the money journal by the time of its
+// lines: what the orders paid in a period paid for it (the parts delivery of the payments, cancelled
+// later or not), told apart what went back with the returns (the parts delivery of the transfers and
+// of the money sent outside the app, less their failures), the way back the transfers kept and the
+// one root paid back, what the sends and the parcels back cost the shop (their lines with the
+// corrections; a send counts only when the shop owes the carrier for it). The sends and the parcels
+// are counted by the time they went (shippedAt). The reports run these queries as they are; here
+// they run in one snapshot (repeatable read) before and after a step of the test, so the other
+// files that make orders at the same time do not matter: the difference is the step alone
 
 const REPEATABLE_READ = { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead };
 const FROM = new Date('2000-01-01T00:00:00.000Z');
@@ -79,7 +82,8 @@ async function waitingOrder(rule: DeliveryRule = {}) {
   return inCommittedTx((db) => waitingOrderOf(db, buyer.id, [[product.variantId, 2]], rule));
 }
 
-// a send of the order the way an admin records it: the order is shipped, the send has the carrier
+// a send of the order the way an admin records it: the order is shipped, the send has the carrier,
+// and what it cost is a line of the money journal
 async function send(
   db: DbSession,
   orderId: number,
@@ -91,11 +95,16 @@ async function send(
     orderId,
   );
   const [row] = await db.rows<{ id: number }>(
-    `insert into cartlify.order_shipments ("orderId", carrier, cost)
-     values ($1::int, 'DHL', $2::numeric) returning id`,
+    `insert into cartlify.order_shipments ("orderId", carrier) values ($1::int, 'DHL') returning id`,
     orderId,
-    fields.cost ?? null,
   );
+  if (fields.cost != null) {
+    await db.rows(
+      `select cartlify.record_order_shipment_cost($1::int, $2::numeric) as result`,
+      row!.id,
+      fields.cost,
+    );
+  }
   if (fields.expense === false) {
     await db.rows(
       `update cartlify.order_shipments set expense = false where id = $1 returning id`,
@@ -213,22 +222,27 @@ describe('the delivery of a period', () => {
         `select id from cartlify.order_items where "orderId" = $1 order by id`,
         orderId,
       );
-      const [made] = await db.rows<{ id: number }>(
-        `select cartlify.create_return(
-           $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
-           'defect'::cartlify."ReturnReason", null, 'Anna Koval', 'anna@example.com', null, null, 4,
-           'Europe/Madrid'
-         ) as id`,
-        orderId,
-        JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
-      );
+      // a statement of each unit: the goods of a statement go back in one parcel
+      const made: number[] = [];
+      for (let unit = 0; unit < 2; unit++) {
+        const [one] = await db.rows<{ id: number }>(
+          `select cartlify.create_return(
+             $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+             'defect'::cartlify."ReturnReason", null, 'Anna Koval', 'anna@example.com', null, null, 4,
+             'Europe/Madrid'
+           ) as id`,
+          orderId,
+          JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
+        );
+        made.push(one!.id);
+      }
       const before = await deliveryOf(db);
-      for (const cost of [4.5, null]) {
+      for (const [at, cost] of [4.5, null].entries()) {
         await db.rows(
           `select cartlify.record_return_shipment(
              $1::int, 'DHL', null, null, $2::numeric, (now() at time zone 'UTC')::timestamp(3)
            ) as id`,
-          made!.id,
+          made[at],
           cost,
         );
       }
@@ -268,34 +282,42 @@ describe('the delivery of a period', () => {
       await pay(db, admin.id, owed);
       const [item] = await itemsOf(db, owed);
       const statement = await withdrawalStatementIn(db, admin.id, owed, item!.id, 1);
+      await returnParcelIn(db, admin.id, statement, 7);
       const [row] = await rowsOf(db, statement);
       await db.rows(
-        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb)`,
+        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
         statement,
         JSON.stringify([{ itemId: row!.id, quantity: 1, goods: 'to_stock' }]),
       );
-      await returnParcelIn(db, admin.id, statement, 7);
       await db.as({ role: 'ADMIN', userId: admin.id });
       const [begun] = await db.rows<{ done: { key: string } }>(
         `select cartlify.begin_return_refund($1::int, null::int[], null::jsonb, 5) as done`,
         statement,
       );
       await db.rows(
-        `select cartlify.finish_return_refund($1::uuid, 'succeeded', 're_test_way', null, null) as done`,
+        `select cartlify.settle_money_refund($1::text, 're_test_way', 'succeeded', null, null) as done`,
         begun!.done.key,
       );
 
-      // the shop pays the way back: root paid 3.50 back to the buyer
+      // the shop pays the way back: the buyer paid the carrier 3.50, root gives it back with the
+      // money of the unit outside the app (the payment holds the unit only)
       await publishContractIn(db, root.id, 'shop');
       const paidBack = await waitingOrderOf(db, buyer.id, [[product.variantId, 1]]);
       await pay(db, admin.id, paidBack);
       const [other] = await itemsOf(db, paidBack);
       const second = await withdrawalStatementIn(db, admin.id, paidBack, other!.id, 1);
+      const [back] = await rowsOf(db, second);
+      await db.as({ role: 'ADMIN', userId: admin.id });
+      await db.rows(
+        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 3.5}'::jsonb)`,
+        second,
+        JSON.stringify([{ itemId: back!.id, quantity: 1, goods: 'to_stock' }]),
+      );
       await db.as({ role: 'ROOT', userId: root.id });
       await db.rows(
-        `select cartlify.record_return_reimbursement(
-           $1::int, 3.5, 'cash'::cartlify."ReturnOutsideMethod", 'At the desk.',
-           (now() at time zone 'UTC')::timestamp(3)
+        `select cartlify.mark_return_refunded_outside(
+           $1::int, null::int[], 'cash'::cartlify."OutsideMethod", 'At the desk.',
+           (now() at time zone 'UTC')::timestamp(3), null::numeric
          ) as done`,
         second,
       );
@@ -337,6 +359,112 @@ describe('the delivery of a period', () => {
   });
 });
 
+describe('the delivery of a period from the money journal', () => {
+  // a transfer of a statement the provider refused: its rows wait for their money again
+  async function failTransfer(db: DbSession, returnId: number) {
+    await db.as({ role: 'ADMIN', userId: admin.id });
+    const [begun] = await db.rows<{ done: { key: string } }>(
+      `select cartlify.begin_return_refund($1::int, null::int[], null::jsonb) as done`,
+      returnId,
+    );
+    await db.rows(
+      `select cartlify.settle_money_refund(
+         $1::text, $2::text, 'failed', 'card_unavailable'::cartlify."RefundFailure", 'closed'
+       ) as done`,
+      begun!.done.key,
+      `re_fail_${begun!.done.key}`,
+    );
+  }
+
+  it('gives the delivery of a transfer back with its failure, and counts it again with the money sent outside the app', async () => {
+    const orderId = await waitingOrder({ flat: 6 });
+
+    const { failed, outside } = await inRolledBackTx(async (db) => {
+      await pay(db, admin.id, orderId);
+      const before = await deliveryOf(db);
+      const returnId = await cancelPaidOrderIn(db, admin.id, orderId);
+      await failTransfer(db, returnId);
+      const failed = diff(await deliveryOf(db), before);
+      await db.as({ role: 'ROOT', userId: root.id });
+      await db.rows(
+        `select cartlify.mark_return_refunded_outside(
+           $1::int, null::int[], 'bank_transfer'::cartlify."OutsideMethod", 'To the account.',
+           (now() at time zone 'UTC')::timestamp(3)
+         ) as done`,
+        returnId,
+      );
+      return { failed, outside: diff(await deliveryOf(db), before) };
+    }, REPEATABLE_READ);
+
+    // the transfer and its failure: nothing went back, no order counts
+    expect(failed).toMatchObject({ refunded_orders: 0, refunded_revenue: 0 });
+    expect(outside).toMatchObject({ refunded_orders: 1, refunded_revenue: 6 });
+  });
+
+  it('counts a cost of a send written again by the difference, and a cost of 0 as none', async () => {
+    const orderId = await waitingOrder();
+
+    const { raised, zeroed } = await inRolledBackTx(async (db) => {
+      await pay(db, admin.id, orderId);
+      const before = await deliveryOf(db);
+      await send(db, orderId, { cost: 7 });
+      await db.as({ role: 'ADMIN', userId: admin.id });
+      const [shipment] = await db.rows<{ id: number }>(
+        `select id from cartlify.order_shipments where "orderId" = $1`,
+        orderId,
+      );
+      const cost = (value: number) =>
+        db.rows(
+          `select cartlify.record_order_shipment_cost($1::int, $2::numeric) as result`,
+          shipment!.id,
+          value,
+        );
+      await cost(9.5);
+      const raised = diff(await deliveryOf(db), before);
+      await cost(0);
+      return { raised, zeroed: diff(await deliveryOf(db), before) };
+    }, REPEATABLE_READ);
+
+    expect(raised).toMatchObject({ sends: 1, ship_cost: 9.5, sends_without_cost: 0 });
+    // free and not known yet are one: the send has no cost
+    expect(zeroed).toMatchObject({ sends: 1, ship_cost: 0, sends_without_cost: 1 });
+  });
+
+  it('counts a cost of a parcel back written again by the difference', async () => {
+    const orderId = await waitingOrder();
+
+    const { before, after } = await inRolledBackTx(async (db) => {
+      await pay(db, admin.id, orderId);
+      const [item] = await itemsOf(db, orderId);
+      const [made] = await db.rows<{ id: number }>(
+        `select cartlify.create_return(
+           $1::int, $2::jsonb, 'admin'::cartlify."ReturnSource", 'other'::cartlify."ReturnBasis",
+           'defect'::cartlify."ReturnReason", null, 'Anna Koval', 'anna@example.com', null, null, 4,
+           'Europe/Madrid'
+         ) as id`,
+        orderId,
+        JSON.stringify([{ orderItemId: item!.id, quantity: 1 }]),
+      );
+      const before = await deliveryOf(db);
+      await db.as({ role: 'ADMIN', userId: admin.id });
+      const [parcel] = await db.rows<{ id: number }>(
+        `select cartlify.record_return_shipment(
+           $1::int, 'DHL', null, null, 4::numeric, (now() at time zone 'UTC')::timestamp(3)
+         ) as id`,
+        made!.id,
+      );
+      await db.rows(`select cartlify.set_return_shipment_cost($1::int, 6.25) as done`, parcel!.id);
+      return { before, after: await deliveryOf(db) };
+    }, REPEATABLE_READ);
+
+    expect(diff(after, before)).toMatchObject({
+      return_sends: 1,
+      return_ship_cost: 6.25,
+      return_sends_without_cost: 0,
+    });
+  });
+});
+
 describe('the delivery of the steps of a timeline', () => {
   type StepNumbers = Numbers & { n: number };
 
@@ -375,8 +503,9 @@ describe('the delivery of the steps of a timeline', () => {
     });
     // the step after the money was made holds none of it
     expect(diff(after[1]!, before[1]!)).toMatchObject({ paid_revenue: 0, sends: 0, ship_cost: 0 });
-    expect(after[0]!.paid_revenue).toBe(whole.paid_revenue);
-    expect(after[0]!.ship_cost).toBe(whole.ship_cost);
+    // the first step is the period: every count of it is the count of the period
+    const { n: _n, ...first } = after[0]!;
+    expect(first).toEqual(whole);
   });
 
   it('counts the refund in the step the money went back in', async () => {

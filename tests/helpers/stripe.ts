@@ -8,7 +8,14 @@ import { STRIPE_PLACEHOLDER_KEY } from '../setup/isolateEnv.js';
 import { uniqueTag } from './factories.js';
 import { hideSecrets } from './hideSecrets.js';
 import { isRealService } from './services.js';
-import { startStripeMock, type RefundOutcome, type StripeMock } from './stripeMock.js';
+import {
+  idOf,
+  startStripeMock,
+  type DisputeEnd,
+  type DisputeOpening,
+  type RefundOutcome,
+  type StripeMock,
+} from './stripeMock.js';
 
 // Stripe answers from a mock (tests/helpers/stripeMock.ts) unless the run takes it for real
 // (service:stripe): then the payment tests use the key of a test sandbox (STRIPE_TEST_SECRET_KEY,
@@ -71,13 +78,31 @@ export const queueRefundOutcome = (outcome: RefundOutcome) =>
 export const settleRefund = (refundId: string, end: { status: 'succeeded' } | RefundOutcome) =>
   mockOfRefunds().settleRefund(refundId, end);
 
+// the bank of the card gives a refund its number (destination_details.card.reference), with
+// refund.updated; the sandbox does it some days after the money is sent (mock only)
+export const giveRefundReference = (refundId: string, reference: string) =>
+  mockOfRefunds().giveRefundReference(refundId, reference);
+
+// the bank opens a dispute on a payment, with charge.dispute.created (and
+// charge.dispute.funds_withdrawn for a chargeback); the id of the dispute (mock only: the sandbox
+// opens one only for a payment of DISPUTED_CARD)
+export const openDispute = (paymentId: string, opening?: DisputeOpening) =>
+  mockOfRefunds().openDispute(paymentId, opening);
+
+// the bank ends a dispute, with charge.dispute.closed (and charge.dispute.funds_reinstated for a
+// chargeback won); mock only, the sandbox ends one by the test evidence (closeDispute)
+export const endDispute = (disputeId: string, end: DisputeEnd) =>
+  mockOfRefunds().endDispute(disputeId, end);
+
 // the test card whose refunds are pending first and succeed a moment later, with a refund.updated
 // event (docs.stripe.com/testing, refunds; the sandbox took about two minutes, 04.11.2026); the mock
 // keeps it pending until a test ends it (settleRefund)
 export const PENDING_REFUND_CARD = 'pm_card_pendingRefund';
 
 // the test card whose payment the buyer disputes at the bank at once (docs.stripe.com/testing,
-// disputes): Stripe refuses a refund of it with charge_disputed, the mock does the same
+// disputes): a fraudulent chargeback of the whole payment, its events charge.dispute.created and
+// charge.dispute.funds_withdrawn; Stripe refuses a refund of it with charge_disputed, the mock does
+// the same
 export const DISPUTED_CARD = 'pm_card_createDispute';
 
 // the test card of a card that is gone: a refund succeeds, then the bank sends the money back and
@@ -120,14 +145,10 @@ export async function refundBecomes(
   });
 }
 
-// the bank decides the dispute of a payment of DISPUTED_CARD: the sandbox closes it by the test
-// evidence (winning_evidence or losing_evidence, docs.stripe.com/testing; won in about 20 s,
-// 04.11.2026), the test waits; the mock closes it now
+// the bank decides the dispute of a payment of DISPUTED_CARD by the test evidence a person submits
+// (winning_evidence or losing_evidence, docs.stripe.com/testing): the sandbox closes it about 20 s
+// later (04.11.2026), the test waits; the mock closes it at once
 export async function closeDispute(paymentId: string, outcome: 'won' | 'lost'): Promise<void> {
-  if (!realStripe) {
-    mockOfRefunds().closeDispute(paymentId, outcome);
-    return;
-  }
   const dispute = await untilStripe('the dispute of the payment', async () => {
     const found = await testStripe.disputes.list({ payment_intent: paymentId, limit: 1 });
     return found.data[0] ?? null;
@@ -389,9 +410,96 @@ export const refundsOf = async (paymentId: string) =>
   (await call('list the refunds', () => testStripe.refunds.list({ payment_intent: paymentId })))
     .data;
 
-// money given back outside the app, the way an admin does it in the Stripe dashboard
-export const refundAtStripe = (paymentId: string) =>
-  call('refund the payment', () => testStripe.refunds.create({ payment_intent: paymentId }));
+// money given back outside the app, the way an admin does it in the Stripe dashboard: all that is
+// left of the payment unless an amount (in cents) is given, with a reason from the list of the
+// dashboard when one is picked, and no key of a transfer of the app
+export const refundAtStripe = (
+  paymentId: string,
+  opts: { amount?: number; reason?: Stripe.RefundCreateParams.Reason } = {},
+) =>
+  call('refund the payment', () =>
+    testStripe.refunds.create({
+      payment_intent: paymentId,
+      ...(opts.amount !== undefined ? { amount: opts.amount } : {}),
+      ...(opts.reason ? { reason: opts.reason } : {}),
+    }),
+  );
+
+// the disputes of a payment, the newest first
+export const disputesOf = async (paymentId: string) =>
+  (
+    await call('list the disputes', () =>
+      testStripe.disputes.list({ payment_intent: paymentId, limit: 100 }),
+    )
+  ).data;
+
+// a dispute as Stripe has it now
+export const disputeOf = (disputeId: string) =>
+  call('read the dispute', () => testStripe.disputes.retrieve(disputeId));
+
+// an event of a dispute (charge.dispute.created, .updated, .closed, .funds_withdrawn,
+// .funds_reinstated) around the dispute as Stripe has it now: the webhook reads the dispute from
+// Stripe again, so the order the events come in does not matter
+export const disputeEvent = async (type: string, disputeId: string) =>
+  craftEvent(type, await disputeOf(disputeId));
+
+// the charge of a payment, which the objects of Radar name beside it
+async function chargeOf(paymentId: string): Promise<string> {
+  const payment = await call('read the payment', () =>
+    testStripe.paymentIntents.retrieve(paymentId),
+  );
+  const charge = payment.latest_charge;
+  const chargeId = typeof charge === 'string' ? charge : charge?.id;
+  if (!chargeId) throw new Error('the payment has no charge');
+  return chargeId;
+}
+
+// an early fraud warning of the network of the card on a payment, the object of
+// radar.early_fraud_warning.created and .updated (docs.stripe.com/api/radar/early_fraud_warnings):
+// actionable until the payment is refunded or disputed. A test builds it around a payment of its
+// own; the sandbox makes one for a test card of its own
+export async function earlyFraudWarningOf(
+  paymentId: string,
+  opts: { id?: string; actionable?: boolean; fraudType?: string } = {},
+): Promise<Stripe.Radar.EarlyFraudWarning> {
+  return {
+    id: opts.id ?? idOf('issfr_', 30),
+    object: 'radar.early_fraud_warning',
+    actionable: opts.actionable ?? true,
+    charge: await chargeOf(paymentId),
+    created: Math.floor(Date.now() / 1000),
+    fraud_type: opts.fraudType ?? 'made_with_stolen_card',
+    livemode: false,
+    payment_intent: paymentId,
+  };
+}
+
+// a review of a payment Radar holds for the shop to look at, the object of review.opened and
+// review.closed (docs.stripe.com/api/radar/reviews): open, or closed with the reason it ended
+// (approved, refunded, refunded_as_fraud, disputed, redacted, canceled, ...). Only the mock run
+// sees one: the sandbox opens a review only by a rule of Radar the shop sets
+export async function paymentReviewOf(
+  paymentId: string,
+  opts: { id?: string; closedReason?: Stripe.Review.ClosedReason; openedReason?: string } = {},
+): Promise<Stripe.Review> {
+  const openedReason = opts.openedReason ?? 'rule';
+  return {
+    id: opts.id ?? idOf('prv_', 28),
+    object: 'review',
+    billing_zip: null,
+    charge: await chargeOf(paymentId),
+    closed_reason: opts.closedReason ?? null,
+    created: Math.floor(Date.now() / 1000),
+    ip_address: null,
+    ip_address_location: null,
+    livemode: false,
+    open: !opts.closedReason,
+    opened_reason: openedReason,
+    payment_intent: paymentId,
+    reason: opts.closedReason ?? openedReason,
+    session: null,
+  };
+}
 
 // a payment of the amount (in cents) with a test card (pm_card_visa unless given), without a payment
 // page: an order an admin cancels needs a payment Stripe really took. Returns the payment

@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 import { getMe, logIn, sessionCookie, signIn } from '../../../helpers/actors.js';
 import { startApp, stopApp } from '../../../helpers/app.js';
 import { drawnAvatarOf } from '../../../helpers/avatar.js';
+import { giveMoneyRight } from '../../../helpers/moneyManager.js';
 import { giveNewsletterRight } from '../../../helpers/newsletterManager.js';
 import { cookieHeader, cookieJar, setCookies } from '../../../helpers/cookies.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
@@ -121,6 +122,37 @@ describe('POST /api/auth/login', () => {
 
     it('is true for root', async () => {
       expect(await loginRight(await newUser({ role: 'ROOT' }))).toBe(true);
+    });
+  });
+
+  // the right to handle the money comes with the role too, the same way
+  describe('the right to handle the money in the profile', () => {
+    const loginRight = async (user: Awaited<ReturnType<typeof newUser>>) => {
+      const res = await logIn(app, csrf, { email: user.email, password: user.password });
+      expect(res.statusCode).toBe(200);
+      return res.json().canManageMoney as unknown;
+    };
+
+    it('is false for a user and for an admin root did not allow', async () => {
+      expect(await loginRight(await newUser())).toBe(false);
+      expect(await loginRight(await newUser({ role: 'ADMIN' }))).toBe(false);
+    });
+
+    it('is true for an admin root allowed, and for root', async () => {
+      const root = await newUser({ role: 'ROOT' });
+      const admin = await newUser({ role: 'ADMIN' });
+      await giveMoneyRight(root.id, admin.id);
+
+      expect(await loginRight(admin)).toBe(true);
+      expect(await loginRight(root)).toBe(true);
+    });
+
+    it('is its own right: the right of the newsletters does not give it', async () => {
+      const root = await newUser({ role: 'ROOT' });
+      const admin = await newUser({ role: 'ADMIN' });
+      await giveNewsletterRight(root.id, admin.id);
+
+      expect(await loginRight(admin)).toBe(false);
     });
   });
 

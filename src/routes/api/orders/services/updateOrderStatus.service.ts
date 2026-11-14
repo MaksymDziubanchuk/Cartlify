@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import { tx, isRetryableTxError, getPgMessage } from '@db/client.js';
 import { setUserContext } from '@db/dbContext.service.js';
 import { writeAdminAuditLog } from '@db/adminAudit.helper.js';
+import { holdReasonsOf } from '@helpers/orderHolds.js';
 import {
   ConflictError,
   ForbiddenError,
@@ -16,6 +17,8 @@ import {
   mapOrderRowToResponse,
   orderContextOf,
   readOrderResponse,
+  recordShipmentCost,
+  shipmentCostsOf,
   shipmentLogOf,
 } from './helpers/index.js';
 import { sendOrderNoticeEmail } from './helpers/sendOrderNoticeEmail.helper.js';
@@ -65,12 +68,16 @@ const STEP_EVENTS: Record<'manual' | 'pickup', StepEvents> = {
 };
 
 // an admin moves an order one step. Shipping a manual order records the send (who carries it, the
-// number, the link, what the shop pays the carrier, each only if known); a pickup is shipped when it
-// is ready to be collected and has no send. A step back of a manual order takes the send back, and
-// the admin says whether the cost of it stays owed (the carrier was used) or was a mistake. Every
-// step goes to the admin log in the name of the admin with what it did; the buyer is mailed after
-// the commit unless the account is deleted. A second request of the same step (a double click)
-// finds the order moved on and is 409 with no second mail
+// number, the link, each only if known) and what the shop pays the carrier, a line of the money
+// journal in the same transaction (none while it is not known); a pickup is shipped when it is ready
+// to be collected and has no send. An order something holds (orders.holds: a dispute, a refund by
+// hand root has not decided on, a warning or a review of the provider) is not sent: the guard of
+// orders refuses it and the admin is told the reasons. A step back of a manual order takes the send
+// back, and the admin says whether the cost of it stays owed (the carrier was used) or was a
+// mistake (the journal corrects it to nothing). Every step goes to the admin log in the name of the
+// admin with what it did; the buyer is mailed after the commit unless the account is deleted. A
+// second request of the same step (a double click) finds the order moved on and is 409 with no
+// second mail
 export async function updateOrderStatus(
   {
     actorId,
@@ -122,16 +129,10 @@ export async function updateOrderStatus(
             delivery: { select: { method: true } },
             // the send on its way
             shipments: {
-              where: { rolledBackAt: null },
+              where: { returnId: null, rolledBackAt: null },
               orderBy: [{ shippedAt: 'desc' }, { id: 'desc' }],
               take: 1,
-              select: {
-                id: true,
-                carrier: true,
-                trackingNumber: true,
-                trackingUrl: true,
-                cost: true,
-              },
+              select: { id: true, carrier: true, trackingNumber: true, trackingUrl: true },
             },
           },
         });
@@ -182,34 +183,30 @@ export async function updateOrderStatus(
             : []),
         ];
 
-        // shipped by hand: the send is recorded, with nothing known of it when nothing is said
+        // shipped by hand: the send is recorded, with nothing known of it when nothing is said, and
+        // what the shop pays the carrier is a line of the money journal once it is known
         if (status === 'shipped' && current.status === 'paid' && !pickup) {
+          const { cost, ...details } = send ?? buildShipmentData(undefined);
           const created = await db.orderShipment.create({
-            data: { orderId: orderIdRaw, ...(send ?? buildShipmentData(undefined)) },
-            select: {
-              id: true,
-              carrier: true,
-              trackingNumber: true,
-              trackingUrl: true,
-              cost: true,
-            },
+            data: { orderId: orderIdRaw, ...details },
+            select: { id: true, carrier: true, trackingNumber: true, trackingUrl: true },
           });
-          changes.push({ field: 'shipment', old: null, new: shipmentLogOf(created) });
+          if (cost !== null) await recordShipmentCost(db, created.id, cost);
+          changes.push({ field: 'shipment', old: null, new: shipmentLogOf({ ...created, cost }) });
         }
 
         // taken back: the send stays as history, marked rolled back. Its cost stays owed (the carrier
-        // was used), or the send was a mistake and cost nothing: 0, the cost it had stays in the log
+        // was used), or the send was a mistake and cost nothing: the journal corrects the cost it had
+        // to 0 with a line of its own, and the admin log keeps the cost it had
         if (status === 'paid' && onItsWay) {
-          const oldCost = onItsWay.cost === null ? null : Number(onItsWay.cost);
+          const oldCost = (await shipmentCostsOf(db, [onItsWay.id])).get(onItsWay.id) ?? null;
           await db.orderShipment.update({
             where: { id: onItsWay.id },
-            data:
-              keepShippingCost === true
-                ? { rolledBackAt: new Date(), expense: true }
-                : { rolledBackAt: new Date(), expense: false, cost: 0 },
+            data: { rolledBackAt: new Date(), expense: keepShippingCost === true },
           });
+          if (keepShippingCost !== true) await recordShipmentCost(db, onItsWay.id, 0);
           changes.push(
-            { field: 'shipment', old: shipmentLogOf(onItsWay), new: null },
+            { field: 'shipment', old: shipmentLogOf({ ...onItsWay, cost: oldCost }), new: null },
             { field: 'shippingCostKept', old: null, new: keepShippingCost === true },
             ...(keepShippingCost === true ? [] : [{ field: 'shippingCost', old: oldCost, new: 0 }]),
           );
@@ -252,6 +249,14 @@ export async function updateOrderStatus(
   } catch (err) {
     if (isAppError(err)) throw err;
 
+    // something holds the order from its sending (the guard of orders, db/05): the admin is told why
+    if (getPgMessage(err) === 'ORDER_ON_HOLD') {
+      throw new ConflictError('ORDER_ON_HOLD', {
+        orderId: orderIdRaw,
+        holds: await holdReasonsOfOrder(actorId, actorRole, orderIdRaw),
+      });
+    }
+
     // a parcel the buyer refused is on its way back (the guard of orders, db/05)
     if (getPgMessage(err) === 'ORDER_HAS_OPEN_REFUSAL') {
       throw new ConflictError('ORDER_HAS_OPEN_REFUSAL', { orderId: orderIdRaw });
@@ -268,6 +273,20 @@ export async function updateOrderStatus(
 
     throw new InternalError({ reason: 'ORDERS_UPDATE_STATUS_UNEXPECTED' }, err);
   }
+}
+
+// the reasons that hold the order, each once, read after the guard refused the step
+async function holdReasonsOfOrder(
+  actorId: UpdateOrderStatusDto['actorId'],
+  actorRole: UpdateOrderStatusDto['actorRole'],
+  orderId: number,
+) {
+  return tx(async (db) => {
+    await setUserContext(db, { userId: actorId, role: actorRole });
+
+    const order = await db.order.findUnique({ where: { id: orderId }, select: { holds: true } });
+    return holdReasonsOf(order?.holds);
+  });
 }
 
 // the order as the admin sees it: with its sends and weight

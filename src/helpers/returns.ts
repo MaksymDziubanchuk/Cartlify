@@ -1,12 +1,14 @@
 import {
+  MoneyPart,
+  MoneyPurpose,
+  OutsideMethod,
+  RefundFailure,
   ReturnBasis,
   ReturnCloseCode,
   ReturnGoods,
   ReturnMoney,
   ReturnNotAcceptedReason,
-  ReturnOutsideMethod,
   ReturnReason,
-  ReturnRefundFailure,
   ReturnSource,
   ReturnStatus,
 } from '@prisma/client';
@@ -21,14 +23,13 @@ export const RETURN_GOODS = Object.values(ReturnGoods);
 export const RETURN_MONEY = Object.values(ReturnMoney);
 export const RETURN_NOT_ACCEPTED_REASONS = Object.values(ReturnNotAcceptedReason);
 export const RETURN_STATUSES = Object.values(ReturnStatus);
-export const RETURN_REFUND_FAILURES = Object.values(ReturnRefundFailure);
 export const RETURN_CLOSE_CODES = Object.values(ReturnCloseCode);
-export const RETURN_OUTSIDE_METHODS = Object.values(ReturnOutsideMethod);
-// the ways root sends money outside the app by hand: a chargeback is the end of a dispute at the
-// bank, recorded by its own action
-export const RETURN_OUTSIDE_PAYMENT_METHODS = RETURN_OUTSIDE_METHODS.filter(
-  (method) => method !== 'chargeback',
-);
+// the money: why a refund failed, how root sends money outside the app by hand, what a line of the
+// money journal is about and which part of a movement it is
+export const REFUND_FAILURES = Object.values(RefundFailure);
+export const OUTSIDE_METHODS = Object.values(OutsideMethod);
+export const MONEY_PURPOSES = Object.values(MoneyPurpose);
+export const MONEY_PARTS = Object.values(MoneyPart);
 // the codes root closes rows with by hand: stated_again is the one of the database, when the buyer
 // states the units of a form without the code themselves
 export const RETURN_ROOT_CLOSE_CODES = RETURN_CLOSE_CODES.filter((code) => code !== 'stated_again');

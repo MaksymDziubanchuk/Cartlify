@@ -14,7 +14,13 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import { watchMail } from '../../../helpers/mail.js';
-import { placeOrder, placeOrderOf } from '../../../helpers/orders.js';
+import {
+  holdForReview,
+  placeOrder,
+  placeOrderOf,
+  shippingCostOf,
+  shippingLinesOf,
+} from '../../../helpers/orders.js';
 
 // the desk of the orders of an admin: the steps shipped and delivered go to the admin log and a
 // double click mails once; the list finds orders by the buyer, the statuses, the text of a buyer
@@ -213,9 +219,11 @@ describe('GET /api/orders for an admin', () => {
   });
 
   it('finds an order by its number, and the orders of a buyer by a part of the email', async () => {
-    const { tag, paid, shipped, waiting } = await buyerWithOrders();
+    const { buyer, tag, paid, shipped, waiting } = await buyerWithOrders();
 
-    expect(idsOf(await listAs(admin, `q=${paid}`))).toEqual([paid]);
+    // the number of the order may stand in the number of a parcel of an order of another file: the
+    // orders of this buyer only
+    expect(idsOf(await listAs(admin, `q=${paid}&userId=${buyer.id}`))).toEqual([paid]);
     expect(idsOf(await listAs(admin, `q=${encodeURIComponent(`lena-${tag}@exa`)}`))).toEqual(
       [paid, shipped, waiting].sort((a, b) => a - b),
     );
@@ -497,6 +505,8 @@ describe('POST /api/orders/status', () => {
       expect.objectContaining({ orderId: named, carrier: 'DHL', trackingNumber: 'A1' }),
       expect.objectContaining({ orderId: bare, carrier: null, trackingNumber: null }),
     ]);
+    expect(await shippingCostOf(sends[0]!.id)).toBe(5);
+    expect(await shippingCostOf(sends[1]!.id)).toBeNull();
   });
 
   it('names an order whose send breaks a rule and ships the others', async () => {
@@ -525,7 +535,13 @@ describe('POST /api/orders/status', () => {
     const product = await createProduct({ price: 10, stock: 5 });
     const kept = await placeOrder(app, csrf, buyer, product, 'paid');
     const cleared = await placeOrder(app, csrf, buyer, product, 'paid');
-    await bulk({ status: 'shipped', orders: [{ orderId: kept }, { orderId: cleared }] });
+    await bulk({
+      status: 'shipped',
+      orders: [
+        { orderId: kept, shipment: { carrier: 'DHL', cost: 5 } },
+        { orderId: cleared, shipment: { carrier: 'DHL', cost: 5 } },
+      ],
+    });
 
     const res = await bulk({
       status: 'paid',
@@ -546,7 +562,41 @@ describe('POST /api/orders/status', () => {
       }),
     );
     expect(sends.map((s) => s.expense)).toEqual([true, false]);
-    expect(Number(sends[1]!.cost)).toBe(0);
+    // the cost kept stays a line of the journal, the one taken back is corrected to nothing
+    expect(await shippingCostOf(sends[0]!.id)).toBe(5);
+    expect(await shippingCostOf(sends[1]!.id)).toBe(0);
+    expect((await shippingLinesOf(sends[1]!.id)).map((l) => [l.event, l.amount])).toEqual([
+      ['money.shipping_cost', -5],
+      ['money.correction', 5],
+    ]);
+  });
+
+  // an order something holds answers why, the others take the step
+  it('names an order something holds and ships the others', async () => {
+    const buyer = await newUser();
+    const product = await createProduct({ price: 10, stock: 5 });
+    const held = await placeOrder(app, csrf, buyer, product, 'paid');
+    const free = await placeOrder(app, csrf, buyer, product, 'paid');
+    await holdForReview(held);
+    const mails = watchMail();
+
+    const res = await bulk({
+      status: 'shipped',
+      orders: [{ orderId: held, shipment: { carrier: 'DHL', cost: 5 } }, { orderId: free }],
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().results).toEqual([
+      {
+        orderId: held,
+        ok: false,
+        errorCode: 'ORDER_ON_HOLD',
+        details: { orderId: held, holds: ['payment_review'] },
+      },
+      { orderId: free, ok: true, status: 'shipped', returnStatus: 'none' },
+    ]);
+    expect(await asAdmin((tx) => tx.orderShipment.count({ where: { orderId: held } }))).toBe(0);
+    expect(mails).toHaveLength(1);
   });
 
   it('refuses a buyer', async () => {

@@ -80,7 +80,7 @@ describe('the guards are in place', () => {
          join pg_class c on c.oid = t.tgrelid
          where c.relnamespace = 'cartlify'::regnamespace
            and (c.relname like 'newsletter\\_%'
-                or t.tgname in ('trg_users_clear_newsletter_manager', 'trg_users_insert_columns'))
+                or t.tgname in ('trg_users_clear_admin_rights', 'trg_users_insert_columns'))
            and not t.tgisinternal and t.tgenabled = 'O'
          order by c.relname, t.tgname`,
       ),
@@ -112,7 +112,7 @@ describe('the guards are in place', () => {
         name: 'trg_newsletter_subscriptions_update_columns',
         events: 'update',
       },
-      { table: 'users', name: 'trg_users_clear_newsletter_manager', events: 'update' },
+      { table: 'users', name: 'trg_users_clear_admin_rights', events: 'update' },
       { table: 'users', name: 'trg_users_insert_columns', events: 'insert' },
     ]);
   });

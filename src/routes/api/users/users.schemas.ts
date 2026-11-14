@@ -39,6 +39,7 @@ const userResponseExample = {
   },
   avatarIsDefault: false,
   canManageNewsletters: false,
+  canManageMoney: false,
   locale: 'en',
   phone: '+10000000000',
   reviews: [userReviewExample],

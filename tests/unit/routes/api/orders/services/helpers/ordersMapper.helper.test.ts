@@ -63,6 +63,9 @@ const row = (patch: Record<string, unknown> = {}) => ({
   deliveredAt: null,
   withdrawalDays: null,
   returnStatus: 'none',
+  // what holds the order from its sending, and the warning of an order already sent
+  holds: [],
+  fraudWarnedAt: null,
   createdAt: new Date('2026-01-01T00:00:00Z'),
   updatedAt: new Date('2026-01-01T00:00:00Z'),
   items: [item()],
@@ -92,7 +95,8 @@ const send = (patch: Record<string, unknown> = {}) => ({
   carrier: 'DHL',
   trackingNumber: 'JD0146',
   trackingUrl: 'https://dhl.example.com/JD0146',
-  cost: new Prisma.Decimal('7.35'),
+  // what the send cost the shop, the sum of its lines in the money journal
+  cost: 7.35,
   expense: true,
   shippedAt: new Date('2026-01-02T08:00:00Z'),
   rolledBackAt: null,
@@ -123,6 +127,7 @@ const map = (
     returnUnits: new Map(),
     withdrawals: new Map(),
     withdrawable: new Map(),
+    money: new Map(),
   });
 // the statements of the order 10 an admin is told of
 const returns = new Map([
@@ -156,14 +161,32 @@ const withdrawals = new Map([
         reason: null,
         step: 'received' as const,
         closedAt: null,
-        proof: null,
-        shippingReimbursement: null,
+        parcels: [],
+        refundedTotal: 0,
+        refunds: [],
         items: [],
       },
     ],
   ],
 ]);
 const withdrawable = new Map([[10, [{ orderItemId: 1, quantity: 2 }]]]);
+// the money of the order 10 the money journal holds, short, the oldest first
+const money = new Map([
+  [
+    10,
+    [
+      {
+        id: 51,
+        event: 'money.payment',
+        purpose: 'order' as const,
+        part: 'goods' as const,
+        amount: 19.98,
+        state: null,
+        createdAt: '2026-01-01T00:10:00.000Z',
+      },
+    ],
+  ],
+]);
 const mapFor = (view: 'buyer' | 'admin', patch: Record<string, unknown> = {}) =>
   mapOrderRowToResponse(
     row(patch) as unknown as Row,
@@ -177,6 +200,7 @@ const mapFor = (view: 'buyer' | 'admin', patch: Record<string, unknown> = {}) =>
       returnUnits: new Map(),
       withdrawals,
       withdrawable,
+      money,
     },
     view,
   );
@@ -552,6 +576,51 @@ describe('mapOrderRowToResponse', () => {
 
     expect(out).not.toHaveProperty('paidAt');
     expect(out).not.toHaveProperty('cancelledAt');
+  });
+
+  // orders.holds and orders.fraudWarnedAt, written by the database; the money of the order comes
+  // with the context, from the money journal
+  describe('what holds the order and its money', () => {
+    const held = [
+      { reason: 'payment_review', since: '2026-01-01T00:20:00.000Z', ref: 'prv_1' },
+      { reason: 'dispute', since: '2026-01-01T00:30:00.000Z', ref: 7 },
+    ];
+
+    it('reads what holds the order and the warning of the provider', () => {
+      expect(orderResponseSelect).toMatchObject({ holds: true, fraudWarnedAt: true });
+    });
+
+    it('gives an admin each hold as the database keeps it, with since and what put it', () => {
+      expect(mapFor('admin', { status: 'paid', confirmed: true, holds: held }).holds).toEqual(held);
+      expect(mapFor('admin').holds).toEqual([]);
+    });
+
+    it('gives an admin the time of the warning of an order already sent, and leaves it out while there is none', () => {
+      const fraudWarnedAt = new Date('2026-01-03T09:00:00Z');
+
+      expect(
+        mapFor('admin', { status: 'shipped', confirmed: true, fraudWarnedAt }).fraudWarnedAt,
+      ).toEqual(fraudWarnedAt);
+      expect(mapFor('admin')).not.toHaveProperty('fraudWarnedAt');
+    });
+
+    it('gives an admin the money of the order, and an empty list to an order without money', () => {
+      expect(mapFor('admin').money).toEqual(money.get(10));
+      expect(mapFor('admin', { id: 99 }).money).toEqual([]);
+    });
+
+    it('gives the buyer none of it', () => {
+      const out = mapFor('buyer', {
+        status: 'shipped',
+        confirmed: true,
+        holds: held,
+        fraudWarnedAt: new Date('2026-01-03T09:00:00Z'),
+      });
+
+      expect(out).not.toHaveProperty('holds');
+      expect(out).not.toHaveProperty('fraudWarnedAt');
+      expect(out).not.toHaveProperty('money');
+    });
   });
 
   describe('the statements of return', () => {

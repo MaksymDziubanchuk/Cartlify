@@ -13,12 +13,18 @@ import {
 } from '../../../helpers/factories.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { refuseMail, watchMail } from '../../../helpers/mail.js';
-import { deliveryBody, placeOrder } from '../../../helpers/orders.js';
+import {
+  deliveryBody,
+  placeOrder,
+  shippingCostOf,
+  shippingLinesOf,
+} from '../../../helpers/orders.js';
 
 // PATCH /api/orders/:orderId/shipments/:shipmentId: an admin writes what the shop pays the carrier
 // when it is known, and corrects the carrier, the number and the link of the send on its way. The
-// buyer is mailed the new shipping details, never the cost; the cost is not mailed at all. Every
-// change goes to the admin log
+// cost is a line of the money journal, a correction a new line with the difference; the buyer is
+// mailed the new shipping details, never the cost; the cost is not mailed at all. Every change goes
+// to the admin log
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -239,12 +245,13 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: the details of the s
     ['a carrier of 101 characters', { carrier: 'x'.repeat(101) }],
     ['a body with nothing in it', {}],
   ])('refuses %s by the request schema', async (_case, payload) => {
-    const { orderId, shipmentId } = await shipped();
+    const { orderId, shipmentId } = await shipped({ carrier: 'DHL', cost: 7.5 });
 
     const res = await patchShipment(orderId, shipmentId, payload);
 
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    expect(await shippingLinesOf(shipmentId)).toHaveLength(1);
   });
 
   it('refuses a body with a field nobody knows and nothing else: the schema takes the field off', async () => {
@@ -358,18 +365,96 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: what the shop pays t
         ],
       }),
     ]);
+    // the one source of the costs of the delivery: a line of the money journal of the admin
+    expect(await shippingLinesOf(shipmentId)).toEqual([
+      expect.objectContaining({
+        event: 'money.shipping_cost',
+        amount: -7.5,
+        orderId,
+        actorId: admin.id,
+        actorRole: 'ADMIN',
+      }),
+    ]);
   });
 
-  it('corrects the cost, and takes the cost of zero', async () => {
+  // a past period of the reports does not change: each correction is a line of the difference that
+  // names the first one, and the cost is their sum
+  it('corrects the cost with a new line each time, down to zero', async () => {
     const { orderId, shipmentId } = await shipped({ carrier: 'DHL', cost: 7.5 });
 
     const lower = await patchShipment(orderId, shipmentId, { cost: 6.25 });
+    const higher = await patchShipment(orderId, shipmentId, { cost: 9 });
     const free = await patchShipment(orderId, shipmentId, { cost: 0 });
-    const cleared = await patchShipment(orderId, shipmentId, { cost: null });
 
     expect(lower.json().shipments[0].cost).toBe(6.25);
+    expect(higher.json().shipments[0].cost).toBe(9);
     expect(free.json().shipments[0].cost).toBe(0);
-    expect(cleared.json().shipments[0].cost).toBeNull();
+    const lines = await shippingLinesOf(shipmentId);
+    const first = lines[0]!.id;
+    expect(lines.map((l) => [l.event, l.amount, l.coversId])).toEqual([
+      ['money.shipping_cost', -7.5, null],
+      ['money.correction', 1.25, first],
+      ['money.correction', -2.75, first],
+      ['money.correction', 9, first],
+    ]);
+    expect(await shippingCostOf(shipmentId)).toBe(0);
+    expect((await linesOf(orderId)).map((line) => line.meta)).toEqual([
+      [
+        { field: 'shipment', old: shipmentId, new: shipmentId },
+        { field: 'cost', old: 7.5, new: 6.25 },
+      ],
+      [
+        { field: 'shipment', old: shipmentId, new: shipmentId },
+        { field: 'cost', old: 6.25, new: 9 },
+      ],
+      [
+        { field: 'shipment', old: shipmentId, new: shipmentId },
+        { field: 'cost', old: 9, new: 0 },
+      ],
+    ]);
+  });
+
+  // a line of the journal is never taken away: a cost of none is a cost of nothing, the cost
+  // written is corrected to 0
+  it('takes a cost of none as nothing: the cost written is corrected to 0', async () => {
+    const { orderId, shipmentId } = await shipped({ carrier: 'DHL', cost: 7.5 });
+
+    const res = await patchShipment(orderId, shipmentId, { cost: null });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().shipments[0].cost).toBe(0);
+    expect((await shippingLinesOf(shipmentId)).map((l) => [l.event, l.amount])).toEqual([
+      ['money.shipping_cost', -7.5],
+      ['money.correction', 7.5],
+    ]);
+    expect((await linesOf(orderId)).map((line) => line.meta)).toEqual([
+      [
+        { field: 'shipment', old: shipmentId, new: shipmentId },
+        { field: 'cost', old: 7.5, new: 0 },
+      ],
+    ]);
+  });
+
+  it('writes no line, and no line of the admin log, for the same cost again', async () => {
+    const { orderId, shipmentId } = await shipped({ carrier: 'DHL', cost: 7.5 });
+
+    const res = await patchShipment(orderId, shipmentId, { cost: 7.5 });
+
+    expect(res.statusCode).toBe(200);
+    expect(await shippingLinesOf(shipmentId)).toHaveLength(1);
+    expect(await linesOf(orderId)).toEqual([]);
+  });
+
+  // the journal has no line of 0: a cost of nothing and a cost not written yet are the same
+  it('writes nothing for a cost of zero while none is written', async () => {
+    const { orderId, shipmentId } = await shipped();
+
+    const res = await patchShipment(orderId, shipmentId, { cost: 0 });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().shipments[0].cost).toBeNull();
+    expect(await shippingLinesOf(shipmentId)).toEqual([]);
+    expect(await linesOf(orderId)).toEqual([]);
   });
 
   // the carrier sends the invoice later, whatever became of the order
@@ -385,7 +470,7 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: what the shop pays t
     const res = await patchShipment(orderId, shipmentId, { cost: 9 });
 
     expect(res.statusCode).toBe(200);
-    expect(Number((await rowOf(shipmentId)).cost)).toBe(9);
+    expect(await shippingCostOf(shipmentId)).toBe(9);
   });
 
   it('refuses the cost of a send the shop owes nothing for', async () => {
@@ -396,8 +481,9 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: what the shop pays t
 
     expect(res.statusCode).toBe(409);
     expect(res.json()).toMatchObject({ errorCode: 'SHIPMENT_COST_NOT_OWED' });
-    // the mistaken send cost nothing: 0 since the step back, and it stays 0
-    expect(Number((await rowOf(shipmentId)).cost)).toBe(0);
+    // the mistaken send cost nothing: 0 since the step back, and it stays 0 with no new line
+    expect(await shippingCostOf(shipmentId)).toBe(0);
+    expect(await shippingLinesOf(shipmentId)).toHaveLength(2);
   });
 
   it('writes the cost and the details at once, and mails the details', async () => {
@@ -409,6 +495,7 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: what the shop pays t
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ errorCode: 'SHIPMENT_CARRIER_REQUIRED' });
     expect(mails).toEqual([]);
+    expect(await shippingLinesOf(shipmentId)).toEqual([]);
 
     const withCarrier = await patchShipment(orderId, shipmentId, {
       cost: 4,
@@ -418,6 +505,7 @@ describe('PATCH /api/orders/:orderId/shipments/:shipmentId: what the shop pays t
 
     expect(withCarrier.statusCode).toBe(200);
     expect(mails).toHaveLength(1);
+    expect(await shippingCostOf(shipmentId)).toBe(4);
   });
 });
 

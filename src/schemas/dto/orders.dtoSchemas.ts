@@ -1,10 +1,15 @@
+import { buyerPaidField } from '@schemas/parcelFields.js';
+import { MoneyPart, MoneyPurpose, MoneyState } from '@prisma/client';
+
+import { MONEY_LOG_EVENTS } from '@config/journalEvents.js';
+import { ORDER_HOLD_REASONS } from '@helpers/orderHolds.js';
 import { PHONE_PATTERN, PROFILE_TEXT_MAX_LENGTH } from '@helpers/profileText.js';
 import {
   RETURN_BASES,
   RETURN_DESCRIPTION_MAX,
   RETURN_MONEY,
   RETURN_NOT_ACCEPTED_REASONS,
-  RETURN_OUTSIDE_METHODS,
+  OUTSIDE_METHODS,
   RETURN_REASONS,
   RETURN_SOURCES,
   RETURN_STATUSES,
@@ -32,6 +37,9 @@ const RETURN_STATUS_NAMES = RETURN_STATUSES.join('|');
 
 // the longest note for the courier, in characters
 const SHIPPING_TEXT_MAX_LENGTH = 500;
+
+// the reasons that hold an order from its sending, for the pattern of a list of them
+const HOLD_REASON_NAMES = ORDER_HOLD_REASONS.join('|');
 
 // where the order goes, as an order answers with it
 const deliveryPersonSchema = {
@@ -165,7 +173,9 @@ const orderShipmentsSchema = {
       trackingUrl: { type: ['string', 'null'] },
       cost: {
         type: ['number', 'null'],
-        description: 'What the shop pays the carrier, empty until it is written.',
+        description:
+          'What the shop pays the carrier: the sum of the lines of the money journal of the send ' +
+          '(the cost and its corrections), empty until a cost above 0 is written.',
       },
       expense: {
         type: 'boolean',
@@ -337,6 +347,67 @@ const ordersOrderResponseSchema = {
         'grace of the shop after it, any other order never. The button of withdrawal goes by it.',
     },
     returnStatus: returnStatusField,
+    holds: {
+      type: 'array',
+      description:
+        'Admin and root: what keeps the order from its sending, the oldest first; the step to ' +
+        'shipped is refused while the list is not empty (ORDER_ON_HOLD). Only a paid order is ' +
+        'held: a dispute of its payment and a review of it by the provider until they end, a ' +
+        'refund made by hand in the dashboard of the provider and an early warning of fraud until ' +
+        'root decides.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          reason: { type: 'string', enum: [...ORDER_HOLD_REASONS] },
+          since: { type: 'string', format: 'date-time', description: 'When it was put.' },
+          ref: {
+            type: ['string', 'integer'],
+            description:
+              'What put it: the id of the dispute (dispute) or of the line of the money journal ' +
+              '(hand_refund), the id of the warning or of the review at the provider.',
+          },
+        },
+        required: ['reason', 'since', 'ref'],
+      },
+    },
+    fraudWarnedAt: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Admin and root, only for an order the provider warned of after it was sent: when the ' +
+        'warning that its payment may be fraud came (a paid order is held instead).',
+    },
+    money: {
+      type: 'array',
+      description:
+        'Admin and root: the money of the order from the money journal, a line at a time, the ' +
+        'oldest first: its payment, the refunds, the money of its statements, a late payment, ' +
+        'the money of a dispute, what the shop paid the carriers. The whole lines are ' +
+        'GET /api/admin/money-log?orderId=.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'integer', description: 'The line of the money journal.' },
+          event: { type: 'string', enum: [...MONEY_LOG_EVENTS] },
+          purpose: { type: 'string', enum: Object.values(MoneyPurpose) },
+          part: { type: 'string', enum: Object.values(MoneyPart) },
+          amount: {
+            type: 'number',
+            description: 'Above 0 to the shop, below 0 from it.',
+          },
+          state: {
+            type: ['string', 'null'],
+            enum: [...Object.values(MoneyState), null],
+            description:
+              'Where a refund stands (a line money.refund only; a failure is a line of its own).',
+          },
+          createdAt: { type: 'string', format: 'date-time' },
+        },
+        required: ['id', 'event', 'purpose', 'part', 'amount', 'state', 'createdAt'],
+      },
+    },
     returns: {
       type: 'array',
       description:
@@ -407,7 +478,9 @@ const ordersOrderResponseSchema = {
         },
         refundedTotal: {
           type: 'number',
-          description: 'The money that went back to the buyer, the delivery with it.',
+          description:
+            'The money that went back to the buyer by the statements in all, the delivery with it ' +
+            '(the sum of their refundedTotal, counted by the database from the money journal).',
         },
         netTotal: {
           type: 'number',
@@ -440,30 +513,116 @@ const ordersOrderResponseSchema = {
             enum: ['received', 'proof_provided', 'proof_confirmed', 'closed'],
           },
           closedAt: { type: ['string', 'null'], format: 'date-time' },
-          proof: {
-            type: ['object', 'null'],
-            additionalProperties: false,
-            description: 'How the buyer sent the goods back, none until they wrote it.',
-            properties: {
-              carrier: { type: 'string' },
-              trackingNumber: { type: 'string' },
-              trackingUrl: { type: ['string', 'null'] },
-              providedAt: { type: 'string', format: 'date-time' },
-              confirmed: { type: 'boolean', description: 'Whether the shop confirmed it.' },
-            },
-            required: ['carrier', 'trackingNumber', 'trackingUrl', 'providedAt', 'confirmed'],
-          },
-          shippingReimbursement: {
-            type: ['object', 'null'],
-            additionalProperties: false,
+          parcels: {
+            type: 'array',
             description:
-              'What the shop paid back for sending the goods back, outside the app, none until it did.',
-            properties: {
-              amount: { type: 'number' },
-              at: { type: 'string', format: 'date-time' },
-              method: { type: 'string', enum: [...RETURN_OUTSIDE_METHODS] },
+              'The parcels of the statement: the one the goods went back to the shop in (told by ' +
+              'the buyer or sent by the shop), the ones the shop sent the goods it did not accept ' +
+              'back in.',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                direction: { type: 'string', enum: ['to_shop', 'to_buyer'] },
+                carrier: { type: ['string', 'null'] },
+                trackingNumber: { type: ['string', 'null'] },
+                trackingUrl: { type: ['string', 'null'] },
+                shippedAt: { type: 'string', format: 'date-time' },
+                confirmed: {
+                  type: 'boolean',
+                  description: 'A parcel to the shop: whether the shop confirmed it.',
+                },
+                buyerPaid: {
+                  type: ['number', 'null'],
+                  description: 'What the buyer paid the carrier for a parcel to the shop, as told.',
+                },
+              },
+              required: [
+                'direction',
+                'carrier',
+                'trackingNumber',
+                'trackingUrl',
+                'shippedAt',
+                'confirmed',
+                'buyerPaid',
+              ],
             },
-            required: ['amount', 'at', 'method'],
+          },
+          refundedTotal: {
+            type: 'number',
+            description:
+              'How much went back to the buyer by this statement in all: what was sent or is on ' +
+              'its way less what failed, the money sent another way, the way back paid back.',
+          },
+          refunds: {
+            type: 'array',
+            description:
+              'The money the statement sent back, a movement at a time, the oldest first: a ' +
+              'transfer to the way the buyer paid (payment), or money the shop sent another way ' +
+              '(outside, with the way).',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                way: { type: 'string', enum: ['payment', 'outside'] },
+                method: { type: ['string', 'null'], enum: [...OUTSIDE_METHODS, null] },
+                state: {
+                  type: 'string',
+                  enum: ['in_transit', 'sent', 'failed'],
+                  description:
+                    'in_transit: the provider has not told it sent yet; sent; failed: it did not ' +
+                    'reach the buyer (the shop writes about another way).',
+                },
+                goods: { type: 'number', description: 'What the units give back.' },
+                delivery: {
+                  type: 'number',
+                  description: 'The delivery that goes back with them, 0 for none.',
+                },
+                deduction: {
+                  type: 'number',
+                  description:
+                    'The cost of sending the goods back taken off (the contract says the buyer ' +
+                    'pays it), 0 for none.',
+                },
+                wayBack: {
+                  type: 'number',
+                  description:
+                    'What the buyer paid the carrier to send the goods back, given back when the ' +
+                    'shop pays the way back, 0 for none.',
+                },
+                amount: {
+                  type: 'number',
+                  description:
+                    'What the buyer gets: the goods, the delivery and the way back less the ' +
+                    'deduction.',
+                },
+                at: {
+                  type: 'string',
+                  format: 'date-time',
+                  description:
+                    'When it was sent; while in transit, when it was asked; when it failed.',
+                },
+                bankReference: {
+                  type: ['string', 'null'],
+                  description:
+                    'The number the bank gives to follow a transfer to the way the buyer paid ' +
+                    '(ARN), to ask the bank about it; null until the provider tells it, and for ' +
+                    'money sent another way.',
+                },
+              },
+              required: [
+                'way',
+                'method',
+                'state',
+                'goods',
+                'delivery',
+                'deduction',
+                'wayBack',
+                'amount',
+                'at',
+                'bankReference',
+              ],
+            },
           },
           items: {
             type: 'array',
@@ -471,21 +630,19 @@ const ordersOrderResponseSchema = {
               type: 'object',
               additionalProperties: false,
               properties: {
+                id: {
+                  type: 'integer',
+                  description: 'The row of the statement: the parcel of the buyer may name it.',
+                },
                 orderItemId: { type: 'integer' },
                 quantity: { type: 'integer' },
                 amount: { type: 'number', description: 'What the units cost.' },
-                deliveryAmount: {
-                  type: 'number',
-                  description: 'The part of the delivery that goes back with them.',
-                },
-                shippingDeduction: {
-                  type: 'number',
-                  description:
-                    'The cost of sending the goods back taken off (the contract says the buyer ' +
-                    'pays it), 0 for none.',
-                },
                 money: { type: 'string', enum: [...RETURN_MONEY] },
-                refundedAt: { type: ['string', 'null'], format: 'date-time' },
+                refundedAt: {
+                  type: ['string', 'null'],
+                  format: 'date-time',
+                  description: 'When the money of the units was sent.',
+                },
                 refusal: {
                   type: ['string', 'null'],
                   enum: [...RETURN_NOT_ACCEPTED_REASONS, 'not_arrived', null],
@@ -495,11 +652,10 @@ const ordersOrderResponseSchema = {
                 },
               },
               required: [
+                'id',
                 'orderItemId',
                 'quantity',
                 'amount',
-                'deliveryAmount',
-                'shippingDeduction',
                 'money',
                 'refundedAt',
                 'refusal',
@@ -516,8 +672,9 @@ const ordersOrderResponseSchema = {
           'reason',
           'step',
           'closedAt',
-          'proof',
-          'shippingReimbursement',
+          'parcels',
+          'refundedTotal',
+          'refunds',
           'items',
         ],
       },
@@ -533,6 +690,13 @@ const ordersOrderResponseSchema = {
         properties: { orderItemId: { type: 'integer' }, quantity: { type: 'integer' } },
         required: ['orderItemId', 'quantity'],
       },
+    },
+    paymentCheck: {
+      type: 'boolean',
+      description:
+        'The buyer: the payment came and the shop checks it once more before the order is sent ' +
+        '(a warning of the network of the card, or a review of the payment provider); the shop ' +
+        'writes when the order is sent or the money goes back.',
     },
     confirmed: { type: 'boolean' },
   },
@@ -864,6 +1028,22 @@ const ordersGetQuerySchema = {
         'Admin and root: only the orders with a send that was sent before this time (a send ' +
         'taken back too); with shippingCostMissing, the send that lacks its cost.',
     },
+    holds: {
+      type: 'string',
+      pattern: `^(any|none|(${HOLD_REASON_NAMES})(,(${HOLD_REASON_NAMES}))*)$`,
+      description:
+        'Admin and root (FILTER_FORBIDDEN for a buyer): the orders that something holds from ' +
+        `their sending for one of these reasons through commas (${ORDER_HOLD_REASONS.join(', ')}), ` +
+        'any: for any reason, none: nothing holds them (with statuses=paid, the paid orders that ' +
+        'wait only for the shop to send them).',
+    },
+    fraudWarnedFrom: {
+      type: 'string',
+      format: 'date-time',
+      description:
+        'Admin and root (FILTER_FORBIDDEN for a buyer): the orders the provider warned of after ' +
+        'they were sent, at this time or later.',
+    },
 
     // sorting
     sortBy: {
@@ -950,8 +1130,9 @@ const shipmentInputSchema = {
       maximum: 99999999.99,
       multipleOf: 0.01,
       description:
-        'What the shop pays the carrier, 0 is possible; left out until the admin writes it ' +
-        '(PATCH /api/orders/{orderId}/shipments/{shipmentId}).',
+        'What the shop pays the carrier, a line of the money journal of the send; 0 or none ' +
+        'writes no line (a cost of nothing and a cost not known yet are the same), left out until ' +
+        'the admin writes it (PATCH /api/orders/{orderId}/shipments/{shipmentId}).',
     },
   },
 } as const;
@@ -970,8 +1151,8 @@ const keepShippingCostSchema = {
   type: 'boolean',
   description:
     'With the step back to paid of a manual order that was shipped: true keeps the cost of the ' +
-    'send as owed (the carrier was used), false makes it 0 (the shipping was a mistake; the cost ' +
-    'it had stays in the admin log). Needed ' +
+    'send as owed (the carrier was used), false makes it 0 (the shipping was a mistake: a line of ' +
+    'the money journal corrects the cost it had to nothing, the admin log keeps it). Needed ' +
     'then (KEEP_SHIPPING_COST_REQUIRED), not allowed otherwise (KEEP_SHIPPING_COST_NOT_ALLOWED).',
 } as const;
 
@@ -1029,7 +1210,8 @@ const ordersBulkStatusResponseSchema = {
             description:
               'Without ok: why the order did not take the step, the code PATCH ' +
               '/api/orders/{orderId}/status would answer (ORDER_NOT_FOUND, ' +
-              'ORDER_STATUS_TRANSITION_INVALID, ORDER_HAS_OPEN_REFUSAL, ORDER_STATUS_CHANGED, RESOURCE_BUSY, ' +
+              'ORDER_STATUS_TRANSITION_INVALID, ORDER_HAS_OPEN_REFUSAL, ORDER_ON_HOLD with ' +
+              'details.holds, ORDER_STATUS_CHANGED, RESOURCE_BUSY, ' +
               'SHIPMENT_NOT_ALLOWED, SHIPMENT_CARRIER_REQUIRED, ' +
               'SHIPMENT_CARRIER_INVALID, SHIPMENT_NUMBER_INVALID, KEEP_SHIPPING_COST_REQUIRED, ' +
               'KEEP_SHIPPING_COST_NOT_ALLOWED, DELIVERED_AT_NOT_ALLOWED, ORDER_DELIVERED_AT_INVALID).',
@@ -1074,14 +1256,46 @@ const ordersShipmentParamsSchema = {
   required: ['orderId', 'shipmentId'],
 } as const;
 
+const ordersCarrierMoneyBodySchema = {
+  $id: 'ordersCarrierMoneyBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['amount', 'method', 'note', 'at'],
+  properties: {
+    amount: {
+      type: 'number',
+      exclusiveMinimum: 0,
+      maximum: 99_999_999.99,
+      multipleOf: 0.01,
+      description: 'What the carrier paid, to the cent.',
+    },
+    method: {
+      type: 'string',
+      enum: [...OUTSIDE_METHODS],
+      description: 'How the money came: a bank transfer, cash or another way.',
+    },
+    note: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 500,
+      description: 'What the carrier paid for: for the shop.',
+    },
+    at: {
+      type: 'string',
+      format: 'date-time',
+      description: 'The day the money really came: never of the future, never before the send.',
+    },
+  },
+} as const;
+
 const ordersShipmentUpdateBodySchema = {
   $id: 'ordersShipmentUpdateBodySchema',
   type: 'object',
   additionalProperties: false,
   minProperties: 1,
   description:
-    'What changes, each part only if it does. null clears a part; the send holds together: a ' +
-    'number and a link each need the carrier, a link may come without a number.',
+    'What changes, each part only if it does. null clears a carrier, a number or a link; the send ' +
+    'holds together: a number and a link each need the carrier, a link may come without a number.',
   properties: {
     carrier: { type: ['string', 'null'], minLength: 1, maxLength: 100 },
     trackingNumber: { type: ['string', 'null'], minLength: 1, maxLength: 100 },
@@ -1096,7 +1310,12 @@ const ordersShipmentUpdateBodySchema = {
       minimum: 0,
       maximum: 99999999.99,
       multipleOf: 0.01,
-      description: 'What the shop pays the carrier, 0 is possible.',
+      description:
+        'What the shop pays the carrier, a line of the money journal of the send: the first cost ' +
+        'above 0, then each other cost a new line of the difference (a past period of the reports ' +
+        'does not change), 0 included. A line is never taken away: null is a cost of 0, the cost ' +
+        'written is corrected to nothing. The same cost again, or 0 while none is written, writes ' +
+        'nothing.',
     },
   },
 } as const;
@@ -1192,6 +1411,25 @@ const ordersReturnProofBodySchema = {
       pattern: '^https://[^\\s]+$',
       description: 'A link to follow the parcel (https).',
     },
+    buyerPaid: buyerPaidField,
+    items: {
+      type: 'array',
+      minItems: 1,
+      maxItems: 100,
+      description:
+        'The rows of the statement and the units the parcel carries (`id` of the rows of the ' +
+        'statement in `withdrawals`). The units that wait and are not named go into a statement of ' +
+        'their own, to be sent in a parcel of their own. Without it: the parcel carries them all.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          itemId: wholeNumberField('Id of a row of the statement'),
+          quantity: wholeNumberField('Units of it in the parcel'),
+        },
+        required: ['itemId', 'quantity'],
+      },
+    },
   },
   required: ['carrier', 'trackingNumber'],
 } as const;
@@ -1210,6 +1448,51 @@ const ordersOrderItemParamsSchema = {
     itemId: idPathParam('the order item'),
   },
   required: ['orderId', 'itemId'],
+} as const;
+
+// what holds a paid order from its sending and is root's to decide on
+export const ROOT_HOLD_REASONS = ['hand_refund', 'fraud_warning'] as const;
+
+const ordersHoldDecisionParamsSchema = {
+  $id: 'ordersHoldDecisionParamsSchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['orderId', 'reason'],
+  properties: {
+    orderId: idPathParam('the order'),
+    reason: {
+      type: 'string',
+      enum: [...ROOT_HOLD_REASONS],
+      description:
+        'What holds the order that root decides on: `hand_refund` (a refund made by hand in the ' +
+        'dashboard of the provider of part of the payment) or `fraud_warning` (an early warning ' +
+        'of fraud of the network of the card). A dispute and a review of the provider are let go ' +
+        'by the system only.',
+    },
+  },
+} as const;
+
+const ordersHoldDecisionBodySchema = {
+  $id: 'ordersHoldDecisionBodySchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['decision', 'note'],
+  properties: {
+    decision: {
+      type: 'string',
+      enum: ['ship', 'cancel'],
+      description:
+        'ship: the hold goes and the order may be sent (a refund made by hand is a compensation); ' +
+        'cancel: root cancels what is left of the order by a statement of the shop and its money ' +
+        'goes back (a refund made by hand is used first).',
+    },
+    note: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 500,
+      description: 'Why: for the journal of the admins, not mailed to the buyer.',
+    },
+  },
 } as const;
 
 export const ordersDtoSchemas = [
@@ -1232,8 +1515,11 @@ export const ordersDtoSchemas = [
   ordersUpdateStatusBodySchema,
   ordersShipmentParamsSchema,
   ordersShipmentUpdateBodySchema,
+  ordersCarrierMoneyBodySchema,
   ordersDeliveryUpdateBodySchema,
   ordersUpdateStatusResponseSchema,
   ordersListResponseSchema,
   ordersOrderItemParamsSchema,
+  ordersHoldDecisionParamsSchema,
+  ordersHoldDecisionBodySchema,
 ];

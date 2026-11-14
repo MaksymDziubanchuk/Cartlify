@@ -112,16 +112,25 @@ export interface UserResponseDto {
   // may the account run the newsletters: always true for root, the right root gave for an admin,
   // false for a user (canManageNewslettersOf)
   canManageNewsletters: boolean;
+  // may the account handle the money the way root does: always true for root, the right root gave
+  // for an admin, false for a user (canManageMoneyOf)
+  canManageMoney: boolean;
   locale?: string;
   phone?: string;
   reviews?: UserReviewResponseDto[];
 }
 
-// public profile of any user: no email, role, verification, phone, right to run the newsletters or
-// reviews
+// public profile of any user: no email, role, verification, phone, rights of an admin or reviews
 export type PublicUserProfileDto = Omit<
   UserResponseDto,
-  'email' | 'isVerified' | 'reviews' | 'role' | 'phone' | 'locale' | 'canManageNewsletters'
+  | 'email'
+  | 'isVerified'
+  | 'reviews'
+  | 'role'
+  | 'phone'
+  | 'locale'
+  | 'canManageNewsletters'
+  | 'canManageMoney'
 >;
 
 export interface AdminProfileOrderDto {

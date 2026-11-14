@@ -4,6 +4,7 @@ import { prisma } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
 import { mailLocaleOf } from '@helpers/locale.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
+import { buildOrderCompensationSentTemplate } from '@services/email/templates/orders/orderCompensationSent.template.js';
 import { buildOrderPaymentRefundedTemplate } from '@services/email/templates/orders/orderPaymentRefunded.template.js';
 import { buildOrderPaymentRefundFailedTemplate } from '@services/email/templates/orders/orderPaymentRefundFailed.template.js';
 import { buildOrderPaymentRefundOutsideTemplate } from '@services/email/templates/orders/orderPaymentRefundOutside.template.js';
@@ -13,7 +14,7 @@ import type { RefundFailure } from '../../providers/types.js';
 import type { PayOrderRefundReason } from './orderPaymentTx.helper.js';
 
 // The mails of the refund of a payment the order could not take, to the buyer: the money is sent,
-// the refund failed, root sent the money another way. The state is kept before each of them goes,
+// the refund failed, root sent the money another way; and the mail of a compensation root gave. The state is kept before each of them goes,
 // so a mail that fails is only logged, with the order id and not the address. A deleted account
 // gets none: its address is not the person's any more
 
@@ -103,6 +104,27 @@ export async function sendPaymentRefundFailedEmail(
     await sendEmail({ to: user.email, subject, text, html });
   } catch (err) {
     log.error({ err, orderId: args.orderId }, 'payment refund failed mail was not sent');
+  }
+}
+
+// the provider sent the compensation root gave by the button of the app; its failure is not mailed
+// (root sends it another way, or not)
+export async function sendCompensationSentEmail(
+  args: PaymentRefundMailArgs,
+  log: PaymentRefundMailLogger,
+): Promise<void> {
+  try {
+    const user = await buyerOf(args.userId);
+    if (!user) return;
+
+    const { subject, text, html } = buildOrderCompensationSentTemplate({
+      ...common(args, user),
+      supportEmail: shopSettings().emailReplyTo,
+    });
+
+    await sendEmail({ to: user.email, subject, text, html });
+  } catch (err) {
+    log.error({ err, orderId: args.orderId }, 'compensation mail was not sent');
   }
 }
 

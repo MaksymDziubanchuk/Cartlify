@@ -8,6 +8,7 @@ import {
 } from '@utils/errors.js';
 
 import { assertEmail } from '@helpers/validateEmail.js';
+import { canManageMoneyOf } from '@helpers/moneyManager.js';
 import { canManageNewslettersOf } from '@helpers/newsletterManager.js';
 
 import {
@@ -195,6 +196,7 @@ export async function githubCallback({
         ...(u.name ? { name: u.name } : {}),
         ...avatarOf(u),
         canManageNewsletters: canManageNewslettersOf(u),
+        canManageMoney: canManageMoneyOf(u),
         ...(u.locale ? { locale: u.locale } : {}),
         ...(u.phone ? { phone: u.phone } : {}),
       };

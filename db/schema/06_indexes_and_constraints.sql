@@ -732,13 +732,15 @@ BEGIN
 END $$;
 
 ----------------------------------------
--- ORDER_SHIPMENTS: the carrier, the tracking number and the link as the admin writes them
+-- ORDER_SHIPMENTS: the parcels of an order (the sends of the order, the parcels of its statements)
 ----------------------------------------
 -- carrier_chk: a carrier, when given, is trimmed and not empty.
 -- tracking_chk: a tracking number and a link each need a carrier (the buyer sees whose tracking it
 --   is); a link may come without a number. A link is https and has no spaces.
--- cost_non_negative: what the shop pays the carrier is 0 or more, or still empty.
 -- rolled_back_chk: a send is rolled back at the time of the send or later.
+-- parcel_chk: a parcel to the shop is a parcel of a statement; only a send of the order is rolled
+--   back; a parcel is confirmed with who confirmed it, and only a parcel to the shop is confirmed or
+--   says what the buyer paid the carrier (0 or more).
 DO $$
 BEGIN
   IF EXISTS (
@@ -783,19 +785,6 @@ BEGIN
     );
 
   IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'order_shipments_cost_non_negative'
-  ) THEN
-    ALTER TABLE cartlify.order_shipments
-      DROP CONSTRAINT order_shipments_cost_non_negative;
-  END IF;
-
-  ALTER TABLE cartlify.order_shipments
-    ADD CONSTRAINT order_shipments_cost_non_negative
-    CHECK (
-      cost IS NULL OR cost >= 0
-    );
-
-  IF EXISTS (
     SELECT 1 FROM pg_constraint WHERE conname = 'order_shipments_rolled_back_chk'
   ) THEN
     ALTER TABLE cartlify.order_shipments
@@ -807,68 +796,22 @@ BEGIN
     CHECK (
       "rolledBackAt" IS NULL OR "rolledBackAt" >= "shippedAt"
     );
-END $$;
-
-----------------------------------------
--- RETURN_SHIPMENTS: the parcels the shop paid to carry goods back
-----------------------------------------
--- carrier_chk, tracking_chk, cost_non_negative: the same rules as the sends to a buyer
--- (order_shipments): a carrier is not blank, a number needs a carrier and a link needs one, the
--- link is https, what the shop paid is 0 or more or still empty.
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'return_shipments_carrier_chk'
-  ) THEN
-    ALTER TABLE cartlify.return_shipments
-      DROP CONSTRAINT return_shipments_carrier_chk;
-  END IF;
-
-  ALTER TABLE cartlify.return_shipments
-    ADD CONSTRAINT return_shipments_carrier_chk
-    CHECK (
-      "carrier" IS NULL
-      OR (char_length("carrier") >= 1 AND "carrier" = btrim("carrier"))
-    );
 
   IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'return_shipments_tracking_chk'
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_shipments_parcel_chk'
   ) THEN
-    ALTER TABLE cartlify.return_shipments
-      DROP CONSTRAINT return_shipments_tracking_chk;
+    ALTER TABLE cartlify.order_shipments
+      DROP CONSTRAINT order_shipments_parcel_chk;
   END IF;
 
-  ALTER TABLE cartlify.return_shipments
-    ADD CONSTRAINT return_shipments_tracking_chk
+  ALTER TABLE cartlify.order_shipments
+    ADD CONSTRAINT order_shipments_parcel_chk
     CHECK (
-      (
-        "trackingNumber" IS NULL
-        OR (
-          carrier IS NOT NULL
-          AND char_length("trackingNumber") >= 1
-          AND "trackingNumber" = btrim("trackingNumber")
-        )
-      )
-      AND (
-        "trackingUrl" IS NULL
-        OR (
-          carrier IS NOT NULL
-          AND "trackingUrl" ~ '^https://[^[:space:]]+$'
-        )
-      )
-    );
-
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'return_shipments_cost_non_negative'
-  ) THEN
-    ALTER TABLE cartlify.return_shipments
-      DROP CONSTRAINT return_shipments_cost_non_negative;
-  END IF;
-
-  ALTER TABLE cartlify.return_shipments
-    ADD CONSTRAINT return_shipments_cost_non_negative
-    CHECK (
-      cost IS NULL OR cost >= 0
+      (direction = 'to_buyer' OR "returnId" IS NOT NULL)
+      AND ("rolledBackAt" IS NULL OR "returnId" IS NULL)
+      AND (("confirmedAt" IS NULL) = ("confirmedById" IS NULL))
+      AND ("confirmedAt" IS NULL OR direction = 'to_shop')
+      AND ("buyerPaid" IS NULL OR (direction = 'to_shop' AND "buyerPaid" >= 0))
     );
 END $$;
 
@@ -1334,9 +1277,10 @@ END $$;
 -- returns_text_chk: the name and the email of the statement are trimmed, the name has 1-200
 --   characters, the email 3-320 and an at sign.
 -- returns_stated_at_chk: a statement is not made before the moment it states (never of the future).
--- returns_source_chk: an admin statement has its admin and its reason, any other has a reason of
---   none; only an admin makes one outside the withdrawal; a statement of an account names the
---   account, one of a form names none.
+-- returns_source_chk: an admin statement has its admin and its reason, one of the system its reason
+--   (a dispute lost, a refund in the dashboard of the provider; nobody else gives those), any other
+--   has a reason of none; only an admin or the system makes one outside the withdrawal; a statement
+--   of an account names the account, one of a form or of the system names none.
 -- returns_extends_chk: a statement does not extend itself.
 -- returns_proof_chk: the proof is confirmed together with who confirmed it.
 -- return_items_quantity_chk, return_items_amount_chk: whole units above 0, money not below 0.
@@ -1344,25 +1288,20 @@ END $$;
 --   reason of a refusal to accept comes with not_accepted and with nothing else.
 -- return_items_pair_chk: the pairs of the goods with the money. The goods that came back (to_stock,
 --   written_off, lost) never have their money refused; the goods that were not accepted or did not
---   arrive have none of it refunded or on its way; refunded or pending money is for goods that wait,
---   came back or were lost; refused money is for goods not accepted or not arrived.
--- return_items_money_chk: the money of a row and the fields of its transfer agree. A pending row has
---   the key of its transfer; a refunded row has the time and either the key (sent through the
---   provider) or the method, the note and the root who recorded it (sent outside the app), not both;
---   a row not refunded or refused has no transfer at all; a failure and its words stay on a row not
---   refunded; the code of a closing stays on a refused row whose goods did not arrive; a refused row
---   carries no delivery and no deduction of the way back; no number is below 0.
--- returns_shipping_reimbursed_chk: the money of the way back root gave back outside the app comes
---   whole (the sum above 0, the day, the way, the note, who) or not at all.
+--   arrive have none of it refunded or on its way; refunded, pending or failed money is for goods
+--   that wait, came back or were lost; refused money is for goods not accepted or not arrived.
+-- return_items_money_chk: a row whose money is on its way, back or failed names the line of the
+--   money journal that put it there, a row not refunded or refused names none; the code of a
+--   closing stays on a refused row whose goods did not arrive.
+-- return_items_back_chk: only goods not accepted go back to the buyer in a parcel.
 -- returns_accepted_chk: only a statement of the form without the code is accepted, together with
 --   who accepted it.
 -- returns_manual_under_review_uidx: one statement of the form without the code waits for the check
 --   of an admin per order (create_return refuses another first, RETURN_MANUAL_UNDER_REVIEW).
--- return_shipments_tracking_uidx: a number of a parcel once per statement, whatever the spaces and
---   the case (record_return_shipment refuses it first, RETURN_SHIPMENT_EXISTS).
--- returns_proof_given_chk: the buyer gives the proof of the parcel as a whole: the time with the
---   carrier and the number, both trimmed and not empty, and a link only with them, https and with
---   no spaces.
+-- order_shipments_return_tracking_uidx: a number of a parcel once per statement, whatever the spaces
+--   and the case (record_return_shipment refuses it first, RETURN_SHIPMENT_EXISTS).
+-- order_shipments_to_shop_uidx: one parcel to the shop per statement: the goods of a statement go
+--   back in one parcel, the units not in it go into a statement of their own (split_return).
 -- returns_close_chk: root closes with a code and a note together.
 -- order_batch_allocations_returned_chk: never more units back than the order took from the batch.
 DO $$
@@ -1396,8 +1335,9 @@ BEGIN
   ALTER TABLE cartlify.returns
     ADD CONSTRAINT returns_source_chk
     CHECK (
-      (source = 'admin') = (reason IS NOT NULL)
-      AND (source = 'admin' OR basis = 'withdrawal')
+      (source IN ('admin', 'system')) = (reason IS NOT NULL)
+      AND (source = 'system') = (reason IS NOT NULL AND reason IN ('dispute_lost', 'stripe_refund'))
+      AND (source IN ('admin', 'system') OR basis = 'withdrawal')
       AND (source IN ('admin', 'account')) = ("createdById" IS NOT NULL)
     );
 
@@ -1409,13 +1349,13 @@ BEGIN
     ADD CONSTRAINT returns_extends_chk
     CHECK ("extendsId" IS NULL OR "extendsId" <> id);
 
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_proof_chk') THEN
-    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_proof_chk;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_split_chk') THEN
+    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_split_chk;
   END IF;
 
   ALTER TABLE cartlify.returns
-    ADD CONSTRAINT returns_proof_chk
-    CHECK (("proofConfirmedAt" IS NULL) = ("proofConfirmedById" IS NULL));
+    ADD CONSTRAINT returns_split_chk
+    CHECK ("splitFromId" IS NULL OR "splitFromId" <> id);
 
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_quantity_chk') THEN
     ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_quantity_chk;
@@ -1445,10 +1385,10 @@ BEGIN
     ADD CONSTRAINT return_items_pair_chk
     CHECK (
       CASE goods
-        WHEN 'expected' THEN money IN ('not_refunded', 'pending', 'refunded')
-        WHEN 'to_stock' THEN money IN ('not_refunded', 'pending', 'refunded')
-        WHEN 'written_off' THEN money IN ('not_refunded', 'pending', 'refunded')
-        WHEN 'lost' THEN money IN ('not_refunded', 'pending', 'refunded')
+        WHEN 'expected' THEN money IN ('not_refunded', 'pending', 'refunded', 'failed')
+        WHEN 'to_stock' THEN money IN ('not_refunded', 'pending', 'refunded', 'failed')
+        WHEN 'written_off' THEN money IN ('not_refunded', 'pending', 'refunded', 'failed')
+        WHEN 'lost' THEN money IN ('not_refunded', 'pending', 'refunded', 'failed')
         -- goods paid ahead that never came keep their money back
         WHEN 'not_arrived' THEN money IN ('not_refunded', 'refused', 'refunded')
         ELSE money IN ('not_refunded', 'refused')
@@ -1463,50 +1403,17 @@ BEGIN
   ALTER TABLE cartlify.return_items
     ADD CONSTRAINT return_items_money_chk
     CHECK (
-      "deliveryShare" >= 0
-      AND "shippingDeduction" >= 0
-      AND (money <> 'pending' OR "refundKey" IS NOT NULL)
-      AND (
-        money <> 'refunded'
-        OR ("refundedAt" IS NOT NULL AND ("refundKey" IS NULL) = ("outsideMethod" IS NOT NULL))
-      )
-      AND (
-        money NOT IN ('not_refunded', 'refused')
-        OR ("refundKey" IS NULL AND "refundedAt" IS NULL AND "refundId" IS NULL AND "outsideMethod" IS NULL)
-      )
-      AND ("outsideMethod" IS NULL) = ("outsideNote" IS NULL)
-      -- money sent outside the app names root; a chargeback the webhook records names nobody
-      AND ("outsideById" IS NULL OR "outsideMethod" IS NOT NULL)
-      AND ("outsideById" IS NOT NULL OR "outsideMethod" IS NULL OR "outsideMethod" = 'chargeback')
-      AND ("refundFailure" IS NULL OR money = 'not_refunded')
-      AND ("refundFailureText" IS NULL OR "refundFailure" IS NOT NULL)
+      (money IN ('pending', 'refunded', 'failed')) = ("moneyLogId" IS NOT NULL)
       AND ("refusedCode" IS NULL OR (money = 'refused' AND goods = 'not_arrived'))
-      AND (money <> 'refused' OR "deliveryShare" = 0)
-      AND (money <> 'refused' OR "shippingDeduction" = 0)
     );
 
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_proof_given_chk') THEN
-    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_proof_given_chk;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'return_items_back_chk') THEN
+    ALTER TABLE cartlify.return_items DROP CONSTRAINT return_items_back_chk;
   END IF;
 
-  ALTER TABLE cartlify.returns
-    ADD CONSTRAINT returns_proof_given_chk
-    CHECK (
-      ("proofProvidedAt" IS NULL) = ("proofCarrier" IS NULL)
-      AND ("proofProvidedAt" IS NULL) = ("proofTrackingNumber" IS NULL)
-      AND (
-        "proofCarrier" IS NULL
-        OR (char_length("proofCarrier") >= 1 AND "proofCarrier" = btrim("proofCarrier"))
-      )
-      AND (
-        "proofTrackingNumber" IS NULL
-        OR (char_length("proofTrackingNumber") >= 1 AND "proofTrackingNumber" = btrim("proofTrackingNumber"))
-      )
-      AND (
-        "proofTrackingUrl" IS NULL
-        OR ("proofProvidedAt" IS NOT NULL AND "proofTrackingUrl" ~ '^https://[^[:space:]]+$')
-      )
-    );
+  ALTER TABLE cartlify.return_items
+    ADD CONSTRAINT return_items_back_chk
+    CHECK ("backShipmentId" IS NULL OR goods = 'not_accepted');
 
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_close_chk') THEN
     ALTER TABLE cartlify.returns DROP CONSTRAINT returns_close_chk;
@@ -1515,20 +1422,6 @@ BEGIN
   ALTER TABLE cartlify.returns
     ADD CONSTRAINT returns_close_chk
     CHECK (("closeCode" IS NULL) = ("closeNote" IS NULL));
-
-  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_shipping_reimbursed_chk') THEN
-    ALTER TABLE cartlify.returns DROP CONSTRAINT returns_shipping_reimbursed_chk;
-  END IF;
-
-  ALTER TABLE cartlify.returns
-    ADD CONSTRAINT returns_shipping_reimbursed_chk
-    CHECK (
-      ("shippingReimbursed" IS NULL) = ("shippingReimbursedAt" IS NULL)
-      AND ("shippingReimbursed" IS NULL) = ("shippingReimbursedMethod" IS NULL)
-      AND ("shippingReimbursed" IS NULL) = ("shippingReimbursedNote" IS NULL)
-      AND ("shippingReimbursed" IS NULL) = ("shippingReimbursedById" IS NULL)
-      AND ("shippingReimbursed" IS NULL OR "shippingReimbursed" > 0)
-    );
 
   IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'returns_accepted_chk') THEN
     ALTER TABLE cartlify.returns DROP CONSTRAINT returns_accepted_chk;
@@ -1570,9 +1463,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS returns_manual_under_review_uidx
   ON cartlify.returns ("orderId")
   WHERE source = 'form_manual' AND "closedAt" IS NULL AND "acceptedAt" IS NULL;
 
-CREATE UNIQUE INDEX IF NOT EXISTS return_shipments_tracking_uidx
-  ON cartlify.return_shipments ("returnId", upper(regexp_replace("trackingNumber", '\s', '', 'g')))
-  WHERE "trackingNumber" IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS order_shipments_return_tracking_uidx
+  ON cartlify.order_shipments ("returnId", upper(regexp_replace("trackingNumber", '\s', '', 'g')))
+  WHERE "returnId" IS NOT NULL AND "trackingNumber" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS order_shipments_to_shop_uidx
+  ON cartlify.order_shipments ("returnId")
+  WHERE direction = 'to_shop';
 
 -- the transfers that wait for the provider: the worker asks about them
 CREATE INDEX IF NOT EXISTS return_items_pending_idx
@@ -1596,7 +1493,8 @@ BEGIN
         ('product_price_change_logs', 'product_price_change_logs_event_chk'),
         ('login_logs', 'login_logs_event_chk'),
         ('legal_acceptances', 'legal_acceptances_event_chk'),
-        ('stock_log', 'stock_log_event_chk')
+        ('stock_log', 'stock_log_event_chk'),
+        ('money_log', 'money_log_event_chk')
     ) AS j (table_name, constraint_name)
   LOOP
     IF NOT EXISTS (
@@ -1662,6 +1560,256 @@ CREATE INDEX IF NOT EXISTS stock_log_order_idx
   WHERE "orderId" IS NOT NULL;
 
 ----------------------------------------
+-- MONEY_LOG: the actor, the sum, the shape of each event, the indexes
+----------------------------------------
+-- money_log_actor_chk: a line has an actor and a role together, or none of them (the system).
+-- money_log_amount_chk: a line is a movement of money (not 0); only money.share_moved is of 0: it
+--   changes what part of a line was for and moves nothing.
+-- money_log_meta_chk: the meta is a list.
+-- money_log_fields_chk: the fields that belong to one kind of line only: the state to a refund
+--   (with its time), the failure to a failed refund, the way and the note together, the decision on
+--   money given back by hand or taken by a bank to such money (a compensation by hand, a loss of the
+--   bank), the words of the provider to a failure.
+-- money_log_event_chk (with the other journals, above): the event is written domain.name.
+-- money_log_shape_chk: what each event is. The purpose, the part and the sign of the sum (above 0
+--   comes to the shop), and what the line has to name: the payment of an order is two parts (goods,
+--   delivery) above 0 of an order; a late payment is one part above 0; a refund is goods, delivery
+--   and the way back below 0 and the deduction and what is covered above 0 (a refund of a
+--   statement), or the whole below 0 (of a late payment, or one made by hand); a failed refund names
+--   the line it reverses and why; money outside the app has the way, the note and the day, and the
+--   parts of a refund of a statement or the whole; what a dispute takes (below 0) and
+--   gives back (above 0) names the dispute and the transaction of the provider; what the shop pays a
+--   carrier is below 0 and names the parcel; a correction names the line it corrects; money that came
+--   back outside the app is above 0 with the way and the day, of rows of a statement, of a send of
+--   the order, or of a share of money given back by hand or taken by a bank (naming its line); what
+--   root gave up of a share is of 0, names the line and says what it became. An event this
+--   check does not know is not refused here (src/config/journalEvents.ts lists them, a test holds
+--   the two together).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'money_log_actor_chk') THEN
+    ALTER TABLE cartlify.money_log
+      ADD CONSTRAINT money_log_actor_chk
+      CHECK (("actorId" IS NULL) = ("actorRole" IS NULL));
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'money_log_amount_chk') THEN
+    ALTER TABLE cartlify.money_log DROP CONSTRAINT money_log_amount_chk;
+  END IF;
+
+  ALTER TABLE cartlify.money_log
+    ADD CONSTRAINT money_log_amount_chk
+    CHECK (amount <> 0 OR event = 'money.share_moved');
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'money_log_meta_chk') THEN
+    ALTER TABLE cartlify.money_log
+      ADD CONSTRAINT money_log_meta_chk
+      CHECK (meta IS NULL OR jsonb_typeof(meta) = 'array');
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'money_log_fields_chk') THEN
+    ALTER TABLE cartlify.money_log DROP CONSTRAINT money_log_fields_chk;
+  END IF;
+
+  ALTER TABLE cartlify.money_log
+      ADD CONSTRAINT money_log_fields_chk
+      CHECK (
+        ((state IS NOT NULL AND "stateAt" IS NOT NULL) = (event = 'money.refund'))
+        AND ((state IS NULL) = ("stateAt" IS NULL))
+        AND ((failure IS NOT NULL) = (event = 'money.refund_failed'))
+        AND ("failureText" IS NULL OR failure IS NOT NULL)
+        AND ((method IS NULL) = (note IS NULL))
+        AND ("moneyUse" IS NULL OR purpose IN ('hand', 'dispute'))
+        AND ("moneyUse" IS DISTINCT FROM 'compensation' OR purpose = 'hand')
+        AND ("moneyUse" IS DISTINCT FROM 'loss' OR purpose = 'dispute')
+        AND ("bankReference" IS NULL OR event = 'money.refund')
+        AND (NOT "byDashboard" OR event = 'money.refund')
+      );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'money_log_shape_chk') THEN
+    ALTER TABLE cartlify.money_log DROP CONSTRAINT money_log_shape_chk;
+  END IF;
+
+  ALTER TABLE cartlify.money_log
+      ADD CONSTRAINT money_log_shape_chk
+      CHECK (
+        CASE event
+          WHEN 'money.payment' THEN
+            amount > 0 AND purpose = 'order' AND part IN ('goods', 'delivery')
+            AND provider IS NOT NULL AND "paymentId" IS NOT NULL AND "orderId" IS NOT NULL
+          WHEN 'money.late_payment' THEN
+            amount > 0 AND purpose = 'late_payment' AND part = 'whole'
+            AND provider IS NOT NULL AND "paymentId" IS NOT NULL
+          WHEN 'money.refund' THEN
+            provider IS NOT NULL AND "paymentId" IS NOT NULL
+            AND (
+              (
+                purpose = 'return'
+                AND (
+                  (part IN ('goods', 'delivery', 'way_back') AND amount < 0)
+                  OR (part IN ('deduction', 'covered') AND amount > 0)
+                )
+              )
+              OR (purpose IN ('late_payment', 'hand', 'compensation') AND part = 'whole' AND amount < 0)
+            )
+          WHEN 'money.refund_failed' THEN
+            purpose IN ('return', 'late_payment', 'hand', 'compensation') AND "coversId" IS NOT NULL
+            AND provider IS NOT NULL AND "paymentId" IS NOT NULL
+          WHEN 'money.outside' THEN
+            purpose IN ('return', 'late_payment', 'hand', 'compensation') AND method IS NOT NULL AND "happenedAt" IS NOT NULL
+            AND (
+              (part IN ('deduction', 'covered') AND amount > 0)
+              OR (part IN ('goods', 'delivery', 'way_back', 'whole') AND amount < 0)
+            )
+          WHEN 'money.return_parcel_cost' THEN
+            amount < 0 AND purpose = 'shipping' AND part = 'whole'
+            AND "orderShipmentId" IS NOT NULL AND "returnId" IS NOT NULL
+          WHEN 'money.shipping_cost' THEN
+            amount < 0 AND purpose = 'shipping' AND part = 'whole' AND "orderShipmentId" IS NOT NULL
+          WHEN 'money.dispute_withdrawn' THEN
+            amount < 0 AND purpose = 'dispute' AND part = 'whole'
+            AND "disputeId" IS NOT NULL AND "stripeTxId" IS NOT NULL
+          WHEN 'money.dispute_reinstated' THEN
+            amount > 0 AND purpose = 'dispute' AND part = 'whole'
+            AND "disputeId" IS NOT NULL AND "stripeTxId" IS NOT NULL
+          WHEN 'money.correction' THEN
+            "coversId" IS NOT NULL
+          WHEN 'money.received' THEN
+            amount > 0 AND method IS NOT NULL AND "happenedAt" IS NOT NULL
+            AND (
+              (purpose = 'return' AND part = 'goods' AND "returnId" IS NOT NULL)
+              OR (purpose = 'shipping' AND part = 'whole' AND "orderShipmentId" IS NOT NULL AND "returnId" IS NULL)
+              OR (
+                purpose IN ('hand', 'dispute') AND part = 'whole' AND "coversId" IS NOT NULL
+                AND "returnId" IS NULL AND "orderId" IS NOT NULL AND meta IS NOT NULL
+              )
+            )
+          WHEN 'money.share_moved' THEN
+            amount = 0 AND purpose IN ('hand', 'dispute') AND part = 'whole' AND "coversId" IS NOT NULL
+            AND "orderId" IS NOT NULL AND "moneyUse" IS NOT NULL AND meta IS NOT NULL AND "returnId" IS NULL
+          ELSE true
+        END
+      );
+END $$;
+
+-- a transfer is written once: the same key writes each part of each event once (the lines that use
+-- or reverse another line are told apart by it; a part covered by the row of the statement and the
+-- item it covers: two rows of one item take a share each, a row its share of the item and of the
+-- delivery); a payment that could not be taken is written once; a refund fails once for each part
+-- it had
+CREATE UNIQUE INDEX IF NOT EXISTS money_log_transfer_row_uidx
+  ON cartlify.money_log (
+    "transferKey", event, part, COALESCE("coversId", 0),
+    (COALESCE(meta -> 0 ->> 'returnItemId', '') || ':' || COALESCE(meta -> 0 ->> 'orderItemId', ''))
+  )
+  WHERE "transferKey" IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS money_log_late_payment_uidx
+  ON cartlify.money_log ("paymentId")
+  WHERE event = 'money.late_payment';
+
+CREATE UNIQUE INDEX IF NOT EXISTS money_log_failed_refund_uidx
+  ON cartlify.money_log ("refundId", part, COALESCE("coversId", 0))
+  WHERE event = 'money.refund_failed' AND "refundId" IS NOT NULL;
+
+-- the refund the provider made is found by its id (the event of the webhook tells it)
+CREATE INDEX IF NOT EXISTS money_log_refund_id_idx
+  ON cartlify.money_log ("refundId")
+  WHERE "refundId" IS NOT NULL;
+
+-- the refunds that wait for the provider: the worker asks about them, the alerts count them
+CREATE INDEX IF NOT EXISTS money_log_in_transit_idx
+  ON cartlify.money_log ("stateAt", id)
+  WHERE state = 'in_transit';
+
+-- the lines of a transfer by its key
+CREATE INDEX IF NOT EXISTS money_log_transfer_key_idx
+  ON cartlify.money_log ("transferKey")
+  WHERE "transferKey" IS NOT NULL;
+
+-- the lines of money given back by hand of a payment or taken by a bank that wait for the decision of
+-- root: they stop the transfers of the order (begin_return_refund)
+CREATE INDEX IF NOT EXISTS money_log_undecided_idx
+  ON cartlify.money_log ("paymentId", id)
+  WHERE purpose IN ('hand', 'dispute') AND "moneyUse" IS NULL;
+
+----------------------------------------
+-- JOURNALS: the filters an admin reads them by (GET /api/admin/*-log): who did it, the line a line
+-- names, the send, the day money really moved, the address; the period and the events go by the
+-- indexes of the time of each journal
+----------------------------------------
+CREATE INDEX IF NOT EXISTS money_log_actor_idx
+  ON cartlify.money_log ("actorId", "createdAt")
+  WHERE "actorId" IS NOT NULL;
+
+-- the lines that name a line (a failure, money sent another way, a part covered, what came back of a
+-- share or was given up of it): the shares, the alerts and the cards look them up too
+CREATE INDEX IF NOT EXISTS money_log_covers_idx
+  ON cartlify.money_log ("coversId")
+  WHERE "coversId" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS money_log_shipment_idx
+  ON cartlify.money_log ("orderShipmentId")
+  WHERE "orderShipmentId" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS money_log_happened_idx
+  ON cartlify.money_log ("happenedAt")
+  WHERE "happenedAt" IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS login_logs_ip_idx
+  ON cartlify.login_logs ("ipAddress", "createdAt");
+
+CREATE INDEX IF NOT EXISTS admin_audit_log_ip_idx
+  ON cartlify.admin_audit_log (ip, "createdAt");
+
+CREATE INDEX IF NOT EXISTS legal_acceptances_ip_idx
+  ON cartlify.legal_acceptances (ip, "createdAt");
+
+----------------------------------------
+-- PAYMENT_DISPUTES: the counts that stay within sense, the open ones
+----------------------------------------
+-- A dispute is found by its payment and by whether it is open: the statuses that end it are won,
+-- lost, prevented and warning_closed.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'payment_disputes_counts_chk') THEN
+    ALTER TABLE cartlify.payment_disputes
+      ADD CONSTRAINT payment_disputes_counts_chk
+      CHECK (
+        "submissionCount" >= 0
+        AND (status NOT IN ('won', 'lost', 'prevented', 'warning_closed') OR "closedAt" IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS payment_disputes_open_idx
+  ON cartlify.payment_disputes ("evidenceDueBy", id)
+  WHERE status NOT IN ('won', 'lost', 'prevented', 'warning_closed');
+
+----------------------------------------
+-- ORDERS: the reasons that block the sending
+----------------------------------------
+-- holds is a list of { reason, since, ref }; the reasons are the four the money functions set; an
+-- order that waits for the sending (paid) is the only one that holds any. The status is checked
+-- against the list at every change: a cancelled order is emptied in the same statement.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'orders_holds_chk') THEN
+    ALTER TABLE cartlify.orders
+      ADD CONSTRAINT orders_holds_chk
+      CHECK (
+        jsonb_typeof(holds) = 'array'
+        AND (jsonb_array_length(holds) = 0 OR status = 'paid')
+        AND NOT jsonb_path_exists(holds, '$[*] ? (@.type() != "object")')
+        AND NOT jsonb_path_exists(
+          holds,
+          '$[*] ? (!(@.reason == "dispute" || @.reason == "hand_refund" || @.reason == "fraud_warning" || @.reason == "payment_review"))'
+        )
+      );
+  END IF;
+END $$;
+
+----------------------------------------
 -- USERS: the form of a language code
 ----------------------------------------
 -- A language is two lower-case letters (en, uk, es, ...); the ones the app answers in are decided
@@ -1694,16 +1842,22 @@ END $$;
 CREATE INDEX IF NOT EXISTS shop_settings_key_id_idx ON cartlify.shop_settings (key, id DESC);
 
 ----------------------------------------
--- USERS: the right to run the newsletters
+-- USERS: the rights of an admin (to run the newsletters, to handle the money)
 ----------------------------------------
--- Only an admin has it (root needs none): it goes off with the role (trg_users_clear_newsletter_manager,
--- db/05), and the check keeps a buyer from having it whoever sets it.
+-- Only an admin has them (root needs none): they go off with the role (trg_users_clear_admin_rights,
+-- db/05), and the checks keep a buyer from having one whoever sets it.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_newsletter_manager_chk') THEN
     ALTER TABLE cartlify.users
       ADD CONSTRAINT users_newsletter_manager_chk
       CHECK (NOT "canManageNewsletters" OR role = 'ADMIN');
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'users_money_manager_chk') THEN
+    ALTER TABLE cartlify.users
+      ADD CONSTRAINT users_money_manager_chk
+      CHECK (NOT "canManageMoney" OR role = 'ADMIN');
   END IF;
 END $$;
 

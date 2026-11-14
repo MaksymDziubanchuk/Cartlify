@@ -49,20 +49,24 @@ describe('returnConditions', () => {
 
   it('makes a condition for the goods: waiting, no proof of any kind, proof told, received', () => {
     expect(conditions({ goods: 'waiting' })).toHaveLength(1);
-    expect(textOf({ goods: 'waiting_no_proof' })).toContain('"proofProvidedAt" is null');
-    // the shop confirming a proof is a proof as well
-    expect(textOf({ goods: 'waiting_no_proof' })).toContain('"proofConfirmedAt" is null');
+    // no parcel to the shop of any kind: one the shop confirmed is a proof as well
+    expect(textOf({ goods: 'waiting_no_proof' })).toContain(
+      `not exists ( select 1 from cartlify.order_shipments as p where p."returnId" = r.id and p.direction = 'to_shop'`,
+    );
     expect(textOf({ goods: 'proof_provided' })).toContain(
-      '"proofProvidedAt" is not null and r."proofConfirmedAt" is null',
+      `exists ( select 1 from cartlify.order_shipments as p where p."returnId" = r.id and p.direction = 'to_shop'::cartlify."ShipmentDirection" and p."confirmedAt" is null )`,
     );
     expect(textOf({ goods: 'received' })).toMatch(/^not exists/);
   });
 
-  it('reads failed as a row not refunded whose transfer failed, and any other money as the state of a row', () => {
-    expect(textOf({ money: 'failed' })).toContain('i."refundFailure" is not null');
-    expect(textOf({ money: 'failed' })).toContain(`i.money = 'not_refunded'`);
+  // a row whose last transfer failed has its money not back: it is one of not_refunded too
+  it('reads not_refunded as a row whose money is not back, a failed transfer too, and any other money as the state of a row', () => {
+    expect(textOf({ money: 'not_refunded' })).toContain(
+      `i.money in ('not_refunded'::cartlify."ReturnMoney", 'failed'::cartlify."ReturnMoney")`,
+    );
+    expect(textOf({ money: 'failed' })).toContain('i.money = ?::cartlify."ReturnMoney"');
+    expect(valuesOf({ money: 'failed' })).toEqual(['failed']);
     expect(textOf({ money: 'refunded' })).toContain('i.money = ?::cartlify."ReturnMoney"');
-    expect(textOf({ money: 'refunded' })).not.toContain('refundFailure');
   });
 
   it('counts the days from the clock given: the time that many days before it', () => {
@@ -79,14 +83,31 @@ describe('returnConditions', () => {
     }
   });
 
-  it('is due money: not back, pending, with goods in or the proof confirmed by the shop, after the days', () => {
+  it('is due money: not back (a failed transfer too), pending, with goods in or the proof confirmed by the shop, after the days', () => {
     const text = textOf({ moneyDueForDays: 10 });
 
     expect(text).toContain(`'not_refunded'`);
     expect(text).toContain(`'pending'`);
+    expect(text).toContain(`'failed'`);
     expect(text).toContain(`'to_stock'`);
-    expect(text).toContain('"proofConfirmedAt" is not null');
+    expect(text).toContain('p."confirmedAt" is not null');
     expect(text).toContain('"statedAt" <');
+  });
+
+  // the money waits for the bank or for root, not for the shop: a dispute of the payment of the order
+  // is open, or a refund of the payment made by hand waits for root (the transfers are refused
+  // meanwhile, RETURN_REFUND_DISPUTED and RETURN_HAND_REFUND_PENDING)
+  it('is the money held or not: a dispute of the payment of the order open, or a refund by hand that waits for root', () => {
+    const held = textOf({ moneyHeld: true });
+
+    expect(held).toMatch(
+      /^exists \( select 1 from cartlify\.orders as \w+ where \w+\.id = r\."orderId"/,
+    );
+    expect(held).toContain('cartlify.payment_disputes');
+    expect(held).toContain(`'hand'::cartlify."MoneyPurpose"`);
+    expect(held).toContain(`hl."moneyUse" is null`);
+    expect(textOf({ moneyHeld: false })).toBe(`not ${held}`);
+    expect(conditions({ moneyHeld: true })).toHaveLength(1);
   });
 
   it('is accepted or not: a statement of the form without the code by the check of an admin', () => {
@@ -132,8 +153,11 @@ describe('returnConditions', () => {
       /"statedAt" >= .* and .*"statedAt" </,
     );
     expect(textOf({ closedFrom: from })).toContain('"closedAt" >=');
-    expect(textOf({ refundedTo: to })).toContain('i."refundedAt" <');
-    expect(textOf({ refundedFrom: from })).not.toContain('i."refundedAt" <');
+    // the money went back when the line of the money journal that sent it was written
+    expect(textOf({ refundedTo: to })).toContain('m.id = i."moneyLogId"');
+    expect(textOf({ refundedTo: to })).toContain('m."createdAt" <');
+    expect(textOf({ refundedFrom: from })).not.toContain('m."createdAt" <');
+    expect(textOf({ refundedFrom: from })).toContain('m."createdAt" >=');
   });
 
   it('joins the conditions of several filters with and', () => {

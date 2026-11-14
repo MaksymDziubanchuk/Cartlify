@@ -29,6 +29,11 @@ const stripeWebhookResponseExample = {
   received: true,
 };
 
+const stripeWebhookSkippedExample = {
+  received: true,
+  skipped: 'NOT_AN_ORDER',
+};
+
 // Schema for user checkout session lookup
 const getCheckoutSessionByIdSchema = {
   operationId: 'getStripeCheckoutSessionById',
@@ -84,7 +89,7 @@ const postStripeWebhookSchema = {
   operationId: 'handleStripeWebhook',
   summary: 'Handle Stripe webhook',
   description:
-    'Handles Stripe checkout webhook events and updates linked order payment state. When the order becomes paid, the buyer gets a mail with the order; a mail that fails is only logged and does not fail the webhook. A payment the order cannot take (already paid by another payment, not payable, amount mismatch, out of stock) is refunded in full and recorded in the admin audit log; the same payment delivered again changes nothing, also after the order was shipped, delivered or cancelled, and a payment whose money went back is acknowledged with `skipped: REFUNDED` (the order does not take it, also when the stock came back meanwhile). An expired checkout releases the order reservation only after the payment grace window; an expired or failed checkout of an already deleted order is acknowledged with `skipped: ORDER_NOT_FOUND`. A checkout the app did not open for an order (another tool in the same Stripe account) is acknowledged with `skipped: NOT_AN_ORDER` and left alone, its payment too. The route is outside the request rate limit: Stripe delivers every event from a few addresses, the signature keeps anybody else out.',
+    'Handles the events of Stripe: the payment pages (`checkout.session.*`), the refunds (`refund.created`, `refund.updated`, `refund.failed`), the disputes (`charge.dispute.*`), the warnings of fraud (`radar.early_fraud_warning.*`) and the reviews (`review.*`); any other event is acknowledged and left alone. A paid page takes the step the reservation timer takes for a page whose event did not come: the order becomes paid and the buyer gets a mail (a mail that fails is only logged); a payment the order cannot take (paid by another payment, not payable, amount mismatch, out of stock, the order is gone) is written into the money journal as a late payment with its refund in transit before Stripe is asked, and the refund of all of it is asked under one key; a refund Stripe does not answer stays in transit for the worker, a refusal is a failure of the refund in the journal. The same payment delivered again changes nothing, also after the order was shipped, delivered or cancelled. A refund of the app (the key of its request in `metadata.transfer`) settles its lines in the journal: its id, sent (the buyer is mailed), or failed (a line with the sum back; the buyer is mailed unless the money went back already or a dispute at the bank caused it). An expired checkout releases the order reservation only after the payment grace window. A refund made by hand in the dashboard (no key) is a line of its own with what it means for the payment: the refund of a late payment in transit takes it, an order not sent whose whole payment went back is cancelled by a statement of the system (the buyer is mailed), part of it holds the order for root, a statement that waits or an order sent is for root to tie or explain; a later event of a refund writes the number of the bank. A dispute (an inquiry of the bank too) is read from Stripe at each event and followed: the money it moves, the hold of an order not sent, a draft of the evidence once (never submitted), the money of the statements that waited when it ends, the cancel of an order not sent the bank decided for the buyer (the buyer is mailed then, never of a dispute opened or won). An early warning of fraud Stripe lets the shop act on holds an order not sent for root and marks one sent; a review holds an order not sent until it closes; the buyer is told once that the payment is checked. The answers: an error only for what passes by itself (the signature, the database busy) and for a fault of the code (Stripe delivers it again); an event that can never pass is acknowledged with the reason in `skipped` and a warning in the log, so Stripe never delivers it again for days. The route is outside the request rate limit: Stripe delivers every event from a few addresses, the signature keeps anybody else out.',
 
   // inline, not a $ref: fastify lowercases header names only in an inline headers schema,
   // so `required` of a referenced one may not apply (FSTSEC002)
@@ -106,15 +111,14 @@ const postStripeWebhookSchema = {
     200: {
       description: 'Stripe webhook was received successfully.',
       $ref: 'paymentsStripeWebhookResponseSchema#',
-      examples: [stripeWebhookResponseExample],
+      examples: [stripeWebhookResponseExample, stripeWebhookSkippedExample],
     },
 
     400: {
       description:
         'Invalid Stripe webhook payload or missing signature: no stripe-signature header ' +
         '(STRIPE_SIGNATURE_REQUIRED), the raw body did not reach the route (STRIPE_RAW_BODY_REQUIRED), ' +
-        'a body that is not json (REQUEST_BODY_INVALID_JSON), an event without a checkout session ' +
-        '(STRIPE_EVENT_OBJECT_INVALID), an order of the page without items (ORDER_ITEMS_REQUIRED).',
+        'a body that is not json (REQUEST_BODY_INVALID_JSON).',
       $ref: 'errorResponseSchema#',
     },
     401: {
@@ -124,12 +128,19 @@ const postStripeWebhookSchema = {
     },
     409: {
       description:
-        'The order changed while the event released its reservation (ORDER_NOT_CONFIRMED, ' +
-        'ORDER_STATUS_NOT_WAITING), or another request holds it (RESOURCE_BUSY); Stripe delivers the event again.',
+        'The database was too busy for the event (RESOURCE_BUSY): nothing was changed, Stripe ' +
+        'delivers the event again.',
       $ref: 'errorResponseSchema#',
     },
     500: {
       description: 'Unexpected server error while handling Stripe webhook.',
+      $ref: 'errorResponseSchema#',
+    },
+    503: {
+      description:
+        'Stripe could not be reached to read what the event names (PAYMENT_PROVIDER_UNAVAILABLE): a ' +
+        'dispute, or a refund made in the dashboard; nothing was changed, Stripe delivers the event ' +
+        'again.',
       $ref: 'errorResponseSchema#',
     },
   },

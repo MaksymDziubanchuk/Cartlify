@@ -7,7 +7,8 @@ import { getCsrf, type Csrf } from '../../helpers/csrf.js';
 import { closeSessions, createProduct, createUser, stockOf } from '../../helpers/factories.js';
 import { watchMail } from '../../helpers/mail.js';
 import { loseReservation, placeOrder } from '../../helpers/orders.js';
-import { openPaymentPage, orderStateOf, payPage, refundAuditOf } from '../../helpers/payments.js';
+import { moneyOfPayment } from '../../helpers/lateRefund.js';
+import { openPaymentPage, orderStateOf, payPage } from '../../helpers/payments.js';
 import { closeOpenSessions, deliver, refundsOf } from '../../helpers/stripe.js';
 
 // a payment that comes late, through the routes of orders, payments and admin with Stripe (its
@@ -64,7 +65,10 @@ describe('a payment that comes after the units were sold', () => {
       status: 'paid',
       paymentId: quickPaid.paymentId,
     });
-    expect(await refundAuditOf(lateOrder)).toHaveLength(1);
+    expect((await moneyOfPayment(latePaid.paymentId)).map((line) => line.event)).toEqual([
+      'money.late_payment',
+      'money.refund',
+    ]);
     expect(
       mails.filter((mail) => mail.to.includes(late.email)).map((mail) => mail.subject),
     ).toEqual([expect.stringContaining(`We sent your payment for order #${lateOrder} back`)]);
@@ -81,14 +85,14 @@ describe('a payment that comes after the units were sold', () => {
         count: number;
         list: { path: string; query: Record<string, string> };
       }[]
-    ).find((alert) => alert.kind === 'refunded_payments');
+    ).find((alert) => alert.kind === 'late_refunds');
     expect(refunded?.count).toBeGreaterThanOrEqual(1);
 
     const lines = await app.inject({
       method: 'GET',
       url: `${refunded!.list.path}?${new URLSearchParams({
         ...refunded!.list.query,
-        entityId: String(lateOrder),
+        orderId: String(lateOrder),
       })}`,
       headers: { cookie: accessCookie(admin) },
     });

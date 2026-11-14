@@ -53,7 +53,17 @@ npm run db:snapshot:save
 # database a running server uses: they recreate triggers, policies and checks in one transaction,
 # which takes the strongest locks, and they meet the queries of the server (its workers read the
 # tables every few seconds) in a deadlock; the run stops and nothing changes. Stop the app first
-# (on Railway: remove the active deployment of the service), run the whole order, then redeploy
+# (on Railway: remove the active deployment of the service), run the whole order, then redeploy.
+# One command does it all. It asks for the address of the superuser and of the owner of the tables (typed
+# or pasted, a star for every sign; it needs a terminal: PowerShell, cmd, or winpty in Git Bash),
+# then asks the database, read only, what it needs: the migrations not applied yet and whether its
+# structure is the one of the reference. When nothing waits and the structure matches, it applies
+# nothing and the app may keep running. Otherwise it asks to type yes (the app must be stopped),
+# applies the migrations that wait, all six scripts in their order and checks the structure again;
+# it stops at the first step that fails, and the output never shows a password, a host or a port.
+# Needs psql on the PATH
+npm run db:apply
+# the same by hand, a script at a time
 psql -v ON_ERROR_STOP=1 -f db/schema/02_extensions.sql "<superuser address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/05_fn_and_triggers.sql "<cartlify_owner address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/03_policies_and_rls.sql "<cartlify_owner address>"
@@ -61,10 +71,11 @@ psql -v ON_ERROR_STOP=1 -f db/schema/04_views.sql "<cartlify_owner address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/06_indexes_and_constraints.sql "<cartlify_owner address>"
 psql -v ON_ERROR_STOP=1 -f db/schema/01_roles_and_schemas.sql "<superuser address>"
 
-# format
+# format: prettier rewrites every file of the project; to format only the files you changed,
+# npx prettier --write <files>
 npm run format
 
-# type check
+# type check: the code of src first, then src together with the tests (tsconfig.test.json)
 npm run typecheck
 
 # tests: pick test parts in a checkbox list (all parts without an interactive terminal);

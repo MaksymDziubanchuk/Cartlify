@@ -204,11 +204,27 @@ async function scheduledIn(inMs: number): Promise<number> {
 }
 
 describe('who sees the alerts of the newsletters', () => {
-  it('gives root the seven kinds between the kinds of every admin and the actions of the admins', async () => {
+  it('gives root the seven kinds between the kinds of every admin and the kinds of root', async () => {
     const { alerts } = await alertsOf(root);
     const kinds = alerts.map((alert) => alert.kind);
 
-    expect(kinds.slice(-8)).toEqual([...KINDS, 'admin_actions']);
+    expect(kinds.slice(kinds.indexOf(KINDS[0]))).toEqual([
+      ...KINDS,
+      'hand_refunds_in_transit',
+      'hand_refunds_failed',
+      'compensation_refunds_in_transit',
+      'compensation_refunds_failed',
+      'dispute_refunds_failed',
+      'bank_money_to_decide',
+      'returns_money_short',
+      'returns_money_overpaid',
+      'hand_refunds_to_explain',
+      'hand_refunds_to_decide',
+      'fraud_warnings',
+      'fraud_warnings_shipped',
+      'payment_reviews',
+      'admin_actions',
+    ]);
     expect(kinds.indexOf('shop_locale_missing')).toBe(kinds.indexOf(KINDS[0]) - 1);
   });
 

@@ -111,5 +111,19 @@ describe('a review from the delivery to its removal', () => {
       }),
     );
     expect(lines).toEqual([{ actorId: admin.id }]);
+
+    // the buyer changes her mind and takes her own review down: the product has none left
+    const own = await app.inject({
+      method: 'DELETE',
+      url: `/api/products/${product.id}/reviews/${praiseId}`,
+      headers: withCsrf(csrf, accessCookie(buyer)),
+    });
+    expect(own.statusCode).toBe(200);
+    const none = await app.inject({ method: 'GET', url: `/api/products/${product.id}` });
+    expect(none.json().product).toMatchObject({ reviewsCount: 0 });
+    expect(
+      (await app.inject({ method: 'GET', url: `/api/products/${product.id}/reviews` })).json()
+        .items,
+    ).toEqual([]);
   });
 });

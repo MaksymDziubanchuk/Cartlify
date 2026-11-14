@@ -1,4 +1,5 @@
 import { t } from '@config/i18n.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 import { sellerLineOf } from '@services/email/seller.js';
@@ -23,6 +24,12 @@ export type ReturnRefundedTemplateArgs = {
   deliveryAmount?: number | string;
   // the cost of the way back the buyer owes, taken off the amount; 0 or none when nothing was
   deductionAmount?: number | string;
+  // the way back the shop pays inside the amount (what the buyer paid the carrier); 0 or none
+  wayBackAmount?: number | string;
+  // the parts of the amount money already with the buyer paid: what the bank gave for a dispute,
+  // and a refund made earlier by hand; all of it so and nothing was sent now. 0 or none when none
+  bankAmount?: number | string;
+  earlierAmount?: number | string;
   // the currency, for example "eur"
   currency: string;
   // money sent outside the app after a transfer failed: how, and the day it went
@@ -49,7 +56,7 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
   text: string;
   html: string;
 } {
-  const appName = args.appName?.trim() || 'Cartlify';
+  const appName = args.appName?.trim() || shopSettings().shopName;
   const orderUrl = args.orderUrl?.trim() || '';
   const locale = args.locale || 'en';
 
@@ -63,12 +70,22 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
   const dateLocale = locale === 'en' ? 'en-GB' : locale;
   const delivery = Number(args.deliveryAmount ?? 0);
   const deduction = Number(args.deductionAmount ?? 0);
+  const wayBack = Number(args.wayBackAmount ?? 0);
   const orderId = String(args.orderId);
   const code = args.code?.trim() || '';
-  const amount = money.format(Number(args.amount));
+  // in cents, so the parts add up without float math: what money already with the buyer paid, and
+  // what was sent now
+  const totalCents = Math.round(Number(args.amount) * 100);
+  const bankCents = Math.round(Number(args.bankAmount ?? 0) * 100);
+  const earlierCents = Math.round(Number(args.earlierAmount ?? 0) * 100);
+  const coveredCents = bankCents + earlierCents;
+  const coveredAll = coveredCents > 0 && totalCents - coveredCents <= 0;
+  const total = money.format(totalCents / 100);
+  const amount = coveredAll ? total : money.format((totalCents - coveredCents) / 100);
+  const intro = coveredAll ? 'returnRefunded.covered' : 'returnRefunded.';
 
   const way = args.outsideMethod ? wayWordsOf(args.outsideMethod, locale) : '';
-  const wayLine = args.outsideMethod
+  const sentWay = args.outsideMethod
     ? args.sentOn
       ? t('returnRefunded.sentWithDate', locale, {
           way,
@@ -81,6 +98,27 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
     : // a transfer to the card can still fail at the bank, and the buyer is then mailed
       // (returnRefundFailed); money sent outside the app has no such later answer
       `${t('returnRefunded.wayBack', locale)} ${t('returnRefunded.laterLine', locale)}`;
+
+  // all of it was with the buyer already: where it came from (a refund made by hand can still fail at
+  // the bank, the money of a bank cannot); part of it: what was sent now, and what the goods have in all
+  const wayLine = coveredAll
+    ? [
+        bankCents > 0
+          ? t('returnRefunded.bankLine', locale, { amount: money.format(bankCents / 100) })
+          : '',
+        earlierCents > 0
+          ? t('returnRefunded.earlierLine', locale, { amount: money.format(earlierCents / 100) })
+          : '',
+        earlierCents > 0 ? t('returnRefunded.laterLine', locale) : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+    : coveredCents > 0
+      ? `${sentWay} ${t('returnRefunded.alreadyLine', locale, {
+          covered: money.format(coveredCents / 100),
+          amount: total,
+        })}`
+      : sentWay;
 
   const values = {
     appName,
@@ -100,6 +138,8 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
       delivery > 0
         ? t('returnRefunded.deliveryLine', locale, { amount: money.format(delivery) })
         : '',
+    wayBackLine:
+      wayBack > 0 ? t('returnRefunded.wayBackLine', locale, { amount: money.format(wayBack) }) : '',
     deductionLine:
       deduction > 0
         ? t('returnRefunded.deductionLine', locale, { amount: money.format(deduction) })
@@ -109,11 +149,15 @@ export function buildReturnRefundedTemplate(args: ReturnRefundedTemplateArgs): {
     userName: args.userName?.trim() || '',
     logoUrl: args.logoUrl?.trim() || '',
     year: String(new Date().getFullYear()),
-    title: t('returnRefunded.subject', locale, { appName, orderId }),
-    preview: t('returnRefunded.preview', locale, { orderId }),
-    leadTxt: t('returnRefunded.leadTxt', locale, { appName, orderId, amount }),
-    heading: t('returnRefunded.heading', locale),
-    body: t('returnRefunded.body', locale, { orderId, amount }),
+    title: t(`${intro}${coveredAll ? 'Subject' : 'subject'}`, locale, { appName, orderId }),
+    preview: t(`${intro}${coveredAll ? 'Preview' : 'preview'}`, locale, { orderId }),
+    leadTxt: t(`${intro}${coveredAll ? 'LeadTxt' : 'leadTxt'}`, locale, {
+      appName,
+      orderId,
+      amount,
+    }),
+    heading: t(`${intro}${coveredAll ? 'Heading' : 'heading'}`, locale),
+    body: t(`${intro}${coveredAll ? 'Body' : 'body'}`, locale, { orderId, amount }),
     greeting: greetingOf(args.userName, locale),
     seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',

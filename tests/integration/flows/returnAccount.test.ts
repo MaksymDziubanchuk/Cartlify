@@ -146,7 +146,9 @@ describe('the buyer withdraws from their account', () => {
     const returnId = found[0].id;
 
     // the parcel is on its way: the admin confirms it and the money goes ahead of the goods
-    expect((await j.post(admin, `/api/returns/${returnId}/proof/confirm`)).statusCode).toBe(200);
+    expect(
+      (await j.post(admin, `/api/returns/${returnId}/proof/confirm`, { buyerPaid: 0 })).statusCode,
+    ).toBe(200);
     const paid = await j.post(admin, `/api/returns/${returnId}/refund`);
     expect(paid.statusCode).toBe(200);
     expect(paid.json().items).toEqual([
@@ -156,6 +158,7 @@ describe('the buyer withdraws from their account', () => {
     // the goods come in
     const card = (await j.get(admin, `/api/returns/${returnId}`)).json();
     const taken = await j.post(admin, `/api/returns/${returnId}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: card.items[0].id, quantity: 2, goods: 'to_stock' }],
     });
     expect(taken.statusCode).toBe(200);
@@ -187,6 +190,12 @@ describe('the buyer withdraws from their account', () => {
     const code = statementCodeIn(mailTo(mails, buyer.email, `Withdrawal from order #${orderId}`));
     const [found] = (await j.get(admin, `/api/returns?q=${code}`)).json().items;
     const card = (await j.get(admin, `/api/returns/${found.id}`)).json();
-    expect(card.proof).toMatchObject({ carrier: 'DHL', trackingNumber: 'JD0146000777' });
+    expect(card.parcels).toEqual([
+      expect.objectContaining({
+        direction: 'to_shop',
+        carrier: 'DHL',
+        trackingNumber: 'JD0146000777',
+      }),
+    ]);
   });
 });

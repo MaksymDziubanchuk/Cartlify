@@ -19,6 +19,7 @@ export async function receiveReturnItems({
   actorRole,
   returnId,
   results,
+  parcel,
   log,
 }: ReceiveReturnItemsDto): Promise<ReturnDto> {
   assertAdminActor(actorId, actorRole);
@@ -28,7 +29,11 @@ export async function receiveReturnItems({
     card = await tx(async (db) => {
       await setUserContext(db, { userId: actorId, role: actorRole });
       await db.$executeRaw`
-        select cartlify.receive_return_items(${returnId}::int, ${JSON.stringify(results)}::jsonb)
+        select cartlify.receive_return_items(
+          ${returnId}::int,
+          ${JSON.stringify(results)}::jsonb,
+          ${parcel ? JSON.stringify(parcel) : null}::jsonb
+        )
       `;
 
       const card = await readReturnCard(db, returnId, actorRole);
@@ -44,6 +49,21 @@ export async function receiveReturnItems({
         changes: [
           { field: 'returnId', old: null, new: returnId },
           { field: 'results', old: null, new: results },
+          // the parcel confirmed in the same step: who paid the carrier, and the carrier of a parcel
+          // written now; never its number or link (they lead to the person)
+          ...(parcel
+            ? [
+                {
+                  field: 'parcel',
+                  old: null,
+                  new: {
+                    buyerPaid: parcel.buyerPaid ?? null,
+                    cost: parcel.cost ?? null,
+                    carrier: parcel.carrier ?? null,
+                  },
+                },
+              ]
+            : []),
         ],
       });
 

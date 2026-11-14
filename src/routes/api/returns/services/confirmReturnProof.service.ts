@@ -15,13 +15,19 @@ export async function confirmReturnProof({
   actorId,
   actorRole,
   returnId,
+  buyerPaid,
+  cost,
 }: ConfirmReturnProofDto): Promise<ReturnDto> {
   assertAdminActor(actorId, actorRole);
 
   try {
     return await tx(async (db) => {
       await setUserContext(db, { userId: actorId, role: actorRole });
-      await db.$executeRaw`select cartlify.confirm_return_proof(${returnId}::int)`;
+      await db.$executeRaw`
+        select cartlify.confirm_return_proof(
+          ${returnId}::int, ${buyerPaid ?? null}::numeric, ${cost ?? null}::numeric
+        )
+      `;
 
       const card = await readReturnCard(db, returnId, actorRole);
       if (!card) throw new InternalError({ reason: 'RETURN_NOT_FOUND_AFTER_PROOF' });
@@ -35,7 +41,14 @@ export async function confirmReturnProof({
         event: 'return.proof_confirm',
         changes: [
           { field: 'returnId', old: null, new: returnId },
-          { field: 'proofConfirmedAt', old: null, new: card.proof.confirmedAt },
+          {
+            field: 'proofConfirmedAt',
+            old: null,
+            new: card.parcels.find((parcel) => parcel.direction === 'to_shop')?.confirmedAt ?? null,
+          },
+          // who paid the carrier, as the admin said it
+          ...(buyerPaid !== undefined ? [{ field: 'buyerPaid', old: null, new: buyerPaid }] : []),
+          ...(cost !== undefined ? [{ field: 'cost', old: null, new: cost }] : []),
         ],
       });
 

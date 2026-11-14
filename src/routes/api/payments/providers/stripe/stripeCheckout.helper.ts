@@ -1,12 +1,12 @@
 import env from '@config/env.js';
 import { shopSettings } from '@config/shopSettings.js';
-import { InternalError, isAppError } from '@utils/errors.js';
+import { InternalError, isAppError, ServiceUnavailableError } from '@utils/errors.js';
 import stripe from '@config/stripe.js';
 import { webPageUrl } from '@helpers/webOrigin.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
 import type Stripe from 'stripe';
-import type { PaymentPageShipping } from '../types.js';
+import type { PaymentPageReading, PaymentPageShipping } from '../types.js';
 import type {
   CheckoutPaymentStatus,
   CheckoutSessionResponseDto,
@@ -92,6 +92,27 @@ const stripeLocaleOf = (locale: string): Stripe.Checkout.SessionCreateParams.Loc
 // money in cents without float math: 10.15 * 100 is 1014.9999999999999
 const centsOf = (value: number) => Math.round(Math.round(value * 1000) / 10);
 
+// a sum of stripe in cents as the app writes money, digits with two decimals, signed below 0
+// ("-10.00" for what a dispute takes), without float math
+function amountOfCents(cents: number): string {
+  if (!Number.isSafeInteger(cents)) {
+    throw new InternalError({ reason: 'STRIPE_AMOUNT_INVALID', cents });
+  }
+
+  const whole = Math.abs(cents);
+  return `${cents < 0 ? '-' : ''}${Math.trunc(whole / 100)}.${String(whole % 100).padStart(2, '0')}`;
+}
+
+// the ways to pay the page offers; the buyer picks one on the page of stripe, which shows each
+// only where it can take the payment: a card, with Google Pay and Apple Pay as wallets of it (they
+// need no type of their own), PayPal (its money is settled on the balance of stripe) and Bizum
+// (buyers in Spain, EUR, 0.50 to 5000)
+const PAYMENT_METHOD_TYPES: Stripe.Checkout.SessionCreateParams.AllowedPaymentMethodType[] = [
+  'card',
+  'paypal',
+  'bizum',
+];
+
 // how long after the reservation stripe closes the page itself (stripePageMinutes, 30 unless
 // root set one, the least stripe takes). The timer closes it at the end of the reservation; when
 // it cannot (stripe out of reach), this keeps a late payment within these minutes instead of a day
@@ -175,7 +196,7 @@ function buildCheckoutSessionPayload({
   return {
     mode: 'payment',
     // stripe 23 renamed payment_method_types to allowed_payment_method_types
-    allowed_payment_method_types: ['card'],
+    allowed_payment_method_types: [...PAYMENT_METHOD_TYPES],
     client_reference_id: String(orderId),
     // keep order owner in metadata: webhook needs it when the order row is already deleted
     metadata: {
@@ -328,7 +349,62 @@ function getPaidAmountFromCheckoutSession(session: Stripe.Checkout.Session): str
   }
 
   // build decimal string without float math, mirrors unit_amount in checkout payload
-  return `${Math.trunc(amountTotal / 100)}.${String(amountTotal % 100).padStart(2, '0')}`;
+  return amountOfCents(amountTotal);
+}
+
+// what a page is, read the way the webhook reads its payment event: a page of another tool first,
+// then whether the money is taken, then the order, its owner and the payment. The same for the
+// event and for a page the reservation timer found paid at stripe
+function paymentPageReadingOf(session: Stripe.Checkout.Session): PaymentPageReading {
+  if (!isOrderCheckoutSession(session)) return { state: 'foreign', pageId: session.id };
+
+  const orderId = getOrderIdFromCheckoutSession(session);
+
+  if (session.payment_status !== 'paid') return { state: 'unpaid', pageId: session.id, orderId };
+
+  const paymentId = getPaymentIntentIdFromCheckoutSession(session);
+  const amount = getPaidAmountFromCheckoutSession(session);
+
+  // a page that takes a payment always names its currency
+  if (!session.currency) {
+    throw new InternalError({
+      reason: 'STRIPE_CHECKOUT_SESSION_CURRENCY_MISSING',
+      sessionId: session.id,
+    });
+  }
+
+  return {
+    state: 'paid',
+    pageId: session.id,
+    orderId,
+    userId: getUserIdFromCheckoutSession(session),
+    paymentId,
+    amount,
+    currency: session.currency,
+  };
+}
+
+// a page as it is at stripe now, read as its payment event is: for a page the timer found paid
+// whose event did not come. Stripe out of reach is PAYMENT_PROVIDER_UNAVAILABLE (ask again
+// later); a page it has no record of is a server error
+async function readStripePaidPage(sessionId: string): Promise<PaymentPageReading> {
+  let session: Stripe.Checkout.Session;
+
+  try {
+    session = await stripe.checkout.sessions.retrieve(sessionId);
+  } catch (err) {
+    if (isStripeUnavailable(err)) {
+      throw new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE', undefined, err);
+    }
+
+    if (isStripeResourceMissing(err)) {
+      throw new InternalError({ reason: 'STRIPE_CHECKOUT_SESSION_NOT_FOUND', sessionId }, err);
+    }
+
+    throw err;
+  }
+
+  return paymentPageReadingOf(session);
 }
 
 // map created stripe checkout session into api dto
@@ -465,11 +541,14 @@ async function readCheckoutSessionStatus(
 }
 
 export {
+  amountOfCents,
   isOrderCheckoutSession,
   isStripeIdempotencyConflict,
   isStripeResourceMissing,
   isStripeUnavailable,
+  paymentPageReadingOf,
   readCheckoutSessionStatus,
+  readStripePaidPage,
   buildCheckoutIdempotencyKey,
   buildCheckoutSessionPayload,
   getOrderIdFromCheckoutSession,

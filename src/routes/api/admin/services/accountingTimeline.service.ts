@@ -12,20 +12,22 @@ import {
   csvFileName,
   deliveryCsvColumns,
   moneyCsvColumns,
+  paymentsCsvColumns,
   summaryCsvColumns,
 } from './helpers/accountingCsv.helper.js';
 import {
-  LOG_BATCHES,
-  WRITE_OFF_EVENTS,
   assertCategory,
   deliveryMoneyOf,
   deliveryOfStepsSql,
   isWholeShop,
   moneyOf,
-  scopeCtes,
+  paymentsMoneyOf,
+  paymentsOfStepsSql,
+  stepMoneyOfScopeCtes,
   summaryOf,
   type DeliveryColumns,
   type MoneyColumns,
+  type PaymentsColumns,
   type ReportScope,
 } from './helpers/accountingSql.helper.js';
 
@@ -40,9 +42,11 @@ import type { Role } from 'types/user.js';
 import type { UserId } from 'types/ids.js';
 
 // the money of a period step by step (sales, returns, net, write-offs, purchases; the stock is of the
-// reports by product and by category): the days, the weeks from monday or the months of the
-// calendar of the shop (SHOP_TIME_ZONE), the first and the last step cut to the period. Without
-// a start the period is the step of its end and the eleven before it
+// reports by product and by category; the delivery and the payments past the statements of the
+// whole shop): the days, the weeks from monday or the months of the calendar of the shop
+// (SHOP_TIME_ZONE), the first and the last step cut to the period. Without a start the period is
+// the step of its end and the eleven before it. A step counts its money the way the report of the
+// accounting counts a period (accountingSql.helper.ts)
 
 export const MAX_REPORT_STEPS = 400;
 
@@ -67,7 +71,8 @@ export type AccountingTimelineArgs = ReportScope & {
 // the steps of the period by the calendar of the shop, from the start of the step of its start;
 // each step is cut to the period. Without a start the period is the step of its last moment and
 // the eleven before it: an end at the start of a month ends the month before it. At most one step
-// over the limit is made, a typo in a year asks for millions of days
+// over the limit is made, a typo in a year asks for millions of days: the series stops there itself
+// (a function in FROM is made whole before the limit is read)
 async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArgs) {
   const zone = env.SHOP_TIME_ZONE;
   const interval = `1 ${args.step}`;
@@ -89,7 +94,11 @@ async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArg
       from bounds,
            generate_series(
              date_trunc(${args.step}, bounds.f at time zone ${zone}),
-             bounds.t at time zone ${zone},
+             least(
+               bounds.t at time zone ${zone},
+               date_trunc(${args.step}, bounds.f at time zone ${zone})
+                 + ${interval}::interval * ${MAX_REPORT_STEPS + 1}::int
+             ),
              ${interval}::interval
            ) as gs
       where gs < bounds.t at time zone ${zone}
@@ -105,96 +114,24 @@ async function stepsOf(db: Prisma.TransactionClient, args: AccountingTimelineArg
 
 type StepMoney = MoneyColumns & { n: bigint };
 
-// the money of each step: the variants of the scope, a step by its number
+// the money of each step: the variants of the scope added up, a step by its number
 async function moneyOfSteps(db: Prisma.TransactionClient, scope: ReportScope, steps: Step[]) {
-  const froms = steps.map((step) => step.from.toISOString());
-  const tos = steps.map((step) => step.to.toISOString());
-
-  const inStep = (column: Prisma.Sql) => Prisma.sql`${column} >= b.f and ${column} < b.t`;
-
   return db.$queryRaw<StepMoney[]>`
-    ${scopeCtes(scope)},
-    steps as (
-      select x.f at time zone 'UTC' as f, x.t at time zone 'UTC' as t, x.n
-      from unnest(${froms}::timestamptz[], ${tos}::timestamptz[]) with ordinality as x(f, t, n)
-    ),
-    sold as (
-      select b.n, sum(oi.quantity)::bigint as units, sum(oi."totalPrice") as revenue
-      from steps as b
-      join cartlify.orders as o on ${inStep(Prisma.sql`o."paidAt"`)}
-      join cartlify.order_items as oi on oi."orderId" = o.id
-      where oi."variantId" in (select id from scope)
-      group by b.n
-    ),
-    sold_cost as (
-      select b.n, sum(a.quantity * pb."unitCost") as cost
-      from steps as b
-      join cartlify.orders as o on ${inStep(Prisma.sql`o."paidAt"`)}
-      join cartlify.order_batch_allocations as a on a."orderId" = o.id
-      join cartlify.product_batches as pb on pb.id = a."batchId"
-      where a."variantId" in (select id from scope)
-      group by b.n
-    ),
-    refunded as (
-      select b.n, ri.id, ri.quantity, ri.amount, oi."variantId" as pid
-      from steps as b
-      join cartlify.return_items as ri on ri.money = 'refunded'
-        and ${inStep(Prisma.sql`ri."refundedAt"`)}
-      join cartlify.order_items as oi on oi.id = ri."orderItemId"
-      where oi."variantId" in (select id from scope)
-    ),
-    returned as (
-      select n, sum(quantity)::bigint as units, sum(amount) as revenue
-      from refunded
-      group by n
-    ),
-    returned_cost as (
-      select b.n, sum((e->>'quantity')::int * (e->>'unitCost')::numeric) as cost
-      from steps as b
-      join cartlify.return_items as ri on ri.money = 'refunded' and ri."refundedAt" < b.t
-      join cartlify.order_items as oi on oi.id = ri."orderItemId"
-      join cartlify.stock_log as l on l."returnItemId" = ri.id and l.event = 'stock.return'
-      ${LOG_BATCHES}
-      where ${inStep(Prisma.sql`greatest(ri."refundedAt", l."createdAt")`)}
-        and oi."variantId" in (select id from scope)
-      group by b.n
-    ),
-    written as (
-      select b.n,
-             sum((e->>'quantity')::int)::bigint as units,
-             sum((e->>'quantity')::int * (e->>'unitCost')::numeric) as value
-      from steps as b
-      join cartlify.stock_log as l on ${inStep(Prisma.sql`l."createdAt"`)}
-      ${LOG_BATCHES}
-      where ${WRITE_OFF_EVENTS}
-        and l."variantId" in (select id from scope)
-      group by b.n
-    ),
-    bought as (
-      select b.n, sum(pb.quantity)::bigint as units, sum(pb.quantity * pb."unitCost") as value
-      from steps as b
-      join cartlify.product_batches as pb on ${inStep(Prisma.sql`pb."createdAt"`)}
-      where pb."variantId" in (select id from scope)
-      group by b.n
-    )
+    ${stepMoneyOfScopeCtes(scope, steps)}
     select b.n,
-           coalesce(sold.units, 0)::bigint as sold_units,
-           coalesce(sold.revenue, 0) as sold_revenue,
-           coalesce(sold_cost.cost, 0) as sold_cost,
-           coalesce(returned.units, 0)::bigint as returned_units,
-           coalesce(returned.revenue, 0) as returned_revenue,
-           coalesce(returned_cost.cost, 0) as returned_cost,
-           coalesce(written.units, 0)::bigint as written_units,
-           coalesce(written.value, 0) as written_value,
-           coalesce(bought.units, 0)::bigint as bought_units,
-           coalesce(bought.value, 0) as bought_value
+           coalesce(sum(m.sold_units), 0)::bigint as sold_units,
+           coalesce(sum(m.sold_revenue), 0) as sold_revenue,
+           coalesce(sum(m.sold_cost), 0) as sold_cost,
+           coalesce(sum(m.returned_units), 0)::bigint as returned_units,
+           coalesce(sum(m.returned_revenue), 0) as returned_revenue,
+           coalesce(sum(m.returned_cost), 0) as returned_cost,
+           coalesce(sum(m.written_units), 0)::bigint as written_units,
+           coalesce(sum(m.written_value), 0) as written_value,
+           coalesce(sum(m.bought_units), 0)::bigint as bought_units,
+           coalesce(sum(m.bought_value), 0) as bought_value
     from steps as b
-    left join sold on sold.n = b.n
-    left join sold_cost on sold_cost.n = b.n
-    left join returned on returned.n = b.n
-    left join returned_cost on returned_cost.n = b.n
-    left join written on written.n = b.n
-    left join bought on bought.n = b.n
+    left join step_money as m on m.n = b.n
+    group by b.n
     order by b.n
   `;
 }
@@ -216,7 +153,7 @@ const SORT_VALUE: Record<
 export async function reportTimeline(
   args: AccountingTimelineArgs,
 ): Promise<GetAdminReportTimelineResponseDto> {
-  const { steps, money, delivery } = await tx(
+  const { steps, money, delivery, payments } = await tx(
     async (db) => {
       await setUserContext(db, { userId: args.actorId, role: args.actorRole });
       await assertCategory(db, args.categoryId);
@@ -232,8 +169,13 @@ export async function reportTimeline(
         steps.length && isWholeShop(args)
           ? await db.$queryRaw<(DeliveryColumns & { n: bigint })[]>(deliveryOfStepsSql(steps))
           : [];
+      // so are the payments past the statements
+      const payments =
+        steps.length && isWholeShop(args)
+          ? await db.$queryRaw<(PaymentsColumns & { n: bigint })[]>(paymentsOfStepsSql(steps))
+          : [];
 
-      return { steps, money, delivery };
+      return { steps, money, delivery, payments };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead, timeout: 15_000 },
   );
@@ -243,6 +185,7 @@ export async function reportTimeline(
     const columns = money[index]!;
     const { sales, returns, net, writeOffs, afterWriteOffs, purchases } = moneyOf(columns);
     const stepDelivery = delivery[index] ?? null;
+    const stepPayments = payments[index] ?? null;
     return {
       id: index,
       label: step.label,
@@ -254,11 +197,13 @@ export async function reportTimeline(
       afterWriteOffs,
       purchases,
       delivery: stepDelivery ? deliveryMoneyOf(stepDelivery) : null,
+      payments: stepPayments ? paymentsMoneyOf(stepPayments) : null,
       summary: summaryOf({
         itemsRevenue: new Prisma.Decimal(columns.sold_revenue).minus(columns.returned_revenue),
         itemsCost: new Prisma.Decimal(columns.sold_cost).minus(columns.returned_cost),
         writeOffs: columns.written_value,
         delivery: stepDelivery,
+        payments: stepPayments,
       }),
     };
   });
@@ -280,6 +225,7 @@ export async function reportTimeline(
       afterWriteOffs: row.afterWriteOffs,
       purchases: row.purchases,
       delivery: row.delivery,
+      payments: row.payments,
       summary: row.summary,
     })),
   };
@@ -293,6 +239,7 @@ const TIMELINE_CSV: CsvColumn<StepCsvRow>[] = [
   { header: 'to', kind: 'text', value: (row) => row.period.to.toISOString() },
   ...moneyCsvColumns<StepCsvRow>((row) => row, { stock: false }),
   ...deliveryCsvColumns<StepCsvRow>((row) => row.delivery),
+  ...paymentsCsvColumns<StepCsvRow>((row) => row.payments),
   ...summaryCsvColumns<StepCsvRow>((row) => row.summary),
 ];
 

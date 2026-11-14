@@ -9,6 +9,16 @@ import { startApp, stopApp } from '../../../helpers/app.js';
 import { chatBotDriver, type Chat } from '../../../helpers/chatBot.js';
 import { closeChatSockets } from '../../../helpers/chatSocket.js';
 import { getCsrf, withCsrf, type Csrf } from '../../../helpers/csrf.js';
+import { inCommittedTx } from '../../../helpers/db.js';
+import {
+  handRefundOf,
+  newDisputeId,
+  reinstatement,
+  synced,
+  withdrawal,
+} from '../../../helpers/dbMoney.js';
+import { pay, waitingOrderOf } from '../../../helpers/dbOrders.js';
+import { cancelPaidOrder } from '../../../helpers/cancel.js';
 import {
   closeSessions,
   createProduct,
@@ -29,7 +39,10 @@ const DAY_MS = 86_400_000;
 // 10.4): per order the state of its statements, until when the customer may withdraw and for which
 // units, and where the money of each statement is (refunded with the day, on its way, not refunded
 // yet, refused with the reason); never what the shop does with the goods. An order with money that
-// failed to go back, or that the bank disputed, is for an admin: the bot says nothing of it. The
+// failed to go back, held back from its sending (a refund made by hand that root has not decided
+// on, a dispute, a check of the payment) or whose payment the bank disputes, is for an admin: the
+// bot says nothing of it. The money of a statement is read from the money journal: the row that made
+// the order whole carries the delivery that went back with it. The
 // orders and the statements come through the real routes and the database functions of the money
 // (helpers/returnFlows.ts, helpers/returns.ts); the model is the test's, and what it is told is
 // read from its request
@@ -465,6 +478,26 @@ describe('where the money of a statement is', () => {
     expect(line).not.toContain('not_arrived');
   });
 
+  // the delivery went back with the row that made the order whole: the money of the statement is
+  // the goods and the delivery together
+  it('adds the delivery that went back with the statement to its money', async () => {
+    const { chat, buyer, product } = await customer();
+    // an order whose delivery cost 6, paid
+    const orderId = await inCommittedTx(async (db) => {
+      const id = await waitingOrderOf(db, buyer.id, [[product.variantId, 1]], { flat: 6 });
+      expect(await pay(db, admin.id, id)).toBe('PAID');
+      return id;
+    });
+    const returnId = await cancelPaidOrder(admin.id, orderId);
+    const { refundedAt } = await refundReturn(admin.id, returnId);
+
+    const line = await lineOf(chat, orderId);
+
+    expect(line).toContain(
+      `money: refunded 16 EUR for 1 unit(s) on ${refundedAt.toISOString()} (UTC)`,
+    );
+  });
+
   // each statement has its own money, and the order says one open statement with money back
   it('is told for each statement apart: one refunded and closed, one open and not refunded', async () => {
     const { chat, buyer, product } = await customer();
@@ -485,7 +518,8 @@ describe('where the money of a statement is', () => {
       `statement ${refunded.id} (stated ${first!.statedAt} UTC): closed; money: refunded 10 EUR for 1 unit(s) on ${refundedAt.toISOString()} (UTC)`,
     );
     expect(line).toContain(
-      `statement ${waiting.id} (stated ${second!.statedAt} UTC): registered; money: 10 EUR for 1 unit(s) is not refunded yet`,
+      // the goods came in: taking them in confirmed the parcel they came in
+      `statement ${waiting.id} (stated ${second!.statedAt} UTC): the shop confirmed the parcel; money: 10 EUR for 1 unit(s) is not refunded yet`,
     );
     expect(line).toContain('; returns: a statement is open and part of the money went back');
   });
@@ -557,5 +591,61 @@ describe('an order with money that failed to go back', () => {
     expect(orders).not.toContain(`statement ${card.id}`);
     expect(orders).not.toContain(`statement ${second.id}`);
     expect(orders).not.toContain('withdrawal:');
+  });
+});
+
+// an order held back from its sending, or whose payment the bank disputes, is for an admin: the
+// bot does not tell of its status, its items or its money
+describe('an order held back or disputed at the bank', () => {
+  it('is left to an admin while a refund made by hand waits for root', async () => {
+    const { chat, buyer, product } = await customer();
+    const orderId = await placeOrder(app, csrf, buyer, product, 'paid', 2);
+    await inCommittedTx((db) => handRefundOf(db, `pi_test_${orderId}`, 5));
+
+    expect(await lineOf(chat, orderId)).toBe(HUMAN_ONLY(orderId));
+  });
+
+  it('is left to an admin while the bank has the money of a dispute, and goes back to the bot once it gave it back', async () => {
+    const { chat, buyer, product } = await customer();
+    const placed = await sent(buyer, product, 1);
+    const stripeId = newDisputeId();
+    const taken = withdrawal(10);
+    // the order is on its way: the dispute holds nothing, the bank took the money
+    await inCommittedTx((db) =>
+      synced(db, {
+        stripeId,
+        paymentId: `pi_test_${placed.orderId}`,
+        status: 'needs_response',
+        transactions: [taken],
+      }),
+    );
+
+    expect(await lineOf(chat, placed.orderId)).toBe(HUMAN_ONLY(placed.orderId));
+
+    await inCommittedTx((db) =>
+      synced(db, {
+        stripeId,
+        paymentId: `pi_test_${placed.orderId}`,
+        status: 'won',
+        transactions: [taken, reinstatement(10)],
+      }),
+    );
+    const line = await lineOf(chat, placed.orderId);
+
+    expect(line).not.toContain('HUMAN ONLY');
+    expect(line).toContain('shipped (sent, on its way to the customer)');
+  });
+
+  it('leaves the other orders of the customer to the bot', async () => {
+    const { chat, buyer, product } = await customer();
+    const held = await placeOrder(app, csrf, buyer, product, 'paid', 1);
+    await inCommittedTx((db) => handRefundOf(db, `pi_test_${held}`, 5));
+    const fine = await sent(buyer, product, 1);
+
+    const lines = (await ordersTold(chat)).split('\n');
+
+    expect(lines).toContain(HUMAN_ONLY(held));
+    const other = lines.find((line) => line.startsWith(`- order ${fine.orderId}:`))!;
+    expect(other).toContain('shipped (sent, on its way to the customer)');
   });
 });

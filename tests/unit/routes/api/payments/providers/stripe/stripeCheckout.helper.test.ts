@@ -103,8 +103,10 @@ describe('buildCheckoutSessionPayload', () => {
     expect(payload().expires_at).toBe(Math.floor(reservationExpiresAt.getTime() / 1000) + 30 * 60);
   });
 
-  // the buyer sees what is bought: a line for each item, its name, units and price in cents
-  it('asks for a one time card payment with a line for each item', () => {
+  // the buyer sees what is bought: a line for each item, its name, units and price in cents; the
+  // way to pay is chosen on the page of stripe: a card (Google Pay and Apple Pay come with it),
+  // PayPal or Bizum, each where stripe offers it to the buyer
+  it('asks for a one time payment by card, PayPal or Bizum with a line for each item', () => {
     const out = helper.buildCheckoutSessionPayload(
       order(34.3, [
         { name: 'Desk lamp', unitPrice: 12.5, quantity: 2 },
@@ -114,7 +116,7 @@ describe('buildCheckoutSessionPayload', () => {
 
     expect(out).toMatchObject({
       mode: 'payment',
-      allowed_payment_method_types: ['card'],
+      allowed_payment_method_types: ['card', 'paypal', 'bizum'],
       client_reference_id: '12',
       line_items: [
         {
@@ -415,6 +417,96 @@ describe('getPaidAmountFromCheckoutSession', () => {
     expect(
       thrownBy(() => helper.getPaidAmountFromCheckoutSession(session({ amount_total }))),
     ).toMatchObject({ details: { reason: 'STRIPE_CHECKOUT_SESSION_AMOUNT_INVALID' } });
+  });
+});
+
+// a sum of stripe in cents as the app writes money; the money a dispute takes is below 0
+describe('amountOfCents', () => {
+  it.each([
+    [1250, '12.50'],
+    [-1000, '-10.00'],
+    [-5, '-0.05'],
+    [-123456789, '-1234567.89'],
+  ])('turns %d cents into %s', (cents, amount) => {
+    expect(helper.amountOfCents(cents)).toBe(amount);
+  });
+
+  it.each([19.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53])('rejects %p cents', (cents) => {
+    expect(thrownBy(() => helper.amountOfCents(cents))).toMatchObject({
+      details: { reason: 'STRIPE_AMOUNT_INVALID' },
+    });
+  });
+});
+
+// the page the way the webhook reads its payment event, and the timer reads the page it found paid
+describe('paymentPageReadingOf', () => {
+  const paid = (patch: Partial<Stripe.Checkout.Session> = {}) =>
+    session({ status: 'complete', payment_status: 'paid', currency: 'eur', ...patch });
+
+  it('reads a paid page of an order: the order, its owner and the payment', () => {
+    expect(helper.paymentPageReadingOf(paid())).toEqual({
+      state: 'paid',
+      pageId: 'cs_test_1',
+      orderId: 12,
+      userId: 3,
+      paymentId: 'pi_test_1',
+      amount: '19.99',
+      currency: 'eur',
+    });
+  });
+
+  it('reads the payment of an expanded payment intent', () => {
+    expect(
+      helper.paymentPageReadingOf(
+        paid({ payment_intent: { id: 'pi_test_2' } as Stripe.PaymentIntent }),
+      ),
+    ).toMatchObject({ state: 'paid', paymentId: 'pi_test_2' });
+  });
+
+  // a page opened before the owner rode in the metadata
+  it('reads a paid page without the owner of the order', () => {
+    expect(
+      helper.paymentPageReadingOf(paid({ metadata: { entityType: 'order', entityId: '12' } })),
+    ).toMatchObject({ state: 'paid', orderId: 12, userId: null });
+  });
+
+  // nothing is taken yet: the page is open, closed, or a bank still decides (complete, unpaid)
+  it.each([
+    ['open', { status: 'open', payment_status: 'unpaid', payment_intent: null }],
+    ['closed', { status: 'expired', payment_status: 'unpaid', payment_intent: null }],
+    ['complete while a bank decides', { status: 'complete', payment_status: 'unpaid' }],
+    ['without a payment to take', { status: 'complete', payment_status: 'no_payment_required' }],
+  ] as const)('reads a page that is %s as unpaid', (_case, state) => {
+    expect(helper.paymentPageReadingOf(session(state as Partial<Stripe.Checkout.Session>))).toEqual(
+      { state: 'unpaid', pageId: 'cs_test_1', orderId: 12 },
+    );
+  });
+
+  // another tool in the same stripe account: its money is left alone, nothing of it is read
+  it.each([
+    ['of another kind', { entityType: 'invoice', entityId: '12' }],
+    ['without an order id', { entityType: 'order' }],
+    ['without metadata', null],
+  ])('reads a page %s as foreign, paid or not', (_case, metadata) => {
+    expect(
+      helper.paymentPageReadingOf(
+        paid({ metadata, payment_intent: null, amount_total: null, currency: null }),
+      ),
+    ).toEqual({ state: 'foreign', pageId: 'cs_test_1' });
+  });
+
+  it.each([
+    [
+      'without a payment intent',
+      { payment_intent: null },
+      'STRIPE_CHECKOUT_SESSION_PAYMENT_INTENT_MISSING',
+    ],
+    ['without a sum', { amount_total: null }, 'STRIPE_CHECKOUT_SESSION_AMOUNT_INVALID'],
+    ['without a currency', { currency: null }, 'STRIPE_CHECKOUT_SESSION_CURRENCY_MISSING'],
+  ] as const)('rejects a paid page of an order %s', (_case, patch, reason) => {
+    expect(
+      thrownBy(() => helper.paymentPageReadingOf(paid(patch as Partial<Stripe.Checkout.Session>))),
+    ).toMatchObject({ details: { reason, sessionId: 'cs_test_1' } });
   });
 });
 

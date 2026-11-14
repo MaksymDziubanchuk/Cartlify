@@ -16,6 +16,7 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { moneyOfPayment } from '../../../helpers/lateRefund.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail } from '../../../helpers/mail.js';
 import { loseReservation, orderRowOf, placeOrder } from '../../../helpers/orders.js';
@@ -24,13 +25,11 @@ import {
   openPaymentPage,
   orderStateOf,
   payPage,
-  refundAuditOf,
 } from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
   deliver,
   openForeignSession,
-  refundAtStripe,
   refundsOf,
   payCheckoutSession,
   stripeEvent,
@@ -38,10 +37,11 @@ import {
 } from '../../../helpers/stripe.js';
 
 // POST /api/payments/stripe/webhook with a payment the order cannot take: the stock is gone, another
-// payment paid it, the items changed, the order is gone. The money goes back in full at Stripe
-// and the refund is recorded in the admin audit log for the buyer, once per payment. The buyer
-// paid the page with a test card (the Stripe mock, or the test sandbox with service:stripe), the
-// test delivers the event
+// payment paid it, the items changed, the order is gone. The money goes back in full at Stripe and
+// the money journal keeps it for the buyer, once per payment: the late payment (with the reason the
+// order could not take it) and its refund. The buyer paid the page with a test card (the Stripe
+// mock, or the test sandbox with service:stripe), the test delivers the event. How the refund ends
+// is webhookLateRefund.test.ts
 
 let app: FastifyInstance;
 let csrf: Csrf;
@@ -78,30 +78,35 @@ const confirmAgain = (user: TestUser, orderId: number) =>
     payload: { orderId, expectedDeliveryPrice: 0 },
   });
 
-// the record of the refund, as the admin audit log keeps it for the buyer
-const refundRecord = (
-  user: TestUser,
-  change: { reason: string; paymentId: string; refundId: unknown },
-) =>
+// what the money journal keeps of the payment: the late payment for the buyer with the reason, and
+// its refund, the work of the system
+const lateRecord = (
+  user: TestUser | null,
+  change: { orderId: number | null; orderRef: number; reason: string; refundId: unknown },
+) => [
   expect.objectContaining({
-    actorId: user.id,
-    actorRole: 'USER',
-    // the refund of a payment that came late is its own event
-    event: 'order.refund_late',
+    event: 'money.late_payment',
+    purpose: 'late_payment',
+    amount: '51.00',
+    currency: 'eur',
+    orderId: change.orderId,
+    userId: user?.id ?? null,
+    actorId: null,
     meta: [
-      {
-        field: 'refund',
-        old: null,
-        new: {
-          initiator: 'system',
-          amount: '51.00',
-          currency: 'eur',
-          provider: 'stripe',
-          ...change,
-        },
-      },
+      { field: 'reason', new: change.reason },
+      { field: 'orderRef', new: change.orderRef },
     ],
-  });
+  }),
+  expect.objectContaining({
+    event: 'money.refund',
+    purpose: 'late_payment',
+    amount: '-51.00',
+    orderId: change.orderId,
+    userId: user?.id ?? null,
+    actorId: null,
+    refundId: change.refundId,
+  }),
+];
 
 beforeAll(async () => {
   app = await startApp();
@@ -137,13 +142,14 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     // the payment was refused before it took a unit, and the refund gives none back: the order has
     // no line in the stock log
     expect(await stockLogOf({ orderId })).toEqual([]);
-    expect(await refundAuditOf(orderId)).toEqual([
-      refundRecord(user, {
+    expect(await moneyOfPayment(paymentId)).toEqual(
+      lateRecord(user, {
+        orderId,
+        orderRef: orderId,
         reason: 'OUT_OF_STOCK',
-        paymentId,
         refundId: refunds[0]!.id,
       }),
-    ]);
+    );
   });
 
   // the buyer paid the page of an earlier confirmation as well, in another tab
@@ -180,12 +186,12 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     expect(
       (await stockLogOf({ orderId })).map((line) => [line.event, line.quantityChange]),
     ).toEqual([['stock.sale', -2]]);
-    expect(await refundAuditOf(orderId)).toEqual([
-      refundRecord(user, {
-        reason,
-        paymentId: first.paymentId,
-        refundId: expect.any(String),
-      }),
+    expect(await moneyOfPayment(first.paymentId)).toEqual(
+      lateRecord(user, { orderId, orderRef: orderId, reason, refundId: expect.any(String) }),
+    );
+    // the payment that paid the order is the lines of the order, and nothing went back of it
+    expect((await moneyOfPayment(second.paymentId)).map((line) => line.event)).toEqual([
+      'money.payment',
     ]);
   });
 
@@ -213,16 +219,18 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     });
     const { items } = await orderRowOf(orderId);
     expect(items.reduce((sum, item) => sum + item.quantity, 0)).toBe(3);
-    expect(await refundAuditOf(orderId)).toEqual([
-      refundRecord(user, {
+    expect(await moneyOfPayment(paymentId)).toEqual(
+      lateRecord(user, {
+        orderId,
+        orderRef: orderId,
         reason: 'AMOUNT_MISMATCH',
-        paymentId,
         refundId: expect.any(String),
       }),
-    ]);
+    );
   });
 
-  // the order is deleted (the account went, for example), the page names the buyer
+  // the order is deleted (the account went, for example), the page names the buyer; the line keeps
+  // the number of the order, the row of the order is not there to name
   it('returns the payment of an order that is gone and records it for its buyer', async () => {
     const { user, orderId, sessionId } = await orderWithPage();
     await loseReservation(orderId);
@@ -233,13 +241,14 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
 
     expect(res.statusCode).toBe(200);
     expect(await refundsOf(paymentId)).toEqual([expect.objectContaining({ amount: 5100 })]);
-    expect(await refundAuditOf(orderId)).toEqual([
-      refundRecord(user, {
+    expect(await moneyOfPayment(paymentId)).toEqual(
+      lateRecord(user, {
+        orderId: null,
+        orderRef: orderId,
         reason: 'ORDER_NOT_FOUND',
-        paymentId,
         refundId: expect.any(String),
       }),
-    ]);
+    );
   });
 
   // the return page of stripe said paid: without a mail the buyer waits for an order that never comes
@@ -277,8 +286,10 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     const again = await deliver(app, event);
 
     expect(again.statusCode).toBe(200);
+    expect(again.json()).toEqual({ received: true, skipped: 'REFUNDED' });
     expect(await refundsOf(paymentId)).toHaveLength(1);
-    expect(await refundAuditOf(orderId)).toHaveLength(1);
+    expect(await moneyOfPayment(paymentId)).toHaveLength(2);
+    expect(await orderStateOf(orderId)).toMatchObject({ status: 'unconfirmed', paymentId: null });
   });
 
   // the money of the payment went back; then the stock came back and Stripe delivered the event
@@ -299,43 +310,37 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     });
     expect(await stockOf(product.id)).toEqual({ stock: 6, reservedStock: 0 });
     expect(await refundsOf(paymentId)).toHaveLength(1);
-    expect(await refundAuditOf(orderId)).toHaveLength(1);
+    expect(await moneyOfPayment(paymentId)).toHaveLength(2);
   });
 
-  // an admin gave the money back in the Stripe dashboard before the event came
-  it('records a payment Stripe gave back already', async () => {
-    const { user, orderId, paymentId, event } = await paymentAfterTheStockIsGone();
-    await refundAtStripe(paymentId);
+  // Stripe out of reach is no failure of the refund: its line stays in transit, the worker asks
+  // again with the same key (worker/moneyRefund.test.ts); the event is taken, so Stripe has nothing
+  // to deliver again, and a delivery of it again does not ask either
+  it('keeps the refund in transit when Stripe cannot be reached, and the event is taken', async () => {
+    const { paymentId, event } = await paymentAfterTheStockIsGone();
 
-    const res = await deliver(app, event);
+    const res = await withStripeOutOfReach(() => deliver(app, event));
 
     expect(res.statusCode).toBe(200);
-    expect(await refundsOf(paymentId)).toHaveLength(1);
-    expect(await refundAuditOf(orderId)).toEqual([
-      refundRecord(user, { reason: 'OUT_OF_STOCK', paymentId, refundId: null }),
-    ]);
-  });
-
-  // an error answer makes Stripe deliver the event again, the money must not stay taken
-  it('asks Stripe again on the next delivery when the refund fails', async () => {
-    const { orderId, paymentId, event } = await paymentAfterTheStockIsGone();
-
-    const failed = await withStripeOutOfReach(() => deliver(app, event));
-
-    expect(failed.statusCode).toBe(500);
-    expect(takeLogs({ msg: 'request failed', reason: 'PAYMENT_REFUND_FAILED' })).toHaveLength(1);
+    expect(res.json()).toEqual({ received: true });
     expect(await refundsOf(paymentId)).toEqual([]);
-    expect(await refundAuditOf(orderId)).toEqual([]);
+    expect((await moneyOfPayment(paymentId)).at(-1)).toMatchObject({
+      event: 'money.refund',
+      amount: '-51.00',
+      state: 'in_transit',
+      refundId: null,
+      transferKey: `refund:${paymentId}`,
+    });
 
     const again = await deliver(app, event);
 
-    expect(again.statusCode).toBe(200);
-    expect(await refundsOf(paymentId)).toHaveLength(1);
-    expect(await refundAuditOf(orderId)).toHaveLength(1);
+    expect(again.json()).toEqual({ received: true, skipped: 'REFUNDED' });
+    expect(await refundsOf(paymentId)).toEqual([]);
   });
 
-  // a page opened before the buyer was kept in the metadata, for an order that is gone
-  it('returns the money and warns when nobody is there to record it for', async () => {
+  // a page opened before the buyer was kept in the metadata, for an order that is gone: the money
+  // goes back all the same, and the line names the order by its number only
+  it('returns the money of a page that names nobody, and records it with the number of the order', async () => {
     const page = await openForeignSession({
       amount: 5100,
       metadata: { entityType: 'order', entityId: '2000000000' },
@@ -346,10 +351,16 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     const res = await deliver(app, event);
 
     expect(res.statusCode).toBe(200);
-    expect(await refundsOf(paymentId)).toEqual([expect.objectContaining({ amount: 5100 })]);
-    expect(takeLogs({ msg: 'stripe refund has no audit record: order owner is unknown' })).toEqual([
-      expect.objectContaining({ orderId: 2_000_000_000, provider: 'stripe', paymentId }),
-    ]);
+    const refunds = await refundsOf(paymentId);
+    expect(refunds).toEqual([expect.objectContaining({ amount: 5100 })]);
+    expect(await moneyOfPayment(paymentId)).toEqual(
+      lateRecord(null, {
+        orderId: null,
+        orderRef: 2_000_000_000,
+        reason: 'ORDER_NOT_FOUND',
+        refundId: refunds[0]!.id,
+      }),
+    );
   });
 
   // a page of another tool in the same Stripe account, paid there: its money is none of the app's,
@@ -367,7 +378,7 @@ describe('POST /api/payments/stripe/webhook: a payment the order cannot take', (
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ received: true, skipped: 'NOT_AN_ORDER' });
     expect(await refundsOf(paymentId)).toEqual([]);
-    expect(takeLogs({ msg: 'stripe event of a page that is not an order was skipped' })).toEqual([
+    expect(takeLogs({ msg: 'stripe event was skipped', skipped: 'NOT_AN_ORDER' })).toEqual([
       expect.objectContaining({ sessionId: page.id, eventType: 'checkout.session.completed' }),
     ]);
   });

@@ -10,7 +10,12 @@ import { craftEvent, deliver, signatureOf, WEBHOOK_URL } from '../../../helpers/
 // POST /api/payments/stripe/webhook, what any event goes through: the Stripe signature, the body, the
 // events the app does not handle. Nothing here needs Stripe itself, an event is signed with the
 // test webhook secret the way Stripe signs it. Payments, refunds and closed pages are in
-// webhookPaid, webhookRefund and webhookExpired
+// webhookPaid, webhookRefund, webhookLateRefund and webhookExpired; the refunds made by hand, the
+// disputes, the warnings of fraud and the reviews are in handRefunds, disputes, fraudWarnings and
+// reviews. An error answer is kept for what passes by itself (the signature, the database busy) and
+// for a fault of the code: an event that can never pass (an object it does not know, a page of
+// another tool) is acknowledged with the reason in skipped and a warning in the log, or Stripe
+// would deliver it again for days and turn the endpoint off
 
 let app: FastifyInstance;
 
@@ -33,6 +38,9 @@ const foreignPage = (overrides: Record<string, unknown> = {}) => ({
 
 const post = (payload: string, headers: Record<string, string>) =>
   app.inject({ method: 'POST', url: WEBHOOK_URL, headers, payload });
+
+// the warnings of the events acknowledged without anything done, with the reason
+const skipped = (reason: string) => takeLogs({ msg: 'stripe event was skipped', skipped: reason });
 
 beforeAll(async () => {
   app = await startApp();
@@ -165,14 +173,27 @@ describe('POST /api/payments/stripe/webhook', () => {
       expect(res.json()).toMatchObject({ errorCode: 'REQUEST_BODY_INVALID_JSON' });
     });
 
-    it('answers STRIPE_EVENT_OBJECT_INVALID for a checkout event about another object', async () => {
-      const res = await deliver(
-        app,
-        craftEvent('checkout.session.completed', { id: 'pi_test_1', object: 'payment_intent' }),
-      );
+    // a delivery of it again would be the same object: it never passes
+    it.each([
+      ['checkout.session.completed', { id: 'pi_test_1', object: 'payment_intent' }],
+      ['checkout.session.expired', { id: 'pi_test_1', object: 'payment_intent' }],
+      ['refund.updated', { id: 'cs_test_1', object: 'checkout.session' }],
+      ['charge.dispute.created', { id: 'pi_test_1', object: 'payment_intent' }],
+      ['charge.dispute.closed', { id: 're_test_1', object: 'refund' }],
+      ['radar.early_fraud_warning.created', { id: 'dp_test_1', object: 'dispute' }],
+      ['radar.early_fraud_warning.updated', { id: 'pi_test_1', object: 'payment_intent' }],
+      ['review.opened', { id: 'dp_test_1', object: 'dispute' }],
+      ['review.closed', { id: 'issfr_1', object: 'radar.early_fraud_warning' }],
+    ])('acknowledges %s about another object and says why it did nothing', async (type, object) => {
+      const event = craftEvent(type, object);
 
-      expect(res.statusCode).toBe(400);
-      expect(res.json()).toMatchObject({ errorCode: 'STRIPE_EVENT_OBJECT_INVALID' });
+      const res = await deliver(app, event);
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ received: true, skipped: 'OBJECT_INVALID' });
+      expect(skipped('OBJECT_INVALID')).toEqual([
+        expect.objectContaining({ eventId: event.id, eventType: type }),
+      ]);
     });
   });
 
@@ -180,9 +201,6 @@ describe('POST /api/payments/stripe/webhook', () => {
   // would make Stripe deliver the event again for days and at last turn the endpoint off. The
   // money of such a page is not touched, webhookRefund.test.ts pays one
   describe('a page that is not of an order', () => {
-    const skipped = () =>
-      takeLogs({ msg: 'stripe event of a page that is not an order was skipped' });
-
     it.each([
       ['checkout.session.completed', foreignPage()],
       ['checkout.session.async_payment_succeeded', foreignPage()],
@@ -198,7 +216,7 @@ describe('POST /api/payments/stripe/webhook', () => {
 
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({ received: true, skipped: 'NOT_AN_ORDER' });
-      expect(skipped()).toEqual([
+      expect(skipped('NOT_AN_ORDER')).toEqual([
         expect.objectContaining({ eventId: event.id, eventType: type, sessionId: page.id }),
       ]);
     });
@@ -213,7 +231,7 @@ describe('POST /api/payments/stripe/webhook', () => {
 
         expect(res.statusCode).toBe(200);
         expect(res.json()).toEqual({ received: true, skipped: 'NOT_AN_ORDER' });
-        expect(skipped()).toHaveLength(1);
+        expect(skipped('NOT_AN_ORDER')).toHaveLength(1);
       },
     );
   });

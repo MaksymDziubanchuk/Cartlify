@@ -26,7 +26,9 @@ export async function closeReturnRows({
   log,
 }: CloseReturnDto): Promise<ReturnDto> {
   assertAdminActor(actorId, actorRole);
-  if (actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
+  // root, or an admin root allowed to handle the money: the guard of the route asks the database,
+  // and the function of the database checks it again
+  if (actorRole !== 'ADMIN' && actorRole !== 'ROOT') throw new ForbiddenError('FORBIDDEN_ROLE');
 
   let card: ReturnDto;
   try {

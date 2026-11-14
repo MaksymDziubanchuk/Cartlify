@@ -154,10 +154,12 @@ const postProofSchema = {
   summary: 'Tell how the goods were sent back, by the code of the mail',
   description:
     'A buyer writes the carrier and the number of the parcel they sent the goods back with (and ' +
-    'a link to follow it), with the code of the order from the link of a mail, for a statement of ' +
+    'a link to follow it, and what they paid the carrier when they want to tell it), with the code of ' +
+    'the order from the link of a mail, for a statement of ' +
     'this order made from an account or from the form with the code. Every failure (a wrong ' +
     'code, a statement there is not or of another kind, one that is closed, has nothing to wait ' +
-    'for or is confirmed by the shop already) is the same answer, `400 WITHDRAWAL_REJECTED`. At ' +
+    'for, is confirmed by the shop already or has a parcel the shop recorded itself) is the same ' +
+    'answer, `400 WITHDRAWAL_REJECTED`. At ' +
     'most `LIMIT_WITHDRAWAL_FORM_PER_ADDRESS` requests an hour from an address and ' +
     '`LIMIT_WITHDRAWAL_FORM_PER_ORDER` for an order from one address.',
 

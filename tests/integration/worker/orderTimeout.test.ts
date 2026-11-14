@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it, jest } from '@jest/globals';
 
 import { getRedis } from '@redis/client.js';
+import { stripeProvider } from '@routes/api/payments/providers/stripe/stripe.provider.js';
+import { ServiceUnavailableError } from '@utils/errors.js';
 import { redisKeys } from '@redis/keys.js';
 import {
   ORDER_TIMEOUT_MAX_ATTEMPTS,
@@ -23,13 +25,16 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../helpers/factories.js';
+import { watchMail } from '../../helpers/mail.js';
 import { placeOrder } from '../../helpers/orders.js';
 import { openPaymentPage, orderStateOf, redisStateOf } from '../../helpers/payments.js';
 import {
   closeOpenSessions,
+  deliver,
   payCheckoutSession,
   readSession,
   rememberSession,
+  stripeEvent,
   withStripeOutOfReach,
 } from '../../helpers/stripe.js';
 
@@ -86,7 +91,7 @@ async function orderWithPage() {
   const user = await newUser();
   const orderId = await placeOrder(app, csrf, user, await newProduct(), 'waiting');
   const sessionId = rememberSession(await openPaymentPage(app, csrf, user, orderId));
-  return { orderId, sessionId };
+  return { user, orderId, sessionId };
 }
 
 beforeAll(async () => {
@@ -220,18 +225,64 @@ describe('the base job: the payment page at the end of the reservation', () => {
       expect(await attemptsOf(redisKeys.orderTimeoutBaseZset, orderId)).toBeNull();
     });
 
-    // the money is taken: the payment event marks the order paid and takes the link away
-    it('leaves a paid page to its payment event, without an error', async () => {
+    // the money is taken and the payment event did not come: the timer reads the page at Stripe and
+    // takes the step the event takes, the event that comes late finds it done
+    it('makes the order of a paid page paid without its event, with the one mail', async () => {
+      const { user, orderId, sessionId } = await orderWithPage();
+      const paymentId = await payCheckoutSession(sessionId);
+      await dueFirst(orderId);
+      const log = workerLog();
+      const mails = watchMail();
+
+      expect(await processClaimedOrderReservationBase(log, 1)).toBe(1);
+
+      expect(await orderStateOf(orderId)).toMatchObject({
+        status: 'paid',
+        paymentProvider: 'stripe',
+        paymentId,
+      });
+      expect(await redisStateOf(orderId)).toMatchObject({
+        pageLink: null,
+        reservationTimer: null,
+        graceTimer: null,
+      });
+      const paidMails = () =>
+        mails.filter((mail) => mail.to.includes(user.email) && mail.subject.includes('paid'));
+      expect(paidMails()).toHaveLength(1);
+      expect(log.error).not.toHaveBeenCalled();
+
+      const late = await deliver(app, await stripeEvent('checkout.session.completed', sessionId));
+
+      expect(late.statusCode).toBe(200);
+      expect(late.json()).toEqual({ received: true });
+      expect(paidMails()).toHaveLength(1);
+      expect(await orderStateOf(orderId)).toMatchObject({ status: 'paid', paymentId });
+    });
+
+    // Stripe said the page is paid and cannot be read now: the job runs again later
+    it('tries a paid page again later when Stripe cannot give its data', async () => {
       const { orderId, sessionId } = await orderWithPage();
       await payCheckoutSession(sessionId);
       await dueFirst(orderId);
       const log = workerLog();
+      jest
+        .spyOn(stripeProvider, 'readPaidPage')
+        .mockRejectedValueOnce(new ServiceUnavailableError('PAYMENT_PROVIDER_UNAVAILABLE'));
 
-      expect(await processClaimedOrderReservationBase(log, 1)).toBe(1);
+      await processClaimedOrderReservationBase(log, 1);
 
-      expect((await redisStateOf(orderId)).pageLink).toBe(`stripe:${sessionId}`);
-      expect(await scoreOf(redisKeys.orderTimeoutBaseZset, orderId)).toBeNull();
-      expect(log.error).not.toHaveBeenCalled();
+      expect(await orderStateOf(orderId)).toMatchObject({ status: 'waiting', paymentId: null });
+      expect(await scoreOf(redisKeys.orderTimeoutBaseZset, orderId)).toBeGreaterThan(Date.now());
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ orderId, attempt: 1 }),
+        'order reservation base expiry failed, it runs again later',
+      );
+
+      await dueAgain(redisKeys.orderTimeoutBaseZset, orderId);
+      await processClaimedOrderReservationBase(log, 1);
+
+      expect(await orderStateOf(orderId)).toMatchObject({ status: 'paid' });
+      jest.restoreAllMocks();
     });
   });
 });

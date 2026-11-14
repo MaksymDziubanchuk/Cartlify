@@ -9,6 +9,7 @@ import {
   ADMIN_ALERT_KINDS,
   NEWSLETTER_ALERT_KINDS,
   ROOT_ALERT_KINDS,
+  MONEY_ALERT_KINDS,
 } from '@routes/api/admin/services/helpers/alertKinds.helper.js';
 
 import { startApp, stopApp } from '../../../helpers/app.js';
@@ -164,7 +165,12 @@ describe('the lists of values the swagger document gives', () => {
     expect(lists.length).toBeGreaterThan(0);
     for (const list of lists) {
       expect([...list].sort()).toEqual(
-        [...ADMIN_ALERT_KINDS, ...NEWSLETTER_ALERT_KINDS, ...ROOT_ALERT_KINDS].sort(),
+        [
+          ...ADMIN_ALERT_KINDS,
+          ...NEWSLETTER_ALERT_KINDS,
+          ...MONEY_ALERT_KINDS,
+          ...ROOT_ALERT_KINDS,
+        ].sort(),
       );
     }
   });

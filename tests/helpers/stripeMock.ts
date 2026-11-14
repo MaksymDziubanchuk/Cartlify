@@ -6,7 +6,11 @@ import type { AddressInfo } from 'node:net';
 // requests to (tests/helpers/stripe.ts), answering the requests they make the way the test sandbox
 // answers them, checked on 24.10.2026 and held to it by stripeAnswers.test.ts in both modes: the
 // objects and their ids, the states of a payment page and of a payment, the idempotency keys, the
-// events Stripe records and the errors the app reads. Each test file has its own, in memory.
+// events Stripe records and the errors the app reads. The disputes (with their balance
+// transactions and the draft of the evidence), the pages of the list of refunds, the number of the
+// bank of a refund and the pages of card, PayPal and Bizum came on 11.11.2026 from the types of the
+// sdk and the docs of Stripe, and stripeAnswers.test.ts holds them to the sandbox in its run with
+// it. Each test file has its own, in memory.
 // A request it was not taught (another endpoint, a parameter it does not know) gets the answer
 // Stripe gives an unknown one and is kept: tests/helpers/stripe.ts fails the test with it
 
@@ -15,8 +19,10 @@ type Answer = { status: number; body: unknown };
 
 const BASE62 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
-// ids of the lengths the sandbox gives: cs_test_ 66, pi_ 27, evt_ 28, price_ 30, prod_ 19
-const idOf = (prefix: string, length: number) =>
+// ids of the lengths the sandbox gives: cs_test_ 66, pi_ 27, evt_ 28, price_ 30, prod_ 19; the
+// ones of disputes (du_ 27, as the sandbox gives them), early fraud warnings (issfr_ 30) and reviews (prv_ 28) as the docs
+// of Stripe show them
+export const idOf = (prefix: string, length: number) =>
   prefix +
   Array.from(randomBytes(length - prefix.length), (byte) => BASE62[byte % BASE62.length]).join('');
 
@@ -28,8 +34,69 @@ const EVENT_API_VERSION = '2026-02-25.clover';
 // the longest id of a checkout session Stripe reads
 const SESSION_ID_MAX_LENGTH = 66;
 
-// the smallest total of a card page in cents, in EUR
-const CARD_MINIMUM_TOTAL = 50;
+// the smallest total of a page in cents, in EUR: the same for a card, PayPal and Bizum
+const PAGE_MINIMUM_TOTAL = 50;
+
+// the most items Stripe gives on a page of a list, and the number it gives without a limit
+const LIST_MAX = 100;
+const LIST_DEFAULT = 10;
+
+// the fee Stripe takes from the balance for a dispute of a payment in EUR, in cents
+const DISPUTE_FEE = 2000;
+
+// the days the shop has to answer a dispute
+const DISPUTE_DAYS = 7;
+
+// the reasons a refund can be given with, as the dashboard lists them
+const REFUND_REASONS = ['duplicate', 'fraudulent', 'requested_by_customer'];
+
+// a dispute is open until it ends one of these ways
+const DISPUTE_ENDS = ['won', 'lost', 'warning_closed', 'prevented'];
+
+// the text evidence of a dispute the app and the helpers send
+const EVIDENCE_TEXT = [
+  'product_description',
+  'customer_name',
+  'customer_email_address',
+  'shipping_address',
+  'shipping_carrier',
+  'shipping_tracking_number',
+  'shipping_date',
+  'refund_policy_disclosure',
+  'refund_refusal_explanation',
+  'uncategorized_text',
+];
+
+// every field of the evidence of a dispute, empty while nothing is put on it
+const EVIDENCE_FIELDS = [
+  'access_activity_log',
+  'billing_address',
+  'cancellation_policy',
+  'cancellation_policy_disclosure',
+  'cancellation_rebuttal',
+  'customer_communication',
+  'customer_email_address',
+  'customer_name',
+  'customer_purchase_ip',
+  'customer_signature',
+  'duplicate_charge_documentation',
+  'duplicate_charge_explanation',
+  'duplicate_charge_id',
+  'product_description',
+  'receipt',
+  'refund_policy',
+  'refund_policy_disclosure',
+  'refund_refusal_explanation',
+  'service_date',
+  'service_documentation',
+  'shipping_address',
+  'shipping_carrier',
+  'shipping_date',
+  'shipping_documentation',
+  'shipping_tracking_number',
+  'uncategorized_file',
+  'uncategorized_text',
+];
 
 const error = (
   status: number,
@@ -82,6 +149,29 @@ const list = (url: string, data: unknown[]): Answer => ({
   status: 200,
   body: { object: 'list', data, has_more: false, url },
 });
+
+// a page of a list (the items the newest first): limit items after the one starting_after names.
+// Null for a limit or a cursor the mock was not taught, it gets the answer of the sandbox first
+function pageOf<T extends { id: string }>(url: string, items: T[], params: Params): Answer | null {
+  const limit = params.limit === undefined ? LIST_DEFAULT : Number(params.limit);
+  const after =
+    params.starting_after === undefined
+      ? 0
+      : items.findIndex((item) => item.id === params.starting_after) + 1;
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > LIST_MAX) return null;
+  if (params.starting_after !== undefined && after === 0) return null;
+
+  return {
+    status: 200,
+    body: {
+      object: 'list',
+      data: items.slice(after, after + limit),
+      has_more: after + limit < items.length,
+      url,
+    },
+  };
+}
 
 // the form body of the sdk: a[b][0][c]=v becomes { a: { b: [{ c: 'v' }] } }
 function parseForm(text: string): Params {
@@ -166,9 +256,15 @@ const KNOWN_PARAMS: Record<string, unknown> = {
     automatic_payment_methods: { enabled: true, allow_redirects: true },
   },
   'GET /v1/payment_intents/:id': {},
-  'POST /v1/refunds': { payment_intent: true, amount: true, metadata: true },
-  'GET /v1/refunds': { payment_intent: true, limit: true },
+  'POST /v1/refunds': { payment_intent: true, amount: true, metadata: true, reason: true },
+  'GET /v1/refunds': { payment_intent: true, limit: true, starting_after: true },
   'GET /v1/refunds/:id': {},
+  'GET /v1/disputes': { payment_intent: true, limit: true },
+  'GET /v1/disputes/:id': {},
+  'POST /v1/disputes/:id': {
+    evidence: Object.fromEntries(EVIDENCE_TEXT.map((field) => [field, true])),
+    submit: true,
+  },
   'GET /v1/events': { type: true, created: { gte: true }, limit: true },
 };
 
@@ -183,11 +279,39 @@ type Session = Record<string, unknown> & { id: string; status: string; payment_s
 type LineItem = Record<string, unknown>;
 type PaymentIntent = Record<string, unknown> & { id: string; amount: number; status: string };
 type Refund = Record<string, unknown> & { id: string; payment_intent: string };
+type Dispute = Record<string, unknown> & {
+  id: string;
+  payment_intent: string;
+  status: string;
+  is_charge_refundable: boolean;
+  evidence: Record<string, unknown>;
+  evidence_details: { has_evidence: boolean; submission_count: number; [key: string]: unknown };
+  balance_transactions: Record<string, unknown>[];
+};
 type StripeEvent = { id: string; type: string; created: number; [key: string]: unknown };
 
 // how the next refund ends, for a test of a refund that does not simply succeed: the sandbox gives
 // a card refund that succeeds, so only the mock can make one that is still pending or fails
 export type RefundOutcome = { status: 'pending' } | { status: 'failed'; reason: string };
+
+// a dispute the bank opens on a payment: a chargeback (needs_response) takes the sum from the
+// balance at once, an inquiry (warning_needs_response) takes nothing. The sandbox makes a
+// fraudulent chargeback of the whole payment for pm_card_createDispute; only the mock makes the
+// others (an inquiry, a part of the payment, a dispute of PayPal, several on one payment)
+export type DisputeOpening = {
+  status?: 'needs_response' | 'warning_needs_response';
+  reason?: string;
+  // in cents, the whole payment unless given
+  amount?: number;
+  // whether the payment can still be refunded: an inquiry and a dispute of PayPal can, a
+  // chargeback of a card cannot
+  refundable?: boolean;
+  method?: 'card' | 'paypal';
+};
+
+// how the bank ends a dispute: won puts the sum back on the balance, lost keeps it with the buyer,
+// warning_closed ends an inquiry
+export type DisputeEnd = 'won' | 'lost' | 'warning_closed';
 
 export type StripeMock = {
   listen: () => Promise<number>;
@@ -198,9 +322,14 @@ export type StripeMock = {
   queueRefundOutcome: (outcome: RefundOutcome) => void;
   // a refund that was pending ends: the event Stripe records is the one the webhook gets
   settleRefund: (refundId: string, end: { status: 'succeeded' } | RefundOutcome) => void;
-  // the bank decides the dispute of a payment of pm_card_createDispute: won, its charge may be
-  // refunded again; lost, it stays charged back
-  closeDispute: (paymentId: string, outcome: 'won' | 'lost') => void;
+  // the bank of the card gives the refund its number (refund.updated): the sandbox has it some
+  // days after the money is sent, the mock when a test says so
+  giveRefundReference: (refundId: string, reference: string) => void;
+  // the bank opens a dispute on a payment, with its events; the id of the dispute
+  openDispute: (paymentId: string, opening?: DisputeOpening) => string;
+  // the bank ends a dispute, with its events: won, its charge may be refunded again; lost, it
+  // stays charged back. The test evidence ends it too, as in the sandbox (POST /v1/disputes/:id)
+  endDispute: (disputeId: string, end: DisputeEnd) => void;
 };
 
 export function startStripeMock(key: string): StripeMock {
@@ -217,10 +346,9 @@ export function startStripeMock(key: string): StripeMock {
   >();
   const refunds: Refund[] = [];
   const refundOutcomes: RefundOutcome[] = [];
-  // the payments made by the test card whose refunds are pending first (pm_card_pendingRefund), and
-  // by the card the buyer disputes at the bank at once (pm_card_createDispute)
+  // the payments made by the test card whose refunds are pending first (pm_card_pendingRefund)
   const pendingRefundPayments = new Set<string>();
-  const disputedPayments = new Set<string>();
+  const disputes: Dispute[] = [];
   const events: StripeEvent[] = [];
   const idempotent = new Map<string, { request: string; answer: Answer }>();
   let unanswered: string[] = [];
@@ -253,6 +381,15 @@ export function startStripeMock(key: string): StripeMock {
       code: 'resource_missing',
       param,
     });
+
+  const noSuchDispute = (id: string) =>
+    error(404, { message: `No such dispute: '${id}'`, code: 'resource_missing', param: 'dispute' });
+
+  // a request the mock was not taught: the test that sent it fails with it
+  const notTaught = (what: string): Answer => {
+    unanswered.push(what);
+    return error(400, { message: `stripe mock: ${what} is not taught` });
+  };
 
   function createSession(params: Params): Answer {
     const created = now();
@@ -317,14 +454,16 @@ export function startStripeMock(key: string): StripeMock {
     });
     const total = items.reduce((sum, item) => sum + item.amount_total, 0);
 
-    if (types.includes('card') && total < CARD_MINIMUM_TOTAL) {
+    // a card, PayPal and Bizum all take 0.50 at least: below it no type is left, and Stripe names
+    // the first one
+    if (total < PAGE_MINIMUM_TOTAL) {
       return error(400, {
         message:
           'All types provided in `allowed_payment_method_types` are invalid. Please ensure the ' +
           'provided types are activated in your dashboard (https://dashboard.stripe.com/account/' +
           'payments/settings) and your account is enabled for any preview features that you are ' +
-          "trying to use. For example, `card` is invalid because: The Checkout Session's total " +
-          'amount due must add up to at least €0.50 EUR',
+          `trying to use. For example, \`${types[0]}\` is invalid because: The Checkout Session's ` +
+          'total amount due must add up to at least €0.50 EUR',
         param: 'allowed_payment_method_types',
       });
     }
@@ -568,9 +707,173 @@ export function startStripeMock(key: string): StripeMock {
       status: 'succeeded',
     });
     if (card === 'pm_card_pendingRefund') pendingRefundPayments.add(payment.id);
-    if (card === 'pm_card_createDispute') disputedPayments.add(payment.id);
+    // the buyer disputes the payment of this card at once: a fraudulent chargeback of all of it
+    if (card === 'pm_card_createDispute') openDisputeOf(payment, {});
     return { status: 200, body: copy(payment) };
   }
+
+  // a move of money of a dispute on the balance: the sum (below 0 taken) and the fee of Stripe
+  function disputeTransaction(dispute: Dispute, amount: number, fee: number, withdrawn: boolean) {
+    const created = now();
+    return {
+      id: idOf('txn_', 28),
+      object: 'balance_transaction',
+      amount,
+      available_on: created,
+      balance_type: 'payments',
+      created,
+      currency: dispute.currency,
+      description: `Chargeback ${withdrawn ? 'withdrawal' : 'reversal'} for ${String(dispute.charge)}`,
+      exchange_rate: null,
+      fee,
+      fee_details: fee
+        ? [
+            {
+              amount: fee,
+              application: null,
+              currency: dispute.currency,
+              description: 'Dispute fee',
+              type: 'stripe_fee',
+            },
+          ]
+        : [],
+      net: amount - fee,
+      reporting_category: withdrawn ? 'dispute' : 'dispute_reversal',
+      source: dispute.id,
+      status: 'available',
+      type: 'adjustment',
+    };
+  }
+
+  function openDisputeOf(payment: PaymentIntent, opening: DisputeOpening): Dispute {
+    const created = now();
+    const status = opening.status ?? 'needs_response';
+    const inquiry = status === 'warning_needs_response';
+    const method = opening.method ?? 'card';
+    const dispute: Dispute = {
+      id: idOf('du_', 27),
+      object: 'dispute',
+      amount: opening.amount ?? payment.amount,
+      balance_transactions: [],
+      charge: payment.latest_charge,
+      created,
+      currency: payment.currency,
+      enhanced_eligibility_types: [],
+      evidence: {
+        ...Object.fromEntries(EVIDENCE_FIELDS.map((field) => [field, null])),
+        enhanced_evidence: {},
+      },
+      evidence_details: {
+        due_by: created + DISPUTE_DAYS * 86_400,
+        enhanced_eligibility: {},
+        has_evidence: false,
+        past_due: false,
+        submission_count: 0,
+      },
+      is_charge_refundable: opening.refundable ?? (inquiry || method === 'paypal'),
+      livemode: false,
+      metadata: {},
+      payment_intent: payment.id,
+      payment_method_details:
+        method === 'paypal'
+          ? { paypal: { case_id: idOf('PP-D-', 17), reason_code: null }, type: 'paypal' }
+          : {
+              card: {
+                brand: 'visa',
+                case_type: inquiry ? 'inquiry' : 'chargeback',
+                network_reason_code: inquiry ? null : '10.4',
+              },
+              type: 'card',
+            },
+      reason: opening.reason ?? 'fraudulent',
+      status,
+    };
+    disputes.push(dispute);
+    record('charge.dispute.created', dispute);
+
+    // a chargeback takes the sum and the fee from the balance at once, an inquiry takes nothing
+    if (!inquiry) {
+      dispute.balance_transactions.push(
+        disputeTransaction(dispute, -Number(dispute.amount), DISPUTE_FEE, true),
+      );
+      record('charge.dispute.funds_withdrawn', dispute);
+    }
+    return dispute;
+  }
+
+  function endDispute(disputeId: string, end: DisputeEnd): void {
+    const dispute = disputes.find((one) => one.id === disputeId);
+    if (!dispute) throw new Error(`the stripe mock has no dispute ${disputeId}`);
+    if (DISPUTE_ENDS.includes(dispute.status)) {
+      throw new Error(`the dispute ${disputeId} is ${dispute.status} already`);
+    }
+
+    const inquiry = dispute.status.startsWith('warning_');
+    if (inquiry !== (end === 'warning_closed')) {
+      throw new Error(`a dispute that is ${dispute.status} does not end ${end}`);
+    }
+
+    dispute.status = end;
+    dispute.is_charge_refundable = end !== 'lost';
+    record('charge.dispute.closed', dispute);
+
+    // won: the bank gives the sum back, and Stripe its fee
+    if (end === 'won' && dispute.balance_transactions.length) {
+      dispute.balance_transactions.push(
+        disputeTransaction(dispute, Number(dispute.amount), -DISPUTE_FEE, false),
+      );
+      record('charge.dispute.funds_reinstated', dispute);
+    }
+  }
+
+  function listDisputes(params: Params): Answer {
+    const paymentId = String(params.payment_intent ?? '');
+    if (!paymentIntents.has(paymentId)) {
+      return notTaught('a list of the disputes of a payment the mock does not have');
+    }
+    const found = disputes.filter((dispute) => dispute.payment_intent === paymentId).reverse();
+    return pageOf('/v1/disputes', copy(found), params) ?? notTaught('a page of the disputes');
+  }
+
+  // the draft of the evidence is put on the dispute (submit false), or the evidence is submitted
+  // (submit true): the test evidence winning_evidence and losing_evidence then end the dispute as
+  // the sandbox does a moment later (docs.stripe.com/testing, disputes)
+  function updateDispute(id: string, params: Params): Answer {
+    const dispute = disputes.find((one) => one.id === id);
+    if (!dispute) return noSuchDispute(id);
+    if (DISPUTE_ENDS.includes(dispute.status) || dispute.evidence_details.submission_count > 0) {
+      return notTaught(`the evidence of a dispute that is ${dispute.status}`);
+    }
+
+    const evidence = (params.evidence as Params | undefined) ?? {};
+    Object.assign(dispute.evidence, evidence);
+    if (Object.keys(evidence).length) dispute.evidence_details.has_evidence = true;
+
+    const submit = params.submit === 'true';
+    if (submit) {
+      dispute.evidence_details.submission_count += 1;
+      dispute.status =
+        dispute.status === 'needs_response' ? 'under_review' : 'warning_under_review';
+    }
+    record('charge.dispute.updated', dispute);
+
+    const verdict = evidence.uncategorized_text;
+    if (submit && dispute.status === 'under_review' && verdict === 'winning_evidence') {
+      endDispute(id, 'won');
+    } else if (submit && dispute.status === 'under_review' && verdict === 'losing_evidence') {
+      endDispute(id, 'lost');
+    }
+    return { status: 200, body: copy(dispute) };
+  }
+
+  // a payment the bank charged back: a dispute of it that is not over and lets no refund through
+  const chargedBack = (paymentId: string) =>
+    disputes.some(
+      (dispute) =>
+        dispute.payment_intent === paymentId &&
+        !dispute.is_charge_refundable &&
+        dispute.status !== 'won',
+    );
 
   function createRefund(params: Params): Answer {
     const paymentId = String(params.payment_intent);
@@ -581,11 +884,14 @@ export function startStripeMock(key: string): StripeMock {
       return error(400, { message: 'stripe mock: a refund of a payment that succeeded only' });
     }
     // the sandbox refuses a refund of a charge the buyer disputed (seen 04.11.2026)
-    if (disputedPayments.has(paymentId)) {
+    if (chargedBack(paymentId)) {
       return error(400, {
         message: `Charge ${String(payment.latest_charge)} has been charged back; cannot issue a refund.`,
         code: 'charge_disputed',
       });
+    }
+    if (params.reason !== undefined && !REFUND_REASONS.includes(String(params.reason))) {
+      return notTaught(`a refund with the reason ${String(params.reason)}`);
     }
     // what is left to give back: a refund that failed or was cancelled took nothing
     const left =
@@ -612,7 +918,8 @@ export function startStripeMock(key: string): StripeMock {
     if (amount > left) {
       const money = (cents: number) => `€${(cents / 100).toFixed(2)}`;
       return error(400, {
-        message: `Refund amount (${money(amount)}) is greater than unrefunded amount on charge (${money(left)}).`,
+        message: `Refund amount (${money(amount)}) is greater than unrefunded amount on charge (${money(left)})`,
+        param: 'amount',
       });
     }
 
@@ -628,13 +935,24 @@ export function startStripeMock(key: string): StripeMock {
       charge: payment.latest_charge,
       created: now(),
       currency: payment.currency,
+      // the payments of the mock are by card: the bank of the card gives the refund its number
+      // some days later (giveRefundReference)
+      destination_details: {
+        card: {
+          reference_status: 'pending',
+          reference_type: 'acquirer_reference_number',
+          type: 'refund',
+        },
+        type: 'card',
+      },
       ...(outcome?.status === 'failed'
         ? { failure_balance_transaction: idOf('txn_', 28), failure_reason: outcome.reason }
         : {}),
+      // a refund made by hand in the dashboard has no key of a transfer of the app
       metadata: (params.metadata as Params | undefined) ?? {},
       payment_intent: paymentId,
       payment_method: payment.payment_method,
-      reason: null,
+      reason: (params.reason as string | undefined) ?? null,
       receipt_number: null,
       status: outcome?.status ?? 'succeeded',
     };
@@ -655,6 +973,16 @@ export function startStripeMock(key: string): StripeMock {
     }
     record('refund.updated', refund);
     if (end.status === 'failed') record('refund.failed', refund);
+  }
+
+  function giveRefundReference(refundId: string, reference: string): void {
+    const refund = refunds.find((one) => one.id === refundId);
+    if (!refund) throw new Error(`the stripe mock has no refund ${refundId}`);
+
+    const details = refund.destination_details as { card: Record<string, unknown> };
+    details.card.reference = reference;
+    details.card.reference_status = 'available';
+    record('refund.updated', refund);
   }
 
   function listEvents(params: Params): Answer {
@@ -722,11 +1050,22 @@ export function startStripeMock(key: string): StripeMock {
       case 'GET /v1/refunds': {
         const paymentId = String(params.payment_intent);
         if (!paymentIntents.has(paymentId)) return noSuchPayment(paymentId, 'payment_intent');
-        return list(
-          '/v1/refunds',
-          copy(refunds.filter((refund) => refund.payment_intent === paymentId)).reverse(),
+        return (
+          pageOf(
+            '/v1/refunds',
+            copy(refunds.filter((refund) => refund.payment_intent === paymentId)).reverse(),
+            params,
+          ) ?? notTaught('a page of the refunds')
         );
       }
+      case 'GET /v1/disputes':
+        return listDisputes(params);
+      case 'GET /v1/disputes/:id': {
+        const dispute = disputes.find((one) => one.id === id);
+        return dispute ? { status: 200, body: copy(dispute) } : noSuchDispute(id!);
+      }
+      case 'POST /v1/disputes/:id':
+        return updateDispute(id!, params);
       case 'GET /v1/events':
         return listEvents(params);
       default:
@@ -845,10 +1184,12 @@ export function startStripeMock(key: string): StripeMock {
       refundOutcomes.push(outcome);
     },
     settleRefund,
-    closeDispute: (paymentId, outcome) => {
-      if (!disputedPayments.has(paymentId))
-        throw new Error(`the stripe mock has no dispute of ${paymentId}`);
-      if (outcome === 'won') disputedPayments.delete(paymentId);
+    giveRefundReference,
+    openDispute: (paymentId, opening = {}) => {
+      const payment = paymentIntents.get(paymentId);
+      if (!payment) throw new Error(`the stripe mock has no payment ${paymentId}`);
+      return openDisputeOf(payment, opening).id;
     },
+    endDispute,
   };
 }

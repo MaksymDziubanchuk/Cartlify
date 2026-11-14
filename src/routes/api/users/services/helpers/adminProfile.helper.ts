@@ -63,14 +63,16 @@ export function resolveProfilePeriod(
 }
 
 // the records of the user the admin asked for, created in the period, newest first; read under
-// the admin context, rls lets an admin read every one of them
+// the admin context, rls lets an admin read every one of them. to null: no "to" came, every record
+// after from up to the last one written (the database dates them by its own clock, at times a
+// moment ahead of the clock of the app)
 export async function loadProfileLists(
   tx: Prisma.TransactionClient,
   userId: number,
   lists: ProfileList[],
-  period: { from: Date; to: Date },
+  period: { from: Date; to: Date | null },
 ): Promise<Partial<AdminProfileListsDto>> {
-  const createdAt = { gte: period.from, lte: period.to };
+  const createdAt = period.to ? { gte: period.from, lte: period.to } : { gte: period.from };
   const newestFirst = [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
   const result: Partial<AdminProfileListsDto> = {};
 

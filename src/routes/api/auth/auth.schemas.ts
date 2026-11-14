@@ -20,6 +20,7 @@ const authRegisterResponseExample = {
   },
   avatarIsDefault: false,
   canManageNewsletters: false,
+  canManageMoney: false,
   locale: 'en',
 };
 
@@ -39,6 +40,7 @@ const authLoginResponseExample = {
   },
   avatarIsDefault: false,
   canManageNewsletters: false,
+  canManageMoney: false,
   locale: 'en',
   phone: '+10000000000',
 };

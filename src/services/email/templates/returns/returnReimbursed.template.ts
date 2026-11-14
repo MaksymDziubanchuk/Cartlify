@@ -1,4 +1,5 @@
 import { t } from '@config/i18n.js';
+import { shopSettings } from '@config/shopSettings.js';
 import { greetingOf } from '@services/email/greeting.js';
 import { renderTemplate } from '@services/email/renderTemplate.js';
 import { sellerLineOf } from '@services/email/seller.js';
@@ -17,7 +18,8 @@ export type ReturnReimbursedTemplateArgs = {
   amount: number | string;
   // the currency, for example "eur"
   currency: string;
-  // how the money went outside the app, and the day it went
+  // how the money went: outside the app (bank_transfer, cash, other), or provider (a transfer to the
+  // card or account the buyer paid with); and the day it went
   method: string;
   sentOn: Date;
   // where the buyer writes: the address the shop answers from
@@ -33,13 +35,14 @@ export type ReturnReimbursedTemplateArgs = {
 };
 
 // the mail itself is returnReimbursed.html and returnReimbursed.txt next to this file. It goes when
-// root recorded that the shop paid the buyer back the cost of sending the goods back
+// root recorded that the shop paid the buyer back the cost of sending the goods back, or when a
+// transfer of its own to the payment sent it
 export function buildReturnReimbursedTemplate(args: ReturnReimbursedTemplateArgs): {
   subject: string;
   text: string;
   html: string;
 } {
-  const appName = args.appName?.trim() || 'Cartlify';
+  const appName = args.appName?.trim() || shopSettings().shopName;
   const orderUrl = args.orderUrl?.trim() || '';
   const locale = args.locale || 'en';
 
@@ -58,8 +61,14 @@ export function buildReturnReimbursedTemplate(args: ReturnReimbursedTemplateArgs
   const orderId = String(args.orderId);
   const code = args.code?.trim() || '';
   const amount = money.format(Number(args.amount));
-  const way = wayWordsOf(args.method, locale);
   const sentOn = day.format(args.sentOn);
+  const sentOnLine =
+    args.method === 'provider'
+      ? t('returnReimbursed.sentToPayment', locale, { date: sentOn })
+      : t('returnReimbursed.sentOn', locale, {
+          way: wayWordsOf(args.method, locale),
+          date: sentOn,
+        });
 
   const values = {
     appName,
@@ -75,7 +84,7 @@ export function buildReturnReimbursedTemplate(args: ReturnReimbursedTemplateArgs
     leadTxt: t('returnReimbursed.leadTxt', locale, { appName, orderId, amount }),
     heading: t('returnReimbursed.heading', locale),
     body: t('returnReimbursed.body', locale, { orderId, amount }),
-    sentOnLine: t('returnReimbursed.sentOn', locale, { way, date: sentOn }),
+    sentOnLine,
     greeting: greetingOf(args.userName, locale),
     seller: sellerLineOf(locale),
     statementLine: code ? t('common.statementLine', locale, { code }) : '',

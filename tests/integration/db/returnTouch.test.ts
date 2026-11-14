@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
 
 import { prisma } from '@db/client.js';
@@ -81,7 +82,7 @@ describe('trg_return_items_touch_return', () => {
     await inCommittedTx(async (db) => {
       await asAdmin(db);
       await db.rows(
-        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb)`,
+        `select 1 as done from cartlify.receive_return_items($1::int, $2::jsonb, '{"buyerPaid": 0}'::jsonb)`,
         returnId,
         JSON.stringify([{ itemId: rowId, quantity: 2, goods: 'to_stock' }]),
       );
@@ -100,13 +101,15 @@ describe('trg_return_items_touch_return', () => {
     });
     const begun = await updatedAtOf(returnId);
 
-    // and ends
+    // and ends: the provider says it went (the rows are committed, so the id of the refund is the
+    // test's own)
     await pause();
     await inCommittedTx(async (db) => {
       await asAdmin(db);
       await db.rows(
-        `select cartlify.finish_return_refund($1::uuid, 'succeeded', 're_touch', null, null) as done`,
+        `select cartlify.settle_money_refund($1::text, $2::text, 'succeeded', null, null) as done`,
         key,
+        `re_touch_${randomUUID()}`,
       );
     });
     const settled = await updatedAtOf(returnId);

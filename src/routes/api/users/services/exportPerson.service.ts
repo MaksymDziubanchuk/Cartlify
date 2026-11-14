@@ -8,6 +8,11 @@ import {
   type ExportedNewsletterSubscription,
 } from './helpers/exportNewsletter.helper.js';
 import { itemNameOf } from '@routes/api/orders/services/helpers/itemName.helper.js';
+import {
+  readReturnMoneyLines,
+  rowSharesOf,
+  sentAtOf,
+} from '@routes/api/returns/services/helpers/returnMoneyLines.helper.js';
 import { InternalError, isAppError, NotFoundError } from '@utils/errors.js';
 
 import type { Role } from 'types/user.js';
@@ -35,20 +40,51 @@ export type ExportPersonResponseDto = {
   legalAcceptances: Record<string, unknown>[];
   // the subscriptions to the newsletter the address of the account has had, with their journal
   newsletterSubscriptions: ExportedNewsletterSubscription[];
+  // every movement of the money of the person, the oldest first (the money journal)
+  money: Record<string, unknown>[];
 };
 
 // everything the shop keeps of the person, read with the rights of whoever asks (rls shows a person
 // their own rows only, root all): the profile, the orders with what they held, where they went and
 // the statements of return made on them, the favorites, the reviews and votes, the chats with their
-// messages, the logins, the open sessions, the consents to the terms and the contract and the
+// messages, the logins, the open sessions, the consents to the terms and the contract, the
 // subscriptions to the newsletter on the address of the account with their journal (the fields
-// are agreed by name, see exportNewsletter.helper.ts). What is
-// no data of the person stays out: the hash of the password, the id of the provider account, the
-// ids of payments and of files, what a send cost the shop, and of a statement of return what became
-// of the goods, what the shop paid to carry them back, the ids of the provider and who of the admins
-// did what, and the notes root wrote (they may name others). What the cleanups of the retention
-// terms have emptied is not given. A request by the route of root leaves a line in the journal of
-// the admins
+// are agreed by name, see exportNewsletter.helper.ts), and every movement of the money of the
+// person (the money journal: what it was, its part, the sum, the currency, the time, the state and
+// the number the bank gives to follow a refund). The money of a statement comes from its lines of
+// the money journal: the share of the delivery and the deduction for the way back a row carries,
+// when its money went back, the way root sent it outside the app (the way back given back is a line
+// of the money journal of the person, part way_back).
+// What is no data of the person stays out: the hash of the password, the id of the provider
+// account, the ids of payments and of files, what a send or a parcel back cost the shop, and of a
+// statement of return what became of the goods, the ids of the provider, the keys of the requests,
+// the meta of the money journal and who of the admins did what, and the notes root wrote (they may
+// name others) but the one of money sent outside the app. What the cleanups of the retention terms
+// have emptied is not given. A request by the route of root leaves a line in the journal of the
+// admins
+// the parcel the goods of a statement went back to the shop in, as the export gives it: when it was
+// told, the carrier, the number and the link, and what the person paid the carrier; all empty while
+// no parcel was told
+function proofOf(
+  parcel:
+    | {
+        shippedAt: Date;
+        carrier: string | null;
+        trackingNumber: string | null;
+        trackingUrl: string | null;
+        buyerPaid: { toString(): string } | null;
+      }
+    | undefined,
+) {
+  return {
+    providedAt: parcel?.shippedAt ?? null,
+    carrier: parcel?.carrier ?? null,
+    trackingNumber: parcel?.trackingNumber ?? null,
+    trackingUrl: parcel?.trackingUrl ?? null,
+    buyerPaid: parcel?.buyerPaid ? parcel.buyerPaid.toString() : null,
+  };
+}
+
 export async function exportPerson({
   subjectId: userId,
   actorId,
@@ -124,7 +160,7 @@ export async function exportPerson({
       // what the buyer is told of a send; what it cost the shop is no data of the person. A query
       // reads at most two relations side by side, so the sends are read apart
       const sends = await tx.orderShipment.findMany({
-        where: { orderId: { in: orderRows.map((order) => order.id) } },
+        where: { orderId: { in: orderRows.map((order) => order.id) }, returnId: null },
         orderBy: { id: 'asc' },
         select: {
           orderId: true,
@@ -156,32 +192,37 @@ export async function exportPerson({
           ip: true,
           userAgent: true,
           closeCode: true,
-          shippingReimbursed: true,
-          shippingReimbursedAt: true,
-          shippingReimbursedMethod: true,
-          proofProvidedAt: true,
-          proofCarrier: true,
-          proofTrackingNumber: true,
-          proofTrackingUrl: true,
           closedAt: true,
+        },
+      });
+      // the parcels the goods of the statements went back to the shop in
+      const statementParcels = await tx.orderShipment.findMany({
+        where: {
+          returnId: { in: statements.map((statement) => statement.id) },
+          direction: 'to_shop',
+        },
+        select: {
+          returnId: true,
+          shippedAt: true,
+          carrier: true,
+          trackingNumber: true,
+          trackingUrl: true,
+          buyerPaid: true,
         },
       });
       const statementRows = await tx.orderReturnItem.findMany({
         where: { returnId: { in: statements.map((statement) => statement.id) } },
         orderBy: { id: 'asc' },
         select: {
+          id: true,
           returnId: true,
           quantity: true,
           goods: true,
           money: true,
           amount: true,
-          deliveryShare: true,
-          shippingDeduction: true,
-          refundedAt: true,
+          moneyLogId: true,
           refusedCode: true,
           notAcceptedReason: true,
-          outsideMethod: true,
-          outsideNote: true,
           orderItem: {
             select: {
               productId: true,
@@ -192,6 +233,12 @@ export async function exportPerson({
           },
         },
       });
+
+      // what the money of the statements did: their lines of the money journal, oldest first
+      const statementMoney = await readReturnMoneyLines(
+        tx,
+        statements.map((statement) => statement.id),
+      );
 
       // a form without a code can come from anybody who knows the number and the name of the
       // recipient: what its sender wrote (the contact, the address, the browser, the words) is the
@@ -225,74 +272,64 @@ export async function exportPerson({
               number,
               contactName,
               contactEmail,
-              proofProvidedAt,
-              proofCarrier,
-              proofTrackingNumber,
-              proofTrackingUrl,
               ip,
               userAgent,
               description,
               closeCode: _closeCode,
-              shippingReimbursed,
-              shippingReimbursedAt,
-              shippingReimbursedMethod,
               ...statement
-            }) => ({
-              ...statement,
-              code: returnCodeOf(statement.basis, order.id, number),
-              // what the shop paid back for sending the goods back, outside the app (the note of
-              // root is not given)
-              shippingReimbursement:
-                shippingReimbursed !== null &&
-                shippingReimbursedAt !== null &&
-                shippingReimbursedMethod !== null
-                  ? {
-                      amount: shippingReimbursed.toString(),
-                      at: shippingReimbursedAt,
-                      method: shippingReimbursedMethod,
-                    }
-                  : null,
-              // the words of an admin on a statement of the shop are a note of the shop; the address
-              // and the browser of it are of the admin
-              description:
-                own.has(statement.id) && statement.source !== 'admin' ? description : null,
-              contact: own.has(statement.id) ? { name: contactName, email: contactEmail } : null,
-              ip: own.has(statement.id) && statement.source !== 'admin' ? ip : null,
-              userAgent: own.has(statement.id) && statement.source !== 'admin' ? userAgent : null,
-              // the parcel the person told of: the carrier, the number and the link they wrote
-              proof: {
-                providedAt: proofProvidedAt,
-                carrier: proofCarrier,
-                trackingNumber: proofTrackingNumber,
-                trackingUrl: proofTrackingUrl,
-              },
-              items: statementRows
-                .filter((row) => row.returnId === statement.id)
-                .map((row) => ({
-                  productId: row.orderItem.productId,
-                  variantId: row.orderItem.variantId,
-                  name: itemNameOf(row.orderItem),
-                  quantity: row.quantity,
-                  money: row.money,
-                  amount: row.amount.toString(),
-                  deliveryShare: row.deliveryShare.toString(),
-                  // the cost of the way back taken off the money of the row
-                  shippingDeduction: row.shippingDeduction.toString(),
-                  refundedAt: row.refundedAt,
-                  // why the money was refused, as the order of the buyer says it: the goods not
-                  // accepted, or not arrived (with the code root closed the row with)
-                  refusal:
-                    row.money !== 'refused'
-                      ? null
-                      : row.goods === 'not_accepted'
-                        ? row.notAcceptedReason
-                        : (row.refusedCode ?? 'not_arrived'),
-                  outside:
-                    row.outsideMethod !== null
-                      ? { method: row.outsideMethod, note: row.outsideNote }
-                      : null,
-                })),
-            }),
+            }) => {
+              const lines = statementMoney.get(statement.id) ?? [];
+              const shares = rowSharesOf(lines);
+              const lineOf = (id: number | null) => lines.find((line) => line.id === id) ?? null;
+
+              return {
+                ...statement,
+                code: returnCodeOf(statement.basis, order.id, number),
+                // the words of an admin on a statement of the shop are a note of the shop; the address
+                // and the browser of it are of the admin
+                description:
+                  own.has(statement.id) && statement.source !== 'admin' ? description : null,
+                contact: own.has(statement.id) ? { name: contactName, email: contactEmail } : null,
+                ip: own.has(statement.id) && statement.source !== 'admin' ? ip : null,
+                userAgent: own.has(statement.id) && statement.source !== 'admin' ? userAgent : null,
+                // the parcel the goods went back in: the carrier, the number and the link, and
+                // what the person paid the carrier
+                proof: proofOf(statementParcels.find((parcel) => parcel.returnId === statement.id)),
+                items: statementRows
+                  .filter((row) => row.returnId === statement.id)
+                  .map((row) => {
+                    // the line that put the money of the row where it stands
+                    const line = lineOf(row.moneyLogId);
+                    const share = shares.get(row.id);
+
+                    return {
+                      productId: row.orderItem.productId,
+                      variantId: row.orderItem.variantId,
+                      name: itemNameOf(row.orderItem),
+                      quantity: row.quantity,
+                      money: row.money,
+                      amount: row.amount.toString(),
+                      // the delivery that went back with the row, and the cost of the way back taken
+                      // off its money
+                      deliveryShare: String(share?.delivery ?? 0),
+                      shippingDeduction: String(share?.deduction ?? 0),
+                      refundedAt: row.money === 'refunded' ? sentAtOf(line) : null,
+                      // why the money was refused, as the order of the buyer says it: the goods not
+                      // accepted, or not arrived (with the code root closed the row with)
+                      refusal:
+                        row.money !== 'refused'
+                          ? null
+                          : row.goods === 'not_accepted'
+                            ? row.notAcceptedReason
+                            : (row.refusedCode ?? 'not_arrived'),
+                      outside:
+                        row.money === 'refunded' && line?.event === 'money.outside' && line.method
+                          ? { method: line.method, note: line.note }
+                          : null,
+                    };
+                  }),
+              };
+            },
           ),
       }));
 
@@ -364,6 +401,23 @@ export async function exportPerson({
           event: true,
           createdAt: true,
           document: { select: { kind: true, version: true, title: true } },
+        },
+      });
+
+      // every movement of the money of the person: what a send or a parcel back cost the shop is
+      // not theirs; the keys, the ids of the provider, the meta, the notes and the actors stay out
+      const money = await tx.moneyLog.findMany({
+        where: { userId, purpose: { not: 'shipping' } },
+        orderBy: { id: 'asc' },
+        select: {
+          orderId: true,
+          event: true,
+          part: true,
+          amount: true,
+          currency: true,
+          createdAt: true,
+          state: true,
+          bankReference: true,
         },
       });
 
@@ -442,6 +496,11 @@ export async function exportPerson({
           createdAt: consent.createdAt,
         })),
         newsletterSubscriptions,
+        money: money.map(({ amount, createdAt, ...line }) => ({
+          ...line,
+          amount: amount.toString(),
+          createdAt: createdAt.toISOString(),
+        })),
       };
     });
   } catch (err) {

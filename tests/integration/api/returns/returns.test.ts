@@ -118,6 +118,8 @@ describe('POST /api/returns', () => {
       code: `R${orderId}-1`,
       orderId,
       extendsId: null,
+      splitFromId: null,
+      splitIds: [],
       statedAt: expect.any(String),
       source: 'admin',
       basis: 'other',
@@ -127,21 +129,12 @@ describe('POST /api/returns', () => {
       createdBy: { id: admin.id, name: null, email: admin.email },
       ip: expect.anything(),
       userAgent: expect.anything(),
-      proof: {
-        providedAt: null,
-        carrier: null,
-        trackingNumber: null,
-        trackingUrl: null,
-        confirmedAt: null,
-        confirmedBy: null,
-      },
       acceptedAt: null,
       acceptedBy: null,
       closedAt: null,
       closedBy: null,
       closeCode: null,
       closeNote: null,
-      shippingReimbursement: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
       order: {
@@ -159,10 +152,28 @@ describe('POST /api/returns', () => {
           actor: { id: admin.id, name: null, email: admin.email },
         }),
       ],
-      shipments: [],
+      parcels: [],
       // outside the withdrawal nothing is taken off, and no parcel of the shop to warn of
       deductible: 0,
       warnings: [],
+      // no money moved yet: nothing went back, nothing blocks a transfer
+      refundedTotal: 0,
+      disputeOpen: false,
+      handRefundPending: false,
+      bankMoneyPending: false,
+      // two units at 10 owed, none due yet (the goods are on their way), 30 left of the payment
+      moneyLeft: {
+        rows: 20,
+        delivery: 0,
+        wayBack: 0,
+        total: 20,
+        due: 0,
+        covered: 0,
+        paymentLeft: 30,
+        short: false,
+      },
+      moneyOverpaid: 0,
+      money: [],
       items: [
         {
           id: expect.any(Number),
@@ -175,15 +186,12 @@ describe('POST /api/returns', () => {
           notAcceptedReason: null,
           money: 'not_refunded',
           amount: 20,
+          paid: 0,
           amountNote: null,
-          deliveryShare: 0,
-          shippingDeduction: 0,
           goodsSetAt: null,
           goodsSetBy: null,
-          refundId: null,
-          refundedAt: null,
+          moneyLogId: null,
           refundFailure: null,
-          outside: null,
           refusedCode: null,
         },
       ],
@@ -450,7 +458,7 @@ describe('GET /api/returns/:returnId', () => {
   it('gives the account of the order, its recipient and what was done with the statement', async () => {
     const { orderId, itemId } = await paidOrder(1);
     const made = (await make(orderId, [{ orderItemId: itemId, quantity: 1 }])).json();
-    await post(`/api/returns/${made.id}/proof/confirm`);
+    await post(`/api/returns/${made.id}/proof/confirm`, { buyerPaid: 0 });
 
     const card = (await get(`/api/returns/${made.id}`)).json();
 
@@ -514,7 +522,7 @@ describe('GET /api/returns/:returnId', () => {
 
 describe('POST /api/returns/:returnId/receive', () => {
   const receive = (returnId: number, results: unknown, actor: TestUser | null = admin) =>
-    post(`/api/returns/${returnId}/receive`, { results }, actor);
+    post(`/api/returns/${returnId}/receive`, { results, parcel: { buyerPaid: 0 } }, actor);
 
   it('puts the units back into the stock and the batches, splits the row, and writes the admin log and the stock log', async () => {
     const { orderId, itemId, product } = await paidOrder(3);
@@ -583,17 +591,17 @@ describe('POST /api/returns/:returnId/receive', () => {
     expect((await orderOf(orderId, buyer)).returnStatus).toBe('declined');
   });
 
-  it('takes units as lost only with the proof confirmed (RETURN_PROOF_REQUIRED, then ok)', async () => {
+  it('takes units as lost only with the parcel confirmed (RETURN_PARCEL_REQUIRED, then ok)', async () => {
     const { orderId, itemId } = await paidOrder(1);
     const made = await make(orderId, [{ orderItemId: itemId, quantity: 1 }]);
     const result = [{ itemId: made.json().items[0].id, quantity: 1, goods: 'lost' }];
 
-    const without = await receive(made.json().id, result);
-    await post(`/api/returns/${made.json().id}/proof/confirm`);
-    const confirmed = await receive(made.json().id, result);
+    const without = await post(`/api/returns/${made.json().id}/receive`, { results: result });
+    await post(`/api/returns/${made.json().id}/proof/confirm`, { buyerPaid: 0 });
+    const confirmed = await post(`/api/returns/${made.json().id}/receive`, { results: result });
 
     expect(without.statusCode).toBe(409);
-    expect(without.json()).toMatchObject({ errorCode: 'RETURN_PROOF_REQUIRED' });
+    expect(without.json()).toMatchObject({ errorCode: 'RETURN_PARCEL_REQUIRED' });
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json().items[0]).toMatchObject({ goods: 'lost' });
   });
@@ -693,6 +701,7 @@ describe('a cancel of the order and the statements', () => {
     );
     const made = await make(orderId, [{ orderItemId: item!.id, quantity: 2 }]);
     await post(`/api/returns/${made.json().id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: made.json().items[0].id, quantity: 2, goods: 'to_stock' }],
     });
 
@@ -732,6 +741,7 @@ describe('a cancel of the order and the statements', () => {
     expect(cancelled.json().order.status).toBe('cancelled');
 
     const res = await post(`/api/returns/${made.json().id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: made.json().items[0].id, quantity: 2, goods: 'to_stock' }],
     });
 
@@ -775,6 +785,7 @@ describe('two requests at once', () => {
     const before = await stockOf(product);
     const take = () =>
       post(`/api/returns/${made.json().id}/receive`, {
+        parcel: { buyerPaid: 0 },
         results: [{ itemId: made.json().items[0].id, quantity: 2, goods: 'to_stock' }],
       });
 
@@ -798,13 +809,20 @@ describe('POST /api/returns/:returnId/proof/confirm', () => {
     const { orderId, itemId } = await paidOrder(1);
     const made = await make(orderId, [{ orderItemId: itemId, quantity: 1 }]);
 
-    const res = await post(`/api/returns/${made.json().id}/proof/confirm`);
+    const res = await post(`/api/returns/${made.json().id}/proof/confirm`, { buyerPaid: 0 });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json().proof).toMatchObject({
-      confirmedAt: expect.any(String),
-      confirmedBy: { id: admin.id },
-    });
+    // an admin confirms the proof from a letter too: the parcel to the shop is written without a
+    // carrier, recorded and confirmed by the admin
+    expect(res.json().parcels).toEqual([
+      expect.objectContaining({
+        direction: 'to_shop',
+        carrier: null,
+        recordedBy: expect.objectContaining({ id: admin.id }),
+        confirmedAt: expect.any(String),
+        confirmedBy: expect.objectContaining({ id: admin.id }),
+      }),
+    ]);
     const lines = await asAdmin((tx) =>
       tx.adminAuditLog.findMany({
         where: { entityType: 'order', entityId: orderId, event: 'return.proof_confirm' },
@@ -819,10 +837,10 @@ describe('POST /api/returns/:returnId/proof/confirm', () => {
     const made = await make(orderId, [{ orderItemId: itemId, quantity: 1 }]);
     const url = `/api/returns/${made.json().id}/proof/confirm`;
 
-    const byBuyer = await post(url, {}, buyer);
-    await post(url);
-    const again = await post(url);
-    const missing = await post('/api/returns/2000000000/proof/confirm');
+    const byBuyer = await post(url, { buyerPaid: 0 }, buyer);
+    await post(url, { buyerPaid: 0 });
+    const again = await post(url, { buyerPaid: 0 });
+    const missing = await post('/api/returns/2000000000/proof/confirm', { buyerPaid: 0 });
 
     expect(byBuyer.statusCode).toBe(403);
     expect(again.statusCode).toBe(409);

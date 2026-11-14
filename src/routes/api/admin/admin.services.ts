@@ -15,7 +15,18 @@ import { reportTimeline, reportTimelineCsv } from './services/accountingTimeline
 import { listStockBatches } from './services/stockBatches.service.js';
 import { listStockMovements } from './services/stockMovements.service.js';
 import { auditLogCsv, listAuditLog } from './services/auditLog.service.js';
-import { listStockLog, stockLogCsv } from './services/stockLog.service.js';
+import {
+  listStockGroups,
+  listStockLog,
+  stockGroupsCsv,
+  stockLogCsv,
+} from './services/stockLog.service.js';
+import {
+  listMoneyGroups,
+  listMoneyLog,
+  moneyGroupsCsv,
+  moneyLogCsv,
+} from './services/moneyLog.service.js';
 import { listPriceLog, priceLogCsv } from './services/priceLog.service.js';
 import { listLoginLog, loginLogCsv } from './services/loginLog.service.js';
 import { consentLogCsv, listConsentLog } from './services/consentLog.service.js';
@@ -361,6 +372,12 @@ export const adminServices = {
   auditLogCsv,
   listStockLog,
   stockLogCsv,
+  listStockGroups,
+  stockGroupsCsv,
+  listMoneyLog,
+  moneyLogCsv,
+  listMoneyGroups,
+  moneyGroupsCsv,
   listPriceLog,
   priceLogCsv,
   listLoginLog,

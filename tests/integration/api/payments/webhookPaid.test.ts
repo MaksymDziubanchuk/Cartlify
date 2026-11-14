@@ -17,17 +17,12 @@ import {
   type TestProduct,
   type TestUser,
 } from '../../../helpers/factories.js';
+import { moneyOfPayment } from '../../../helpers/lateRefund.js';
 import { takeLogs } from '../../../helpers/logs.js';
 import { watchMail } from '../../../helpers/mail.js';
 import { loseReservation, orderRowOf, placeOrder, placeOrderOf } from '../../../helpers/orders.js';
 import { auditLinesOf, markVariantDeleted } from '../../../helpers/variants.js';
-import {
-  openPaymentPage,
-  orderStateOf,
-  payPage,
-  redisStateOf,
-  refundAuditOf,
-} from '../../../helpers/payments.js';
+import { openPaymentPage, orderStateOf, payPage, redisStateOf } from '../../../helpers/payments.js';
 import {
   closeOpenSessions,
   craftEvent,
@@ -258,7 +253,9 @@ describe('POST /api/payments/stripe/webhook: checkout.session.completed', () => 
       expect(again.statusCode).toBe(200);
       expect(again.json()).toEqual({ received: true });
       expect(await refundsOf(paymentId)).toEqual([]);
-      expect(await refundAuditOf(orderId)).toEqual([]);
+      expect((await moneyOfPayment(paymentId)).map((line) => line.event)).not.toContain(
+        'money.late_payment',
+      );
       expect(await orderStateOf(orderId)).toMatchObject({
         status: stage,
         paymentProvider: 'stripe',

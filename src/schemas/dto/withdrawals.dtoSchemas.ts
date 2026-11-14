@@ -1,3 +1,4 @@
+import { buyerPaidField } from '@schemas/parcelFields.js';
 import { RETURN_DESCRIPTION_MAX } from '@helpers/returns.js';
 import { MAX_ID } from '@schemas/idPathParam.js';
 
@@ -202,6 +203,7 @@ const withdrawalProofBodySchema = {
       pattern: '^https://[^\\s]+$',
       description: 'A link to follow the parcel (https).',
     },
+    buyerPaid: buyerPaidField,
   },
   required: ['orderId', 'code', 'returnId', 'carrier', 'trackingNumber'],
 } as const;

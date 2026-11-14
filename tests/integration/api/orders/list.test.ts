@@ -15,11 +15,13 @@ import {
   type TestUser,
 } from '../../../helpers/factories.js';
 import {
+  holdForReview,
   loseReservation,
   payOrder,
   placeOrder,
   placeUnconfirmedOrder,
   shippingData,
+  warnOfFraud,
 } from '../../../helpers/orders.js';
 import { markVariantDeleted } from '../../../helpers/variants.js';
 
@@ -358,5 +360,201 @@ describe('GET /api/orders', () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ errorCode: 'INSUFFICIENT_ROLE' });
+  });
+});
+
+// orders.holds: what keeps a paid order from its sending (a dispute, a refund by hand root has not
+// decided on, a warning or a review of the provider), and orders.fraudWarnedAt: a warning of the
+// provider about an order already sent. The desk of an admin lists them; the alerts list them by the
+// same filters (the paid orders that wait to be sent are the ones nothing holds)
+describe('GET /api/orders: what holds the orders (admin and root)', () => {
+  let admin: TestUser;
+
+  beforeAll(async () => {
+    admin = await newUser({ role: 'ADMIN' });
+  });
+
+  const sortedIdsOf = (res: { json: () => { items: ListedOrder[] } }) =>
+    idsOf(res).sort((a, b) => a - b);
+
+  // the orders of one buyer: a paid one nothing holds, one the provider reviews, one it warned of,
+  // one held for both, and one already sent
+  async function heldOrders() {
+    const buyer = await newUser();
+    const product = await newProduct();
+    const free = await placeOrder(app, csrf, buyer, product, 'paid');
+    const reviewed = await placeOrder(app, csrf, buyer, product, 'paid');
+    const warned = await placeOrder(app, csrf, buyer, product, 'paid');
+    const both = await placeOrder(app, csrf, buyer, product, 'paid');
+    const sent = await placeOrder(app, csrf, buyer, product, 'shipped');
+    await holdForReview(reviewed);
+    await warnOfFraud(warned);
+    await holdForReview(both);
+    await warnOfFraud(both);
+    return { buyer, free, reviewed, warned, both, sent };
+  }
+
+  it('lists the orders a reason holds, a few reasons through commas', async () => {
+    const o = await heldOrders();
+    const held = (holds: string) => list(admin, `?userId=${o.buyer.id}&holds=${holds}`);
+
+    expect(sortedIdsOf(await held('payment_review'))).toEqual([o.reviewed, o.both]);
+    expect(sortedIdsOf(await held('fraud_warning'))).toEqual([o.warned, o.both]);
+    expect(sortedIdsOf(await held('payment_review,fraud_warning'))).toEqual([
+      o.reviewed,
+      o.warned,
+      o.both,
+    ]);
+    expect(sortedIdsOf(await held('dispute,hand_refund'))).toEqual([]);
+  });
+
+  it('lists the orders anything holds, and the ones nothing holds', async () => {
+    const o = await heldOrders();
+
+    const any = await list(admin, `?userId=${o.buyer.id}&holds=any`);
+    const none = await list(admin, `?userId=${o.buyer.id}&holds=none`);
+    // the paid orders that wait only for the shop to send them
+    const waiting = await list(admin, `?userId=${o.buyer.id}&holds=none&statuses=paid`);
+
+    expect(any.statusCode).toBe(200);
+    expect(sortedIdsOf(any)).toEqual([o.reviewed, o.warned, o.both]);
+    expect(any.json().total).toBe(3);
+    expect(sortedIdsOf(none)).toEqual([o.free, o.sent]);
+    expect(sortedIdsOf(waiting)).toEqual([o.free]);
+  });
+
+  it.each(['paid', 'any,dispute', 'none,payment_review', 'dispute,,hand_refund', ''])(
+    'refuses holds=%s by the request schema',
+    async (holds) => {
+      const res = await list(admin, `?holds=${holds}`);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ errorCode: 'VALIDATION_ERROR' });
+    },
+  );
+
+  // the database sets the time of the warning: the period is taken with a minute to spare
+  it('lists the orders the provider warned of after they were sent, from a time', async () => {
+    const buyer = await newUser();
+    const product = await newProduct();
+    const sent = await placeOrder(app, csrf, buyer, product, 'shipped');
+    const quiet = await placeOrder(app, csrf, buyer, product, 'shipped');
+    // a paid order is held instead of marked
+    const held = await placeOrder(app, csrf, buyer, product, 'paid');
+    await warnOfFraud(sent);
+    await warnOfFraud(held);
+
+    const before = new Date(Date.now() - 60_000).toISOString();
+    const after = new Date(Date.now() + 60_000).toISOString();
+    const since = await list(admin, `?userId=${buyer.id}&fraudWarnedFrom=${before}`);
+    const later = await list(admin, `?userId=${buyer.id}&fraudWarnedFrom=${after}`);
+
+    expect(since.statusCode).toBe(200);
+    expect(idsOf(since)).toEqual([sent]);
+    expect(idsOf(later)).toEqual([]);
+    expect(idsOf(since)).not.toContain(quiet);
+  });
+
+  it.each([
+    ['holds', 'holds=any'],
+    ['fraudWarnedFrom', 'fraudWarnedFrom=2026-01-01T00:00:00.000Z'],
+  ])('refuses the filter %s to a buyer', async (filter, query) => {
+    const res = await list(await newUser(), `?${query}`);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ errorCode: 'FILTER_FORBIDDEN', details: { filter } });
+  });
+});
+
+// the card of an order an admin opens: what holds it, the warning of an order already sent, and
+// the money of the order from the money journal, short (the whole lines are the money journal of
+// the admins); the buyer sees none of it
+describe('GET /api/orders/:orderId: what holds the order and its money (admin and root)', () => {
+  let admin: TestUser;
+
+  beforeAll(async () => {
+    admin = await newUser({ role: 'ADMIN' });
+  });
+
+  const cardOf = (actor: TestUser, orderId: number) =>
+    app.inject({
+      method: 'GET',
+      url: `/api/orders/${orderId}`,
+      headers: { cookie: accessCookie(actor) },
+    });
+
+  const nearNow = (iso: string) => Math.abs(Date.parse(iso) - Date.now()) < 60_000;
+
+  it('gives the admin what holds the order, since when and what put it, and the buyer none of it', async () => {
+    const buyer = await newUser();
+    const orderId = await placeOrder(app, csrf, buyer, await newProduct(), 'paid');
+    const reviewId = await holdForReview(orderId);
+
+    const adminCard = await cardOf(admin, orderId);
+    const buyerCard = await cardOf(buyer, orderId);
+
+    expect(adminCard.statusCode).toBe(200);
+    expect(adminCard.json().holds).toEqual([
+      { reason: 'payment_review', since: expect.any(String), ref: reviewId },
+    ]);
+    expect(nearNow(adminCard.json().holds[0].since)).toBe(true);
+    expect(adminCard.json()).not.toHaveProperty('fraudWarnedAt');
+    expect(buyerCard.statusCode).toBe(200);
+    for (const field of ['holds', 'fraudWarnedAt', 'money']) {
+      expect(buyerCard.json()).not.toHaveProperty(field);
+    }
+  });
+
+  it('gives the time the provider warned of an order already sent, and no hold for it', async () => {
+    const orderId = await placeOrder(app, csrf, await newUser(), await newProduct(), 'shipped');
+    await warnOfFraud(orderId);
+
+    const res = await cardOf(admin, orderId);
+
+    expect(res.json().holds).toEqual([]);
+    expect(nearNow(res.json().fraudWarnedAt)).toBe(true);
+  });
+
+  it('gives the money of the order from the journal, the oldest first, in the list too', async () => {
+    const buyer = await newUser();
+    const orderId = await placeOrder(app, csrf, buyer, await newProduct({ price: 12 }), 'paid');
+    const shipped = await app.inject({
+      method: 'PATCH',
+      url: `/api/orders/${orderId}/status`,
+      headers: withCsrf(csrf, accessCookie(admin)),
+      payload: { status: 'shipped', shipment: { carrier: 'DHL', cost: 7 } },
+    });
+    expect(shipped.statusCode).toBe(200);
+
+    const card = await cardOf(admin, orderId);
+    const row = listed(await list(admin, `?userId=${buyer.id}`), orderId) as unknown as {
+      money: unknown;
+    };
+
+    const money = [
+      {
+        id: expect.any(Number),
+        event: 'money.payment',
+        purpose: 'order',
+        part: 'goods',
+        amount: 12,
+        state: null,
+        createdAt: expect.any(String),
+      },
+      {
+        id: expect.any(Number),
+        event: 'money.shipping_cost',
+        purpose: 'shipping',
+        part: 'whole',
+        amount: -7,
+        state: null,
+        createdAt: expect.any(String),
+      },
+    ];
+    expect(card.json().money).toEqual(money);
+    expect(row.money).toEqual(money);
+    expect(nearNow(card.json().money[0].createdAt)).toBe(true);
+    // the step answers with the card of the admin as well
+    expect(shipped.json().money).toEqual(money);
   });
 });

@@ -772,46 +772,6 @@ WITH
 CREATE POLICY return_items_delete_deny ON cartlify.return_items FOR DELETE USING (false);
 
 ----------------------------------------
--- RETURN_SHIPMENTS
-----------------------------------------
--- The parcels the shop paid to carry goods back: read by admin and root, written only by the
--- system functions that run as the owner (record_return_shipment, set_return_shipment_cost, db/05);
--- the columns an update may change: trg_return_shipments_update_columns. Never deleted.
-ALTER TABLE cartlify.return_shipments ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE cartlify.return_shipments FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS return_shipments_select ON cartlify.return_shipments;
-
-DROP POLICY IF EXISTS return_shipments_select_owner ON cartlify.return_shipments;
-
-DROP POLICY IF EXISTS return_shipments_insert_owner ON cartlify.return_shipments;
-
-DROP POLICY IF EXISTS return_shipments_update_owner ON cartlify.return_shipments;
-
-DROP POLICY IF EXISTS return_shipments_delete_deny ON cartlify.return_shipments;
-
-CREATE POLICY return_shipments_select ON cartlify.return_shipments FOR
-SELECT
-  USING (cartlify.is_admin ());
-
-CREATE POLICY return_shipments_select_owner ON cartlify.return_shipments FOR
-SELECT
-  TO cartlify_owner USING (true);
-
-CREATE POLICY return_shipments_insert_owner ON cartlify.return_shipments FOR INSERT TO cartlify_owner
-WITH
-  CHECK (true);
-
-CREATE POLICY return_shipments_update_owner ON cartlify.return_shipments
-FOR UPDATE TO cartlify_owner
-  USING (true)
-WITH
-  CHECK (true);
-
-CREATE POLICY return_shipments_delete_deny ON cartlify.return_shipments FOR DELETE USING (false);
-
-----------------------------------------
 -- PRODUCT IMAGES
 ----------------------------------------
 -- Read by everybody, written by admin/root.
@@ -1410,10 +1370,13 @@ WITH
 ----------------------------------------
 -- ORDER SHIPMENTS
 ----------------------------------------
--- The times an order was sent with a carrier outside the app, one row each; a send that was rolled
--- back stays, marked. Written and corrected by admin/root. The buyer of the order can read the row
--- (the server gives the buyer the carrier and the number, never the cost). What an update may
--- change: trg_order_shipments_update_columns.
+-- The parcels of an order: the times the order was sent with a carrier outside the app, one row
+-- each (a send that was rolled back stays, marked), written and corrected by admin/root; and the
+-- parcels of its statements (the goods back to the shop, the goods not accepted back to the buyer),
+-- written and changed only by the system functions that run as the owner (record_return_shipment,
+-- provide_return_proof, confirm_return_proof, db/05). The buyer of the order can read the rows (the
+-- server gives the buyer what is theirs to see; what a parcel cost the shop is a line of the money
+-- journal). What an update may change: trg_order_shipments_update_columns.
 ALTER TABLE cartlify.order_shipments ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE cartlify.order_shipments FORCE ROW LEVEL SECURITY;
@@ -1425,6 +1388,10 @@ DROP POLICY IF EXISTS order_shipments_select_owner ON cartlify.order_shipments;
 DROP POLICY IF EXISTS order_shipments_insert ON cartlify.order_shipments;
 
 DROP POLICY IF EXISTS order_shipments_update ON cartlify.order_shipments;
+
+DROP POLICY IF EXISTS order_shipments_insert_owner ON cartlify.order_shipments;
+
+DROP POLICY IF EXISTS order_shipments_update_owner ON cartlify.order_shipments;
 
 -- SELECT: through the parent order (the buyer, admin/root)
 CREATE POLICY order_shipments_select ON cartlify.order_shipments FOR
@@ -1446,12 +1413,14 @@ CREATE POLICY order_shipments_select_owner ON cartlify.order_shipments FOR
 SELECT
   TO cartlify_owner USING (true);
 
--- INSERT: admin/root, for a shipped order; a new send is not rolled back and its cost counts
--- (expense)
+-- INSERT: admin/root, a send of a shipped order; a new send is not rolled back and the shop owes
+-- the carrier for it (expense). A parcel of a statement only by the functions of the owner (below)
 CREATE POLICY order_shipments_insert ON cartlify.order_shipments FOR INSERT
 WITH
   CHECK (
     cartlify.current_actor_role () IN ('ADMIN', 'ROOT')
+    AND "returnId" IS NULL
+    AND direction = 'to_buyer'
     AND "rolledBackAt" IS NULL
     AND "expense" = true
     AND EXISTS (
@@ -1465,13 +1434,25 @@ WITH
     )
   );
 
--- UPDATE: admin/root. A send that was rolled back is history: the guard lets only its cost and
--- the mark of the cost change.
+-- UPDATE: admin/root, a send of the order. A send that was rolled back is history: the guard lets
+-- only the mark of what the shop owes for it change.
 CREATE POLICY order_shipments_update ON cartlify.order_shipments
 FOR UPDATE
-  USING (cartlify.current_actor_role () IN ('ADMIN', 'ROOT'))
+  USING (cartlify.current_actor_role () IN ('ADMIN', 'ROOT') AND "returnId" IS NULL)
 WITH
   -- the columns an update may change: trg_order_shipments_update_columns (db/05)
+  CHECK ("returnId" IS NULL);
+
+-- the parcels of the statements: the system functions write and change them, for whoever they work
+-- (the buyer of an account telling of the parcel, an admin recording or confirming one)
+CREATE POLICY order_shipments_insert_owner ON cartlify.order_shipments FOR INSERT TO cartlify_owner
+WITH
+  CHECK (true);
+
+CREATE POLICY order_shipments_update_owner ON cartlify.order_shipments
+FOR UPDATE TO cartlify_owner
+  USING (true)
+WITH
   CHECK (true);
 
 -- DELETE: none, the history stays
@@ -2218,6 +2199,117 @@ WITH
 
 -- DELETE: denied to every role
 CREATE POLICY stock_log_delete_deny ON cartlify.stock_log FOR DELETE USING (false);
+
+----------------------------------------
+-- MONEY LOG
+----------------------------------------
+-- The journal of the money: a line for every movement of money. Read: admin/root, and a buyer reads
+-- the lines of their own money (the app gives a buyer only the safe fields). A line is written by
+-- the system functions that move the money (cartlify.log_money_change, called from pay_order,
+-- begin_return_refund, settle_money_refund and the others, which run as the owner) and never
+-- changed or removed, except the few once-written fields db/05 names (money_log_append_only).
+ALTER TABLE cartlify.money_log ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.money_log FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS money_log_select ON cartlify.money_log;
+
+DROP POLICY IF EXISTS money_log_insert_owner ON cartlify.money_log;
+
+DROP POLICY IF EXISTS money_log_update_deny ON cartlify.money_log;
+
+DROP POLICY IF EXISTS money_log_update_owner ON cartlify.money_log;
+
+DROP POLICY IF EXISTS money_log_delete_deny ON cartlify.money_log;
+
+CREATE POLICY money_log_select ON cartlify.money_log FOR
+SELECT
+  USING (
+    cartlify.is_admin ()
+    OR (
+      cartlify.current_actor_role () = 'USER'
+      AND "userId" IS NOT NULL
+      AND "userId" = cartlify.current_actor_id ()
+    )
+  );
+
+-- INSERT for the system functions: a line names who did it. A signed-in admin or root is named
+-- with their own role; the system (the admin context without a user id: the webhook, the worker)
+-- has no actor and no role. The app role has no insert policy: it writes nothing here.
+CREATE POLICY money_log_insert_owner ON cartlify.money_log FOR INSERT TO cartlify_owner
+WITH
+  CHECK (
+    (
+      cartlify.is_system ()
+      AND "actorId" IS NULL
+      AND "actorRole" IS NULL
+    )
+    OR (
+      cartlify.is_admin ()
+      AND "actorId" = cartlify.current_actor_id ()
+      AND "actorRole" = cartlify.current_actor_role ()
+    )
+  );
+
+-- UPDATE: denied to every role but the owner (the functions of the database write the few fields
+-- of a line that are written once, the cleanup of the retention terms empties the notes, the
+-- address and the browser; trg_money_log_append_only, db/05, says what is allowed)
+CREATE POLICY money_log_update_deny ON cartlify.money_log
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+CREATE POLICY money_log_update_owner ON cartlify.money_log
+FOR UPDATE
+  TO cartlify_owner USING (true)
+WITH
+  CHECK (true);
+
+-- DELETE: denied to every role
+CREATE POLICY money_log_delete_deny ON cartlify.money_log FOR DELETE USING (false);
+
+----------------------------------------
+-- PAYMENT DISPUTES
+----------------------------------------
+-- A dispute of a payment at the bank: its description and where it stands. Read: admin/root. It is
+-- written only by the function that follows the provider (sync_payment_dispute, run as the owner)
+-- and never removed.
+ALTER TABLE cartlify.payment_disputes ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE cartlify.payment_disputes FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS payment_disputes_select ON cartlify.payment_disputes;
+
+DROP POLICY IF EXISTS payment_disputes_insert_owner ON cartlify.payment_disputes;
+
+DROP POLICY IF EXISTS payment_disputes_update_deny ON cartlify.payment_disputes;
+
+DROP POLICY IF EXISTS payment_disputes_update_owner ON cartlify.payment_disputes;
+
+DROP POLICY IF EXISTS payment_disputes_delete_deny ON cartlify.payment_disputes;
+
+CREATE POLICY payment_disputes_select ON cartlify.payment_disputes FOR
+SELECT
+  USING (cartlify.is_admin ());
+
+CREATE POLICY payment_disputes_insert_owner ON cartlify.payment_disputes FOR INSERT TO cartlify_owner
+WITH
+  CHECK (cartlify.is_system ());
+
+CREATE POLICY payment_disputes_update_deny ON cartlify.payment_disputes
+FOR UPDATE
+  USING (false)
+WITH
+  CHECK (false);
+
+CREATE POLICY payment_disputes_update_owner ON cartlify.payment_disputes
+FOR UPDATE
+  TO cartlify_owner USING (cartlify.is_system ())
+WITH
+  CHECK (cartlify.is_system ());
+
+CREATE POLICY payment_disputes_delete_deny ON cartlify.payment_disputes FOR DELETE USING (false);
 
 ----------------------------------------
 -- SHOP SETTINGS

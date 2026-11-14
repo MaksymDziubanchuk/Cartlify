@@ -21,6 +21,8 @@ export type LogMatch = {
   errorCode?: string;
   // the reason of a logged server error (its details.reason)
   reason?: string;
+  // why the webhook of a payment provider took an event without anything done
+  skipped?: string;
 };
 
 const WARN = 40;
@@ -31,7 +33,8 @@ const allowed: LogMatch[] = [];
 const matches = (entry: LogEntry, match: LogMatch) =>
   (match.msg === undefined || entry.msg === match.msg) &&
   (match.errorCode === undefined || entry.err?.errorCode === match.errorCode) &&
-  (match.reason === undefined || entry.err?.details?.reason === match.reason);
+  (match.reason === undefined || entry.err?.details?.reason === match.reason) &&
+  (match.skipped === undefined || entry.skipped === match.skipped);
 
 // every logger of the app writes into the stream of the root logger, the request loggers too
 export function captureLogs(log: FastifyBaseLogger): void {

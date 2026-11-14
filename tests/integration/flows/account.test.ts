@@ -58,6 +58,33 @@ describe('an account from the first visit to the logout', () => {
     expect(liked.statusCode).toBe(200);
     const guestId = cookieJar(liked).guestId!;
     const guest = cookieHeader({ guestId });
+
+    // the guest likes another product too, finds both among the favorites and takes it out again
+    const other = await createProduct();
+    const likedToo = await app.inject({
+      method: 'POST',
+      url: `/api/favorites/${other.variantId}`,
+      headers: withCsrf(csrf, guest),
+    });
+    expect(likedToo.statusCode).toBe(200);
+    const guestFavorites = async () =>
+      (
+        (
+          await app.inject({ method: 'GET', url: '/api/favorites', headers: { cookie: guest } })
+        ).json().items as { variant: { id: number } }[]
+      )
+        .map((item) => item.variant.id)
+        .sort((a, b) => a - b);
+    expect(await guestFavorites()).toEqual(
+      [product.variantId, other.variantId].sort((a, b) => a - b),
+    );
+    const unliked = await app.inject({
+      method: 'DELETE',
+      url: `/api/favorites/${other.variantId}`,
+      headers: withCsrf(csrf, guest),
+    });
+    expect(unliked.json()).toEqual({ variantId: other.variantId, isFavorite: false });
+    expect(await guestFavorites()).toEqual([product.variantId]);
     const guestChat = await app.inject({
       method: 'GET',
       url: '/api/chat/thread/current',

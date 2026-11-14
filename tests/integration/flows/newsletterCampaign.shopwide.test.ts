@@ -19,6 +19,7 @@ let app: FastifyInstance;
 let csrf: Csrf;
 let root: TestUser;
 let admin: TestUser;
+let drafter: TestUser;
 let limitBefore: { count: number; days: number };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -32,11 +33,12 @@ beforeAll(async () => {
   csrf = await getCsrf(app);
   root = await createUser({ role: 'ROOT', name: 'Campaign Root' });
   admin = await createUser({ role: 'ADMIN', name: 'Campaign Admin' });
+  drafter = await createUser({ role: 'ADMIN', name: 'Draft Admin' });
 });
 
 afterAll(async () => {
   try {
-    await closeSessions([root.id, admin.id]);
+    await closeSessions([root.id, admin.id, drafter.id]);
   } finally {
     await stopApp();
   }
@@ -234,5 +236,35 @@ describe('a campaign from a draft to the day it goes out', () => {
         await send(rootSession, 'PUT', `/api/root/shop-settings/${key}`, { value });
       }
     }
+  });
+});
+
+describe('a draft that is not to be sent', () => {
+  it('is deleted by the admin who runs the newsletters and leaves the list', async () => {
+    // root gives an admin the right to run the newsletters; the admin drafts one and drops it
+    const rootSession = await signIn(app, csrf, root);
+    const given = await send(rootSession, 'PATCH', `/api/root/admins/${drafter.id}`, {
+      canManageNewsletters: true,
+    });
+    expect(given.statusCode).toBe(200);
+    const session = await signIn(app, csrf, drafter);
+    const created = await send(session, 'POST', '/api/newsletters/campaigns', {
+      name: 'Flow draft to drop',
+      content: { subject: { en: 'Not this one' }, blocks: [] },
+    });
+    expect(created.statusCode).toBe(201);
+    const { id } = created.json() as { id: number };
+    const listed = async () =>
+      (
+        (await send(session, 'GET', '/api/newsletters/campaigns?limit=100')).json().items as {
+          id: number;
+        }[]
+      ).map((one) => one.id);
+    expect(await listed()).toContain(id);
+
+    const dropped = await send(session, 'DELETE', `/api/newsletters/campaigns/${id}`);
+    expect(dropped.statusCode).toBeLessThan(300);
+    expect(await listed()).not.toContain(id);
+    expect((await send(session, 'GET', `/api/newsletters/campaigns/${id}`)).statusCode).toBe(404);
   });
 });
