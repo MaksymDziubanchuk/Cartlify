@@ -10,8 +10,15 @@ import {
   isStripeUnavailable,
   mapCreatedCheckoutSession,
   readCheckoutSessionStatus,
+  readStripePaidPage,
 } from './stripeCheckout.helper.js';
-import { findStripeRefund, getStripeRefund, refundStripePayment } from './stripeRefund.helper.js';
+import { getStripeDispute, putStripeDisputeEvidence } from './stripeDispute.helper.js';
+import {
+  findStripeRefund,
+  getStripeRefund,
+  listStripeRefunds,
+  refundStripePayment,
+} from './stripeRefund.helper.js';
 import { PaymentPageChangedError } from '../types.js';
 
 import type Stripe from 'stripe';
@@ -123,5 +130,22 @@ export const stripeProvider: PaymentProvider = {
 
   findRefund({ paymentId, key }) {
     return findStripeRefund({ paymentIntentId: paymentId, key });
+  },
+
+  listRefunds(paymentId) {
+    return listStripeRefunds(paymentId);
+  },
+
+  getDispute(disputeId) {
+    return getStripeDispute(disputeId);
+  },
+
+  putDisputeEvidence(disputeId, evidence) {
+    return putStripeDisputeEvidence(disputeId, evidence);
+  },
+
+  // the page of a stripe order is its checkout session
+  readPaidPage(sessionId) {
+    return readStripePaidPage(sessionId);
   },
 };

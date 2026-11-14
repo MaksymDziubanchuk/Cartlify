@@ -1,67 +1,68 @@
+import { Prisma } from '@prisma/client';
+
 import { tx } from '@db/client.js';
 import { setAdminContext } from '@db/dbContext.service.js';
-import { settleLateRefund } from '@routes/api/payments/services/helpers/settleLateRefund.helper.js';
-import { settleReturnRefund } from '@routes/api/returns/services/helpers/returnRefund.helper.js';
+import { settleHandRefund } from '@routes/api/payments/services/helpers/handRefunds.helper.js';
+import { settleMoneyRefund } from '@routes/api/payments/services/helpers/settleMoneyRefund.helper.js';
 
+import { amountOfCents } from './stripeCheckout.helper.js';
 import { refundAnswerOf } from './stripeRefund.helper.js';
 
 import type Stripe from 'stripe';
+import type { PaymentRefundMailLogger } from '@routes/api/payments/services/helpers/paymentRefundMails.helper.js';
 
-type RefundEventLogger = {
-  warn: (obj: unknown, msg?: string) => void;
-  error: (obj: unknown, msg?: string) => void;
-};
+// why a refund event was taken without anything done:
+// UNKNOWN_REFUND - the key has the form of the app, but no refund of the app has it or the id
+// NOT_AN_ORDER - a refund made by hand of a payment that is none of the shop's (another tool in the
+//   same account)
+export type RefundEventSkip = 'UNKNOWN_REFUND' | 'NOT_AN_ORDER';
 
-// the key of our transfer is the uuid in the metadata of the refund (refund:<uuid>)
-const TRANSFER = /^refund:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
-
-// the key of a payment given back late is refund:<payment id> (refundWholePayment); the payment of a
-// stripe order is its PaymentIntent
-const LATE_REFUND = /^refund:(pi_[A-Za-z0-9_]+)$/;
-
-// the transfer a refund belongs to: the key it carries, or, for a refund the app made before the
-// key rode with it, the rows that kept its id. None for a refund that is not a transfer of a
-// statement (a payment given back late, a refund made by hand at stripe)
-async function transferKeyOf(refund: Stripe.Refund): Promise<string | null> {
-  const carried = TRANSFER.exec(refund.metadata?.transfer ?? '');
-  if (carried) return carried[1]!;
-
-  return tx(async (db) => {
-    await setAdminContext(db);
-
-    const rows = await db.orderReturnItem.findMany({
-      where: { refundId: refund.id, refundKey: { not: null } },
-      select: { refundKey: true },
-      take: 1,
-    });
-
-    return rows[0]?.refundKey ?? null;
-  });
-}
-
-// stripe tells a refund ended or changed. The transfer of a statement is settled by it, once (a second
-// delivery of the event, or the worker that got there first, changes nothing). A payment given back
-// late is settled by it the same way (settleLateRefund): the refund is found by its id or by the
-// payment in its key. A refund that is neither, one made by hand in the dashboard, is acknowledged
-// and left alone
+// Stripe tells a refund was made, changed or ended (refund.created, .updated, .failed). A refund of
+// the app carries the key of its request in the metadata (metadata.transfer): the lines of the key
+// are settled by the state of the refund (settleMoneyRefund: the id is kept, the money is sent, or
+// it failed), once, whatever the order of the events and the number of their deliveries. A refund
+// made by hand in the dashboard carries none: it is a line of its own with what it means for its
+// payment (settleHandRefund). Either way the number the bank of the card gives the refund, some days
+// after the money is sent, is kept on its lines once
 export async function settleStripeRefundEvent(
   refund: Stripe.Refund,
-  log: RefundEventLogger,
-): Promise<void> {
-  const key = await transferKeyOf(refund);
+  log: PaymentRefundMailLogger,
+): Promise<{ skipped?: RefundEventSkip }> {
+  const key = refund.metadata?.transfer || null;
+  const answer = refundAnswerOf(refund);
 
   if (key) {
-    await settleReturnRefund({ key, answer: refundAnswerOf(refund), actor: null, log });
-    return;
+    const settled = await settleMoneyRefund({ key, answer }, log);
+    if (settled.purpose === undefined) return { skipped: 'UNKNOWN_REFUND' };
+  } else {
+    const payment = refund.payment_intent;
+    const settled = await settleHandRefund(
+      {
+        provider: 'stripe',
+        refundId: refund.id,
+        paymentId: typeof payment === 'string' ? payment : (payment?.id ?? null),
+        amount: amountOfCents(refund.amount),
+        currency: refund.currency,
+        answer,
+      },
+      log,
+    );
+    if (settled.skipped) return { skipped: settled.skipped };
   }
 
-  await settleLateRefund(
-    {
-      provider: 'stripe',
-      refundId: refund.id,
-      paymentId: LATE_REFUND.exec(refund.metadata?.transfer ?? '')?.[1] ?? null,
-    },
-    refundAnswerOf(refund),
-    log,
-  );
+  if (answer.bankReference) await keepBankReference(refund.id, answer.bankReference);
+  return {};
+}
+
+// the number of the bank goes on every line of the refund that has none yet; a second number
+// changes nothing (record_refund_bank_reference, db/05)
+async function keepBankReference(refundId: string, reference: string): Promise<void> {
+  await tx(async (db) => {
+    await setAdminContext(db);
+    await db.$queryRaw(Prisma.sql`
+      select cartlify.record_refund_bank_reference(
+        ${refundId}::text, ${reference.slice(0, 100)}::text
+      ) as kept
+    `);
+  });
 }

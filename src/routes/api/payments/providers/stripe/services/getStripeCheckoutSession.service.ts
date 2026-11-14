@@ -19,7 +19,7 @@ import {
 } from '../stripeCheckout.helper.js';
 
 import type Stripe from 'stripe';
-import { isPaymentRefunded } from '@routes/api/payments/services/helpers/orderPaymentRefund.helper.js';
+import { isLatePayment } from '@routes/api/payments/services/helpers/latePayments.helper.js';
 
 import type {
   GetCheckoutSessionByIdDto,
@@ -85,9 +85,7 @@ export async function getStripeCheckoutSession({
     const paymentIntent = session.payment_intent;
     const paymentId =
       typeof paymentIntent === 'string' ? paymentIntent : (paymentIntent?.id ?? null);
-    const paymentRefunded = paymentId
-      ? await isPaymentRefunded({ provider: 'stripe', paymentId, orderId })
-      : false;
+    const paymentRefunded = paymentId ? await isLatePayment(paymentId) : false;
 
     // map stripe session into api dto
     // reservation time is empty once the order is paid or unconfirmed, stripe own expiry is used then
