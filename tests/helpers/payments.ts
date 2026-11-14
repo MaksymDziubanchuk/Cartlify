@@ -177,21 +177,6 @@ export const orderStateOf = (orderId: number) =>
     }),
   );
 
-// the lines that record the refunds of the payments the order could not take (their ends are the
-// lines of lateLinesOf, helpers/lateRefund.ts)
-export const refundAuditOf = (orderId: number) =>
-  asAdmin((tx) =>
-    tx.adminAuditLog.findMany({
-      where: {
-        entityType: 'order',
-        entityId: orderId,
-        action: 'OTHER',
-        event: 'order.refund_late',
-      },
-      orderBy: { id: 'asc' },
-    }),
-  );
-
 // the clock of the app moved forward, for a time the test cannot wait for; restore() puts it back
 export function moveClock(ms: number) {
   const realNow = Date.now.bind(Date);

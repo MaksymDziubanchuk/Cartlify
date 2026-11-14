@@ -62,6 +62,20 @@ export type Launched = {
 // limit of its own when the sending is to stop half way). A campaign starts with a mail for every
 // subscription in force in the database, so the file that launches one is *.shopwide, and the flows
 // judge the mails of their own readers
+// the numbers of the subscribers (GET /api/newsletters/subscribers/summary)
+export type NewsletterSummary = {
+  active: number;
+  byLocale: { locale: string | null; count: number }[];
+  bySource: { form: number; account: number };
+  pending: number;
+  pausedComplaint: number;
+  stoppedBounce: number;
+};
+
+// the subscribers in force in a language, by the numbers of the manager
+export const countOf = (summary: NewsletterSummary, locale: string | null): number =>
+  summary.byLocale.find((one) => one.locale === locale)?.count ?? 0;
+
 export function newsletterDesk(app: FastifyInstance, csrf: Csrf, cookie: string) {
   const api = newsletterApi(app, csrf);
   // above the years the tests of the schedule and the pass draw theirs from (2100 to about 8200), so
@@ -166,6 +180,13 @@ export function newsletterDesk(app: FastifyInstance, csrf: Csrf, cookie: string)
     },
 
     // the subscriptions of an address as the manager finds them, the oldest first
+    // the numbers of the subscribers the manager reads
+    async summary() {
+      const res = await get(`${BASE}/subscribers/summary`);
+      expect(res.statusCode).toBe(200);
+      return res.json() as NewsletterSummary;
+    },
+
     async subscribers(email: string) {
       const res = await get(`${BASE}/subscribers?email=${encodeURIComponent(email)}`);
       expect(res.statusCode).toBe(200);

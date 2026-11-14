@@ -195,16 +195,17 @@ export async function pay(
   db: DbSession,
   adminId: number,
   orderId: number,
-  opts: { provider?: string; paymentId?: string; amount?: string } = {},
+  opts: { provider?: string; paymentId?: string; amount?: string; currency?: string } = {},
 ) {
   const amount = opts.amount ?? (await payableOf(db, adminId, orderId));
   await db.as({ role: 'ADMIN' });
   const outcome = await db.attempt<{ result: string }>(
-    `select cartlify.pay_order($1::int, $2::cartlify."PaymentProvider", $3, $4::numeric) as result`,
+    `select cartlify.pay_order($1::int, $2::cartlify."PaymentProvider", $3, $4::numeric, $5) as result`,
     orderId,
     opts.provider ?? 'stripe',
     opts.paymentId ?? `pi_db_${orderId}`,
     amount,
+    opts.currency ?? null,
   );
   return outcome.ok ? outcome.rows[0]!.result : `ERROR ${outcome.message}`;
 }

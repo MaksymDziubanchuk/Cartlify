@@ -78,6 +78,7 @@ export function returnFlows(context: {
     extra: Record<string, unknown> = {},
   ) {
     const res = await post(`/api/returns/${card.id}/receive`, {
+      parcel: { buyerPaid: 0 },
       results: [{ itemId: card.items[0]!.id, quantity, goods, ...extra }],
     });
     if (res.statusCode !== 200) throw new Error(`the goods answered ${res.statusCode}`);
@@ -95,7 +96,7 @@ export function returnFlows(context: {
   }
 
   async function confirmProof(returnId: number) {
-    const res = await post(`/api/returns/${returnId}/proof/confirm`);
+    const res = await post(`/api/returns/${returnId}/proof/confirm`, { buyerPaid: 0 });
     if (res.statusCode !== 200) throw new Error(`the confirm answered ${res.statusCode}`);
   }
 
