@@ -2,6 +2,7 @@ import {
   AUDIT_EVENTS,
   CONSENT_EVENTS,
   LOGIN_EVENTS,
+  MONEY_LOG_EVENTS,
   PRICE_LOG_EVENTS,
   STOCK_LOG_EVENTS,
 } from '@config/journalEvents.js';
@@ -263,9 +264,10 @@ const moneySummarySchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'The money of the period: what came in, what went out, what each income left. The orders ' +
-    'are the ones paid in the period; what goes back later (a return) is in the period its money ' +
-    'went back, and never changes the period the order was paid in.',
+    'The money of the period: what came in, what went out, what each income left, read from the ' +
+    'money journal by the time its lines were written. The orders are the ones paid in the ' +
+    'period; what goes back later (a return) is in the period its money was written, and never ' +
+    'changes the period the order was paid in.',
   properties: {
     income: {
       type: 'object',
@@ -281,15 +283,21 @@ const moneySummarySchema = {
       additionalProperties: false,
       description:
         'What the items kept cost (the batches they took, less the units that came back), the ' +
-        'units written off in the period, the sends the shop owes the carriers for (by the time ' +
-        'they were sent), together.',
+        'units written off in the period, the sends and the parcels back the shop owes the ' +
+        'carriers for, what the disputes, the refunds made by hand and the compensations cost ' +
+        'past the returns (otherRefunds: what the bank kept and what went out by hand, less what ' +
+        'the decisions gave the goods, which the returns of the products count, and less what ' +
+        'statements took of it for the delivery; with the compensations, less what carriers paid ' +
+        'the shop), together. A payment the order could not take is the money of the buyer, never ' +
+        'an income.',
       properties: {
         costOfGoods: { type: 'number' },
         writeOffs: { type: 'number' },
         shipping: nullableMoney,
+        otherRefunds: nullableMoney,
         total: { type: 'number' },
       },
-      required: ['costOfGoods', 'writeOffs', 'shipping', 'total'],
+      required: ['costOfGoods', 'writeOffs', 'shipping', 'otherRefunds', 'total'],
     },
     margin: {
       type: 'object',
@@ -381,14 +389,15 @@ const adminDeliveryMoneySchema = {
   type: ['object', 'null'],
   additionalProperties: false,
   description:
-    'The delivery of all orders in the period, apart from the products. Null when the report ' +
-    'is of some products or of a category: the delivery belongs to no product.',
+    'The delivery of all orders in the period, apart from the products, read from the money ' +
+    'journal. Null when the report is of some products or of a category: the delivery belongs ' +
+    'to no product.',
   properties: {
     income: {
       type: 'object',
       additionalProperties: false,
       description:
-        'What the orders paid in the period (by paidAt), cancelled later or not, paid for the ' +
+        'What the payments written in the period, cancelled later or not, paid for the ' +
         'delivery; orders counts the ones that paid for it (a delivery that cost nothing is none).',
       properties: { orders: nonNegativeIntegerSchema, revenue: { type: 'number' } },
       required: ['orders', 'revenue'],
@@ -397,8 +406,10 @@ const adminDeliveryMoneySchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'The delivery that went back with the returns whose money went back in the period (by ' +
-        'the time it went back); the income of the period the order was paid in keeps it.',
+        'The delivery that went back with the money of the statements written in the period ' +
+        '(the transfers and the money sent outside the app, less their failures); orders counts ' +
+        'the ones whose delivery went back. The income of the period the order was paid in keeps ' +
+        'it.',
       properties: { orders: nonNegativeIntegerSchema, revenue: { type: 'number' } },
       required: ['orders', 'revenue'],
     },
@@ -408,10 +419,15 @@ const adminDeliveryMoneySchema = {
       description:
         'The sends the shop owes the carriers for, by the time they were sent (shippedAt): a ' +
         'send taken back with its cost kept counts, one the carrier was not paid for does not. ' +
-        'withoutCost counts the sends of them whose cost is not written yet.',
+        'withoutCost counts the sends of them that have no cost (none written, or 0).',
       properties: {
         sends: nonNegativeIntegerSchema,
-        cost: { type: 'number', description: 'The costs written, to the cent.' },
+        cost: {
+          type: 'number',
+          description:
+            'The costs of the sends the shop owes for, written in the period, with the ' +
+            'corrections in theirs, to the cent.',
+        },
         withoutCost: nonNegativeIntegerSchema,
       },
       required: ['sends', 'cost', 'withoutCost'],
@@ -422,16 +438,21 @@ const adminDeliveryMoneySchema = {
       description:
         'The parcels the shop paid to carry goods back from buyers (recorded by an admin on a ' +
         'statement of return), by the time they were sent (the time the admin gave). ' +
-        'withoutCost counts the ones whose cost is not written yet.',
+        'withoutCost counts the ones that have no cost (none written, or 0).',
       properties: {
         sends: nonNegativeIntegerSchema,
-        cost: { type: 'number', description: 'The costs written, to the cent.' },
+        cost: {
+          type: 'number',
+          description:
+            'The costs of the parcels written in the period, with the corrections in theirs, to ' +
+            'the cent.',
+        },
         withoutCost: nonNegativeIntegerSchema,
         deducted: {
           type: 'number',
           description:
-            'The cost of the way back the buyers owed, taken off the transfers whose money went ' +
-            'back in the period: an income.',
+            'The cost of the way back the buyers owed, taken off the transfers written in the ' +
+            'period (less their failures): an income.',
         },
         reimbursed: {
           type: 'number',
@@ -452,11 +473,111 @@ const adminDeliveryMoneySchema = {
   required: ['income', 'refunded', 'shipping', 'returnShipping', 'result'],
 } as const;
 
+const signedMoney = (description: string) => ({ type: 'number', description }) as const;
+
+// the money the payments moved past the statements in a period, of no product: only a report of
+// the whole shop has it
+const adminPaymentsMoneySchema = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  description:
+    'The money the payments moved past the statements in the period, read from the money ' +
+    'journal by the time its lines were written; result is what each left the money of the ' +
+    'shop, below 0 the shop is without it. Null when the report is of some products or of a ' +
+    'category: it belongs to no product.',
+  properties: {
+    disputes: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The disputes at the bank of the payments of orders.',
+      properties: {
+        withdrawn: signedMoney('What the bank took (the fee of the dispute apart).'),
+        reinstated: signedMoney('What the bank gave back.'),
+        used: signedMoney(
+          'What the transfers of statements took of the money of lost disputes as money the ' +
+            'buyer had back (the returns count it), less their failures.',
+        ),
+        undecided: signedMoney(
+          'Of withdrawn, what the bank took for a dispute lost that root has not said what it was ' +
+            'for yet (in the period of the line; known once decided).',
+        ),
+        result: signedMoney('reinstated - withdrawn + used.'),
+      },
+      required: ['withdrawn', 'reinstated', 'used', 'undecided', 'result'],
+    },
+    handRefunds: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The refunds made by hand in the dashboard of the provider for the payments of orders, ' +
+        'less their failures and with the money sent outside the app after one, by what root or ' +
+        'the system decided they were (as decided now; refunded stays as it was).',
+      properties: {
+        refunded: signedMoney('What went out by hand: compensations + coverage + undecided.'),
+        compensations: signedMoney('Given for what the app does not follow, such as a gesture.'),
+        coverage: signedMoney('Counted for what a statement of the order owes the buyer.'),
+        undecided: signedMoney('Not decided by root yet.'),
+        used: signedMoney(
+          'What the transfers of statements took of them as money the buyer had back (the ' +
+            'returns count it), less their failures.',
+        ),
+        result: signedMoney('used - refunded.'),
+      },
+      required: ['refunded', 'compensations', 'coverage', 'undecided', 'used', 'result'],
+    },
+    latePayments: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The payments the orders could not take (a second payment, a wrong sum, an order that ' +
+        'was gone): the money of the buyers until it goes back, no income.',
+      properties: {
+        received: signedMoney('What came in.'),
+        refunded: signedMoney(
+          'What of them went back in any way: the refunds of the app and by hand (less their ' +
+            'failures), the money sent outside the app, what the bank took for a dispute.',
+        ),
+        result: signedMoney('received - refunded: not 0 is money of buyers still at the shop.'),
+      },
+      required: ['received', 'refunded', 'result'],
+    },
+    compensations: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The compensations root gave by the button of the app (POST /api/payments/compensations), ' +
+        'less their failures, with the money sent outside the app after one.',
+      properties: {
+        given: signedMoney('What went out.'),
+        result: signedMoney('- given.'),
+      },
+      required: ['given', 'result'],
+    },
+    received: {
+      type: 'object',
+      additionalProperties: false,
+      description:
+        'The money the shop got back outside the app: from buyers for rows of statements (the ' +
+        'returns of the products take it off), from carriers for the sends they lost.',
+      properties: {
+        buyers: signedMoney('From buyers.'),
+        carriers: signedMoney('From carriers.'),
+        result: signedMoney('buyers + carriers.'),
+      },
+      required: ['buyers', 'carriers', 'result'],
+    },
+  },
+  required: ['disputes', 'handRefunds', 'latePayments', 'compensations', 'received'],
+} as const;
+
 const adminReturnKindSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    units: nonNegativeIntegerSchema,
+    units: {
+      type: 'integer',
+      description: 'Below 0 in a period whose failures of transfers gave back more than went.',
+    },
     revenue: { type: 'number', description: 'The money of the units that went back.' },
     cost: { type: 'number', description: 'What the units that came back cost (their batches).' },
   },
@@ -546,12 +667,15 @@ const adminAccountingResponseSchema = {
       type: 'object',
       additionalProperties: false,
       description:
-        'The rows of the statements of return whose money went back in the period (by the time ' +
-        'it went back): the money of the units, and what the units that came back cost. byKind ' +
-        'tells the right of withdrawal from the reasons an admin gave.',
+        'The rows of the statements of return whose money was written in the period (the ' +
+        'transfers and the money sent outside the app; a failure of a transfer gives its money ' +
+        'back in the period the failure came, below 0): the money of the units, and what the ' +
+        'units that came back cost, booked when the money and the goods are both back. orders ' +
+        'counts the orders of the statements whose money went back in the period, less what ' +
+        'failed in it. byKind tells the right of withdrawal from the reasons an admin gave.',
       properties: {
         orders: nonNegativeIntegerSchema,
-        units: nonNegativeIntegerSchema,
+        units: { type: 'integer' },
         revenue: { type: 'number' },
         cost: { type: 'number' },
         byKind: {
@@ -623,6 +747,7 @@ const adminAccountingResponseSchema = {
     },
     stock: adminStockTurnoverSchema,
     delivery: adminDeliveryMoneySchema,
+    payments: adminPaymentsMoneySchema,
   },
   required: [
     'period',
@@ -635,6 +760,7 @@ const adminAccountingResponseSchema = {
     'writeOffs',
     'stock',
     'delivery',
+    'payments',
   ],
 } as const;
 
@@ -781,8 +907,9 @@ const reportReturnsSchema = {
   type: 'object',
   additionalProperties: false,
   description:
-    'The items whose money went back in the period (by the time it went back): the money of the ' +
-    'units, and what the units that came back cost.',
+    'The items whose money was written in the period (a failure of a transfer gives it back, ' +
+    'below 0): the money of the units, and what the units that came back cost, booked when the ' +
+    'money and the goods are both back.',
   properties: { units: { type: 'integer' }, revenue: moneyNumber, cost: moneyNumber },
   required: ['units', 'revenue', 'cost'],
 } as const;
@@ -989,9 +1116,10 @@ const adminReportTimelineResponseSchema = {
           period: { $ref: 'adminStatsPeriodSchema#' },
           ...reportMoneyProperties,
           delivery: adminDeliveryMoneySchema,
+          payments: adminPaymentsMoneySchema,
           summary: moneySummarySchema,
         },
-        required: ['label', 'period', ...reportMoneyRequired, 'delivery', 'summary'],
+        required: ['label', 'period', ...reportMoneyRequired, 'delivery', 'payments', 'summary'],
       },
     },
   },
@@ -1370,6 +1498,120 @@ const logUserAgentSchema = {
 const logEventSchema = (events: readonly string[], what: string) =>
   ({ type: 'string', enum: [...events], description: what }) as const;
 
+// the filters of the columns of the journals (journal.helper.ts, ColumnFilter)
+const logIdFilter = (what: string) =>
+  ({
+    type: 'integer',
+    minimum: 1,
+    maximum: MAX_ID,
+    description: `Only the lines ${what}.`,
+  }) as const;
+const logTextFilter = (what: string) =>
+  ({
+    type: 'string',
+    minLength: 1,
+    maxLength: 255,
+    description: `Only the lines ${what}.`,
+  }) as const;
+const logEnumFilter = (values: readonly string[], what: string) =>
+  ({ type: 'string', enum: [...values], description: `Only the lines ${what}.` }) as const;
+const logBoundFilter = (what: string) =>
+  ({ type: 'number', minimum: -99_999_999.99, maximum: 99_999_999.99, description: what }) as const;
+const logTimeFilter = (what: string) => ({ ...dateTimeSchema, description: what }) as const;
+const LOG_ROLES = ['USER', 'ADMIN', 'ROOT'] as const;
+
+// the address and the browser of the request of a line, the lines of root never for an admin
+const logRequestFilters = {
+  ip: logTextFilter(
+    'written from this address, as it is (for an admin, never the lines of root, whose address is hidden)',
+  ),
+  userAgent: logTextFilter(
+    'whose browser has this text, in any case (for an admin, never the lines of root)',
+  ),
+} as const;
+
+// the pages of the groups of a journal: up to three keys through commas, a sort, a page by an
+// offset; the period, the events and the filters of the journal narrow the lines
+const groupsQueryFields = (keys: readonly string[], sums: readonly string[]) =>
+  ({
+    groupBy: {
+      type: 'string',
+      pattern: `^(${keys.join('|')})(,(${keys.join('|')})){0,2}$`,
+      description:
+        `The keys the lines are taken together by, one to three through commas: ${keys.join(', ')} ` +
+        '(day, week and month: of the time of the line, in utc; the week from its Monday). For an ' +
+        'admin the account of root is one group of the id 0.',
+    },
+    sortBy: {
+      type: 'string',
+      pattern: `^(${[...keys, 'count', ...sums].join('|')})$`,
+      description:
+        `A key of groupBy, count or a sum (${sums.join(', ')}); count unless given ` +
+        '(LOG_SORT_INVALID for a key not in groupBy).',
+    },
+    sortOrder: {
+      type: 'string',
+      enum: ['asc', 'desc'],
+      description: 'desc (the largest first) unless given; the keys break ties.',
+    },
+    limit: {
+      type: 'integer',
+      minimum: 1,
+      maximum: 1000,
+      description: 'The groups of a page, 100 unless given.',
+    },
+    offset: {
+      type: 'integer',
+      minimum: 0,
+      maximum: 1_000_000,
+      description: 'The groups skipped before the page, 0 unless given.',
+    },
+    from: { ...dateTimeSchema, description: 'The start of the period, taken in.' },
+    to: { ...dateTimeSchema, description: 'The end of the period, left out.' },
+    events: {
+      type: 'string',
+      pattern: '^[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*(,[a-z][a-z0-9_]*[.][a-z][a-z0-9_]*)*$',
+      description: 'Only the lines of these events, through commas (LOG_EVENTS_INVALID).',
+    },
+    format: {
+      type: 'string',
+      enum: ['json', 'csv'],
+      description: 'csv gives every group of the filters as a file, without pages.',
+    },
+  }) as const;
+
+// a page of the groups of a journal: each group has the keys asked for, the count and the sums
+const groupsPageSchema = (
+  id: string,
+  keys: Record<string, unknown>,
+  sums: Record<string, unknown>,
+  what: string,
+) =>
+  ({
+    $id: id,
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          description: `${what} The keys of groupBy, how many lines and the sums.`,
+          properties: { ...keys, count: { type: 'integer' }, ...sums },
+          required: ['count', ...Object.keys(sums)],
+        },
+      },
+      total: { type: 'integer', description: 'The groups of the filters.' },
+      limit: { type: 'integer' },
+      offset: { type: 'integer' },
+    },
+    required: ['items', 'total', 'limit', 'offset'],
+  }) as const;
+
+const groupNumberKey = { type: ['integer', 'null'] } as const;
+const groupTextKey = { type: ['string', 'null'] } as const;
+
 // a page of a journal; the lines have the columns asked for
 const journalPageSchema = (id: string, properties: Record<string, unknown>, what: string) =>
   ({
@@ -1409,6 +1651,7 @@ const AUDIT_ACTIONS = [
   'CATEGORY_UPDATE',
   'REVIEW_DELETE',
   'NEWSLETTER_MANAGER_CHANGE',
+  'MONEY_MANAGER_CHANGE',
   'NEWSLETTER_CAMPAIGN_CHANGE',
   'NEWSLETTER_SUBSCRIBER_DELETE',
   'NEWSLETTER_BLOCK_CHANGE',
@@ -1494,6 +1737,7 @@ const adminAuditLogQuerySchema = {
         'Only the lines with a change of this field: refund names the refunds of late ' +
         'payments, price the changes of a price.',
     },
+    ...logRequestFilters,
     ...journalQueryFields(AUDIT_SORTS, AUDIT_COLUMNS, AUDIT_EVENTS),
   },
 } as const;
@@ -1591,6 +1835,12 @@ const adminPriceLogQuerySchema = {
       enum: ['fixed', 'percent'],
       description: 'Only the changes given this way: by an amount of money or by a percent.',
     },
+    oldPriceFrom: logBoundFilter('Only the lines whose price before is at least this.'),
+    oldPriceTo: logBoundFilter('Only the lines whose price before is at most this.'),
+    newPriceFrom: logBoundFilter('Only the lines whose new price is at least this.'),
+    newPriceTo: logBoundFilter('Only the lines whose new price is at most this.'),
+    endsFrom: logTimeFilter('Only the sales that end at this time or later.'),
+    endsTo: logTimeFilter('Only the sales that end before this time.'),
     ...journalQueryFields(PRICE_LOG_SORTS, PRICE_LOG_COLUMNS, PRICE_LOG_EVENTS),
   },
 } as const;
@@ -1699,11 +1949,21 @@ const adminStockLogQuerySchema = {
       description: 'Only the lines of this write-off (the writeOffId its response gave).',
     },
     orderId: stockIdQueryField('lines of this order: the sale at its payment and the units back'),
+    actorId: logIdFilter('of this account (for an admin, root is never found by its id)'),
+    actorRole: logEnumFilter(LOG_ROLES, 'written by an account of this role then'),
+    returnId: stockIdQueryField('lines of the units of this statement of return'),
+    returnItemId: stockIdQueryField('lines of the units of this row of a statement'),
+    categoryId: stockIdQueryField('lines of the products of this category (not of its children)'),
+    quantityFrom: logBoundFilter('Only the lines whose change is at least this (1: what came in).'),
+    quantityTo: logBoundFilter('Only the lines whose change is at most this (-1: what went out).'),
+    stockAfterFrom: logBoundFilter('Only the lines whose stock after the change is at least this.'),
+    stockAfterTo: logBoundFilter('Only the lines whose stock after the change is at most this.'),
+    ...logRequestFilters,
     ...journalQueryFields(STOCK_LOG_SORTS, STOCK_LOG_COLUMNS, STOCK_LOG_EVENTS),
   },
 } as const;
 
-const adminStockLogResponseSchema = journalPageSchema(
+const adminStockLogPageSchema = journalPageSchema(
   'adminStockLogResponseSchema',
   {
     id: { type: 'integer' },
@@ -1791,6 +2051,288 @@ const adminStockLogResponseSchema = journalPageSchema(
   'A line of the stock log: one variant, one change.',
 );
 
+// the money log
+const MONEY_PURPOSES = [
+  'order',
+  'return',
+  'late_payment',
+  'hand',
+  'dispute',
+  'shipping',
+  'compensation',
+] as const;
+const MONEY_PARTS = ['goods', 'delivery', 'deduction', 'way_back', 'covered', 'whole'] as const;
+const MONEY_STATES = ['in_transit', 'sent'] as const;
+const MONEY_FAILURES = [
+  'card_unavailable',
+  'shop_balance',
+  'disputed',
+  'already_refunded',
+  'unknown',
+] as const;
+const MONEY_METHODS = ['bank_transfer', 'cash', 'other'] as const;
+const MONEY_USES = ['goods', 'compensation', 'loss'] as const;
+const MONEY_PROVIDERS = ['stripe'] as const;
+
+const MONEY_LOG_COLUMNS = [
+  'id',
+  'createdAt',
+  'actorId',
+  'actor',
+  'actorRole',
+  'event',
+  'purpose',
+  'part',
+  'amount',
+  'currency',
+  'orderId',
+  'userId',
+  'user',
+  'returnId',
+  'orderShipmentId',
+  'disputeId',
+  'coversId',
+  'provider',
+  'paymentId',
+  'refundId',
+  'transferKey',
+  'stripeTxId',
+  'bankReference',
+  'byDashboard',
+  'state',
+  'stateAt',
+  'failure',
+  'failureText',
+  'method',
+  'note',
+  'happenedAt',
+  'moneyUse',
+  'ip',
+  'userAgent',
+  'meta',
+] as const;
+const MONEY_LOG_SORTS = MONEY_LOG_COLUMNS.filter(
+  (column) => column !== 'actor' && column !== 'user' && column !== 'meta',
+);
+
+const adminMoneyLogQuerySchema = {
+  $id: 'adminMoneyLogQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    orderId: stockIdQueryField('lines of this order'),
+    userId: stockIdQueryField('lines of the money of this buyer, whatever order'),
+    returnId: stockIdQueryField(
+      'lines of this statement of return: its transfers, their failures, the money sent outside ' +
+        'the app, the way back paid, the parcels back, the money by hand or of the bank it took',
+    ),
+    disputeId: stockIdQueryField('lines of this dispute: what the bank took and gave back'),
+    paymentId: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 255,
+      description: 'Only the lines of this payment at the provider (its id there, as it is).',
+    },
+    purpose: {
+      type: 'string',
+      enum: [...MONEY_PURPOSES],
+      description:
+        'Only the lines of this purpose: order (the payment of an order), return (the money of a ' +
+        'statement to the buyer), late_payment (a payment the order could not take and what went ' +
+        'back of it), hand (a refund made by hand in the dashboard of the provider), dispute (what ' +
+        'the bank took and gave back), shipping (what the shop paid a carrier).',
+    },
+    state: {
+      type: 'string',
+      enum: [...MONEY_STATES],
+      description:
+        'Only the refunds that stand here: in_transit (asked of the provider, not told sent yet; ' +
+        'a refund that failed stays here, its failure is a line of its own) or sent.',
+    },
+    actorId: logIdFilter('of this account (for an admin, root is never found by its id)'),
+    actorRole: logEnumFilter(LOG_ROLES, 'written by an account of this role then'),
+    part: logEnumFilter(MONEY_PARTS, 'of this part of a movement'),
+    currency: logTextFilter('of this currency, as the provider writes it (eur)'),
+    amountFrom: logBoundFilter(
+      'Only the lines whose sum with its sign is at least this (0.01: what came in).',
+    ),
+    amountTo: logBoundFilter(
+      'Only the lines whose sum with its sign is at most this (-0.01: what went out).',
+    ),
+    orderShipmentId: logIdFilter('of this send or parcel'),
+    coversId: logIdFilter(
+      'that name this line: its failure, the money sent another way, a part covered',
+    ),
+    provider: logEnumFilter(MONEY_PROVIDERS, 'of this provider'),
+    refundId: logTextFilter('of this refund at the provider (its id there, as it is)'),
+    transferKey: logTextFilter('of this transfer of the app (its key, as it is)'),
+    stripeTxId: logTextFilter('of this transaction of the balance of the provider (a dispute)'),
+    bankReference: logTextFilter('whose reference of the bank has this text, in any case'),
+    byDashboard: {
+      type: 'boolean',
+      description: 'Only the refunds made in the dashboard of the provider (true) or not.',
+    },
+    failure: logEnumFilter(MONEY_FAILURES, 'of a failure of this reason'),
+    method: logEnumFilter(MONEY_METHODS, 'of money that moved outside the app this way'),
+    moneyUse: logEnumFilter(
+      MONEY_USES,
+      'of money given back by hand or taken by a bank decided so',
+    ),
+    note: logTextFilter('whose note has this text, in any case'),
+    stateFrom: logTimeFilter('Only the refunds whose state is of this time or later.'),
+    stateTo: logTimeFilter('Only the refunds whose state is of before this time.'),
+    happenedFrom: logTimeFilter(
+      'Only the money that really moved on this day or later (outside the app).',
+    ),
+    happenedTo: logTimeFilter(
+      'Only the money that really moved before this time (outside the app).',
+    ),
+    ...logRequestFilters,
+    ...journalQueryFields(MONEY_LOG_SORTS, MONEY_LOG_COLUMNS, MONEY_LOG_EVENTS),
+  },
+} as const;
+
+const nullableDateTime = (description: string) =>
+  ({ anyOf: [dateTimeSchema, { type: 'null' }], description }) as const;
+
+const nullableEnum = (values: readonly string[], description: string) =>
+  ({ type: ['string', 'null'], enum: [...values, null], description }) as const;
+
+const adminMoneyLogPageSchema = journalPageSchema(
+  'adminMoneyLogResponseSchema',
+  {
+    id: { type: 'integer' },
+    createdAt: {
+      ...dateTimeSchema,
+      description: 'The time of the database the line was written at; the reports go by it.',
+    },
+    actorId: {
+      type: ['integer', 'null'],
+      description:
+        'The id of the account that did it; none for the work of the system (the webhook, the ' +
+        'worker); 0 for an admin where it is root.',
+    },
+    actor: {
+      anyOf: [logAccountSchema, { type: 'null' }],
+      description: 'The account that did it; none for the work of the system.',
+    },
+    actorRole: {
+      type: ['string', 'null'],
+      enum: ['USER', 'ADMIN', 'ROOT', null],
+      description: 'The role it had when it did it; none for the work of the system.',
+    },
+    event: logEventSchema(
+      MONEY_LOG_EVENTS,
+      'What moved the money: a payment, a late payment, a refund, its failure, money sent ' +
+        'outside the app, the way back paid to the buyer, the cost of a parcel back or of a send, ' +
+        'what a dispute took or gave back, a correction of a sum.',
+    ),
+    purpose: {
+      type: 'string',
+      enum: [...MONEY_PURPOSES],
+      description: 'What the money is for (see the filter purpose).',
+    },
+    part: {
+      type: 'string',
+      enum: [...MONEY_PARTS],
+      description:
+        'The part of the movement: goods and delivery of a payment or of a transfer, deduction ' +
+        '(kept of a transfer for the way back, above 0), covered (the part of a transfer money ' +
+        'by hand or of the bank already gave the buyer, above 0), whole (a movement without parts).',
+    },
+    amount: {
+      type: 'number',
+      description: 'The sum, to the cent: above 0 to the shop, below 0 from it, never 0.',
+    },
+    currency: { type: ['string', 'null'], description: 'The currency, when the line names one.' },
+    orderId: {
+      type: ['integer', 'null'],
+      description: 'The order; none only when its row is gone (the number is then in meta).',
+    },
+    userId: {
+      type: ['integer', 'null'],
+      description: 'The buyer the money is of; 0 for an admin where it is root.',
+    },
+    user: {
+      anyOf: [logUserSchema, { type: 'null' }],
+      description: 'The buyer the money is of, as the account is now.',
+    },
+    returnId: { type: ['integer', 'null'], description: 'The statement of return.' },
+    orderShipmentId: {
+      type: ['integer', 'null'],
+      description:
+        'The parcel whose cost the line is: a send of an order, or a parcel of a statement (then the line names the statement too).',
+    },
+    disputeId: { type: ['integer', 'null'], description: 'The dispute at the bank.' },
+    coversId: {
+      type: ['integer', 'null'],
+      description:
+        'Another line: the one a failure reverses, a correction corrects, a covered part uses.',
+    },
+    provider: nullableEnum(MONEY_PROVIDERS, 'Who took the money.'),
+    paymentId: { type: ['string', 'null'], description: 'The payment at the provider.' },
+    refundId: {
+      type: ['string', 'null'],
+      description: 'The refund at the provider, once the provider gave it.',
+    },
+    transferKey: {
+      type: ['string', 'null'],
+      description:
+        'Our key of the request to the provider, the same in every part of one transfer; kept in ' +
+        'the refund at the provider.',
+    },
+    stripeTxId: {
+      type: ['string', 'null'],
+      description: 'The balance transaction of a dispute at the provider.',
+    },
+    bankReference: {
+      type: ['string', 'null'],
+      description: 'The number the bank gives to follow a refund.',
+    },
+    byDashboard: {
+      type: 'boolean',
+      description: 'The refund was made in the dashboard of the provider, not by this server.',
+    },
+    state: nullableEnum(
+      MONEY_STATES,
+      'Where a refund stands (lines of money.refund only); none for the others.',
+    ),
+    stateAt: nullableDateTime('Since when the refund stands where it is.'),
+    failure: nullableEnum(
+      MONEY_FAILURES,
+      'Why a refund failed (lines of money.refund_failed): the card is gone, the balance of the ' +
+        'shop is short, the buyer disputes the payment, the money went back already, unknown.',
+    ),
+    failureText: { type: ['string', 'null'], description: 'The words of the provider.' },
+    method: nullableEnum(MONEY_METHODS, 'How money outside the app was sent.'),
+    note: { type: ['string', 'null'], description: 'The note of the person who wrote it.' },
+    happenedAt: nullableDateTime(
+      'The day money outside the app really moved, as the person wrote it; only shown.',
+    ),
+    moneyUse: nullableEnum(
+      MONEY_USES,
+      'What root or the system decided money given back by hand or taken by a bank for a lost ' +
+        'dispute was for: goods (all of it went to the items and the delivery of the order, ' +
+        'meta), compensation (by hand: the rest the shop gave apart), loss (the bank: the rest the ' +
+        'shop lost). Empty while nobody decided, and for any other line.',
+    ),
+    ip: logIpSchema,
+    userAgent: logUserAgentSchema,
+    meta: {
+      type: 'array',
+      description:
+        'What the line is made of: for the goods of a transfer the rows of the statement it pays ' +
+        '(returnItemId, variantId, amount), for a part covered the row and the item of the order ' +
+        'it covers (returnItemId, orderItemId, amount), for money given back by hand or taken by a ' +
+        'bank the shares of the decision (orderItemId, productId, variantId, quantity, unitPrice, ' +
+        'amount; delivery), for a late payment the reason and the number of the order. Empty for ' +
+        'a line without it.',
+      items: { type: 'object', additionalProperties: true },
+    },
+  },
+  'A line of the money log: one part of one movement of money.',
+);
+
 // the log of logins
 const LOGIN_LOG_COLUMNS = [
   'id',
@@ -1834,9 +2376,223 @@ const adminLoginLogQuerySchema = {
       maxLength: 100,
       description: 'A part of the email of the login, whatever the case.',
     },
+    ...logRequestFilters,
     ...journalQueryFields(LOGIN_LOG_SORTS, LOGIN_LOG_COLUMNS, LOGIN_EVENTS),
   },
 } as const;
+
+const adminStockLogResponseSchema = {
+  ...adminStockLogPageSchema,
+  properties: {
+    ...adminStockLogPageSchema.properties,
+    sums: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'The sum of the changes of every line of the filters, not of the page alone.',
+      properties: { quantityChange: { type: 'integer' } },
+      required: ['quantityChange'],
+    },
+  },
+  required: [...adminStockLogPageSchema.required, 'sums'],
+} as const;
+
+const adminMoneyLogResponseSchema = {
+  ...adminMoneyLogPageSchema,
+  properties: {
+    ...adminMoneyLogPageSchema.properties,
+    sums: {
+      type: 'array',
+      description:
+        'The sums of every line of the filters, not of the page alone, one for each currency (above ' +
+        '0 came to the shop).',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { currency: { type: ['string', 'null'] }, amount: { type: 'number' } },
+        required: ['currency', 'amount'],
+      },
+    },
+  },
+  required: [...adminMoneyLogPageSchema.required, 'sums'],
+} as const;
+
+// the groups of the stock log and of the money log (GET /api/admin/stock-log/groups,
+// /money-log/groups): the filters of the journal, the keys and the sums
+const STOCK_GROUP_KEYS = [
+  'event',
+  'actorRole',
+  'actorId',
+  'productId',
+  'variantId',
+  'categoryId',
+  'orderId',
+  'deliveryId',
+  'writeOffId',
+  'day',
+  'week',
+  'month',
+] as const;
+const MONEY_GROUP_KEYS = [
+  'event',
+  'purpose',
+  'part',
+  'currency',
+  'provider',
+  'state',
+  'failure',
+  'method',
+  'moneyUse',
+  'actorRole',
+  'actorId',
+  'userId',
+  'orderId',
+  'returnId',
+  'disputeId',
+  'day',
+  'week',
+  'month',
+] as const;
+
+const adminStockLogGroupsQuerySchema = {
+  $id: 'adminStockLogGroupsQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['groupBy'],
+  properties: {
+    productId: stockIdQueryField('lines of the variants of this product'),
+    variantId: stockIdQueryField('lines of this variant'),
+    deliveryId: { type: 'string', format: 'uuid', description: 'Only the lines of this delivery.' },
+    writeOffId: {
+      type: 'string',
+      format: 'uuid',
+      description: 'Only the lines of this write-off.',
+    },
+    orderId: stockIdQueryField('lines of this order'),
+    actorId: logIdFilter('of this account (for an admin, root is never found by its id)'),
+    actorRole: logEnumFilter(LOG_ROLES, 'written by an account of this role then'),
+    returnId: stockIdQueryField('lines of the units of this statement of return'),
+    returnItemId: stockIdQueryField('lines of the units of this row of a statement'),
+    categoryId: stockIdQueryField('lines of the products of this category (not of its children)'),
+    quantityFrom: logBoundFilter('Only the lines whose change is at least this (1: what came in).'),
+    quantityTo: logBoundFilter('Only the lines whose change is at most this (-1: what went out).'),
+    stockAfterFrom: logBoundFilter('Only the lines whose stock after the change is at least this.'),
+    stockAfterTo: logBoundFilter('Only the lines whose stock after the change is at most this.'),
+    ...logRequestFilters,
+    ...groupsQueryFields(STOCK_GROUP_KEYS, ['quantityChange']),
+  },
+} as const;
+
+const adminStockLogGroupsResponseSchema = groupsPageSchema(
+  'adminStockLogGroupsResponseSchema',
+  {
+    event: groupTextKey,
+    actorRole: groupTextKey,
+    actorId: groupNumberKey,
+    productId: groupNumberKey,
+    variantId: groupNumberKey,
+    categoryId: groupNumberKey,
+    orderId: groupNumberKey,
+    deliveryId: groupTextKey,
+    writeOffId: groupTextKey,
+    day: groupTextKey,
+    week: groupTextKey,
+    month: groupTextKey,
+  },
+  { quantityChange: { type: 'integer', description: 'The sum of the changes of the group.' } },
+  'A group of the lines of the stock log.',
+);
+
+const adminMoneyLogGroupsQuerySchema = {
+  $id: 'adminMoneyLogGroupsQuerySchema',
+  type: 'object',
+  additionalProperties: false,
+  required: ['groupBy'],
+  properties: {
+    orderId: stockIdQueryField('lines of this order'),
+    userId: stockIdQueryField('lines of the money of this buyer'),
+    returnId: stockIdQueryField('lines of this statement of return'),
+    disputeId: stockIdQueryField('lines of this dispute'),
+    paymentId: {
+      type: 'string',
+      minLength: 1,
+      maxLength: 255,
+      description: 'Only the lines of this payment at the provider.',
+    },
+    purpose: logEnumFilter(MONEY_PURPOSES, 'of this purpose'),
+    state: logEnumFilter(MONEY_STATES, 'of the refunds that stand here'),
+    actorId: logIdFilter('of this account (for an admin, root is never found by its id)'),
+    actorRole: logEnumFilter(LOG_ROLES, 'written by an account of this role then'),
+    part: logEnumFilter(MONEY_PARTS, 'of this part of a movement'),
+    currency: logTextFilter('of this currency, as the provider writes it (eur)'),
+    amountFrom: logBoundFilter(
+      'Only the lines whose sum with its sign is at least this (0.01: what came in).',
+    ),
+    amountTo: logBoundFilter(
+      'Only the lines whose sum with its sign is at most this (-0.01: what went out).',
+    ),
+    orderShipmentId: logIdFilter('of this send or parcel'),
+    coversId: logIdFilter(
+      'that name this line: its failure, the money sent another way, a part covered',
+    ),
+    provider: logEnumFilter(MONEY_PROVIDERS, 'of this provider'),
+    refundId: logTextFilter('of this refund at the provider (its id there, as it is)'),
+    transferKey: logTextFilter('of this transfer of the app (its key, as it is)'),
+    stripeTxId: logTextFilter('of this transaction of the balance of the provider (a dispute)'),
+    bankReference: logTextFilter('whose reference of the bank has this text, in any case'),
+    byDashboard: {
+      type: 'boolean',
+      description: 'Only the refunds made in the dashboard of the provider (true) or not.',
+    },
+    failure: logEnumFilter(MONEY_FAILURES, 'of a failure of this reason'),
+    method: logEnumFilter(MONEY_METHODS, 'of money that moved outside the app this way'),
+    moneyUse: logEnumFilter(
+      MONEY_USES,
+      'of money given back by hand or taken by a bank decided so',
+    ),
+    note: logTextFilter('whose note has this text, in any case'),
+    stateFrom: logTimeFilter('Only the refunds whose state is of this time or later.'),
+    stateTo: logTimeFilter('Only the refunds whose state is of before this time.'),
+    happenedFrom: logTimeFilter(
+      'Only the money that really moved on this day or later (outside the app).',
+    ),
+    happenedTo: logTimeFilter(
+      'Only the money that really moved before this time (outside the app).',
+    ),
+    ...logRequestFilters,
+    ...groupsQueryFields(MONEY_GROUP_KEYS, ['amount']),
+  },
+} as const;
+
+const adminMoneyLogGroupsResponseSchema = groupsPageSchema(
+  'adminMoneyLogGroupsResponseSchema',
+  {
+    event: groupTextKey,
+    purpose: groupTextKey,
+    part: groupTextKey,
+    currency: groupTextKey,
+    provider: groupTextKey,
+    state: groupTextKey,
+    failure: groupTextKey,
+    method: groupTextKey,
+    moneyUse: groupTextKey,
+    actorRole: groupTextKey,
+    actorId: groupNumberKey,
+    userId: groupNumberKey,
+    orderId: groupNumberKey,
+    returnId: groupNumberKey,
+    disputeId: groupNumberKey,
+    day: groupTextKey,
+    week: groupTextKey,
+    month: groupTextKey,
+  },
+  {
+    amount: {
+      type: 'number',
+      description: 'The sum of the group with its sign (above 0 came in).',
+    },
+  },
+  'A group of the lines of the money log.',
+);
 
 const adminLoginLogResponseSchema = journalPageSchema(
   'adminLoginLogResponseSchema',
@@ -1895,6 +2651,7 @@ const adminConsentLogQuerySchema = {
       enum: ['terms', 'contract'],
       description: 'Only the consents to the versions of the terms or of the contract.',
     },
+    ...logRequestFilters,
     ...journalQueryFields(CONSENT_LOG_SORTS, CONSENT_LOG_COLUMNS, CONSENT_EVENTS),
   },
 } as const;
@@ -1941,8 +2698,9 @@ const adminLogEventsResponseSchema = {
     loginLog: { type: 'array', items: { type: 'string', enum: [...LOGIN_EVENTS] } },
     consentLog: { type: 'array', items: { type: 'string', enum: [...CONSENT_EVENTS] } },
     stockLog: { type: 'array', items: { type: 'string', enum: [...STOCK_LOG_EVENTS] } },
+    moneyLog: { type: 'array', items: { type: 'string', enum: [...MONEY_LOG_EVENTS] } },
   },
-  required: ['auditLog', 'priceLog', 'loginLog', 'consentLog', 'stockLog'],
+  required: ['auditLog', 'priceLog', 'loginLog', 'consentLog', 'stockLog', 'moneyLog'],
 } as const;
 
 // the alerts of an admin
@@ -1960,14 +2718,27 @@ const ALERT_KINDS = [
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
-  'refunded_payments',
-  'refunded_payments_not_sent',
-  'failed_refunds',
+  'late_refunds',
+  'late_refunds_in_transit',
+  'late_refunds_failed',
+  'return_refunds_in_transit',
+  'return_refunds_failed',
+  'hand_refunds_in_transit',
+  'hand_refunds_failed',
+  'compensation_refunds_in_transit',
+  'compensation_refunds_failed',
+  'dispute_refunds_in_transit',
+  'dispute_refunds_failed',
+  'bank_money_to_decide',
+  'disputes_to_answer',
+  'disputes_lost',
   'returns_manual_check',
   'returns_proof_waiting',
   'returns_goods_not_sent',
   'returns_money_late',
   'returns_goods_late',
+  'returns_money_short',
+  'returns_money_overpaid',
   'worker_stalled',
   'shop_settings_incomplete',
   'shop_locale_missing',
@@ -1978,6 +2749,11 @@ const ALERT_KINDS = [
   'newsletter_starting_soon',
   'newsletter_cancelled_by_limit',
   'newsletter_sending_halted',
+  'hand_refunds_to_explain',
+  'hand_refunds_to_decide',
+  'fraud_warnings',
+  'fraud_warnings_shipped',
+  'payment_reviews',
   'admin_actions',
 ] as const;
 
@@ -1993,6 +2769,13 @@ const adminAlertsQuerySchema = {
       description:
         'true: only the kinds the actor follows, for the notifications; every kind of the zone ' +
         'of the actor unless given.',
+    },
+    kinds: {
+      type: 'string',
+      pattern: `^(${ALERT_KINDS.join('|')})(,(${ALERT_KINDS.join('|')}))*$`,
+      description:
+        'Only these kinds, through commas (a page that shows one alert counts only it); a kind ' +
+        'outside the zone of the actor is left out. Every kind of the zone unless given.',
     },
   },
 } as const;
@@ -2234,6 +3017,12 @@ export const adminDtoSchemas = [
   adminPriceLogResponseSchema,
   adminStockLogQuerySchema,
   adminStockLogResponseSchema,
+  adminMoneyLogQuerySchema,
+  adminMoneyLogResponseSchema,
+  adminStockLogGroupsQuerySchema,
+  adminStockLogGroupsResponseSchema,
+  adminMoneyLogGroupsQuerySchema,
+  adminMoneyLogGroupsResponseSchema,
   adminLoginLogQuerySchema,
   adminLoginLogResponseSchema,
   adminConsentLogQuerySchema,

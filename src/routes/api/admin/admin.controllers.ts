@@ -11,12 +11,18 @@ import type {
   GetAdminAlertsQueryDto,
   AdminAuditLogQueryDto,
   AdminStockLogQueryDto,
+  AdminMoneyLogQueryDto,
+  AdminLogGroupsQueryDto,
+  AdminLogGroupsDto,
+  AdminStockLogGroupDto,
+  AdminMoneyLogGroupDto,
   AdminConsentLogQueryDto,
   AdminLoginLogQueryDto,
   AdminPriceLogQueryDto,
   GetAdminAlertsResponseDto,
   GetAdminAuditLogResponseDto,
   GetAdminStockLogResponseDto,
+  GetAdminMoneyLogResponseDto,
   GetAdminConsentLogResponseDto,
   GetAdminLoginLogResponseDto,
   GetAdminLogEventsResponseDto,
@@ -46,7 +52,8 @@ import { parseProductIds, parseVariantIds } from './services/helpers/accountingR
 import { stockBatchesArgsOf } from './services/stockBatches.service.js';
 import { stockMovementsArgsOf } from './services/stockMovements.service.js';
 import { auditLogArgsOf } from './services/auditLog.service.js';
-import { stockLogArgsOf } from './services/stockLog.service.js';
+import { stockGroupsArgsOf, stockLogArgsOf } from './services/stockLog.service.js';
+import { moneyGroupsArgsOf, moneyLogArgsOf } from './services/moneyLog.service.js';
 import { priceLogArgsOf } from './services/priceLog.service.js';
 import { loginLogArgsOf } from './services/loginLog.service.js';
 import { consentLogArgsOf } from './services/consentLog.service.js';
@@ -308,6 +315,77 @@ const getStockLog: ControllerRouter<
   return reply.code(200).send(await adminServices.listStockLog(args));
 };
 
+// the money log with its filters; the csv has every line of them
+const getMoneyLog: ControllerRouter<
+  {},
+  {},
+  AdminMoneyLogQueryDto,
+  GetAdminMoneyLogResponseDto
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = moneyLogArgsOf(req.query, req.user);
+  if (req.query.format === 'csv') return sendCsv(reply, await adminServices.moneyLogCsv(args));
+
+  return reply.code(200).send(await adminServices.listMoneyLog(args));
+};
+
+// the lines of the stock log and of the money log taken together by up to three keys: the
+// filters of the journal, then the groups
+type GroupsQuery = AdminLogGroupsQueryDto & Record<string, unknown>;
+
+// the filters of the journal for its groups: the sort named is the groups' own (their count, a key
+// they group by, a sum), not one of the journal, which would refuse it
+const filtersOf = <Query>(query: GroupsQuery) => ({ ...query, sortBy: undefined }) as Query;
+
+const getStockLogGroups: ControllerRouter<
+  {},
+  {},
+  GroupsQuery,
+  AdminLogGroupsDto<AdminStockLogGroupDto>
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = stockLogArgsOf(filtersOf<AdminStockLogQueryDto>(req.query), req.user);
+  const groups = stockGroupsArgsOf(req.query);
+  if (req.query.format === 'csv') {
+    return sendCsv(reply, await adminServices.stockGroupsCsv(args, groups));
+  }
+
+  return reply
+    .code(200)
+    .send(
+      (await adminServices.listStockGroups(
+        args,
+        groups,
+      )) as AdminLogGroupsDto<AdminStockLogGroupDto>,
+    );
+};
+
+const getMoneyLogGroups: ControllerRouter<
+  {},
+  {},
+  GroupsQuery,
+  AdminLogGroupsDto<AdminMoneyLogGroupDto>
+> = async (req, reply) => {
+  if (!req.user) throw new UnauthorizedError('LOGIN_REQUIRED');
+
+  const args = moneyLogArgsOf(filtersOf<AdminMoneyLogQueryDto>(req.query), req.user);
+  const groups = moneyGroupsArgsOf(req.query);
+  if (req.query.format === 'csv') {
+    return sendCsv(reply, await adminServices.moneyGroupsCsv(args, groups));
+  }
+
+  return reply
+    .code(200)
+    .send(
+      (await adminServices.listMoneyGroups(
+        args,
+        groups,
+      )) as AdminLogGroupsDto<AdminMoneyLogGroupDto>,
+    );
+};
+
 // the log of prices of every product, the same way
 const getPriceLog: ControllerRouter<
   {},
@@ -370,7 +448,10 @@ const getAlerts: ControllerRouter<
 
   const result = await adminServices.getAdminAlerts(
     { actorId: req.user.id, actorRole: req.user.role },
-    { subscribed: req.query.subscribed === true },
+    {
+      subscribed: req.query.subscribed === true,
+      kinds: req.query.kinds === undefined ? undefined : req.query.kinds.split(','),
+    },
   );
   return reply.code(200).send(result);
 };
@@ -486,6 +567,9 @@ export const adminController = {
   getStockMovements,
   getAuditLog,
   getStockLog,
+  getMoneyLog,
+  getStockLogGroups,
+  getMoneyLogGroups,
   getPriceLog,
   getLoginLog,
   getConsentLog,

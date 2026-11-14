@@ -98,6 +98,34 @@ export default async function adminRouter(app: FastifyInstance) {
   );
 
   app.get(
+    '/money-log',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getMoneyLogSchema,
+    },
+    adminController.getMoneyLog,
+  );
+
+  // the lines of the stock log and of the money log taken together by their keys, with their sums
+  app.get(
+    '/stock-log/groups',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getStockLogGroupsSchema,
+    },
+    adminController.getStockLogGroups,
+  );
+
+  app.get(
+    '/money-log/groups',
+    {
+      preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],
+      schema: adminSchema.getMoneyLogGroupsSchema,
+    },
+    adminController.getMoneyLogGroups,
+  );
+
+  app.get(
     '/price-log',
     {
       preHandler: [authGuard, requireRole(['ADMIN', 'ROOT'])],

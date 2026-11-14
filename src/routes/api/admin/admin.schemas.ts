@@ -101,8 +101,14 @@ const adminStatsResponseExample = {
   },
   money: {
     income: { items: 3095.5, delivery: 105, total: 3200.5 },
-    expenses: { costOfGoods: 1650.25, writeOffs: 42.5, shipping: 60, total: 1752.75 },
-    margin: { items: 1445.25, delivery: 45, total: 1447.75 },
+    expenses: {
+      costOfGoods: 1650.25,
+      writeOffs: 42.5,
+      shipping: 60,
+      otherRefunds: 15,
+      total: 1767.75,
+    },
+    margin: { items: 1445.25, delivery: 45, total: 1432.75 },
   },
   createdAt: '2026-01-31T23:59:59.999Z',
 };
@@ -115,7 +121,8 @@ const getStatsSchema = {
     'Returns aggregated dashboard statistics for users, orders, products and reviews. The period ' +
     'is [from, to), all time until now unless given: the money, the units sold and the average ' +
     'order count the orders paid in it (paidAt), cancelled later or not, `orders.returned` what ' +
-    'went back with the returns in it (by the time the money went back), the tops the net (the ' +
+    'went back with the returns in it (the lines of the money journal written in it: the ' +
+    'transfers and the money sent outside the app, less their failures), the tops the net (the ' +
     'sales less the returns), the reviews and the users the ones made in it. The users are the ' +
     'accounts of buyers, admins and root are left out. `money` is the income, the expenses and ' +
     'the margins of the period, counted the way `summary` of GET /api/admin/reports/accounting ' +
@@ -169,20 +176,41 @@ const deliveryExample = {
   result: 3.5,
 };
 
+// the money the payments moved past the statements in a period, as the report of the whole shop
+// gives it
+const paymentsExample = {
+  disputes: { withdrawn: 30, reinstated: 10, used: 5, undecided: 0, result: -15 },
+  handRefunds: {
+    refunded: 30,
+    compensations: 4,
+    coverage: 20,
+    undecided: 6,
+    used: 20,
+    result: -10,
+  },
+  latePayments: { received: 51, refunded: 40, result: 11 },
+  compensations: { given: 5, result: -5 },
+  received: { buyers: 10, carriers: 0, result: 10 },
+};
+
 // Schema for the accounting report
 const getAccountingReportSchema = {
   operationId: 'getAccountingReport',
   summary: 'Get the accounting report',
   description:
     'The money of a period, from `from` (taken in) to `to` (left out), in the money of the ' +
-    'shop: the sales of the orders paid in it (cancelled later or not), at the prices they were ' +
+    'shop, read from the money journal by the time its lines were written: the sales of the ' +
+    'orders whose payment was written in it (cancelled later or not), at the prices they were ' +
     'paid with, their cost at the costs of the batches they took and the margin; the returns, ' +
-    'the rows of the statements whose money went back in it (by the time it went back), their ' +
-    'money and the cost of the units that came back, by the kind of the statement (`byKind`: ' +
-    'the right of withdrawal, or the reason an admin gave); the net, the sales less the ' +
-    'returns; `summary`, the income (the net items, the delivery less what went back, ' +
-    'together), the expenses (what the net items cost, the write-offs, the sends, together) and ' +
-    'the margins (the items, the delivery, all of it); the batches taken in during it by ' +
+    'the rows of the statements whose money was written in it (the transfers and the money sent ' +
+    'outside the app; a failure of a transfer gives its money back in the period the failure ' +
+    'came, so `units` and `revenue` of a period may be below 0), their money and the cost of ' +
+    'the units that came back (booked when the money and the goods are both back), by the kind ' +
+    'of the statement (`byKind`: the right of withdrawal, or the reason an admin gave); the ' +
+    'net, the sales less the returns; `summary`, the income (the net items, the delivery less ' +
+    'what went back, together), the expenses (what the net items cost, the write-offs, the ' +
+    'sends, what the disputes and the refunds made by hand cost past the statements, together) ' +
+    'and the margins (the items, the delivery, all of it); the batches taken in during it by ' +
     'source; the units written off in it by reason, at the costs of their batches (also the ' +
     'goods that came back and went out at once, as `customer_return`); and the stock, read from ' +
     'the stock log: at the start of the period, what came in, what went out, at the end, and ' +
@@ -192,10 +220,16 @@ const getAccountingReportSchema = {
     'with its whole branch unless `branch=false`. All of it comes from one snapshot. ' +
     'The `delivery` is of all orders and of no product, so it is none (null) in a report of some ' +
     'products, variants or of a category: what the orders paid in the period paid for it (by ' +
-    'the time of the payment), what went back with the returns (by the time the money went ' +
-    'back), what the sends ' +
-    'cost the shop (by the time they were sent; the ones whose cost is not written are counted ' +
-    'apart in `withoutCost`), and the result. ' +
+    'the time of the payment), what went back with the returns (by the time its money was ' +
+    'written, less the failures), what the sends and the parcels back cost the shop (the sends ' +
+    'and the parcels by the time they went, their costs with the corrections by the time they ' +
+    'were written; the ones with no cost are counted apart in `withoutCost`), and the result. ' +
+    'So are the `payments` past the statements: what the bank took for the disputes and gave ' +
+    'back, the refunds made by hand in the dashboard of the provider (by what root or the system ' +
+    'decided they were: a compensation, coverage of what a statement owes, not decided yet), ' +
+    'what the transfers of statements took of both as money the buyer had back (`used`, in the ' +
+    'returns), and the payments the orders could not take with what of them went back (a result ' +
+    'that is not 0 is money of buyers still at the shop, no income). ' +
     'This operation is restricted to privileged users.',
 
   querystring: {
@@ -231,8 +265,14 @@ const getAccountingReportSchema = {
           net: { units: 28, revenue: 1400, cost: 840, margin: 560, marginPercent: 40 },
           summary: {
             income: { items: 1500, delivery: 45, total: 1545 },
-            expenses: { costOfGoods: 900, writeOffs: 90, shipping: 36.5, total: 1026.5 },
-            margin: { items: 600, delivery: 8.5, total: 518.5 },
+            expenses: {
+              costOfGoods: 900,
+              writeOffs: 90,
+              shipping: 36.5,
+              otherRefunds: 25,
+              total: 1051.5,
+            },
+            margin: { items: 600, delivery: 8.5, total: 493.5 },
           },
           purchases: {
             units: 50,
@@ -264,6 +304,7 @@ const getAccountingReportSchema = {
             onTheWayBack: { units: 1, value: 30 },
           },
           delivery: deliveryExample,
+          payments: paymentsExample,
         },
       ],
     },
@@ -462,9 +503,9 @@ const getAccountingTimelineSchema = {
     'period is the step of `to` and the eleven before it. ' +
     MONEY_TEXT +
     'Each step in the order of time, or by `sortBy`; the sum of the variants of `productIds` ' +
-    '(the products), of `variantIds` or of a category. The `delivery` of each step is of all ' +
-    'orders, and none (null) with `productIds`, `variantIds` or `categoryId`; the csv has its ' +
-    'columns empty then. `summary` of each step is its income, ' +
+    '(the products), of `variantIds` or of a category. The `delivery` and the `payments` of ' +
+    'each step are of all orders, and none (null) with `productIds`, `variantIds` or ' +
+    '`categoryId`; the csv has their columns empty then. `summary` of each step is its income, ' +
     'its expenses and its margins, as in the report of the period. ' +
     CSV_TEXT +
     ' This operation is restricted to privileged users.',
@@ -593,7 +634,9 @@ const getAuditLogSchema = {
     '(the address made anonymous, `newsletter_subscriber`, `NEWSLETTER_SUBSCRIBER_DELETE`, event ' +
     '`newsletter.subscriber_erased`), an address blocked for the ' +
     'public form added or taken off (`newsletter_block`, `NEWSLETTER_BLOCK_CHANGE`); their ' +
-    'events start with `newsletter.`.',
+    'events start with `newsletter.`. Root giving an admin the right to handle the money or ' +
+    'taking it away is a line about the account too (action `MONEY_MANAGER_CHANGE`, events ' +
+    '`payment.manager_granted`, `payment.manager_revoked`).',
 
   querystring: { $ref: 'adminAuditLogQuerySchema#' },
 
@@ -710,6 +753,124 @@ const getStockLogSchema = {
   response: journalResponse('the stock log', 'adminStockLogResponseSchema'),
 } satisfies FastifySchema;
 
+// Schema for the money log
+const getMoneyLogSchema = {
+  operationId: 'getAdminMoneyLog',
+  summary: 'Get the money log',
+  description:
+    'Every movement of money, a line for each part of it, only added to: the payment of an ' +
+    'order (`money.payment`, the goods and the delivery), a payment the order could not take ' +
+    '(`money.late_payment`), a refund asked of the provider (`money.refund`: of a statement of ' +
+    'return in parts with one `transferKey`, of a late payment, or made by hand in the dashboard ' +
+    'of the provider, `byDashboard`) with where it stands (`state`: `in_transit`, then `sent`, ' +
+    'with `refundId`), its failure (`money.refund_failed`, the opposite sum, the line it reverses ' +
+    'in `coversId`, the reason in `failure` and `failureText`; the line of the refund stays in ' +
+    'transit), the money sent to the buyer outside the app (`money.outside`, with `method`, ' +
+    '`note` and the day it really happened, `happenedAt`), money that came to the shop outside ' +
+    'the app (`money.received`: from the buyer, or from a carrier for a send), what a share of ' +
+    'money already with the buyer became (`money.share_moved`, a sum of 0), what the shop paid ' +
+    'a carrier (`money.return_parcel_cost`, ' +
+    '`money.shipping_cost`), what the bank took and gave back for a dispute ' +
+    '(`money.dispute_withdrawn`, `money.dispute_reinstated`, with `disputeId`) and the correction ' +
+    'of a sum (`money.correction`). `amount` is to the cent, above 0 to the shop and below 0 ' +
+    'from it; the line names what it is about (`orderId`, the buyer `userId` and `user`, ' +
+    '`returnId`, the parcel or the send, `disputeId`), the payment at the provider (`paymentId`), ' +
+    'who did it (none for the work of the system: the webhook, the worker), the address and the ' +
+    'browser of the request, and what it is made of (`meta`: the rows of a statement a transfer ' +
+    'pays). The reports go by `createdAt`, the time of the database. Filters: `orderId`, ' +
+    '`userId`, `returnId`, `disputeId`, `paymentId`, `purpose`, `state` (where a refund stands), ' +
+    'and one for every other column: who and with which role, the part, the currency, the bounds ' +
+    'of the sum (`amountFrom`, `amountTo`), the send, the line it names (`coversId`), the ' +
+    'provider, the ids at the provider and of the app, a part of the reference of the bank and of ' +
+    'the note, `byDashboard`, the reason of a failure, the way and the decision on the money, the ' +
+    'time of the state of a refund and the day money really moved (`stateFrom`, `stateTo`, ' +
+    '`happenedFrom`, `happenedTo`), the address and a part of the browser. `sums` gives the ' +
+    'sum of every line of the filters for each currency; GET /api/admin/money-log/groups takes ' +
+    'them together by their keys. ' +
+    JOURNAL_TEXT +
+    ' The account of root as the buyer is left out for an admin the same way.',
+  querystring: {
+    $ref: 'adminMoneyLogQuerySchema#',
+    examples: [
+      {
+        orderId: 42,
+        events: 'money.refund,money.refund_failed',
+        state: 'in_transit',
+        sortBy: 'amount',
+      },
+    ],
+  },
+  response: journalResponse('the money log', 'adminMoneyLogResponseSchema'),
+} satisfies FastifySchema;
+
+// the groups of a journal: its filters, the keys, the sort, a page by an offset
+const groupsResponse = (what: string, schemaId: string) => ({
+  200: {
+    description: 'The groups of the page; a csv file with format=csv.',
+    content: {
+      'application/json': { schema: { $ref: `${schemaId}#` } },
+      'text/csv': { schema: CSV_FILE_SCHEMA },
+    },
+  },
+  400: {
+    description:
+      'Invalid query: a wrong field (VALIDATION_ERROR), a period that ends before it starts ' +
+      '(INVALID_STATS_PERIOD), an event the journal has not (LOG_EVENTS_INVALID), a key the ' +
+      'journal does not group by or more than three (LOG_GROUP_INVALID, `details.allowed`), a sort ' +
+      'by a key not in groupBy (LOG_SORT_INVALID).',
+    $ref: 'errorResponseSchema#',
+  },
+  401: {
+    description: `Authentication is required to read ${what}.`,
+    $ref: 'errorResponseSchema#',
+  },
+  403: {
+    description: 'The current actor is not admin or root (INSUFFICIENT_ROLE).',
+    $ref: 'errorResponseSchema#',
+  },
+  500: {
+    description: `Unexpected server error while reading ${what}.`,
+    $ref: 'errorResponseSchema#',
+  },
+});
+
+const getStockLogGroupsSchema = {
+  operationId: 'getAdminStockLogGroups',
+  summary: 'Get the stock log taken together',
+  description:
+    'The lines of the stock log with the filters of GET /api/admin/stock-log taken together by ' +
+    'one to three keys (`groupBy`: the event, who and with which role, the product, the variant, ' +
+    'the category, the order, the delivery, the write-off, the day, the week, the month): each ' +
+    'group with its keys, how many lines (`count`) and the sum of their changes ' +
+    '(`quantityChange`). Sorted by a key, the count or the sum (`count` unless given), a page at ' +
+    'a time (`limit`, `offset`, `total` of the groups); `format=csv` gives every group. For an ' +
+    'admin the account of root is one group of the id 0.',
+  querystring: {
+    $ref: 'adminStockLogGroupsQuerySchema#',
+    examples: [{ groupBy: 'event,month', from: '2026-01-01T00:00:00.000Z', sortBy: 'month' }],
+  },
+  response: groupsResponse('the stock log', 'adminStockLogGroupsResponseSchema'),
+} satisfies FastifySchema;
+
+const getMoneyLogGroupsSchema = {
+  operationId: 'getAdminMoneyLogGroups',
+  summary: 'Get the money log taken together',
+  description:
+    'The lines of the money log with the filters of GET /api/admin/money-log taken together by ' +
+    'one to three keys (`groupBy`: the event, the purpose, the part, the currency, the provider, ' +
+    'the state, the reason of a failure, the way, the decision on the money, who and with which ' +
+    'role, the buyer, the order, the statement, the dispute, the day, the week, the month): each ' +
+    'group with its keys, how many lines (`count`) and their sum with its sign (`amount`). ' +
+    'Sorted by a key, the count or the sum (`count` unless given), a page at a time (`limit`, ' +
+    '`offset`, `total` of the groups); `format=csv` gives every group. For an admin the account ' +
+    'of root, as the actor and as the buyer, is one group of the id 0.',
+  querystring: {
+    $ref: 'adminMoneyLogGroupsQuerySchema#',
+    examples: [{ groupBy: 'purpose,month', events: 'money.refund', sortBy: 'amount' }],
+  },
+  response: groupsResponse('the money log', 'adminMoneyLogGroupsResponseSchema'),
+} satisfies FastifySchema;
+
 // Schema for the log of logins
 const getLoginLogSchema = {
   operationId: 'getAdminLoginLog',
@@ -748,9 +909,10 @@ const getLogEventsSchema = {
   operationId: 'getAdminLogEvents',
   summary: 'Get the events of the journals',
   description:
-    'The events every journal writes (the admin log, the log of prices, of logins, of consents ' +
-    'and the stock log): what the checkboxes of a page of a journal list. A line from before the ' +
-    'events has `legacy.unknown` (the stock log has none: it began with its events).',
+    'The events every journal writes (the admin log, the log of prices, of logins, of consents, ' +
+    'the stock log and the money log): what the checkboxes of a page of a journal list. A line ' +
+    'from before the events has `legacy.unknown` (the stock log and the money log have none: ' +
+    'they began with their events).',
   response: {
     200: {
       description: 'The events of each journal.',
@@ -778,17 +940,32 @@ const getAlertsSchema = {
   description:
     'What waits for the work of an admin, each kind of the zone of the actor with how many ' +
     'cases wait now, counted with the thresholds of the actor (GET ' +
-    '/api/admin/alerts/subscriptions): paid orders to ship (`paid_orders_waiting`), orders sent ' +
+    '/api/admin/alerts/subscriptions): paid orders to ship that nothing holds ' +
+    '(`paid_orders_waiting`), orders sent ' +
     'by hand and not delivered for some days (`shipped_orders_waiting`), pickups ready and not ' +
     'collected for some days (`pickup_not_collected`), sends whose cost the shop has not ' +
     'written for some days (`shipped_without_cost`), orders shipped by hand whose send has no ' +
-    'tracking number for some days (`shipped_without_tracking`), refunds that failed: the ' +
-    'transfer of the money of a statement, or the refund of a late payment that root has not ' +
-    'sent another way yet (`failed_refunds`), statements of return: a statement made without the code ' +
+    'tracking number for some days (`shipped_without_tracking`), the money of the payments, ' +
+    'each kind of refund apart (the list GET /api/payments/refunds with its purpose): the ' +
+    'refunds of late payments that came to their state in some last days (`late_refunds`), ' +
+    'then for each kind, the refunds of late payments (`late_refunds_in_transit`, ' +
+    '`late_refunds_failed`), the transfers of the statements (`return_refunds_in_transit`, ' +
+    '`return_refunds_failed`), the refunds made by hand in the dashboard of the provider ' +
+    '(`hand_refunds_in_transit`, `hand_refunds_failed`) and what the app sends after a dispute ' +
+    'lost on an order not sent (`dispute_refunds_in_transit`, `dispute_refunds_failed`), the ' +
+    'ones asked some days ago that the provider has told neither sent nor failed and the ' +
+    'failures that wait for the shop (a failure while a dispute of the payment is open, a ' +
+    'refund the bank refused for a dispute and the money of a statement a refund made by hand ' +
+    'that waits for root holds wait for the bank or for root, not for the shop), the disputes ' +
+    'and the inquiries of the bank no evidence was submitted for yet (`disputes_to_answer`; the ' +
+    'list GET /api/payments/disputes puts the nearest date due first and marks one of an order ' +
+    'with an open statement, `returnOpen`) and the disputes lost in some last days ' +
+    '(`disputes_lost`), statements of return: a statement made without the code ' +
     'that waits for a check (`returns_manual_check`), a proof of the parcel told and not ' +
     'confirmed for some days (`returns_proof_waiting`), no goods and no word of the parcel ' +
     'some days after the statement (`returns_goods_not_sent`), the money due and not back some ' +
-    'days after the statement (`returns_money_late`), the money back and the goods not in ' +
+    'days after the statement while nothing holds it (`returns_money_late`), the money back and ' +
+    'the goods not in ' +
     'some days later (`returns_goods_late`), products of the catalog with no free ' +
     'units (`out_of_stock`) or with a few (`low_stock`), variants that lack the weight or the ' +
     'sizes (`products_without_shipping_data`), variants that lack a characteristic their ' +
@@ -796,9 +973,8 @@ const getAlertsSchema = {
     'of the variants of (`products_hidden_from_buyers`; a product removed on purpose is not ' +
     'one), batches whose last good ' +
     'day is in some days (`expiring_batches`) or over with units left (`expired_batches`), ' +
-    'chats with a message no admin has read (`chats_waiting`), late payments given back in ' +
-    'some last days (`refunded_payments`), refunds of late payments made some days ago whose ' +
-    'money was not told sent or failed (`refunded_payments_not_sent`), a reservation worker that has not run for some ' +
+    'chats with a message no admin has read (`chats_waiting`), a reservation worker that has not ' +
+    'run for some ' +
     'seconds (`worker_stalled`), the fields of the data of the shop root has not set yet ' +
     '(`shop_settings_incomplete`; how many, the ones GET /api/admin/shop-settings/missing ' +
     'names), the language of the shop with no dictionary any more ' +
@@ -820,8 +996,17 @@ const getAlertsSchema = {
     'whole stream, such as a key the mail provider refuses, until a pass goes through; ' +
     '`occurredAt` is the time of the last stop; no threshold, no list, nothing to put ' +
     'aside); the cases of the others are campaigns, their lists are the list of the ' +
-    'campaigns with the filters. Root also gets the lines the admins wrote in some last hours ' +
-    '(`admin_actions`). Each kind names the request to the list of the app with its cases ' +
+    'campaigns with the filters. Root, and an admin root allowed to handle the money ' +
+    '(`canManageMoney`), also get the decisions on the money, each for themselves (a case goes ' +
+    'for all of them once one acts): the refunds made by hand root has to say what they were ' +
+    'for (`hand_refunds_to_explain`: the order went or was cancelled, or a statement of it ' +
+    'waits for its money), the ' +
+    'orders not sent part of which came back by hand (`hand_refunds_to_decide`), the orders not ' +
+    'sent an early warning of fraud holds (`fraud_warnings`; the list of orders puts the order ' +
+    'paid first first, each row says since when it is held), the orders sent the provider ' +
+    'warned of in some last days (`fraud_warnings_shipped`) and the orders a review of the ' +
+    'provider holds (`payment_reviews`); the cases of the last four are orders. Root alone gets ' +
+    'the lines the admins wrote in some last hours (`admin_actions`). Each kind names the request to the list of the app with its cases ' +
     '(`list`): the page of an admin shows a few of its rows and sorts them the way that list ' +
     'sorts, a click leads to the list or to a case. The cases the actor put aside are left out ' +
     'of `count` and counted in `dismissed`. The frontend asks again at the interval the admin ' +
@@ -858,7 +1043,8 @@ const getAlertSubscriptionsSchema = {
     'set or the one the server gives, its bounds and unit; null for a kind without one). Every ' +
     'kind is followed until the actor turns it off. Each admin and each root has their own. The ' +
     'kinds of the newsletters are listed for root and for an admin root allowed to run the ' +
-    'newsletters only (the right is read from the database at every request).',
+    'newsletters only, the kinds of the decisions on the money for root and for an admin root ' +
+    'allowed to handle the money only (the rights are read from the database at every request).',
 
   response: {
     200: {
@@ -913,7 +1099,9 @@ const alertSubscriptionSchema = (on: boolean) =>
       404: {
         description:
           'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root, ' +
-          'the newsletter_* kinds are for root and for an admin root allowed to run the newsletters.',
+          'the newsletter_* kinds are for root and for an admin root allowed to run the newsletters, ' +
+          'the kinds of the decisions on the money (hand_refunds_to_*, fraud_warnings*, ' +
+          'payment_reviews) for root and for an admin root allowed to handle the money.',
         $ref: 'errorResponseSchema#',
       },
       500: {
@@ -965,7 +1153,8 @@ const alertThresholdSchema = (set: boolean) =>
         description:
           'No such kind for the actor (ALERT_KIND_NOT_FOUND): admin_actions is a kind of root, ' +
           'the newsletter_* kinds are for root and for an admin root allowed to run the ' +
-          'newsletters; a kind without a threshold (ALERT_THRESHOLD_NOT_FOUND).',
+          'newsletters, the kinds of the decisions on the money for root and for an admin root ' +
+          'allowed to handle the money; a kind without a threshold (ALERT_THRESHOLD_NOT_FOUND).',
         $ref: 'errorResponseSchema#',
       },
       500: {
@@ -1046,11 +1235,13 @@ const alertDismissalSchema = (on: boolean) =>
           ? 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled, ' +
             'shop_settings_incomplete and shop_locale_missing have no cases, admin_actions is a ' +
             'kind of root, the newsletter_* kinds are for root and for an admin root allowed to ' +
-            'run the newsletters; no case of the kind waits with the id (ALERT_ITEM_NOT_FOUND).'
+            'run the newsletters, the kinds of the decisions on the money for root and for an admin ' +
+            'root allowed to handle the money; no case of the kind waits with the id (ALERT_ITEM_NOT_FOUND).'
           : 'No such kind with cases for the actor (ALERT_KIND_NOT_FOUND): worker_stalled, ' +
             'shop_settings_incomplete and shop_locale_missing have no cases, admin_actions is a ' +
             'kind of root, the newsletter_* kinds are for root and for an admin root allowed to ' +
-            'run the newsletters.',
+            'run the newsletters, the kinds of the decisions on the money for root and for an admin ' +
+            'root allowed to handle the money.',
         $ref: 'errorResponseSchema#',
       },
       500: {
@@ -1079,6 +1270,9 @@ const taggedAdminSchema = withOpenApiTag(
     getStockMovementsSchema,
     getAuditLogSchema,
     getStockLogSchema,
+    getMoneyLogSchema,
+    getStockLogGroupsSchema,
+    getMoneyLogGroupsSchema,
     getPriceLogSchema,
     getLoginLogSchema,
     getConsentLogSchema,

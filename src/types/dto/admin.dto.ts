@@ -158,22 +158,26 @@ export interface AdminSalesDto {
   margin: number;
 }
 
-// the delivery of the orders in a period, apart from the products: what buyers paid for it, what
-// went back with the returns, what the shop paid the carriers; it is of no product, so a report of
-// some products has none
+// the delivery of the orders in a period, apart from the products, from the money journal: what
+// buyers paid for it, what went back with the returns, what the shop paid the carriers; it is of no
+// product, so a report of some products has none
 export interface AdminDeliveryMoneyDto {
-  // the delivery of the orders paid in the period, cancelled later or not (orders that paid for it)
+  // the delivery of the payments written in the period, cancelled later or not (orders that paid
+  // for it)
   income: { orders: number; revenue: number };
-  // the delivery that went back with the returns whose money went back in the period (by the time
-  // the money went back); the income of the period the order was paid in keeps it
+  // the delivery that went back with the money of the statements written in the period (the
+  // transfers and the money sent outside the app, less their failures); the income of the period
+  // the order was paid in keeps it
   refunded: { orders: number; revenue: number };
-  // the sends the shop owes the carriers for, by the time they were sent (shippedAt); the ones
-  // without a cost written count apart
+  // the sends the shop owes the carriers for, by the time they were sent (shippedAt); the cost is
+  // the lines of their costs with the corrections, by the time they were written; the ones without
+  // a cost count apart
   shipping: { sends: number; cost: number; withoutCost: number };
   // the parcels the shop paid to carry goods back from buyers, by the time they were sent (the time
-  // the admin gave); the ones without a cost written count apart. deducted: the cost of the way
-  // back the buyers owed, taken off the transfers in the period (an income); reimbursed: the cost
-  // of the way back root paid back to buyers outside the app in the period (spent)
+  // the admin gave), the cost as for the sends; the ones without a cost count apart. deducted: the
+  // cost of the way back the buyers owed, taken off the transfers in the period (an income);
+  // reimbursed: the cost of the way back root paid back to buyers outside the app in the period
+  // (spent)
   returnShipping: {
     sends: number;
     cost: number;
@@ -185,15 +189,59 @@ export interface AdminDeliveryMoneyDto {
   result: number;
 }
 
-// the money of a period in three parts; the delivery and the sends are of the whole shop, none for
-// a report of some products or of a category, and the totals are of the items then
+// the money the payments moved past the statements in a period, of the whole shop: a report of some
+// products has none. result is what each left the money of the shop, below 0 the shop is without it
+export interface AdminPaymentsMoneyDto {
+  // what the bank took for the disputes of the payments of orders and gave back; used, what the
+  // transfers of statements took of the money of lost disputes as money the buyer had back (the
+  // returns count it)
+  disputes: {
+    withdrawn: number;
+    reinstated: number;
+    used: number;
+    // what the bank took for a dispute lost that root has not said what it was for yet
+    undecided: number;
+    result: number;
+  };
+  // the refunds made by hand in the dashboard of the provider for the payments of orders (less the
+  // failures, with the money sent outside the app after one), by what root or the system decided
+  // they were: a compensation, coverage of what a statement owes, not decided yet; used, what the
+  // transfers of statements took of them
+  handRefunds: {
+    refunded: number;
+    compensations: number;
+    coverage: number;
+    undecided: number;
+    used: number;
+    result: number;
+  };
+  // the payments the orders could not take, and what of them went back in any way (our refunds, by
+  // hand, outside the app, by the bank); a result that is not 0 is money of buyers still at the shop
+  latePayments: { received: number; refunded: number; result: number };
+  // the compensations root gave by the button of the app (less the failures, with the money sent
+  // outside the app after one)
+  compensations: { given: number; result: number };
+  // the money the shop got back outside the app: from buyers, from carriers
+  received: { buyers: number; carriers: number; result: number };
+}
+
+// the money of a period in three parts; the delivery, the sends and the other refunds are of the
+// whole shop, none for a report of some products or of a category, and the totals are of the items
+// then
 export interface AdminMoneySummaryDto {
   // the items of the orders paid in the period less the returns, the delivery less what went back,
   // together
   income: { items: number; delivery: number | null; total: number };
   // what the items kept cost (their batches, less the units that came back), the units written
-  // off, the sends the shop owes the carriers for, together
-  expenses: { costOfGoods: number; writeOffs: number; shipping: number | null; total: number };
+  // off, the sends the shop owes the carriers for, what the disputes and the refunds made by hand
+  // cost past the statements (otherRefunds), together
+  expenses: {
+    costOfGoods: number;
+    writeOffs: number;
+    shipping: number | null;
+    otherRefunds: number | null;
+    total: number;
+  };
   // the items less their cost, the delivery less the sends, all the income less all the expenses
   margin: { items: number; delivery: number | null; total: number };
 }
@@ -270,6 +318,8 @@ export interface GetAdminAccountingResponseDto {
   stock: AdminStockTurnoverDto;
   // the delivery of all orders; none when the report is of some products or of a category
   delivery: AdminDeliveryMoneyDto | null;
+  // the money the payments moved past the statements; none as the delivery
+  payments: AdminPaymentsMoneyDto | null;
 }
 
 // the money of a product, a category or a step of time in a period
@@ -394,6 +444,8 @@ export interface AdminReportStepRowDto extends Omit<AdminMoneyBreakdownDto, 'sto
   period: AdminStatsPeriodDto;
   // the delivery of the step; none when the report is of some products or of a category
   delivery: AdminDeliveryMoneyDto | null;
+  // the money the payments moved past the statements in the step; none as the delivery
+  payments: AdminPaymentsMoneyDto | null;
   // the income, the expenses and the margins of the step
   summary: AdminMoneySummaryDto;
 }
@@ -537,8 +589,8 @@ export interface GetAdminStockMovementsResponseDto {
   total: number;
 }
 
-// THE JOURNALS (the admin log, the log of prices, of logins, of consents and the stock log): the
-// same query for each. A journal sorts by any simple column, reads a period, takes some events and some columns
+// THE JOURNALS (the admin log, the log of prices, of logins, of consents, the stock log and the
+// money log): the same query for each. A journal sorts by any simple column, reads a period, takes some events and some columns
 export interface AdminLogQueryDto {
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
@@ -569,8 +621,33 @@ export interface AdminLogPageDto<Item> {
   nextCursor: string | null;
 }
 
+// the address (as it is) and a part of the browser of the request a line was written in
+export interface AdminLogRequestFiltersDto {
+  ip?: string;
+  userAgent?: string;
+}
+
+// the lines of a journal taken together by up to three keys (GET /api/admin/<journal>/groups): the
+// filters of the journal, the keys through commas, a sort by a key, the count or a sum, a page by
+// an offset
+export interface AdminLogGroupsQueryDto {
+  groupBy: string;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+  format?: 'csv';
+}
+
+export interface AdminLogGroupsDto<Group> {
+  items: Group[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 // THE ADMIN LOG: who did what to what, from which address and browser
-export interface AdminAuditLogQueryDto extends AdminLogQueryDto {
+export interface AdminAuditLogQueryDto extends AdminLogQueryDto, AdminLogRequestFiltersDto {
   actorId?: number;
   // the lines written with this role
   actorRole?: 'USER' | 'ADMIN' | 'ROOT';
@@ -608,6 +685,13 @@ export interface AdminPriceLogQueryDto extends AdminLogQueryDto {
   variantId?: number;
   actorId?: number;
   mode?: 'fixed' | 'percent';
+  // the bounds of the old and the new price, taken in; the end of a sale, from taken in, to left out
+  oldPriceFrom?: number;
+  oldPriceTo?: number;
+  newPriceFrom?: number;
+  newPriceTo?: number;
+  endsFrom?: string;
+  endsTo?: string;
 }
 
 export interface AdminPriceLogItemDto {
@@ -631,9 +715,21 @@ export interface AdminPriceLogItemDto {
 export type GetAdminPriceLogResponseDto = AdminLogPageDto<AdminPriceLogItemDto>;
 
 // THE STOCK LOG: every change of the quantity of a variant
-export interface AdminStockLogQueryDto extends AdminLogQueryDto {
+export interface AdminStockLogQueryDto extends AdminLogQueryDto, AdminLogRequestFiltersDto {
   productId?: number;
   variantId?: number;
+  actorId?: number;
+  actorRole?: 'USER' | 'ADMIN' | 'ROOT';
+  // the lines of the units of a statement of return, of one of its rows
+  returnId?: number;
+  returnItemId?: number;
+  // the lines of the products of a category (its own products, not of its children)
+  categoryId?: number;
+  // the bounds of the change and of the stock after it, taken in
+  quantityFrom?: number;
+  quantityTo?: number;
+  stockAfterFrom?: number;
+  stockAfterTo?: number;
   // the lines of one delivery, one write-off, one order
   deliveryId?: string;
   writeOffId?: string;
@@ -670,10 +766,123 @@ export interface AdminStockLogItemDto {
   changes: Array<{ field: string; old: unknown; new: unknown }>;
 }
 
-export type GetAdminStockLogResponseDto = AdminLogPageDto<AdminStockLogItemDto>;
+export type GetAdminStockLogResponseDto = AdminLogPageDto<AdminStockLogItemDto> & {
+  // the sum of the changes of the lines of the filters
+  sums: { quantityChange: number };
+};
+
+export type AdminStockLogGroupDto = Record<string, string | number | null> & {
+  count: number;
+  quantityChange: number;
+};
+
+// THE MONEY LOG: every movement of money, a line for each part of it
+export type AdminMoneyPurpose =
+  'order' | 'return' | 'late_payment' | 'hand' | 'dispute' | 'shipping' | 'compensation';
+export type AdminMoneyPart = 'goods' | 'delivery' | 'deduction' | 'way_back' | 'covered' | 'whole';
+export type AdminMoneyState = 'in_transit' | 'sent';
+
+export interface AdminMoneyLogQueryDto extends AdminLogQueryDto {
+  orderId?: number;
+  // the buyer the money is of
+  userId?: number;
+  returnId?: number;
+  disputeId?: number;
+  // the id of the payment at the provider
+  paymentId?: string;
+  purpose?: AdminMoneyPurpose;
+  // where a refund stands
+  state?: AdminMoneyState;
+  actorId?: number;
+  actorRole?: 'USER' | 'ADMIN' | 'ROOT';
+  part?: AdminMoneyPart;
+  currency?: string;
+  // the bounds of the sum with its sign, taken in
+  amountFrom?: number;
+  amountTo?: number;
+  orderShipmentId?: number;
+  coversId?: number;
+  provider?: string;
+  refundId?: string;
+  transferKey?: string;
+  stripeTxId?: string;
+  // a part of the reference of the bank
+  bankReference?: string;
+  byDashboard?: boolean;
+  failure?: string;
+  method?: 'bank_transfer' | 'cash' | 'other';
+  moneyUse?: 'goods' | 'compensation' | 'loss';
+  // a part of the note
+  note?: string;
+  // the time of the state of a refund and the day money really moved: from taken in, to left out
+  stateFrom?: string;
+  stateTo?: string;
+  happenedFrom?: string;
+  happenedTo?: string;
+  ip?: string;
+  userAgent?: string;
+}
+
+export interface AdminMoneyLogItemDto {
+  id: number;
+  createdAt: string;
+  // who did it; none for the work of the system (the webhook, the worker)
+  actorId: UserId | null;
+  actor: AdminLogAccountDto | null;
+  actorRole: Role | null;
+  event: string;
+  purpose: AdminMoneyPurpose;
+  part: AdminMoneyPart;
+  // above 0 to the shop, below 0 from it
+  amount: number;
+  currency: string | null;
+  orderId: number | null;
+  // the buyer the money is of; a deleted account has no email
+  userId: UserId | null;
+  user: (AdminLogAccountDto & { deleted: boolean }) | null;
+  returnId: number | null;
+  orderShipmentId: number | null;
+  disputeId: number | null;
+  // the line this one reverses, corrects or uses
+  coversId: number | null;
+  provider: string | null;
+  paymentId: string | null;
+  refundId: string | null;
+  // our key of the request to the provider
+  transferKey: string | null;
+  stripeTxId: string | null;
+  bankReference: string | null;
+  byDashboard: boolean;
+  // where a refund stands and since when
+  state: AdminMoneyState | null;
+  stateAt: string | null;
+  // why a refund failed, and the words of the provider
+  failure: string | null;
+  failureText: string | null;
+  // money sent outside the app: how, the note, the day it really happened
+  method: string | null;
+  note: string | null;
+  happenedAt: string | null;
+  // what root or the system decided money given back by hand or taken by a bank was for
+  moneyUse: string | null;
+  ip: string | null;
+  userAgent: string | null;
+  // what the line is made of: the rows of a statement a transfer pays, the reason of a late payment
+  meta: Array<Record<string, unknown>>;
+}
+
+export type GetAdminMoneyLogResponseDto = AdminLogPageDto<AdminMoneyLogItemDto> & {
+  // the sums of the lines of the filters, one for each currency
+  sums: { currency: string | null; amount: number }[];
+};
+
+export type AdminMoneyLogGroupDto = Record<string, string | number | null> & {
+  count: number;
+  amount: number;
+};
 
 // THE LOG OF LOGINS: who came in, how, from where
-export interface AdminLoginLogQueryDto extends AdminLogQueryDto {
+export interface AdminLoginLogQueryDto extends AdminLogQueryDto, AdminLogRequestFiltersDto {
   userId?: number;
   // the roles of the accounts through commas
   roles?: string;
@@ -696,7 +905,7 @@ export interface AdminLoginLogItemDto {
 export type GetAdminLoginLogResponseDto = AdminLogPageDto<AdminLoginLogItemDto>;
 
 // THE LOG OF CONSENTS: who agreed to which version, where
-export interface AdminConsentLogQueryDto extends AdminLogQueryDto {
+export interface AdminConsentLogQueryDto extends AdminLogQueryDto, AdminLogRequestFiltersDto {
   userId?: number;
   documentId?: number;
   orderId?: number;
@@ -725,6 +934,7 @@ export interface GetAdminLogEventsResponseDto {
   loginLog: string[];
   consentLog: string[];
   stockLog: string[];
+  moneyLog: string[];
 }
 
 // ALERTS: what waits for the work of an admin, each kind with how many there are
@@ -742,9 +952,22 @@ export type AdminAlertKind =
   | 'expiring_batches'
   | 'expired_batches'
   | 'chats_waiting'
-  | 'refunded_payments'
-  | 'refunded_payments_not_sent'
-  | 'failed_refunds'
+  | 'late_refunds'
+  | 'late_refunds_in_transit'
+  | 'late_refunds_failed'
+  | 'return_refunds_in_transit'
+  | 'return_refunds_failed'
+  | 'hand_refunds_in_transit'
+  | 'hand_refunds_failed'
+  | 'dispute_refunds_in_transit'
+  | 'dispute_refunds_failed'
+  | 'compensation_refunds_in_transit'
+  | 'compensation_refunds_failed'
+  | 'bank_money_to_decide'
+  | 'returns_money_short'
+  | 'returns_money_overpaid'
+  | 'disputes_to_answer'
+  | 'disputes_lost'
   | 'returns_manual_check'
   | 'returns_proof_waiting'
   | 'returns_goods_not_sent'
@@ -760,6 +983,11 @@ export type AdminAlertKind =
   | 'newsletter_starting_soon'
   | 'newsletter_cancelled_by_limit'
   | 'newsletter_sending_halted'
+  | 'hand_refunds_to_explain'
+  | 'hand_refunds_to_decide'
+  | 'fraud_warnings'
+  | 'fraud_warnings_shipped'
+  | 'payment_reviews'
   | 'admin_actions';
 
 export type AdminAlertThresholdUnit =
@@ -800,6 +1028,8 @@ export interface AdminAlertDto {
 export interface GetAdminAlertsQueryDto {
   // true: only the kinds the actor follows
   subscribed?: boolean;
+  // only these kinds, through commas
+  kinds?: string;
 }
 
 export interface GetAdminAlertsResponseDto {
