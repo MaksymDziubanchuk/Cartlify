@@ -30,6 +30,8 @@ type PayOrderArgs = {
   orderId: number;
   // decimal string in the same units as order total
   paidAmount: string;
+  // the currency the provider charged in, lower case: every line of the money of the payment keeps it
+  currency: string;
 };
 
 type UnconfirmOrderFromWebhookArgs = {
@@ -48,6 +50,7 @@ async function payOrder({
   paymentId,
   orderId,
   paidAmount,
+  currency,
 }: PayOrderArgs): Promise<PayOrderResult> {
   return tx(
     async (db) => {
@@ -66,7 +69,8 @@ async function payOrder({
           ${orderId}::int,
           ${provider}::cartlify."PaymentProvider",
           ${paymentId},
-          ${paidAmount}::numeric
+          ${paidAmount}::numeric,
+          ${currency}::text
         ) as result
       `;
 
