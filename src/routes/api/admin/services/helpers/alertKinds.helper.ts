@@ -6,6 +6,8 @@ import {
   SHARE_WATCH_DAYS,
 } from '../../../newsletters/services/helpers/campaignShares.helper.js';
 
+import type { OrderHoldReason } from '@helpers/orderHolds.js';
+import type { MoneyRefundPurpose } from '../../../payments/services/helpers/moneyRefunds.helper.js';
 import type {
   AdminAlertKind,
   AdminAlertListDto,
@@ -33,9 +35,16 @@ export const ADMIN_ALERT_KINDS = [
   'expiring_batches',
   'expired_batches',
   'chats_waiting',
-  'refunded_payments',
-  'refunded_payments_not_sent',
-  'failed_refunds',
+  // the money of the payments, each kind of refund apart (each admin follows the ones of their work): the late payments given
+  // back, then each kind of refund in transit too long and failed, then the disputes at the bank
+  'late_refunds',
+  'late_refunds_in_transit',
+  'late_refunds_failed',
+  'return_refunds_in_transit',
+  'return_refunds_failed',
+  'dispute_refunds_in_transit',
+  'disputes_to_answer',
+  'disputes_lost',
   'returns_manual_check',
   'returns_proof_waiting',
   'returns_goods_not_sent',
@@ -58,14 +67,45 @@ export const NEWSLETTER_ALERT_KINDS = [
   'newsletter_sending_halted',
 ] as const satisfies readonly AdminAlertKind[];
 
+// the kinds of the money that root decides on, and so does an admin root allowed to handle the money
+// (a refund made by hand to explain, to tie to a statement, an order not sent part of which came back
+// by hand to decide on, the checks of a payment the provider asks for; each follows them for
+// themselves, a case goes for all of them once one acts)
+export const MONEY_ALERT_KINDS = [
+  // the refunds made by hand in transit too long and failed, the compensations of the app the same,
+  // the refusal of the rest after a dispute lost (root and a
+  // money admin send them another way)
+  'hand_refunds_in_transit',
+  'hand_refunds_failed',
+  'compensation_refunds_in_transit',
+  'compensation_refunds_failed',
+  'dispute_refunds_failed',
+  // what a bank took for a dispute lost on an order sent waits for the decision, a statement
+  // whose money does not fit in what is left of the payment, money already with the buyer for goods
+  // no statement owes any more
+  'bank_money_to_decide',
+  'returns_money_short',
+  'returns_money_overpaid',
+  'hand_refunds_to_explain',
+  'hand_refunds_to_decide',
+  'fraud_warnings',
+  'fraud_warnings_shipped',
+  'payment_reviews',
+] as const satisfies readonly AdminAlertKind[];
+
+// the kinds of root alone: the actions of the admins
 export const ROOT_ALERT_KINDS = ['admin_actions'] as const satisfies readonly AdminAlertKind[];
 
+// the rights of an admin that open kinds of their own, as the database says them at the request
+export type AlertRights = { newsletters: boolean; money: boolean };
+
 // the kinds of a role in the order they are told: those of every admin, the newsletters (for root,
-// and for an admin who may run them: `manager`), those of root. Nobody but root and an admin can have
-// a kind of the newsletters, whatever `manager` says
-export const alertKindsOf = (role: Role, manager: boolean): AdminAlertKind[] => [
+// and for an admin who may run them), the money (for root, and for an admin who may handle it), those
+// of root. Nobody but root and an admin can have a kind of a right, whatever `rights` says
+export const alertKindsOf = (role: Role, rights: AlertRights): AdminAlertKind[] => [
   ...ADMIN_ALERT_KINDS,
-  ...(role === 'ROOT' || (role === 'ADMIN' && manager) ? NEWSLETTER_ALERT_KINDS : []),
+  ...(role === 'ROOT' || (role === 'ADMIN' && rights.newsletters) ? NEWSLETTER_ALERT_KINDS : []),
+  ...(role === 'ROOT' || (role === 'ADMIN' && rights.money) ? MONEY_ALERT_KINDS : []),
   ...(role === 'ROOT' ? ROOT_ALERT_KINDS : []),
 ];
 
@@ -96,10 +136,18 @@ const THRESHOLDS: Partial<Record<AdminAlertKind, ThresholdSpec>> = {
   low_stock: { unit: 'units', default: 5, min: 1, max: 100_000 },
   // the last good day of a batch within so many days
   expiring_batches: { unit: 'days', default: 7, min: 1, max: 365 },
-  // the refunds of late payments of so many last days
-  refunded_payments: { unit: 'days', default: 7, min: 1, max: 365 },
-  // a refund of a late payment made so many days ago whose money was not told sent or failed
-  refunded_payments_not_sent: { unit: 'days', default: 3, min: 1, max: 365 },
+  // the refunds of late payments that came to their state in so many last days
+  late_refunds: { unit: 'days', default: 7, min: 1, max: 365 },
+  // a refund of each kind asked so many days ago whose money was not told sent or failed
+  late_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
+  return_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
+  hand_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
+  compensation_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
+  dispute_refunds_in_transit: { unit: 'days', default: 3, min: 1, max: 365 },
+  // the disputes lost in so many last days
+  disputes_lost: { unit: 'days', default: 7, min: 1, max: 365 },
+  // root: the orders sent the provider warned of fraud in so many last days
+  fraud_warnings_shipped: { unit: 'days', default: 7, min: 1, max: 365 },
   // a worker that has not run for so many seconds; it runs every few seconds
   worker_stalled: { unit: 'seconds', default: 180, min: 60, max: 86_400 },
   // root: the lines the admins wrote in so many last hours
@@ -197,9 +245,15 @@ export function alertWindowOf(
       return { units: threshold };
     case 'expiring_batches':
       return { expiresBy: dayAfter(today, threshold) };
-    case 'refunded_payments':
+    case 'late_refunds':
+    case 'disputes_lost':
+    case 'fraud_warnings_shipped':
       return { since: new Date(now - threshold * DAY) };
-    case 'refunded_payments_not_sent':
+    case 'late_refunds_in_transit':
+    case 'return_refunds_in_transit':
+    case 'hand_refunds_in_transit':
+    case 'compensation_refunds_in_transit':
+    case 'dispute_refunds_in_transit':
       return { before: new Date(now - threshold * DAY) };
     case 'admin_actions':
       return { since: new Date(now - threshold * HOUR) };
@@ -225,16 +279,47 @@ const isoOf = (date: Date | undefined) => (date ?? new Date(0)).toISOString();
 
 const CAMPAIGNS_PATH = '/api/newsletters/campaigns';
 const REFUNDS_PATH = '/api/payments/refunds';
+const DISPUTES_PATH = '/api/payments/disputes';
+
+// the kinds of each refund in transit too long and failed, with the purpose of their refunds in the
+// list of the refunds of the money journal
+export const REFUND_ALERT_PURPOSES = {
+  late_refunds_in_transit: 'late_payment',
+  late_refunds_failed: 'late_payment',
+  return_refunds_in_transit: 'return',
+  return_refunds_failed: 'return',
+  hand_refunds_in_transit: 'hand',
+  hand_refunds_failed: 'hand',
+  compensation_refunds_in_transit: 'compensation',
+  compensation_refunds_failed: 'compensation',
+  dispute_refunds_in_transit: 'dispute_remainder',
+  dispute_refunds_failed: 'dispute_remainder',
+} as const satisfies Partial<Record<AdminAlertKind, MoneyRefundPurpose>>;
+
+// the paid orders root decides on, with what holds them
+export const HELD_ORDER_ALERTS = {
+  hand_refunds_to_decide: 'hand_refund',
+  fraud_warnings: 'fraud_warning',
+  payment_reviews: 'payment_review',
+} as const satisfies Partial<Record<AdminAlertKind, OrderHoldReason>>;
+
+// the paid orders held for the reason, the order paid first first: the buyer waits since they paid
+// (each row names since when the hold waits, holds[].since)
+const heldOrders = (reason: OrderHoldReason): AdminAlertListDto => ({
+  path: '/api/orders',
+  query: { statuses: 'paid', holds: reason, sortBy: 'paidAt', sortDir: 'asc' },
+});
 
 // the request to the list of the app with the cases of a kind, the most urgent first; the
 // frontend adds a limit, its own sort or a filter of its rows. The stop of the worker and the stop of
 // the sending worker have none
 export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAlertListDto | null {
   switch (kind) {
+    // an order held from its sending waits for the bank or for root, not for the shop to send it
     case 'paid_orders_waiting':
       return {
         path: '/api/orders',
-        query: { statuses: 'paid', sortBy: 'paidAt', sortDir: 'asc' },
+        query: { statuses: 'paid', holds: 'none', sortBy: 'paidAt', sortDir: 'asc' },
       };
     case 'shipped_orders_waiting':
       return {
@@ -278,12 +363,62 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sortDir: 'asc',
         },
       };
-    // the refunds that failed are transfers of statements and refunds of late payments: the list of
-    // the refunds that wait counts them both (waitingRefunds.helper.ts is the rule of its rows)
-    case 'failed_refunds':
-      return { path: REFUNDS_PATH, query: { state: 'failed' } };
-    case 'refunded_payments_not_sent':
-      return { path: REFUNDS_PATH, query: { state: 'unsent', to: isoOf(window.before) } };
+    // the refunds of the money journal: the list counts them with the same filters
+    // (moneyRefunds.helper.ts is the rule of its rows), those asked before the days of the threshold
+    // and not told sent, and the failures that wait for the shop
+    case 'late_refunds':
+      return { path: REFUNDS_PATH, query: { purpose: 'late_payment', from: isoOf(window.since) } };
+    case 'late_refunds_in_transit':
+    case 'return_refunds_in_transit':
+    case 'hand_refunds_in_transit':
+    case 'compensation_refunds_in_transit':
+    case 'dispute_refunds_in_transit':
+      return {
+        path: REFUNDS_PATH,
+        query: {
+          purpose: REFUND_ALERT_PURPOSES[kind],
+          state: 'in_transit',
+          to: isoOf(window.before),
+        },
+      };
+    case 'late_refunds_failed':
+    case 'return_refunds_failed':
+    case 'hand_refunds_failed':
+    case 'compensation_refunds_failed':
+    case 'dispute_refunds_failed':
+      return {
+        path: REFUNDS_PATH,
+        query: { purpose: REFUND_ALERT_PURPOSES[kind], state: 'failed' },
+      };
+    // root: the refunds made by hand that wait for root to say what they were for
+    case 'hand_refunds_to_explain':
+      return {
+        path: REFUNDS_PATH,
+        query: { purpose: 'hand', state: 'unassigned', need: 'explain' },
+      };
+    // root: the paid orders held for what root decides on, or until the review of the provider ends
+    case 'hand_refunds_to_decide':
+    case 'fraud_warnings':
+    case 'payment_reviews':
+      return heldOrders(HELD_ORDER_ALERTS[kind]);
+    // root: the orders sent the provider warned of (newest orders first, the default of the list)
+    case 'fraud_warnings_shipped':
+      return { path: '/api/orders', query: { fraudWarnedFrom: isoOf(window.since) } };
+    // the disputes and the inquiries of the bank: the list puts the nearest date due first and marks
+    // the ones of an order with an open statement (returnOpen)
+    case 'disputes_to_answer':
+      return { path: DISPUTES_PATH, query: { toAnswer: 'true' } };
+    case 'disputes_lost':
+      return { path: DISPUTES_PATH, query: { status: 'lost', closedFrom: isoOf(window.since) } };
+    // root: what a bank took for a dispute lost waits for the decision of what it was for
+    case 'bank_money_to_decide':
+      return { path: DISPUTES_PATH, query: { status: 'lost', moneyUndecided: 'true' } };
+    // root: the statements whose money does not fit in the payment, and the ones of an order whose
+    // money already with the buyer gave more than its statements took
+    case 'returns_money_short':
+      return { path: '/api/returns', query: { state: 'open', moneyShort: 'true' } };
+    case 'returns_money_overpaid':
+      return { path: '/api/returns', query: { state: 'closed', moneyOverpaid: 'true' } };
     // the cases of the statements of return are statements: the list of the statements counts
     // them with the same filters (returnFilters.helper.ts)
     case 'returns_manual_check':
@@ -319,12 +454,15 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
           sortDir: 'asc',
         },
       };
+    // the money held by a dispute of the payment or by a refund made by hand that waits for root is
+    // not late for the shop: the bank or root acts on it
     case 'returns_money_late':
       return {
         path: '/api/returns',
         query: {
           state: 'open',
           moneyDueForDays: String(window.days ?? 0),
+          moneyHeld: 'false',
           sortBy: 'statedAt',
           sortDir: 'asc',
         },
@@ -393,17 +531,6 @@ export function alertListOf(kind: AdminAlertKind, window: AlertWindow): AdminAle
       };
     case 'chats_waiting':
       return { path: '/api/chat/admin/threads', query: { queue: 'unread' } };
-    case 'refunded_payments':
-      return {
-        path: '/api/admin/audit-log',
-        query: {
-          actions: 'OTHER',
-          entityType: 'order',
-          events: 'order.refund_late',
-          field: 'refund',
-          from: isoOf(window.since),
-        },
-      };
     case 'worker_stalled':
       return null;
     // the fields of the data of the shop root has not set yet (missingShopSettingsFields): the
