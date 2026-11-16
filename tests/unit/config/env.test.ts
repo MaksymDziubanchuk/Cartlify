@@ -20,6 +20,7 @@ const SHOP_DEFAULTS = {
   LIMIT_MAIL_PER_ADDRESS: 10,
   LIMIT_MAIL_PER_EMAIL: 1,
   LIMIT_CHECKOUT_PER_USER: 10,
+  LIMIT_DELIVERY_PRICES_PER_USER: 30,
   LIMIT_PASSWORD_CHANGE_PER_USER: 10,
   LIMIT_EXPORT_PER_USER: 1,
   LIMIT_REVIEW_PER_USER: 30,
@@ -295,6 +296,56 @@ describe('env', () => {
     expect(loaded.WITHDRAWAL_CODE_SECRET).toBe('');
   });
 
+  it.each(['development', 'production'])(
+    'stops the start in %s when SHIPPYPRO_API_KEY is set and SHIPPYPRO_WEBHOOK_SECRET is missing',
+    async (mode) => {
+      const err = await rejectedBy(() =>
+        loadEnv({ NODE_ENV: mode, SHIPPYPRO_API_KEY: 'key', SHIPPYPRO_WEBHOOK_SECRET: ' ' }),
+      );
+
+      expect((err as Error).message).toBe(
+        'Missing required env variable: SHIPPYPRO_WEBHOOK_SECRET',
+      );
+    },
+  );
+
+  it.each(['development', 'production'])(
+    'refuses a SHIPPYPRO_WEBHOOK_SECRET shorter than 32 characters in %s: the webhook is outside the request rate limit, a short one could be found by trying',
+    async (mode) => {
+      const err = await rejectedBy(() =>
+        loadEnv({
+          NODE_ENV: mode,
+          SHIPPYPRO_API_KEY: 'key',
+          SHIPPYPRO_WEBHOOK_SECRET: 'a'.repeat(31),
+        }),
+      );
+
+      expect((err as Error).message).toBe(
+        'Invalid env variable: SHIPPYPRO_WEBHOOK_SECRET must be at least 32 characters',
+      );
+    },
+  );
+
+  it('takes a SHIPPYPRO_WEBHOOK_SECRET of 32 characters, trimmed', async () => {
+    const loaded = await loadEnv({
+      NODE_ENV: 'production',
+      SHIPPYPRO_API_KEY: 'key',
+      SHIPPYPRO_WEBHOOK_SECRET: ` ${'a'.repeat(32)} `,
+    });
+
+    expect(loaded.SHIPPYPRO_WEBHOOK_SECRET).toBe('a'.repeat(32));
+  });
+
+  it('lets a server without SHIPPYPRO_API_KEY start without SHIPPYPRO_WEBHOOK_SECRET', async () => {
+    const loaded = await loadEnv({
+      NODE_ENV: 'production',
+      SHIPPYPRO_API_KEY: ' ',
+      SHIPPYPRO_WEBHOOK_SECRET: ' ',
+    });
+
+    expect(loaded.SHIPPYPRO_WEBHOOK_SECRET).toBe('');
+  });
+
   it('lets the tests start without STRIPE_WEBHOOK_SECRET', async () => {
     const loaded = await loadEnv({ NODE_ENV: 'test', STRIPE_WEBHOOK_SECRET: '' });
 
@@ -356,6 +407,7 @@ describe('the settings of the shop', () => {
         LIMIT_MAIL_PER_ADDRESS: '7',
         LIMIT_MAIL_PER_EMAIL: '2',
         LIMIT_CHECKOUT_PER_USER: '3',
+        LIMIT_DELIVERY_PRICES_PER_USER: '11',
         LIMIT_PASSWORD_CHANGE_PER_USER: '4',
         LIMIT_EXPORT_PER_USER: '6',
         LIMIT_REVIEW_PER_USER: '50',
@@ -398,6 +450,7 @@ describe('the settings of the shop', () => {
       LIMIT_MAIL_PER_ADDRESS: 7,
       LIMIT_MAIL_PER_EMAIL: 2,
       LIMIT_CHECKOUT_PER_USER: 3,
+      LIMIT_DELIVERY_PRICES_PER_USER: 11,
       LIMIT_PASSWORD_CHANGE_PER_USER: 4,
       LIMIT_EXPORT_PER_USER: 6,
       LIMIT_REVIEW_PER_USER: 50,
@@ -453,6 +506,7 @@ describe('the settings of the shop', () => {
       'LIMIT_MAIL_PER_ADDRESS',
       'LIMIT_MAIL_PER_EMAIL',
       'LIMIT_CHECKOUT_PER_USER',
+      'LIMIT_DELIVERY_PRICES_PER_USER',
       'LIMIT_PASSWORD_CHANGE_PER_USER',
       'LIMIT_EXPORT_PER_USER',
       'LIMIT_REVIEW_PER_USER',

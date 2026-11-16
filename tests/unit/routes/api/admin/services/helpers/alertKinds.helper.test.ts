@@ -122,6 +122,22 @@ describe('alertKindsOf', () => {
     },
   );
 
+  // the parcels of the delivery provider follow the sends by hand; the delivery provider that does
+  // not answer is a state, after the worker
+  it('puts the parcels of the delivery provider after the sends, and the provider after the worker', () => {
+    const kinds = alertKindsOf('ADMIN', NONE);
+    const at = kinds.indexOf('shipped_without_tracking') + 1;
+
+    expect(kinds.slice(at, at + 5)).toEqual([
+      'parcels_not_collected',
+      'parcels_void_pending',
+      'parcels_coming_back',
+      'parcels_lost',
+      'parcels_ahead_of_order',
+    ]);
+    expect(kinds[kinds.indexOf('worker_stalled') + 1]).toBe('delivery_provider_down');
+  });
+
   it('names seven kinds of the newsletters, none of them in the kinds of every admin', () => {
     expect(NEWSLETTER_ALERT_KINDS).toHaveLength(7);
     for (const kind of NEWSLETTER_ALERT_KINDS) expect(ADMIN_ALERT_KINDS).not.toContain(kind);
@@ -187,6 +203,8 @@ describe('thresholdOf', () => {
     ['disputes_lost', 7, 'days'],
     ['fraud_warnings_shipped', 7, 'days'],
     ['shipped_without_tracking', 2, 'days'],
+    ['parcels_not_collected', 3, 'days'],
+    ['delivery_provider_down', 900, 'seconds'],
     ['returns_proof_waiting', 2, 'days'],
     ['returns_goods_not_sent', 21, 'days'],
     ['returns_money_late', 10, 'days'],
@@ -222,6 +240,10 @@ describe('thresholdOf', () => {
     'payment_reviews',
     'returns_manual_check',
     'newsletter_sending_halted',
+    'parcels_void_pending',
+    'parcels_coming_back',
+    'parcels_lost',
+    'parcels_ahead_of_order',
   ] as const)('gives %s no threshold', (kind) => {
     expect(thresholdOf(kind, null)).toBeNull();
   });
@@ -236,6 +258,7 @@ describe('assertThreshold', () => {
 
   it.each([
     'shipped_without_tracking',
+    'parcels_not_collected',
     'late_refunds',
     'late_refunds_in_transit',
     'return_refunds_in_transit',
@@ -330,6 +353,16 @@ describe('alertWindowOf', () => {
     expect(alertWindowOf('shipped_without_tracking', 2, NOW, '2026-10-25')).toEqual({
       before: new Date(NOW - 2 * DAY),
     });
+  });
+
+  it('starts the time of the parcels not taken in days, and of the provider down in seconds', () => {
+    expect(alertWindowOf('parcels_not_collected', 3, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 3 * DAY),
+    });
+    expect(alertWindowOf('delivery_provider_down', 900, NOW, '2026-10-25')).toEqual({
+      before: new Date(NOW - 900_000),
+    });
+    expect(alertWindowOf('parcels_lost', null, NOW, '2026-10-25')).toEqual({});
   });
 
   // the lists of the statements count their periods in days, so the window of these kinds is the days
@@ -453,12 +486,12 @@ describe('alertListOf', () => {
     });
   });
 
-  it('sends to the orders sent by hand and changed before the threshold, the oldest first', () => {
+  it('sends to the orders sent by hand or by a carrier and changed before the threshold, the oldest first', () => {
     expect(listOf('shipped_orders_waiting', 14)).toEqual({
       path: '/api/orders',
       query: {
         statuses: 'shipped',
-        deliveryMethod: 'manual',
+        deliveryMethod: 'manual,carrier',
         updatedTo: new Date(NOW - 14 * DAY).toISOString(),
         sortBy: 'updatedAt',
         sortDir: 'asc',
@@ -581,6 +614,29 @@ describe('alertListOf', () => {
         sortDir: 'asc',
       },
     });
+  });
+
+  it('sends to the orders whose parcels wait for an admin, by the case of each kind', () => {
+    expect(listOf('parcels_not_collected', 3)).toEqual({
+      path: '/api/orders',
+      query: {
+        parcels: 'not_collected',
+        parcelsMadeTo: new Date(NOW - 3 * DAY).toISOString(),
+        sortBy: 'paidAt',
+        sortDir: 'asc',
+      },
+    });
+    for (const [kind, parcels] of [
+      ['parcels_void_pending', 'void_pending'],
+      ['parcels_coming_back', 'coming_back'],
+      ['parcels_lost', 'lost'],
+      ['parcels_ahead_of_order', 'ahead'],
+    ] as const) {
+      expect(listOf(kind, null)).toEqual({
+        path: '/api/orders',
+        query: { parcels, sortBy: 'updatedAt', sortDir: 'asc' },
+      });
+    }
   });
 
   // root: what a bank took waits for the decision, the statements whose money does not fit in the
@@ -797,8 +853,9 @@ describe('alertListOf', () => {
     });
   });
 
-  it('sends nowhere for the stop of the worker', () => {
+  it('sends nowhere for the stop of the worker and for the delivery provider down', () => {
     expect(listOf('worker_stalled', 180)).toBeNull();
+    expect(listOf('delivery_provider_down', 900)).toBeNull();
   });
 
   // the cases are the fields root has not set yet: their list is the one the alert counts

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
+import { t } from '@config/i18n.js';
+
 import {
   buildOrderShippedTemplate,
   type OrderShippedTemplateArgs,
@@ -27,6 +29,40 @@ afterEach(() => {
 });
 
 describe('buildOrderShippedTemplate', () => {
+  it('names the carrier, the number and the link of the one parcel, without a heading', () => {
+    const { text, html } = buildOrderShippedTemplate(
+      order({
+        parcels: [
+          { carrier: 'DHL', trackingNumber: 'JD1', trackingUrl: 'https://track.example.com/JD1' },
+        ],
+      }),
+    );
+
+    expect(text).toContain('DHL');
+    expect(text).toContain('JD1');
+    expect(text).toContain('https://track.example.com/JD1');
+    expect(html).toContain('href="https://track.example.com/JD1"');
+    expect(text).not.toContain('Parcel 1');
+  });
+
+  it('names every parcel under a heading of its own when there are several', () => {
+    const { text, html } = buildOrderShippedTemplate(
+      order({
+        locale: 'uk',
+        parcels: [
+          { carrier: 'DHL', trackingNumber: 'JD1', trackingUrl: null },
+          { carrier: 'UPS', trackingNumber: 'UP2', trackingUrl: 'https://track.example.com/UP2' },
+        ],
+      }),
+    );
+
+    const heading = (number: string) => t('orderShipped.parcelHeading', 'uk', { number });
+    expect(text.indexOf(heading('1'))).toBeLessThan(text.indexOf('JD1'));
+    expect(text.indexOf(heading('2'))).toBeLessThan(text.indexOf('UP2'));
+    expect(html).toContain(heading('2'));
+    expect(html).toContain('href="https://track.example.com/UP2"');
+  });
+
   it.each([
     ['a price the buyer paid', 4.99, 'Delivery: €4.99'],
     ['a free delivery', 0, 'Delivery: free'],

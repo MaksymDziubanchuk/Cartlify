@@ -10,7 +10,7 @@ import {
   type ChatBotReturnContextItemDto,
   type ChatBotVariantContextItemDto,
 } from '@routes/api/chat/services/bot/chatBotPrompt.service.js';
-import type { DeliveryMethodInfoDto } from 'types/dto/delivery.dto.js';
+import type { DeliveryMethodInfoDto, DeliveryZoneInfoDto } from 'types/dto/delivery.dto.js';
 
 const said = (
   senderType: ChatBotHistoryMessageDto['senderType'],
@@ -56,7 +56,7 @@ const order = (patch: Partial<ChatBotOrderContextItemDto> = {}): ChatBotOrderCon
   withdrawal: null,
   returns: [],
   delivery: null,
-  shipment: null,
+  shipments: [],
   ...patch,
 });
 
@@ -83,24 +83,35 @@ const row = (
   ...patch,
 });
 
-// the methods of the shop as the list of the delivery methods gives them
-const BY_HAND: DeliveryMethodInfoDto = {
-  method: 'manual',
-  price: 5,
-  freeFrom: 50,
-  countries: ['UA', 'PL'],
-  address: null,
-  hours: null,
-};
+// the methods of the shop and its zones as the list of the delivery methods gives them
+const BY_HAND: DeliveryMethodInfoDto = { method: 'manual', address: null, hours: null };
 
 const PICKUP: DeliveryMethodInfoDto = {
   method: 'pickup',
-  price: 0,
-  freeFrom: null,
-  countries: [],
   address: 'Lichtstrasse 4, Berlin',
   hours: 'Mon-Fri 9-18',
 };
+
+const BY_CARRIER: DeliveryMethodInfoDto = { method: 'carrier', address: null, hours: null };
+
+const HOME: DeliveryZoneInfoDto = {
+  name: 'Home',
+  countries: ['UA', 'PL'],
+  manualPrice: 5,
+  freeFrom: 50,
+};
+
+const FAR: DeliveryZoneInfoDto = {
+  name: 'Far',
+  countries: ['GB'],
+  manualPrice: null,
+  freeFrom: null,
+};
+
+const shopOf = (methods: DeliveryMethodInfoDto[], zones: DeliveryZoneInfoDto[] = [HOME]) => ({
+  methods,
+  zones,
+});
 
 const build = (patch: Partial<BuildChatBotPromptDto> = {}) =>
   buildChatBotPrompt({
@@ -112,7 +123,7 @@ const build = (patch: Partial<BuildChatBotPromptDto> = {}) =>
     orders: [],
     currency: 'eur',
     paymentProviders: ['Stripe'],
-    delivery: [BY_HAND],
+    delivery: shopOf([BY_HAND]),
     ...patch,
   });
 
@@ -187,17 +198,27 @@ describe('buildChatBotPrompt', () => {
 
   // the model invented a carrier and a delivery time when it was told nothing of the delivery
   describe('the delivery of the shop', () => {
-    it('tells the model the method by hand, its countries, its price and the sum it is free from', () => {
-      const { instructions } = build({ delivery: [BY_HAND] });
+    it('tells the model the method by hand to each zone with a price of it, and the sum it is free from', () => {
+      const { instructions } = build({ delivery: shopOf([BY_HAND], [HOME, FAR]) });
 
       expect(instructions).toContain(
         '- by hand: the shop sends the order to an address in UA or PL; the delivery costs 5 EUR, and nothing when the items cost 50 EUR or more.',
       );
+      // the manual delivery does not go to a zone without its price
+      expect(instructions).not.toContain('address in GB');
       expect(instructions).not.toContain('- pickup:');
     });
 
+    it('tells the model a carrier is picked with its price for the address, and where it is free', () => {
+      const { instructions } = build({ delivery: shopOf([BY_CARRIER], [HOME, FAR]) });
+
+      expect(instructions).toContain(
+        '- by a carrier: the shop sends the order to an address in UA, PL or GB with a carrier the customer picks when confirming the order, from a list of carriers with their prices and delivery times for the address. To UA or PL it costs nothing when the items cost 50 EUR or more.',
+      );
+    });
+
     it('tells the model a pickup with its address and hours, and that it costs nothing', () => {
-      const { instructions } = build({ delivery: [PICKUP] });
+      const { instructions } = build({ delivery: shopOf([PICKUP]) });
 
       expect(instructions).toContain(
         '- pickup: the customer collects the order at Lichtstrasse 4, Berlin (Mon-Fri 9-18); it costs nothing.',
@@ -206,7 +227,7 @@ describe('buildChatBotPrompt', () => {
     });
 
     it('names both methods as a choice of the customer', () => {
-      const { instructions } = build({ delivery: [BY_HAND, PICKUP] });
+      const { instructions } = build({ delivery: shopOf([BY_HAND, PICKUP]) });
 
       expect(instructions).toContain('the customer picks one when confirming the order');
       expect(instructions).toContain('- by hand:');
@@ -214,7 +235,9 @@ describe('buildChatBotPrompt', () => {
     });
 
     it('says a delivery that costs nothing costs nothing, without a sum it is free from', () => {
-      const { instructions } = build({ delivery: [{ ...BY_HAND, price: 0, freeFrom: null }] });
+      const { instructions } = build({
+        delivery: shopOf([BY_HAND], [{ ...HOME, manualPrice: 0, freeFrom: null }]),
+      });
 
       expect(instructions).toContain('to an address in UA or PL; the delivery costs nothing.');
     });
@@ -578,11 +601,14 @@ describe('buildChatBotPrompt', () => {
       const { messages } = build({
         orders: [
           order({
-            shipment: {
-              carrier: 'DHL',
-              trackingNumber: 'JD0146',
-              trackingUrl: 'https://dhl.example.com/JD0146',
-            },
+            shipments: [
+              {
+                carrier: 'DHL',
+                trackingNumber: 'JD0146',
+                trackingUrl: 'https://dhl.example.com/JD0146',
+                state: 'sent',
+              },
+            ],
           }),
         ],
       });
@@ -594,14 +620,39 @@ describe('buildChatBotPrompt', () => {
 
     it('name a send without the number, and a send without any detail', () => {
       const partly = build({
-        orders: [order({ shipment: { carrier: 'DHL', trackingNumber: null, trackingUrl: null } })],
+        orders: [
+          order({
+            shipments: [{ carrier: 'DHL', trackingNumber: null, trackingUrl: null, state: 'sent' }],
+          }),
+        ],
       }).messages[0]!.content;
       const bare = build({
-        orders: [order({ shipment: { carrier: null, trackingNumber: null, trackingUrl: null } })],
+        orders: [
+          order({
+            shipments: [{ carrier: null, trackingNumber: null, trackingUrl: null, state: 'sent' }],
+          }),
+        ],
       }).messages[0]!.content;
 
       expect(partly).toContain('; send: carrier DHL;');
       expect(bare).toContain('; send: no carrier or tracking number was given;');
+    });
+
+    it('name each parcel of an order sent in several, with where it stands', () => {
+      const { messages } = build({
+        orders: [
+          order({
+            shipments: [
+              { carrier: 'DHL', trackingNumber: 'JD0146', trackingUrl: null, state: 'delivered' },
+              { carrier: 'UPS', trackingNumber: '1Z999', trackingUrl: null, state: 'sent' },
+            ],
+          }),
+        ],
+      });
+
+      expect(messages[0]!.content).toContain(
+        '; parcel 1: carrier DHL, tracking number JD0146 (delivered); parcel 2: carrier UPS, tracking number 1Z999;',
+      );
     });
 
     // an order with a send or a step taken back, or a transfer of return money that failed or was
@@ -614,7 +665,9 @@ describe('buildChatBotPrompt', () => {
             status: 'cancelled',
             unusual: true,
             delivery: { method: 'manual', price: 5, country: 'PL' },
-            shipment: { carrier: 'DHL', trackingNumber: 'JD0146', trackingUrl: null },
+            shipments: [
+              { carrier: 'DHL', trackingNumber: 'JD0146', trackingUrl: null, state: 'sent' },
+            ],
           }),
           order({ id: 8 }),
         ],

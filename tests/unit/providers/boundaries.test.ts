@@ -12,7 +12,7 @@ const SRC = path.join(process.cwd(), 'src');
 const PROVIDERS = path.join(SRC, 'providers');
 
 // the kinds of outside services; a kind keeps the names of its providers in names.ts
-const KINDS = ['payments', 'mail', 'files', 'ai', 'captcha', 'identity'] as const;
+const KINDS = ['payments', 'mail', 'files', 'ai', 'captcha', 'identity', 'delivery'] as const;
 
 // the files that may name a provider though they are not its own: the settings of env (the names
 // of the variables of each provider), and the registry and the names of its kind

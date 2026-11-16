@@ -25,6 +25,8 @@ const product: ProductResponseRow = {
   manufacturerId: 7,
   euResponsibleId: null,
   warnings: null,
+  hsCode: null,
+  originCountry: null,
   withdrawal: null,
   deletedAt: null,
   createdAt: new Date('2026-01-01T10:00:00.000Z'),
