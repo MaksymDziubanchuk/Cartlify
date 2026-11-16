@@ -92,6 +92,22 @@ BEGIN
   END IF;
 END $$;
 
+-- What customs need of a product, both optional: the code of the goods (HS) of 6 to 10 digits, the
+-- country they were made in as two capital letters.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'products_customs_chk') THEN
+    ALTER TABLE cartlify.products DROP CONSTRAINT products_customs_chk;
+  END IF;
+
+  ALTER TABLE cartlify.products
+    ADD CONSTRAINT products_customs_chk
+    CHECK (
+      ("hsCode" IS NULL OR "hsCode" ~ '^[0-9]{6,10}$')
+      AND ("originCountry" IS NULL OR "originCountry" ~ '^[A-Z]{2}$')
+    );
+END $$;
+
 ----------------------------------------
 -- DOCUMENTS: the title, the file; the place of a document in a product
 ----------------------------------------
@@ -689,7 +705,7 @@ BEGIN
     ADD CONSTRAINT order_deliveries_address_chk
     CHECK (
       (
-        method = 'manual'
+        method IN ('manual', 'carrier')
         AND country IS NOT NULL
         AND country ~ '^[A-Z]{2}$'
         AND city IS NOT NULL
@@ -729,6 +745,39 @@ BEGIN
       "note" IS NULL
       OR (char_length("note") >= 1 AND "note" = btrim("note"))
     );
+
+  -- carrier_chk: the method carrier names the carrier the buyer picked from the prices, its service
+  -- and its connection at the delivery provider, each trimmed and not empty; no other method names
+  -- one
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_deliveries_carrier_chk'
+  ) THEN
+    ALTER TABLE cartlify.order_deliveries
+      DROP CONSTRAINT order_deliveries_carrier_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_deliveries
+    ADD CONSTRAINT order_deliveries_carrier_chk
+    CHECK (
+      (
+        method = 'carrier'
+        AND "carrierName" IS NOT NULL
+        AND char_length("carrierName") >= 1
+        AND "carrierName" = btrim("carrierName")
+        AND "carrierService" IS NOT NULL
+        AND char_length("carrierService") >= 1
+        AND "carrierService" = btrim("carrierService")
+        AND "carrierConnection" IS NOT NULL
+        AND char_length("carrierConnection") >= 1
+        AND "carrierConnection" = btrim("carrierConnection")
+      )
+      OR (
+        method <> 'carrier'
+        AND "carrierName" IS NULL
+        AND "carrierService" IS NULL
+        AND "carrierConnection" IS NULL
+      )
+    );
 END $$;
 
 ----------------------------------------
@@ -737,7 +786,8 @@ END $$;
 -- carrier_chk: a carrier, when given, is trimmed and not empty.
 -- tracking_chk: a tracking number and a link each need a carrier (the buyer sees whose tracking it
 --   is); a link may come without a number. A link is https and has no spaces.
--- rolled_back_chk: a send is rolled back at the time of the send or later.
+-- rolled_back_chk: a send is rolled back at the time of the send or later (a parcel of the delivery
+--   provider that was never sent has no time of its send).
 -- parcel_chk: a parcel to the shop is a parcel of a statement; only a send of the order is rolled
 --   back; a parcel is confirmed with who confirmed it, and only a parcel to the shop is confirmed or
 --   says what the buyer paid the carrier (0 or more).
@@ -813,6 +863,111 @@ BEGIN
       AND ("confirmedAt" IS NULL OR direction = 'to_shop')
       AND ("buyerPaid" IS NULL OR (direction = 'to_shop' AND "buyerPaid" >= 0))
     );
+
+  -- state_chk: a parcel of the delivery provider (its id there) is a parcel to the buyer of the
+  --   order, and only such a parcel stands anywhere but sent; it has the time of its send exactly
+  --   while the carrier has it (not while it is made, waits for its void or was voided).
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_shipments_state_chk'
+  ) THEN
+    ALTER TABLE cartlify.order_shipments
+      DROP CONSTRAINT order_shipments_state_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_shipments
+    ADD CONSTRAINT order_shipments_state_chk
+    CHECK (
+      ((state IN ('created', 'void_pending', 'voided')) = ("shippedAt" IS NULL))
+      AND (state = 'sent' OR "providerParcelId" IS NOT NULL)
+      AND (
+        "providerParcelId" IS NULL
+        OR (
+          "returnId" IS NULL
+          AND direction = 'to_buyer'
+          AND char_length("providerParcelId") >= 1
+          AND "providerParcelId" = btrim("providerParcelId")
+        )
+      )
+    );
+
+  -- label_chk: the label of a parcel of the delivery provider is a link on https without spaces.
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'order_shipments_label_chk'
+  ) THEN
+    ALTER TABLE cartlify.order_shipments
+      DROP CONSTRAINT order_shipments_label_chk;
+  END IF;
+
+  ALTER TABLE cartlify.order_shipments
+    ADD CONSTRAINT order_shipments_label_chk
+    CHECK (
+      "labelUrl" IS NULL
+      OR ("providerParcelId" IS NOT NULL AND "labelUrl" ~ '^https://[^[:space:]]+$')
+    );
+END $$;
+
+----------------------------------------
+-- SHIPMENT_BOXES: the boxes of a parcel to the buyer and what is in them
+----------------------------------------
+-- number_chk: the boxes of a parcel count from 1 (shipment_boxes_number_uidx: once each).
+-- size_chk: the weight in grams and the three sizes in millimetres come together, in the bounds of
+--   a variant (a ton, ten metres), or none of them (a manual send without them).
+-- tracking_chk: the number of the carrier for the box is trimmed and not empty, its label https.
+-- items_chk: the items are a list of { orderItemId, quantity }, each item once, whole numbers above
+--   0 (shipment_box_items_valid, db/05); that they are the items of the order of the parcel and no
+--   more units than were bought is the trigger of the table (db/05).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shipment_boxes_number_chk') THEN
+    ALTER TABLE cartlify.shipment_boxes DROP CONSTRAINT shipment_boxes_number_chk;
+  END IF;
+
+  ALTER TABLE cartlify.shipment_boxes
+    ADD CONSTRAINT shipment_boxes_number_chk
+    CHECK (number >= 1 AND number <= 1000);
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shipment_boxes_size_chk') THEN
+    ALTER TABLE cartlify.shipment_boxes DROP CONSTRAINT shipment_boxes_size_chk;
+  END IF;
+
+  ALTER TABLE cartlify.shipment_boxes
+    ADD CONSTRAINT shipment_boxes_size_chk
+    CHECK (
+      (
+        "weightGrams" IS NULL
+        AND "lengthMm" IS NULL
+        AND "widthMm" IS NULL
+        AND "heightMm" IS NULL
+      )
+      OR (
+        "weightGrams" IS NOT NULL AND "weightGrams" > 0 AND "weightGrams" <= 1000000
+        AND "lengthMm" IS NOT NULL AND "lengthMm" > 0 AND "lengthMm" <= 10000
+        AND "widthMm" IS NOT NULL AND "widthMm" > 0 AND "widthMm" <= 10000
+        AND "heightMm" IS NOT NULL AND "heightMm" > 0 AND "heightMm" <= 10000
+      )
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shipment_boxes_tracking_chk') THEN
+    ALTER TABLE cartlify.shipment_boxes DROP CONSTRAINT shipment_boxes_tracking_chk;
+  END IF;
+
+  ALTER TABLE cartlify.shipment_boxes
+    ADD CONSTRAINT shipment_boxes_tracking_chk
+    CHECK (
+      (
+        "trackingNumber" IS NULL
+        OR (char_length("trackingNumber") >= 1 AND "trackingNumber" = btrim("trackingNumber"))
+      )
+      AND ("labelUrl" IS NULL OR "labelUrl" ~ '^https://[^[:space:]]+$')
+    );
+
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'shipment_boxes_items_chk') THEN
+    ALTER TABLE cartlify.shipment_boxes DROP CONSTRAINT shipment_boxes_items_chk;
+  END IF;
+
+  ALTER TABLE cartlify.shipment_boxes
+    ADD CONSTRAINT shipment_boxes_items_chk
+    CHECK (cartlify.shipment_box_items_valid (items));
 END $$;
 
 ----------------------------------------
@@ -1278,9 +1433,10 @@ END $$;
 --   characters, the email 3-320 and an at sign.
 -- returns_stated_at_chk: a statement is not made before the moment it states (never of the future).
 -- returns_source_chk: an admin statement has its admin and its reason, one of the system its reason
---   (a dispute lost, a refund in the dashboard of the provider; nobody else gives those), any other
---   has a reason of none; only an admin or the system makes one outside the withdrawal; a statement
---   of an account names the account, one of a form or of the system names none.
+--   (a dispute lost, a refund in the dashboard of the provider, which nobody else gives; or a parcel
+--   the carrier says the buyer refused), any other has a reason of none; only an admin or the system
+--   makes one outside the withdrawal; a statement of an account names the account, one of a form or
+--   of the system names none.
 -- returns_extends_chk: a statement does not extend itself.
 -- returns_proof_chk: the proof is confirmed together with who confirmed it.
 -- return_items_quantity_chk, return_items_amount_chk: whole units above 0, money not below 0.
@@ -1336,7 +1492,8 @@ BEGIN
     ADD CONSTRAINT returns_source_chk
     CHECK (
       (source IN ('admin', 'system')) = (reason IS NOT NULL)
-      AND (source = 'system') = (reason IS NOT NULL AND reason IN ('dispute_lost', 'provider_refund'))
+      AND (source = 'system' OR reason IS NULL OR reason NOT IN ('dispute_lost', 'provider_refund'))
+      AND (source <> 'system' OR reason IN ('dispute_lost', 'provider_refund', 'refused'))
       AND (source IN ('admin', 'system') OR basis = 'withdrawal')
       AND (source IN ('admin', 'account')) = ("createdById" IS NOT NULL)
     );

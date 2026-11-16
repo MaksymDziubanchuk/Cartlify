@@ -67,7 +67,15 @@ BEGIN
       ('order_shipments', 'rolledBackAt'), ('order_shipments', 'recordedById'),
       ('order_shipments', 'confirmedAt'), ('order_shipments', 'confirmedById'),
       ('order_shipments', 'buyerPaid'), ('order_shipments', 'createdAt'),
-      ('order_shipments', 'updatedAt'),
+      ('order_shipments', 'updatedAt'), ('order_shipments', 'providerParcelId'),
+      ('order_shipments', 'labelUrl'), ('order_shipments', 'state'),
+      -- the boxes of a parcel: the number and the label of a box lead to the person, they change
+      -- below; the sizes and the items name no one
+      ('shipment_boxes', 'id'), ('shipment_boxes', 'shipmentId'), ('shipment_boxes', 'number'),
+      ('shipment_boxes', 'weightGrams'), ('shipment_boxes', 'lengthMm'),
+      ('shipment_boxes', 'widthMm'), ('shipment_boxes', 'heightMm'),
+      ('shipment_boxes', 'trackingNumber'), ('shipment_boxes', 'labelUrl'),
+      ('shipment_boxes', 'items'), ('shipment_boxes', 'createdAt'),
       ('order_deliveries', 'orderId'), ('order_deliveries', 'method'),
       ('order_deliveries', 'recipientFirstName'), ('order_deliveries', 'recipientLastName'),
       ('order_deliveries', 'recipientPhone'), ('order_deliveries', 'country'),
@@ -76,6 +84,9 @@ BEGIN
       ('order_deliveries', 'apartment'), ('order_deliveries', 'note'),
       ('order_deliveries', 'price'), ('order_deliveries', 'createdAt'),
       ('order_deliveries', 'updatedAt'),
+      -- the carrier the buyer picked: a carrier of the shop, it names no one
+      ('order_deliveries', 'carrierName'), ('order_deliveries', 'carrierService'),
+      ('order_deliveries', 'carrierConnection'),
       ('chat_threads', 'id'), ('chat_threads', 'userId'), ('chat_threads', 'type'),
       ('chat_threads', 'status'), ('chat_threads', 'lastMessageAt'),
       ('chat_threads', 'unreadCount'), ('chat_threads', 'lastMessagePreview'),
@@ -327,11 +338,20 @@ UPDATE cartlify.return_items
 SET
   "amountNote" = CASE WHEN "amountNote" IS NOT NULL THEN 'Lowered by the shop' END;
 
--- the number and the link of a parcel are made up: they lead to the person the parcel goes to
+-- the number and the link of a parcel are made up: they lead to the person the parcel goes to; so
+-- do the id of a parcel at the delivery provider and its label (a pdf with the address and the
+-- phone)
 UPDATE cartlify.order_shipments
 SET
   "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'TRACK' || id END,
-  "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/' || id END;
+  "trackingUrl" = CASE WHEN "trackingUrl" IS NOT NULL THEN 'https://example.com/track/' || id END,
+  "providerParcelId" = CASE WHEN "providerParcelId" IS NOT NULL THEN 'PARCEL' || id END,
+  "labelUrl" = CASE WHEN "labelUrl" IS NOT NULL THEN 'https://example.com/label/' || id END;
+
+UPDATE cartlify.shipment_boxes
+SET
+  "trackingNumber" = CASE WHEN "trackingNumber" IS NOT NULL THEN 'BOX' || id END,
+  "labelUrl" = CASE WHEN "labelUrl" IS NOT NULL THEN 'https://example.com/label/box/' || id END;
 
 
 ------------------------------------------------------------
@@ -523,6 +543,16 @@ BEGIN
       FROM cartlify.order_shipments
       WHERE ("trackingNumber" IS NOT NULL AND "trackingNumber" <> 'TRACK' || id)
         OR ("trackingUrl" IS NOT NULL AND "trackingUrl" <> 'https://example.com/track/' || id)
+        OR ("providerParcelId" IS NOT NULL AND "providerParcelId" <> 'PARCEL' || id)
+        OR ("labelUrl" IS NOT NULL AND "labelUrl" <> 'https://example.com/label/' || id)
+    )
+    UNION ALL
+    SELECT 'shipment_boxes'
+    WHERE EXISTS (
+      SELECT 1
+      FROM cartlify.shipment_boxes
+      WHERE ("trackingNumber" IS NOT NULL AND "trackingNumber" <> 'BOX' || id)
+        OR ("labelUrl" IS NOT NULL AND "labelUrl" <> 'https://example.com/label/box/' || id)
     )
     UNION ALL
     SELECT 'chat_messages'

@@ -1869,10 +1869,11 @@ BEGIN
 END;
 $$;
 
--- Gives what the buyer pays for the delivery: the manual method costs the flat price, and
--- nothing from the free-from sum of the items on (that sum itself is free); a pickup, and a shop
--- that names no flat price, cost nothing. The server gives the flat price and the free-from sum
--- from its settings. Pure arithmetic, no table is read.
+-- Gives what the buyer pays for the delivery: the manual method and a carrier cost the price the
+-- server gives (the price of the zone of the country for the manual one, the price of the delivery
+-- provider for the carrier the buyer picked), and nothing from the free-from sum of the items of
+-- the zone on (that sum itself is free); a pickup, and no price, cost nothing. Pure arithmetic, no
+-- table is read.
 CREATE OR REPLACE FUNCTION cartlify.delivery_price (
   p_method cartlify."DeliveryMethod",
   p_items_total numeric,
@@ -1880,7 +1881,7 @@ CREATE OR REPLACE FUNCTION cartlify.delivery_price (
   p_free_from numeric
 ) RETURNS numeric LANGUAGE sql IMMUTABLE AS $$
   SELECT CASE
-    WHEN p_method IS DISTINCT FROM 'manual' OR p_flat IS NULL THEN 0::numeric
+    WHEN p_method IS NULL OR p_method NOT IN ('manual', 'carrier') OR p_flat IS NULL THEN 0::numeric
     WHEN p_free_from IS NOT NULL AND p_items_total >= p_free_from THEN 0::numeric
     ELSE p_flat
   END
@@ -2024,6 +2025,12 @@ BEGIN
 
   IF NOT FOUND THEN
     RAISE EXCEPTION 'ORDER_DELIVERY_REQUIRED';
+  END IF;
+
+  -- a carrier costs what the delivery provider prices it at, which the server gives: without a
+  -- price nothing is confirmed (no price would be a delivery for nothing)
+  IF v_method = 'carrier' AND p_delivery_flat IS NULL THEN
+    RAISE EXCEPTION 'ORDER_DELIVERY_PRICE_REQUIRED';
   END IF;
 
   SELECT COALESCE(SUM(oi."totalPrice"), 0)
@@ -3734,9 +3741,9 @@ BEGIN
     "recipientLastName" = 'Customer',
     "recipientPhone" = '+10000000000',
     "postalCode" = NULL,
-    city = CASE WHEN d.method = 'manual' THEN 'City' END,
-    street = CASE WHEN d.method = 'manual' THEN 'Street' END,
-    house = CASE WHEN d.method = 'manual' THEN '0' END,
+    city = CASE WHEN d.method IN ('manual', 'carrier') THEN 'City' END,
+    street = CASE WHEN d.method IN ('manual', 'carrier') THEN 'Street' END,
+    house = CASE WHEN d.method IN ('manual', 'carrier') THEN '0' END,
     apartment = NULL,
     note = NULL
   FROM cartlify.orders AS o
@@ -3764,6 +3771,30 @@ BEGIN
     AND cartlify.retention_due ('retentionRecipientDays', o."createdAt", u."deletedAt", v_now);
 
   GET DIAGNOSTICS v_count = ROW_COUNT;
+
+  -- the labels of the parcels of the delivery provider (files with the name, the address and the
+  -- phone of the recipient) and the numbers of their boxes at the carrier go with the recipient:
+  -- of every order whose recipient is anonymous
+  UPDATE cartlify.order_shipments AS s
+  SET "labelUrl" = NULL
+  FROM cartlify.order_deliveries AS d
+  WHERE d."orderId" = s."orderId"
+    AND s."returnId" IS NULL
+    AND s."labelUrl" IS NOT NULL
+    AND d."recipientFirstName" = 'Recipient'
+    AND d."recipientLastName" = 'Customer'
+    AND d."recipientPhone" = '+10000000000';
+
+  UPDATE cartlify.shipment_boxes AS b
+  SET "labelUrl" = NULL, "trackingNumber" = NULL
+  FROM cartlify.order_shipments AS s
+  JOIN cartlify.order_deliveries AS d ON d."orderId" = s."orderId"
+  WHERE s.id = b."shipmentId"
+    AND (b."labelUrl" IS NOT NULL OR b."trackingNumber" IS NOT NULL)
+    AND d."recipientFirstName" = 'Recipient'
+    AND d."recipientLastName" = 'Customer'
+    AND d."recipientPhone" = '+10000000000';
+
   RETURN v_count;
 END;
 $$;
@@ -4683,10 +4714,11 @@ CREATE TRIGGER trg_order_deliveries_before_update
 BEFORE UPDATE ON cartlify.order_deliveries FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_deliveries_before_update ();
 
--- Guard of order deliveries: a user writes where the order goes, the method too (the policy lets
--- this only while the order is not confirmed); an admin or root corrects the person and the
--- address of a paid order (the policy), but not the method or the price; the price is fixed by
--- confirm_order, a step of the database.
+-- Guard of order deliveries: a user writes where the order goes, the method and the carrier picked
+-- from the prices too (the policy lets this only while the order is not confirmed); an admin or
+-- root corrects the person and the address of a paid order (the policy) and picks another carrier
+-- of the delivery provider, or sends an order of a carrier by hand (the method carrier to manual),
+-- never another method or the price; the price is fixed by confirm_order, a step of the database.
 CREATE OR REPLACE FUNCTION cartlify.order_deliveries_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -4718,15 +4750,15 @@ BEGIN
      AND (NOT ('note' = ANY (v_changed)) OR NEW.note IS NULL)
      AND (
        NOT ('city' = ANY (v_changed))
-       OR NEW.city IS NOT DISTINCT FROM (CASE WHEN NEW.method = 'manual' THEN 'City' END)
+       OR NEW.city IS NOT DISTINCT FROM (CASE WHEN NEW.method IN ('manual', 'carrier') THEN 'City' END)
      )
      AND (
        NOT ('street' = ANY (v_changed))
-       OR NEW.street IS NOT DISTINCT FROM (CASE WHEN NEW.method = 'manual' THEN 'Street' END)
+       OR NEW.street IS NOT DISTINCT FROM (CASE WHEN NEW.method IN ('manual', 'carrier') THEN 'Street' END)
      )
      AND (
        NOT ('house' = ANY (v_changed))
-       OR NEW.house IS NOT DISTINCT FROM (CASE WHEN NEW.method = 'manual' THEN '0' END)
+       OR NEW.house IS NOT DISTINCT FROM (CASE WHEN NEW.method IN ('manual', 'carrier') THEN '0' END)
      ) THEN
     RETURN NEW;
   END IF;
@@ -4738,7 +4770,8 @@ BEGIN
      AND cartlify.current_actor_role() = 'USER'
      AND v_changed <@ ARRAY[
        'method', 'recipientFirstName', 'recipientLastName', 'recipientPhone', 'country',
-       'postalCode', 'city', 'street', 'house', 'apartment', 'note', 'price', 'updatedAt'
+       'postalCode', 'city', 'street', 'house', 'apartment', 'note', 'price', 'carrierName',
+       'carrierService', 'carrierConnection', 'updatedAt'
      ]
      AND (NOT 'price' = ANY (v_changed) OR (NEW.method = 'pickup' AND NEW."price" = 0)) THEN
     RETURN NEW;
@@ -4748,8 +4781,10 @@ BEGIN
      AND cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
      AND v_changed <@ ARRAY[
        'recipientFirstName', 'recipientLastName', 'recipientPhone', 'country', 'postalCode', 'city',
-       'street', 'house', 'apartment', 'note', 'updatedAt'
-     ] THEN
+       'street', 'house', 'apartment', 'note', 'method', 'carrierName', 'carrierService',
+       'carrierConnection', 'updatedAt'
+     ]
+     AND (NOT 'method' = ANY (v_changed) OR (OLD.method = 'carrier' AND NEW.method = 'manual')) THEN
     RETURN NEW;
   END IF;
 
@@ -4784,8 +4819,11 @@ EXECUTE FUNCTION cartlify.order_shipments_before_update ();
 -- statement: only the functions of the owner change it, and only what the buyer told of it before it
 -- was confirmed (the carrier, the number, the link, the time, what they paid), the confirmation once,
 -- what the buyer paid as the admin set it from the receipt, and the made-up number and the empty
--- link of the retention cleanup; never the order, the statement or the direction. What a parcel cost
--- the shop is in the money journal, not on the row.
+-- link of the retention cleanup; never the order, the statement or the direction. A parcel of the
+-- delivery provider: an admin or the system moves it on from made (sent with the time of its send,
+-- delivered, back, lost), never back to made and never to voided, which only void_order_parcel does
+-- (with its cost); the functions of the owner send it to its void and void it; a voided parcel stays
+-- as it is. What a parcel cost the shop is in the money journal, not on the row.
 CREATE OR REPLACE FUNCTION cartlify.order_shipments_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   v_changed text[] := ARRAY(
@@ -4800,9 +4838,35 @@ BEGIN
   IF OLD."returnId" IS NULL
      AND cartlify.current_actor_role() IN ('ADMIN', 'ROOT')
      AND v_changed <@ ARRAY[
-       'carrier', 'trackingNumber', 'trackingUrl', 'expense', 'rolledBackAt', 'updatedAt'
+       'carrier', 'trackingNumber', 'trackingUrl', 'expense', 'rolledBackAt', 'state', 'shippedAt',
+       'updatedAt'
      ]
-     AND (OLD."rolledBackAt" IS NULL OR v_changed <@ ARRAY['expense', 'updatedAt']) THEN
+     AND (OLD."rolledBackAt" IS NULL OR v_changed <@ ARRAY['expense', 'updatedAt'])
+     AND OLD.state <> 'voided'
+     AND (
+       NOT (v_changed && ARRAY['state', 'shippedAt'])
+       OR (OLD."providerParcelId" IS NOT NULL AND NEW.state NOT IN ('created', 'voided'))
+       -- a step back of the order: a parcel sent is only made again, with no time of a send
+       OR (
+         OLD."providerParcelId" IS NOT NULL AND OLD.state = 'sent' AND NEW.state = 'created'
+         AND NEW."shippedAt" IS NULL
+       )
+     ) THEN
+    RETURN NEW;
+  END IF;
+
+  IF OLD."returnId" IS NULL AND current_user = 'cartlify_owner'
+     AND OLD."providerParcelId" IS NOT NULL
+     AND OLD.state <> 'voided'
+     AND NEW.state <> 'created'
+     AND v_changed <@ ARRAY['state', 'expense', 'shippedAt', 'updatedAt'] THEN
+    RETURN NEW;
+  END IF;
+
+  -- the retention cleanup empties the link of the label of a parcel to the buyer (a file with the
+  -- name, the address and the phone of the recipient), whatever became of the parcel
+  IF OLD."returnId" IS NULL AND current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY['labelUrl', 'updatedAt'] AND NEW."labelUrl" IS NULL THEN
     RETURN NEW;
   END IF;
 
@@ -4834,6 +4898,254 @@ DROP TRIGGER IF EXISTS trg_order_shipments_update_columns ON cartlify.order_ship
 CREATE TRIGGER trg_order_shipments_update_columns
 BEFORE UPDATE ON cartlify.order_shipments FOR EACH ROW
 EXECUTE FUNCTION cartlify.order_shipments_update_columns ();
+
+-- A box of a parcel is written once: nothing of it changes, but the retention cleanup empties
+-- the link of its label and its number at the carrier (they lead to the recipient).
+CREATE OR REPLACE FUNCTION cartlify.shipment_boxes_update_columns () RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  v_changed text[] := ARRAY(
+    SELECT n.key FROM jsonb_each(to_jsonb(NEW)) AS n
+    WHERE n.value IS DISTINCT FROM to_jsonb(OLD) -> n.key
+  );
+BEGIN
+  IF (SELECT r.rolsuper FROM pg_roles AS r WHERE r.rolname = current_user) THEN
+    RETURN NEW;
+  END IF;
+
+  IF current_user = 'cartlify_owner'
+     AND v_changed <@ ARRAY['labelUrl', 'trackingNumber']
+     AND NEW."labelUrl" IS NULL AND NEW."trackingNumber" IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  RAISE EXCEPTION 'SHIPMENT_BOX_UPDATE_FORBIDDEN' USING ERRCODE = '42501';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shipment_boxes_update_columns ON cartlify.shipment_boxes;
+
+CREATE TRIGGER trg_shipment_boxes_update_columns
+BEFORE UPDATE ON cartlify.shipment_boxes FOR EACH ROW
+EXECUTE FUNCTION cartlify.shipment_boxes_update_columns ();
+
+-- True for the items of a box (db/06, shipment_boxes_items_chk): a list of 1 to 1000 objects
+-- { orderItemId, quantity } and nothing else in them, both whole numbers above 0 (an id that fits an
+-- integer, up to a million units), each item once.
+CREATE OR REPLACE FUNCTION cartlify.shipment_box_items_valid (p_items jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  v_item jsonb;
+  v_ids  bigint[] := ARRAY[]::bigint[];
+  v_id   bigint;
+BEGIN
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array'
+     OR jsonb_array_length(p_items) NOT BETWEEN 1 AND 1000 THEN
+    RETURN false;
+  END IF;
+
+  FOR v_item IN SELECT e FROM jsonb_array_elements(p_items) AS e LOOP
+    IF jsonb_typeof(v_item) <> 'object' THEN
+      RETURN false;
+    END IF;
+
+    IF (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(v_item) AS k)
+         IS DISTINCT FROM ARRAY['orderItemId', 'quantity']
+       OR jsonb_typeof(v_item -> 'orderItemId') <> 'number'
+       OR jsonb_typeof(v_item -> 'quantity') <> 'number'
+       OR (v_item ->> 'orderItemId') !~ '^[1-9][0-9]{0,9}$'
+       OR (v_item ->> 'quantity') !~ '^[1-9][0-9]{0,5}$' THEN
+      RETURN false;
+    END IF;
+
+    v_id := (v_item ->> 'orderItemId')::bigint;
+    IF v_id > 2147483647 OR v_id = ANY (v_ids) THEN
+      RETURN false;
+    END IF;
+    v_ids := v_ids || v_id;
+  END LOOP;
+
+  RETURN true;
+END;
+$$;
+
+-- Guard of the boxes, before a box is written: its parcel is a parcel to the buyer of an order
+-- (SHIPMENT_BOX_SHIPMENT_INVALID); every item of it is an item of that order
+-- (SHIPMENT_BOX_ITEM_INVALID); the live parcels of the order (not waiting for their void, not
+-- voided, not taken back) never hold more units of an item than were bought
+-- (SHIPMENT_BOX_ITEMS_EXCEED). The boxes of an order are written one after another (the order is
+-- locked). Items of a wrong shape are left to shipment_boxes_items_chk. The time is the database's.
+CREATE OR REPLACE FUNCTION cartlify.shipment_boxes_before_insert () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_order_id integer;
+BEGIN
+  NEW."createdAt" := now() AT TIME ZONE 'UTC';
+
+  IF NOT cartlify.shipment_box_items_valid (NEW.items) THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT s."orderId" INTO v_order_id
+  FROM cartlify.order_shipments AS s
+  WHERE s.id = NEW."shipmentId" AND s."returnId" IS NULL AND s.direction = 'to_buyer';
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'SHIPMENT_BOX_SHIPMENT_INVALID';
+  END IF;
+
+  PERFORM 1 FROM cartlify.orders AS o WHERE o.id = v_order_id FOR UPDATE;
+
+  IF EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(NEW.items) AS e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM cartlify.order_items AS i
+      WHERE i.id = (e ->> 'orderItemId')::integer AND i."orderId" = v_order_id
+    )
+  ) THEN
+    RAISE EXCEPTION 'SHIPMENT_BOX_ITEM_INVALID';
+  END IF;
+
+  IF EXISTS (
+    SELECT 1
+    FROM (
+      SELECT (e ->> 'orderItemId')::integer AS item_id, sum((e ->> 'quantity')::integer) AS units
+      FROM (
+        SELECT b.items
+        FROM cartlify.shipment_boxes AS b
+        JOIN cartlify.order_shipments AS s ON s.id = b."shipmentId"
+        WHERE s."orderId" = v_order_id
+          AND s."returnId" IS NULL
+          AND s.direction = 'to_buyer'
+          AND s."rolledBackAt" IS NULL
+          AND s.state NOT IN ('void_pending', 'voided')
+        UNION ALL
+        SELECT NEW.items
+      ) AS boxes
+      CROSS JOIN LATERAL jsonb_array_elements(boxes.items) AS e
+      GROUP BY 1
+    ) AS packed
+    JOIN cartlify.order_items AS i ON i.id = packed.item_id
+    WHERE packed.units > i.quantity
+  ) THEN
+    RAISE EXCEPTION 'SHIPMENT_BOX_ITEMS_EXCEED';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_shipment_boxes_before_insert ON cartlify.shipment_boxes;
+
+CREATE TRIGGER trg_shipment_boxes_before_insert
+BEFORE INSERT ON cartlify.shipment_boxes FOR EACH ROW
+EXECUTE FUNCTION cartlify.shipment_boxes_before_insert ();
+
+-- An order cancelled before the carrier took its parcels: every parcel of the delivery provider
+-- that is only made (created) waits for its void (void_pending), whatever cancelled the order (a
+-- statement of the buyer or of an admin, a decision on a hold); the worker of the voids takes it
+-- from there.
+CREATE OR REPLACE FUNCTION cartlify.orders_after_cancel_void_parcels () RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  UPDATE cartlify.order_shipments AS s
+  SET state = 'void_pending'
+  WHERE s."orderId" = NEW.id AND s.state = 'created';
+
+  RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_orders_after_cancel_void_parcels ON cartlify.orders;
+
+CREATE TRIGGER trg_orders_after_cancel_void_parcels
+AFTER UPDATE OF status ON cartlify.orders FOR EACH ROW
+WHEN (NEW.status = 'cancelled' AND OLD.status IS DISTINCT FROM 'cancelled')
+EXECUTE FUNCTION cartlify.orders_after_cancel_void_parcels ();
+
+-- Voids a parcel of the delivery provider the carrier never took: the worker of the voids once the
+-- provider voided it, an admin after the carrier cancelled it in its dashboard (a carrier the
+-- provider cannot ask), or an admin who made it wrong and makes it again. Only a parcel that is
+-- made or waits for its void (ORDER_PARCEL_STATE_INVALID); an admin, root or the system
+-- (ORDER_PARCEL_FORBIDDEN); ORDER_PARCEL_NOT_FOUND for a parcel of the provider there is not. The
+-- shop owes the carrier nothing for it: no expense, its cost in the money journal corrected to
+-- nothing. The answer is { shipmentId, orderId, oldCost, changed }: oldCost the cost it had (text,
+-- two decimals; null while no line named it), changed a line was written.
+CREATE OR REPLACE FUNCTION cartlify.void_order_parcel (p_shipment_id integer) RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+DECLARE
+  v_order_id integer;
+  v_user_id  integer;
+  v_state    cartlify."ParcelState";
+  v_first    integer;
+  v_old      numeric;
+  v_changed  boolean := false;
+BEGIN
+  IF NOT cartlify.is_admin () THEN
+    RAISE EXCEPTION 'ORDER_PARCEL_FORBIDDEN';
+  END IF;
+
+  SELECT s."orderId" INTO v_order_id
+  FROM cartlify.order_shipments AS s
+  WHERE s.id = p_shipment_id AND s."providerParcelId" IS NOT NULL;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'ORDER_PARCEL_NOT_FOUND';
+  END IF;
+
+  -- the voids and the costs of the parcels of an order go one after another
+  SELECT o."userId" INTO v_user_id FROM cartlify.orders AS o WHERE o.id = v_order_id FOR UPDATE;
+
+  SELECT s.state INTO v_state
+  FROM cartlify.order_shipments AS s
+  WHERE s.id = p_shipment_id
+  FOR UPDATE;
+
+  IF v_state NOT IN ('created', 'void_pending') THEN
+    RAISE EXCEPTION 'ORDER_PARCEL_STATE_INVALID';
+  END IF;
+
+  -- the parcel stays a send the shop counted a cost for: the reports keep the cost in the period
+  -- it was written in, and the correction below takes it back in the period of the void
+  UPDATE cartlify.order_shipments AS s
+  SET state = 'voided'
+  WHERE s.id = p_shipment_id;
+
+  SELECT min(l.id) FILTER (WHERE l.event = 'money.shipping_cost'), COALESCE(-SUM(l.amount), 0)
+  INTO v_first, v_old
+  FROM cartlify.money_log AS l
+  WHERE l."orderShipmentId" = p_shipment_id AND l.purpose = 'shipping' AND l.event <> 'money.received';
+
+  IF v_first IS NOT NULL AND v_old <> 0 THEN
+    PERFORM cartlify.log_money_change (
+      jsonb_build_object(
+        'event', 'money.correction',
+        'purpose', 'shipping',
+        'part', 'whole',
+        'amount', v_old,
+        'orderId', v_order_id,
+        'userId', v_user_id,
+        'orderShipmentId', p_shipment_id,
+        'coversId', v_first
+      )
+    );
+
+    v_changed := true;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'shipmentId', p_shipment_id,
+    'orderId', v_order_id,
+    'oldCost', CASE WHEN v_first IS NOT NULL THEN to_char(v_old, 'FM99999999990.00') END,
+    'changed', v_changed
+  );
+END;
+$$;
 
 -- Guard of chat threads: a chat keeps its user or guest, a closed chat stays closed, a request
 -- for an admin is made now, never earlier (the queue goes by adminRequestedAt; a minute is left
@@ -5370,6 +5682,137 @@ CREATE OR REPLACE FUNCTION cartlify.shop_setting_list_valid (p_value jsonb, p_pa
     AND jsonb_array_length(p_value) = (SELECT count(DISTINCT e) FROM jsonb_array_elements(p_value) AS e);
 $$;
 
+-- True for a sum of money of a setting: a number of 0 or more (above 0 unless zero is taken), to
+-- the cent, at most what an amount of the shop holds.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_money_valid (p_value jsonb, p_zero boolean) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+  SELECT coalesce(
+    jsonb_typeof(p_value) = 'number'
+      AND (CASE WHEN jsonb_typeof(p_value) = 'number' THEN
+        (p_value)::numeric >= 0
+        AND (p_zero OR (p_value)::numeric > 0)
+        AND (p_value)::numeric <= 99999999.99
+        AND (p_value)::numeric = round((p_value)::numeric, 2)
+      END),
+    false
+  );
+$$;
+
+-- True for the zones of the delivery (deliveryZones): a list of up to 100 zones, each
+-- { name, countries, manualPrice, freeFrom } and nothing else: a name of 1 to 100 characters,
+-- trimmed, once; the countries a list of two capital letters, at least one, or 'rest' (every
+-- country the server delivers to that no other zone names; one such zone at most); the price of the
+-- manual delivery to the zone 0 or more, null when the manual delivery does not go there; the sum
+-- of the items from which every delivery to the zone is free, above 0 or null. A country is in one
+-- zone only. Which countries the server delivers to at all is the server's rule.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_zones_valid (p_value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  v_zone      jsonb;
+  v_name      text;
+  v_names     text[] := ARRAY[]::text[];
+  v_countries text[] := ARRAY[]::text[];
+  v_country   jsonb;
+  v_rest      integer := 0;
+BEGIN
+  IF p_value IS NULL OR jsonb_typeof(p_value) <> 'array' OR jsonb_array_length(p_value) > 100 THEN
+    RETURN false;
+  END IF;
+
+  FOR v_zone IN SELECT e FROM jsonb_array_elements(p_value) AS e LOOP
+    IF jsonb_typeof(v_zone) <> 'object' THEN
+      RETURN false;
+    END IF;
+
+    IF (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(v_zone) AS k)
+         IS DISTINCT FROM ARRAY['countries', 'freeFrom', 'manualPrice', 'name']
+       OR jsonb_typeof(v_zone -> 'name') <> 'string' THEN
+      RETURN false;
+    END IF;
+
+    v_name := v_zone ->> 'name';
+    IF char_length(v_name) NOT BETWEEN 1 AND 100 OR v_name <> btrim(v_name) OR v_name = ANY (v_names) THEN
+      RETURN false;
+    END IF;
+    v_names := v_names || v_name;
+
+    IF jsonb_typeof(v_zone -> 'manualPrice') <> 'null'
+       AND NOT cartlify.shop_setting_money_valid (v_zone -> 'manualPrice', true) THEN
+      RETURN false;
+    END IF;
+
+    IF jsonb_typeof(v_zone -> 'freeFrom') <> 'null'
+       AND NOT cartlify.shop_setting_money_valid (v_zone -> 'freeFrom', false) THEN
+      RETURN false;
+    END IF;
+
+    IF v_zone -> 'countries' = '"rest"'::jsonb THEN
+      v_rest := v_rest + 1;
+    ELSIF jsonb_typeof(v_zone -> 'countries') = 'array' AND jsonb_array_length(v_zone -> 'countries') >= 1 THEN
+      FOR v_country IN SELECT c FROM jsonb_array_elements(v_zone -> 'countries') AS c LOOP
+        IF jsonb_typeof(v_country) <> 'string' OR (v_country #>> '{}') !~ '^[A-Z]{2}$'
+           OR (v_country #>> '{}') = ANY (v_countries) THEN
+          RETURN false;
+        END IF;
+        v_countries := v_countries || (v_country #>> '{}');
+      END LOOP;
+    ELSE
+      RETURN false;
+    END IF;
+  END LOOP;
+
+  RETURN v_rest <= 1;
+END;
+$$;
+
+-- True for the address the parcels of the delivery provider go from (deliverySender):
+-- { name, street, house, apartment, city, postalCode, country, phone, email } and nothing else; the
+-- texts trimmed and not empty, as long as the address of an order takes them (the name up to 200),
+-- the apartment and the postal code may be null; the country two capital letters, the phone in the
+-- international form, the email up to 254 characters with an @ and no spaces.
+CREATE OR REPLACE FUNCTION cartlify.shop_setting_sender_valid (p_value jsonb) RETURNS boolean LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+  v_field record;
+  v_text  text;
+BEGIN
+  IF p_value IS NULL OR jsonb_typeof(p_value) <> 'object' THEN
+    RETURN false;
+  END IF;
+
+  IF (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(p_value) AS k)
+       IS DISTINCT FROM ARRAY[
+         'apartment', 'city', 'country', 'email', 'house', 'name', 'phone', 'postalCode', 'street'
+       ] THEN
+    RETURN false;
+  END IF;
+
+  FOR v_field IN
+    SELECT *
+    FROM (
+      VALUES
+        ('name', 200, false), ('street', 150, false), ('house', 20, false),
+        ('apartment', 40, true), ('city', 100, false), ('postalCode', 16, true),
+        ('country', 2, false), ('phone', 16, false), ('email', 254, false)
+    ) AS f (key, max_length, nullable)
+  LOOP
+    IF jsonb_typeof(p_value -> v_field.key) = 'null' AND v_field.nullable THEN
+      CONTINUE;
+    END IF;
+
+    IF jsonb_typeof(p_value -> v_field.key) <> 'string' THEN
+      RETURN false;
+    END IF;
+
+    v_text := p_value ->> v_field.key;
+    IF char_length(v_text) NOT BETWEEN 1 AND v_field.max_length OR v_text <> btrim(v_text) THEN
+      RETURN false;
+    END IF;
+  END LOOP;
+
+  RETURN (p_value ->> 'country') ~ '^[A-Z]{2}$'
+    AND (p_value ->> 'phone') ~ '^\+[1-9][0-9]{7,14}$'
+    AND (p_value ->> 'email') ~ '^[^@[:space:]]+@[^@[:space:]]+$';
+END;
+$$;
+
 -- True when the value is of the shape its key takes; false for a key the server does not know.
 -- Money is above zero to the cent and at most what an amount of the shop holds; a count is a
 -- whole number; a text has the length its field allows; null is "no value" for a setting that
@@ -5386,14 +5829,15 @@ BEGIN
 
   CASE p_key
     WHEN 'deliveryMethods' THEN
-      v_valid := cartlify.shop_setting_list_valid(p_value, '^(manual|pickup)$');
-    WHEN 'deliveryCountries' THEN
-      v_valid := cartlify.shop_setting_list_valid(p_value, '^[A-Z]{2}$');
+      v_valid := cartlify.shop_setting_list_valid(p_value, '^(manual|pickup|carrier)$');
+    WHEN 'deliveryZones' THEN
+      v_valid := cartlify.shop_setting_zones_valid(p_value);
+    WHEN 'customsFreeCountries' THEN
+      v_valid := v_type = 'null' OR cartlify.shop_setting_list_valid(p_value, '^[A-Z]{2}$');
+    WHEN 'deliverySender' THEN
+      v_valid := v_type = 'null' OR cartlify.shop_setting_sender_valid(p_value);
     WHEN 'enabledLocales' THEN
       v_valid := cartlify.shop_setting_list_valid(p_value, '^[a-z]{2}$');
-    WHEN 'deliveryFlatPrice', 'deliveryFreeFrom' THEN
-      v_valid := v_type = 'null'
-        OR (v_number > 0 AND v_number <= 99999999.99 AND v_number = round(v_number, 2));
     WHEN 'pickupAddress', 'pickupHours' THEN
       v_valid := char_length(v_text) <= 300;
     WHEN 'shopName', 'emailFromName' THEN
@@ -5500,15 +5944,27 @@ EXECUTE FUNCTION cartlify.shop_settings_append_only ();
 ------------------------------------------------------------
 
 -- Whether the goods of an order were never handed over to the buyer: a paid order that was not
--- sent, or a pickup that is ready and not collected (shipped, the goods still on the shelf of the
--- shop). A statement for such an order takes its goods back at once. Internal step: the returns
--- functions call it with the status they read under the lock of the order; the app has no execute
--- right (db/01).
+-- sent (no parcel of it the carrier took: one it took makes the order a sent one for the statements,
+-- decision 16 of the delivery), or a pickup that is ready and not collected (shipped, the goods
+-- still on the shelf of the shop). A statement for such an order takes its goods back at once.
+-- Internal step: the returns functions call it with the status they read under the lock of the
+-- order; the app has no execute right (db/01).
 CREATE OR REPLACE FUNCTION cartlify.order_goods_on_shelf (p_order_id integer, p_status cartlify."OrderStatus") RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
 SET
   search_path = cartlify,
   pg_temp AS $$
-  SELECT p_status = 'paid'
+  SELECT (
+      p_status = 'paid'
+      AND NOT EXISTS (
+        SELECT 1
+        FROM cartlify.order_shipments AS s
+        WHERE s."orderId" = p_order_id
+          AND s."returnId" IS NULL
+          AND s.direction = 'to_buyer'
+          AND s."rolledBackAt" IS NULL
+          AND s.state NOT IN ('created', 'void_pending', 'voided')
+      )
+    )
     OR (
       p_status = 'shipped'
       AND EXISTS (
@@ -5543,6 +5999,7 @@ DECLARE
   v_money  boolean;
   v_full   boolean;
   v_whole  boolean;
+  v_shelf  boolean;
   v_order_status text;
   v_status cartlify."ReturnStatus";
 BEGIN
@@ -5630,8 +6087,12 @@ BEGIN
 
   SELECT o.status::text INTO v_order_status FROM cartlify.orders AS o WHERE o.id = p_order_id;
 
-  IF (cartlify.order_goods_on_shelf (p_order_id, v_order_status::cartlify."OrderStatus") AND v_whole)
-     OR (v_order_status = 'shipped' AND v_status = 'full') THEN
+  v_shelf := cartlify.order_goods_on_shelf (p_order_id, v_order_status::cartlify."OrderStatus");
+
+  -- a paid order the carrier took a parcel of is a sent one (decision 16 of the delivery)
+  IF (v_shelf AND v_whole)
+     OR (v_order_status = 'shipped' AND v_status = 'full')
+     OR (v_order_status = 'paid' AND NOT v_shelf AND v_status = 'full') THEN
     UPDATE cartlify.orders AS o
     SET status = 'cancelled', "cancelledAt" = now() AT TIME ZONE 'UTC', holds = '[]'::jsonb
     WHERE o.id = p_order_id;
@@ -5671,6 +6132,42 @@ BEGIN
 END;
 $$;
 
+-- The parcels of the delivery provider a statement takes units from before the carrier took them
+-- (decisions 16 and 22 of the delivery): every parcel only made whose boxes hold an item of the
+-- statement waits for its void (the worker of the voids, or the admin, closes it), the others stay;
+-- the admin makes a parcel of what is left. A statement of the form without the code does it once
+-- an admin accepted it. A refusal voids none: its units are the ones of the parcels the carrier
+-- took, a parcel only made that holds the same item holds other units of it. Internal step:
+-- create_return and accept_return call it under the lock of the order; the app has no execute
+-- right (db/01).
+CREATE OR REPLACE FUNCTION cartlify.void_statement_parcels (p_return_id integer) RETURNS void LANGUAGE plpgsql SECURITY DEFINER
+SET
+  search_path = cartlify,
+  pg_temp AS $$
+BEGIN
+  UPDATE cartlify.order_shipments AS s
+  SET state = 'void_pending'
+  WHERE s."orderId" = (
+      SELECT r."orderId"
+      FROM cartlify.returns AS r
+      WHERE r.id = p_return_id AND r.reason IS DISTINCT FROM 'refused'
+    )
+    AND s.state = 'created'
+    AND s."providerParcelId" IS NOT NULL
+    AND s."returnId" IS NULL
+    AND s.direction = 'to_buyer'
+    AND s."rolledBackAt" IS NULL
+    AND EXISTS (
+      SELECT 1
+      FROM cartlify.shipment_boxes AS b
+      CROSS JOIN LATERAL jsonb_array_elements(b.items) AS e
+      JOIN cartlify.return_items AS i
+        ON i."returnId" = p_return_id AND i."orderItemId" = (e.value ->> 'orderItemId')::integer
+      WHERE b."shipmentId" = s.id
+    );
+END;
+$$;
+
 -- Makes a statement of withdrawal or of return for the items of a paid, shipped or delivered order
 -- and returns its id. The one place a statement is made, for every source: an admin (any basis, any
 -- reason of an admin), the buyer from the account (withdrawal, an order of their own), the system
@@ -5699,7 +6196,11 @@ $$;
 -- sent for all of this: the shop cancels it, and a statement of the buyer brings its goods back.
 -- Each statement gets the next number of its order (the code the buyer and the admins see). A
 -- statement from the account or with the code takes the units an open form without the code holds
--- (take_back_manual_units): the form gives them up as not arrived, refused, stated_again.
+-- (take_back_manual_units): the form gives them up as not arrived, refused, stated_again. The
+-- parcels of the delivery provider the carrier has not taken that hold an item of the statement wait
+-- for their void (void_statement_parcels; a form without the code once accepted). A paid order the
+-- carrier took a parcel of is a sent one (decision 16 of the delivery): a statement of the buyer
+-- brings back at once only the units still on the shelf, the ones on their way are expected.
 CREATE OR REPLACE FUNCTION cartlify.create_return (
   p_order_id integer,
   p_items jsonb,
@@ -5737,6 +6238,14 @@ DECLARE
   v_taken     integer;
   v_on_shelf  boolean;
   v_number    integer;
+  v_results   jsonb;
+  -- the parcels of the delivery provider a refusal takes: a provider tells it of a parcel that goes
+  -- back, so only the parcels coming back; the admin tells it from the buyer or the carrier, and the
+  -- provider may skip the state going back or never send it, so every parcel not delivered
+  v_back      cartlify."ParcelState"[] := CASE
+    WHEN p_source = 'system' THEN ARRAY['returning', 'returned']::cartlify."ParcelState"[]
+    ELSE ARRAY['sent', 'returning', 'returned']::cartlify."ParcelState"[]
+  END;
 BEGIN
   IF p_source = 'admin' THEN
     IF NOT cartlify.is_admin () OR v_actor IS NULL THEN
@@ -5754,12 +6263,16 @@ BEGIN
     RAISE EXCEPTION 'RETURN_FORBIDDEN';
   END IF;
 
-  -- the reasons of the system are its own, and it gives no other
-  IF (p_source = 'system') <> COALESCE(p_reason IN ('dispute_lost', 'provider_refund'), false) THEN
+  -- the reasons of the system are its own, and nobody else gives them; beside them the system tells
+  -- a parcel the carrier says the buyer refused (decision 16 of the delivery)
+  IF (p_source = 'system')
+     <> COALESCE(p_reason IN ('dispute_lost', 'provider_refund'), false)
+     AND NOT (p_source = 'system' AND p_reason IS NOT DISTINCT FROM 'refused') THEN
     RAISE EXCEPTION 'RETURN_REASON_INVALID';
   END IF;
 
-  IF p_stated_at IS NOT NULL AND p_source <> 'admin' THEN
+  IF p_stated_at IS NOT NULL AND p_source <> 'admin'
+     AND NOT (p_source = 'system' AND p_reason IS NOT DISTINCT FROM 'refused') THEN
     RAISE EXCEPTION 'RETURN_FORBIDDEN';
   END IF;
 
@@ -5814,10 +6327,17 @@ BEGIN
     RAISE EXCEPTION 'RETURN_STATED_AT_INVALID';
   END IF;
 
-  -- a parcel refused is told with the moment the carrier gives, which is the admin's to give (the
-  -- period and the reports count from it) and never before the parcel was sent
+  -- a parcel refused is told with the moment the carrier gives, which is the admin's to give (or the
+  -- one of the event of the provider; the period and the reports count from it) and never before
+  -- the parcel was sent: the parcels of the provider the refusal takes when there are, all of them else
   IF p_reason = 'refused' THEN
     IF p_stated_at IS NULL OR v_stated < COALESCE(
+      (
+        SELECT MAX(sh."shippedAt")
+        FROM cartlify.order_shipments AS sh
+        WHERE sh."orderId" = p_order_id AND sh."returnId" IS NULL AND sh."rolledBackAt" IS NULL
+          AND sh.state = ANY (v_back)
+      ),
       (
         SELECT MAX(sh."shippedAt")
         FROM cartlify.order_shipments AS sh
@@ -5845,12 +6365,48 @@ BEGIN
     IF p_basis <> 'withdrawal' THEN
       RAISE EXCEPTION 'RETURN_REASON_INVALID';
     END IF;
-    IF v_status <> 'shipped' OR v_on_shelf THEN
+    -- a sent order, or a paid one the carrier took a parcel of (decision 16 of the delivery)
+    IF v_status NOT IN ('paid', 'shipped') OR v_on_shelf THEN
       RAISE EXCEPTION 'RETURN_ORDER_NOT_RETURNABLE';
     END IF;
   END IF;
 
-  IF p_reason IN ('refused', 'dispute_lost', 'provider_refund') THEN
+  -- a parcel of the delivery provider refused takes the units of its parcels (v_back) that no
+  -- statement holds; the other parcels of the order may be delivered (decision 39 of the delivery)
+  IF p_reason = 'refused' AND EXISTS (
+    SELECT 1
+    FROM cartlify.order_shipments AS sh
+    WHERE sh."orderId" = p_order_id AND sh."returnId" IS NULL AND sh."providerParcelId" IS NOT NULL
+  ) THEN
+    SELECT COALESCE(
+      jsonb_agg(jsonb_build_object('orderItemId', oi.id, 'quantity', b.units) ORDER BY oi.id),
+      '[]'::jsonb
+    )
+    INTO p_items
+    FROM cartlify.order_items AS oi
+    CROSS JOIN LATERAL (
+      SELECT LEAST(
+        oi.quantity - (
+          SELECT COALESCE(SUM(i.quantity), 0)
+          FROM cartlify.return_items AS i
+          WHERE i."orderItemId" = oi.id AND i.money <> 'refused'
+        ),
+        (
+          SELECT COALESCE(SUM((e.value ->> 'quantity')::integer), 0)
+          FROM cartlify.order_shipments AS s
+          JOIN cartlify.shipment_boxes AS x ON x."shipmentId" = s.id
+          CROSS JOIN LATERAL jsonb_array_elements(x.items) AS e
+          WHERE s."orderId" = p_order_id
+            AND s."returnId" IS NULL
+            AND s.direction = 'to_buyer'
+            AND s."rolledBackAt" IS NULL
+            AND s.state = ANY (v_back)
+            AND (e.value ->> 'orderItemId')::integer = oi.id
+        )
+      ) AS units
+    ) AS b
+    WHERE oi."orderId" = p_order_id AND b.units > 0;
+  ELSIF p_reason IN ('refused', 'dispute_lost', 'provider_refund') THEN
     SELECT COALESCE(
       jsonb_agg(jsonb_build_object('orderItemId', oi.id, 'quantity', oi.quantity - t.taken) ORDER BY oi.id),
       '[]'::jsonb
@@ -6004,6 +6560,50 @@ BEGIN
       ),
       COALESCE(v_actor, v_owner)
     );
+  ELSIF p_source IN ('account', 'form_code') AND v_status = 'paid' THEN
+    -- a paid order the carrier took a part of: the units on the shelf (the ones of the parcels it has
+    -- not taken, and the ones in no parcel) come back at once, the ones on their way are expected.
+    -- The units of the other statements of the item are counted on the shelf first, as they were
+    SELECT jsonb_agg(
+      jsonb_build_object('itemId', i.id, 'quantity', u.units, 'goods', 'to_stock') ORDER BY i.id
+    )
+    INTO v_results
+    FROM cartlify.return_items AS i
+    JOIN cartlify.order_items AS oi ON oi.id = i."orderItemId"
+    CROSS JOIN LATERAL (
+      SELECT LEAST(
+        i.quantity,
+        oi.quantity
+          - (
+            SELECT COALESCE(SUM((e.value ->> 'quantity')::integer), 0)
+            FROM cartlify.order_shipments AS s
+            JOIN cartlify.shipment_boxes AS b ON b."shipmentId" = s.id
+            CROSS JOIN LATERAL jsonb_array_elements(b.items) AS e
+            WHERE s."orderId" = p_order_id
+              AND s."returnId" IS NULL
+              AND s.direction = 'to_buyer'
+              AND s."rolledBackAt" IS NULL
+              AND s.state NOT IN ('created', 'void_pending', 'voided')
+              AND (e.value ->> 'orderItemId')::integer = oi.id
+          )
+          - (
+            SELECT COALESCE(SUM(o.quantity), 0)
+            FROM cartlify.return_items AS o
+            WHERE o."orderItemId" = oi.id AND o.money <> 'refused' AND o."returnId" <> v_return_id
+          )
+      ) AS units
+    ) AS u
+    WHERE i."returnId" = v_return_id AND u.units > 0;
+
+    IF v_results IS NOT NULL THEN
+      PERFORM cartlify.apply_return_results (v_return_id, v_results, COALESCE(v_actor, v_owner));
+    END IF;
+  END IF;
+
+  -- the parcels not taken that hold its items are not sent (a form without the code waits for the
+  -- check of an admin)
+  IF p_source <> 'form_manual' THEN
+    PERFORM cartlify.void_statement_parcels (v_return_id);
   END IF;
 
   PERFORM cartlify.refresh_return_state (p_order_id);
@@ -6415,6 +7015,9 @@ BEGIN
   SET "acceptedAt" = (now() AT TIME ZONE 'UTC')::timestamp(3),
       "acceptedById" = v_actor
   WHERE r.id = p_return_id;
+
+  -- now the statement of the buyer: the parcels not taken that hold its items are not sent
+  PERFORM cartlify.void_statement_parcels (p_return_id);
 END;
 $$;
 
@@ -8172,7 +8775,10 @@ BEGIN
     IF v_open THEN
       PERFORM cartlify.add_order_hold (v_order_id, 'dispute', to_jsonb(v_id));
     ELSIF v_state.status = 'lost' AND EXISTS (
-      SELECT 1 FROM cartlify.orders AS o WHERE o.id = v_order_id AND o.status = 'paid'
+      SELECT 1 FROM cartlify.orders AS o
+      WHERE o.id = v_order_id AND o.status = 'paid'
+        -- a paid order the carrier took a parcel of is a sent one: the system does not cancel it
+        AND cartlify.order_goods_on_shelf (o.id, o.status)
     ) THEN
       PERFORM cartlify.add_order_hold (v_order_id, 'dispute', to_jsonb(v_id));
     ELSE
@@ -8186,12 +8792,18 @@ BEGIN
   -- (money_line_is_whole); any other line of an order sent waits for root to say what it was for
   -- (decide_money_use), and the transfers of the order wait with it
   IF NOT v_late AND v_state.status = 'lost' THEN
-    v_unsent := (SELECT o.status FROM cartlify.orders AS o WHERE o.id = v_order_id) = 'paid'
+    -- not sent: a paid order no carrier took a parcel of, or a cancelled one that never left (a
+    -- parcel only made, or voided, is no send)
+    v_unsent := (
+        (SELECT o.status FROM cartlify.orders AS o WHERE o.id = v_order_id) = 'paid'
+        AND cartlify.order_goods_on_shelf (v_order_id, 'paid')
+      )
       OR (
         (SELECT o.status FROM cartlify.orders AS o WHERE o.id = v_order_id) = 'cancelled'
         AND NOT EXISTS (
           SELECT 1 FROM cartlify.order_shipments AS sh
           WHERE sh."orderId" = v_order_id AND sh."returnId" IS NULL AND sh."rolledBackAt" IS NULL
+            AND sh.state NOT IN ('created', 'void_pending', 'voided')
         )
         AND EXISTS (SELECT 1 FROM cartlify.returns AS r WHERE r."orderId" = v_order_id AND r."closedAt" IS NULL)
       );
