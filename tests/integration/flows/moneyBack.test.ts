@@ -92,7 +92,7 @@ describe('money a carrier pays for a send it lost', () => {
     const { orderId } = await paidOrder();
     const shipped = await j.patch(admin, `/api/orders/${orderId}/status`, {
       status: 'shipped',
-      shipment: { carrier: 'DHL', trackingNumber: '1Z999AA10123456784', cost: 6 },
+      shipments: [{ carrier: 'DHL', trackingNumber: '1Z999AA10123456784', cost: 6 }],
     });
     expect(shipped.statusCode).toBe(200);
 

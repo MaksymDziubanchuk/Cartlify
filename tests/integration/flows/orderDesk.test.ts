@@ -76,8 +76,14 @@ describe('the desk of the orders', () => {
     const shipped = await j.post(admin, '/api/orders/status', {
       status: 'shipped',
       orders: [
-        { orderId: first, shipment: { carrier: 'Nova Poshta', trackingNumber: '20450000000001' } },
-        { orderId: second, shipment: { carrier: 'Nova Poshta', trackingNumber: '20450000000009' } },
+        {
+          orderId: first,
+          shipments: [{ carrier: 'Nova Poshta', trackingNumber: '20450000000001' }],
+        },
+        {
+          orderId: second,
+          shipments: [{ carrier: 'Nova Poshta', trackingNumber: '20450000000009' }],
+        },
       ],
     });
     expect(shipped.statusCode).toBe(200);
@@ -99,7 +105,9 @@ describe('the desk of the orders', () => {
       },
     );
     expect(fixed.statusCode).toBe(200);
-    expect((await j.get(buyer, `/api/orders/${second}`)).json().delivery.shipment).toMatchObject({
+    expect(
+      (await j.get(buyer, `/api/orders/${second}`)).json().delivery.shipments[0],
+    ).toMatchObject({
       trackingNumber: '20450000000002',
     });
 
@@ -113,7 +121,7 @@ describe('the desk of the orders', () => {
     ]);
     const again = await j.patch(admin, `/api/orders/${first}/status`, {
       status: 'shipped',
-      shipment: { carrier: 'Nova Poshta', trackingNumber: '20450000000003' },
+      shipments: [{ carrier: 'Nova Poshta', trackingNumber: '20450000000003' }],
     });
     expect(again.statusCode).toBe(200);
 
@@ -129,7 +137,7 @@ describe('the desk of the orders', () => {
     }
     expect((await j.get(buyer, `/api/orders/${first}`)).json().delivery).toMatchObject({
       address: { street: 'New street' },
-      shipment: { trackingNumber: '20450000000003' },
+      shipments: [{ trackingNumber: '20450000000003' }],
     });
   });
 });
